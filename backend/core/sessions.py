@@ -22,7 +22,8 @@ _TITLE_MAX_CHARS = 48
 _TITLE_MIN_CHARS = 24
 
 _MESSAGE_SQL = """
-select id, session_id, role, content, retrieval_trimmed, omitted_document_count, created_at
+select id, session_id, role, content, thinking, thinking_ms, retrieval_trimmed,
+       omitted_document_count, created_at
 from messages
 where session_id = ?
 order by id
@@ -117,18 +118,14 @@ def title_from_message(content: str) -> str:
     return f"{head[:cut] if cut > _TITLE_MIN_CHARS else head}..."
 
 
-def set_session_title_if_unset(
-    conn: sqlite3.Connection, session_id: int, content: str
-) -> None:
+def set_session_title_if_unset(conn: sqlite3.Connection, session_id: int, content: str) -> None:
     """Name an untitled conversation after its first message.
 
     A conversation is identified by what it is about, not by its position in a list:
     numbering renumbers as conversations come and go, so the same chat changes name.
     Only the first message titles a session; later ones leave the name alone.
     """
-    row = conn.execute(
-        "select title from chat_sessions where id = ?", (session_id,)
-    ).fetchone()
+    row = conn.execute("select title from chat_sessions where id = ?", (session_id,)).fetchone()
     if row is None or (row["title"] or "").strip():
         return
     conn.execute(
@@ -145,6 +142,8 @@ def add_message(
     content: str,
     retrieval_trimmed: bool = False,
     omitted_document_count: int = 0,
+    thinking: str = "",
+    thinking_ms: int = 0,
 ) -> int:
     """Append one message to a conversation and return its id.
 
@@ -155,6 +154,10 @@ def add_message(
         content: Message text. A reply cut short by a disconnect is stored as it stands.
         retrieval_trimmed: Whether this turn's retrieval was cut by more than half.
         omitted_document_count: Distinct documents that trim dropped.
+        thinking: The model's reasoning for this turn, empty for a model that does not
+            think or a server that does not expose it. Stored beside the answer, never
+            inside it, and never replayed back to the model as history.
+        thinking_ms: How long that reasoning took, zero when there was none.
 
     Returns:
         The id of the inserted message.
@@ -164,13 +167,50 @@ def add_message(
     """
     get_session(conn, session_id)
     cursor = conn.execute(
-        "insert into messages "
-        "(session_id, role, content, retrieval_trimmed, omitted_document_count) "
-        "values (?, ?, ?, ?, ?)",
-        (session_id, role, content, int(retrieval_trimmed), omitted_document_count),
+        "insert into messages (session_id, role, content, thinking, thinking_ms, "
+        "retrieval_trimmed, omitted_document_count) values (?, ?, ?, ?, ?, ?, ?)",
+        (
+            session_id,
+            role,
+            content,
+            thinking,
+            thinking_ms,
+            int(retrieval_trimmed),
+            omitted_document_count,
+        ),
     )
     conn.commit()
     return int(cursor.lastrowid or 0)
+
+
+def last_user_message(conn: sqlite3.Connection, session_id: int) -> dict[str, object]:
+    """The most recent question in a conversation, which is the one a retry re-answers.
+
+    Raises:
+        NotFoundError: when no session carries that id, or when the conversation holds no
+            question yet. There is nothing to retry in an empty conversation, and saying
+            so is better than regenerating against a prompt that does not exist.
+    """
+    get_session(conn, session_id)
+    row = conn.execute(
+        "select id, content from messages where session_id = ? and role = 'user' "
+        "order by id desc limit 1",
+        (session_id,),
+    ).fetchone()
+    if row is None:
+        raise NotFoundError("There is no question in this conversation to try again.")
+    return dict(row)
+
+
+def delete_messages_after(conn: sqlite3.Connection, session_id: int, message_id: int) -> None:
+    """Drop every message in a conversation newer than `message_id`.
+
+    This is what makes a retry a retry rather than a second question: the previous answer
+    is removed before the new one is generated, so the conversation ends up with one reply
+    to the question rather than two.
+    """
+    conn.execute("delete from messages where session_id = ? and id > ?", (session_id, message_id))
+    conn.commit()
 
 
 def list_messages(conn: sqlite3.Connection, session_id: int) -> list[dict[str, object]]:

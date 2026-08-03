@@ -4,14 +4,18 @@ Handlers are sync `def`, because `sqlite3` blocks and FastAPI runs sync handlers
 threadpool. The streaming handler is the exception: it is `async def` because the turn it
 returns is driven by awaited `httpx` reads from the tutor endpoint.
 
-The stream is SSE over POST, one of six JSON frame shapes per `data:` line. The frame types are the
-contract, so there is no `[DONE]` sentinel: a client reads `type` and dispatches on it.
+The stream is SSE over POST, one of seven JSON frame shapes per `data:` line. The frame types
+are the contract, so there is no `[DONE]` sentinel: a client reads `type` and dispatches on it.
+A reasoning model's thought arrives on `reasoning` frames, entirely separate from the `token`
+frames carrying the answer, so the interface can show the two apart and never splice a thought
+into a reply.
 """
 
 import asyncio
 import json
 import logging
 import sqlite3
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Annotated, Literal
@@ -76,12 +80,14 @@ class SessionRead(BaseModel):
 
 
 class MessageRead(BaseModel):
-    """One persisted message, carrying what retrieval had to leave out."""
+    """One persisted message, carrying its reasoning and what retrieval had to leave out."""
 
     id: int
     session_id: int
     role: Literal["user", "assistant"]
     content: str
+    thinking: str
+    thinking_ms: int
     retrieval_trimmed: bool
     omitted_document_count: int
     created_at: str
@@ -103,6 +109,18 @@ class ChatRequest(BaseModel):
         return cleaned
 
 
+class RegenerateRequest(BaseModel):
+    """Body of `POST /api/sessions/{session_id}/regenerate`.
+
+    It carries no content: the question is the one already in the conversation. Mode is
+    sent because the student may have switched Guide to Show precisely in order to ask for
+    the same thing a different way.
+    """
+
+    mode: ChatMode
+    document_id: int | None = None
+
+
 @dataclass(frozen=True)
 class TurnBudget:
     """One turn's context window split into tokens per bucket."""
@@ -111,6 +129,24 @@ class TurnBudget:
     system: int
     history: int
     retrieval: int
+
+
+@dataclass(frozen=True)
+class TurnPlan:
+    """Which messages this turn answers, and which it is about to replace.
+
+    `superseded` is empty for an ordinary turn and holds the discarded reply on a retry.
+    Those messages are excluded from the prompt immediately but deleted only once there is
+    a new reply to put in their place.
+    """
+
+    user_message_id: int
+    superseded: tuple[int, ...] = ()
+
+    @property
+    def excluded(self) -> frozenset[int]:
+        """Message ids that must not appear in this turn's history."""
+        return frozenset({self.user_message_id, *self.superseded})
 
 
 @dataclass(frozen=True)
@@ -183,9 +219,30 @@ async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> Stre
     Once the first frame is out the status line is gone, so every later failure has to
     travel as an `error` frame instead.
     """
-    config, user_message_id = await asyncio.to_thread(_open_turn, conn, session_id, payload)
+    config, plan = await asyncio.to_thread(_open_turn, conn, session_id, payload)
     return StreamingResponse(
-        _stream_turn(session_id, payload, config, user_message_id),
+        _stream_turn(session_id, payload, config, plan),
+        media_type="text/event-stream",
+        headers=SSE_HEADERS,
+    )
+
+
+@router.post("/sessions/{session_id}/regenerate")
+async def regenerate_chat(
+    session_id: int, payload: RegenerateRequest, conn: DbConn
+) -> StreamingResponse:
+    """Answer the conversation's last question again, replacing the reply it already has.
+
+    A retry is not the same act as asking twice: the reply being retried is removed rather
+    than joined by a second one, and the model is never shown its own discarded attempt as
+    history. The removal happens at the moment the new reply is written, not when the turn
+    opens, so a retry that fails upstream leaves the student with the answer they already
+    had instead of nothing at all.
+    """
+    config, plan, content = await asyncio.to_thread(_open_regeneration, conn, session_id, payload)
+    request = ChatRequest(content=content, mode=payload.mode, document_id=payload.document_id)
+    return StreamingResponse(
+        _stream_turn(session_id, request, config, plan),
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )
@@ -193,7 +250,7 @@ async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> Stre
 
 def _open_turn(
     conn: sqlite3.Connection, session_id: int, request: ChatRequest
-) -> tuple[TutorConfig, int]:
+) -> tuple[TutorConfig, TurnPlan]:
     """Validate the turn and persist the user's message before any streaming starts.
 
     Raises:
@@ -209,14 +266,41 @@ def _open_turn(
     sessions.set_session_title_if_unset(conn, session_id, request.content)
     user_message_id = sessions.add_message(conn, session_id, "user", request.content)
     touch_class(conn, int(session["class_id"]))
-    return config, user_message_id
+    return config, TurnPlan(user_message_id=user_message_id)
+
+
+def _open_regeneration(
+    conn: sqlite3.Connection, session_id: int, request: RegenerateRequest
+) -> tuple[TutorConfig, TurnPlan, str]:
+    """Plan a retry of the conversation's last question.
+
+    Nothing is deleted here. The reply being retried is only named, so that a turn which
+    never produces a replacement leaves the conversation exactly as it found it.
+
+    Raises:
+        NotFoundError: no session carries that id, or it holds no question yet.
+        ConfigurationError: no tutor endpoint is configured.
+    """
+    session = sessions.get_session(conn, session_id)
+    config = resolve_tutor_config(conn)
+    question = sessions.last_user_message(conn, session_id)
+    user_message_id = int(question["id"])
+    superseded = tuple(
+        int(message["id"])
+        for message in sessions.list_messages(conn, session_id)
+        if int(message["id"]) > user_message_id
+    )
+    sessions.set_session_mode(conn, session_id, request.mode)
+    touch_class(conn, int(session["class_id"]))
+    plan = TurnPlan(user_message_id=user_message_id, superseded=superseded)
+    return config, plan, str(question["content"])
 
 
 async def _stream_turn(
     session_id: int,
     request: ChatRequest,
     config: TutorConfig,
-    user_message_id: int,
+    plan: TurnPlan,
 ) -> AsyncIterator[str]:
     """Stream one turn and persist the assistant's message however the turn ends.
 
@@ -225,12 +309,14 @@ async def _stream_turn(
     """
     conn = connect()
     received: list[str] = []
+    thought: list[str] = []
+    thinking_ms = 0
     retrieval = RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
     try:
-        yield _frame(type="start", message_id=user_message_id)
+        yield _frame(type="start", message_id=plan.user_message_id)
         yield _frame(type="status", stage="prompt_processing")
         preparation = await asyncio.to_thread(
-            _prepare_turn, conn, session_id, request, config, user_message_id
+            _prepare_turn, conn, session_id, request, config, plan
         )
 
         yield _frame(type="status", stage="reviewing_documents")
@@ -252,19 +338,38 @@ async def _stream_turn(
             )
 
         yield _frame(type="status", stage="composing_answer")
-        async for token in stream_chat(
+        # Thinking is timed from its first token to the answer's first token. Measuring it
+        # here rather than in the browser keeps it out of the render loop and lets it be
+        # stored, so a reopened conversation still says how long the model took.
+        thinking_started = 0.0
+        async for delta in stream_chat(
             config.endpoint_url, config.api_key, config.model, turn.messages
         ):
-            received.append(token)
-            yield _frame(type="token", text=token)
+            if delta.channel == "reasoning":
+                if not thought:
+                    thinking_started = time.monotonic()
+                thought.append(delta.text)
+                yield _frame(type="reasoning", text=delta.text)
+            else:
+                if thinking_started and not received:
+                    thinking_ms = round((time.monotonic() - thinking_started) * 1000)
+                received.append(delta.text)
+                yield _frame(type="token", text=delta.text)
+        # A turn that thought and then said nothing still spent that time thinking.
+        if thinking_started and not received:
+            thinking_ms = round((time.monotonic() - thinking_started) * 1000)
 
-        message_id = _persist_reply(conn, session_id, "".join(received), retrieval)
+        message_id = _commit_reply(
+            conn, session_id, plan, received, thought, retrieval, thinking_ms
+        )
         yield _frame(type="done", message_id=message_id)
     except (asyncio.CancelledError, GeneratorExit):
         # The reader went away mid-answer. Keep what did arrive, so the conversation is
         # not left holding a question with no reply, then let the cancellation continue.
-        if received:
-            _persist_reply(conn, session_id, "".join(received), retrieval)
+        # A turn cut off while still thinking has a thought and no answer, and that is
+        # worth keeping too: it is the only record of what the model was doing.
+        if received or thought:
+            _commit_reply(conn, session_id, plan, received, thought, retrieval, thinking_ms)
         raise
     except LyraError as exc:
         # Deliberately not persisted: a turn that failed partway is a turn to retry, and
@@ -282,7 +387,7 @@ def _prepare_turn(
     session_id: int,
     request: ChatRequest,
     config: TutorConfig,
-    user_message_id: int,
+    plan: TurnPlan,
 ) -> TurnPreparation:
     """Prepare system instructions, history, and the retrieval budget for one turn."""
     class_id = int(sessions.get_session(conn, session_id)["class_id"])
@@ -295,10 +400,13 @@ def _prepare_turn(
     # is charged to retrieval rather than to the generation reserve.
     system_overrun = max(0, estimate_tokens(system_prompt) - budget.system)
 
+    # The question itself is appended last, and a reply being retried is on its way out, so
+    # neither belongs in the history the model is shown.
+    excluded = plan.excluded
     earlier = [
         message
         for message in sessions.list_messages(conn, session_id)
-        if message["id"] != user_message_id
+        if int(message["id"]) not in excluded
     ]
     history, history_used = _trim_history(earlier, budget.history)
     # Unused history budget is lent to retrieval. The reverse never happens: retrieval
@@ -363,17 +471,32 @@ def _context_entry(chunk: RetrievedChunk) -> dict[str, object]:
     }
 
 
-def _persist_reply(
-    conn: sqlite3.Connection, session_id: int, content: str, retrieval: RetrievalResult
+def _commit_reply(
+    conn: sqlite3.Connection,
+    session_id: int,
+    plan: TurnPlan,
+    received: list[str],
+    thought: list[str],
+    retrieval: RetrievalResult,
+    thinking_ms: int = 0,
 ) -> int:
-    """Store the assistant's message with the retrieval reporting for that turn."""
+    """Swap in this turn's reply, dropping whatever it supersedes.
+
+    The order matters and is the whole point of deferring the delete: a reply the student
+    can already read is only removed once there is a new one to take its place, so a retry
+    that dies upstream costs them nothing.
+    """
+    if plan.superseded:
+        sessions.delete_messages_after(conn, session_id, plan.user_message_id)
     return sessions.add_message(
         conn,
         session_id,
         "assistant",
-        content,
+        "".join(received),
         retrieval_trimmed=retrieval.trimmed,
         omitted_document_count=retrieval.omitted_document_count,
+        thinking="".join(thought),
+        thinking_ms=thinking_ms,
     )
 
 

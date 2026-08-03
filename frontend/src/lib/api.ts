@@ -14,6 +14,7 @@ import type {
   DocumentRead,
   DocumentStatus,
   MessageRead,
+  RegenerateRequest,
   SessionRead,
   SettingsRead,
   SettingsUpdate,
@@ -182,17 +183,36 @@ export const api = {
  * SSE frames are parsed by hand off a `ReadableStream` reader, buffering partial lines
  * across chunks.
  */
-export async function streamChat(
+export function streamChat(
   sessionId: number,
   body: ChatRequest,
   onEvent: (event: ChatEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const response = await send(`/api/sessions/${sessionId}/chat`, {
-    method: 'POST',
-    body,
-    signal,
-  })
+  return streamTurn(`/api/sessions/${sessionId}/chat`, body, onEvent, signal)
+}
+
+/**
+ * Streams a second attempt at the conversation's last question, over the same frame
+ * protocol. There is no message body to send: the question is already stored, which is
+ * what makes this a retry of the answer rather than a repeat of the question.
+ */
+export function streamRegenerate(
+  sessionId: number,
+  body: RegenerateRequest,
+  onEvent: (event: ChatEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamTurn(`/api/sessions/${sessionId}/regenerate`, body, onEvent, signal)
+}
+
+async function streamTurn(
+  path: string,
+  body: ChatRequest | RegenerateRequest,
+  onEvent: (event: ChatEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await send(path, { method: 'POST', body, signal })
 
   const reader = response.body?.getReader()
   if (!reader) throw new ApiError(0, UNREACHABLE)

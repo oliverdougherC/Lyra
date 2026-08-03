@@ -19,10 +19,11 @@ from fastapi.testclient import TestClient
 from backend.api import routes_chat
 from backend.core import app_settings, sessions
 from backend.core.errors import LyraError, UpstreamError
+from backend.llm.client import StreamDelta
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk
 from backend.storage.database import connect, get_db
 
-StreamFactory = Callable[..., AsyncIterator[str]]
+StreamFactory = Callable[..., AsyncIterator[StreamDelta]]
 
 QUESTION = "Explain the chain rule"
 ENDPOINT = "http://127.0.0.1:8081/v1"
@@ -74,11 +75,18 @@ def _returns(result: RetrievalResult) -> Callable[..., RetrievalResult]:
 
 
 def _stream_of(*tokens: str, recorder: list[list[tuple[str, str]]] | None = None) -> StreamFactory:
-    """A stand-in for `stream_chat` yielding fixed tokens.
+    """A stand-in for `stream_chat` yielding fixed answer deltas.
 
     When a recorder is passed, the conversation as stored at the moment streaming starts
     is captured into it, which is how the ordering of the two writes is pinned down.
     """
+    return _stream_deltas(*(StreamDelta("answer", token) for token in tokens), recorder=recorder)
+
+
+def _stream_deltas(
+    *deltas: StreamDelta, recorder: list[list[tuple[str, str]]] | None = None
+) -> StreamFactory:
+    """A stand-in for `stream_chat` yielding deltas across both channels."""
 
     async def stream(
         endpoint_url: str,
@@ -86,11 +94,11 @@ def _stream_of(*tokens: str, recorder: list[list[tuple[str, str]]] | None = None
         model: str | None,
         messages: list[dict[str, str]],
         **kwargs: object,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamDelta]:
         if recorder is not None:
             recorder.append(_stored_messages())
-        for token in tokens:
-            yield token
+        for delta in deltas:
+            yield delta
 
     return stream
 
@@ -104,9 +112,9 @@ def _stream_then_fail(*tokens: str) -> StreamFactory:
         model: str | None,
         messages: list[dict[str, str]],
         **kwargs: object,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[StreamDelta]:
         for token in tokens:
-            yield token
+            yield StreamDelta("answer", token)
         raise UpstreamError("The tutor endpoint is not reachable.")
 
     return stream
@@ -411,7 +419,8 @@ async def test_a_disconnect_keeps_the_part_of_the_answer_that_arrived(
     )
     user_message_id = sessions.add_message(db, session_id, "user", QUESTION)
 
-    stream = routes_chat._stream_turn(session_id, request, config, user_message_id)
+    plan = routes_chat.TurnPlan(user_message_id=user_message_id)
+    stream = routes_chat._stream_turn(session_id, request, config, plan)
     started = _frames(await anext(stream))
     prompt_status = _frames(await anext(stream))
     retrieval_status = _frames(await anext(stream))
@@ -427,3 +436,130 @@ async def test_a_disconnect_keeps_the_part_of_the_answer_that_arrived(
     stored = sessions.list_messages(db, session_id)
     assert [message["role"] for message in stored] == ["user", "assistant"]
     assert stored[1]["content"] == "Half "
+
+
+def test_reasoning_streams_on_its_own_frames_and_is_stored_beside_the_answer(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        routes_chat,
+        "stream_chat",
+        _stream_deltas(
+            StreamDelta("reasoning", "Chain rule "),
+            StreamDelta("reasoning", "applies here."),
+            StreamDelta("answer", "Differentiate the outside first."),
+        ),
+    )
+
+    frames = _frames(_send(client, session_id).text)
+
+    assert [frame["type"] for frame in frames] == [
+        "start",
+        "status",
+        "status",
+        "status",
+        "reasoning",
+        "reasoning",
+        "token",
+        "done",
+    ]
+    stored = sessions.list_messages(db, session_id)
+    assert stored[1]["content"] == "Differentiate the outside first."
+    assert stored[1]["thinking"] == "Chain rule applies here."
+    # The thought is never mixed into the reply the student reads.
+    assert "Chain rule" not in str(stored[1]["content"])
+
+
+def test_a_model_that_does_not_think_stores_an_empty_thought(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Straight to it."))
+
+    _send(client, session_id)
+
+    assert sessions.list_messages(db, session_id)[1]["thinking"] == ""
+
+
+def test_regenerate_replaces_the_previous_answer_rather_than_appending_a_turn(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("First attempt."))
+    _send(client, session_id)
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Second attempt."))
+
+    response = client.post(
+        f"/api/sessions/{session_id}/regenerate", json={"mode": "show", "document_id": None}
+    )
+
+    assert response.status_code == 200
+    stored = sessions.list_messages(db, session_id)
+    assert [(m["role"], m["content"]) for m in stored] == [
+        ("user", QUESTION),
+        ("assistant", "Second attempt."),
+    ]
+    # The question is answered again, not asked again.
+    assert sessions.get_session(db, session_id)["mode"] == "show"
+
+
+def test_the_regenerated_turn_does_not_show_the_model_its_discarded_attempt(
+    client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("First attempt."))
+    _send(client, session_id)
+
+    async def capture(
+        endpoint_url: str,
+        api_key: str | None,
+        model: str | None,
+        messages: list[dict[str, str]],
+        **kwargs: object,
+    ) -> AsyncIterator[StreamDelta]:
+        seen.append(messages)
+        yield StreamDelta("answer", "Second attempt.")
+
+    monkeypatch.setattr(routes_chat, "stream_chat", capture)
+    client.post(f"/api/sessions/{session_id}/regenerate", json={"mode": "guide"})
+
+    contents = [message["content"] for message in seen[0]]
+    assert "First attempt." not in contents
+    assert contents[-1] == QUESTION
+
+
+def test_regenerating_an_empty_conversation_is_a_404_with_a_reason(
+    client: TestClient, session_id: int
+) -> None:
+    response = client.post(f"/api/sessions/{session_id}/regenerate", json={"mode": "guide"})
+
+    assert response.status_code == 404
+    assert "try again" in str(response.json()["detail"])
+
+
+def test_a_retry_that_fails_upstream_leaves_the_previous_answer_in_place(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Losing a good answer to a failed retry would make the button unsafe to press."""
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("The answer they already have."))
+    _send(client, session_id)
+
+    async def dies(
+        endpoint_url: str,
+        api_key: str | None,
+        model: str | None,
+        messages: list[dict[str, str]],
+        **kwargs: object,
+    ) -> AsyncIterator[StreamDelta]:
+        raise UpstreamError("The tutor endpoint is not reachable.")
+        yield  # pragma: no cover - never reached, but this must stay a generator.
+
+    monkeypatch.setattr(routes_chat, "stream_chat", dies)
+    frames = _frames(
+        client.post(f"/api/sessions/{session_id}/regenerate", json={"mode": "guide"}).text
+    )
+
+    assert frames[-1]["type"] == "error"
+    stored = sessions.list_messages(db, session_id)
+    assert [(m["role"], m["content"]) for m in stored] == [
+        ("user", QUESTION),
+        ("assistant", "The answer they already have."),
+    ]

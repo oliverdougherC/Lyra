@@ -143,6 +143,9 @@ export function DocumentDropzone({
         className={cn(
           'flex items-center gap-2 rounded-md border border-dashed px-2.5 py-2 text-sm transition-colors duration-150',
           'focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2',
+          // Idle, this well and the composer across the seam are the same height, so the two
+          // columns close on one line. It still grows freely when it has something to say.
+          'min-h-[var(--pane-control-row)]',
           expanded && 'flex-col items-stretch gap-2.5 p-3',
           dragOver
             ? 'border-accent-primary bg-accent-surface'

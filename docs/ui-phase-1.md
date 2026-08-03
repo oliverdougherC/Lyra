@@ -40,7 +40,13 @@ registry items are used in Phase 1:
 inside buttons and never as a page or list loading state.
 
 Lyra-specific components not in the registry: `IngestionProgress`, `DocumentDropzone`,
-`MessageBubble`, `StreamingMarkdown`, `EndpointLocalityBadge`, `FactRow`, `RetrievalNotice`.
+`MessageBubble`, `StreamingMarkdown`, `ThinkingIndicator`, `ReasoningTrace`, `LyraMark`,
+`EndpointLocalityBadge`, `FactRow`, `RetrievalNotice`.
+
+`LyraMark` is the assistant's identity: Vega, the lyre's bright star, held at the center of an orbit
+carrying two smaller companions. Lyra is a constellation, so the mark is drawn as one rather than as
+the generic sparkle every assistant ships. The orbit is one ring broken at a single point, not a pair
+of arcs, because a broken ring still reads as a ring while two arcs read as two parentheses.
 
 ## Application Shell
 
@@ -234,24 +240,64 @@ toward a terminal state. The document list is scrollable once rows exceed the pa
 
 ### Conversation
 
-Message rows preserve the conversation behavior while using distinct reading surfaces: the student's
-message is a right-aligned muted-paper note at `radius-md`; Lyra's response is a full-width
-parchment reading surface with a warm border.
+The two voices are told apart by shape, not by decoration: the student's message is a right-aligned
+muted-paper note at a pill radius; Lyra's response is unboxed prose on the page itself, led by the
+mark. Wrapping every reply in a bordered card turns a conversation into a stack of receipts, and the
+reply is the page's main content, so it gets the page.
 
-- Lyra messages carry a 24px `avatar` in `--accent-surface`
+- Lyra messages carry the `LyraMark` on a 28px `--accent-surface` disc
 - Markdown renders incrementally during streaming, with `JetBrains Mono` code blocks, syntax
   highlighting themed per mode, table/pre/code overflow contained in its surface, and KaTeX math
-- Tutor processing exposes the ordered stages **Processing prompt**, **Reviewing documents**, and
-  **Writing explanation**, each with its truthful detail copy before the first visible answer text
 - Equations use `$$...$$` on their own blank-line-separated display rows; `$...$` is reserved for
   short inline quantities, and wide display math scrolls horizontally rather than overlapping prose
 - Newly arriving prose words fade in in source order with a 180ms opacity/2px-rise reveal; code and
   math remain intact and are never split into visual-only layers
-- A caret stays at the stream tail and becomes a solid marker under reduced motion
-- Hover reveals Copy on any message, and Retry on the last Lyra message
+- There is no stream caret. Markdown blocks are block-level, so a trailing marker cannot sit
+  at the end of the last word: it lands at the start of the line below, reading as stray
+  punctuation. The word reveal is already the evidence that text is arriving
+- An action row sits under each message, hidden until that message is hovered or something in the row
+  takes focus: Copy on any message, Retry on the last Lyra message, and the timestamp
 - While streaming, the send button becomes Stop
 - Timestamps are `caption` in `--text-tertiary`, shown on hover, and pinned visible for the first
   message after a gap of more than an hour, so a thread resumed the next day says so
+- Sending a message, or retrying one, always returns the view to the tail. It is the one case where
+  following re-attaches without the reader scrolling there, and it is correct because they just acted
+
+### Waiting, And Thinking
+
+Between a question and its first word, Lyra shows one line: the `breathe` braille loader and a
+shimmering label naming what is actually happening, plus an elapsed counter once the wait passes
+three seconds. The mark animates alongside it, its orbit turning and its stars breathing.
+
+This replaced a three-row stage checklist. On a machine that can run the model at all, prompt
+assembly and retrieval finish in milliseconds, so the checklist spent a card narrating work nobody
+waits for. The stages are still tracked, because on a large class they stop being instant, and a
+reader who waits deserves to know which part is slow:
+
+| Stage | Label |
+|-------|-------|
+| `prompt_processing` | `Reading your question` |
+| `reviewing_documents` | `Looking through your material` |
+| `composing_answer` | `Thinking` |
+
+**Reasoning models.** Lyra assumes the user's model may think first. The thought is **always closed
+until the reader opens it**, live or settled: it is the model's working, not the reply, and
+unfolding it unasked pushes the answer down the page and makes the reader watch a draft they did not
+ask for. What the wait actually needs is on the header, which is a trigger in both states: the
+loader, `Thinking`, and an elapsed counter while the model works, then `Thought for 12 seconds` once
+it stops. Opening it mid-turn shows the thought streaming live, scrolling itself under a faded top
+edge with no scrollbar; that view returns to closed when the turn lands, because the answer is what
+the reader came for by then. The duration is stored with the message, so a reopened conversation
+still reports it. A settled thought renders as markdown at a smaller, quieter scale than the answer;
+a streaming one stays plain text, because re-parsing thousands of characters per delta buys nothing
+on text moving faster than anyone reads. A model that does not think never renders any of this.
+
+The first row of a reply is one consistent 28px height whether it leads with a thought, a wait, or
+the answer itself, and the mark is centered on it. A mark that shifts as a turn moves between those
+states reads as the layout settling rather than as one speaker talking.
+
+**Retry means answer again, not ask again.** The question stays where it is and its reply is
+replaced. A student presses Retry because the answer was wrong, not because they forgot they asked.
 
 **Empty conversation.** Not a blank pane. It shows the class name, a one-line statement of what Lyra
 knows (`4 documents indexed, syllabus analyzed`), and three suggested prompts generated from the
@@ -370,13 +416,18 @@ Every animation in Phase 1, so nothing is improvised:
 | Batch loader | two counter-rotating token rings; rotation stops under reduced motion | motion-safe, linear |
 | Dialog, sheet, menu, popover, select, tooltip | fade plus at most 8px vertical movement | 200ms, never side-slide or zoom |
 | Streaming word reveal | New prose words fade in source order with a 24ms stagger capped at 160ms | 180ms, gentle |
+| Thinking loader | `breathe` braille cell, one character wide at every frame so the label never shifts; holds at full brightness under reduced motion | 100ms per frame |
+| Thinking label | Light sweep clipped to the glyphs; removed outright under reduced motion, never frozen, because a paused clip leaves the text transparent | 2.6s, linear |
+| Mark at work | Orbit turns; the primary star breathes and its companions twinkle off-phase | 7s linear, 2.4s gentle |
+| Reasoning trace | Collapsible height transition; live thought scrolls itself under a faded top edge | 200ms |
 | Dropzone drag over | border and surface-color change | 150ms |
 | Skeleton and spinner | motion-safe only; static/no rotation under reduced motion | preference-controlled |
 | Sidebar collapse | width transition | 200ms |
 
 Under `prefers-reduced-motion`: transform and looping motion are removed, `Reveal` becomes a 150ms
-opacity fade with zero delay, skeletons are static, spinners remain visible without rotating, word
-reveals are immediately readable, and the streaming caret is solid.
+opacity fade with zero delay, skeletons are static, spinners remain visible without rotating, the
+thinking loader holds at full brightness, the shimmer is dropped rather than frozen, and word
+reveals are immediately readable.
 
 ## Keyboard Map
 

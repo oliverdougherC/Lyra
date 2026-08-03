@@ -2,25 +2,26 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, Sparkles } from 'lucide-react'
+import { ArrowDown } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Composer } from '@/components/chat/composer'
+import { LyraMark } from '@/components/chat/lyra-mark'
 import { MessageRow, type ChatMessage } from '@/components/chat/message-bubble'
-import { isProcessingStage, type ProcessingStage } from '@/components/chat/processing-state'
+import { isProcessingStage, type ProcessingStage } from '@/components/chat/thinking-indicator'
 import { buildSuggestedPrompts } from '@/components/chat/suggested-prompts'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { ApiError, streamChat } from '@/lib/api'
+import { ApiError, streamChat, streamRegenerate } from '@/lib/api'
 import { formatCount, parseTimestamp } from '@/lib/format'
 import { chatKeys, useCreateSession, useMessages, useSessions } from '@/lib/hooks/use-chat'
 import { useDocuments } from '@/lib/hooks/use-documents'
 import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { cn } from '@/lib/utils'
-import type { ChatMode } from '@/types'
+import type { ChatEvent, ChatMode } from '@/types'
 
 const MODES: { value: ChatMode; label: string; hint: string }[] = [
   {
@@ -66,6 +67,9 @@ function startsTimeGap(messages: ChatMessage[], index: number): boolean {
 
 type TurnOutcome = 'active' | 'completed' | 'stopped' | 'failed'
 
+/** A new question, or a second attempt at the one already asked. */
+type TurnKind = 'send' | 'regenerate'
+
 export function ChatPane({
   classId,
   className = 'Class',
@@ -91,8 +95,12 @@ export function ChatPane({
   const [draft, setDraft] = useState('')
   const [pendingTurn, setPendingTurn] = useState<ChatMessage[] | null>(null)
   const [streamText, setStreamText] = useState('')
+  const [streamThinking, setStreamThinking] = useState('')
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
+  const [thinkingDurationMs, setThinkingDurationMs] = useState<number | null>(null)
   const [processingStage, setProcessingStage] = useState<ProcessingStage | null>(null)
   const [turnOutcome, setTurnOutcome] = useState<TurnOutcome | null>(null)
+  const [turnKind, setTurnKind] = useState<TurnKind>('send')
   const [revealDrained, setRevealDrained] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const creationAttemptedRef = useRef(false)
@@ -100,6 +108,9 @@ export function ChatPane({
   const streamTextRef = useRef('')
   const revealDrainedRef = useRef(false)
   const settledRef = useRef(false)
+  // Read inside the stream callback, which closes over the value it was created with, so
+  // the elapsed thinking time cannot come from the `turnStartedAt` state.
+  const turnOpenedAtRef = useRef(0)
 
   const newestSession = useMemo(
     () => (sessions && sessions.length > 0 ? [...sessions].sort((a, b) => b.id - a.id)[0] : null),
@@ -116,8 +127,16 @@ export function ChatPane({
   const messages: ChatMessage[] = useMemo(() => {
     const base = persisted ?? []
     if (!pendingTurn || turnOutcome === 'failed') return base
+    // A retry answers the question already on screen, so its optimistic reply stands where
+    // the previous one did rather than below it. The server holds the old reply until the
+    // new one is written, which is why a failed retry falls back to `base` intact.
+    if (turnKind === 'regenerate') {
+      const withoutLastReply =
+        base.length > 0 && base[base.length - 1].role === 'assistant' ? base.slice(0, -1) : base
+      return [...withoutLastReply, ...pendingTurn]
+    }
     return [...base, ...pendingTurn]
-  }, [pendingTurn, persisted, turnOutcome])
+  }, [pendingTurn, persisted, turnKind, turnOutcome])
 
   // Only an empty class needs a new session. Existing sessions are derived directly from
   // the query result, avoiding an effect-time state update after every refetch.
@@ -141,6 +160,9 @@ export function ChatPane({
   const clearOptimisticTurn = useCallback(() => {
     setPendingTurn(null)
     setStreamText('')
+    setStreamThinking('')
+    setTurnStartedAt(null)
+    setThinkingDurationMs(null)
     streamTextRef.current = ''
     setProcessingStage(null)
     setTurnOutcome(null)
@@ -179,9 +201,29 @@ export function ChatPane({
     setTurnOutcome(outcome)
   }, [])
 
-  const send = useCallback(
-    async (content: string) => {
-      if (!activeSessionId || pendingTurn !== null || content.trim().length === 0) return
+  /** The blank assistant row a turn streams into. */
+  const placeholderReply = useCallback(
+    (createdAt: string): ChatMessage => ({
+      id: -2,
+      role: 'assistant',
+      content: '',
+      thinking: '',
+      thinking_ms: 0,
+      retrieval_trimmed: false,
+      omitted_document_count: 0,
+      created_at: createdAt,
+    }),
+    [],
+  )
+
+  /**
+   * One turn, whether it is a new question or a second attempt at the last one. Both read
+   * the same frame protocol and settle the same way; they differ only in what they send
+   * and in which optimistic rows stand in for the answer while it streams.
+   */
+  const runTurn = useCallback(
+    async (kind: TurnKind, content: string) => {
+      if (!activeSessionId || pendingTurn !== null) return
 
       const controller = new AbortController()
       abortRef.current = controller
@@ -189,71 +231,95 @@ export function ChatPane({
       outcomeRef.current = 'active'
       revealDrainedRef.current = false
       streamTextRef.current = ''
+      setTurnKind(kind)
       setTurnOutcome('active')
       setRevealDrained(false)
       setProcessingStage('prompt_processing')
+      turnOpenedAtRef.current = performance.now()
+      setTurnStartedAt(turnOpenedAtRef.current)
+      setThinkingDurationMs(null)
 
       const now = new Date().toISOString()
       let assistantText = ''
+      let reasoningText = ''
 
-      setDraft('')
       setStreamText('')
-      setPendingTurn([
-        {
-          id: -1,
-          role: 'user',
-          content: content.trim(),
-          retrieval_trimmed: false,
-          omitted_document_count: 0,
-          created_at: now,
-        },
-        {
-          id: -2,
-          role: 'assistant',
-          content: '',
-          retrieval_trimmed: false,
-          omitted_document_count: 0,
-          created_at: now,
-        },
-      ])
+      setStreamThinking('')
+      setPendingTurn(
+        kind === 'regenerate'
+          ? [placeholderReply(now)]
+          : [
+              {
+                id: -1,
+                role: 'user',
+                content,
+                thinking: '',
+                thinking_ms: 0,
+                retrieval_trimmed: false,
+                omitted_document_count: 0,
+                created_at: now,
+              },
+              placeholderReply(now),
+            ],
+      )
+
+      const onEvent = (event: ChatEvent) => {
+        if (event.type === 'token') {
+          // The first word of the answer is what ends thinking, so the elapsed time is
+          // fixed here rather than when the reasoning channel happens to fall quiet.
+          if (assistantText.length === 0 && reasoningText.length > 0) {
+            setThinkingDurationMs(
+              (current) => current ?? performance.now() - turnOpenedAtRef.current,
+            )
+          }
+          assistantText += event.text
+          streamTextRef.current = assistantText
+          setStreamText(assistantText)
+        } else if (event.type === 'reasoning') {
+          reasoningText += event.text
+          setStreamThinking(reasoningText)
+        } else if (event.type === 'status') {
+          if (isProcessingStage(event.stage)) setProcessingStage(event.stage)
+        } else if (event.type === 'notice') {
+          setPendingTurn(
+            (current) =>
+              current?.map((message) =>
+                message.id === -2
+                  ? {
+                      ...message,
+                      retrieval_trimmed: event.retrieval_trimmed,
+                      omitted_document_count: event.omitted_document_count,
+                    }
+                  : message,
+              ) ?? null,
+          )
+        } else if (event.type === 'done') {
+          setOutcome('completed')
+          if (assistantText.trim().length === 0) {
+            revealDrainedRef.current = true
+            setRevealDrained(true)
+          }
+        } else if (event.type === 'error') {
+          toast.error(event.message)
+          setOutcome('failed')
+        }
+      }
 
       try {
-        await streamChat(
-          activeSessionId,
-          { content: content.trim(), mode: activeMode, document_id: scopedDocument?.id ?? null },
-          (event) => {
-            if (event.type === 'token') {
-              assistantText += event.text
-              streamTextRef.current = assistantText
-              setStreamText(assistantText)
-            } else if (event.type === 'status') {
-              if (isProcessingStage(event.stage)) setProcessingStage(event.stage)
-            } else if (event.type === 'notice') {
-              setPendingTurn(
-                (current) =>
-                  current?.map((message) =>
-                    message.id === -2
-                      ? {
-                          ...message,
-                          retrieval_trimmed: event.retrieval_trimmed,
-                          omitted_document_count: event.omitted_document_count,
-                        }
-                      : message,
-                  ) ?? null,
-              )
-            } else if (event.type === 'done') {
-              setOutcome('completed')
-              if (assistantText.trim().length === 0) {
-                revealDrainedRef.current = true
-                setRevealDrained(true)
-              }
-            } else if (event.type === 'error') {
-              toast.error(event.message)
-              setOutcome('failed')
-            }
-          },
-          controller.signal,
-        )
+        const documentId = scopedDocument?.id ?? null
+        await (kind === 'regenerate'
+          ? streamRegenerate(
+              activeSessionId,
+              { mode: activeMode, document_id: documentId },
+              onEvent,
+              controller.signal,
+            )
+          : streamChat(
+              activeSessionId,
+              { content, mode: activeMode, document_id: documentId },
+              onEvent,
+              controller.signal,
+            ))
       } catch (caught) {
         if (caught instanceof DOMException && caught.name === 'AbortError') {
           if (outcomeRef.current === 'active') {
@@ -275,8 +341,25 @@ export function ChatPane({
         }
       }
     },
-    [activeMode, activeSessionId, pendingTurn, scopedDocument, setOutcome],
+    [activeMode, activeSessionId, pendingTurn, placeholderReply, scopedDocument, setOutcome],
   )
+
+  const send = useCallback(
+    (content: string) => {
+      const trimmed = content.trim()
+      if (trimmed.length === 0) return
+      setDraft('')
+      void runTurn('send', trimmed)
+    },
+    [runTurn],
+  )
+
+  /**
+   * Retry means answer again, not ask again. The question stays put and its reply is
+   * replaced, which is the only reading of the button that makes sense: a student presses
+   * it because the answer was wrong, not because they forgot they had asked.
+   */
+  const regenerate = useCallback(() => void runTurn('regenerate', ''), [runTurn])
 
   const stop = useCallback(() => {
     if (!abortRef.current) return
@@ -304,8 +387,14 @@ export function ChatPane({
   const optimisticTurn = pendingTurn !== null && turnOutcome !== 'failed'
   const turnActive = pendingTurn !== null && turnOutcome === 'active'
   const rendered = optimisticTurn
-    ? messages.map((message) => (message.id === -2 ? { ...message, content: streamText } : message))
+    ? messages.map((message) =>
+        message.id === -2 ? { ...message, content: streamText, thinking: streamThinking } : message,
+      )
     : messages
+  const lastAssistantIndex = rendered.reduce(
+    (found, message, index) => (message.role === 'assistant' ? index : found),
+    -1,
+  )
 
   // A conversation opens at its latest message, and follows the stream while the reader
   // is already at the tail. Scrolling up to re-read detaches the follow, and the jump
@@ -364,6 +453,22 @@ export function ChatPane({
     scrollToBottom('instant')
   }, [activeSessionId, messagesPending, scrollToBottom])
 
+  // Sending a question, or asking for the answer again, is an unambiguous request to be at
+  // the tail: the reply lands at the bottom and the reader is now waiting on it. This is
+  // the one place following re-attaches without the reader scrolling there, and it is
+  // correct precisely because they just acted. `turnStartedAt` is a fresh timestamp per
+  // turn, so this fires once for each.
+  useEffect(() => {
+    if (turnStartedAt === null) return
+    followingRef.current = true
+    // After paint, so the scroll measures the height the new rows actually occupy.
+    const frame = requestAnimationFrame(() => {
+      setFollowing(true)
+      scrollToBottom('smooth')
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [turnStartedAt, scrollToBottom])
+
   // A new message animates into view; streamed tokens do not, because a smooth scroll
   // restarting on every token never arrives.
   useEffect(() => {
@@ -374,7 +479,7 @@ export function ChatPane({
   useEffect(() => {
     if (!followingRef.current || !optimisticTurn) return
     scrollToBottom('instant')
-  }, [streamText, processingStage, optimisticTurn, scrollToBottom])
+  }, [streamText, streamThinking, processingStage, optimisticTurn, scrollToBottom])
 
   // The conversation keeps growing after the first paint: KaTeX re-lays out its math,
   // and opening the documents column reflows every paragraph taller. Both move the tail
@@ -392,7 +497,9 @@ export function ChatPane({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-3 border-b px-4">
+      {/* Stated rather than left to the mode buttons to set, because the documents column
+          matches this height to keep the rule under both columns on one line. */}
+      <div className="flex h-9 shrink-0 items-center gap-3 border-b px-4 lg:h-10">
         {/* Below the desktop layout a Chat tab already names this pane, so repeating
             "Tutor" underneath it spends a second row of a small screen saying nothing. */}
         <h2 className="hidden text-xs font-medium tracking-[0.14em] uppercase lg:block">Tutor</h2>
@@ -452,30 +559,28 @@ export function ChatPane({
                 onPick={setDraft}
               />
             ) : (
-              rendered.map((message, index) => (
-                <MessageRow
-                  key={message.id}
-                  message={message}
-                  startsTimeGap={startsTimeGap(rendered, index)}
-                  streaming={optimisticTurn && message.id === -2}
-                  processingStage={optimisticTurn && message.id === -2 ? processingStage : null}
-                  turnEnded={
-                    optimisticTurn && message.id === -2
-                      ? turnOutcome === 'completed' || turnOutcome === 'stopped'
-                      : undefined
-                  }
-                  onRevealComplete={
-                    optimisticTurn && message.id === -2 ? handleRevealComplete : undefined
-                  }
-                  canRetry={
-                    !optimisticTurn && message.role === 'assistant' && index === rendered.length - 1
-                  }
-                  onRetry={() => {
-                    const previous = rendered[index - 1]
-                    if (previous?.role === 'user') void send(previous.content)
-                  }}
-                />
-              ))
+              rendered.map((message, index) => {
+                const isStreamingReply = optimisticTurn && message.id === -2
+                return (
+                  <MessageRow
+                    key={message.id}
+                    message={message}
+                    startsTimeGap={startsTimeGap(rendered, index)}
+                    streaming={isStreamingReply}
+                    processingStage={isStreamingReply ? processingStage : null}
+                    turnStartedAt={isStreamingReply ? turnStartedAt : null}
+                    thinkingDurationMs={isStreamingReply ? thinkingDurationMs : null}
+                    turnEnded={
+                      isStreamingReply
+                        ? turnOutcome === 'completed' || turnOutcome === 'stopped'
+                        : undefined
+                    }
+                    onRevealComplete={isStreamingReply ? handleRevealComplete : undefined}
+                    canRetry={!optimisticTurn && index === lastAssistantIndex}
+                    onRetry={regenerate}
+                  />
+                )
+              })
             )}
           </div>
         </ScrollArea>
@@ -498,7 +603,7 @@ export function ChatPane({
           <Composer
             value={draft}
             onChange={setDraft}
-            onSend={() => void send(draft)}
+            onSend={() => send(draft)}
             onStop={stop}
             streaming={turnActive}
             disabledReason={
@@ -530,8 +635,8 @@ function EmptyConversation({
 }: EmptyConversationProps) {
   return (
     <div className="flex min-h-[60vh] flex-col justify-center py-8">
-      <div className="bg-accent-surface text-accent-surface-foreground mb-4 flex size-10 items-center justify-center rounded-md">
-        <Sparkles className="size-5" aria-hidden />
+      <div className="text-accent-primary mb-4 size-10">
+        <LyraMark />
       </div>
       <h2 className="text-2xl font-medium">{className}</h2>
       <p className="text-text-secondary mt-1 text-sm">

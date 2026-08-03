@@ -49,6 +49,15 @@ def test_guide_withholds_the_answer_and_show_does_not() -> None:
     assert "reserve $...$ for short inline quantities" in _normalized(guide)
 
 
+def test_the_prompt_forbids_opening_every_reply_by_citing_the_material() -> None:
+    prompt = _normalized(build_system_prompt("guide", [], []))
+
+    assert "according to the course materials" in prompt
+    assert "do not open a reply by narrating where your information came from" in prompt
+    # Citing a source is still wanted where the citation carries information.
+    assert "cite a source when the citation is itself part of the answer" in prompt
+
+
 def test_facts_render_one_heading_per_kind(db: sqlite3.Connection, class_id: int) -> None:
     _insert_fact(db, class_id, "deadline", "Midterm 1", "2026-03-04")
     _insert_fact(db, class_id, "topic", "Series", "Convergence tests")

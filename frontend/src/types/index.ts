@@ -83,6 +83,10 @@ export interface MessageRead {
   session_id: number
   role: MessageRole
   content: string
+  /** The model's reasoning for this turn, empty for a model that does not think. */
+  thinking: string
+  /** How long that reasoning took. Zero for a turn that did none. */
+  thinking_ms: number
   retrieval_trimmed: boolean
   omitted_document_count: number
   created_at: string
@@ -142,17 +146,28 @@ export interface ConnectionTestResult {
   message: string
 }
 
-/** The six SSE frame shapes emitted by `POST /api/sessions/{id}/chat`. */
+/**
+ * The seven SSE frame shapes emitted by `POST /api/sessions/{id}/chat` and
+ * `/regenerate`. `reasoning` carries a thinking model's deliberation and never overlaps
+ * with `token`, which carries the answer.
+ */
 export type ChatEvent =
   | { type: 'start'; message_id: number }
   | { type: 'status'; stage: 'prompt_processing' | 'reviewing_documents' | 'composing_answer' }
   | { type: 'notice'; retrieval_trimmed: boolean; omitted_document_count: number }
+  | { type: 'reasoning'; text: string }
   | { type: 'token'; text: string }
   | { type: 'done'; message_id: number }
   | { type: 'error'; message: string }
 
 export interface ChatRequest {
   content: string
+  mode: ChatMode
+  document_id: number | null
+}
+
+/** Body of `POST /api/sessions/{id}/regenerate`: the question is the one already stored. */
+export interface RegenerateRequest {
   mode: ChatMode
   document_id: number | null
 }

@@ -152,6 +152,10 @@ pages skipped for lack of extractable text, and the error if failed.
 - `GET /api/classes/{class_id}/sessions` - List sessions
 - `GET /api/sessions/{session_id}/messages` - Message history for a session
 - `POST /api/sessions/{session_id}/chat` - Send a message, stream the reply over SSE
+- `POST /api/sessions/{session_id}/regenerate` - Answer the last question again, over the same SSE
+  protocol. It carries no message body: the question is already stored, which is what makes this a
+  retry of the answer rather than a repeat of the question. The reply being replaced is deleted only
+  once a new one has been written, so a retry that fails upstream costs the user nothing
 - `DELETE /api/sessions/{session_id}` - Delete a session
 
 Chat is session-scoped, not class-scoped, so conversation history has an unambiguous owner.

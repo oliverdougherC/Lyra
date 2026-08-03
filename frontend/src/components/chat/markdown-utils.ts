@@ -119,6 +119,45 @@ function addToken(tokens: RenderToken[], text: string, display = false): void {
   tokens.push({ text, ...(display ? { display: true } : {}) })
 }
 
+/**
+ * Sentence-ending punctuation stranded after a display equation, optionally across one line
+ * break. A blank line is deliberately not matched: that is a new paragraph the author meant
+ * to start, not a full stop that fell off the end of an equation.
+ */
+const STRANDED_PUNCTUATION = /^[ \t]*\n?[ \t]*([.,;:!?]+)/
+
+/** A multi-line environment owns its own closing; text after `\end{...}` is not valid there. */
+const ENVIRONMENT_TERMINATED = /\\end\{[^}]*\}\s*$/
+
+/**
+ * Pull a stranded full stop back into the equation it belongs to.
+ *
+ * A display equation interrupts its paragraph, so `...is $$f = 1/T$$.` renders the equation
+ * as a block and leaves a paragraph containing nothing but `.`, which reads as a typo. Set
+ * mathematics has carried its own terminal punctuation since long before the web: the period
+ * belongs inside the display, at the end of the last line. That is where this puts it, so
+ * the sentence still ends where the author ended it and nothing is silently dropped.
+ *
+ * The mark goes in as `\text{}` rather than bare. Math mode spaces `:` as a relation and `,`
+ * as a separator, which sets a stranded colon a full quad away from the equation it is meant
+ * to be touching; text mode sets it tight, the way the same sentence would be set in print.
+ */
+function absorbStrandedPunctuation(tokens: RenderToken[]): RenderToken[] {
+  const result = tokens.map((token) => ({ ...token }))
+  for (let index = 0; index < result.length - 1; index += 1) {
+    const equation = result[index]
+    const following = result[index + 1]
+    if (!equation.display || following.display) continue
+    if (ENVIRONMENT_TERMINATED.test(equation.text.replace(/\n\$\$$/, ''))) continue
+    const match = STRANDED_PUNCTUATION.exec(following.text)
+    if (!match) continue
+    // A function replacement, because `$$` in a replacement string means a literal `$`.
+    equation.text = equation.text.replace(/\n\$\$$/, () => `\\text{${match[1]}}\n$$`)
+    following.text = following.text.slice(match[0].length)
+  }
+  return result
+}
+
 function appendToken(output: string, token: RenderToken): string {
   if (!token.display) return output + token.text
   const prefix = output.length > 0 && !output.endsWith('\n\n') ? '\n\n' : ''
@@ -274,5 +313,5 @@ export function normalizeMarkdownForRender(source: string, streaming = false): s
   }
 
   flushPlain()
-  return tokens.reduce(appendToken, '')
+  return absorbStrandedPunctuation(tokens).reduce(appendToken, '')
 }

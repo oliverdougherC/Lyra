@@ -85,7 +85,9 @@ export function Composer({
         </Badge>
       ) : null}
 
-      <div className="flex items-end gap-2 rounded-[10px] border border-input bg-card p-2 shadow-sm transition-colors focus-within:border-accent-primary focus-within:ring-2 focus-within:ring-ring/20">
+      {/* The shared control-row height is what keeps this and the documents well across the
+          seam closing their columns on one line. */}
+      <div className="flex min-h-[var(--pane-control-row)] items-end gap-2 rounded-[10px] border border-input bg-card p-2 shadow-sm transition-colors focus-within:border-accent-primary focus-within:ring-2 focus-within:ring-ring/20">
         <Textarea
           ref={textareaRef}
           rows={1}

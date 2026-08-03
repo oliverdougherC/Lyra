@@ -33,17 +33,93 @@ def _transport(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Mock
     return httpx.MockTransport(handler)
 
 
-async def test_stream_chat_yields_only_deltas_and_stops_at_done() -> None:
-    transport = _transport(lambda request: httpx.Response(200, text=_STREAM_BODY))
+def _body(*frames: str) -> str:
+    """An SSE body from raw `data:` payloads, terminated the way a server terminates one."""
+    return "\n".join([*(f"data: {frame}" for frame in frames), "data: [DONE]", ""])
 
-    chunks = [
-        chunk
-        async for chunk in client.stream_chat(
+
+async def _collect(body: str) -> list[client.StreamDelta]:
+    """Run one stubbed stream to completion and return every delta it yielded."""
+    transport = _transport(lambda request: httpx.Response(200, text=body))
+    return [
+        delta
+        async for delta in client.stream_chat(
             _ENDPOINT, None, "local-model", [{"role": "user", "content": "hi"}], transport=transport
         )
     ]
 
-    assert chunks == ["The ", "limit ", "is 2."]
+
+def _text(deltas: list[client.StreamDelta], channel: str) -> str:
+    """Everything one channel carried, rejoined."""
+    return "".join(delta.text for delta in deltas if delta.channel == channel)
+
+
+async def test_stream_chat_yields_only_deltas_and_stops_at_done() -> None:
+    deltas = await _collect(_STREAM_BODY)
+
+    assert deltas == [
+        client.StreamDelta("answer", "The "),
+        client.StreamDelta("answer", "limit "),
+        client.StreamDelta("answer", "is 2."),
+    ]
+
+
+@pytest.mark.parametrize("field", ["reasoning_content", "reasoning", "thinking"])
+async def test_a_server_side_reasoning_field_arrives_on_its_own_channel(field: str) -> None:
+    deltas = await _collect(
+        _body(
+            f'{{"choices":[{{"delta":{{"{field}":"Chain rule first."}}}}]}}',
+            '{"choices":[{"delta":{"content":"The derivative is 2x."}}]}',
+        )
+    )
+
+    assert _text(deltas, "reasoning") == "Chain rule first."
+    assert _text(deltas, "answer") == "The derivative is 2x."
+
+
+async def test_inline_think_tags_are_split_out_of_the_content_stream() -> None:
+    deltas = await _collect(
+        _body(
+            '{"choices":[{"delta":{"content":"<think>Recall the "}}]}',
+            '{"choices":[{"delta":{"content":"power rule.</think>The answer "}}]}',
+            '{"choices":[{"delta":{"content":"is 2x."}}]}',
+        )
+    )
+
+    assert _text(deltas, "reasoning") == "Recall the power rule."
+    assert _text(deltas, "answer") == "The answer is 2x."
+
+
+async def test_a_think_tag_split_across_chunks_is_still_recognized() -> None:
+    deltas = await _collect(
+        _body(
+            '{"choices":[{"delta":{"content":"<thi"}}]}',
+            '{"choices":[{"delta":{"content":"nk>hmm</thin"}}]}',
+            '{"choices":[{"delta":{"content":"k>Answer."}}]}',
+        )
+    )
+
+    assert _text(deltas, "reasoning") == "hmm"
+    assert _text(deltas, "answer") == "Answer."
+
+
+async def test_an_unclosed_think_block_is_flushed_as_reasoning_not_swallowed() -> None:
+    deltas = await _collect(_body('{"choices":[{"delta":{"content":"<think>cut off here"}}]}'))
+
+    assert _text(deltas, "reasoning") == "cut off here"
+    assert _text(deltas, "answer") == ""
+
+
+async def test_a_lone_angle_bracket_is_answer_text_once_the_stream_ends() -> None:
+    deltas = await _collect(_body('{"choices":[{"delta":{"content":"a < b"}}]}'))
+
+    assert _text(deltas, "answer") == "a < b"
+    assert _text(deltas, "reasoning") == ""
+
+
+def test_strip_reasoning_leaves_only_the_answer_for_a_whole_message() -> None:
+    assert client.strip_reasoning('<think>weighing it</think>\n{"topics": []}') == '{"topics": []}'
+    assert client.strip_reasoning('{"topics": []}') == '{"topics": []}'
 
 
 @pytest.mark.parametrize("endpoint", ["http://127.0.0.1:8080/v1", "http://127.0.0.1:8080/v1/"])

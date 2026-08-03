@@ -256,8 +256,10 @@ export function DocumentsPane({
           event.target.value = ''
         }}
       />
+      {/* Header height is matched to the tutor pane's rather than derived from this row's
+          controls, so the rule under both columns is one line. */}
       {onClose ? (
-        <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2.5">
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 lg:h-10">
           <h2 className="text-xs font-medium tracking-[0.14em] uppercase">Documents</h2>
           {documents.length > 0 ? (
             <span className="text-text-tertiary text-xs tabular-nums">{documents.length}</span>
@@ -339,7 +341,9 @@ export function DocumentsPane({
         </div>
       </ScrollArea>
 
-      <div className="shrink-0 border-t bg-card p-3">
+      {/* Vertical padding matches the composer's bar; horizontal stays at the list's inset so
+          the well still lines up with the rows above it. */}
+      <div className="shrink-0 border-t bg-card px-3 py-4">
         {batchActive ? (
           <BatchLoader
             title={batchTitle}

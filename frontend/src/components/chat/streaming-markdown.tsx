@@ -53,16 +53,29 @@ function hasClass(node: RenderNode, name: string): boolean {
 function rehypeStreamWords() {
   return (tree: RenderNode) => {
     let fallbackOffset = 0
+    // Equations are keyed by their order in the answer rather than by a source offset. A
+    // streamed answer only ever grows, so the third equation stays the third equation, while
+    // its source offset moves as `normalizeMarkdownForRender` closes and reopens the
+    // fragment it is still receiving.
+    let equationIndex = 0
 
     const visit = (node: RenderNode): void => {
       if (node.type === 'element') {
         const tagName = node.tagName?.toLowerCase()
-        if (
-          tagName === 'pre' ||
-          tagName === 'code' ||
-          hasClass(node, 'katex') ||
-          hasClass(node, 'hljs')
-        ) {
+        if (tagName === 'pre' || tagName === 'code' || hasClass(node, 'hljs')) {
+          return
+        }
+        // A typeset equation reveals as one piece, in its place in the cascade. Letting it
+        // through to the word splitter would fade in half a fraction at a time; skipping it
+        // entirely, which is what this used to do, painted every equation instantly while
+        // the prose around it was still arriving, so the answer looked like it was composed
+        // of equations first and words afterwards.
+        if (hasClass(node, 'katex-display') || hasClass(node, 'katex')) {
+          node.properties = {
+            ...node.properties,
+            'data-stream-word': `equation-${equationIndex}`,
+          }
+          equationIndex += 1
           return
         }
       }
@@ -221,12 +234,6 @@ export const StreamingMarkdown = memo(function StreamingMarkdown({
       >
         {renderContent}
       </Markdown>
-      {streaming ? (
-        <span
-          className="bg-accent-primary ml-0.5 inline-block h-4 w-[2px] translate-y-0.5 motion-safe:animate-pulse"
-          aria-hidden
-        />
-      ) : null}
     </div>
   )
 })

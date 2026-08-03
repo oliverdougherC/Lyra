@@ -41,6 +41,12 @@
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
+  /* The workbench is one surface split into two columns, so the rules that open and close
+     each column have to read as a single line across the seam. Both panes size their action
+     bar's control row from this rather than from whatever their own contents measure: the
+     composer is sized by its send button, the dropzone by a smaller pair of controls, and
+     left alone they part company by 16px. */
+  --pane-control-row: 3.625rem;
   --elevation-sm: 0 2px 8px rgb(48 40 33 / 0.05);
   --elevation-md: 0 12px 30px rgb(48 40 33 / 0.08);
   --elevation-lg: 0 24px 60px rgb(48 40 33 / 0.12);
@@ -265,6 +271,12 @@
     margin-block: 0.75rem;
   }
 
+  /* A reply opens at its own top edge. The leading margin would otherwise push the first
+     line half a line down and leave the mark beside it stranded above the text. */
+  .assistant-content > :first-child {
+    margin-block-start: 0;
+  }
+
   .assistant-content ol,
   .assistant-content ul {
     padding-inline-start: 1.25rem;
@@ -374,6 +386,149 @@
     min-width: 100%;
     font-size: 1.12em;
   }
+
+  /* The thought scrolls itself, but its scrollbar is noise: the faded top edge already says
+     there is more above, and a track running down the side of a quiet aside draws more
+     attention than the aside does. */
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* A settled thought renders as markdown, but it is not the answer: smaller, quieter, and
+     tighter, so an expanded trace never competes with the reply beneath it. */
+  .reasoning-body .assistant-content {
+    font-size: 0.9375rem;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+
+  .reasoning-body .assistant-content p,
+  .reasoning-body .assistant-content ol,
+  .reasoning-body .assistant-content ul {
+    margin-block: 0.5rem;
+  }
+
+  .reasoning-body .assistant-content h1,
+  .reasoning-body .assistant-content h2,
+  .reasoning-body .assistant-content h3 {
+    margin-block: 0.75rem 0.375rem;
+    font-size: 0.9375rem;
+  }
+
+  .reasoning-body .assistant-content .katex-display {
+    margin-block: 0.75rem;
+  }
+}
+
+/* The mark at work. The ring turns steadily, the primary star breathes on a slower cycle,
+   and its two neighbours twinkle off-phase, so the whole thing reads as alive rather than
+   as one element spinning. All three stop under reduced motion, leaving the static mark. */
+@keyframes lyra-mark-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes lyra-mark-breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.72;
+    transform: scale(0.88);
+  }
+}
+
+@keyframes lyra-mark-twinkle {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+
+/* The orbit and its companions turn about the mark's center, not their own bounding boxes:
+   a fill-box origin would spin each element in place instead of carrying them around. */
+.lyra-mark-ring {
+  transform-box: view-box;
+  transform-origin: 12px 12px;
+}
+
+.lyra-mark-star,
+.lyra-mark-companion,
+.lyra-mark-faint {
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+.lyra-mark-thinking .lyra-mark-ring {
+  animation: lyra-mark-orbit 7s linear infinite;
+}
+
+.lyra-mark-thinking .lyra-mark-star {
+  animation: lyra-mark-breathe 2.4s var(--ease-gentle) infinite;
+}
+
+.lyra-mark-thinking .lyra-mark-companion {
+  animation: lyra-mark-twinkle 1.9s var(--ease-gentle) infinite;
+}
+
+.lyra-mark-thinking .lyra-mark-faint {
+  animation: lyra-mark-twinkle 2.7s var(--ease-gentle) 0.6s infinite;
+}
+
+/* A light sweep travelling along the label while the model works. The gradient is clipped
+   to the glyphs, so the text keeps its own color at both ends of the sweep and only the
+   highlight moves. */
+@keyframes lyra-shimmer-sweep {
+  from {
+    background-position: 180% center;
+  }
+  to {
+    background-position: -80% center;
+  }
+}
+
+.lyra-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    var(--text-secondary) 20%,
+    var(--accent-primary) 42%,
+    var(--text-primary) 50%,
+    var(--accent-primary) 58%,
+    var(--text-secondary) 80%
+  );
+  background-size: 220% auto;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: lyra-shimmer-sweep 2.6s linear infinite;
+}
+
+@keyframes lyra-label-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.lyra-label-enter {
+  display: inline-block;
+  animation:
+    lyra-label-enter 240ms var(--ease-gentle) both,
+    lyra-shimmer-sweep 2.6s linear infinite;
 }
 
 @keyframes lyra-stream-word-reveal {
@@ -393,6 +548,12 @@
   transform: translateY(2px);
 }
 
+/* A display equation reveals as one unit like any other, but it is a block in its own right:
+   `inline-block` would drop it back into the paragraph flow it was pulled out of. */
+.katex-display[data-stream-word] {
+  display: block;
+}
+
 [data-stream-word].stream-word-visible {
   animation: lyra-stream-word-reveal 180ms var(--ease-gentle) var(--stream-word-delay, 0ms) both;
 }
@@ -410,5 +571,16 @@
     opacity: 1;
     transform: none;
     animation: none !important;
+  }
+
+  /* The shimmer paints its text with a moving gradient and a transparent color. Freezing
+     that animation would leave the label clipped to whatever slice of the gradient it
+     stopped on, so the effect is removed outright rather than paused. */
+  .lyra-shimmer,
+  .lyra-label-enter {
+    background-image: none;
+    color: var(--text-secondary);
+    animation: none !important;
+    transform: none;
   }
 }

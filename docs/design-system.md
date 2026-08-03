@@ -206,7 +206,7 @@ already seen explains nothing and reads as latency.
 
 Skeletons, Spinner, and Sonner's loading icon use `motion-safe` animation. Under
 `prefers-reduced-motion: reduce`, skeletons remain static, spinners stay visible without rotating,
-the streaming caret remains a solid 2px sage marker, and panel transitions do not transform.
+the braille thinking loader holds at full brightness, and panel transitions do not transform.
 
 ## Focus and keyboard
 

@@ -320,6 +320,26 @@ Rules:
 **Streaming.** SSE over `POST`, consumed with `fetch` and a `ReadableStream` reader. Note that the
 browser `EventSource` API cannot be used, because it only issues `GET`.
 
+**Reasoning models.** Lyra assumes the user's model may think before it answers, and works either way.
+A thought reaches the client on its own `reasoning` frames, never mixed into the `token` frames that
+carry the answer, and is stored in the message's `thinking` column beside the reply rather than
+inside it. Two upstream shapes are handled:
+
+- A server running a reasoning parser (llama.cpp, vLLM, Ollama, and the hosted DeepSeek and
+  OpenRouter APIs) puts the thought in its own delta field: `reasoning_content`, `reasoning`, or
+  `thinking`.
+- A server without one leaves raw `<think>...</think>` markers inline in the content stream, so the
+  client splits them back out, holding back any partial tail that could still become a tag.
+
+One case is deliberately unhandled: a chat template that pre-fills the opening `<think>` server-side,
+leaving only the closing marker on the wire. Text already streamed to the reader cannot be
+reclassified, and buffering every answer against the chance a close marker arrives would delay the
+first word for every non-thinking model. Servers that do this ship a reasoning parser, which is the
+first path above.
+
+A stored thought is **never replayed to the model as history**. It is context for the reader, not for
+the next turn.
+
 ## Automatic Profile Extraction
 
 Ingestion runs an analysis pass that **proposes** structured facts for the Class Profile. It runs as
