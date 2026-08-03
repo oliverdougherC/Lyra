@@ -2,10 +2,12 @@
 
 import { useQueryClient } from '@tanstack/react-query'
 import { FileText } from 'lucide-react'
-import { useCallback, useRef, useState } from 'react'
+import { motion, useReducedMotion } from 'motion/react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
-import { DocumentDropzone } from '@/components/documents/document-dropzone'
+import { BatchLoader } from '@/components/documents/batch-loader'
+import { DocumentDropzone, filesFromDrop } from '@/components/documents/document-dropzone'
 import { DocumentRow } from '@/components/documents/document-row'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -15,6 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError } from '@/lib/api'
 import { parseTimestamp } from '@/lib/format'
 import {
+  isTerminal,
   documentKeys,
   useDeleteDocument,
   useDocuments,
@@ -23,7 +26,7 @@ import {
 } from '@/lib/hooks/use-documents'
 import { profileKeys } from '@/lib/hooks/use-profile'
 import { cn } from '@/lib/utils'
-import type { DocumentRead, DocumentStatus } from '@/types'
+import type { DocumentRead, DocumentState, DocumentStatus } from '@/types'
 
 type DocumentsPaneProps = {
   classId: number
@@ -38,16 +41,28 @@ export function DocumentsPane({
   selectedDocumentId,
   onSelectDocument,
 }: DocumentsPaneProps) {
-  const { data, isPending, isError, error, refetch } = useDocuments(classId)
+  const queueRef = useRef<File[]>([])
+  const drainingRef = useRef(false)
+  const [uploading, setUploading] = useState<string | null>(null)
+  const [batch, setBatch] = useState<{
+    total: number
+    uploaded: number
+    failed: number
+    documentIds: number[]
+    currentName: string | null
+  }>({ total: 0, uploaded: 0, failed: 0, documentIds: [], currentName: null })
+  const batchActive = batch.total > 0
+
+  const { data, isPending, isError, error, refetch } = useDocuments(classId, {
+    // While a batch is draining or ingesting, keep the list fresh so the batch loader
+    // reports real stage verbs (Reading, Splitting, ...) and terminal counts.
+    refetchInterval: batchActive ? 1500 : false,
+  })
   const uploadDocument = useUploadDocument(classId)
   const reingestDocument = useReingestDocument(classId)
   const deleteDocument = useDeleteDocument(classId)
   const queryClient = useQueryClient()
-
-  const queueRef = useRef<File[]>([])
-  const drainingRef = useRef(false)
-  const [uploading, setUploading] = useState<string | null>(null)
-  const [batch, setBatch] = useState({ done: 0, total: 0 })
+  const reduceMotion = useReducedMotion()
 
   // Uploads run one at a time so the progress readout names a single file, and so a large
   // multi-file drop does not open a dozen request bodies at once. The queue lives in a ref
@@ -59,31 +74,70 @@ export function DocumentsPane({
       while (queueRef.current.length > 0) {
         const next = queueRef.current[0]
         setUploading(next.name)
+        setBatch((current) => ({ ...current, currentName: next.name }))
         try {
-          await uploadDocument.mutateAsync(next)
+          const created = await uploadDocument.mutateAsync(next)
+          setBatch((current) => ({
+            ...current,
+            documentIds: [...current.documentIds, created.id],
+          }))
         } catch (caught) {
+          setBatch((current) => ({ ...current, failed: current.failed + 1 }))
           toast.error(
             caught instanceof ApiError ? caught.message : `Could not upload ${next.name}.`,
           )
         }
         queueRef.current = queueRef.current.slice(1)
-        setBatch((current) => ({ ...current, done: current.done + 1 }))
+        setBatch((current) => ({ ...current, uploaded: current.uploaded + 1 }))
       }
     } finally {
       drainingRef.current = false
       setUploading(null)
-      setBatch({ done: 0, total: 0 })
+      setBatch((current) => ({ ...current, currentName: null }))
     }
   }, [uploadDocument])
 
   const onFiles = useCallback(
     (files: File[]) => {
+      if (files.length === 0) return
       queueRef.current = [...queueRef.current, ...files]
       setBatch((current) => ({ ...current, total: current.total + files.length }))
       void drain()
     },
     [drain],
   )
+
+  const documentsById = useMemo(
+    () => new Map(data?.map((document) => [document.id, document]) ?? []),
+    [data],
+  )
+  const processedCount = batch.documentIds.filter((id) => {
+    const document = documentsById.get(id)
+    return document !== undefined && isTerminal(document.state)
+  }).length
+  const batchFinished =
+    batchActive && batch.uploaded >= batch.total && processedCount >= batch.total - batch.failed
+
+  // Once every uploaded document has finished ingesting, let the finished summary linger
+  // briefly, then clear the batch so the next drop starts from a clean counter.
+  useEffect(() => {
+    if (!batchFinished) return
+    const timer = window.setTimeout(() => {
+      setBatch({ total: 0, uploaded: 0, failed: 0, documentIds: [], currentName: null })
+    }, 2000)
+    return () => window.clearTimeout(timer)
+  }, [batchFinished])
+
+  const batchDocument = batch.documentIds
+    .map((id) => documentsById.get(id))
+    .find((document) => document !== undefined && !isTerminal(document.state))
+  const batchTitle = uploading
+    ? `Uploading ${batch.currentName ?? ''}`
+    : batchDocument
+      ? `${STATE_ACTIONS[batchDocument.state]} ${batchDocument.filename}`
+      : batchFinished
+        ? 'All documents processed'
+        : 'Preparing documents'
 
   const onRetry = useCallback(
     (documentId: number) => {
@@ -137,7 +191,7 @@ export function DocumentsPane({
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault()
-        onFiles(Array.from(event.dataTransfer.files))
+        void filesFromDrop(event.dataTransfer).then(({ files }) => onFiles(files))
       }}
     >
       <div className="flex items-center justify-between border-b px-4 py-3">
@@ -183,18 +237,29 @@ export function DocumentsPane({
             </Empty>
           ) : (
             <ul className="space-y-2">
-              {documents.map((document) => (
-                <DocumentRow
+              {documents.map((document, index) => (
+                <motion.li
                   key={document.id}
-                  document={document}
-                  selected={document.id === selectedDocumentId}
-                  onSelect={(picked) =>
-                    onSelectDocument(picked.id === selectedDocumentId ? null : picked.id)
-                  }
-                  onRetry={onRetry}
-                  onDelete={onDelete}
-                  onStatus={onStatus}
-                />
+                  layout
+                  initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{
+                    duration: 0.25,
+                    delay: Math.min(index, 5) * 0.05,
+                    ease: [0.25, 0.1, 0.3, 1],
+                  }}
+                >
+                  <DocumentRow
+                    document={document}
+                    selected={document.id === selectedDocumentId}
+                    onSelect={(picked) =>
+                      onSelectDocument(picked.id === selectedDocumentId ? null : picked.id)
+                    }
+                    onRetry={onRetry}
+                    onDelete={onDelete}
+                    onStatus={onStatus}
+                  />
+                </motion.li>
               ))}
             </ul>
           )}
@@ -202,13 +267,33 @@ export function DocumentsPane({
       </ScrollArea>
 
       <div className="border-t bg-card p-3">
+        {batchActive ? (
+          <BatchLoader
+            title={batchTitle}
+            detail={batchDocument?.stage_detail}
+            processed={processedCount}
+            total={batch.total}
+            className="mb-3"
+          />
+        ) : null}
         <DocumentDropzone
           onFiles={onFiles}
           uploadingName={uploading}
-          uploadedCount={batch.done}
-          queueLength={Math.max(batch.total - batch.done, 0)}
+          uploadedCount={batch.uploaded}
+          queueLength={Math.max(batch.total - batch.uploaded, 0)}
         />
       </div>
     </div>
   )
+}
+
+const STATE_ACTIONS: Record<DocumentState, string> = {
+  pending: 'Queued',
+  parsing: 'Reading',
+  chunking: 'Splitting',
+  embedding: 'Indexing',
+  extracting: 'Analyzing',
+  ready: 'Ready',
+  failed: 'Failed',
+  unsupported: 'Unsupported',
 }

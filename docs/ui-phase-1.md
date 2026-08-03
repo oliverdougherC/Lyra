@@ -191,13 +191,16 @@ Persistent target at the bottom of the document pane, and the whole pane accepts
 
 | State | Presentation |
 |-------|--------------|
-| Idle | 32px icon tile, dashed 1px `--border-strong`, and `Drop PDF, TXT, or MD` |
+| Idle | 32px icon tile, dashed 1px `--border-strong`, `Drop PDF, TXT, or MD`, and `Choose folder` / `Choose files` controls |
 | Drag over | sage-tinted fill with `--accent-primary` boundary and icon |
 | Rejected type | clay danger treatment with `--danger-text` error copy naming accepted types |
 | Uploading | tokenized `progress` bar with filename and queued progress |
 
-It is also a keyboard-accessible button that opens the native file picker, and it accepts multiple
-files, queueing them.
+Dropped folders are scanned recursively through the file system entry API, and the picker offers
+both a folder input (`webkitdirectory`) and the existing multi-file input. The batch is uploaded
+one file at a time so a large folder does not open dozens of request bodies at once; a `BatchLoader`
+above the well reports the current stage verb and `processed of total` counts while rows poll
+toward a terminal state. The document list is scrollable once rows exceed the pane.
 
 ### Conversation
 
@@ -316,6 +319,8 @@ Every animation in Phase 1, so nothing is improvised:
 |---------|--------|------------------|
 | Class card entry | `Reveal`: fade plus 8px rise, 50ms stagger capped at 200ms | 250ms, gentle |
 | Card hover | `shadow-sm` to `shadow-md`, no scale | 200ms |
+| Document list entry | staggered fade plus 8px rise, capped at five steps, with layout reordering | 250ms, gentle |
+| Batch loader | two counter-rotating token rings; rotation stops under reduced motion | motion-safe, linear |
 | Dialog, sheet, menu, popover, select, tooltip | fade plus at most 8px vertical movement | 200ms, never side-slide or zoom |
 | Streaming caret | opacity pulse; solid under reduced motion | motion-safe |
 | Dropzone drag over | border and surface-color change | 150ms |

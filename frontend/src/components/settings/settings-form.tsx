@@ -79,12 +79,12 @@ function SettingsSection({
   children: React.ReactNode
 }) {
   return (
-    <Card className="gap-4">
-      <div className="border-b px-(--card-spacing) pb-(--card-spacing)">
+    <Card className="gap-4 py-0">
+      <div className="border-b px-5 pt-5 pb-4">
         <h2 className="font-heading text-xl leading-tight font-medium tracking-tight">{title}</h2>
         <p className="mt-1 text-sm text-muted-foreground">{description}</p>
       </div>
-      <div className="px-(--card-spacing)">{children}</div>
+      <div className="px-5 pb-5">{children}</div>
     </Card>
   )
 }

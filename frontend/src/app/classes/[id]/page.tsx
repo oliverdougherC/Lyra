@@ -94,7 +94,7 @@ export default function ClassWorkspacePage() {
   )
 
   return (
-    <div className="flex min-h-[calc(100dvh-8.5rem)] flex-col gap-3">
+    <div className="flex h-[calc(100dvh-8.5rem)] flex-col gap-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           {classQuery.data?.code ? (
@@ -124,16 +124,10 @@ export default function ClassWorkspacePage() {
             </TabsTrigger>
             <TabsTrigger value="chat">Chat</TabsTrigger>
           </TabsList>
-          <TabsContent
-            value="documents"
-            className="mt-0 min-h-[calc(100dvh-14rem)] rounded-none border-0"
-          >
+          <TabsContent value="documents" className="mt-0 min-h-0 flex-1 rounded-none border-0">
             {documents}
           </TabsContent>
-          <TabsContent
-            value="chat"
-            className="mt-0 min-h-[calc(100dvh-14rem)] rounded-none border-0"
-          >
+          <TabsContent value="chat" className="mt-0 min-h-0 flex-1 rounded-none border-0">
             {chat}
           </TabsContent>
         </Tabs>

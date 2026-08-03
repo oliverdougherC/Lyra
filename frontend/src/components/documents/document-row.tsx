@@ -78,7 +78,7 @@ export function DocumentRow({
   const selectable = state === 'ready'
 
   return (
-    <li
+    <div
       className={cn(
         'rounded-md border bg-card p-3 transition-colors duration-150',
         busy && 'opacity-70',
@@ -156,7 +156,7 @@ export function DocumentRow({
       {!busy && state !== 'failed' ? (
         <p className="text-text-tertiary mt-1 pl-6 text-xs">{formatFileSize(document.byte_size)}</p>
       ) : null}
-    </li>
+    </div>
   )
 }
 

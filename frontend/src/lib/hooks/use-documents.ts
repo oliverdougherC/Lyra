@@ -17,11 +17,15 @@ export function isTerminal(state: DocumentState): boolean {
   return TERMINAL_STATES.includes(state)
 }
 
-export function useDocuments(classId: number) {
+export function useDocuments(
+  classId: number,
+  options: { enabled?: boolean; refetchInterval?: number | false } = {},
+) {
   return useQuery({
     queryKey: documentKeys.list(classId),
     queryFn: ({ signal }) => api.listDocuments(classId, signal),
-    enabled: Number.isFinite(classId),
+    enabled: options.enabled ?? Number.isFinite(classId),
+    refetchInterval: options.refetchInterval ?? false,
   })
 }
 
