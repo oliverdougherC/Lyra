@@ -9,38 +9,38 @@ services, no persistent daemon, no cloud account.
 
 ```
 ┌──────────────────────────────────────────────┐
-│                   Browser                     │
-│  ┌──────────────────────────────────────────┐ │
-│  │       Next.js Frontend (localhost:3000)   │ │
-│  │  ┌──────────┐  ┌──────────┐  ┌─────────┐ │ │
-│  │  │ Classes  │  │Workspace │  │Settings │ │ │
-│  │  └──────────┘  └──────────┘  └─────────┘ │ │
-│  └──────────────────────────────────────────┘ │
+│                   Browser                    │
+│  ┌────────────────────────────────────────┐  │
+│  │   Next.js Frontend (localhost:3000)    │  │
+│  │  ┌─────────┐ ┌──────────┐ ┌─────────┐  │  │
+│  │  │ Classes │ │Workspace │ │Settings │  │  │
+│  │  └─────────┘ └──────────┘ └─────────┘  │  │
+│  └────────────────────────────────────────┘  │
 └──────────────────┬───────────────────────────┘
                    │ HTTP/JSON + SSE
 ┌──────────────────▼───────────────────────────┐
-│      FastAPI Backend (127.0.0.1:8000)         │
-│  ┌──────────┐  ┌──────────┐  ┌────────────┐ │
-│  │   API    │  │   RAG    │  │  Memory    │ │
-│  │  Routes  │  │ Pipeline │  │  Engine    │ │
-│  └──────────┘  └──────────┘  └────────────┘ │
-│  ┌──────────────────────────────────────────┐ │
-│  │      SQLite (lyra.db) + sqlite-vec        │ │
-│  └──────────────────────────────────────────┘ │
-└────────┬─────────────────────────────┬────────┘
-         │ subprocess                  │ OpenAI-compatible HTTP
-┌────────▼──────────────┐   ┌──────────▼─────────────────┐
-│  llama.cpp (bundled   │   │   Tutor LLM endpoint        │
-│  binaries, GGUF)      │   │   (user-configured)         │
-│  - llama-mtmd-cli:OCR │   │   llama-server / Ollama /   │
-│  - llama-server:embed │   │   remote (testing only)     │
-└───────────────────────┘   └────────────────────────────┘
+│       FastAPI Backend (127.0.0.1:8000)       │
+│  ┌───────────┐ ┌────────────┐ ┌───────────┐  │
+│  │    API    │ │    RAG     │ │  Memory   │  │
+│  │  Routes   │ │  Pipeline  │ │  Engine   │  │
+│  └───────────┘ └────────────┘ └───────────┘  │
+│  ┌────────────────────────────────────────┐  │
+│  │     SQLite (lyra.db) + sqlite-vec      │  │
+│  └────────────────────────────────────────┘  │
+└────────┬─────────────────────┬───────────────┘
+         │ subprocess          │ OpenAI-compatible HTTP
+┌────────▼────────────┐  ┌─────────▼───────────┐
+│  llama.cpp (GGUF)   │  │ Tutor LLM endpoint  │
+│   local, bundled    │  │   user-configured   │
+│ llama-server: embed │  │llama-server / Ollama│
+│ mtmd-cli: OCR (P2)  │  │remote: testing only │
+└─────────────────────┘  └─────────────────────┘
 ```
 
 Two inference concerns, deliberately separated:
 
-- **Infrastructure models** (OCR, embeddings) are Lyra's responsibility. They are always local, run
-  through llama.cpp on GGUF weights, and are not user-configurable in V1.
+- **Infrastructure models** (embeddings in V1, OCR from Phase 2) are Lyra's responsibility. They are
+  always local, run through llama.cpp on GGUF weights, and are not user-configurable.
 - **The tutor model** is the user's responsibility. Lyra talks to it over an OpenAI-compatible API.
 
 ## Inference Posture
@@ -51,7 +51,7 @@ endpoint" that would otherwise leak user documents off the machine.
 **V1 does not bundle an LLM inference engine for the tutor model.** Shipping and managing a
 tutor-model runtime (weights download, memory budgeting, model selection, update path) is a large
 amount of complexity that would dominate V1. It is deliberately deferred. See the roadmap entry
-"Bundled tutor inference engine" in Phase 4. This is the single most important post-V1 change to the
+"Bundled tutor inference engine" in Phase 5. This is the single most important post-V1 change to the
 architecture, and the LLM client abstraction exists so that it can be added without touching the
 rest of the system.
 
@@ -73,7 +73,7 @@ Consequences for V1:
    - Automatic profile extraction (which sends document text to the tutor model) is **skipped** when
      the endpoint is non-local and the acknowledgement has not been given. It is never performed
      silently against a remote endpoint.
-4. OCR and embeddings never leave the machine under any configuration.
+4. Embeddings, and OCR once it lands, never leave the machine under any configuration.
 
 Nothing in Lyra phones home. There is no telemetry, no analytics, and no update check in V1.
 
@@ -109,14 +109,15 @@ No wildcard origins.
 |--------|----------------|
 | `api/` | Route handlers, request/response models |
 | `core/` | Business logic, class management, sessions, ingestion jobs |
-| `rag/` | Document ingestion, OCR, chunking, embedding, retrieval |
+| `rag/` | Document ingestion, parsing, chunking, embedding, retrieval |
 | `storage/` | SQLite schema and migrations, vector store, secret storage |
 | `llm/` | Tutor client abstraction, prompt templates, streaming |
 
 ### 3. API Surface
 
-Ingestion is slow (OCR of a scanned page is seconds to tens of seconds), so document upload is
-asynchronous and status is polled. Every list endpoint is class-scoped.
+Ingestion is slow (embedding a long document takes seconds, and profile extraction on a local tutor
+model can take minutes), so document upload is asynchronous and status is polled. Every list
+endpoint is class-scoped.
 
 **Classes**
 - `GET /api/classes` - List all classes
@@ -131,12 +132,20 @@ asynchronous and status is polled. Every list endpoint is class-scoped.
 - `GET /api/classes/{class_id}/documents` - List documents with ingestion state
 - `GET /api/documents/{document_id}` - Document detail, including extracted text availability
 - `GET /api/documents/{document_id}/status` - Ingestion progress. Poll target.
-- `POST /api/documents/{document_id}/reingest` - Re-run ingestion, for example after an OCR fix
+- `POST /api/documents/{document_id}/reingest` - Re-run ingestion, for example once OCR support
+  lands for a document previously marked `unsupported`
 - `DELETE /api/documents/{document_id}` - Delete document, its file, and its chunks
 
-**Ingestion state machine:** `pending -> parsing -> chunking -> embedding -> extracting -> ready`,
-with terminal `failed` carrying a user-facing `error_message` and a stage marker. `GET .../status`
-returns the current stage, a page-level progress counter where known, and the error if failed.
+**Ingestion state machine:** `pending -> parsing -> chunking -> embedding -> extracting -> ready`.
+
+Two terminal states besides `ready`:
+- `failed` carries a user-facing `error_message` and the stage that failed.
+- `unsupported` means the file is a kind Lyra cannot read yet, in practice a fully scanned PDF
+  before Phase 2. The original file is retained so it can be re-ingested later without re-uploading.
+  It is deliberately distinct from `failed`: nothing went wrong, the feature is not built yet.
+
+`GET .../status` returns the current stage, a page-level progress counter where known, the count of
+pages skipped for lack of extractable text, and the error if failed.
 
 **Chat**
 - `POST /api/classes/{class_id}/sessions` - Create a chat session
@@ -167,7 +176,7 @@ invocations and their currently-known upstream limitations.
 **Summary:**
 - Documents are ingested by a background job on upload
 - Text-based PDFs are parsed with PyMuPDF
-- Scanned pages and images go to Unlimited-OCR via `llama-mtmd-cli` on GGUF weights
+- Fully scanned documents terminate as `unsupported` in V1; OCR arrives in Phase 2
 - Text is chunked semantically, with a hard token ceiling per chunk
 - Chunks are embedded locally with `nomic-embed-text-v1.5` GGUF, using mandatory task prefixes
 - Stored in SQLite with `sqlite-vec`, searched by exact brute-force KNN
@@ -219,7 +228,7 @@ See Phase 1 in the roadmap.
 
 **File storage (`data/`):**
 - `data/uploads/` original files, `data/text/` extracted text, `data/thumbs/` previews
-- `data/models/` GGUF weights for OCR and embeddings
+- `data/models/` GGUF weights for embeddings, and for OCR from Phase 2
 
 **Secret storage.** The tutor API key is stored in the **OS keychain** (macOS Keychain via
 `keyring`), not in `lyra.db`. Encrypting a secret inside the database would require keeping the
@@ -244,7 +253,7 @@ both and are the supported entry points.
 
 **Known consequence:** V1 requires both a Node and a Python runtime on the machine. This is
 acceptable for V1, whose audience already runs a local model server. Collapsing this into one
-distributable artifact is the job of the native wrapper in Phase 4, which will supervise both
+distributable artifact is the job of the native wrapper in Phase 5, which will supervise both
 processes.
 
 ## Design Decisions
@@ -268,7 +277,7 @@ processes.
 - Sufficient at document scale (thousands of chunks)
 
 ### Why llama.cpp with GGUF for infrastructure models
-- One runtime covers both OCR and embeddings, so there is no PyTorch dependency in the product
+- One runtime covers embeddings and later OCR, so there is no PyTorch dependency in the product
 - GGUF quantizations run across Apple Silicon, CPU, CUDA, Vulkan, and ROCm, which is the widest
   device compatibility available to us
 - vLLM and SGLang were rejected: both are effectively Linux plus NVIDIA, and the reference
@@ -277,4 +286,4 @@ processes.
 
 ### Why not a desktop app in V1
 - The value is the AI logic, not OS integration
-- Keeps V1 focused; the wrapper is Phase 4
+- Keeps V1 focused; the wrapper is Phase 5

@@ -7,15 +7,20 @@ core differentiator of Lyra.
 
 Three models are involved, with strictly separate roles:
 
-| Role | Model | Runtime | Configurable in V1 |
-|------|-------|---------|--------------------|
-| OCR | `baidu/Unlimited-OCR` (GGUF) | llama.cpp, local | No |
-| Embedding | `nomic-embed-text-v1.5` (GGUF) | llama.cpp, local | No |
-| Tutor | user's choice | user's OpenAI-compatible endpoint | Yes |
+| Role | Model | Runtime | Phase | Configurable |
+|------|-------|---------|-------|--------------|
+| Embedding | `nomic-embed-text-v1.5` (GGUF) | llama.cpp, local | 1 | No |
+| Tutor | user's choice | user's OpenAI-compatible endpoint | 1 | Yes |
+| OCR | `baidu/Unlimited-OCR` (GGUF) | llama.cpp, local | 2 | No |
 
-OCR and embedding are infrastructure and always run locally. The tutor model is the product. See
+Embedding and OCR are infrastructure and always run locally. The tutor model is the product. See
 the Inference Posture section of [architecture.md](architecture.md) for the rules governing remote
 tutor endpoints.
+
+**OCR is Phase 2, not V1.** Phase 1 accepts text-based PDFs, TXT, and MD only. The OCR
+specification below is retained in full because the research behind it is load-bearing and was
+expensive to establish, but it is not V1 scope and nothing in Phase 1 may depend on it. Sections
+that apply only to Phase 2 are marked.
 
 ## Pipeline Stages
 
@@ -27,11 +32,16 @@ Stages 2 through 5 run in a background ingestion job. Upload returns immediately
 
 ### Stage 1: Upload
 
-Accepted formats:
-- PDF (text-based or scanned)
-- Images (PNG, JPG, WebP)
+**Phase 1 accepted formats:**
+- PDF, text-based
 - Plain text (TXT, MD)
-- Office documents (DOCX, PPTX) are a later phase
+
+**Phase 2 adds:** scanned PDFs and images (PNG, JPG, WebP).
+**Later:** Office documents (DOCX, PPTX).
+
+A file whose extension is accepted but whose content cannot be read as text in Phase 1 is not an
+error in the usual sense. It is a document Lyra will support later, so it terminates in the
+`unsupported` state described in Stage 2 and the original file is kept.
 
 **Input:** File bytes plus metadata (filename, timestamp, class ID)
 **Output:** File in `data/uploads/`, a `documents` row in state `pending`, and an ingestion job
@@ -43,11 +53,30 @@ Upload responds `202`. It never blocks on parsing.
 **Text-based PDFs**
 - PyMuPDF direct text extraction
 - Preserve page numbers and section structure
-- A page is treated as scanned if its extractable text is below a threshold (fewer than 20
-  characters of non-whitespace text). Mixed documents are handled per page, not per file.
 
 **Plain text and Markdown**
 - Read directly
+
+**Scanned-page detection.** A page counts as scanned when its extractable text is below a threshold
+of 20 non-whitespace characters. Detection runs in Phase 1 even though OCR does not, because the
+alternative is worse than an error: a scanned PDF would otherwise ingest "successfully" as an empty
+document, embed nothing, and then quietly fail to answer any question about it.
+
+Phase 1 outcome by document composition:
+
+| Composition | Result |
+|-------------|--------|
+| All pages have extractable text | `ready`, fully searchable |
+| Some pages scanned | `ready`, with `pages_skipped` recorded and surfaced in the UI |
+| All pages scanned | `unsupported`, terminal, file retained |
+
+`unsupported` is not `failed`. It carries a distinct message telling the user the document needs
+text recognition, which is coming, and that the file has been kept so it can be processed later
+without re-uploading. Phase 2 re-ingests these documents in place.
+
+### Stage 2b: OCR (Phase 2)
+
+Everything from here to the end of this stage is Phase 2 scope.
 
 **Scanned pages and images**
 - Render to PNG at 300 DPI with PyMuPDF
@@ -116,7 +145,7 @@ page break may be split. That is accepted for V1. Revisit when #24975 merges.
 Pin the exact llama.cpp build in `scripts/` and record the commit. Do not float on master: this
 model's support surface is actively changing.
 
-#### Required spike before Phase 1 OCR work
+#### Required spike before any Phase 2 OCR work
 
 One-shot `llama-mtmd-cli` per page reloads several GB of weights per page, which is unacceptable for
 a 40-page document. The alternative is a persistent `llama-server` process with `--mmproj` that
@@ -130,8 +159,8 @@ the chat template made it run but degraded OCR quality.
 `llama-server` and through one-shot `llama-mtmd-cli`, and confirm byte-identical or
 quality-equivalent text with the chat template applied. If llama-server cannot serve this model
 correctly, fall back to a single long-lived `llama-mtmd-cli` invocation per document batch and accept
-the reload cost. Record the outcome in this document. Do not build the ingestion job until this is
-settled.
+the reload cost. Record the outcome in this document. This gates the Phase 2 OCR stage only; the
+Phase 1 ingestion job is built without it and gains OCR as an additional parse path later.
 
 #### Post-processing
 

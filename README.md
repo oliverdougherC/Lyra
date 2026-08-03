@@ -23,22 +23,28 @@ understands your specific class context.
 - **Frontend:** Next.js (React + TypeScript), Tailwind CSS v4, shadcn/ui, Framer Motion
 - **Backend:** Python, FastAPI, bound to loopback only
 - **Data:** SQLite, single-user and local, with `sqlite-vec` for vector search
-- **OCR:** `baidu/Unlimited-OCR` (GGUF) through llama.cpp
 - **Embeddings:** `nomic-embed-text-v1.5` (GGUF) through llama.cpp
 - **Tutor LLM:** user-configured OpenAI-compatible endpoint (llama.cpp, Ollama, or remote for testing)
+- **OCR (Phase 2):** `baidu/Unlimited-OCR` (GGUF) through llama.cpp
 
-One runtime, llama.cpp on GGUF weights, covers both OCR and embeddings. That keeps PyTorch out of
-the product and gives the widest device compatibility: Apple Silicon, CPU, CUDA, Vulkan, and ROCm.
+llama.cpp on GGUF weights is the single runtime for local models: embeddings in V1, OCR from
+Phase 2. That keeps PyTorch out of the product and gives the widest device compatibility, covering
+Apple Silicon, CPU, CUDA, Vulkan, and ROCm.
+
+**V1 scope note.** Phase 1 accepts text-based PDFs, TXT, and MD. Scanned documents are recognized
+and reported honestly rather than silently ingested as empty, and gain text recognition in Phase 2.
+Cutting OCR from V1 removes the pipeline's largest technical risk and redirects that effort into the
+interface, which is a core pillar.
 
 **V1 does not bundle an inference engine for the tutor model.** You point Lyra at a local model
-server. Bundling one is the headline Phase 4 item; see
+server. Bundling one is the headline Phase 5 item; see
 [docs/feature-roadmap.md](docs/feature-roadmap.md).
 
 ## Status
 
 Pre-scaffolding. The `docs/` specifications are the source of truth and are complete enough to build
-against. Phase 0 in the roadmap covers cleanup and the one open technical spike (OCR serving mode),
-which gates ingestion work.
+against. Phase 0 covers the remaining scaffolding manifests; Phase 1 is the MVP, with its interface
+specified screen by screen in [docs/ui-phase-1.md](docs/ui-phase-1.md).
 
 ## Quick Start
 
@@ -58,7 +64,7 @@ scripts/dev
 ```
 
 The backend serves `127.0.0.1:8000` and the frontend `localhost:3000`. Lyra runs two local
-processes; the native wrapper that collapses them into one launch is Phase 4.
+processes; the native wrapper that collapses them into one launch is Phase 5.
 
 ## Project Structure
 
@@ -86,7 +92,8 @@ Lyra/
 ## Documentation
 
 - [Architecture](docs/architecture.md) - components, inference posture, API surface, storage
-- [RAG Pipeline](docs/rag-pipeline.md) - OCR, chunking, embedding, retrieval, context budget
+- [RAG Pipeline](docs/rag-pipeline.md) - parsing, chunking, embedding, retrieval, context budget
 - [Design System](docs/design-system.md) - tokens with contrast contracts, components, motion
+- [Phase 1 Interface](docs/ui-phase-1.md) - screen-by-screen specification for the MVP
 - [Feature Roadmap](docs/feature-roadmap.md) - phased plan and explicit exclusions
 - [Code Conventions](docs/conventions.md) - style, structure, testing, git
