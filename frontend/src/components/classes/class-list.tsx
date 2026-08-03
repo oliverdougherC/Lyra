@@ -1,9 +1,9 @@
 'use client'
 
-import { useRef, useState } from 'react'
-import { GraduationCap, Plus } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
+import { Archive, GraduationCap, Plus } from 'lucide-react'
 
-import { ClassCard, ClassCardSkeleton } from '@/components/classes/class-card'
+import { ClassCard, ClassCardSkeleton, NewClassCard } from '@/components/classes/class-card'
 import { ClassFormDialog } from '@/components/classes/class-form-dialog'
 import { DeleteClassDialog } from '@/components/classes/delete-class-dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -17,8 +17,9 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty'
 import { ApiError } from '@/lib/api'
-import { useClasses } from '@/lib/hooks/use-classes'
-import { parseTimestamp } from '@/lib/format'
+import { useAppShortcuts } from '@/lib/hooks/use-app-shortcuts'
+import { useClasses, useUpdateClass } from '@/lib/hooks/use-classes'
+import { formatCount, parseTimestamp } from '@/lib/format'
 import type { ClassRead } from '@/types'
 
 const SKELETON_COUNT = 6
@@ -26,12 +27,30 @@ const GRID = 'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3'
 
 export function ClassList() {
   const { data, isPending, isError, error, refetch, isFetching } = useClasses()
+  const updateClass = useUpdateClass()
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<ClassRead | null>(null)
   const [deleting, setDeleting] = useState<ClassRead | null>(null)
   const [focusClassId, setFocusClassId] = useState<number | null>(null)
   const formTriggerRef = useRef<HTMLButtonElement>(null)
   const createdRef = useRef(false)
+
+  const shortcuts = useMemo(
+    () => [
+      {
+        key: 'n',
+        run: () => {
+          // Always the create form: the dialog doubles as Rename, and a stale editing
+          // target would turn the shortcut into an edit of whichever class was last
+          // renamed.
+          setEditing(null)
+          setFormOpen(true)
+        },
+      },
+    ],
+    [],
+  )
+  useAppShortcuts(shortcuts)
 
   function openCreate(trigger: HTMLButtonElement) {
     formTriggerRef.current = trigger
@@ -58,6 +77,8 @@ export function ClassList() {
           parseTimestamp(b.last_active_at).getTime() - parseTimestamp(a.last_active_at).getTime(),
       )
     : []
+  const activeClasses = classes.filter((item) => !item.archived)
+  const archivedCount = classes.length - activeClasses.length
 
   return (
     <div className="space-y-6">
@@ -75,6 +96,13 @@ export function ClassList() {
           </Button>
         )}
       </div>
+
+      {archivedCount > 0 ? (
+        <p className="text-text-tertiary -mt-2 text-xs">
+          {formatCount(archivedCount, 'class')} archived. Open the sidebar&apos;s Archived section
+          to restore one.
+        </p>
+      ) : null}
 
       {isPending ? (
         <div className={GRID} aria-busy="true" aria-label="Loading classes">
@@ -102,27 +130,47 @@ export function ClassList() {
             </Button>
           </AlertDescription>
         </Alert>
-      ) : classes.length === 0 ? (
-        <Empty>
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <GraduationCap className="text-text-tertiary size-8" />
-            </EmptyMedia>
-            <EmptyTitle>No classes yet</EmptyTitle>
-            <EmptyDescription>
-              Create a class to start uploading your course materials.
-            </EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <Button size="lg" onClick={(event) => openCreate(event.currentTarget)}>
-              <Plus />
-              New class
-            </Button>
-          </EmptyContent>
-        </Empty>
+      ) : activeClasses.length === 0 ? (
+        archivedCount > 0 ? (
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Archive className="text-text-tertiary size-8" />
+              </EmptyMedia>
+              <EmptyTitle>All classes are archived</EmptyTitle>
+              <EmptyDescription>
+                Restore a class from the sidebar&apos;s Archived section to see it here.
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button size="lg" onClick={(event) => openCreate(event.currentTarget)}>
+                <Plus />
+                New class
+              </Button>
+            </EmptyContent>
+          </Empty>
+        ) : (
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <GraduationCap className="text-text-tertiary size-8" />
+              </EmptyMedia>
+              <EmptyTitle>No classes yet</EmptyTitle>
+              <EmptyDescription>
+                Create a class to start uploading your course materials.
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button size="lg" onClick={(event) => openCreate(event.currentTarget)}>
+                <Plus />
+                New class
+              </Button>
+            </EmptyContent>
+          </Empty>
+        )
       ) : (
         <div className={GRID}>
-          {classes.map((klass, index) => (
+          {activeClasses.map((klass, index) => (
             <ClassCard
               key={klass.id}
               klass={klass}
@@ -130,8 +178,12 @@ export function ClassList() {
               autoFocus={klass.id === focusClassId}
               onRename={openRename}
               onDelete={setDeleting}
+              onArchive={(picked) =>
+                updateClass.mutate({ classId: picked.id, body: { archived: true } })
+              }
             />
           ))}
+          <NewClassCard onClick={openCreate} />
         </div>
       )}
 

@@ -149,6 +149,22 @@ def test_patch_renames_and_persists(client: TestClient) -> None:
     assert fetched["code"] == "MATH 201"
 
 
+def test_archive_moves_class_in_and_out_of_the_active_list(client: TestClient) -> None:
+    class_id = client.post("/api/classes", json={"name": "Finished Course"}).json()["id"]
+    assert client.get(f"/api/classes/{class_id}").json()["archived"] is False
+
+    archived = client.patch(f"/api/classes/{class_id}", json={"archived": True})
+    assert archived.status_code == 200
+    assert archived.json()["archived"] is True
+
+    listed = client.get("/api/classes").json()
+    assert any(item["id"] == class_id and item["archived"] is True for item in listed)
+
+    restored = client.patch(f"/api/classes/{class_id}", json={"archived": False})
+    assert restored.json()["archived"] is False
+    assert any(item["id"] == class_id for item in client.get("/api/classes").json())
+
+
 def test_delete_removes_only_that_class_embeddings(
     client: TestClient, db: sqlite3.Connection
 ) -> None:

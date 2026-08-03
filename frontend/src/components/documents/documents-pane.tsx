@@ -1,13 +1,18 @@
 'use client'
 
 import { useQueryClient } from '@tanstack/react-query'
-import { FileText } from 'lucide-react'
+import { FileText, PanelRightClose } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from 'react'
 import { toast } from 'sonner'
 
 import { BatchLoader } from '@/components/documents/batch-loader'
-import { DocumentDropzone, filesFromDrop } from '@/components/documents/document-dropzone'
+import {
+  ACCEPTED_EXTENSIONS,
+  DocumentDropzone,
+  filesFromDrop,
+  partitionFiles,
+} from '@/components/documents/document-dropzone'
 import { DocumentRow } from '@/components/documents/document-row'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -33,6 +38,8 @@ type DocumentsPaneProps = {
   className?: string
   selectedDocumentId: number | null
   onSelectDocument: (documentId: number | null) => void
+  /** When set, the pane draws its own header with a close control (desktop column). */
+  onClose?: () => void
 }
 
 export function DocumentsPane({
@@ -40,10 +47,17 @@ export function DocumentsPane({
   className,
   selectedDocumentId,
   onSelectDocument,
+  onClose,
 }: DocumentsPaneProps) {
   const queueRef = useRef<File[]>([])
   const drainingRef = useRef(false)
+  // Hoisted to the pane root: the collapsed strip header's Upload button must be able to
+  // open the pickers even when the dropzone (and its inputs) are not rendered.
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
+  const [terminalStateById, setTerminalStateById] = useState(() => new Map<number, DocumentState>())
   const [uploading, setUploading] = useState<string | null>(null)
+  const [rejectedFiles, setRejectedFiles] = useState<string[] | null>(null)
   const [batch, setBatch] = useState<{
     total: number
     uploaded: number
@@ -97,32 +111,34 @@ export function DocumentsPane({
     }
   }, [uploadDocument])
 
-  const onFiles = useCallback(
-    (files: File[]) => {
-      if (files.length === 0) return
-      queueRef.current = [...queueRef.current, ...files]
-      setBatch((current) => ({ ...current, total: current.total + files.length }))
-      void drain()
-    },
-    [drain],
-  )
+  const onFiles = (files: File[]) => {
+    const { accepted, rejected } = partitionFiles(files)
+    setRejectedFiles(rejected.length > 0 ? rejected : null)
+    if (accepted.length === 0) return
+    queueRef.current = [...queueRef.current, ...accepted]
+    setBatch((current) => ({ ...current, total: current.total + accepted.length }))
+    void drain()
+  }
 
   const documentsById = useMemo(
     () => new Map(data?.map((document) => [document.id, document]) ?? []),
     [data],
   )
-  const processedCount = batch.documentIds.filter((id) => {
-    const document = documentsById.get(id)
-    return document !== undefined && isTerminal(document.state)
-  }).length
+  const batchTerminalStates = batch.documentIds
+    .map((id) => terminalStateById.get(id) ?? documentsById.get(id)?.state)
+    .filter((state): state is DocumentState => state !== undefined && isTerminal(state))
+  const terminalCount = batchTerminalStates.length
+  const failedDocumentCount = batchTerminalStates.filter((state) => state === 'failed').length
+  const successfulDocumentCount = terminalCount - failedDocumentCount
+  const batchFailureCount = batch.failed + failedDocumentCount
   const batchFinished =
-    batchActive && batch.uploaded >= batch.total && processedCount >= batch.total - batch.failed
-
+    batchActive && batch.uploaded >= batch.total && terminalCount >= batch.total - batch.failed
   // Once every uploaded document has finished ingesting, let the finished summary linger
   // briefly, then clear the batch so the next drop starts from a clean counter.
   useEffect(() => {
     if (!batchFinished) return
     const timer = window.setTimeout(() => {
+      setTerminalStateById(new Map())
       setBatch({ total: 0, uploaded: 0, failed: 0, documentIds: [], currentName: null })
     }, 2000)
     return () => window.clearTimeout(timer)
@@ -130,13 +146,20 @@ export function DocumentsPane({
 
   const batchDocument = batch.documentIds
     .map((id) => documentsById.get(id))
-    .find((document) => document !== undefined && !isTerminal(document.state))
+    .find(
+      (document) =>
+        document !== undefined && !isTerminal(terminalStateById.get(document.id) ?? document.state),
+    )
   const batchTitle = uploading
     ? `Uploading ${batch.currentName ?? ''}`
     : batchDocument
       ? `${STATE_ACTIONS[batchDocument.state]} ${batchDocument.filename}`
       : batchFinished
-        ? 'All documents processed'
+        ? batchFailureCount === 0
+          ? 'All documents processed'
+          : batchFailureCount === 1
+            ? '1 item failed'
+            : `${batchFailureCount} items failed`
         : 'Preparing documents'
 
   const onRetry = useCallback(
@@ -167,6 +190,14 @@ export function DocumentsPane({
 
   const onStatus = useCallback(
     (documentId: number, status: DocumentStatus) => {
+      if (isTerminal(status.state)) {
+        setTerminalStateById((current) => {
+          if (current.get(documentId) === status.state) return current
+          const next = new Map(current)
+          next.set(documentId, status.state)
+          return next
+        })
+      }
       queryClient.setQueryData<DocumentRead[]>(documentKeys.list(classId), (current) =>
         current?.map((document) =>
           document.id === documentId ? { ...document, ...status } : document,
@@ -187,21 +218,63 @@ export function DocumentsPane({
 
   return (
     <div
-      className={cn('flex h-full flex-col', className)}
+      className={cn('flex h-full min-h-0 flex-col overflow-hidden', className)}
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault()
         void filesFromDrop(event.dataTransfer).then(({ files }) => onFiles(files))
       }}
     >
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <h2 className="text-xs font-medium tracking-[0.14em] uppercase">Documents</h2>
-        {documents.length > 0 ? (
-          <span className="text-text-tertiary text-xs tabular-nums">{documents.length}</span>
-        ) : null}
-      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        id="document-upload"
+        name="documents"
+        multiple
+        accept={ACCEPTED_EXTENSIONS.join(',')}
+        className="sr-only"
+        aria-label="Choose documents to upload"
+        onChange={(event) => {
+          onFiles(Array.from(event.target.files ?? []))
+          event.target.value = ''
+        }}
+      />
+      <input
+        ref={folderInputRef}
+        {...({ webkitdirectory: '' } as InputHTMLAttributes<HTMLInputElement> & {
+          webkitdirectory?: string
+        })}
+        type="file"
+        id="folder-upload"
+        name="folder"
+        multiple
+        accept={ACCEPTED_EXTENSIONS.join(',')}
+        className="sr-only"
+        aria-label="Choose a folder of documents to upload"
+        onChange={(event) => {
+          onFiles(Array.from(event.target.files ?? []))
+          event.target.value = ''
+        }}
+      />
+      {onClose ? (
+        <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2.5">
+          <h2 className="text-xs font-medium tracking-[0.14em] uppercase">Documents</h2>
+          {documents.length > 0 ? (
+            <span className="text-text-tertiary text-xs tabular-nums">{documents.length}</span>
+          ) : null}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="ml-auto size-8"
+            onClick={onClose}
+            aria-label="Hide the documents panel"
+          >
+            <PanelRightClose />
+          </Button>
+        </div>
+      ) : null}
 
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea id="documents-pane-body" className="min-h-0 flex-1 overflow-hidden">
         <div className="p-3">
           {isPending ? (
             <div className="space-y-2" aria-busy="true" aria-label="Loading documents">
@@ -266,21 +339,26 @@ export function DocumentsPane({
         </div>
       </ScrollArea>
 
-      <div className="border-t bg-card p-3">
+      <div className="shrink-0 border-t bg-card p-3">
         {batchActive ? (
           <BatchLoader
             title={batchTitle}
             detail={batchDocument?.stage_detail}
-            processed={processedCount}
+            processed={successfulDocumentCount}
             total={batch.total}
+            complete={batchFinished}
+            failed={batchFailureCount}
             className="mb-3"
           />
         ) : null}
         <DocumentDropzone
           onFiles={onFiles}
+          rejectedFiles={rejectedFiles}
           uploadingName={uploading}
           uploadedCount={batch.uploaded}
           queueLength={Math.max(batch.total - batch.uploaded, 0)}
+          fileInputRef={fileInputRef}
+          folderInputRef={folderInputRef}
         />
       </div>
     </div>

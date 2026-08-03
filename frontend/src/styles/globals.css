@@ -1,7 +1,12 @@
+/* KaTeX styles must lose to `@layer components` overrides. Naming the layer here, ahead
+   of Tailwind's own layer statement, pins katex first in the cascade-layer order;
+   otherwise the bundled import lands last and its rules win regardless of specificity. */
+@layer katex, theme, base, components, utilities;
+
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
-@import 'katex/dist/katex.min.css';
+@import 'katex/dist/katex.min.css' layer(katex);
 
 @custom-variant dark (&:is(.dark *));
 
@@ -45,7 +50,9 @@
   --bg-primary: #1d1a16;
   --bg-secondary: #28241f;
   --bg-tertiary: #37302a;
-  --border: #4f453b;
+  /* Lifted from #4f453b: the decorative rule is what separates one dark surface from the
+     next once shadows stop doing that work, so it has to be visible on its own. */
+  --border: #5b5044;
   --border-strong: #a18c78;
   --text-primary: #f3f0ed;
   --text-secondary: #cdc1b6;
@@ -68,9 +75,12 @@
   --danger-text: #d7bfb7;
   --focus-ring: #9fc6a3;
   --overlay: rgb(14 12 10 / 0.48);
-  --elevation-sm: 0 2px 8px rgb(14 12 10 / 0.22);
-  --elevation-md: 0 12px 30px rgb(14 12 10 / 0.3);
-  --elevation-lg: 0 24px 60px rgb(14 12 10 / 0.38);
+  /* A drop shadow is a light-theme device: on a dark canvas it darkens dark and reads as
+     nothing. Dark earns the same separation with a hairline of lifted paper along the top
+     of each surface, so raised paper still reads as raised. */
+  --elevation-sm: 0 2px 8px rgb(14 12 10 / 0.4), inset 0 1px 0 rgb(255 250 244 / 0.04);
+  --elevation-md: 0 12px 30px rgb(14 12 10 / 0.5), inset 0 1px 0 rgb(255 250 244 / 0.05);
+  --elevation-lg: 0 24px 60px rgb(14 12 10 / 0.62), inset 0 1px 0 rgb(255 250 244 / 0.06);
 }
 
 /*
@@ -168,6 +178,7 @@
   --font-sans: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
   --font-heading: var(--font-fraunces), ui-serif, Georgia, serif;
+  --font-ai-response: var(--font-source-serif), ui-serif, Georgia, serif;
 }
 
 @layer base {
@@ -228,6 +239,164 @@
   }
 }
 
+@layer components {
+  /* The tutor's reading surface. Slightly larger than the interface sans, because a serif
+     at the same nominal size reads smaller, and set to the one bold weight actually
+     loaded so emphasis is drawn rather than synthesized. */
+  .assistant-content {
+    color: var(--text-primary);
+    font-size: 1.0625rem;
+    line-height: 1.65;
+  }
+
+  .assistant-content strong,
+  .assistant-content b {
+    font-weight: 600;
+  }
+
+  .assistant-content a {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .assistant-content p,
+  .assistant-content ol,
+  .assistant-content ul {
+    margin-block: 0.75rem;
+  }
+
+  .assistant-content ol,
+  .assistant-content ul {
+    padding-inline-start: 1.25rem;
+  }
+
+  .assistant-content ol {
+    list-style: decimal;
+  }
+
+  .assistant-content ul {
+    list-style: disc;
+  }
+
+  .assistant-content li {
+    margin-block: 0.25rem;
+  }
+
+  .assistant-content h1,
+  .assistant-content h2,
+  .assistant-content h3 {
+    font-family: var(--font-fraunces), ui-serif, Georgia, serif;
+    font-weight: 500;
+    letter-spacing: -0.025em;
+  }
+
+  .assistant-content h1 {
+    margin-block: 1.25rem 0.75rem;
+    font-size: 1.125rem;
+  }
+
+  .assistant-content h2 {
+    margin-block: 1.25rem 0.75rem;
+    font-size: 1rem;
+  }
+
+  .assistant-content h3 {
+    margin-block: 1rem 0.5rem;
+    font-size: 0.875rem;
+  }
+
+  .assistant-content blockquote {
+    margin-block: 1rem;
+    border-inline-start: 2px solid var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-surface) 50%, transparent);
+    padding-block: 0.5rem;
+    padding-inline: 0.75rem;
+    color: var(--text-secondary);
+  }
+
+  .assistant-content code {
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    padding-inline: 0.25rem;
+    font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
+    font-size: 0.9em;
+  }
+
+  .assistant-content pre {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    padding: 0.75rem;
+  }
+
+  .assistant-content pre code {
+    background: transparent;
+    padding: 0;
+  }
+
+  /* Tables keep the interface sans: tabular data is not prose, and the serif's wider
+     figures cost column width the message can rarely spare. */
+  .assistant-content table {
+    min-width: max-content;
+    border-collapse: collapse;
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.875rem;
+  }
+
+  .assistant-content th,
+  .assistant-content td {
+    border: 1px solid var(--border);
+    padding: 0.25rem 0.5rem;
+  }
+
+  .assistant-content th {
+    background: var(--bg-tertiary);
+  }
+
+  .assistant-content .katex {
+    color: var(--text-primary);
+    font-size: 1em;
+  }
+
+  .assistant-content .katex-display {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    margin-block: 1.25rem;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .assistant-content .katex-display > .katex {
+    display: block;
+    width: max-content;
+    min-width: 100%;
+    font-size: 1.12em;
+  }
+}
+
+@keyframes lyra-stream-word-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+[data-stream-word] {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(2px);
+}
+
+[data-stream-word].stream-word-visible {
+  animation: lyra-stream-word-reveal 180ms var(--ease-gentle) var(--stream-word-delay, 0ms) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -235,5 +404,11 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  [data-stream-word] {
+    opacity: 1;
+    transform: none;
+    animation: none !important;
   }
 }

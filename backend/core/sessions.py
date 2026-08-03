@@ -16,6 +16,11 @@ MessageRole = Literal["user", "assistant"]
 
 MODES: tuple[str, ...] = ("guide", "show")
 
+# Title length: long enough to tell two conversations apart in a 260px rail, short enough
+# that most titles survive without an ellipsis.
+_TITLE_MAX_CHARS = 48
+_TITLE_MIN_CHARS = 24
+
 _MESSAGE_SQL = """
 select id, session_id, role, content, retrieval_trimmed, omitted_document_count, created_at
 from messages
@@ -94,6 +99,43 @@ def set_session_mode(
     conn.execute("update chat_sessions set mode = ? where id = ?", (mode, session_id))
     conn.commit()
     return get_session(conn, session_id)
+
+
+def title_from_message(content: str) -> str:
+    """Condense a first message into a sidebar-length conversation title.
+
+    Cut at a word boundary rather than mid-word, and keep it short enough that the rail
+    truncates rarely. Newlines collapse so a pasted problem statement does not become a
+    title with a line break in it.
+    """
+    cleaned = " ".join(content.split())
+    if len(cleaned) <= _TITLE_MAX_CHARS:
+        return cleaned
+    head = cleaned[:_TITLE_MAX_CHARS]
+    cut = head.rfind(" ")
+    # A single word longer than the limit has no boundary to cut at; take the hard slice.
+    return f"{head[:cut] if cut > _TITLE_MIN_CHARS else head}..."
+
+
+def set_session_title_if_unset(
+    conn: sqlite3.Connection, session_id: int, content: str
+) -> None:
+    """Name an untitled conversation after its first message.
+
+    A conversation is identified by what it is about, not by its position in a list:
+    numbering renumbers as conversations come and go, so the same chat changes name.
+    Only the first message titles a session; later ones leave the name alone.
+    """
+    row = conn.execute(
+        "select title from chat_sessions where id = ?", (session_id,)
+    ).fetchone()
+    if row is None or (row["title"] or "").strip():
+        return
+    conn.execute(
+        "update chat_sessions set title = ? where id = ?",
+        (title_from_message(content), session_id),
+    )
+    conn.commit()
 
 
 def add_message(

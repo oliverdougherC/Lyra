@@ -1,5 +1,6 @@
 'use client'
 
+import { AlertCircle, Check } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 
 import { cn } from '@/lib/utils'
@@ -11,6 +12,10 @@ type BatchLoaderProps = {
   detail?: string | null
   /** Documents that reached a terminal state out of the whole batch. */
   processed: number
+  /** Upload or ingestion failures included in the completed count. */
+  failed: number
+  /** Whether the batch has reached its terminal summary. */
+  complete: boolean
   total: number
   className?: string
 }
@@ -20,10 +25,19 @@ type BatchLoaderProps = {
  * clay borders instead of gradients so the loader stays inside the design-system
  * surface rules, and rotation stops entirely under reduced motion.
  */
-export function BatchLoader({ title, detail, processed, total, className }: BatchLoaderProps) {
+export function BatchLoader({
+  title,
+  detail,
+  processed,
+  failed,
+  total,
+  complete,
+  className,
+}: BatchLoaderProps) {
   const reduceMotion = useReducedMotion()
   const spin = reduceMotion ? { rotate: 0 } : { rotate: 360 }
-  const percent = total > 0 ? Math.round((processed / total) * 100) : 0
+  const completed = processed + failed
+  const percent = total > 0 ? Math.min(Math.round((completed / total) * 100), 100) : 0
 
   return (
     <div
@@ -34,19 +48,33 @@ export function BatchLoader({ title, detail, processed, total, className }: Batc
         className,
       )}
     >
-      <span className="relative size-9 shrink-0" aria-hidden>
-        <span className="absolute inset-0 rounded-full border border-border" />
-        <motion.span
-          className="absolute inset-0 rounded-full border-2 border-transparent border-t-accent-primary border-r-accent-primary"
-          animate={spin}
-          transition={{ duration: 1.1, repeat: Infinity, ease: 'linear' }}
-        />
-        <motion.span
-          className="absolute inset-1 rounded-full border border-transparent border-b-accent-tertiary border-l-accent-tertiary"
-          animate={spin}
-          transition={{ duration: 1.8, repeat: Infinity, ease: 'linear' }}
-        />
-      </span>
+      {complete ? (
+        <span
+          aria-hidden
+          className={cn(
+            'flex size-9 shrink-0 items-center justify-center rounded-full border',
+            failed === 0
+              ? 'border-success-text/30 bg-success-fill text-success-text'
+              : 'border-danger-text/30 bg-danger-fill text-danger-text',
+          )}
+        >
+          {failed === 0 ? <Check className="size-4" /> : <AlertCircle className="size-4" />}
+        </span>
+      ) : (
+        <span className="relative size-9 shrink-0" aria-hidden>
+          <span className="absolute inset-0 rounded-full border border-border" />
+          <motion.span
+            className="absolute inset-0 rounded-full border-2 border-transparent border-t-accent-primary border-r-accent-primary"
+            animate={spin}
+            transition={{ duration: 1.1, repeat: Infinity, ease: 'linear' }}
+          />
+          <motion.span
+            className="absolute inset-1 rounded-full border border-transparent border-b-accent-tertiary border-l-accent-tertiary"
+            animate={spin}
+            transition={{ duration: 1.8, repeat: Infinity, ease: 'linear' }}
+          />
+        </span>
+      )}
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium">{title}</span>
         {detail ? (
@@ -54,7 +82,7 @@ export function BatchLoader({ title, detail, processed, total, className }: Batc
         ) : null}
       </span>
       <span className="text-text-tertiary shrink-0 text-xs tabular-nums">
-        {processed} of {total}
+        {completed} of {total}
       </span>
       <span aria-hidden className="bg-muted h-1 w-16 shrink-0 overflow-hidden rounded-full">
         <span

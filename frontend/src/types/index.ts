@@ -32,6 +32,7 @@ export interface ClassRead {
   name: string
   code: string | null
   semester: string | null
+  archived: boolean
   document_count: number
   created_at: string
   last_active_at: string
@@ -43,7 +44,7 @@ export interface ClassCreate {
   semester?: string | null
 }
 
-export type ClassUpdate = Partial<ClassCreate>
+export type ClassUpdate = Partial<ClassCreate> & { archived?: boolean }
 
 export interface DocumentRead {
   id: number
@@ -141,9 +142,10 @@ export interface ConnectionTestResult {
   message: string
 }
 
-/** The five SSE frame shapes emitted by `POST /api/sessions/{id}/chat`. */
+/** The six SSE frame shapes emitted by `POST /api/sessions/{id}/chat`. */
 export type ChatEvent =
   | { type: 'start'; message_id: number }
+  | { type: 'status'; stage: 'prompt_processing' | 'reviewing_documents' | 'composing_answer' }
   | { type: 'notice'; retrieval_trimmed: boolean; omitted_document_count: number }
   | { type: 'token'; text: string }
   | { type: 'done'; message_id: number }

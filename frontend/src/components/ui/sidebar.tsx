@@ -244,23 +244,26 @@ function Sidebar({
 }
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar } = useSidebar()
+  const { isMobile, open, openMobile, toggleSidebar } = useSidebar()
+  const expanded = isMobile ? openMobile : open
 
   return (
     <Button
+      {...props}
       data-sidebar="trigger"
       data-slot="sidebar-trigger"
       variant="ghost"
       size="icon-sm"
       className={cn(className)}
+      aria-expanded={expanded}
+      aria-label={expanded ? 'Hide sidebar' : 'Show sidebar'}
       onClick={(event) => {
         onClick?.(event)
         toggleSidebar()
       }}
-      {...props}
     >
       <PanelLeftIcon />
-      <span className="sr-only">Toggle Sidebar</span>
+      <span className="sr-only">{expanded ? 'Hide sidebar' : 'Show sidebar'}</span>
     </Button>
   )
 }
@@ -290,9 +293,11 @@ function SidebarRail({ className, ...props }: React.ComponentProps<'button'>) {
   )
 }
 
-function SidebarInset({ className, ...props }: React.ComponentProps<'main'>) {
+// Renders a `div`, not a `main`: AppShell owns the single `main` landmark that the skip
+// link targets, and nesting two of them makes the page report two main regions.
+function SidebarInset({ className, ...props }: React.ComponentProps<'div'>) {
   return (
-    <main
+    <div
       data-slot="sidebar-inset"
       className={cn(
         'relative flex w-full flex-1 flex-col bg-background md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-lg md:peer-data-[variant=inset]:shadow-sm md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2 lg:peer-data-[variant=inset]:m-3 lg:peer-data-[variant=inset]:ml-0 lg:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-3',

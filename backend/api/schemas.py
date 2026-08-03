@@ -33,11 +33,13 @@ class ClassUpdate(BaseModel):
 
     `code` and `semester` accept an explicit null, which clears them. `name` does not:
     the column is not nullable, so a null there is bad input rather than a clear.
+    `archived` moves a class to (or back from) the archived section without deleting it.
     """
 
     name: str | None = None
     code: str | None = None
     semester: str | None = None
+    archived: bool | None = None
 
     @field_validator("name")
     @classmethod
@@ -54,6 +56,7 @@ class ClassRead(BaseModel):
     name: str
     code: str | None
     semester: str | None
+    archived: bool = False
     document_count: int
     created_at: str
     last_active_at: str

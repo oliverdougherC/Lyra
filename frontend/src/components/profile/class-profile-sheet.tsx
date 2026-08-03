@@ -16,7 +16,6 @@ import {
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useClassProfile, useCorrectFact, useResolveFact } from '@/lib/hooks/use-profile'
-import { cn } from '@/lib/utils'
 import type { FactKind } from '@/types'
 
 const SECTIONS: { kind: FactKind; title: string }[] = [
@@ -25,6 +24,9 @@ const SECTIONS: { kind: FactKind; title: string }[] = [
   { kind: 'grading', title: 'Grading' },
   { kind: 'professor', title: 'Professor' },
   { kind: 'prerequisite', title: 'Prerequisites' },
+  // Without this section, extracted facts of kind `note` are dropped from the screen
+  // entirely: stored, used in prompts, and invisible to the person who can correct them.
+  { kind: 'note', title: 'Other details' },
 ]
 
 const SKIPPED_COPY = {
@@ -50,12 +52,14 @@ export function ClassProfileSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full sm:max-w-md">
-        <SheetHeader className="border-b px-5 py-4">
+      <SheetContent className="flex w-full flex-col sm:max-w-md">
+        <SheetHeader className="shrink-0 border-b px-5 py-4">
           <SheetTitle>Class profile</SheetTitle>
           <SheetDescription>Facts Lyra found in your course materials.</SheetDescription>
         </SheetHeader>
-        <ScrollArea className="h-[calc(100vh-9rem)] px-5 py-5">
+        {/* Sized by the sheet rather than by a viewport calculation, which drifts the
+            moment the header's copy wraps to a second line. */}
+        <ScrollArea className="min-h-0 flex-1 px-5 py-5">
           {isPending ? (
             <div className="space-y-3" aria-busy="true" aria-label="Loading class profile">
               <Skeleton className="h-20 w-full" />
@@ -103,13 +107,16 @@ export function ClassProfileSheet({
                       {title}
                     </h3>
                     <ul className="overflow-hidden rounded-md border bg-card">
-                      {facts.map((fact) => {
+                      {facts.map((fact, index) => {
                         const busy = correctFact.isPending || resolveFact.isPending
                         return (
                           <FactRow
                             key={fact.id}
                             fact={fact}
                             busy={busy}
+                            // Five rows reading "From homework_1.pdf" is noise; the
+                            // source only earns a line when it changes.
+                            showSource={fact.source_filename !== facts[index - 1]?.source_filename}
                             onCorrect={(value) => correctFact.mutate({ factId: fact.id, value })}
                             onResolve={(action) => resolveFact.mutate({ factId: fact.id, action })}
                           />
@@ -119,9 +126,10 @@ export function ClassProfileSheet({
                   </section>
                 )
               })}
-              <p className={cn('flex items-center gap-2 text-xs text-text-tertiary')}>
-                <CheckCircle2 aria-hidden className="size-4 text-success-text" />
-                Confirmed and high-confidence facts guide future answers.
+              <p className="text-text-tertiary flex items-start gap-2 text-xs">
+                <CheckCircle2 aria-hidden className="mt-px size-4 shrink-0" />
+                Lyra found these in your documents and uses them in answers. Click any value to
+                correct it.
               </p>
             </div>
           )}

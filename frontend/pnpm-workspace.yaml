@@ -1,8 +1,13 @@
-allowBuilds:
-  sharp: true
-  unrs-resolver: true
-minimumReleaseAgeExclude:
-  - '@hookform/resolvers@5.7.1'
+# Force one katex version everywhere: rehype-katex's ^0.16.0 range would otherwise
+# resolve a nested 0.16.x whose emitted classes mismatch the 0.18.x stylesheet we import.
+overrides:
+  katex: 0.18.1
+
+# Packages whose postinstall scripts are required for the app to run.
 onlyBuiltDependencies:
   - sharp
   - unrs-resolver
+
+allowBuilds:
+  sharp: true
+  unrs-resolver: true

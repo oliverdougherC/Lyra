@@ -206,7 +206,21 @@ def test_a_normal_turn_streams_start_then_tokens_then_done(
     assert response.headers["x-accel-buffering"] == "no"
 
     frames = _frames(response.text)
-    assert [frame["type"] for frame in frames] == ["start", "token", "token", "token", "done"]
+    assert [frame["type"] for frame in frames] == [
+        "start",
+        "status",
+        "status",
+        "status",
+        "token",
+        "token",
+        "token",
+        "done",
+    ]
+    assert [frames[index]["stage"] for index in (1, 2, 3)] == [
+        "prompt_processing",
+        "reviewing_documents",
+        "composing_answer",
+    ]
     answer = "".join(str(f["text"]) for f in frames if f["type"] == "token")
     assert answer == "The chain rule:\n\n$f'(g(x))g'(x)$"
     # The frame types are the contract; there is no sentinel to look for.
@@ -220,13 +234,23 @@ def test_a_trimmed_retrieval_adds_a_notice_immediately_after_start(
     monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Sure."))
 
     frames = _frames(_send(client, session_id).text)
-
-    assert [frame["type"] for frame in frames] == ["start", "notice", "token", "done"]
-    assert frames[1] == {
+    assert [frame["type"] for frame in frames] == [
+        "start",
+        "status",
+        "status",
+        "notice",
+        "status",
+        "token",
+        "done",
+    ]
+    assert frames[1] == {"type": "status", "stage": "prompt_processing"}
+    assert frames[2] == {"type": "status", "stage": "reviewing_documents"}
+    assert frames[3] == {
         "type": "notice",
         "retrieval_trimmed": True,
         "omitted_document_count": 2,
     }
+    assert frames[4] == {"type": "status", "stage": "composing_answer"}
 
 
 def test_the_question_is_stored_before_the_reply_and_the_reply_after(
@@ -280,9 +304,20 @@ def test_an_upstream_failure_mid_stream_arrives_as_an_error_frame(
     response = _send(client, session_id)
     frames = _frames(response.text)
 
-    # The status line went out with the first frame, so the failure cannot be a status.
     assert response.status_code == 200
-    assert [frame["type"] for frame in frames] == ["start", "token", "error"]
+    assert [frame["type"] for frame in frames] == [
+        "start",
+        "status",
+        "status",
+        "status",
+        "token",
+        "error",
+    ]
+    assert [frames[index]["stage"] for index in (1, 2, 3)] == [
+        "prompt_processing",
+        "reviewing_documents",
+        "composing_answer",
+    ]
     assert frames[-1]["message"]
     # A failed turn is one to retry, so no half-answer is stored to look complete later.
     assert [message["role"] for message in sessions.list_messages(db, session_id)] == ["user"]
@@ -297,6 +332,61 @@ def test_the_requested_mode_is_persisted_on_the_session(
     _send(client, session_id, mode="show")
 
     assert sessions.get_session(db, session_id)["mode"] == "show"
+
+
+def test_an_untitled_session_is_named_after_its_first_message(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Here it is."))
+    assert sessions.get_session(db, session_id)["title"] is None
+
+    _send(client, session_id)
+
+    assert sessions.get_session(db, session_id)["title"] == QUESTION
+
+
+def test_a_later_message_does_not_rename_the_session(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Here it is."))
+    _send(client, session_id)
+    first_title = sessions.get_session(db, session_id)["title"]
+
+    client.post(
+        f"/api/sessions/{session_id}/chat",
+        json={"content": "A completely different question", "mode": "guide"},
+    )
+
+    assert sessions.get_session(db, session_id)["title"] == first_title
+
+
+def test_a_session_created_with_a_title_keeps_it(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Here it is."))
+    created = client.post(f"/api/classes/{class_id}/sessions", json={"title": "Week 9"})
+
+    _send(client, created.json()["id"])
+
+    assert sessions.get_session(db, created.json()["id"])["title"] == "Week 9"
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("Short one", "Short one"),
+        ("  collapses\n  whitespace  ", "collapses whitespace"),
+        # Cut at the last word boundary inside the limit, never mid-word.
+        (
+            "Explain how the region of convergence constrains the inverse transform",
+            "Explain how the region of convergence...",
+        ),
+        # No boundary to cut at, so the hard slice stands rather than returning nothing.
+        ("x" * 80, f"{'x' * 48}..."),
+    ],
+)
+def test_a_title_is_condensed_at_a_word_boundary(content: str, expected: str) -> None:
+    assert sessions.title_from_message(content) == expected
 
 
 def test_a_blank_message_is_rejected_before_anything_is_stored(
@@ -323,10 +413,16 @@ async def test_a_disconnect_keeps_the_part_of_the_answer_that_arrived(
 
     stream = routes_chat._stream_turn(session_id, request, config, user_message_id)
     started = _frames(await anext(stream))
+    prompt_status = _frames(await anext(stream))
+    retrieval_status = _frames(await anext(stream))
+    composing_status = _frames(await anext(stream))
     first_token = _frames(await anext(stream))
     await stream.aclose()
 
     assert started[0] == {"type": "start", "message_id": user_message_id}
+    assert prompt_status[0] == {"type": "status", "stage": "prompt_processing"}
+    assert retrieval_status[0] == {"type": "status", "stage": "reviewing_documents"}
+    assert composing_status[0] == {"type": "status", "stage": "composing_answer"}
     assert first_token[0] == {"type": "token", "text": "Half "}
     stored = sessions.list_messages(db, session_id)
     assert [message["role"] for message in stored] == ["user", "assistant"]

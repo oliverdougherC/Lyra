@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
+import { useState } from 'react'
 import { FolderOpen, Upload } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -8,7 +8,6 @@ import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
 
 export const ACCEPTED_EXTENSIONS = ['.pdf', '.txt', '.md'] as const
-const ACCEPT_ATTR = ACCEPTED_EXTENSIONS.join(',')
 
 export function hasAcceptedExtension(name: string): boolean {
   return ACCEPTED_EXTENSIONS.some((extension) => name.toLowerCase().endsWith(extension))
@@ -94,68 +93,39 @@ export function filesFromDrop(
 
 type DocumentDropzoneProps = {
   onFiles: (files: File[]) => void
+  rejectedFiles?: string[] | null
   /** Name of the file currently uploading, when one is in flight. */
   uploadingName?: string | null
   uploadedCount?: number
   queueLength?: number
   className?: string
+  /** Hidden pickers owned by the parent, so a collapsed pane can still open them. */
+  fileInputRef?: React.RefObject<HTMLInputElement | null>
+  folderInputRef?: React.RefObject<HTMLInputElement | null>
 }
 
 export function DocumentDropzone({
   onFiles,
+  rejectedFiles,
   uploadingName,
   uploadedCount = 0,
   queueLength = 0,
   className,
+  fileInputRef,
+  folderInputRef,
 }: DocumentDropzoneProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const folderInputRef = useRef<HTMLInputElement>(null)
   const [dragOver, setDragOver] = useState(false)
-  const [rejected, setRejected] = useState<string[] | null>(null)
-
-  const submit = useCallback(
-    (files: File[]) => {
-      const { accepted, rejected: refused } = partitionFiles(files)
-      setRejected(refused.length > 0 ? refused : null)
-      if (accepted.length > 0) onFiles(accepted)
-    },
-    [onFiles],
-  )
 
   const uploading = Boolean(uploadingName)
   const total = uploadedCount + queueLength
   const percent = total > 0 ? Math.round((uploadedCount / total) * 100) : 0
 
+  // Idle, this is one quiet row so the document list keeps the pane's height. It only
+  // grows when it has something to say: a drag in progress, a rejection, or an upload.
+  const expanded = dragOver || Boolean(rejectedFiles) || uploading
+
   return (
     <div className={className}>
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        accept={ACCEPT_ATTR}
-        className="sr-only"
-        aria-label="Choose documents to upload"
-        onChange={(event) => {
-          submit(Array.from(event.target.files ?? []))
-          event.target.value = ''
-        }}
-      />
-      <input
-        ref={(node) => {
-          folderInputRef.current = node
-          if (node && !node.hasAttribute('webkitdirectory')) {
-            node.setAttribute('webkitdirectory', '')
-          }
-        }}
-        type="file"
-        multiple
-        className="sr-only"
-        aria-label="Choose a folder of documents to upload"
-        onChange={(event) => {
-          submit(Array.from(event.target.files ?? []))
-          event.target.value = ''
-        }}
-      />
       <div
         role="group"
         aria-label="Upload documents"
@@ -166,61 +136,65 @@ export function DocumentDropzone({
         onDragLeave={() => setDragOver(false)}
         onDrop={(event) => {
           event.preventDefault()
+          event.stopPropagation()
           setDragOver(false)
-          void filesFromDrop(event.dataTransfer).then(({ files }) => submit(files))
+          void filesFromDrop(event.dataTransfer).then(({ files }) => onFiles(files))
         }}
         className={cn(
-          'flex flex-col gap-2 rounded-md border border-dashed p-3 text-sm transition-colors duration-150',
+          'flex items-center gap-2 rounded-md border border-dashed px-2.5 py-2 text-sm transition-colors duration-150',
           'focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2',
+          expanded && 'flex-col items-stretch gap-2.5 p-3',
           dragOver
             ? 'border-accent-primary bg-accent-surface'
-            : rejected
+            : rejectedFiles
               ? 'border-danger-text bg-danger-fill'
               : 'border-border-strong bg-card hover:bg-muted',
         )}
       >
-        <div className="flex items-center gap-3">
-          <span
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <Upload
             className={cn(
-              'flex size-8 shrink-0 items-center justify-center rounded-md bg-muted',
+              'size-4 shrink-0',
               dragOver
-                ? 'bg-accent-surface text-accent-primary'
-                : rejected
-                  ? 'bg-danger-fill text-danger-text'
+                ? 'text-accent-primary'
+                : rejectedFiles
+                  ? 'text-danger-text'
                   : 'text-text-tertiary',
             )}
-          >
-            <Upload className="size-4" aria-hidden />
-          </span>
+            aria-hidden
+          />
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">Drop PDF, TXT, or MD</p>
+            <p className={cn('truncate text-xs', dragOver ? 'font-medium' : 'text-text-secondary')}>
+              {dragOver ? 'Drop to upload' : 'Drop PDF, TXT, or MD here'}
+            </p>
             {uploading ? (
               <div className="mt-1.5 space-y-1.5">
                 <p className="text-text-secondary truncate text-xs">Uploading {uploadingName}</p>
                 <Progress value={percent} />
               </div>
-            ) : rejected ? (
+            ) : rejectedFiles ? (
               <p className="text-danger-text mt-1 text-xs">
-                {rejected.length === 1
-                  ? `${rejected[0]} is not`
-                  : `${rejected.length} files are not`}{' '}
+                {rejectedFiles.length === 1
+                  ? `${rejectedFiles[0]} is not`
+                  : `${rejectedFiles.length} files are not`}{' '}
                 a supported type. Lyra reads PDF, TXT, and MD.
               </p>
-            ) : (
-              <p className="text-text-secondary mt-1 text-xs">
-                Folders are scanned recursively. Choose files or drag them here.
-              </p>
-            )}
+            ) : null}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" onClick={() => folderInputRef.current?.click()}>
-            <FolderOpen />
-            Choose folder
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => fileInputRef.current?.click()}>
-            <Upload />
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Button size="sm" variant="outline" onClick={() => fileInputRef?.current?.click()}>
             Choose files
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="size-8"
+            onClick={() => folderInputRef?.current?.click()}
+            title="Choose a folder, scanned recursively"
+            aria-label="Choose a folder, scanned recursively"
+          >
+            <FolderOpen />
           </Button>
         </div>
       </div>

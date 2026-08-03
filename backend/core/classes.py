@@ -11,10 +11,10 @@ import sqlite3
 from backend.config import settings
 from backend.core.errors import NotFoundError
 
-UPDATABLE_FIELDS = frozenset({"name", "code", "semester"})
+UPDATABLE_FIELDS = frozenset({"name", "code", "semester", "archived"})
 
 _LIST_SQL = """
-select c.id, c.name, c.code, c.semester, c.created_at, c.last_active_at,
+select c.id, c.name, c.code, c.semester, c.archived, c.created_at, c.last_active_at,
        count(d.id) as document_count
 from classes c
 left join documents d on d.class_id = c.id
@@ -23,7 +23,7 @@ order by c.last_active_at desc, c.id desc
 """
 
 _GET_SQL = """
-select c.id, c.name, c.code, c.semester, c.created_at, c.last_active_at,
+select c.id, c.name, c.code, c.semester, c.archived, c.created_at, c.last_active_at,
        count(d.id) as document_count
 from classes c
 left join documents d on d.class_id = c.id

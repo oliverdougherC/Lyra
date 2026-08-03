@@ -10,11 +10,11 @@ export const chatKeys = {
   messages: (sessionId: number) => ['messages', sessionId] as const,
 }
 
-export function useSessions(classId: number) {
+export function useSessions(classId: number | null) {
   return useQuery({
-    queryKey: chatKeys.sessions(classId),
-    queryFn: ({ signal }) => api.listSessions(classId, signal),
-    enabled: Number.isFinite(classId),
+    queryKey: chatKeys.sessions(classId ?? -1),
+    queryFn: ({ signal }) => api.listSessions(classId as number, signal),
+    enabled: classId !== null,
   })
 }
 
@@ -26,12 +26,14 @@ export function useMessages(sessionId: number | null) {
   })
 }
 
-export function useCreateSession(classId: number) {
+export function useCreateSession(classId: number | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => api.createSession(classId),
+    mutationFn: () => api.createSession(classId as number),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: chatKeys.sessions(classId) })
+      if (classId !== null) {
+        queryClient.invalidateQueries({ queryKey: chatKeys.sessions(classId) })
+      }
       queryClient.invalidateQueries({ queryKey: classKeys.all })
     },
   })

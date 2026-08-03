@@ -4,7 +4,7 @@ Handlers are sync `def`, because `sqlite3` blocks and FastAPI runs sync handlers
 threadpool. The streaming handler is the exception: it is `async def` because the turn it
 returns is driven by awaited `httpx` reads from the tutor endpoint.
 
-The stream is SSE over POST, one JSON object per `data:` line. The frame types are the
+The stream is SSE over POST, one of six JSON frame shapes per `data:` line. The frame types are the
 contract, so there is no `[DONE]` sentinel: a client reads `type` and dispatches on it.
 """
 
@@ -114,6 +114,16 @@ class TurnBudget:
 
 
 @dataclass(frozen=True)
+class TurnPreparation:
+    """Prompt and budget work completed before the blocking retrieval call."""
+
+    class_id: int
+    system_prompt: str
+    history: list[dict[str, object]]
+    retrieval_budget: int
+
+
+@dataclass(frozen=True)
 class Turn:
     """The assembled prompt plus what retrieval had to say about itself."""
 
@@ -195,6 +205,8 @@ def _open_turn(
     # Persisted on the session, not just used for this turn, so the toggle survives a
     # reload and the next turn continues in the mode the student picked.
     sessions.set_session_mode(conn, session_id, request.mode)
+    # Before the message is stored, so "first message" means this one.
+    sessions.set_session_title_if_unset(conn, session_id, request.content)
     user_message_id = sessions.add_message(conn, session_id, "user", request.content)
     touch_class(conn, int(session["class_id"]))
     return config, user_message_id
@@ -216,13 +228,22 @@ async def _stream_turn(
     retrieval = RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
     try:
         yield _frame(type="start", message_id=user_message_id)
-
-        # Retrieval embeds the query over HTTP and reads SQLite, both blocking, so the
-        # whole assembly runs off the event loop this generator is driven by.
-        turn = await asyncio.to_thread(
-            _build_turn, conn, session_id, request, config, user_message_id
+        yield _frame(type="status", stage="prompt_processing")
+        preparation = await asyncio.to_thread(
+            _prepare_turn, conn, session_id, request, config, user_message_id
         )
-        retrieval = turn.retrieval
+
+        yield _frame(type="status", stage="reviewing_documents")
+        result = await asyncio.to_thread(
+            retrieve,
+            conn,
+            preparation.class_id,
+            request.content,
+            preparation.retrieval_budget,
+            document_id=request.document_id,
+        )
+        retrieval = result
+        turn = _build_turn(preparation, request, result)
         if retrieval.trimmed:
             yield _frame(
                 type="notice",
@@ -230,6 +251,7 @@ async def _stream_turn(
                 omitted_document_count=retrieval.omitted_document_count,
             )
 
+        yield _frame(type="status", stage="composing_answer")
         async for token in stream_chat(
             config.endpoint_url, config.api_key, config.model, turn.messages
         ):
@@ -255,20 +277,14 @@ async def _stream_turn(
         conn.close()
 
 
-def _build_turn(
+def _prepare_turn(
     conn: sqlite3.Connection,
     session_id: int,
     request: ChatRequest,
     config: TutorConfig,
     user_message_id: int,
-) -> Turn:
-    """Assemble one turn's prompt against the context budget.
-
-    System prompt, then the retrieved context block, then the trimmed history, then the
-    student's message, which is the prompt structure Stage 7 specifies. The context block
-    rides on the system message so endpoints that only honour the first system message
-    still receive it.
-    """
+) -> TurnPreparation:
+    """Prepare system instructions, history, and the retrieval budget for one turn."""
     class_id = int(sessions.get_session(conn, session_id)["class_id"])
     budget = plan_budget(config.context_window)
 
@@ -288,16 +304,29 @@ def _build_turn(
     # Unused history budget is lent to retrieval. The reverse never happens: retrieval
     # cannot borrow history's share, and neither may touch the generation reserve.
     retrieval_budget = max(0, budget.retrieval + budget.history - history_used - system_overrun)
-
-    result = retrieve(
-        conn, class_id, request.content, retrieval_budget, document_id=request.document_id
+    return TurnPreparation(
+        class_id=class_id,
+        system_prompt=system_prompt,
+        history=history,
+        retrieval_budget=retrieval_budget,
     )
+
+
+def _build_turn(
+    preparation: TurnPreparation, request: ChatRequest, result: RetrievalResult
+) -> Turn:
+    """Assemble the final prompt after retrieval has returned."""
     context_block = format_context_block([_context_entry(chunk) for chunk in result.chunks])
-    system_content = f"{system_prompt}\n\n{context_block}" if context_block else system_prompt
+    system_content = (
+        f"{preparation.system_prompt}\n\n{context_block}"
+        if context_block
+        else preparation.system_prompt
+    )
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]
     messages += [
-        {"role": str(message["role"]), "content": str(message["content"])} for message in history
+        {"role": str(message["role"]), "content": str(message["content"])}
+        for message in preparation.history
     ]
     messages.append({"role": "user", "content": request.content})
     return Turn(messages=messages, retrieval=result)

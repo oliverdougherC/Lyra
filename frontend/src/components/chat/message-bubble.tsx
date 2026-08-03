@@ -3,10 +3,12 @@
 import { useState } from 'react'
 import { Check, Copy, RotateCw, Sparkles } from 'lucide-react'
 
+import { ProcessingState, type ProcessingStage } from '@/components/chat/processing-state'
 import { StreamingMarkdown } from '@/components/chat/streaming-markdown'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatCount, formatRelativeTime } from '@/lib/format'
+import { cn } from '@/lib/utils'
 
 export type ChatMessage = {
   id: number
@@ -19,12 +21,26 @@ export type ChatMessage = {
 
 type MessageRowProps = {
   message: ChatMessage
+  /** True when a visible gap in time separates this message from the previous one. */
+  startsTimeGap?: boolean
   streaming?: boolean
+  processingStage?: ProcessingStage | null
+  turnEnded?: boolean
+  onRevealComplete?: () => void
   canRetry?: boolean
   onRetry?: () => void
 }
 
-export function MessageRow({ message, streaming, canRetry, onRetry }: MessageRowProps) {
+export function MessageRow({
+  message,
+  startsTimeGap,
+  streaming,
+  processingStage,
+  turnEnded,
+  onRevealComplete,
+  canRetry,
+  onRetry,
+}: MessageRowProps) {
   if (message.role === 'user') {
     return (
       <div className="group flex justify-end">
@@ -33,7 +49,7 @@ export function MessageRow({ message, streaming, canRetry, onRetry }: MessageRow
             {message.content}
           </div>
           <div className="mt-1 flex items-center justify-end gap-1">
-            <Timestamp value={message.created_at} />
+            <Timestamp value={message.created_at} pinned={startsTimeGap} />
             <CopyButton content={message.content} />
           </div>
         </div>
@@ -51,12 +67,21 @@ export function MessageRow({ message, streaming, canRetry, onRetry }: MessageRow
           <Sparkles className="size-3.5" />
         </div>
         <div className="min-w-0 flex-1">
-          <StreamingMarkdown content={message.content} streaming={streaming} />
+          {streaming && !message.content.trim() && processingStage ? (
+            <ProcessingState stage={processingStage} />
+          ) : (
+            <StreamingMarkdown
+              content={message.content}
+              streaming={streaming}
+              turnEnded={turnEnded}
+              onRevealComplete={onRevealComplete}
+            />
+          )}
           {message.retrieval_trimmed ? (
             <RetrievalNotice omittedDocumentCount={message.omitted_document_count} />
           ) : null}
           <div className="mt-1 flex items-center gap-1">
-            <Timestamp value={message.created_at} />
+            <Timestamp value={message.created_at} pinned={startsTimeGap} />
             <CopyButton content={message.content} />
             {canRetry && onRetry ? (
               <Button
@@ -97,9 +122,18 @@ export function RetrievalNotice({ omittedDocumentCount }: { omittedDocumentCount
   )
 }
 
-function Timestamp({ value }: { value: string }) {
+/**
+ * Shown on hover, and pinned visible when this message opens a new stretch of time, so a
+ * conversation resumed the next day says so without the reader having to go looking.
+ */
+function Timestamp({ value, pinned }: { value: string; pinned?: boolean }) {
   return (
-    <span className="text-text-tertiary text-xs opacity-0 transition-opacity group-hover:opacity-100">
+    <span
+      className={cn(
+        'text-text-tertiary text-xs transition-opacity',
+        pinned ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+      )}
+    >
       {formatRelativeTime(value)}
     </span>
   )

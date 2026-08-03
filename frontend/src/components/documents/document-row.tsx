@@ -80,7 +80,7 @@ export function DocumentRow({
   return (
     <div
       className={cn(
-        'rounded-md border bg-card p-3 transition-colors duration-150',
+        'rounded-md border bg-card px-2.5 py-1.5 transition-colors duration-150',
         busy && 'opacity-70',
         selected ? 'border-accent-primary bg-accent-surface/50' : 'border-border hover:bg-muted',
       )}
@@ -91,20 +91,34 @@ export function DocumentRow({
           disabled={!selectable}
           onClick={() => onSelect(document)}
           aria-pressed={selected}
-          className="flex min-h-10 min-w-0 flex-1 items-center gap-2 rounded-sm text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-default"
+          aria-label={
+            selectable
+              ? `${selected ? 'Ask about every document instead of' : 'Ask only about'} ${document.filename}`
+              : document.filename
+          }
+          className="flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-sm text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-default"
         >
           <FileIcon filename={document.filename} />
           <span className="min-w-0 flex-1 truncate text-sm" title={document.filename}>
             {truncateMiddle(document.filename)}
           </span>
+          {!busy && state !== 'failed' ? (
+            <span className="text-text-tertiary shrink-0 text-xs tabular-nums">
+              {formatFileSize(document.byte_size)}
+            </span>
+          ) : null}
           <StateIndicator state={state} />
         </button>
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="shrink-0">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 shrink-0"
+              aria-label={`Actions for ${document.filename}`}
+            >
               <MoreVertical />
-              <span className="sr-only">Actions for {document.filename}</span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -151,10 +165,6 @@ export function DocumentRow({
             Retry
           </Button>
         </div>
-      ) : null}
-
-      {!busy && state !== 'failed' ? (
-        <p className="text-text-tertiary mt-1 pl-6 text-xs">{formatFileSize(document.byte_size)}</p>
       ) : null}
     </div>
   )

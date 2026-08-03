@@ -71,7 +71,7 @@ Calculated WCAG ratios from the values in `globals.css`:
 | Token | Value |
 | --- | --- |
 | `--bg-primary`, `--bg-secondary`, `--bg-tertiary` | `#1D1A16`, `#28241F`, `#37302A` |
-| `--border`, `--border-strong` | `#4F453B`, `#A18C78` |
+| `--border`, `--border-strong` | `#5B5044`, `#A18C78` |
 | `--text-primary`, `--text-secondary`, `--text-tertiary` | `#F3F0ED`, `#CDC1B6`, `#B1A195` |
 | `--accent-primary`, `--accent-primary-hover`, `--accent-foreground` | `#9FC6A3`, `#B1D3B4`, `#1D1A16` |
 | `--accent-surface`, `--accent-surface-foreground` | `#3D5C40`, `#E0EBE1` |
@@ -124,12 +124,21 @@ keywords use `--danger-text`; titles and tags use `--accent-primary`; literals a
 ## Typography
 
 `frontend/src/app/layout.tsx` loads DM Sans (`400`, `500`, `600`, `700`) as
-`--font-dm-sans`, Fraunces (`500`, `600`, `700`) as `--font-fraunces`, and keeps JetBrains Mono.
-`globals.css` maps them to `--font-sans`, `--font-heading`, and `--font-mono`.
+`--font-dm-sans`, Fraunces (`500`, `600`, `700`) as `--font-fraunces`, keeps JetBrains Mono, and
+loads Source Serif 4 (`400`, `600`, both with italics) as `--font-source-serif`.
+`globals.css` maps them to `--font-sans`, `--font-heading`, `--font-mono`, and the assistant-only
+`--font-ai-response` token.
 
 - **DM Sans:** body copy, labels, controls, metadata, state text, and navigation.
 - **Fraunces:** `h1`, `h2`, `h3`, and Card, Dialog, Sheet, and Empty titles only.
 - **JetBrains Mono:** code, file-oriented technical notation, and keyboard notation.
+- **Source Serif 4:** assistant response reading surfaces only, at `1.0625rem` and `1.65` leading;
+  KaTeX retains its own math font.
+
+The reading face must ship a real bold. Tutor answers are prose with emphasis, and a single-weight
+face leaves the browser to synthesize every `**bold**` run, which renders visibly wrong at reading
+size. Tables inside a response drop back to `--font-sans`: tabular data is not prose, and the
+serif's wider figures cost column width the message can rarely spare.
 
 Display hierarchy comes from tighter tracking and scale, not heavier weights. Heading defaults use
 `tracking-tight`; small uppercase editorial labels use measured positive tracking.
@@ -141,9 +150,13 @@ Display hierarchy comes from tighter tracking and scale, not heavier weights. He
 | `--radius-sm` | `6px` | `6px` |
 | `--radius-md` | `10px` | `10px` |
 | `--radius-lg` | `16px` | `16px` |
-| `--elevation-sm` | `0 2px 8px rgb(48 40 33 / 0.05)` | `0 2px 8px rgb(14 12 10 / 0.22)` |
-| `--elevation-md` | `0 12px 30px rgb(48 40 33 / 0.08)` | `0 12px 30px rgb(14 12 10 / 0.30)` |
-| `--elevation-lg` | `0 24px 60px rgb(48 40 33 / 0.12)` | `0 24px 60px rgb(14 12 10 / 0.38)` |
+| `--elevation-sm` | `0 2px 8px rgb(48 40 33 / 0.05)` | `0 2px 8px rgb(14 12 10 / 0.40)`, `inset 0 1px 0 rgb(255 250 244 / 0.04)` |
+| `--elevation-md` | `0 12px 30px rgb(48 40 33 / 0.08)` | `0 12px 30px rgb(14 12 10 / 0.50)`, `inset 0 1px 0 rgb(255 250 244 / 0.05)` |
+| `--elevation-lg` | `0 24px 60px rgb(48 40 33 / 0.12)` | `0 24px 60px rgb(14 12 10 / 0.62)`, `inset 0 1px 0 rgb(255 250 244 / 0.06)` |
+
+A drop shadow is a light-theme device: on a dark canvas it darkens dark and reads as nothing. Dark
+therefore carries a second, inset hairline of lifted paper along the top of each elevated surface,
+and a lighter `--border`, so raised paper still reads as raised in both themes.
 
 Cards are 16px raised-paper surfaces: `--bg-secondary`, a 1px `--border`, and `shadow-sm`.
 Inputs, textareas, selects, settings rows, and the composer well use 10px radii and
@@ -164,11 +177,16 @@ avatars, status dots, switches, and compact metadata badges.
   Course-mark avatars are rectangular through `rounded-[inherit]` children.
 - **Overlays and surfaces:** AlertDialog, Dialog, and Sheet overlays use `bg-overlay`. Dialogs, sheets,
   dropdowns, popovers, selects, tooltips, and Sonner use paper, border, and semantic elevation.
-- **Shell:** desktop uses a 260px inset rail that can collapse to 60px; mobile uses a floating,
-  64px paper shelf below 640px. Main content keeps the 1200px cap.
-- **Workspace:** compact Documents/Chat uses line tabs; desktop panes live inside one bordered,
-  raised-paper workbench. Document rows are paper items with a sage selected edge. Student messages
-  are muted-paper notes; assistant messages are full-width parchment reading surfaces.
+- **Shell:** desktop uses a 260px inset rail that moves off-canvas when closed; mobile uses a floating,
+  64px paper shelf below 640px. Main content keeps the 1320px cap.
+- **Workspace:** compact Documents/Chat uses line tabs, defaulting to Chat; on desktop one
+  raised-paper workbench holds the conversation, with documents opening as a 340px right column
+  into the gutter the 860px reading measure was never going to use. Document rows are paper items
+  with a sage selected edge. Student messages are muted-paper notes; assistant messages are
+  full-width parchment reading surfaces.
+- **Course marks:** the mark is the code's subject prefix (`ECE 203` marks as `ECE`), falling back
+  to name initials when a class has no code. Never per-word initials, which render `ECE 203` as
+  `E2` and collide across a department.
 - **Settings:** Tutor model, Privacy, and Appearance are raised-paper sections. Appearance rows have
   a token swatch and a 44px minimum target. Remote endpoint warnings remain semantic danger alerts.
 
@@ -181,6 +199,10 @@ no surface slides sideways, zooms, or lasts more than 250ms.
 enters at opacity `0`, `y: 8` over 250ms with `ease: [0.25, 0.1, 0.3, 1]`; delay is capped at 200ms.
 Class cards use the five-step, 50ms stagger through this cap. With reduced motion it uses only a
 150ms opacity fade, zero delay, and no transform.
+
+`Reveal` takes an `once` id and plays at most once per session for that id. Motion explains that
+something arrived; replaying the cascade every time the user navigates back to a list they have
+already seen explains nothing and reads as latency.
 
 Skeletons, Spinner, and Sonner's loading icon use `motion-safe` animation. Under
 `prefers-reduced-motion: reduce`, skeletons remain static, spinners stay visible without rotating,

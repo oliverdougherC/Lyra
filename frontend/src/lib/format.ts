@@ -30,6 +30,17 @@ export function formatRelativeTime(value: string): string {
   return relative.format(Math.round(elapsedSeconds / 31557600), 'year')
 }
 
+const shortDate = new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric' })
+
+/**
+ * Fallback name for a conversation the backend has not titled yet, which in practice
+ * means one with no messages. Dated rather than numbered: a positional name renumbers
+ * every time a conversation is added or removed, so the same chat keeps changing name.
+ */
+export function formatSessionFallbackTitle(createdAt: string): string {
+  return `Chat from ${shortDate.format(parseTimestamp(createdAt))}`
+}
+
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
@@ -50,10 +61,23 @@ export function truncateMiddle(value: string, max = 32): string {
   return `${value.slice(0, head)}...${value.slice(value.length - (max - 1 - head))}`
 }
 
-/** Two-character avatar label, from the course code when there is one. */
+/**
+ * Short course mark, at most three characters.
+ *
+ * The subject prefix of a course code is what a student actually reads a class by, so
+ * `ECE 203` marks as `ECE`. Taking the first letter of each word instead would render it
+ * `E2`, which identifies nothing and collides with every other course in the department.
+ * Classes with no code fall back to initials from the name.
+ */
 export function initialsFor(name: string, code: string | null): string {
-  const source = code?.trim() || name.trim()
-  const words = source.split(/\s+/).filter(Boolean)
+  const trimmedCode = code?.trim() ?? ''
+  if (trimmedCode) {
+    const letters = /^[^\W\d_]+/u.exec(trimmedCode)?.[0]
+    if (letters) return letters.slice(0, 3).toUpperCase()
+    return trimmedCode.replace(/\s+/g, '').slice(0, 3).toUpperCase()
+  }
+
+  const words = name.trim().split(/\s+/).filter(Boolean)
   if (words.length >= 2) return (words[0][0] + words[1][0]).toUpperCase()
-  return source.slice(0, 2).toUpperCase()
+  return name.trim().slice(0, 2).toUpperCase()
 }

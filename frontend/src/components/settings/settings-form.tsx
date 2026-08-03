@@ -244,7 +244,13 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
                 onValueChange={(value) => void save({ model: value }, 'Model selected.')}
               >
                 <SelectTrigger id="model" className="flex-1">
-                  <SelectValue placeholder={settings.model ?? 'Test the connection first'} />
+                  {/* Radix renders nothing when the stored value has no matching item,
+                      which is the normal state before a connection test: the model is
+                      saved, the list is not loaded yet. Naming it here keeps the control
+                      from reading as empty when it is not. */}
+                  <SelectValue placeholder="Test the connection to choose a model">
+                    {settings.model ?? undefined}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {models.map((name) => (

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Check, HelpCircle, X } from 'lucide-react'
+import { Check, Dot, HelpCircle, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,14 +13,49 @@ type FactRowProps = {
   onCorrect: (value: string) => void
   onResolve: (action: 'confirm' | 'reject') => void
   busy: boolean
+  /** False when the row above cites the same document, so the source is not repeated. */
+  showSource?: boolean
 }
 
-export function FactRow({ fact, onCorrect, onResolve, busy }: FactRowProps) {
+/**
+ * Extraction labels come from the model and are frequently filler: a topic labelled
+ * `topic`, a value labelled `content`. Those say nothing the section heading has not
+ * already said, and printing them exposes the shape of the extraction prompt.
+ */
+const FILLER_LABELS = new Set([
+  'content',
+  'value',
+  'text',
+  'item',
+  'fact',
+  'detail',
+  'name',
+  'title',
+  'note',
+  'deadline',
+  'topic',
+  'grading',
+  'professor',
+  'prerequisite',
+])
+
+function displayLabel(fact: FactRead): string | null {
+  const label = fact.label?.trim()
+  if (!label) return null
+  const normalized = label.toLowerCase()
+  if (normalized === fact.kind || FILLER_LABELS.has(normalized)) return null
+  return label
+}
+
+export function FactRow({ fact, onCorrect, onResolve, busy, showSource = true }: FactRowProps) {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(fact.value)
 
   const needsConfirmation = !fact.confirmed && fact.confidence === 'low'
+  const label = displayLabel(fact)
 
+  // A success surface is a claim that the user checked this. Only a confirmed fact earns
+  // it: everything else is still something Lyra proposed on its own.
   const confirmation = fact.rejected
     ? {
         label: 'Rejected',
@@ -43,7 +78,15 @@ export function FactRow({ fact, onCorrect, onResolve, busy }: FactRowProps) {
             iconClass: 'text-success-text',
           }
         : null
-  const StateIcon = fact.rejected ? X : needsConfirmation ? HelpCircle : Check
+  // A check reads as "verified", which only a confirmed fact is. An unconfirmed one gets
+  // a neutral bullet: Lyra proposed it, nobody has checked it yet.
+  const StateIcon = fact.rejected
+    ? X
+    : needsConfirmation
+      ? HelpCircle
+      : fact.confirmed
+        ? Check
+        : Dot
 
   function commit() {
     const next = value.trim()
@@ -61,19 +104,21 @@ export function FactRow({ fact, onCorrect, onResolve, busy }: FactRowProps) {
     >
       <div className="flex items-start gap-2">
         <StateIcon
-          className={cn('mt-0.5 size-4 shrink-0', confirmation?.iconClass ?? 'text-success-text')}
+          className={cn('mt-0.5 size-4 shrink-0', confirmation?.iconClass ?? 'text-text-tertiary')}
           aria-hidden
         />
 
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            {fact.label ? <p className="text-text-secondary text-xs">{fact.label}</p> : null}
-            {confirmation ? (
-              <span className={cn('text-xs font-medium', confirmation.textClass)}>
-                {confirmation.label}
-              </span>
-            ) : null}
-          </div>
+          {label || confirmation ? (
+            <div className="mb-0.5 flex flex-wrap items-center gap-2">
+              {label ? <p className="text-text-secondary text-xs">{label}</p> : null}
+              {confirmation ? (
+                <span className={cn('text-xs font-medium', confirmation.textClass)}>
+                  {confirmation.label}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
 
           {editing ? (
             <Input
@@ -92,19 +137,20 @@ export function FactRow({ fact, onCorrect, onResolve, busy }: FactRowProps) {
                 }
               }}
               className="mt-1"
-              aria-label={`Edit ${fact.label || 'fact'}`}
+              aria-label={`Edit ${label || 'this fact'}`}
             />
           ) : (
             <button
               type="button"
               onClick={() => setEditing(true)}
+              title="Click to correct this"
               className="focus-visible:ring-ring/50 w-full rounded-sm text-left break-words focus-visible:ring-[3px] focus-visible:outline-none"
             >
               {fact.value}
             </button>
           )}
 
-          {fact.source_filename ? (
+          {showSource && fact.source_filename ? (
             <p className="text-text-tertiary mt-1 text-xs">From {fact.source_filename}</p>
           ) : null}
 

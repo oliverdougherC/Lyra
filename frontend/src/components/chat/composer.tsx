@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { Textarea } from '@/components/ui/textarea'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
+import { cn } from '@/lib/utils'
 
 const MAX_ROWS = 3
 const LINE_HEIGHT_PX = 24
@@ -55,10 +56,11 @@ export function Composer({
     if (!hintDismissed) setHintDismissed(true)
     onSend()
   }, [streaming, disabledReason, value, hintDismissed, setHintDismissed, onSend])
+  const hasDraft = value.trim().length > 0
 
   if (disabledReason) {
     return (
-      <div className="rounded-md border border-border-strong bg-muted p-3 text-sm">
+      <div className="rounded-[10px] border border-border-strong bg-muted p-3 text-sm">
         <p className="text-text-secondary">{disabledReason}</p>
         <Button asChild variant="outline" size="sm" className="mt-2">
           <Link href="/settings">Open settings</Link>
@@ -70,24 +72,27 @@ export function Composer({
   return (
     <div className="space-y-2">
       {scopedDocumentName ? (
-        <Badge variant="secondary" className="gap-1">
-          Only {scopedDocumentName}
+        <Badge variant="secondary" className="max-w-full">
+          <span className="truncate">Only {scopedDocumentName}</span>
           <button
             type="button"
             onClick={onClearScope}
-            className="focus-visible:ring-ring/50 rounded-full focus-visible:ring-[2px] focus-visible:outline-none"
+            aria-label="Clear document scope"
+            className="rounded-full focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
           >
-            <X className="size-3" />
-            <span className="sr-only">Search all documents again</span>
+            <X aria-hidden className="size-3" />
           </button>
         </Badge>
       ) : null}
 
-      <div className="border-input focus-within:border-accent-primary flex items-end gap-2 rounded-md border bg-card p-2 shadow-sm transition-colors focus-within:ring-2 focus-within:ring-ring/20">
+      <div className="flex items-end gap-2 rounded-[10px] border border-input bg-card p-2 shadow-sm transition-colors focus-within:border-accent-primary focus-within:ring-2 focus-within:ring-ring/20">
         <Textarea
           ref={textareaRef}
           rows={1}
+          id="message-composer"
+          name="message"
           value={value}
+          disabled={streaming}
           placeholder="Ask about your material"
           aria-label="Message Lyra"
           onChange={(event) => onChange(event.target.value)}
@@ -97,10 +102,12 @@ export function Composer({
               send()
             }
           }}
-          className="max-h-[88px] min-h-0 resize-none border-0 bg-transparent p-1 shadow-none focus-visible:ring-0"
+          className="max-h-[88px] min-h-0 flex-1 resize-none border-0 bg-transparent px-1.5 py-1.5 leading-6 shadow-none focus-visible:ring-0 disabled:cursor-text disabled:bg-transparent disabled:opacity-100"
         />
+
         {streaming ? (
           <Button
+            type="button"
             size="icon"
             variant="outline"
             className="shrink-0 rounded-full"
@@ -111,10 +118,12 @@ export function Composer({
           </Button>
         ) : (
           <Button
+            type="button"
             size="icon"
-            className="shrink-0 rounded-full"
+            variant={hasDraft ? 'default' : 'secondary'}
+            className={cn('shrink-0 rounded-full', !hasDraft && 'text-text-tertiary')}
             onClick={send}
-            disabled={value.trim().length === 0}
+            disabled={!hasDraft}
             aria-label="Send message"
           >
             <ArrowUp />
@@ -122,8 +131,10 @@ export function Composer({
         )}
       </div>
 
+      {/* Shown until the first message is sent, and never on a phone, where there is no
+          physical Enter key to explain and the row costs real reading height. */}
       {hintDismissed ? null : (
-        <p className="text-text-tertiary text-xs">
+        <p className="text-text-tertiary hidden text-xs sm:block">
           <Kbd>Enter</Kbd> sends, <Kbd>Shift</Kbd> <Kbd>Enter</Kbd> starts a new line.
         </p>
       )}

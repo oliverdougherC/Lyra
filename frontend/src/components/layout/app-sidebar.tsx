@@ -1,9 +1,11 @@
 'use client'
 
-import { GraduationCap, Settings } from 'lucide-react'
+import { Suspense, useCallback } from 'react'
+import { Archive, ChevronDown, GraduationCap, Plus, RotateCcw, Settings } from 'lucide-react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 
+import { CourseMark } from '@/components/classes/course-mark'
 import {
   Sidebar,
   SidebarContent,
@@ -12,22 +14,176 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSkeleton,
-  SidebarRail,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarSeparator,
 } from '@/components/ui/sidebar'
-import { useClasses } from '@/lib/hooks/use-classes'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { formatSessionFallbackTitle } from '@/lib/format'
+import { useClasses, useUpdateClass } from '@/lib/hooks/use-classes'
+import { useCreateSession, useSessions } from '@/lib/hooks/use-chat'
+import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
 import { cn } from '@/lib/utils'
+import type { ClassRead } from '@/types'
+
+const ARCHIVED_STORAGE_KEY = 'lyra-sidebar-archived-open'
+
+/**
+ * The active marker sits inside the row's rounded surface rather than on its border box.
+ * A `border-l` lands outside the corner radius and reads as a rule floating beside the
+ * row instead of part of it.
+ */
+const ACTIVE_ROW =
+  'relative font-medium text-accent-primary before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent-primary'
+
+function parseOpen(raw: string): boolean {
+  return raw === 'true'
+}
+
+/**
+ * `useSearchParams` must sit under a Suspense boundary or statically prerendered pages
+ * (the 404 shell) fail the build. The fallback renders the same nav without the active
+ * chat highlight, so there is no layout shift.
+ */
+function SessionParam({
+  children,
+}: {
+  children: (activeSessionId: string | null) => React.ReactNode
+}) {
+  const searchParams = useSearchParams()
+  return children(searchParams.get('session'))
+}
+
+/**
+ * One class row. Only the class currently open shows its conversations: every other row
+ * stays a single line, so a long class list does not bury the workspace in submenus.
+ */
+function ClassNavItem({
+  klass,
+  selected,
+  activeSessionId,
+  sessions,
+  sessionsPending,
+  onNewChat,
+}: {
+  klass: ClassRead
+  selected: boolean
+  activeSessionId: string | null
+  sessions?: { id: number; title: string | null; mode: string; created_at: string }[]
+  sessionsPending?: boolean
+  onNewChat: () => void
+}) {
+  const href = `/classes/${klass.id}`
+
+  return (
+    <Collapsible open={selected}>
+      <SidebarMenuItem>
+        <CollapsibleTrigger asChild>
+          <SidebarMenuButton
+            asChild
+            isActive={selected}
+            tooltip={klass.code ? `${klass.code} · ${klass.name}` : klass.name}
+            className={cn('h-auto py-1.5', selected && ACTIVE_ROW)}
+          >
+            <Link href={href} aria-label={klass.code ? `${klass.code}, ${klass.name}` : klass.name}>
+              <CourseMark klass={klass} size="sm" />
+              <span className="grid min-w-0 flex-1">
+                <span className="truncate">{klass.name}</span>
+                {klass.code ? (
+                  <span className="text-text-tertiary truncate text-xs font-normal">
+                    {klass.code}
+                  </span>
+                ) : null}
+              </span>
+            </Link>
+          </SidebarMenuButton>
+        </CollapsibleTrigger>
+
+        {selected ? (
+          <SidebarMenuSub>
+            {sessionsPending ? (
+              <SidebarMenuSubItem aria-busy="true">
+                <SidebarMenuSkeleton />
+              </SidebarMenuSubItem>
+            ) : (
+              (sessions ?? []).map((session) => {
+                const label = session.title || formatSessionFallbackTitle(session.created_at)
+                return (
+                  <SidebarMenuSubItem key={session.id}>
+                    <SidebarMenuSubButton asChild isActive={activeSessionId === String(session.id)}>
+                      <Link href={`${href}?session=${session.id}`} title={label}>
+                        <span className="truncate">{label}</span>
+                      </Link>
+                    </SidebarMenuSubButton>
+                  </SidebarMenuSubItem>
+                )
+              })
+            )}
+            <SidebarMenuSubItem>
+              <SidebarMenuSubButton asChild onClick={onNewChat}>
+                <button type="button" aria-label="Start a new chat" className="text-text-secondary">
+                  <Plus />
+                  <span>New chat</span>
+                </button>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          </SidebarMenuSub>
+        ) : null}
+      </SidebarMenuItem>
+    </Collapsible>
+  )
+}
 
 export function AppSidebar() {
   const pathname = usePathname()
+  const router = useRouter()
   const { data: classes, isPending } = useClasses()
+  const updateClass = useUpdateClass()
+  const [archivedOpen, setArchivedOpen] = useLocalStorageState(
+    ARCHIVED_STORAGE_KEY,
+    false,
+    parseOpen,
+  )
+
+  const classMatch = /^\/classes\/(\d+)/.exec(pathname)
+  const selectedClassId = classMatch ? Number(classMatch[1]) : null
+  const selectedClassIsValid =
+    selectedClassId !== null && Number.isSafeInteger(selectedClassId) && selectedClassId > 0
+
+  const { data: sessions, isPending: sessionsPending } = useSessions(
+    selectedClassIsValid ? selectedClassId : null,
+  )
+  const createSession = useCreateSession(selectedClassIsValid ? selectedClassId : null)
+
+  const startNewChat = useCallback(() => {
+    if (selectedClassId === null) return
+    createSession.mutate(undefined, {
+      onSuccess: (session) => {
+        router.push(`/classes/${selectedClassId}?session=${session.id}`)
+      },
+    })
+  }, [createSession, router, selectedClassId])
+
+  const restoreClass = useCallback(
+    (classId: number) => {
+      updateClass.mutate({ classId, body: { archived: false } })
+    },
+    [updateClass],
+  )
+
+  const allClasses = classes ?? []
+  const activeClasses = allClasses.filter((item) => !item.archived)
+  const archivedClasses = allClasses.filter((item) => item.archived)
 
   return (
-    <Sidebar variant="inset" collapsible="icon">
-      <SidebarHeader>
+    <Sidebar variant="inset" collapsible="offcanvas">
+      <SidebarHeader className="p-1">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" tooltip="Lyra home">
@@ -58,30 +214,97 @@ export function AppSidebar() {
                 </SidebarMenuItem>
               </>
             ) : (
-              (classes ?? []).map((item) => {
-                const href = `/classes/${item.id}`
-                const active = pathname === href
-                return (
-                  <SidebarMenuItem key={item.id}>
-                    <SidebarMenuButton
-                      asChild
-                      isActive={active}
-                      tooltip={item.name}
-                      className={cn(
-                        active &&
-                          'border-l-2 border-accent-primary text-accent-primary font-medium',
-                      )}
-                    >
-                      <Link href={href}>
-                        <span className="truncate">{item.code ?? item.name}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                )
-              })
+              <Suspense
+                fallback={activeClasses.map((item) => (
+                  <ClassNavItem
+                    key={item.id}
+                    klass={item}
+                    selected={selectedClassId === item.id}
+                    activeSessionId={null}
+                    sessions={sessions}
+                    sessionsPending={sessionsPending}
+                    onNewChat={startNewChat}
+                  />
+                ))}
+              >
+                <SessionParam>
+                  {(activeSessionId) =>
+                    activeClasses.map((item) => (
+                      <ClassNavItem
+                        key={item.id}
+                        klass={item}
+                        selected={selectedClassId === item.id}
+                        activeSessionId={activeSessionId}
+                        sessions={sessions}
+                        sessionsPending={sessionsPending}
+                        onNewChat={startNewChat}
+                      />
+                    ))
+                  }
+                </SessionParam>
+              </Suspense>
             )}
           </SidebarMenu>
         </SidebarGroup>
+
+        {archivedClasses.length > 0 ? (
+          <SidebarGroup>
+            <Collapsible open={archivedOpen} onOpenChange={setArchivedOpen}>
+              <SidebarGroupLabel asChild>
+                <CollapsibleTrigger className="w-full">
+                  <span className="flex w-full items-center gap-2">
+                    <Archive aria-hidden className="size-3.5" />
+                    <span className="flex-1 text-left">Archived</span>
+                    <span className="text-text-tertiary tabular-nums">
+                      {archivedClasses.length}
+                    </span>
+                    <ChevronDown
+                      aria-hidden
+                      className={cn(
+                        'text-text-tertiary size-3.5 transition-transform duration-150',
+                        !archivedOpen && '-rotate-90',
+                      )}
+                    />
+                  </span>
+                </CollapsibleTrigger>
+              </SidebarGroupLabel>
+              <CollapsibleContent>
+                <SidebarMenu>
+                  {archivedClasses.map((item) => (
+                    <SidebarMenuItem key={item.id}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={selectedClassId === item.id}
+                        tooltip={item.code ? `${item.code} · ${item.name}` : item.name}
+                        className={cn(selectedClassId === item.id && ACTIVE_ROW)}
+                      >
+                        <Link
+                          href={`/classes/${item.id}`}
+                          aria-label={item.code ? `${item.code}, ${item.name}` : item.name}
+                        >
+                          <CourseMark klass={item} size="sm" className="opacity-60" />
+                          <span className="truncate">{item.name}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <SidebarMenuAction
+                            showOnHover
+                            onClick={() => restoreClass(item.id)}
+                            aria-label={`Move ${item.code ?? item.name} back to active classes`}
+                          >
+                            <RotateCcw />
+                          </SidebarMenuAction>
+                        </TooltipTrigger>
+                        <TooltipContent>Restore to active classes</TooltipContent>
+                      </Tooltip>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </CollapsibleContent>
+            </Collapsible>
+          </SidebarGroup>
+        ) : null}
       </SidebarContent>
 
       <SidebarFooter>
@@ -92,10 +315,7 @@ export function AppSidebar() {
               asChild
               isActive={pathname === '/settings'}
               tooltip="Settings"
-              className={cn(
-                pathname === '/settings' &&
-                  'border-l-2 border-accent-primary text-accent-primary font-medium',
-              )}
+              className={cn(pathname === '/settings' && ACTIVE_ROW)}
             >
               <Link href="/settings">
                 <Settings />
@@ -105,8 +325,6 @@ export function AppSidebar() {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
-
-      <SidebarRail />
     </Sidebar>
   )
 }

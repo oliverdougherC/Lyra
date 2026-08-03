@@ -1,24 +1,18 @@
 'use client'
 
-import { useCallback, useMemo, useRef, useState } from 'react'
-import { FileText, UserRound } from 'lucide-react'
-import { useParams } from 'next/navigation'
+import { useCallback, useState } from 'react'
+import { FileText } from 'lucide-react'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 
 import { ChatPane } from '@/components/chat/chat-pane'
 import { DocumentsPane } from '@/components/documents/documents-pane'
-import { ClassProfileSheet } from '@/components/profile/class-profile-sheet'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useClass } from '@/lib/hooks/use-classes'
+import { useDocuments } from '@/lib/hooks/use-documents'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
-
-function parseLayout(raw: string): string | null {
-  const [left, right] = raw.split(',').map(Number)
-  return Number.isFinite(left) && Number.isFinite(right) && left > 10 && right > 10 ? raw : null
-}
 
 function readClassId(value: string | string[] | undefined): number | null {
   const raw = Array.isArray(value) ? value[0] : value
@@ -26,24 +20,48 @@ function readClassId(value: string | string[] | undefined): number | null {
   return Number.isSafeInteger(classId) && classId > 0 ? classId : null
 }
 
+function readSessionId(value: string | null): number | null {
+  const sessionId = Number(value)
+  return Number.isSafeInteger(sessionId) && sessionId > 0 ? sessionId : null
+}
+
+function parseOpen(raw: string): boolean {
+  return raw === 'true'
+}
+
 export default function ClassWorkspacePage() {
   const params = useParams<{ id: string }>()
   const classId = readClassId(params.id)
   const compact = useMediaQuery('(max-width: 1023px)')
-  const [profileOpen, setProfileOpen] = useState(false)
-  const profileTriggerRef = useRef<HTMLButtonElement>(null)
-  const onProfileOpenChange = useCallback((open: boolean) => {
-    setProfileOpen(open)
-    if (!open) requestAnimationFrame(() => profileTriggerRef.current?.focus())
-  }, [])
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null)
-  const layoutKey = `lyra-workspace-layout-${classId ?? 'unknown'}`
-  const [storedLayout, setStoredLayout] = useLocalStorageState(layoutKey, '40,60', parseLayout)
-  const panelLayout = useMemo(() => {
-    const [documents, chat] = storedLayout.split(',').map(Number)
-    return { documents, chat }
-  }, [storedLayout])
+
+  // The conversation is part of the URL so sidebar chats are linkable and reloadable.
+  // The URL is the only source of truth here: mirroring it into state meant every
+  // navigation set state from an effect and re-rendered the workspace twice.
+  const sessionId = readSessionId(searchParams.get('session'))
+
+  const handleSessionIdChange = useCallback(
+    (next: number | null) => {
+      const target = next === null ? `/classes/${classId}` : `/classes/${classId}?session=${next}`
+      router.replace(target, { scroll: false })
+    },
+    [classId, router],
+  )
+
+  // Documents open into the space the reading column was never going to use, so the
+  // conversation does not shrink when the list appears. Closed by default, per class.
+  const documentsStorageKey = `lyra-workspace-documents-open-${classId ?? 'unknown'}`
+  const [documentsOpen, setDocumentsOpen] = useLocalStorageState(
+    documentsStorageKey,
+    false,
+    parseOpen,
+  )
+
   const classQuery = useClass(classId ?? Number.NaN)
+  const { data: documentList } = useDocuments(classId ?? Number.NaN)
+  const documentCount = documentList?.length ?? null
 
   if (classId === null) {
     return (
@@ -81,6 +99,7 @@ export default function ClassWorkspacePage() {
       classId={classId}
       selectedDocumentId={selectedDocumentId}
       onSelectDocument={setSelectedDocumentId}
+      onClose={compact ? undefined : () => setDocumentsOpen(false)}
     />
   )
   const chat = (
@@ -90,62 +109,67 @@ export default function ClassWorkspacePage() {
       className={className}
       selectedDocumentId={selectedDocumentId}
       onClearSelectedDocument={() => setSelectedDocumentId(null)}
+      sessionId={sessionId}
+      onSessionIdChange={handleSessionIdChange}
+      headerActions={
+        compact ? null : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8"
+            aria-expanded={documentsOpen}
+            aria-controls="documents-pane-body"
+            onClick={() => setDocumentsOpen(!documentsOpen)}
+          >
+            <FileText aria-hidden className="size-3.5" />
+            Documents
+            {documentCount === null ? null : (
+              <span className="text-text-tertiary tabular-nums">{documentCount}</span>
+            )}
+          </Button>
+        )
+      }
     />
   )
 
+  // One raised-paper workbench, not two floating cards: the conversation and its
+  // documents are one workspace and read as one surface.
   return (
-    <div className="flex h-[calc(100dvh-8.5rem)] flex-col gap-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          {classQuery.data?.code ? (
-            <p className="text-text-tertiary text-xs font-medium tracking-[0.16em] uppercase">
-              {classQuery.data.code}
-            </p>
-          ) : null}
-          <h1 className="text-3xl leading-tight font-medium md:text-4xl">{className}</h1>
-        </div>
-        <Button ref={profileTriggerRef} variant="outline" onClick={() => setProfileOpen(true)}>
-          <UserRound aria-hidden className="size-4" />
-          Profile
-        </Button>
-      </div>
-
-      <ClassProfileSheet classId={classId} open={profileOpen} onOpenChange={onProfileOpenChange} />
-
+    <div className="flex min-h-0 flex-1 flex-col">
       {compact ? (
         <Tabs
-          defaultValue="documents"
+          defaultValue="chat"
           className="min-h-0 flex-1 gap-0 overflow-hidden rounded-lg border bg-card shadow-sm"
         >
           <TabsList variant="line" aria-label="Workspace panes" className="px-4">
-            <TabsTrigger value="documents">
-              <FileText aria-hidden className="size-4" />
-              Documents
-            </TabsTrigger>
             <TabsTrigger value="chat">Chat</TabsTrigger>
+            <TabsTrigger value="documents">
+              Documents
+              {documentCount === null ? null : (
+                <span className="text-text-tertiary tabular-nums">{documentCount}</span>
+              )}
+            </TabsTrigger>
           </TabsList>
-          <TabsContent value="documents" className="mt-0 min-h-0 flex-1 rounded-none border-0">
-            {documents}
-          </TabsContent>
-          <TabsContent value="chat" className="mt-0 min-h-0 flex-1 rounded-none border-0">
+          <TabsContent
+            value="chat"
+            className="mt-0 min-h-0 flex-1 overflow-hidden rounded-none border-0"
+          >
             {chat}
+          </TabsContent>
+          <TabsContent
+            value="documents"
+            className="mt-0 min-h-0 flex-1 overflow-hidden rounded-none border-0"
+          >
+            {documents}
           </TabsContent>
         </Tabs>
       ) : (
-        <ResizablePanelGroup
-          orientation="horizontal"
-          defaultLayout={panelLayout}
-          onLayoutChanged={(layout) => setStoredLayout(`${layout.documents},${layout.chat}`)}
-          className="min-h-0 flex-1 overflow-hidden rounded-lg border bg-card shadow-sm"
-        >
-          <ResizablePanel id="documents" minSize="25%">
-            {documents}
-          </ResizablePanel>
-          <ResizableHandle withHandle />
-          <ResizablePanel id="chat" minSize="35%">
-            {chat}
-          </ResizablePanel>
-        </ResizablePanelGroup>
+        <div className="flex min-h-0 flex-1 overflow-hidden rounded-lg border bg-card shadow-sm">
+          <div className="min-w-0 flex-1">{chat}</div>
+          {documentsOpen ? (
+            <div className="w-[340px] shrink-0 border-l xl:w-[380px]">{documents}</div>
+          ) : null}
+        </div>
       )}
     </div>
   )

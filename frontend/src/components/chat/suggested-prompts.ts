@@ -8,6 +8,19 @@ const FALLBACKS = [
 
 const SUGGESTION_COUNT = 3
 
+/**
+ * Topics are pulled from document headings, which arrive in Title Case. Dropped into a
+ * sentence they read as shouting, against the sentence-case rule in ui-phase-1.md. Words
+ * that are already all-caps are acronyms (ROC, LTI) and keep their case.
+ */
+function downcaseHeading(value: string): string {
+  return value
+    .trim()
+    .split(/(\s+)/)
+    .map((word) => (/^[A-Z]{2,}$/.test(word.replace(/\W/g, '')) ? word : word.toLowerCase()))
+    .join('')
+}
+
 /** Active means it may enter a prompt: confirmed, or high confidence and not rejected. */
 function isActive(fact: FactRead): boolean {
   return !fact.rejected && (fact.confirmed || fact.confidence === 'high')
@@ -24,7 +37,7 @@ export function buildSuggestedPrompts(facts: FactRead[]): string[] {
   if (active.some((fact) => fact.kind === 'deadline')) suggestions.push('What is due next week?')
 
   for (const fact of active.filter((candidate) => candidate.kind === 'topic').slice(0, 2)) {
-    const topic = fact.value.trim()
+    const topic = downcaseHeading(fact.value)
     if (topic) suggestions.push(`Explain ${topic}`)
   }
 

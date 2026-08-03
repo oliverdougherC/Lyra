@@ -35,8 +35,8 @@ provided context does not cover the question, say so plainly instead of inventin
 material, deadlines, or problem statements. You may then fall back on general knowledge, but
 say that is what you are doing.
 
-Write mathematics in LaTeX: $...$ inline and $$...$$ for display."""
-
+Write mathematics in LaTeX. Put equations in $$...$$ on their own line for display math; reserve $...$ for short inline quantities.
+"""
 _GUIDE_PROMPT = """\
 Mode: Guide.
 

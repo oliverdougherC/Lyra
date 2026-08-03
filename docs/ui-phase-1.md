@@ -50,7 +50,7 @@ Lyra-specific components not in the registry: `IngestionProgress`, `DocumentDrop
 │ │              │ │  Header: breadcrumb · endpoint badge   ││
 │ │   Sidebar    │ ├────────────────────────────────────────┤│
 │ │   260px      │ │                                        ││
-│ │              │ │  Route content, max 1200px, centered   ││
+│              │ │  Route content, max 1320px, centered ││
 │ │  Lyra        │ │                                        ││
 │ │  ─────────   │ │                                        ││
 │ │  Classes     │ │                                        ││
@@ -63,11 +63,16 @@ Lyra-specific components not in the registry: `IngestionProgress`, `DocumentDrop
 ```
 
 - Desktop navigation is a 260px inset raised-paper rail, collapsible to a 60px icon rail with state persisted in `localStorage`
-- Active class rows use `--accent-primary` text with a 2px left rule in the same token
+- Class rows carry the course mark, the class name, and the course code beneath it. The name is the primary line: a rail of bare codes (`ECE 203`, `ECE 380`) does not say which class is which
+- Active class rows use `--accent-primary` text with a 2px sage marker inset within the row's rounded surface, not a `border-l` on its box, which lands outside the corner radius and reads as detached
+- A class row expands into its conversations only while that class is open: each chat links to `/classes/{id}?session={n}`, and a `New chat` action sits at the bottom of the list. Every other class stays a single line
+- Conversations are named by the backend from their first message, and an untitled one falls back to its creation date. Never by list position, which renumbers whenever a conversation is added or removed, so the same chat keeps changing name
+- An `Archived` group below the classes is collapsed by default and holds archived classes, each with a hover restore action
 - A skip-to-content link is the first focusable element and is visually hidden until focused
-- The header carries the breadcrumb and endpoint locality badge on a translucent parchment rule
+- The header carries the breadcrumb and endpoint locality badge on a translucent parchment rule; on class pages the breadcrumb reads `Classes / ECE 203 Continuous-Time Signals` and the header also carries the Profile button, so the workspace starts at the panes. Settings is a root crumb, not a child of Classes. Below 640px ancestor crumbs fold away, because three truncated crumbs name nothing
 - Below 640px, navigation becomes a floating 64px raised-paper bottom shelf; main content keeps clear space beneath it
-- Route content is capped at 1200px and centered, with `p-6` desktop and `p-4` on smaller screens
+- Route content is capped at 1320px and centered, with `p-6` desktop and `p-4` on smaller screens
+- The shell owns the viewport: `main` is the one scroll container below the header, so the rail and header never travel on a long route, while a full-height route sizes itself to exactly what is left
 
 ### Endpoint Locality Badge
 
@@ -96,8 +101,14 @@ Card anatomy:
 - Class name, `h2`
 - Course code and semester, `body-sm` in `--text-secondary`
 - Footer row: document count and relative last-activity time, `caption` in `--text-tertiary`
-- Whole card is one link; a `dropdown-menu` on the top right offers Rename and Delete
+- Whole card is one link; a `dropdown-menu` on the top right offers Rename, Archive, and Delete
 - Hover raises `shadow-sm` to `shadow-md` without a color shift or scale transform
+- The name wraps to two lines rather than truncating: it is how the user tells one card from another
+- Footers sit on the card's floor, so cards in a row square up however long their titles run
+- A dashed `New class` tile closes the grid. A row of cards trailing off into empty canvas reads as an unfinished page, and the tile keeps the screen's one action within reach of the eye
+
+Archived classes drop out of the grid (a small caption notes the count and points at the sidebar's
+Archived section); they are restored from there without touching their data.
 
 **Loading.** Six skeleton cards matching the real card's exact dimensions and internal rhythm, so
   nothing shifts when data arrives. Never a spinner.
@@ -122,25 +133,39 @@ button uses `--danger-fill` with `--danger-foreground`.
 
 ## Screen: Class Workspace
 
-Route `/classes/[id]`. Two panes via `resizable`, documents left and conversation right, with the
-divider position persisted per class.
+Route `/classes/[id]`. The header carries the class code, name, and the Profile button, so the
+workspace starts at the panes. The conversation is the primary surface and fills a single
+raised-paper workbench. Documents open as a 340px right column inside that same workbench, into the
+gutter the 860px reading measure was never going to use, so the conversation does not narrow when
+the list appears. The column is closed by default and its state is persisted per class; an upload
+batch in flight opens it. The active conversation is part of the URL (`?session={n}`) so chats in
+the sidebar are linkable and reloadable.
 
 ```
-┌──────────────────────┬────────────────────────────────────┐
-│ Documents        [+] │  Guide | Show        Profile >     │
-│ -------------------- │ ---------------------------------- │
-│  syllabus.pdf  ready │                                    │
-│  hw3.pdf       ready │   conversation, max 720px          │
-│  notes.md       60%  │                                    │
-│  scan.pdf    no text │                                    │
-│                      │ ---------------------------------- │
-│  [ drop files here ] │  [ composer            send ]      │
-└──────────────────────┴────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│ Header: Classes / ECE 203 Continuous-Time Signals · P…   │
+├──────────────────────────────────────────────────────────┤
+│ TUTOR              Guide | Show   [ Documents 17 ]       │
+├──────────────────────────────────┬───────────────────────┤
+│ ┌──────────────────────────────┐ │ DOCUMENTS 17      [→] │
+│ │   conversation, max 860px    │ │  ▸ syllabus.pdf       │
+│ │                              │ │  ▸ homework_1.pdf     │
+│ │        [ Jump to latest ]    │ │  ▸ …                  │
+│ └──────────────────────────────┘ │                       │
+├──────────────────────────────────┤                       │
+│ [ composer .............. send ] │ [ drop · Choose files]│
+└──────────────────────────────────┴───────────────────────┘
 ```
 
-Below 1024px the panes become Documents and Chat line tabs with a 2px sage active rule. Both compact
-and desktop layouts live in a bordered raised-paper workbench; below 640px navigation becomes the
-floating bottom shelf described in design-system.md.
+The conversation opens at its latest message and follows the tail while the reader is already
+there. Only the reader detaches that: a wheel, touch, or key scroll away from the bottom. Content
+that grows under a scroll which already ran (KaTeX re-laying out, the documents column opening)
+re-pins instead, because that is a layout change rather than the reader moving. When detached, a
+`Jump to latest` control returns.
+
+Below 1024px the panes become Chat and Documents line tabs with a 2px sage active rule, defaulting
+to Chat. Both compact and desktop layouts live in a bordered raised-paper workbench; below 640px
+navigation becomes the floating bottom shelf described in design-system.md.
 
 ### Document List
 
@@ -191,10 +216,15 @@ Persistent target at the bottom of the document pane, and the whole pane accepts
 
 | State | Presentation |
 |-------|--------------|
-| Idle | 32px icon tile, dashed 1px `--border-strong`, `Drop PDF, TXT, or MD`, and `Choose folder` / `Choose files` controls |
-| Drag over | sage-tinted fill with `--accent-primary` boundary and icon |
-| Rejected type | clay danger treatment with `--danger-text` error copy naming accepted types |
-| Uploading | tokenized `progress` bar with filename and queued progress |
+| Idle | one row: dashed 1px `--border-strong`, `Drop PDF, TXT, or MD here`, a `Choose files` control, and a folder icon action |
+| Drag over | sage-tinted fill with `--accent-primary` boundary and icon, expanded |
+| Rejected type | clay danger treatment with `--danger-text` error copy naming accepted types, expanded |
+| Uploading | tokenized `progress` bar with filename and queued progress, expanded |
+
+Idle, the well is a single quiet row, and it grows only when it has something to say. It shares a
+pane with the document list, and a permanently expanded well takes that height from the list: at
+17 documents the difference is between one visible row and eight. Choosing files is the primary
+control and the folder picker is secondary, because a single file is the common case.
 
 Dropped folders are scanned recursively through the file system entry API, and the picker offers
 both a folder input (`webkitdirectory`) and the existing multi-file input. The batch is uploaded
@@ -210,12 +240,18 @@ parchment reading surface with a warm border.
 
 - Lyra messages carry a 24px `avatar` in `--accent-surface`
 - Markdown renders incrementally during streaming, with `JetBrains Mono` code blocks, syntax
-  highlighting themed per mode, and KaTeX math
-- A caret pulses at the stream tail at `duration-normal`, and is removed under reduced motion
+  highlighting themed per mode, table/pre/code overflow contained in its surface, and KaTeX math
+- Tutor processing exposes the ordered stages **Processing prompt**, **Reviewing documents**, and
+  **Writing explanation**, each with its truthful detail copy before the first visible answer text
+- Equations use `$$...$$` on their own blank-line-separated display rows; `$...$` is reserved for
+  short inline quantities, and wide display math scrolls horizontally rather than overlapping prose
+- Newly arriving prose words fade in in source order with a 180ms opacity/2px-rise reveal; code and
+  math remain intact and are never split into visual-only layers
+- A caret stays at the stream tail and becomes a solid marker under reduced motion
 - Hover reveals Copy on any message, and Retry on the last Lyra message
 - While streaming, the send button becomes Stop
-- Timestamps are `caption` in `--text-tertiary`, shown on hover or for the first message in a
-  time gap
+- Timestamps are `caption` in `--text-tertiary`, shown on hover, and pinned visible for the first
+  message after a gap of more than an hour, so a thread resumed the next day says so
 
 **Empty conversation.** Not a blank pane. It shows the class name, a one-line statement of what Lyra
 knows (`4 documents indexed, syllabus analyzed`), and three suggested prompts generated from the
@@ -223,8 +259,9 @@ class profile, such as `What is due next week?`. Each is a `button` that fills t
 sending, so the user stays in control.
 
 **Composer.** Auto-growing `textarea`, three rows maximum before internal scroll. `Enter` sends,
-`Shift+Enter` inserts a newline, and the hint is shown once using `kbd` for a new user. Disabled with
-an explanation when no endpoint is configured, linking to Settings.
+`Shift+Enter` inserts a newline, and the hint is shown once using `kbd` for a new user, on pointer
+breakpoints only: below 640px there is no physical Enter key to explain and the row costs real
+reading height. Disabled with an explanation when no endpoint is configured, linking to Settings.
 
 ### Guide And Show Toggle
 
@@ -247,10 +284,20 @@ mistaking a truncation artifact for the model being wrong.
 A `sheet` from the right, opened from the workspace header. In Phase 1 it is read-and-confirm, not a
 full editor.
 
-Facts are grouped into Deadlines, Topics, Grading, Professor, and Prerequisites. Each `FactRow`
-shows the value, its source document, and its confidence.
+Facts are grouped into Deadlines, Topics, Grading, Professor, Prerequisites, and Other details. That
+last group is not optional: without it, facts of kind `note` are stored and used in prompts while
+being invisible to the one person who can correct them. Each `FactRow` shows the value, its source
+document, and its confidence.
+
+Extraction labels come from the model and are frequently filler, a topic labelled `topic` or a value
+labelled `content`. A label that repeats its kind or is generic filler is dropped: it says nothing
+the section heading has not, and printing it exposes the shape of the extraction prompt. A source
+line is shown only when it differs from the row above, so five facts from one syllabus do not print
+five identical citations.
 
 - **Confirmed** facts: success surface with a `Check` in `--success-text`
+- **Unconfirmed high-confidence** facts: no surface, and a neutral bullet in `--text-tertiary`. Not
+  a check, which reads as verified when nobody has verified anything
 - **Unconfirmed low-confidence** facts: information surface, `HelpCircle` in `--info-text`, and a
   `caption` reading `Not used until you confirm this`, with Confirm and Reject buttons
 - **Rejected** facts: danger surface with a visible rejected state when retained for review
@@ -317,19 +364,19 @@ Every animation in Phase 1, so nothing is improvised:
 
 | Element | Motion | Duration, easing |
 |---------|--------|------------------|
-| Class card entry | `Reveal`: fade plus 8px rise, 50ms stagger capped at 200ms | 250ms, gentle |
+| Class card entry | `Reveal`: fade plus 8px rise, 50ms stagger capped at 200ms, once per card per session | 250ms, gentle |
 | Card hover | `shadow-sm` to `shadow-md`, no scale | 200ms |
 | Document list entry | staggered fade plus 8px rise, capped at five steps, with layout reordering | 250ms, gentle |
 | Batch loader | two counter-rotating token rings; rotation stops under reduced motion | motion-safe, linear |
 | Dialog, sheet, menu, popover, select, tooltip | fade plus at most 8px vertical movement | 200ms, never side-slide or zoom |
-| Streaming caret | opacity pulse; solid under reduced motion | motion-safe |
+| Streaming word reveal | New prose words fade in source order with a 24ms stagger capped at 160ms | 180ms, gentle |
 | Dropzone drag over | border and surface-color change | 150ms |
 | Skeleton and spinner | motion-safe only; static/no rotation under reduced motion | preference-controlled |
 | Sidebar collapse | width transition | 200ms |
 
 Under `prefers-reduced-motion`: transform and looping motion are removed, `Reveal` becomes a 150ms
-opacity fade with zero delay, skeletons are static, spinners remain visible without rotating, and
-the streaming caret is solid.
+opacity fade with zero delay, skeletons are static, spinners remain visible without rotating, word
+reveals are immediately readable, and the streaming caret is solid.
 
 ## Keyboard Map
 
@@ -339,7 +386,7 @@ the streaming caret is solid.
 | `Enter` | Send message, or activate focused control |
 | `Shift+Enter` | Newline in the composer |
 | `Escape` | Close overlay, cancel inline edit, or stop generation |
-| `Cmd/Ctrl+K` | Focus the composer from anywhere in a workspace |
+| `Cmd/Ctrl+K` | Focus the composer from anywhere, including from another field |
 | `Cmd/Ctrl+N` | New class from home |
 | `Cmd/Ctrl+B` | Toggle the sidebar |
 | `Cmd/Ctrl+,` | Open Settings |

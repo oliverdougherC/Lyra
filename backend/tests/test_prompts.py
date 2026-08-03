@@ -45,6 +45,8 @@ def test_guide_withholds_the_answer_and_show_does_not() -> None:
     assert guide != show
     assert "do not give the final answer immediately" in _normalized(guide)
     assert "do not withhold the answer" in _normalized(show)
+    assert "$$...$$ on their own line for display math" in _normalized(guide)
+    assert "reserve $...$ for short inline quantities" in _normalized(guide)
 
 
 def test_facts_render_one_heading_per_kind(db: sqlite3.Connection, class_id: int) -> None:
