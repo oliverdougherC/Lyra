@@ -1,0 +1,239 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+@import 'katex/dist/katex.min.css';
+
+@custom-variant dark (&:is(.dark *));
+
+/* Lyra design tokens: the single source of truth, per docs/design-system.md. */
+:root {
+  --bg-primary: #f5f1eb;
+  --bg-secondary: #f9f8f6;
+  --bg-tertiary: #ebe4db;
+  --border: #dcd2c6;
+  --border-strong: #9e8167;
+  --text-primary: #302821;
+  --text-secondary: #655548;
+  --text-tertiary: #7d6959;
+  --accent-primary: #45684a;
+  --accent-primary-hover: #36543a;
+  --accent-foreground: #f9f8f6;
+  --accent-surface: #d8e4d2;
+  --accent-surface-foreground: #2a412d;
+  --accent-secondary: #dcc9b7;
+  --accent-secondary-foreground: #634b36;
+  --accent-tertiary: #dec7ba;
+  --accent-tertiary-foreground: #6b4733;
+  --success-fill: #d3e0cc;
+  --success-text: #466039;
+  --info-fill: #d1dee0;
+  --info-text: #395960;
+  --danger-fill: #e0c6be;
+  --danger-foreground: #3d2a24;
+  --danger-text: #673e32;
+  --focus-ring: #45684a;
+  --overlay: rgb(48 40 33 / 0.2);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --elevation-sm: 0 2px 8px rgb(48 40 33 / 0.05);
+  --elevation-md: 0 12px 30px rgb(48 40 33 / 0.08);
+  --elevation-lg: 0 24px 60px rgb(48 40 33 / 0.12);
+}
+
+.dark {
+  --bg-primary: #1d1a16;
+  --bg-secondary: #28241f;
+  --bg-tertiary: #37302a;
+  --border: #4f453b;
+  --border-strong: #a18c78;
+  --text-primary: #f3f0ed;
+  --text-secondary: #cdc1b6;
+  --text-tertiary: #b1a195;
+  --accent-primary: #9fc6a3;
+  --accent-primary-hover: #b1d3b4;
+  --accent-foreground: #1d1a16;
+  --accent-surface: #3d5c40;
+  --accent-surface-foreground: #e0ebe1;
+  --accent-secondary: #66503d;
+  --accent-secondary-foreground: #ebe2db;
+  --accent-tertiary: #744f3e;
+  --accent-tertiary-foreground: #f0e5e0;
+  --success-fill: #43593b;
+  --success-text: #b3cfaa;
+  --info-fill: #3b5459;
+  --info-text: #b1cdd3;
+  --danger-fill: #6a483e;
+  --danger-foreground: #f1e7e4;
+  --danger-text: #d7bfb7;
+  --focus-ring: #9fc6a3;
+  --overlay: rgb(14 12 10 / 0.48);
+  --elevation-sm: 0 2px 8px rgb(14 12 10 / 0.22);
+  --elevation-md: 0 12px 30px rgb(14 12 10 / 0.3);
+  --elevation-lg: 0 24px 60px rgb(14 12 10 / 0.38);
+}
+
+/*
+ * shadcn/ui raw variable names, aliased onto the Lyra tokens. Declared once:
+ * each alias is a var() reference resolved on the same element that carries
+ * `.dark`, so the dark overrides above flow through without a second block.
+ * `--border` is already a Lyra token name and is deliberately not re-aliased.
+ */
+:root {
+  --background: var(--bg-primary);
+  --foreground: var(--text-primary);
+  --card: var(--bg-secondary);
+  --card-foreground: var(--text-primary);
+  --popover: var(--bg-secondary);
+  --popover-foreground: var(--text-primary);
+  --muted: var(--bg-tertiary);
+  --muted-foreground: var(--text-secondary);
+  --accent: var(--bg-tertiary);
+  --primary: var(--accent-primary);
+  --primary-foreground: var(--accent-foreground);
+  --secondary: var(--bg-secondary);
+  --secondary-foreground: var(--text-primary);
+  --destructive: var(--danger-text);
+  --destructive-foreground: var(--accent-foreground);
+  --input: var(--border-strong);
+  --ring: var(--focus-ring);
+  --sidebar: var(--bg-secondary);
+  --sidebar-foreground: var(--text-primary);
+  --sidebar-primary: var(--accent-primary);
+  --sidebar-primary-foreground: var(--accent-foreground);
+  --sidebar-accent: var(--bg-tertiary);
+  --sidebar-accent-foreground: var(--text-primary);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--focus-ring);
+  --radius: var(--radius-md);
+}
+
+@theme inline {
+  --color-background: var(--bg-primary);
+  --color-foreground: var(--text-primary);
+  --color-card: var(--bg-secondary);
+  --color-card-foreground: var(--text-primary);
+  --color-popover: var(--bg-secondary);
+  --color-popover-foreground: var(--text-primary);
+  --color-muted: var(--bg-tertiary);
+  --color-muted-foreground: var(--text-secondary);
+  --color-accent: var(--bg-tertiary);
+  --color-accent-foreground: var(--text-primary);
+  --color-primary: var(--accent-primary);
+  --color-primary-foreground: var(--accent-foreground);
+  --color-secondary: var(--bg-secondary);
+  --color-secondary-foreground: var(--text-primary);
+  --color-destructive: var(--danger-text);
+  --color-destructive-foreground: var(--accent-foreground);
+  --color-border: var(--border);
+  --color-input: var(--border-strong);
+  --color-ring: var(--focus-ring);
+  --color-sidebar: var(--bg-secondary);
+  --color-sidebar-foreground: var(--text-primary);
+  --color-sidebar-primary: var(--accent-primary);
+  --color-sidebar-primary-foreground: var(--accent-foreground);
+  --color-sidebar-accent: var(--bg-tertiary);
+  --color-sidebar-accent-foreground: var(--text-primary);
+  --color-sidebar-border: var(--border);
+  --color-sidebar-ring: var(--focus-ring);
+  --color-overlay: var(--overlay);
+
+  --color-border-strong: var(--border-strong);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-accent-primary: var(--accent-primary);
+  --color-accent-primary-hover: var(--accent-primary-hover);
+  --color-accent-surface: var(--accent-surface);
+  --color-accent-surface-foreground: var(--accent-surface-foreground);
+  --color-accent-secondary: var(--accent-secondary);
+  --color-accent-secondary-foreground: var(--accent-secondary-foreground);
+  --color-accent-tertiary: var(--accent-tertiary);
+  --color-accent-tertiary-foreground: var(--accent-tertiary-foreground);
+  --color-success-fill: var(--success-fill);
+  --color-success-text: var(--success-text);
+  --color-info-fill: var(--info-fill);
+  --color-info-text: var(--info-text);
+  --color-danger-fill: var(--danger-fill);
+  --color-danger-text: var(--danger-text);
+  --color-danger-foreground: var(--danger-foreground);
+
+  --shadow-sm: var(--elevation-sm);
+  --shadow-md: var(--elevation-md);
+  --shadow-lg: var(--elevation-lg);
+
+  --ease-gentle: cubic-bezier(0.25, 0.1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --font-sans: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+  --font-heading: var(--font-fraunces), ui-serif, Georgia, serif;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  html {
+    @apply font-sans;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-heading tracking-tight;
+  }
+
+  /* Highlight.js syntax roles resolve through the Lyra token bridge. */
+  .hljs,
+  .hljs-subst {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+
+  .hljs-keyword,
+  .hljs-selector-tag,
+  .hljs-meta .hljs-keyword {
+    color: var(--danger-text);
+  }
+
+  .hljs-title,
+  .hljs-title.class_,
+  .hljs-title.function_,
+  .hljs-name,
+  .hljs-tag {
+    color: var(--accent-primary);
+  }
+
+  .hljs-literal,
+  .hljs-number {
+    color: var(--info-text);
+  }
+
+  .hljs-string,
+  .hljs-doctag,
+  .hljs-regexp,
+  .hljs-attribute {
+    color: var(--accent-tertiary-foreground);
+  }
+
+  .hljs-comment,
+  .hljs-quote {
+    color: var(--text-tertiary);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -57,7 +57,7 @@ source .venv/bin/activate
 pip install -e '.[dev]'
 
 # Frontend
-cd frontend && yarn install && cd ..
+cd frontend && pnpm install && cd ..
 
 # Both processes
 scripts/dev

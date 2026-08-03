@@ -62,11 +62,12 @@ Lyra-specific components not in the registry: `IngestionProgress`, `DocumentDrop
 └────────────────────────────────────────────────────────────┘
 ```
 
-- Sidebar 260px, collapsible to a 60px icon rail, state persisted in `localStorage`
-- Active class row uses `--accent-primary` text with a 2px left rule in the same token
+- Desktop navigation is a 260px inset raised-paper rail, collapsible to a 60px icon rail with state persisted in `localStorage`
+- Active class rows use `--accent-primary` text with a 2px left rule in the same token
 - A skip-to-content link is the first focusable element and is visually hidden until focused
-- The header carries the breadcrumb and the endpoint locality badge, nothing else
-- Route content is capped at 1200px and centered, `p-6` desktop and `p-4` tablet
+- The header carries the breadcrumb and endpoint locality badge on a translucent parchment rule
+- Below 640px, navigation becomes a floating 64px raised-paper bottom shelf; main content keeps clear space beneath it
+- Route content is capped at 1200px and centered, with `p-6` desktop and `p-4` on smaller screens
 
 ### Endpoint Locality Badge
 
@@ -90,16 +91,16 @@ Route `/`. The class list is the product's front door and is worth real attentio
 Cards are sorted by most recently active.
 
 Card anatomy:
-- `avatar` with the class code's first two characters on `--accent-surface` with
-  `--accent-surface-foreground` text
-- Class name, `h3`
+- Rectangular class initials use a deterministic course-mark palette: sage `--accent-surface`, tan
+  `--accent-secondary`, or muted clay `--accent-tertiary`, always with the paired foreground token
+- Class name, `h2`
 - Course code and semester, `body-sm` in `--text-secondary`
 - Footer row: document count and relative last-activity time, `caption` in `--text-tertiary`
 - Whole card is one link; a `dropdown-menu` on the top right offers Rename and Delete
-- Hover raises `shadow-sm` to `shadow-md` and scales 1.02x
+- Hover raises `shadow-sm` to `shadow-md` without a color shift or scale transform
 
 **Loading.** Six skeleton cards matching the real card's exact dimensions and internal rhythm, so
-nothing shifts when data arrives. Never a spinner.
+  nothing shifts when data arrives. Never a spinner.
 
 **Empty.** The `empty` primitive: a `GraduationCap` icon at 32px in `--text-tertiary`, heading
 `No classes yet`, body `Create a class to start uploading your course materials.`, and a primary
@@ -137,8 +138,9 @@ divider position persisted per class.
 └──────────────────────┴────────────────────────────────────┘
 ```
 
-Below 1024px the panes become `tabs` labeled Documents and Chat. Below 640px the sidebar collapses to
-bottom navigation per design-system.md.
+Below 1024px the panes become Documents and Chat line tabs with a 2px sage active rule. Both compact
+and desktop layouts live in a bordered raised-paper workbench; below 640px navigation becomes the
+floating bottom shelf described in design-system.md.
 
 ### Document List
 
@@ -189,19 +191,19 @@ Persistent target at the bottom of the document pane, and the whole pane accepts
 
 | State | Presentation |
 |-------|--------------|
-| Idle | dashed 1px `--border-strong`, `Upload` icon, `Drop PDF, TXT, or MD` |
-| Drag over | border and icon become `--accent-primary`, fill `--bg-tertiary`, 1.01x scale |
-| Rejected type | border `--danger-text`, message naming accepted types |
-| Uploading | `progress` bar with filename and percent |
+| Idle | 32px icon tile, dashed 1px `--border-strong`, and `Drop PDF, TXT, or MD` |
+| Drag over | sage-tinted fill with `--accent-primary` boundary and icon |
+| Rejected type | clay danger treatment with `--danger-text` error copy naming accepted types |
+| Uploading | tokenized `progress` bar with filename and queued progress |
 
 It is also a keyboard-accessible button that opens the native file picker, and it accepts multiple
 files, queueing them.
 
 ### Conversation
 
-Message rows, not chat bubbles on both sides. The student's message is right-aligned in
-`--bg-tertiary` at `radius-md`; Lyra's response is full-width on the page background with no
-container, so long explanations read like a document.
+Message rows preserve the conversation behavior while using distinct reading surfaces: the student's
+message is a right-aligned muted-paper note at `radius-md`; Lyra's response is a full-width
+parchment reading surface with a warm border.
 
 - Lyra messages carry a 24px `avatar` in `--accent-surface`
 - Markdown renders incrementally during streaming, with `JetBrains Mono` code blocks, syntax
@@ -223,14 +225,12 @@ an explanation when no endpoint is configured, linking to Settings.
 
 ### Guide And Show Toggle
 
-A two-option `button-group` above the conversation, not a `switch`, because both options are named
-and neither is a default-off state.
+A two-option named control above the conversation, not a `switch`, because both options are named
+and neither is a default-off state. It uses the line-tab treatment: the active option has a 2px sage
+rule rather than a filled segment. Tooltips and per-session behavior remain unchanged.
 
 - **Guide:** Socratic. Lyra asks leading questions and withholds the final answer.
 - **Show:** direct. Lyra explains the full solution.
-
-The active option uses `--accent-primary` fill with `--accent-foreground`. A `tooltip` explains each.
-The setting is per session, persisted, and applied to the next turn rather than retroactively.
 
 ### Retrieval Notice
 
@@ -247,9 +247,10 @@ full editor.
 Facts are grouped into Deadlines, Topics, Grading, Professor, and Prerequisites. Each `FactRow`
 shows the value, its source document, and its confidence.
 
-- **Confirmed** facts: plain `--text-primary` with a `Check` in `--success-text`
-- **Unconfirmed low-confidence** facts: `--bg-tertiary` fill, `HelpCircle` in `--info-text`, and a
+- **Confirmed** facts: success surface with a `Check` in `--success-text`
+- **Unconfirmed low-confidence** facts: information surface, `HelpCircle` in `--info-text`, and a
   `caption` reading `Not used until you confirm this`, with Confirm and Reject buttons
+- **Rejected** facts: danger surface with a visible rejected state when retained for review
 
 That caption is load-bearing. It tells the user the system is not silently acting on a guess, which
 is the whole reason this screen exists in Phase 1.
@@ -265,8 +266,9 @@ appearing mysteriously empty.
 
 ## Screen: Settings
 
-Route `/settings`. A single scrolling column at 720px, sectioned with `separator`, using `form` with
-Zod throughout. No section is a raw key-value dump.
+Route `/settings`. A single scrolling column at 720px. Tutor model, Privacy, and Appearance each
+live in a raised-paper `Card` with a display heading and supporting description; no section is a raw
+key-value dump. Existing form, validation, mutation, and connection-result behavior is unchanged.
 
 ### Tutor Model
 
@@ -302,8 +304,9 @@ Present in Phase 1 because the inference posture is a promise the UI has to keep
 
 ### Appearance
 
-Theme `radio-group`: System, Light, Dark. Switching applies immediately with a crossfade at
-`duration-normal`, suppressed under reduced motion.
+Theme `radio-group`: Light, System, Dark. Light is the fresh-user default and reads `Use the
+parchment palette by default.`; explicit System and Dark choices remain immediate. Each labeled row
+has a token swatch, visible selected state, and a 44px minimum target.
 
 ## Motion Inventory
 
@@ -311,21 +314,17 @@ Every animation in Phase 1, so nothing is improvised:
 
 | Element | Motion | Duration, easing |
 |---------|--------|------------------|
-| Route change | crossfade | `duration-normal`, `ease-in-out` |
-| Class card entry | fade plus 8px rise, 50ms stagger, max 5 | `duration-normal`, `gentle` |
-| Card hover | 1.02x scale, shadow raise | `duration-fast`, `spring` |
-| Dialog and sheet | fade plus 8px rise, backdrop fade | `duration-normal`, `ease-out` |
-| Message entry | fade plus 4px rise | `duration-fast`, `gentle` |
-| Streaming caret | opacity pulse, loops | `duration-normal` |
-| Ingestion step advance | check scale from 0.8, label crossfade | `duration-fast`, `spring` |
-| Dropzone drag over | 1.01x scale, border color | `duration-fast`, `ease-out` |
-| Skeleton | opacity shimmer, loops | 1200ms |
-| Sidebar collapse | width transition | `duration-normal`, `ease-in-out` |
-| Toast | slide from bottom right plus fade | `duration-normal`, `ease-out` |
+| Class card entry | `Reveal`: fade plus 8px rise, 50ms stagger capped at 200ms | 250ms, gentle |
+| Card hover | `shadow-sm` to `shadow-md`, no scale | 200ms |
+| Dialog, sheet, menu, popover, select, tooltip | fade plus at most 8px vertical movement | 200ms, never side-slide or zoom |
+| Streaming caret | opacity pulse; solid under reduced motion | motion-safe |
+| Dropzone drag over | border and surface-color change | 150ms |
+| Skeleton and spinner | motion-safe only; static/no rotation under reduced motion | preference-controlled |
+| Sidebar collapse | width transition | 200ms |
 
-Under `prefers-reduced-motion`: all transform and looping motion is dropped, opacity transitions are
-capped at `duration-fast`, stagger is removed, skeletons become static, and the streaming caret is
-solid.
+Under `prefers-reduced-motion`: transform and looping motion are removed, `Reveal` becomes a 150ms
+opacity fade with zero delay, skeletons are static, spinners remain visible without rotating, and
+the streaming caret is solid.
 
 ## Keyboard Map
 
@@ -350,7 +349,8 @@ find, reload, or zoom.
 - Errors name the cause and the next step. Never `Something went wrong`.
 - No blame: `Lyra could not reach your model server`, not `You configured this wrong`.
 - Never expose internal stage names, file paths, stack traces, or endpoint URLs in error text.
-- Sentence case for all headings, labels, and buttons. No title case, no all caps.
+- Sentence case for headings, labels, and buttons. Small uppercase editorial labels are reserved for
+  pane and section context, never for body copy.
 - No em dashes, no emoji, per conventions.md.
 - Numbers are concrete: `4 documents indexed`, not `Several documents processed`.
 
@@ -363,7 +363,7 @@ A screen is complete when all of the following hold:
 - [ ] Correct in light and dark, verified against the design-system contrast contracts
 - [ ] Fully keyboard operable, with visible `:focus-visible` rings throughout
 - [ ] Correct at all three breakpoints
-- [ ] `prefers-reduced-motion` respected in both CSS and Framer Motion variants
+- [ ] `prefers-reduced-motion` respected in CSS and the Motion `Reveal` contract
 - [ ] Zero hardcoded colors; every value resolves to a token
 - [ ] Every icon-only control has an `aria-label`
 - [ ] No `console` noise, no layout shift after hydration

@@ -1,340 +1,210 @@
-# Design System
+# Lyra Design System
 
-## Core Principle
+## Core direction
 
-Lyra's interface should feel expensive, polished, and intentional. Every element, spacing,
-typography, animation, and color should communicate quality. This is not a prototype aesthetic. It
-is a product-level finish.
+Lyra is a light-first, local-study workspace. Its material language is parchment canvas, raised paper,
+warm rules, espresso type, muted terracotta, and actionable sage. It earns depth through the three
+paper surfaces, thin boundaries, and restrained elevation—not gradients, glow, texture imagery, or
+marketing-page ornament.
 
-The visual language is **earthy and educational**: warm neutrals, soft pastels, natural texture.
-Think linen paper, chalkboard, wood grain. Grounded, not digital. Calm, not energetic.
+`frontend/src/styles/globals.css` is the only visual-token bridge. Components consume semantic
+utilities; they do not introduce component-local hex values, a Tailwind configuration, or a second
+token file.
 
-## Accessibility Is Part Of The Finish
+Theme storage is light-first. A missing `localStorage['lyra-theme']` key leaves `<html>` light.
+Explicit stored `system` and `dark` values retain their meanings. Settings presents Light, System,
+then Dark; Light reads “Use the parchment palette by default.”
 
-Every color pair in this document has been checked against WCAG 2.1 AA and the required ratio is
-recorded beside it. A token that cannot meet its contract is not a style choice, it is a defect.
+## Accessibility contracts
 
-- Body and UI text: **4.5:1** minimum against its background
-- Large text (18.66px bold or 24px plain and above): **3:1** minimum
-- Interactive component boundaries and focus indicators: **3:1** minimum against adjacent color
-- Purely decorative dividers and surface separation are exempt
+- Body and status text is at least **4.5:1** on every documented surface.
+- Strong control boundaries and focus indicators are at least **3:1** against their adjacent paper
+  surface.
+- Decorative fills always have a named foreground token when text or an icon appears in them.
+- `:focus-visible` uses a 2px ring with a 2px offset. No control removes focus without replacing it.
+- Primary actions are 44px when `size="lg"`; standard actions and default icon actions are 40px.
+  Dense menu controls retain their compact 28px/32px use cases.
+- Keyboard behavior stays native: the skip link is first, Radix overlays trap and restore focus,
+  Escape dismisses overlays, and existing Cmd/Ctrl+B behavior remains unchanged.
 
-Two consequences shape the palette below, and both were mistakes worth naming:
+Calculated WCAG ratios from the values in `globals.css`:
 
-1. **The brand sage and the actionable accent cannot be the same token.** `#7BA17D` is a beautiful
-   surface color but only reaches 2.74 against the page background, so it can be neither readable
-   text nor a reliable focus indicator. The palette therefore splits them: `--accent-primary` is the
-   deeper, actionable sage used for buttons, links, and focus, while `--accent-surface` keeps the
-   original brand sage for decorative fills.
-2. **Every colored fill needs a declared foreground.** Never leave the label color on a button to the
-   component author.
+| Pair | Light | Dark |
+| --- | ---: | ---: |
+| `--text-primary` on `--bg-primary` | 12.86:1 | 15.27:1 |
+| `--text-secondary` on `--bg-secondary` | 6.72:1 | 8.73:1 |
+| `--text-tertiary` on `--bg-primary` | 4.62:1 | 6.93:1 |
+| `--border-strong` on `--bg-primary` | 3.22:1 | 5.40:1 |
+| `--focus-ring` on `--bg-primary` | 5.60:1 | 9.15:1 |
+| `--accent-foreground` on `--accent-primary` | 5.94:1 | 9.15:1 |
+| `--accent-surface-foreground` on `--accent-surface` | 8.43:1 | 6.11:1 |
+| `--accent-secondary-foreground` on `--accent-secondary` | 5.05:1 | 5.91:1 |
+| `--accent-tertiary-foreground` on `--accent-tertiary` | 5.04:1 | 5.80:1 |
+| `--success-text` on `--success-fill` | 5.11:1 | 4.55:1 |
+| `--info-text` on `--info-fill` | 5.50:1 | 4.83:1 |
+| `--danger-foreground` on `--danger-fill` | 8.35:1 | 6.63:1 |
+| `--danger-text` on `--bg-primary` | 8.07:1 | 9.93:1 |
 
-## Color Palette
+## Color tokens
 
-### Light Theme (Default)
+### Light palette
 
-| Token | Hex | Usage | Contract |
-|-------|-----|-------|----------|
-| `--bg-primary` | `#FAF8F5` | Page background, input fill | warm off-white |
-| `--bg-secondary` | `#F3F0EB` | Cards, panels, elevated surfaces | |
-| `--bg-tertiary` | `#EBE7DF` | Subtle fills, hover surfaces, skeletons | |
-| `--border` | `#DCD6CB` | Decorative dividers and card edges | decorative, exempt |
-| `--border-strong` | `#8F8579` | Input, checkbox, and control borders | 3.42 on bg-primary, 3.19 on bg-secondary |
-| `--text-primary` | `#2C2C2C` | Body text | 13.17 on bg-primary |
-| `--text-secondary` | `#5C5C5C` | Captions, metadata | 6.31 / 5.88 |
-| `--text-tertiary` | `#776B5F` | Placeholders, disabled text | 4.89 / 4.56 |
-| `--accent-primary` | `#456F47` | Primary button fill, links, active nav, focus | 5.48 / 5.11 / 4.71 on the three surfaces |
-| `--accent-primary-hover` | `#3B5F3D` | Primary fill hover | 6.85 |
-| `--accent-foreground` | `#FAF8F5` | Label on `--accent-primary` | 5.48 |
-| `--accent-surface` | `#7BA17D` | Brand sage decorative fill: badges, avatars | fill only, never text |
-| `--accent-surface-foreground` | `#1E2A1F` | Label on `--accent-surface` | 5.15 |
-| `--focus-ring` | `#456F47` | Focus indicator | 5.48, needs 3.0 |
-| `--accent-secondary` | `#C4A882` | Warm tan decorative fill | fill only, never text |
-| `--success-fill` | `#A8C5A0` | Success surfaces and badges | fill only |
-| `--success-text` | `#566F4D` | Success text and icons | 5.25 / 4.89 / 4.51 |
-| `--info-fill` | `#8FAEC4` | Information surfaces | fill only |
-| `--info-text` | `#4A6B82` | Information text and icons | 5.33 / 4.97 / 4.58 |
-| `--danger-fill` | `#C4948A` | Destructive button, error surfaces | fill only |
-| `--danger-foreground` | `#2C2C2C` | Label on `--danger-fill` | 5.29 |
-| `--danger-text` | `#885E53` | Error message text, inline validation | 5.25 / 4.90 / 4.51 |
+| Token | Value | Role |
+| --- | --- | --- |
+| `--bg-primary` | `#F5F1EB` | Parchment canvas and assistant reading surface |
+| `--bg-secondary` | `#F9F8F6` | Raised paper, fields, popovers, rail |
+| `--bg-tertiary` | `#EBE4DB` | Insets, hovers, code, skeletons |
+| `--border` / `--border-strong` | `#DCD2C6` / `#9E8167` | Decorative rules / visible controls |
+| `--text-primary` / `--text-secondary` / `--text-tertiary` | `#302821` / `#655548` / `#7D6959` | Espresso hierarchy |
+| `--accent-primary` / `--accent-primary-hover` / `--accent-foreground` | `#45684A` / `#36543A` / `#F9F8F6` | Sage action, hover, paired action label |
+| `--accent-surface` / `--accent-surface-foreground` | `#D8E4D2` / `#2A412D` | Sage decorative course mark |
+| `--accent-secondary` / `--accent-secondary-foreground` | `#DCC9B7` / `#634B36` | Tan decorative course mark |
+| `--accent-tertiary` / `--accent-tertiary-foreground` | `#DEC7BA` / `#6B4733` | Muted-clay decorative course mark |
+| `--success-fill` / `--success-text` | `#D3E0CC` / `#466039` | Success surface and status text |
+| `--info-fill` / `--info-text` | `#D1DEE0` / `#395960` | Informational surface and status text |
+| `--danger-fill` / `--danger-foreground` / `--danger-text` | `#E0C6BE` / `#3D2A24` / `#673E32` | Destructive fill, paired label, inline error |
+| `--focus-ring` | `#45684A` | Focus indicator |
+| `--overlay` | `rgb(48 40 33 / 0.20)` | The only light overlay color |
 
-### Dark Theme
+### Dark palette
 
-| Token | Hex | Usage | Contract |
-|-------|-----|-------|----------|
-| `--bg-primary` | `#1A1A1A` | Page background, input fill | warm dark |
-| `--bg-secondary` | `#242424` | Cards, panels | |
-| `--bg-tertiary` | `#2F2F2F` | Subtle fills, hover surfaces | |
-| `--border` | `#3A3A3A` | Decorative dividers and card edges | decorative, exempt |
-| `--border-strong` | `#736E68` | Control borders | 3.45 / 3.07 |
-| `--text-primary` | `#E8E4DF` | Body text | 13.75 on bg-primary |
-| `--text-secondary` | `#A09C96` | Captions, metadata | 6.37 / 5.68 |
-| `--text-tertiary` | `#918A83` | Placeholders, disabled text | 5.11 / 4.56 |
-| `--accent-primary` | `#8FB88E` | Primary fill, links, active nav, focus | 7.80 / 6.96 |
-| `--accent-primary-hover` | `#A1C4A0` | Primary fill hover | 9.05 |
-| `--accent-foreground` | `#1A1A1A` | Label on `--accent-primary` | 7.80 |
-| `--accent-surface` | `#3C5A3C` | Brand sage decorative fill | fill only |
-| `--accent-surface-foreground` | `#E8E4DF` | Label on `--accent-surface` | 6.10 |
-| `--focus-ring` | `#8FB88E` | Focus indicator | 7.80 / 6.96 |
-| `--accent-secondary` | `#D1B899` | Warm tan decorative fill | 37.8% saturation |
-| `--success-fill` | `#4A6B4A` | Success surfaces | fill only |
-| `--success-text` | `#8FB88E` | Success text | 7.80 / 6.96 |
-| `--info-fill` | `#3D5566` | Information surfaces | fill only |
-| `--info-text` | `#7DA3C4` | Information text | 6.55 / 5.85 |
-| `--danger-fill` | `#C48A80` | Destructive button | fill only |
-| `--danger-foreground` | `#1A1A1A` | Label on `--danger-fill` | 6.05 |
-| `--danger-text` | `#C48A80` | Error message text | 6.05 / 5.39 |
+| Token | Value |
+| --- | --- |
+| `--bg-primary`, `--bg-secondary`, `--bg-tertiary` | `#1D1A16`, `#28241F`, `#37302A` |
+| `--border`, `--border-strong` | `#4F453B`, `#A18C78` |
+| `--text-primary`, `--text-secondary`, `--text-tertiary` | `#F3F0ED`, `#CDC1B6`, `#B1A195` |
+| `--accent-primary`, `--accent-primary-hover`, `--accent-foreground` | `#9FC6A3`, `#B1D3B4`, `#1D1A16` |
+| `--accent-surface`, `--accent-surface-foreground` | `#3D5C40`, `#E0EBE1` |
+| `--accent-secondary`, `--accent-secondary-foreground` | `#66503D`, `#EBE2DB` |
+| `--accent-tertiary`, `--accent-tertiary-foreground` | `#744F3E`, `#F0E5E0` |
+| `--success-fill`, `--success-text` | `#43593B`, `#B3CFAA` |
+| `--info-fill`, `--info-text` | `#3B5459`, `#B1CDD3` |
+| `--danger-fill`, `--danger-foreground`, `--danger-text` | `#6A483E`, `#F1E7E4`, `#D7BFB7` |
+| `--focus-ring`, `--overlay` | `#9FC6A3`, `rgb(14 12 10 / 0.48)` |
 
-### Design Notes
+Sage is the only actionable accent. Tan and muted clay are decorative fills only; always pair them
+with their named foreground. Status and destructive surfaces use their own semantic pairs.
 
-- No pure black (`#000`) or pure white (`#FFF`) anywhere. Always warm variants.
-- **No token exceeds 40% HSL saturation.** This is checked, not asserted.
-- Accent colors are desaturated, never vivid or neon.
-- Color is used sparingly for function. Surfaces stay neutral.
-- Pastels read like watercolor, not marker.
-- Never place text on `--accent-surface`, `--accent-secondary`, or any `*-fill` token without using
-  the paired `*-foreground` or a token whose contract covers it.
+## Token bridge
 
-## Design Token Bridge
-
-The tokens above are the single source of truth. Tailwind v4 and shadcn/ui both expect their own
-naming, so the mapping is declared once in `frontend/src/styles/globals.css` and never duplicated.
-Without this bridge the project would grow two parallel color vocabularies.
+`globals.css` owns raw Lyra tokens, shadcn aliases, and Tailwind v4 `@theme inline` mappings. The
+bridge maps `bg-overlay` to `--overlay`, `shadow-sm`/`shadow-md`/`shadow-lg` to the elevation
+tokens, and all custom text, fill, and foreground utilities to their semantic source.
 
 ```css
-@import 'tailwindcss';
-
 :root {
-  /* Lyra tokens: source of truth */
-  --bg-primary: #faf8f5;
-  --accent-primary: #456f47;
-  --accent-foreground: #faf8f5;
-  --accent-surface: #7ba17d;
-  /* ...full set as tabled above... */
+  --background: var(--bg-primary);
+  --card: var(--bg-secondary);
+  --primary: var(--accent-primary);
+  --primary-foreground: var(--accent-foreground);
+  --destructive: var(--danger-text);
+  --destructive-foreground: var(--accent-foreground);
+  --input: var(--border-strong);
+  --ring: var(--focus-ring);
 }
 
 @theme inline {
-  /* shadcn/ui contract, mapped onto Lyra tokens */
-  --color-background: var(--bg-primary);
-  --color-foreground: var(--text-primary);
-  --color-card: var(--bg-secondary);
-  --color-card-foreground: var(--text-primary);
-  --color-muted: var(--bg-tertiary);
-  --color-muted-foreground: var(--text-secondary);
-  --color-primary: var(--accent-primary);
-  --color-primary-foreground: var(--accent-foreground);
-  --color-secondary: var(--bg-secondary);
-  --color-destructive: var(--danger-fill);
-  --color-destructive-foreground: var(--danger-foreground);
-  --color-border: var(--border);
-  --color-input: var(--border-strong);
-  --color-ring: var(--focus-ring);
+  --color-overlay: var(--overlay);
+  --color-destructive: var(--danger-text);
+  --color-destructive-foreground: var(--accent-foreground);
+  --shadow-sm: var(--elevation-sm);
+  --shadow-md: var(--elevation-md);
+  --shadow-lg: var(--elevation-lg);
 }
 ```
 
-Rules:
-- Components reference Tailwind utilities or shadcn semantic names. They never hardcode a hex value.
-- Adding a color means adding a Lyra token first, then mapping it.
-- Dark theme overrides only the Lyra tokens under `.dark`. The `@theme inline` block is written once.
+Invalid-control borders and inline errors therefore use `--danger-text`. The destructive Button
+variant explicitly uses `--danger-fill` and `--danger-foreground`; do not infer its colors from the
+shadcn destructive alias.
 
-**Spacing uses Tailwind's built-in scale.** Tailwind's spacing is already a 4px system, so `p-4` is
-16px and `gap-6` is 24px. Lyra does **not** define parallel `--space-*` tokens; doing so would create
-a second spacing vocabulary for zero benefit.
-
-| Tailwind | Value | Usage |
-|----------|-------|-------|
-| `1` | 4px | Icon gaps, tight spacing |
-| `2` | 8px | Small gaps, padding edges |
-| `3` | 12px | Button and input padding |
-| `4` | 16px | Card internals, section padding |
-| `5` | 20px | Generous padding |
-| `6` | 24px | Card margins, section gaps |
-| `8` | 32px | Major section breaks |
-| `10` | 40px | Page-level spacing |
-| `12` | 48px | Wide spacing |
-| `16` | 64px | Full section dividers |
+Highlight.js is local, not a GitHub theme import: code uses `--bg-tertiary` and `--text-primary`;
+keywords use `--danger-text`; titles and tags use `--accent-primary`; literals and numbers use
+`--info-text`; strings use `--accent-tertiary-foreground`; comments use `--text-tertiary`.
 
 ## Typography
 
-**Headings and UI:** Inter. Weights 400, 500, 600.
-**Monospace:** JetBrains Mono, for inline code, equations, file names, technical notation.
+`frontend/src/app/layout.tsx` loads DM Sans (`400`, `500`, `600`, `700`) as
+`--font-dm-sans`, Fraunces (`500`, `600`, `700`) as `--font-fraunces`, and keeps JetBrains Mono.
+`globals.css` maps them to `--font-sans`, `--font-heading`, and `--font-mono`.
 
-| Level | Size | Weight | Line Height | Usage |
-|-------|------|--------|-------------|-------|
-| `h1` | 32px | 600 | 1.2 | Page titles |
-| `h2` | 24px | 600 | 1.3 | Section headers |
-| `h3` | 20px | 500 | 1.4 | Card titles |
-| `h4` | 16px | 500 | 1.5 | Labels, small headers |
-| `body-lg` | 16px | 400 | 1.6 | Main body text |
-| `body` | 14px | 400 | 1.6 | Default body |
-| `body-sm` | 13px | 400 | 1.5 | Secondary text |
-| `caption` | 12px | 400 | 1.4 | Metadata, timestamps |
+- **DM Sans:** body copy, labels, controls, metadata, state text, and navigation.
+- **Fraunces:** `h1`, `h2`, `h3`, and Card, Dialog, Sheet, and Empty titles only.
+- **JetBrains Mono:** code, file-oriented technical notation, and keyboard notation.
 
-Text below 14px never carries essential information on its own.
+Display hierarchy comes from tighter tracking and scale, not heavier weights. Heading defaults use
+`tracking-tight`; small uppercase editorial labels use measured positive tracking.
 
-## Border Radius
+## Surface geometry and elevation
 
-| Token | Value | Usage |
-|-------|-------|-------|
-| `radius-sm` | 6px | Badges, tags, small buttons |
-| `radius-md` | 10px | Cards, inputs, buttons |
-| `radius-lg` | 16px | Panels, modals |
-| `radius-full` | 9999px | Avatars, pills, toggles |
+| Token | Light | Dark |
+| --- | --- | --- |
+| `--radius-sm` | `6px` | `6px` |
+| `--radius-md` | `10px` | `10px` |
+| `--radius-lg` | `16px` | `16px` |
+| `--elevation-sm` | `0 2px 8px rgb(48 40 33 / 0.05)` | `0 2px 8px rgb(14 12 10 / 0.22)` |
+| `--elevation-md` | `0 12px 30px rgb(48 40 33 / 0.08)` | `0 12px 30px rgb(14 12 10 / 0.30)` |
+| `--elevation-lg` | `0 24px 60px rgb(48 40 33 / 0.12)` | `0 24px 60px rgb(14 12 10 / 0.38)` |
 
-## Shadows
+Cards are 16px raised-paper surfaces: `--bg-secondary`, a 1px `--border`, and `shadow-sm`.
+Inputs, textareas, selects, settings rows, and the composer well use 10px radii and
+`--border-strong`. Borders lead separation; shadows only reinforce it. Full rounding is reserved for
+avatars, status dots, switches, and compact metadata badges.
 
-Subtle, warm shadows. No harsh drop shadows.
+## Component recipes
 
-| Token | Value | Usage |
-|-------|-------|-------|
-| `shadow-sm` | `0 1px 2px rgba(44,44,44,0.05)` | Buttons, small elements |
-| `shadow-md` | `0 4px 12px rgba(44,44,44,0.08)` | Cards, elevated surfaces |
-| `shadow-lg` | `0 8px 24px rgba(44,44,44,0.10)` | Modals, dropdowns |
+- **Buttons:** default is solid sage; outline is raised paper with a strong edge; secondary is quiet
+  paper; ghost is transparent; destructive is `--danger-fill` with `--danger-foreground`.
+- **Fields:** paper fill, strong edge, native labels and validation markup, 2px focus ring with a 2px
+  offset. Invalid controls use `--danger-text`.
+- **Switches:** default size is exactly 44×24px; the thumb is bordered paper.
+- **Badges:** pills are limited to compact status and scope metadata.
+- **Tabs:** default workspace tabs use `TabsList variant="line"`; the active state is a 2px sage rule,
+  never a filled rounded segment.
+- **Course marks:** class initials use a deterministic sage/tan/clay mapping keyed by class ID.
+  Course-mark avatars are rectangular through `rounded-[inherit]` children.
+- **Overlays and surfaces:** AlertDialog, Dialog, and Sheet overlays use `bg-overlay`. Dialogs, sheets,
+  dropdowns, popovers, selects, tooltips, and Sonner use paper, border, and semantic elevation.
+- **Shell:** desktop uses a 260px inset rail that can collapse to 60px; mobile uses a floating,
+  64px paper shelf below 640px. Main content keeps the 1200px cap.
+- **Workspace:** compact Documents/Chat uses line tabs; desktop panes live inside one bordered,
+  raised-paper workbench. Document rows are paper items with a sage selected edge. Student messages
+  are muted-paper notes; assistant messages are full-width parchment reading surfaces.
+- **Settings:** Tutor model, Privacy, and Appearance are raised-paper sections. Appearance rows have
+  a token swatch and a 44px minimum target. Remote endpoint warnings remain semantic danger alerts.
 
-Shadows carry surface separation together with `--border`, not alone. Card edges must remain
-perceptible on both themes; if a card reads as flat, raise the border, not the shadow opacity.
+## Motion and reduced motion
 
-## Animation
+Motion is useful only when it explains structure. Content may fade and move vertically at most 8px;
+no surface slides sideways, zooms, or lasts more than 250ms.
 
-### Philosophy
+`Reveal` in `frontend/src/components/ui/reveal.tsx` is the only shared visual reveal utility. It
+enters at opacity `0`, `y: 8` over 250ms with `ease: [0.25, 0.1, 0.3, 1]`; delay is capped at 200ms.
+Class cards use the five-step, 50ms stagger through this cap. With reduced motion it uses only a
+150ms opacity fade, zero delay, and no transform.
 
-Animation reveals relationships and guides attention. No gratuitous motion.
+Skeletons, Spinner, and Sonner's loading icon use `motion-safe` animation. Under
+`prefers-reduced-motion: reduce`, skeletons remain static, spinners stay visible without rotating,
+the streaming caret remains a solid 2px sage marker, and panel transitions do not transform.
 
-### Easing And Duration
+## Focus and keyboard
 
-| Name | Cubic Bezier | Usage |
-|------|-------------|-------|
-| `ease-out` | `cubic-bezier(0.25, 0.1, 0.25, 1)` | Default |
-| `ease-in-out` | `cubic-bezier(0.4, 0, 0.2, 1)` | Entering and leaving view |
-| `spring` | `cubic-bezier(0.34, 1.56, 0.64, 1)` | Micro-interactions |
-| `gentle` | `cubic-bezier(0.25, 0.1, 0.3, 1)` | Content reveals |
+- The skip link precedes the shell and targets `main#main-content`.
+- Icon-only buttons have accessible names; document actions, message copy/retry, send/stop, profile,
+  sidebar, and mobile navigation remain named.
+- Dialogs and sheets preserve Radix focus trapping and trigger restoration. Existing Escape and form
+  Enter behavior remains intact.
+- Document picker behavior remains native; keyboard activates the compact upload well.
+- The visual selected state of Light, System, and Dark accompanies the accessible radio label.
 
-| Token | Value | Usage |
-|-------|-------|-------|
-| `duration-fast` | 150ms | Hover, micro-interactions |
-| `duration-normal` | 250ms | Default transitions |
-| `duration-slow` | 400ms | Page transitions, major reveals |
+## Implementation rules
 
-### Principles
-
-- Content enters from below or fades in, never from the sides
-- Stagger lists by 50ms per item, maximum 5 staggered, then simultaneous
-- Hover uses scale (1.02x maximum) and shadow, not color shifts
-- Loading uses skeleton screens, not spinners
-- Page transitions crossfade, never slide
-- Nothing exceeds 400ms
-
-### Reduced Motion
-
-Honoring `prefers-reduced-motion` is mandatory, not optional polish. Under the reduced preference:
-
-- Transform and scale animation is removed; opacity crossfades are kept at `duration-fast`
-- List stagger is disabled and items appear together
-- Skeleton shimmer becomes a static placeholder
-
-```css
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-}
-```
-
-Framer Motion components read the preference through `useReducedMotion()` and skip transform
-variants rather than relying only on the CSS override.
-
-## Focus And Keyboard
-
-Every interactive element is reachable and visibly focused.
-
-- Focus styling uses `:focus-visible`, never `:focus`, so pointer users see no ring
-- Ring: 2px `--focus-ring` with a 2px offset, meeting the 3:1 boundary contract
-- `outline: none` without a replacement indicator is prohibited
-- Modals and dropdowns trap focus and restore it to the trigger on close
-- Escape closes any dismissible overlay
-- A skip-to-content link precedes the sidebar
-- Hit targets are at least 24x24px, with 44x44px preferred for primary actions
-
-## Component Patterns
-
-### Cards
-- Background `--bg-secondary`, 1px `--border`, `radius-md`, `p-4`, `shadow-sm`
-- Hover elevates to `shadow-md`
-
-### Buttons
-- **Primary:** `--accent-primary` fill, `--accent-foreground` label
-- **Secondary:** `--bg-secondary` fill, `--text-primary` label, 1px `--border-strong`
-- **Destructive:** `--danger-fill` fill, `--danger-foreground` label
-- **Ghost:** transparent, `--accent-primary` label, `--bg-tertiary` on hover
-- Padding `py-2 px-4`, `radius-md`
-- Hover: 1.02x scale plus shadow, and the `-hover` fill token
-- Disabled: `--bg-tertiary` fill, `--text-tertiary` label, no scale. WCAG exempts text in an
-  inactive control from the contrast minimum, which is why this pair sits at 4.20 rather than 4.5.
-  Disabled state MUST therefore also be conveyed non-visually with `aria-disabled` and a
-  `not-allowed` cursor, never by color alone.
-
-### Inputs
-- Fill `--bg-primary`, 1px `--border-strong`, `radius-md`, `px-3 py-2`
-- Focus: border becomes `--focus-ring` plus the 2px ring at 2px offset
-- Placeholder `--text-tertiary`
-- Invalid: 1px `--danger-text` border with the message in `--danger-text`
-
-### Toggle Switches
-- Track `--bg-tertiary` off, `--accent-primary` on, so the on state clears 3:1 against the page
-- Thumb `--bg-primary` with `shadow-sm` and a 1px `--border-strong` edge so it stays visible on the
-  active track
-- 44x24px, `radius-full`
-
-### Avatars
-- Circular, `--bg-tertiary` fill, `--text-secondary` initials
-- Sizes 32px, 40px, 48px
-
-### States
-Every list and data surface defines four states, and none may be an afterthought:
-- **Loading:** skeleton matching the real layout
-- **Empty:** icon, one line of explanation, one primary action
-- **Error:** `--danger-text` message plus a retry action
-- **Partial:** shown when retrieval was heavily trimmed, per rag-pipeline.md
-
-## Layout
-
-- Max content width 1200px
-- Sidebar 260px, collapsible to a 60px icon bar
-- Main padding `p-6` desktop, `p-4` tablet
-- Chat column max 720px, centered
-
-### Responsive Breakpoints
-- Mobile below 640px: single column, sidebar becomes bottom navigation
-- Tablet 640 to 1024px: sidebar collapses to icons
-- Desktop above 1024px: full layout
-
-Responsive layout keeps the web app usable on a narrow window. It is not a mobile app, which stays
-out of scope.
-
-## Dark Mode
-
-- Follows system preference by default, with an override in Settings
-- Only Lyra tokens are redefined under `.dark`
-- Code blocks and math rendering adapt to the dark surface
-
-## Iconography
-
-- Lucide React, 1.5px stroke
-- 20px inline, 24px standalone
-- `--text-secondary` default, `--text-primary` active, `--accent-primary` when indicating accent state
-- Every icon-only control carries an `aria-label`
-
-## Anti-Patterns (What Lyra Is Not)
-
-- No gradient backgrounds, text gradients, or neon glows
-- No emoji in the UI; icons only
-- No `radius-full` everywhere; use measured radius
-- No heavy borders; 1px is the standard
-- No animation beyond 400ms
-- No pure black or pure white surfaces
-- No saturation above 40%
-- No text on a fill token without its paired foreground
-- No `outline: none` without a replacement focus indicator
-- No hardcoded hex values in component files
+1. `frontend/src/styles/globals.css` remains the one source of truth for colors, fonts, elevations,
+   global syntax styling, and reduced-motion policy.
+2. Do not add a Tailwind config, token file, external theme package, visual registry dependency, or
+   component-local hex color.
+3. Do not add gradients, glows, literal texture images, continuous effects, scroll-triggered reveals,
+   model selectors, simulated uploads, or unrelated prompt controls.
+4. Do not replace Radix behavior, existing keyboard paths, four data states, API behavior, hooks, or
+   schema merely to restyle a route.
+5. Keep Light, System, and Dark coherent. A documentation value or contrast claim that differs from
+   `globals.css` is a design-system defect.

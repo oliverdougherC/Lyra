@@ -1,0 +1,8 @@
+allowBuilds:
+  sharp: true
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - '@hookform/resolvers@5.7.1'
+onlyBuiltDependencies:
+  - sharp
+  - unrs-resolver
