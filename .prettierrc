@@ -2,6 +2,7 @@
   "semi": false,
   "singleQuote": true,
   "quoteProps": "consistent",
-  "trailingComma": "es5",
-  "endOfLine": "auto"
+  "trailingComma": "all",
+  "printWidth": 100,
+  "endOfLine": "lf"
 }

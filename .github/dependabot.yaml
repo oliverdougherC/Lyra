@@ -1,19 +1,20 @@
-# https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference#package-ecosystem-
+# https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
 version: 2
 updates:
-  - package-ecosystem: 'cargo'
-    directory: 'src-tauri'
+  - package-ecosystem: 'pip'
+    directory: '/'
     schedule:
       interval: 'weekly'
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
+
   - package-ecosystem: 'npm'
-    directories:
-      - '/'
-      - 'core'
-      - 'docs'
-      - 'extensions'
-      - 'extensions/*'
-      - 'web-app'
+    directory: 'frontend'
     schedule:
       interval: 'weekly'
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 5

@@ -1,107 +1,54 @@
-
-!.env.example
-!.vscode/extensions.json
-!src-tauri/icons/dmg/
-!src-tauri/icons/dmg/background.png
-!src-tauri/icons/icon.png
-# Auto QA
-# Build & dist
-# Cache & temp
-# Dependencies
-# Docs & website
-# Env & secrets
-# Logs & debug
-# OS & IDE
-# Project-specific
-# Rust / Cargo
-# Swift / SPM
-# Test & coverage
-**/.env
-**/.env.*
-**/node_modules
-*.db
-*.gguf
-*.local
-*.log
-*.njsproj
-*.ntvs*
+# Python
+__pycache__/
 *.pyc
-*.sln
-*.suo
-*.sw?
-*.tgz
-*.tsbuildinfo
-.DS_Store
-.DS_Store?
-.astro/
-.build/
-.cache/
-.claude/
-.claude/agents
-.env
-.env.*
-.idea/
+.venv/
 .myenv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
 .next/
-.nyc_output/
-.omx/
-.opencode
+.yarn/
 .pnp
 .pnp.js
-.pytest_cache/
-.temp
-.turbo
-.venv/
-.vite/
-.vscode/*
-.yarn
-.yarn/
-.yarnrc
-Cargo.lock
-Claude.md
-OpenCode.md
-Thumbs.db
-__pycache__/
-archive/
-autoqa/__pycache__
-autoqa/recordings
-autoqa/trajectories
-build/
-core/dist/
-core/lib/**
-coverage/
-data/
-dist-ssr
-dist-web
-dist/
-docs/.next/
-docs/out/
-docs/src/content/config.ts.timestamp-*
-docs/yarn.lock
-error.log
-lerna-debug.log*
-llm-docs
-logs/
-node_modules/
-npm-debug.log*
-out/
-package-lock.json
-pnpm-debug.log*
-pre-install
-src-tauri/gen/android
-src-tauri/gen/apple
-src-tauri/icons/*
-src-tauri/icons/dmg/*
-src-tauri/resources/
-src-tauri/resources/bin
-src-tauri/resources/lib
-target/
-temp/
-test-data
-test_results.html
-tmp/
-venv/
-website/.astro/
-website/dist/
-yarn-debug.log*
 yarn-error.log*
+npm-debug.log*
+
+# Lyra data: user documents, database, and model weights are never committed
+data/
+*.db
+*.db-wal
+*.db-shm
+*.gguf
+
+# Env and secrets
+.env
+.env.*
+!.env.example
+config.yaml
+
+# Build and coverage
+dist/
+build/
+out/
+coverage/
+*.tsbuildinfo
+
+# Logs
+logs/
+*.log
+
+# Tooling and agent state
+.omx/
+.claude/
+.opencode
+
+# OS and IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
