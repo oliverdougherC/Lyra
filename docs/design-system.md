@@ -80,7 +80,7 @@ Two consequences shape the palette below, and both were mistakes worth naming:
 | `--success-fill` | `#4A6B4A` | Success surfaces | fill only |
 | `--success-text` | `#8FB88E` | Success text | 7.80 / 6.96 |
 | `--info-fill` | `#3D5566` | Information surfaces | fill only |
-| `--info-text` | `#7DA3C4` | Information text | 6.05 / 5.39 |
+| `--info-text` | `#7DA3C4` | Information text | 6.55 / 5.85 |
 | `--danger-fill` | `#C48A80` | Destructive button | fill only |
 | `--danger-foreground` | `#1A1A1A` | Label on `--danger-fill` | 6.05 |
 | `--danger-text` | `#C48A80` | Error message text | 6.05 / 5.39 |
