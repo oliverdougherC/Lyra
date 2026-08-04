@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { normalizeMarkdownForRender } from '@/components/chat/markdown-utils'
+import { normalizeMarkdownForRender, repairUndelimitedMath } from '@/components/chat/markdown-utils'
 
 /**
  * Contracts from docs/ui-phase-1.md: display math sits on its own blank-line-separated rows,
@@ -151,5 +151,60 @@ describe('normalizeMarkdownForRender', () => {
     it('separates two consecutive equations', () => {
       expect(normalizeMarkdownForRender('$$a$$$$b$$')).toBe('$$\na\n$$\n\n$$\nb\n$$\n\n')
     })
+  })
+})
+
+/**
+ * A model asked for LaTeX delimiters mostly supplies them. The rest of the time the
+ * student is shown `\frac{1}{2\pi(2-jt)}` as characters, which is worse than useless in a
+ * field labelled "Answer". Every guard below exists to keep this repair away from text it
+ * would damage.
+ */
+describe('repairUndelimitedMath', () => {
+  it('wraps a bare expression, keeping its label outside the math', () => {
+    expect(repairUndelimitedMath('(b) x(t) = \\frac{1}{2\\pi(2-jt)}')).toBe(
+      '(b) $x(t) = \\frac{1}{2\\pi(2-jt)}$',
+    )
+  })
+
+  it('wraps each line of a multi-line answer on its own', () => {
+    const source = '(a) x(t) = \\frac{1}{t}\n(b) x(t) = \\cos(\\pi t)'
+
+    expect(repairUndelimitedMath(source)).toBe(
+      '(a) $x(t) = \\frac{1}{t}$\n(b) $x(t) = \\cos(\\pi t)$',
+    )
+  })
+
+  it('leaves a source that already has delimiters completely alone', () => {
+    // The one signal that the model did its job. Touching anything here risks breaking
+    // mathematics that was already rendering.
+    const source = 'First $\\frac{1}{2}$, then \\frac{3}{4} outside.'
+
+    expect(repairUndelimitedMath(source)).toBe(source)
+  })
+
+  it('leaves prose alone', () => {
+    const source = 'The system is stable because every pole lies in the left half plane.'
+
+    expect(repairUndelimitedMath(source)).toBe(source)
+  })
+
+  it('does not touch a source containing code', () => {
+    // A `$` inserted into a shell snippet is a variable expansion, not a delimiter.
+    const source = 'Run `printf \\frac` to see it.'
+
+    expect(repairUndelimitedMath(source)).toBe(source)
+  })
+
+  it('does not touch bracket-delimited math it would break', () => {
+    const source = '\\[ \\frac{1}{2} \\]'
+
+    expect(repairUndelimitedMath(source)).toBe(source)
+  })
+
+  it('leaves a line with no mathematics untouched inside an answer that has some', () => {
+    const source = 'Both parts converge.\n(a) x = \\frac{1}{2}'
+
+    expect(repairUndelimitedMath(source)).toBe('Both parts converge.\n(a) $x = \\frac{1}{2}$')
   })
 })

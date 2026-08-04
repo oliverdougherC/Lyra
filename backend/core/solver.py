@@ -428,15 +428,22 @@ def _generate(
     solved = solving.parse_solution(content)
     if not solved.steps and not solved.answer:
         raise LyraError(_EMPTY_REPLY)
-    return solved, _provenance_for(solved, retrieval)
+    return solved, _provenance_for(solved, retrieval, references)
 
 
 def _provenance_for(
-    solved: SolvedProblem, retrieval: solving.RetrievalResult
+    solved: SolvedProblem,
+    retrieval: solving.RetrievalResult,
+    references: list[solving.ReferenceDocument],
 ) -> list[list[ProvenanceEntry]]:
     """Resolve each step's cited context numbers into provenance rows.
 
-    A citation outside the block is dropped rather than stored: a source line that
+    The numbering is one sequence: retrieved chunks first, then the reference solutions
+    attached to this run. A reference citation becomes a document-level row with no chunk
+    and no page, because a reference enters the prompt whole rather than as an indexed
+    passage, and inventing a page for it would be a citation nobody can follow.
+
+    A citation outside the sequence is dropped rather than stored: a source line that
     resolves to nothing would render as grounding the step does not have.
     """
     resolved: list[list[ProvenanceEntry]] = []
@@ -451,6 +458,18 @@ def _provenance_for(
                         document_id=chunk.document_id,
                         page_number=chunk.page_number,
                         label=chunk.section_title,
+                    )
+                )
+                continue
+            offset = number - len(retrieval.chunks) - 1
+            if 0 <= offset < len(references):
+                reference = references[offset]
+                entries.append(
+                    ProvenanceEntry(
+                        chunk_id=None,
+                        document_id=reference.document_id,
+                        page_number=None,
+                        label=None,
                     )
                 )
         resolved.append(entries)

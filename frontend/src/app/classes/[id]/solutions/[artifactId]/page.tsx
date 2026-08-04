@@ -145,19 +145,17 @@ export default function SolutionWorkspacePage() {
     <div
       className={
         state === 'ready' || state === 'solving' || state === 'cancelled'
-          ? 'flex w-full flex-col gap-4'
+          ? 'flex min-h-0 w-full flex-1 flex-col gap-4'
           : 'mx-auto flex w-full max-w-[860px] flex-col gap-6'
       }
     >
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-1">
-          <h1 className="font-heading text-text-primary truncate text-2xl tracking-tight">
-            {artifact.title}
-          </h1>
-          <p className="text-text-tertiary text-xs">
-            {artifact.sources.map((source) => source.filename).join(', ')}
-          </p>
-        </div>
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        {/* The filenames used to sit under the title. They are already named in the source
+            pane's tab and in the picker that chose them, and the line they occupied is
+            worth more as height for the problems. */}
+        <h1 className="font-heading text-text-primary min-w-0 truncate text-2xl tracking-tight">
+          {artifact.title}
+        </h1>
         <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button variant="ghost" size="sm" className="print:hidden">

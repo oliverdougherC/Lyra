@@ -76,8 +76,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           tabIndex={-1}
           className="relative flex min-h-0 flex-1 flex-col overflow-y-auto"
         >
-          <div className="mx-auto flex min-h-0 w-full max-w-[1320px] flex-1 flex-col p-4 pb-28 sm:pb-4 md:p-6">
+          <div className="mx-auto flex min-h-0 w-full max-w-[1320px] flex-1 flex-col p-4 pb-0 md:p-6 md:pb-0">
             {children}
+            {/* Breathing room as a spacer rather than as padding on this box.
+                `flex-1` is `1 1 0%`, so this box is always exactly the scroll container's
+                height and a long page's content overflows it; padding here would sit above
+                that overflow and contribute nothing at the end of the scroll, leaving the
+                last button flush against the window edge however much padding was set. A
+                sibling that cannot shrink is part of the content in both cases: it ends
+                the scroll on a long page, and on a full-height route it simply lifts the
+                workbench off the edge. The mobile size also clears the bottom nav. */}
+            <div aria-hidden className="h-28 shrink-0 sm:h-10 md:h-12 print:hidden" />
           </div>
         </main>
       </SidebarInset>

@@ -27,8 +27,12 @@ function AccordionTrigger({
   children,
   ...props
 }: React.ComponentProps<typeof AccordionPrimitive.Trigger>) {
+  // `flex-1 min-w-0` on the header as well as `flex`. Radix wraps the trigger in this
+  // header, so the header is what a flex parent lays out; without it the trigger's own
+  // `flex-1` grows inside a box that has already shrunk to its content, and a row sharing
+  // space with a sibling menu button collapses to the left of a wide pane.
   return (
-    <AccordionPrimitive.Header className="flex">
+    <AccordionPrimitive.Header className="flex min-w-0 flex-1">
       <AccordionPrimitive.Trigger
         data-slot="accordion-trigger"
         className={cn(

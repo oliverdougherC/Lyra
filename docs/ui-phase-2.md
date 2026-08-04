@@ -79,8 +79,16 @@ form and not a workspace.
    the normal pipeline and appears in the list when it becomes ready. Selecting more than one
    document is ordinary, not an edge case: a set that spans two files is common.
 2. **Reference solutions, optional.** The same picker over the same documents, with the helper text
-   `If you have solutions from an earlier set, Lyra will follow their notation and method.` Nothing
-   is selected by default.
+   `Worked solutions Lyra should follow for notation and method.` Nothing is selected by default.
+
+   Choosing a problem set offers any file that looks like its answers — `homework_5.pdf` offers
+   `ECE203_homework5_solution.pdf` — naming what it matched, with `Use it` and a dismiss. The match
+   requires agreement on both the kind of assignment and its number, so lab 5 is never offered for
+   homework 5: a loose match hands the solver a wrong reference that then looks plausible. Nothing
+   is ever selected on the student's behalf. The panel says that solutions to the same set steer the
+   answers rather than only the notation, because that changes what the result means and the moment
+   of the decision is where it is worth saying.
+
 3. **Title.** An `input`, prefilled from the first selected document's filename with its extension
    removed, editable.
 

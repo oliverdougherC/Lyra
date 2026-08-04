@@ -114,6 +114,44 @@ function shouldPromoteInlineMath(content: string): boolean {
   return content.length > 32 || DISPLAY_COMMAND_PATTERN.test(content)
 }
 
+/** LaTeX commands common enough in an answer that seeing one means mathematics. */
+const MATH_COMMAND =
+  /\\(?:d?frac|int|iint|oint|sum|prod|sqrt|left|right|cdot|times|div|infty|partial|nabla|lim|log|ln|sin|cos|tan|sec|csc|cot|sinh|cosh|tanh|exp|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|phi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Sigma|Phi|Psi|Omega|neq|leq|geq|ll|gg|approx|equiv|propto|pm|mp|to|rightarrow|Rightarrow|text|mathrm|mathbb|hat|bar|tilde|vec|overline|underline|langle|rangle|lfloor|rfloor|quad|qquad)\b/
+
+/** A leading enumeration label: `(a)`, `a)`, `1.`, `(iii)`. Kept out of the math. */
+const LEADING_LABEL = /^(\s*\(?[0-9a-z]{1,4}[).]\s*)/i
+
+/**
+ * Wrap mathematics a model wrote without delimiters.
+ *
+ * `"answer": "(a) x(t) = \\frac{1}{2\\pi(2-jt)}"` is a real reply, and without `$` around
+ * it the student is shown the characters the model typed instead of a fraction. The prompt
+ * asks for the delimiters and mostly gets them; this is what happens the rest of the time.
+ *
+ * Every guard here exists to keep the repair away from text it would damage. It runs only
+ * when the source contains no `$`, no backtick, and no `\(` or `\[` — that is, only when
+ * there is no delimited mathematics and no code for a stray `$` to break, so the source
+ * cannot already be rendering correctly. Within that, only lines carrying a known LaTeX
+ * command are touched.
+ */
+export function repairUndelimitedMath(source: string): string {
+  if (source.includes('$') || source.includes('`')) return source
+  if (source.includes('\\(') || source.includes('\\[')) return source
+  // A `\begin{align*}` block already delimits itself and the tokenizer below promotes it.
+  if (source.includes('\\begin{')) return source
+  if (!MATH_COMMAND.test(source)) return source
+
+  return source
+    .split('\n')
+    .map((line) => {
+      if (!MATH_COMMAND.test(line)) return line
+      const prefix = LEADING_LABEL.exec(line)?.[1] ?? ''
+      const rest = line.slice(prefix.length).trim()
+      return rest ? `${prefix}$${rest}$` : line
+    })
+    .join('\n')
+}
+
 function addToken(tokens: RenderToken[], text: string, display = false): void {
   if (!text) return
   tokens.push({ text, ...(display ? { display: true } : {}) })
@@ -179,7 +217,10 @@ export function normalizeMarkdownForRender(
   // the length threshold, and centring it on its own line while its four siblings sit
   // inline makes one sub-part look like a different kind of thing.
   const promote = promoteInlineMath ? shouldPromoteInlineMath : () => false
-  const normalized = source.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
+  const lineEndings = source.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
+  // Not while streaming: a line that has not finished arriving would be wrapped, rendered,
+  // and unwrapped again on the next frame, which flickers the equation in and out.
+  const normalized = streaming ? lineEndings : repairUndelimitedMath(lineEndings)
   const tokens: RenderToken[] = []
   let plain = ''
   let cursor = 0

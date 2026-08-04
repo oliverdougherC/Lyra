@@ -197,9 +197,22 @@ def retrieve_for(
         return _EMPTY_RETRIEVAL
 
 
+@dataclass(frozen=True)
+class ReferenceDocument:
+    """One reference solution as a solve turn carries it.
+
+    The id travels with the text because a step that cites this document has to become a
+    provenance row pointing at it, the same way a cited chunk does.
+    """
+
+    document_id: int
+    filename: str
+    text: str
+
+
 def reference_documents(
     conn: sqlite3.Connection, artifact_id: int, budget_tokens: int
-) -> list[tuple[str, str]]:
+) -> list[ReferenceDocument]:
     """The reference solutions attached to this run, truncated to their shared budget.
 
     The budget is split evenly across the documents rather than first-come, so two
@@ -210,11 +223,14 @@ def reference_documents(
         return []
 
     per_document = (budget_tokens // len(sources)) * CHARS_PER_TOKEN
-    documents: list[tuple[str, str]] = []
+    documents: list[ReferenceDocument] = []
     for source in sources:
-        text = _document_text(int(source["document_id"]))
+        document_id = int(source["document_id"])
+        text = _document_text(document_id)
         if text:
-            documents.append((str(source["filename"]), text[:per_document]))
+            documents.append(
+                ReferenceDocument(document_id, str(source["filename"]), text[:per_document])
+            )
     return documents
 
 
@@ -227,15 +243,24 @@ def _document_text(document_id: int) -> str:
 
 
 def build_prompt(
-    problem: SolveInput, retrieval: RetrievalResult, references: list[tuple[str, str]]
+    problem: SolveInput, retrieval: RetrievalResult, references: list[ReferenceDocument]
 ) -> list[dict[str, str]]:
-    """Assemble the solve turn from the problem and the evidence gathered for it."""
+    """Assemble the solve turn from the problem and the evidence gathered for it.
+
+    References are numbered continuing from the retrieved chunks, in one sequence, so a
+    step that followed the answer key can cite it. Numbering them separately, or not at
+    all, made a solve whose whole point was a reference document report every step
+    ungrounded: the model had followed something it had no way to name.
+    """
     return build_solve_prompt(
         problem.statement,
         problem.label,
         sub_parts=list(problem.sub_parts),
         context_block=format_context_block([_context_entry(c) for c in retrieval.chunks]),
-        reference_block=format_reference_block(references),
+        reference_block=format_reference_block(
+            [(one.filename, one.text) for one in references],
+            start_index=len(retrieval.chunks) + 1,
+        ),
         correction=problem.correction,
     )
 

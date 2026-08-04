@@ -107,7 +107,9 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
         </Button>
       </header>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="px-4 py-2">
+        {/* The last problem needs somewhere to end. Matching the top padding left it
+            touching the bottom edge of the pane. */}
+        <div className="px-4 pt-2 pb-10">
           <Accordion
             type="multiple"
             value={expanded}
@@ -136,7 +138,11 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
 
   return (
     <>
-      <div className="border-border bg-card h-[calc(100vh-11rem)] min-h-[520px] overflow-hidden rounded-lg border shadow-sm print:h-auto print:min-h-0 print:overflow-visible print:rounded-none print:border-0 print:shadow-none">
+      {/* Sized from what the shell has left rather than from a viewport calculation. The
+          old `calc(100vh - 11rem)` encoded the header's height as a magic number, so it
+          was wrong the moment the header changed, and it ignored the page's own padding
+          in either direction. */}
+      <div className="border-border bg-card min-h-[520px] flex-1 overflow-hidden rounded-lg border shadow-sm print:h-auto print:min-h-0 print:flex-none print:overflow-visible print:rounded-none print:border-0 print:shadow-none">
         {wide ? (
           <ResizablePanelGroup
             orientation="horizontal"

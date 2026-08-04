@@ -289,10 +289,22 @@ persistent role on the document. That is the moment the student is actually thin
 needs no schema change to `documents`, and the same document can be a reference for one run and
 irrelevant to another. It is recorded as an `artifact_sources` row with role `reference_solutions`.
 
-Reference solutions enter the prompt as few-shot examples, labelled as examples of style and method
-rather than as material to copy from. They are capped at a share of the retrieval budget so a long
-reference document cannot crowd out the retrieved course material for the problem actually being
-solved.
+Reference solutions enter the prompt labelled by what they are: the notation, layout, and method the
+course expects. They are capped at a share of the retrieval budget so a long reference document
+cannot crowd out the retrieved course material for the problem actually being solved.
+
+The label distinguishes two cases, because the picker allows both and they are not the same
+instruction. Solutions to a **different** set are a method to follow and not content to copy; a
+model that answers from them is answering the wrong question. Solutions to the **set being solved**
+are the authority on the answer: the student attached them deliberately, and a solve told to look
+away from them is a solve that ignores what the student asked it to use. In that case the model is
+told to follow the reference, to say in the step that it is doing so, and to say so explicitly where
+its own working disagrees rather than silently picking one. The setup screen states this too, at the
+moment the reference is chosen.
+
+Reference documents are also reachable through ordinary retrieval, which is what makes them citable:
+a step that follows the answer key cites the retrieved entry and the provenance chip names the file.
+Without that, a run whose whole point was the answer key reports every step ungrounded.
 
 ### Structure
 
@@ -343,14 +355,14 @@ interface renders. There is no separate claim-extraction format to keep in sync 
 
 Tools available in Phase 2, all pure computation:
 
-| Tool | Purpose |
-|------|---------|
-| `cas_evaluate` | Simplify an expression, or test whether two expressions are equal |
-| `cas_solve` | Solve an equation or system for named unknowns |
-| `cas_integrate` | Definite and indefinite integration |
-| `cas_differentiate` | Differentiation, including partial derivatives |
-| `cas_linalg` | Determinant, inverse, eigenvalues, rank, linear solve |
-| `check_units` | Dimensional analysis: does an expression carry the expected units |
+| Tool                | Purpose                                                           |
+| ------------------- | ----------------------------------------------------------------- |
+| `cas_evaluate`      | Simplify an expression, or test whether two expressions are equal |
+| `cas_solve`         | Solve an equation or system for named unknowns                    |
+| `cas_integrate`     | Definite and indefinite integration                               |
+| `cas_differentiate` | Differentiation, including partial derivatives                    |
+| `cas_linalg`        | Determinant, inverse, eigenvalues, rank, linear solve             |
+| `check_units`       | Dimensional analysis: does an expression carry the expected units |
 
 Unit and dimensional checking is cheap and catches a large share of physics and engineering errors,
 which is why it is in the first tool set rather than a later refinement.
@@ -480,6 +492,7 @@ All routes are class-scoped for creation and listing, artifact-scoped thereafter
 existing document and session split.
 
 **Solutions**
+
 - `POST /api/classes/{class_id}/solutions` - Create a solution set from selected documents. Returns
   `202` with the artifact in state `pending` and begins segmentation. Body carries the source
   document ids with their roles and an optional title.
@@ -492,18 +505,21 @@ existing document and session split.
 - `DELETE /api/solutions/{artifact_id}` - Delete the artifact and everything it owns
 
 **Parts**
+
 - `PATCH /api/solutions/{artifact_id}/parts/{part_id}` - Store the student's edit of a part
 - `POST /api/solutions/{artifact_id}/parts/{part_id}/regenerate` - Re-solve one problem, optionally
   with a correction
 - `GET /api/solutions/{artifact_id}/parts/{part_id}/revisions` - Revision history for one part
 
 **Documents**, extended
+
 - `GET /api/documents/{document_id}/pages/{page_number}` - One page rendered to PNG by PyMuPDF and
   cached under `data/pages/`. The solver's source pane needs exact page-level anchoring, which an
   embedded PDF viewer cannot give reliably, and Phase 3 needs the same rasterization for figures
   and text recognition. Text sources have no pages and are served from their extracted text instead
 
 **Chat**, extended
+
 - `POST /api/classes/{class_id}/sessions` gains an optional `artifact_part_id`
 
 The route prefix is `/api/solutions` while the table is `artifacts`, and that is intentional. The

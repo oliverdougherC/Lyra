@@ -16,6 +16,7 @@ What this file defends, in the order it matters:
 """
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -210,6 +211,51 @@ def test_a_cited_step_carries_its_source_and_an_uncited_one_carries_none(
     assert artifacts.list_provenance(db, int(steps[1]["id"])) == []
 
 
+def test_a_step_can_cite_a_reference_solution(
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    retrieved: RetrievedChunk,
+) -> None:
+    """A reference the student attached has to be citable, or it cannot be reported.
+
+    References used to enter the prompt unnumbered, so a step that followed the answer key
+    had no way to name it and the screen said every step was ungrounded. They now continue
+    the retrieved chunks' numbering: one chunk means the reference is [2].
+    """
+    problem_document = _document(db, class_id)
+    reference = _document(db, class_id, "hw4_solutions.pdf")
+    created = artifacts.create_artifact(
+        db,
+        class_id,
+        "Problem set 4",
+        [SourceSpec(problem_document), SourceSpec(reference, artifacts.REFERENCE_SOLUTIONS)],
+    )
+    artifact_id = int(created["id"])
+    artifacts.create_part(db, artifact_id, artifacts.PROBLEM, 0, label="Problem 1", content="Go.")
+    artifacts.set_artifact_state(db, artifact_id, artifacts.AWAITING_REVIEW)
+    fake_solver(
+        monkeypatch,
+        {
+            "steps": [
+                {"title": "Follow the key", "content": "As in the solutions.", "sources": [2]},
+            ],
+            "answer": "1/s^2",
+        },
+        chunks=[retrieved],
+    )
+
+    solver.run_solve(artifact_id)
+
+    steps = _children(db, int(_problems(db, artifact_id)[0]["id"]), artifacts.STEP)
+    entries = artifacts.list_provenance(db, int(steps[0]["id"]))
+    assert [entry["filename"] for entry in entries] == ["hw4_solutions.pdf"]
+    # No chunk and no page: a reference enters the prompt whole rather than as an indexed
+    # passage, and a page number invented for it would be a citation nobody can follow.
+    assert [entry["chunk_id"] for entry in entries] == [None]
+    assert [entry["page_number"] for entry in entries] == [None]
+
+
 def test_a_citation_outside_the_context_block_is_dropped(
     db: sqlite3.Connection,
     class_id: int,
@@ -379,12 +425,16 @@ def test_reference_solutions_reach_the_prompt_labelled_as_examples(
     sent = fake_solver(monkeypatch, _SOLUTION)
     solver.run_solve(artifact_id)
 
-    prompt = sent[0][1]["content"]
+    # Collapsed: the prompt is hard-wrapped and which words share a line is not a contract.
+    prompt = re.sub(r"\s+", " ", sent[0][1]["content"])
     assert "last_term_solutions.pdf" in prompt
     assert "Reference text." in prompt
-    # Labelled as style to follow, not material to copy. A reference presented as source
-    # material is a reference the model will answer from.
-    assert "Do not copy their content" in prompt
+    # The heading has to distinguish the two cases the picker now allows. Solutions to an
+    # earlier set are a method to follow and not content to copy. Solutions to the set
+    # being solved are the authority on the answer, and a student who deliberately
+    # attached them is owed a solve that reads them rather than one told to look away.
+    assert "take the method and not the content" in prompt
+    assert "it is the authority on the answer" in prompt
 
 
 def test_a_prose_reply_becomes_one_step_rather_than_a_failure(

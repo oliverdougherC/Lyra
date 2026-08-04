@@ -134,19 +134,32 @@ Return JSON with two fields:
   on, or an empty list when it relies on none.
 - "answer": the final result, stated plainly. Include units where the problem has them.
 
-Only cite a context number in "sources" if that entry is what the step actually rests on.
-An invented citation is worse than none, because the student is told the step is grounded
-when it is not.
+Cite in "sources" every numbered entry a step actually used, and only those. The reference
+solutions below are numbered in the same sequence as the retrieved context and are cited
+the same way. A step that follows a worked example, a formula, or a method from either one
+cites the entry it came from; a step you derived yourself cites nothing. Both halves
+matter: an invented citation tells the student a step is grounded when it is not, and a
+missing one tells them their own material went unused when it did not.
 
-Write mathematics in LaTeX. Put equations in $$...$$ on their own line for display math; \
-reserve $...$ for short inline quantities.
+The numbers belong in "sources" and nowhere else. Writing "as shown in [15]" into a step's
+text puts a marker on screen that refers to a list the student cannot see; name the source
+in words, or say nothing and let the citation carry it.
+
+Write mathematics in LaTeX, in "answer" as well as in every step. Put equations in $$...$$
+on their own line for display math and $...$ for short inline quantities. Every LaTeX
+command belongs inside those delimiters: a bare \\frac outside them reaches the student as
+the characters you typed rather than as a fraction.
 
 Reply with JSON only. No prose, no explanation, and no code fence."""
 
 _REFERENCE_HEADING = """\
-Solutions the student already has, as examples of the notation, layout, and method their
-course expects. Follow their style. Do not copy their content: they are a different
-problem."""
+Worked solutions the student already has. Follow their notation, layout, and method: this
+is the form their course expects and the form their marker reads.
+
+Where one of them covers the problem you are solving now, it is the authority on the
+answer. Follow it, say in the step that you are following it, and if your own working
+disagrees with it, say that too rather than quietly picking one. Where they cover
+different problems, take the method and not the content."""
 
 _VERIFY_PROMPT = """\
 You are checking a solution that has already been written. You are not rewriting it and
@@ -281,12 +294,16 @@ def build_verification_prompt(
     ]
 
 
-def format_reference_block(documents: list[tuple[str, str]]) -> str:
+def format_reference_block(documents: list[tuple[str, str]], start_index: int = 1) -> str:
     """Render reference solutions as the labelled examples section of a solve prompt.
 
     Args:
         documents: `(filename, text)` pairs, already truncated to their share of the
             budget by the caller.
+        start_index: The first citation number to use. References share one numbering
+            sequence with the retrieved context so a step can cite either, which is what
+            makes "grounded in your material" true of a step that followed the answer key
+            the student attached.
 
     Returns:
         The block, or an empty string for no documents so callers can append it
@@ -294,7 +311,12 @@ def format_reference_block(documents: list[tuple[str, str]]) -> str:
     """
     if not documents:
         return ""
-    entries = [f"--- {filename}\n{text}" for filename, text in documents if text.strip()]
+    entries = [
+        f"[{start_index + offset}] {filename}\n{text}"
+        for offset, (filename, text) in enumerate(
+            [(name, body) for name, body in documents if body.strip()]
+        )
+    ]
     if not entries:
         return ""
     return f"{_REFERENCE_HEADING}\n\n" + "\n\n".join(entries)
