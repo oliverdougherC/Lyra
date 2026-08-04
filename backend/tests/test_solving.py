@@ -686,6 +686,39 @@ def test_a_reply_nobody_can_read_is_unchecked_rather_than_agreement() -> None:
     assert outcome.verdict == artifacts.UNCHECKED
 
 
+def test_a_report_with_prose_around_it_is_still_read() -> None:
+    """One problem in ten came back this way, and its verdict was thrown away.
+
+    A checker that narrates a sentence before or after its JSON has still reported. That
+    is a formatting difference, not a missing conclusion, and treating it as unreadable
+    loses a check that actually ran.
+    """
+    outcome = verification.judge(
+        _loop(
+            'I checked each part.\n\n{"verdict": "agrees", "detail": "Both integrals match."}\n'
+            "That is all.",
+            (_call(),),
+        )
+    )
+
+    assert outcome.verdict == artifacts.VERIFIED
+    assert outcome.detail == "Both integrals match."
+
+
+def test_prose_around_a_refutation_does_not_become_agreement() -> None:
+    # The last object carrying a verdict is the report. An earlier object that is not one
+    # must not be mistaken for it.
+    outcome = verification.judge(
+        _loop(
+            'Working: {"expression": "2*t"} then\n'
+            '{"verdict": "disagrees", "detail": "Step 2 differentiates wrongly."}',
+            (_call(),),
+        )
+    )
+
+    assert outcome.verdict == artifacts.REFUTED
+
+
 def test_a_disagreement_stated_in_prose_is_still_read() -> None:
     # Reading agreement out of prose would let a reply that checked nothing become a pass.
     # Reading disagreement out of it only ever costs a re-derive.

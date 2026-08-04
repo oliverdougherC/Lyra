@@ -80,6 +80,32 @@ def _strip_code_fence(content: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _embedded_report(text: str) -> Mapping[str, object] | None:
+    """The report object inside a reply that carries prose around it, or None.
+
+    Searched from the last opening brace backwards, because a checker that talks either
+    side of its JSON puts the report at the end far more often than at the start, and an
+    object that does not carry a `verdict` is not the report whatever else it holds.
+    """
+    for start in reversed([index for index, char in enumerate(text) if char == "{"]):
+        depth = 0
+        for index in range(start, len(text)):
+            if text[index] == "{":
+                depth += 1
+            elif text[index] == "}":
+                depth -= 1
+                if depth:
+                    continue
+                try:
+                    candidate = json.loads(text[start : index + 1])
+                except ValueError:
+                    break
+                if isinstance(candidate, Mapping) and "verdict" in candidate:
+                    return candidate
+                break
+    return None
+
+
 def read_report(content: str) -> tuple[str, str]:
     """Read the checker's closing message into `(verdict word, detail)`.
 
@@ -93,9 +119,13 @@ def read_report(content: str) -> tuple[str, str]:
     """
     stripped = _strip_code_fence(content)
     try:
-        payload = json.loads(stripped)
+        payload: object = json.loads(stripped)
     except ValueError:
-        payload = None
+        # A checker that narrated a sentence before its JSON, or added one after it, has
+        # still reported a verdict. Measured against a real signals set, one problem in
+        # ten came back this way and its verdict was thrown away as unreadable, which
+        # loses a check that actually ran.
+        payload = _embedded_report(stripped)
 
     if isinstance(payload, Mapping):
         word = str(payload.get("verdict") or "").strip().lower()
