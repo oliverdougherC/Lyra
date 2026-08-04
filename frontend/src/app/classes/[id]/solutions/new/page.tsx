@@ -1,6 +1,6 @@
 'use client'
 
-import { FileText } from 'lucide-react'
+import { FileText, Lightbulb, X } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import { useMemo, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
@@ -13,10 +13,11 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ApiError } from '@/lib/api'
-import { formatCount } from '@/lib/format'
+import { formatCount, truncateMiddle } from '@/lib/format'
 import { useClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
 import { useCreateSolution } from '@/lib/hooks/use-solutions'
+import { suggestReferences } from '@/lib/reference-match'
 
 /**
  * A raised-paper section, matching the Settings screen.
@@ -61,6 +62,9 @@ export default function NewSolutionPage() {
   const [reference, setReference] = useState<number[]>([])
   const [title, setTitle] = useState('')
   const [titleTouched, setTitleTouched] = useState(false)
+  // Waved away by hand. A suggestion the student has already judged should not come back
+  // when they change something else on the page.
+  const [dismissed, setDismissed] = useState<number[]>([])
 
   const classQuery = useClass(classId ?? Number.NaN)
   // Ingestion is polled here too: a file dropped on the workspace a moment ago should
@@ -75,6 +79,14 @@ export default function NewSolutionPage() {
   }, [documents, problemSet])
 
   const effectiveTitle = titleTouched ? title : suggestedTitle
+
+  const suggestions = useMemo(
+    () =>
+      suggestReferences(documents, problemSet, reference).filter(
+        (suggestion) => !dismissed.includes(suggestion.document.id),
+      ),
+    [documents, problemSet, reference, dismissed],
+  )
 
   if (classId === null) {
     return (
@@ -174,8 +186,65 @@ export default function NewSolutionPage() {
 
           <SetupSection
             title="Reference solutions"
-            description="Optional. If you have solutions from an earlier set, Lyra will follow their notation and method."
+            description="Optional. Worked solutions Lyra should follow for notation and method."
           >
+            {suggestions.length > 0 ? (
+              <div className="border-accent-primary/50 bg-accent-surface/40 mb-4 rounded-md border border-dashed p-3">
+                <p className="text-text-secondary flex items-start gap-2 text-sm">
+                  <Lightbulb className="text-accent-primary mt-0.5 size-4 shrink-0" aria-hidden />
+                  <span>
+                    {suggestions.length === 1
+                      ? 'This file looks like the answers to what you picked. Nothing is selected until you say so.'
+                      : 'These files look like the answers to what you picked. Nothing is selected until you say so.'}
+                  </span>
+                </p>
+                <ul className="mt-3 flex flex-col gap-2">
+                  {suggestions.map((suggestion) => (
+                    <li
+                      key={suggestion.document.id}
+                      className="border-border bg-card flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border px-3 py-2"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span
+                          className="text-text-primary block text-sm"
+                          title={suggestion.document.filename}
+                        >
+                          {truncateMiddle(suggestion.document.filename)}
+                        </span>
+                        <span className="text-text-tertiary block text-xs">
+                          Matches {truncateMiddle(suggestion.because.filename)}
+                        </span>
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setReference([...reference, suggestion.document.id])
+                          setDismissed([...dismissed, suggestion.document.id])
+                        }}
+                      >
+                        Use it
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`Dismiss ${suggestion.document.filename}`}
+                        onClick={() => setDismissed([...dismissed, suggestion.document.id])}
+                      >
+                        <X className="size-4" aria-hidden />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+                {/* Said plainly rather than left for the student to discover from a
+                    provenance chip afterwards. Handing Lyra the answers to the very set
+                    it is solving changes what the result means, and that is worth one
+                    sentence at the moment of the decision. */}
+                <p className="text-text-secondary mt-3 text-xs">
+                  Solutions to the same set will steer the answers rather than only the notation.
+                </p>
+              </div>
+            ) : null}
             <SourcePicker
               name="reference-solutions"
               documents={documents}

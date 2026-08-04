@@ -56,15 +56,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         Skip to content
       </a>
       <AppSidebar />
-      <SidebarInset className="min-h-0 min-w-0 overflow-hidden border-border md:peer-data-[variant=inset]:border">
+      {/* `overflow-clip` rather than `overflow-hidden`. Both clip the same pixels, but
+          `hidden` also makes the box a scroll container, and this one is positioned, so
+          it was the containing block for any absolutely positioned descendant that had
+          no positioned parent of its own — every `sr-only` form control, among others.
+          Focusing one made the browser scroll a box with no scrollbar and no wheel
+          handling, which read to the user as the page disappearing. `clip` cannot
+          scroll, so that failure is now unreachable rather than merely unlikely. */}
+      <SidebarInset className="min-h-0 min-w-0 overflow-clip border-border md:peer-data-[variant=inset]:border">
         <AppHeader />
         {/* `main` is the one scroll container below the header, so the rail and header
             stay put on long routes while a full-height route (the workspace) can still
-            size itself to exactly what is left. */}
+            size itself to exactly what is left. It is `relative` so that it, and not
+            something further up, is the containing block for absolutely positioned
+            content: whatever the browser decides to scroll into view should be the box
+            the student can actually scroll. */}
         <main
           id="main-content"
           tabIndex={-1}
-          className="flex min-h-0 flex-1 flex-col overflow-y-auto"
+          className="relative flex min-h-0 flex-1 flex-col overflow-y-auto"
         >
           <div className="mx-auto flex min-h-0 w-full max-w-[1320px] flex-1 flex-col p-4 pb-28 sm:pb-4 md:p-6">
             {children}

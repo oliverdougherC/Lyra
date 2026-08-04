@@ -67,7 +67,15 @@ export function SourcePicker({
           <li key={document.id}>
             <label
               className={cn(
-                'border-border bg-card flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2.5 transition-colors',
+                // `relative` is load-bearing. The checkbox below is `sr-only`, which is
+                // `position: absolute`, and an absolutely positioned box is only clipped
+                // by ancestors that lie between it and its containing block. Without a
+                // positioned parent here its containing block was the app shell's inset,
+                // several layers above the scroll container, so clicking a row focused a
+                // checkbox the browser believed to be off-screen and it scrolled the
+                // inset to reveal it. The inset is `overflow: hidden`: no scrollbar, no
+                // wheel, no way back. The page simply vanished.
+                'border-border bg-card relative flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2.5 transition-colors',
                 'has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2',
                 isSelected && 'border-accent-primary bg-accent-surface/40',
                 disabled && 'cursor-not-allowed opacity-60',

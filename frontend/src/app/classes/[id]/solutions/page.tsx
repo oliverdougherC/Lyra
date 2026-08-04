@@ -31,6 +31,26 @@ const STATE_LABELS: Record<SolutionState, string> = {
 }
 
 /**
+ * What the solver will actually do, in the order it does it. The middle one is here
+ * because it is the step nobody expects: solving stops and waits for the student to
+ * check the problem list, and finding that out mid-run reads like a fault.
+ */
+const STEPS = [
+  {
+    title: 'Pick the files',
+    body: 'The homework, and optionally worked solutions for Lyra to follow.',
+  },
+  {
+    title: 'Check the problems',
+    body: 'Lyra lists what it found. Merge, split, or edit anything it got wrong.',
+  },
+  {
+    title: 'Read the solutions',
+    body: 'Each problem lands as it finishes, with its working and its checks.',
+  },
+]
+
+/**
  * The solver's front door.
  *
  * This page exists because the feature had nowhere to live. Its only entry point was a
@@ -52,22 +72,30 @@ export default function SolutionsIndexPage() {
     )
   }
 
+  // With nothing to list, the card below is the whole screen: it explains the feature and
+  // starts it. Repeating that explanation and that button up here as well said the same
+  // thing twice in the same glance.
+  const listed = solutions.data !== undefined && solutions.data.length > 0
+
   return (
     <div className="mx-auto flex w-full max-w-[860px] flex-col gap-6">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex flex-col gap-1">
           <h1 className="font-heading text-text-primary text-2xl tracking-tight">Solutions</h1>
-          <p className="text-text-secondary text-sm">
-            Hand Lyra a problem set and it works through every problem, checks the mathematics, and
-            shows you which steps came from your own course material.
-          </p>
+          {listed ? (
+            <p className="text-text-secondary text-sm">
+              Every problem set you have handed to Lyra in this class.
+            </p>
+          ) : null}
         </div>
-        <Button asChild>
-          <Link href={`/classes/${classId}/solutions/new`}>
-            <Plus className="size-4" />
-            New solution set
-          </Link>
-        </Button>
+        {listed ? (
+          <Button asChild>
+            <Link href={`/classes/${classId}/solutions/new`}>
+              <Plus className="size-4" />
+              New solution set
+            </Link>
+          </Button>
+        ) : null}
       </header>
 
       {solutions.isPending ? (
@@ -98,22 +126,48 @@ export default function SolutionsIndexPage() {
       ) : solutions.data.length === 0 ? (
         // Not a bare "nothing here". A student arriving with no solution sets is the
         // student most likely never to have used the solver, so this is the one place
-        // that has to say what it does.
-        <Empty className="py-12">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <SquareCheckBig className="text-text-tertiary size-8" />
+        // that has to say what it does — and, since the solver takes a couple of minutes
+        // and asks for a decision halfway through, what it is going to ask of them.
+        <Empty className="gap-0 px-6 py-12">
+          <EmptyHeader className="max-w-lg">
+            <EmptyMedia
+              variant="icon"
+              className="bg-accent-surface text-accent-surface-foreground size-14 rounded-full"
+            >
+              <SquareCheckBig className="size-7" />
             </EmptyMedia>
-            <EmptyTitle>No solution sets yet</EmptyTitle>
+            <EmptyTitle className="text-xl">Solve a problem set</EmptyTitle>
             <EmptyDescription>
-              Upload a homework PDF and Lyra reads it, shows you the problems it found so you can
-              correct them, then solves each one and checks the result against a computer algebra
-              system. You can edit any step, ask about it, or have a problem solved again.
+              Hand Lyra a homework PDF. It works through every problem, checks the mathematics
+              against a computer algebra system, and shows you which steps came from your own course
+              material.
             </EmptyDescription>
           </EmptyHeader>
-          <Button asChild>
+
+          {/* `text-pretty` because `Empty` sets `text-balance`, which is right for one
+              centred paragraph and wrong for three short columns: it evens the line
+              lengths and leaves every card ragged. */}
+          <ol className="mt-8 grid w-full max-w-2xl gap-3 text-left text-pretty sm:grid-cols-3">
+            {STEPS.map((step, index) => (
+              <li key={step.title} className="border-border bg-muted/40 rounded-md border p-4">
+                <span
+                  aria-hidden
+                  className="bg-accent-surface text-accent-surface-foreground flex size-6 items-center justify-center rounded-full text-xs font-medium tabular-nums"
+                >
+                  {index + 1}
+                </span>
+                <p className="text-text-primary mt-3 text-sm font-medium">{step.title}</p>
+                <p className="text-text-tertiary mt-1 text-xs leading-relaxed">{step.body}</p>
+              </li>
+            ))}
+          </ol>
+
+          <Button asChild size="lg" className="mt-8">
             <Link href={`/classes/${classId}/solutions/new`}>Solve a problem set</Link>
           </Button>
+          <p className="text-text-tertiary mt-3 text-xs">
+            Every problem shows what was checked, and says so plainly when nothing could be.
+          </p>
         </Empty>
       ) : (
         <ul className="flex flex-col gap-2">
