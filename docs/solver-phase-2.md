@@ -205,6 +205,13 @@ Polling backs off from 500ms to 2s and stops on a terminal state, matching the i
 **Identify each problem and sub-part in an uploaded homework set, then show the result before
 solving anything.**
 
+Segmentation sends whole documents to the tutor model, exactly as profile extraction
+does, so it is bound by the same rule: **document text is never sent to a non-local
+endpoint the student has not acknowledged.** That rule lives in one place,
+`app_settings.document_text_allowed`, which both callers ask before reading any text. A
+blocked pass is not a failure: the chunker's list stands on its own and the gate is where
+the student sees it.
+
 ### Two sources of evidence
 
 1. **The chunker, already done.** `chunks.problem_number` and `chunks.part_index` are populated
@@ -500,6 +507,7 @@ New modules, following the structure in conventions.md:
 backend/
   core/
     solver.py           # Job orchestration: segment, solve, verify, regenerate
+    segmentation.py     # Chunker markers plus a model pass, reconciled
     artifacts.py        # Artifact and part CRUD, revisions, provenance
   llm/
     tools.py            # The tool-calling loop and the tool registry

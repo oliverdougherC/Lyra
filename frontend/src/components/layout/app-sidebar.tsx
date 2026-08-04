@@ -29,8 +29,9 @@ import { formatSessionFallbackTitle } from '@/lib/format'
 import { useClasses, useUpdateClass } from '@/lib/hooks/use-classes'
 import { useCreateSession, useSessions } from '@/lib/hooks/use-chat'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
+import { useSolutions } from '@/lib/hooks/use-solutions'
 import { cn } from '@/lib/utils'
-import type { ClassRead } from '@/types'
+import type { ClassRead, SolutionRead } from '@/types'
 
 const ARCHIVED_STORAGE_KEY = 'lyra-sidebar-archived-open'
 
@@ -70,6 +71,8 @@ function ClassNavItem({
   activeSessionId,
   sessions,
   sessionsPending,
+  solutions,
+  activeSolutionId,
   onNewChat,
 }: {
   klass: ClassRead
@@ -77,6 +80,8 @@ function ClassNavItem({
   activeSessionId: string | null
   sessions?: { id: number; title: string | null; mode: string; created_at: string }[]
   sessionsPending?: boolean
+  solutions?: SolutionRead[]
+  activeSolutionId: string | null
   onNewChat: () => void
 }) {
   const href = `/classes/${klass.id}`
@@ -133,6 +138,40 @@ function ClassNavItem({
                 </button>
               </SidebarMenuSubButton>
             </SidebarMenuSubItem>
+
+            <SidebarMenuSubItem>
+              <span className="text-text-tertiary mt-2 block px-2 text-[0.6875rem] font-medium tracking-wider uppercase">
+                Solutions
+              </span>
+            </SidebarMenuSubItem>
+            {(solutions ?? []).map((solution) => (
+              <SidebarMenuSubItem key={solution.id}>
+                <SidebarMenuSubButton asChild isActive={activeSolutionId === String(solution.id)}>
+                  <Link href={`${href}/solutions/${solution.id}`} title={solution.title}>
+                    <span className="truncate">{solution.title}</span>
+                    {/* `awaiting_review` is neither working nor finished, and the student
+                        is the thing it is blocked on, so the rail says so. */}
+                    {solution.state === 'awaiting_review' ? (
+                      <span className="text-info-text ml-auto shrink-0 text-[0.6875rem]">
+                        Waiting for you
+                      </span>
+                    ) : null}
+                  </Link>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+            ))}
+            <SidebarMenuSubItem>
+              <SidebarMenuSubButton asChild>
+                <Link
+                  href={`${href}/solutions/new`}
+                  aria-label="Start a new solution set"
+                  className="text-text-secondary"
+                >
+                  <Plus />
+                  <span>New solution set</span>
+                </Link>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
           </SidebarMenuSub>
         ) : null}
       </SidebarMenuItem>
@@ -159,6 +198,11 @@ export function AppSidebar() {
   const { data: sessions, isPending: sessionsPending } = useSessions(
     selectedClassIsValid ? selectedClassId : null,
   )
+  const { data: solutions } = useSolutions(
+    selectedClassIsValid ? selectedClassId : Number.NaN,
+    selectedClassIsValid,
+  )
+  const solutionMatch = /^\/classes\/\d+\/solutions\/(\d+)/.exec(pathname)
   const createSession = useCreateSession(selectedClassIsValid ? selectedClassId : null)
 
   const startNewChat = useCallback(() => {
@@ -221,6 +265,8 @@ export function AppSidebar() {
                     klass={item}
                     selected={selectedClassId === item.id}
                     activeSessionId={null}
+                    solutions={solutions}
+                    activeSolutionId={solutionMatch ? solutionMatch[1] : null}
                     sessions={sessions}
                     sessionsPending={sessionsPending}
                     onNewChat={startNewChat}
@@ -235,6 +281,8 @@ export function AppSidebar() {
                         klass={item}
                         selected={selectedClassId === item.id}
                         activeSessionId={activeSessionId}
+                        solutions={solutions}
+                        activeSolutionId={solutionMatch ? solutionMatch[1] : null}
                         sessions={sessions}
                         sessionsPending={sessionsPending}
                         onNewChat={startNewChat}

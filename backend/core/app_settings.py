@@ -88,17 +88,20 @@ def resolve_tutor_config(conn: sqlite3.Connection) -> TutorConfig:
     )
 
 
-def extraction_allowed(conn: sqlite3.Connection) -> str | None:
-    """Whether profile extraction may send document text out, or why it may not.
+def document_text_allowed(conn: sqlite3.Connection) -> str | None:
+    """Whether document text may be sent to the tutor endpoint at all, or why it may not.
+
+    The rule from the Inference Posture section of docs/architecture.md, written once.
+    It is about **document text leaving the machine**, not about which feature is doing
+    it: profile extraction and solver segmentation both send whole documents to the tutor
+    model, so both ask here. A second copy of this rule per feature is a second place for
+    one of them to quietly stop asking.
 
     Returns:
-        None when extraction may run, otherwise the skip reason recorded on the
-        document: `extraction_disabled`, `no_endpoint`, or `remote_unacknowledged`.
+        None when document text may be sent, otherwise `no_endpoint` or
+        `remote_unacknowledged`.
     """
     row = get_settings_row(conn)
-
-    if not row["extraction_enabled"]:
-        return EXTRACTION_DISABLED
 
     endpoint_url = (row["endpoint_url"] or "").strip()
     if not endpoint_url:
@@ -108,3 +111,17 @@ def extraction_allowed(conn: sqlite3.Connection) -> str | None:
         return REMOTE_UNACKNOWLEDGED
 
     return None
+
+
+def extraction_allowed(conn: sqlite3.Connection) -> str | None:
+    """Whether profile extraction may run, or why it may not.
+
+    Its own Settings toggle first, then the shared document-text rule above.
+
+    Returns:
+        None when extraction may run, otherwise the skip reason recorded on the
+        document: `extraction_disabled`, `no_endpoint`, or `remote_unacknowledged`.
+    """
+    if not get_settings_row(conn)["extraction_enabled"]:
+        return EXTRACTION_DISABLED
+    return document_text_allowed(conn)

@@ -18,8 +18,10 @@ from backend.api import (
     routes_documents,
     routes_profile,
     routes_settings,
+    routes_solutions,
 )
 from backend.config import settings
+from backend.core import solver
 from backend.core.errors import LyraError
 from backend.core.ingestion import reconcile_interrupted, start_worker
 from backend.llm.embed_server import embedding_server
@@ -39,9 +41,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         interrupted = reconcile_interrupted(conn)
         if interrupted:
             logger.warning("Marked %d interrupted ingestion job(s) as failed", interrupted)
+        # An artifact left `awaiting_review` is deliberately untouched by this: it was not
+        # working when the process stopped, it was waiting, and it still is.
+        stalled = solver.reconcile_interrupted(conn)
+        if stalled:
+            logger.warning("Marked %d interrupted solve job(s) as failed", stalled)
     finally:
         conn.close()
     start_worker()
+    solver.start_worker()
     try:
         yield
     finally:
@@ -73,6 +81,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_chat.router)
     app.include_router(routes_profile.router)
     app.include_router(routes_settings.router)
+    app.include_router(routes_solutions.router)
 
     return app
 

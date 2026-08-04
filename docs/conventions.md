@@ -59,6 +59,7 @@ backend/
     profiles.py         # Profile facts, confidence, confirmation
     ingestion.py        # Background ingestion job orchestration
     artifacts.py        # Artifact and part CRUD, revisions, provenance (Phase 2)
+    segmentation.py     # Problem lists from chunk markers plus a model pass (Phase 2)
     solver.py           # Background solve job: segment, solve, verify (Phase 2)
   tools/                # Pure computation, no prompts, no models, no database (Phase 2)
     __init__.py
@@ -208,7 +209,8 @@ Tests defend observable contracts. A test that restates the implementation is wo
 - Retrieval ordering, recency weighting, and context-budget trimming
 - Embedding prefix application, since a regression here is silent
 - Ingestion state transitions, including failure paths
-- Endpoint locality detection and the remote-extraction skip rule
+- Endpoint locality detection, and that no path sends document text to an unacknowledged
+  remote endpoint
 - Profile fact confidence and the rule that unconfirmed low-confidence facts never enter a prompt
 - API request and response contracts
 

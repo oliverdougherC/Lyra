@@ -171,3 +171,108 @@ export interface RegenerateRequest {
   mode: ChatMode
   document_id: number | null
 }
+
+/** Where a solution set's run has got to. `awaiting_review` is waiting on the student. */
+export type SolutionState =
+  'pending' | 'segmenting' | 'awaiting_review' | 'solving' | 'ready' | 'failed' | 'cancelled'
+
+export type PartKind = 'problem' | 'step' | 'answer' | 'figure'
+
+export type PartStatus = 'pending' | 'solving' | 'verifying' | 'complete' | 'failed'
+
+export type PartOrigin = 'generated' | 'regenerated' | 'user_corrected'
+
+/**
+ * What checking concluded. `unchecked` (checking did not run) and `uncheckable` (nothing
+ * here could be checked) are both honest non-answers, and neither may render as a pass.
+ */
+export type Verdict = 'unchecked' | 'verified' | 'refuted' | 'uncheckable'
+
+export type SourceRole = 'problem_set' | 'reference_solutions'
+
+export interface SolutionSource {
+  document_id: number
+  role: SourceRole
+  ordinal: number
+  filename: string
+}
+
+/** Where a part came from. `filename` is null once the source document is deleted. */
+export interface Provenance {
+  chunk_id: number | null
+  document_id: number | null
+  page_number: number | null
+  label: string | null
+  filename: string | null
+}
+
+export interface SolutionPart {
+  id: number
+  artifact_id: number
+  parent_part_id: number | null
+  kind: PartKind
+  ordinal: number
+  label: string | null
+  content: string
+  content_type: 'markdown' | 'image'
+  status: PartStatus
+  origin: PartOrigin
+  verdict: Verdict
+  error_message: string | null
+  provenance: Provenance[]
+}
+
+export interface SolutionRead {
+  id: number
+  class_id: number
+  kind: 'solution_set'
+  title: string
+  state: SolutionState
+  stage_detail: string | null
+  /** Null until segmentation has counted, so "not counted" differs from "none found". */
+  problems_total: number | null
+  problems_done: number
+  error_message: string | null
+  created_at: string
+  updated_at: string
+  sources: SolutionSource[]
+}
+
+export interface SolutionDetail extends SolutionRead {
+  parts: SolutionPart[]
+}
+
+export interface SolutionStatus {
+  state: SolutionState
+  stage_detail: string | null
+  problems_total: number | null
+  problems_done: number
+  error_message: string | null
+  parts: { id: number; status: PartStatus; verdict: Verdict }[]
+}
+
+export interface SolutionCreate {
+  sources: { document_id: number; role: SourceRole }[]
+  title?: string | null
+}
+
+/** One sub-part in a corrected problem list. */
+export interface SegmentationPart {
+  label?: string | null
+  statement: string
+}
+
+/**
+ * One problem in a corrected problem list. `id` names the part it came from, so an edited
+ * problem keeps the page it was found on. Merge and split produce entries with no id.
+ */
+export interface SegmentationProblem {
+  id?: number | null
+  label?: string | null
+  statement: string
+  parts: SegmentationPart[]
+}
+
+export interface SegmentationUpdate {
+  problems: SegmentationProblem[]
+}

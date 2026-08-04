@@ -15,9 +15,14 @@ import type {
   DocumentStatus,
   MessageRead,
   RegenerateRequest,
+  SegmentationUpdate,
   SessionRead,
   SettingsRead,
   SettingsUpdate,
+  SolutionCreate,
+  SolutionDetail,
+  SolutionRead,
+  SolutionStatus,
   UserProfile,
 } from '@/types'
 
@@ -176,6 +181,34 @@ export const api = {
 
   listModels: (signal?: AbortSignal) =>
     requestJson<{ models: string[] }>('/api/settings/models', { signal }),
+
+  listSolutions: (classId: number, signal?: AbortSignal) =>
+    requestJson<SolutionRead[]>(`/api/classes/${classId}/solutions`, { signal }),
+
+  createSolution: (classId: number, body: SolutionCreate) =>
+    requestJson<SolutionRead>(`/api/classes/${classId}/solutions`, { method: 'POST', body }),
+
+  getSolution: (artifactId: number, signal?: AbortSignal) =>
+    requestJson<SolutionDetail>(`/api/solutions/${artifactId}`, { signal }),
+
+  getSolutionStatus: (artifactId: number, signal?: AbortSignal) =>
+    requestJson<SolutionStatus>(`/api/solutions/${artifactId}/status`, { signal }),
+
+  updateSegmentation: (artifactId: number, body: SegmentationUpdate) =>
+    requestJson<SolutionDetail>(`/api/solutions/${artifactId}/segmentation`, {
+      method: 'PATCH',
+      body,
+    }),
+
+  resegmentSolution: (artifactId: number) =>
+    requestJson<SolutionRead>(`/api/solutions/${artifactId}/resegment`, { method: 'POST' }),
+
+  cancelSolution: (artifactId: number) =>
+    requestJson<SolutionRead>(`/api/solutions/${artifactId}/cancel`, { method: 'POST' }),
+
+  deleteSolution: async (artifactId: number) => {
+    await send(`/api/solutions/${artifactId}`, { method: 'DELETE' })
+  },
 }
 
 /**

@@ -82,6 +82,50 @@ Reply with JSON only. No prose, no explanation, and no code fence."""
 
 _CONTEXT_HEADING = "Retrieved context from the student's uploaded material:"
 
+_SEGMENTATION_PROMPT = """\
+You are reading a homework assignment and listing the problems in it. You are not solving
+anything.
+
+Return JSON with one field, "problems", holding a list in the order they appear. Each
+problem has:
+- "label": what the sheet calls it, such as "Problem 4" or "Exercise 3.14". Use the
+  sheet's own wording, not a number you assigned.
+- "number": just the number, as text, such as "4" or "3.14".
+- "statement": the problem text, copied as written. Do not summarise it, do not fix it,
+  and do not add anything the sheet does not say.
+- "page": the page it starts on, as a whole number, or null if you cannot tell.
+- "parts": a list of its lettered or numbered sub-parts, each with "label" and
+  "statement". An empty list when the problem has none.
+
+Copy statements verbatim. A statement you paraphrased is one the student cannot check
+against their own sheet.
+
+Course headers, due dates, and general instructions belong to no problem. Leave them out
+rather than attaching them to the first one.
+
+Reply with JSON only. No prose, no explanation, and no code fence."""
+
+
+def build_segmentation_prompt(text: str, filename: str) -> list[dict[str, str]]:
+    """Build the messages that ask the model to list a homework set's problems.
+
+    The filename is included because a sheet's own numbering is often only legible
+    alongside what the file is called: `hw4.pdf` numbering its problems 1 to 5 is a
+    different reading from `chapter4.pdf` doing the same.
+
+    Args:
+        text: Document text, already truncated to the segmentation budget by the caller.
+        filename: Original upload filename.
+
+    Returns:
+        OpenAI-shaped messages. The result is a proposal that a person reviews before any
+        solving happens, so the parser downstream tolerates a loose reply.
+    """
+    return [
+        {"role": "system", "content": _SEGMENTATION_PROMPT},
+        {"role": "user", "content": f"File: {filename}\n\n{text}"},
+    ]
+
 
 def _render_facts(facts: list[sqlite3.Row], heading: str) -> str:
     """Render one already-filtered fact list, or an empty string when there is nothing to show."""
