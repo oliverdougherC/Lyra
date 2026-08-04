@@ -97,11 +97,14 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
 
   const solutionPane = (
     <section aria-label="Solutions" className="flex h-full min-h-0 flex-col">
-      <header className="border-border flex items-center justify-between gap-2 border-b px-4 py-2 print:hidden">
+      {/* Same explicit height as the source pane's header, so the rule under the two
+          columns is one line. Deriving it from this row's controls made this side taller
+          by exactly the height of the Export button. */}
+      <header className="border-border flex h-9 shrink-0 items-center justify-between gap-2 border-b px-4 lg:h-10 print:hidden">
         <span className="text-text-tertiary text-xs tracking-wide uppercase">
           Solutions · {formatCount(tree.length, 'problem')}
         </span>
-        <Button variant="ghost" size="sm" onClick={() => window.print()}>
+        <Button variant="ghost" size="sm" className="-mr-2 h-7" onClick={() => window.print()}>
           <Printer className="size-4" />
           Export
         </Button>

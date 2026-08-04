@@ -65,7 +65,11 @@ export function SourcePane({ sources, documents, anchor }: SourcePaneProps) {
 
   return (
     <section aria-label="Source document" className="flex h-full min-h-0 flex-col">
-      <header className="border-border flex items-center justify-between gap-2 border-b px-4 py-2">
+      {/* An explicit height, matching the solutions pane's and the Phase 1 workspace's.
+          Both headers used to size themselves from their own controls, and the solutions
+          side has a button where this side has a filename, so the two rules sat 16px
+          apart and the split read as two panels rather than one. */}
+      <header className="border-border flex h-9 shrink-0 items-center justify-between gap-2 border-b px-4 lg:h-10">
         <span className="flex min-w-0 items-center gap-2">
           <FileText className="text-text-tertiary size-4 shrink-0" aria-hidden />
           <span className="text-text-secondary truncate text-xs" title={filename}>
