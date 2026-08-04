@@ -31,10 +31,25 @@ PROBLEM_BOUNDARY = "problem"
 HEADING_BOUNDARY = "heading"
 PARAGRAPH_BOUNDARY = "paragraph"
 
-# `1.`, `2)`, `3:`, `Problem 4.`, `Q5.` at the start of a line. The empty third
-# alternative is what admits a bare `1.`, and the lookahead on `Q` keeps it from eating
-# the first letter of an ordinary word.
-PROBLEM_MARKER = re.compile(r"^\s*(?:Problem\s+|Q(?=\d)|)(\d+)[.):]\s", re.MULTILINE)
+# `1.`, `2)`, `3:`, `Problem 4.`, `Problem 5 (Parseval)`, `Exercise 3.14`, `Q5.` at the
+# start of a line.
+#
+# The delimiter is required of a bare number and optional after a word that already says
+# what the line is. `Problem 6` with its title in brackets after it is how a large share
+# of real sheets number their problems, and requiring the full stop made every problem on
+# such a sheet invisible to the chunker: measured against a real signals course, two of
+# eight sets came back with no markers at all. A bare `6` still needs its delimiter,
+# because a line opening with a loose number is usually a quantity rather than a heading.
+PROBLEM_MARKER = re.compile(
+    r"""
+    ^[ \t]*
+    (?:(?P<word>Problem|Exercise|Q)[ \t]*)?    # the sheet's own word for it, if it uses one
+    (?P<number>\d+(?:\.\d+)*)                  # 4, or a sectioned 3.14
+    (?(word)[.):]?|[.):])                      # named: delimiter optional. Bare: required
+    (?=[ \t]|$)
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
 
 # Sub-parts of one problem: `(a)`, `a.`, `a)`, `(ii)`, `iii.`. Deliberately lowercase
 # only. `A.` and `I.` would match the first word of far too many ordinary sentences.
@@ -221,9 +236,30 @@ def _flatten(parsed: ParsedDocument) -> _Flat:
     return _Flat(PAGE_SEPARATOR.join(texts), offsets, numbers)
 
 
+def _problem_matches(text: str) -> list[re.Match[str]]:
+    """The markers that start a problem, ignoring the ones that start a sub-item.
+
+    A sheet that writes `Problem 3` above a list of numbered sub-items numbers both, and
+    the two are not the same thing: taking every marker split one real signals problem
+    into six, each holding one line of a question the student is meant to answer as a
+    whole. Where a document names its markers, the named ones are its problems and the
+    bare numbers under them are their parts.
+
+    The named ones only win when the first marker in the document is one of them, which is
+    what makes every bare number a thing sitting *underneath* a named problem. A sheet
+    that opens with `1.` and later writes `Problem 3` is mixing notation for the same
+    kind of thing, and there both are problems.
+    """
+    matches = list(PROBLEM_MARKER.finditer(text))
+    named = [match for match in matches if match.group("word")]
+    if not named or named[0] is not matches[0]:
+        return matches
+    return named
+
+
 def _chunk_problems(flat: _Flat) -> list[_Draft]:
     """One chunk per homework problem, splitting a problem only when it is too big."""
-    matches = list(PROBLEM_MARKER.finditer(flat.text))
+    matches = _problem_matches(flat.text)
     if not matches:
         # Named like homework but with no detectable problem markers. Paragraph grouping
         # is the documented fallback for a document with no structure to follow.
@@ -238,7 +274,7 @@ def _chunk_problems(flat: _Flat) -> list[_Draft]:
     for position, match in enumerate(matches):
         start = match.start()
         end = matches[position + 1].start() if position + 1 < len(matches) else len(flat.text)
-        drafts.extend(_split_problem(flat, start, flat.text[start:end], match.group(1)))
+        drafts.extend(_split_problem(flat, start, flat.text[start:end], match.group("number")))
     return drafts
 
 

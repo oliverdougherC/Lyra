@@ -14,6 +14,7 @@ from backend.rag.chunk import (
     HOMEWORK,
     LECTURE_NOTES,
     MAX_CHUNK_TOKENS,
+    PROBLEM_MARKER,
     SYLLABUS,
     TEXTBOOK,
     Chunk,
@@ -112,6 +113,73 @@ def test_a_problem_that_fits_is_one_chunk_with_no_part_index() -> None:
     assert [chunk.problem_number for chunk in chunks] == [None, "1", "2", "3", "4"]
     assert all(chunk.part_index is None for chunk in chunks)
     assert chunks[2].content.startswith("2) Integrate")
+
+
+def test_a_problem_numbered_without_a_full_stop_is_still_a_problem() -> None:
+    """`Problem 1 (Time Shift)` is how a large share of real sheets number their problems.
+
+    Requiring the delimiter made every problem on such a sheet invisible: measured against
+    a real signals course, two of eight sets came back with no markers at all, and
+    segmentation fell back to paragraph grouping for the whole document.
+    """
+    homework = (
+        "ECE203 Homework 7\nFourier Transform Properties\n\n"
+        "Problem 1 (Time Shift + Differentiation)\nFind the transform of x(t).\n\n"
+        "Problem 2 (Scaling)\nFind the transform of y(t).\n\n"
+        "Exercise 3.14 Prove the shifting property.\n"
+    )
+
+    chunks = chunk_document(_parsed(homework), HOMEWORK)
+
+    _assert_well_formed(chunks)
+    assert [chunk.problem_number for chunk in chunks] == [None, "1", "2", "3.14"]
+
+
+def test_numbered_sub_items_under_a_named_problem_stay_with_it() -> None:
+    """`Problem 1` above five numbered questions is one problem, not six.
+
+    Both are numbered markers, and taking every one of them split a real sampling problem
+    into six chunks each holding one line of a question meant to be answered as a whole.
+    """
+    homework = (
+        "Sampling\n\n"
+        "Problem 1\nA signal x(t) = cos(200 pi t) is sampled.\n"
+        "1. Determine the highest frequency present.\n"
+        "2. Find the Nyquist rate.\n\n"
+        "Problem 2\nA second signal is sampled.\n"
+        "1. Determine its frequency.\n"
+    )
+
+    chunks = chunk_document(_parsed(homework), HOMEWORK)
+
+    _assert_well_formed(chunks)
+    assert [chunk.problem_number for chunk in chunks] == [None, "1", "2"]
+    assert "Nyquist" in str(chunks[1].content)
+
+
+def test_a_sheet_that_mixes_both_notations_keeps_both() -> None:
+    # A sheet that opens with `1.` and later writes `Problem 3` is using two notations for
+    # the same kind of thing. Only a bare number sitting *under* a named one is a sub-item.
+    homework = "1. Differentiate.\n\n2) Integrate.\n\nProblem 3. Prove it.\n"
+
+    chunks = chunk_document(_parsed(homework), HOMEWORK)
+
+    assert [chunk.problem_number for chunk in chunks] == ["1", "2", "3"]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "2.5 kg of salt dissolves in the tank\n",
+        "15 minutes after the switch closes\n",
+        "1\n",
+        "5 points\n",
+    ],
+)
+def test_a_loose_number_at_the_start_of_a_line_is_not_a_problem(line: str) -> None:
+    # The delimiter stays required of a bare number. A line opening with a quantity is far
+    # more common than one opening with an unpunctuated problem number.
+    assert PROBLEM_MARKER.search(line) is None
 
 
 def test_syllabus_is_detected_by_filename_and_chunked_at_its_target_and_overlap() -> None:

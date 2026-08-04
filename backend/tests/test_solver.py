@@ -148,6 +148,74 @@ def test_chunked_problems_reassembles_a_split_problem(
     assert len(found[0].chunk_ids) == 2
 
 
+def test_numbering_that_restarts_under_a_heading_is_not_one_problem(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """Twelve problems on a real sheet came back as five, and the model could not fix it.
+
+    Sheets restart their numbering under each section heading, and collecting chunks into
+    a dictionary keyed by number folded every group into one row carrying three unrelated
+    statements. Because the chunker is the spine, a model pass that read the sheet
+    correctly was then reconciled back down to the same five.
+    """
+    document_id = _document(db, class_id)
+    _chunk(db, class_id, document_id, "System of LTI systems", None)
+    _chunk(db, class_id, document_id, "1. Cascade them.", "1")
+    _chunk(db, class_id, document_id, "2. Add them.", "2")
+    _chunk(db, class_id, document_id, "1. Find the Fourier series.", "1", page_number=2)
+    _chunk(db, class_id, document_id, "2. Find its power.", "2", page_number=2)
+
+    found = segmentation.chunked_problems(db, document_id)
+
+    assert [problem.statement for problem in found] == [
+        "1. Cascade them.",
+        "2. Add them.",
+        "1. Find the Fourier series.",
+        "2. Find its power.",
+    ]
+
+
+def test_equal_numbers_are_matched_in_document_order() -> None:
+    """A sheet with two problem 1s has two, and each keeps its own model label.
+
+    A lookup keyed by number silently kept only the last entry for a repeated number, so
+    the second problem 1 took the first one's label and sub-parts.
+    """
+    from_chunks = [
+        SegmentedProblem("Problem 1", "1", "1. Cascade them.", 7),
+        SegmentedProblem("Problem 1", "1", "1. Find the Fourier series.", 7),
+    ]
+    from_model = [
+        SegmentedProblem("Problem 1 (Systems)", "1", "Cascade.", 7),
+        SegmentedProblem("Problem 1 (Fourier series)", "1", "Series.", 7),
+    ]
+
+    merged = segmentation.reconcile(from_chunks, from_model)
+
+    assert [problem.label for problem in merged] == [
+        "Problem 1 (Systems)",
+        "Problem 1 (Fourier series)",
+    ]
+    assert [problem.statement for problem in merged] == [
+        "1. Cascade them.",
+        "1. Find the Fourier series.",
+    ]
+
+
+def test_a_second_model_problem_of_the_same_number_is_kept() -> None:
+    # The chunker saw one problem 1; the model saw that the sheet has two. The extra one
+    # is a problem the markers missed, which is what the model pass is for.
+    from_chunks = [SegmentedProblem("Problem 1", "1", "1. Cascade them.", 7)]
+    from_model = [
+        SegmentedProblem("Problem 1 (Systems)", "1", "Cascade.", 7),
+        SegmentedProblem("Problem 1 (Fourier series)", "1", "Series.", 7),
+    ]
+
+    merged = segmentation.reconcile(from_chunks, from_model)
+
+    assert [problem.statement for problem in merged] == ["1. Cascade them.", "Series."]
+
+
 def test_the_model_supplies_labels_and_sub_parts_without_rewriting_statements() -> None:
     from_chunks = [
         SegmentedProblem(
@@ -178,6 +246,89 @@ def test_the_model_supplies_labels_and_sub_parts_without_rewriting_statements() 
     assert merged[0].parts[0].label == "(a)"
     assert merged[0].chunk_ids == (11,)
     assert merged[0].page_number == 3
+
+
+def test_a_transcription_into_latex_replaces_the_flattened_extraction() -> None:
+    """The gate is where a student checks Lyra's reading against their sheet.
+
+    PDF extraction flattens exponents into the line, so the chunker's own text says
+    `e−2tu(t −3)` where the sheet says $e^{-2t}u(t-3)$. Keeping it unconditionally meant
+    the one screen built for checking mathematics was the one screen printing it wrong.
+    """
+    from_chunks = [
+        SegmentedProblem(
+            label="Problem 1",
+            number="1",
+            statement="Problem 1 (Time Shift)\nStarting pair:\ne−2tu(t) ←→\n1\n2 + jω\n"
+            "Find the Fourier Transform of\nx(t) = e−2(t−1)u(t −1)",
+            document_id=7,
+            chunk_ids=(11,),
+        )
+    ]
+    from_model = [
+        SegmentedProblem(
+            label="Problem 1 (Time Shift)",
+            number="1",
+            statement="Starting pair:\n$$e^{-2t}u(t) \\longleftrightarrow \\frac{1}{2 + j\\omega}$$"
+            "\n\nFind the Fourier Transform of\n$$x(t) = e^{-2(t-1)}u(t-1)$$",
+            document_id=7,
+        )
+    ]
+
+    merged = segmentation.reconcile(from_chunks, from_model)
+
+    assert "e^{-2t}" in merged[0].statement
+    # The citation still points at the chunk the text was found in.
+    assert merged[0].chunk_ids == (11,)
+
+
+def test_a_summary_does_not_replace_the_sheets_own_text() -> None:
+    # The rule is not "the model wins". A reading that dropped what the sheet said is a
+    # summary, and the student would be confirming a problem their homework does not hold.
+    from_chunks = [
+        SegmentedProblem(
+            label="Problem 1",
+            number="1",
+            statement="Sketch the magnitude response and mark the corner frequency, "
+            "then state the phase at direct current.",
+            document_id=7,
+        )
+    ]
+    from_model = [SegmentedProblem("Problem 1", "1", "Sketch the response.", 7)]
+
+    merged = segmentation.reconcile(from_chunks, from_model)
+
+    assert merged[0].statement.startswith("Sketch the magnitude response")
+
+
+def test_sub_parts_count_as_part_of_the_models_reading() -> None:
+    # The prompt asks for sub-parts separately, so the model's statement is the lead-in
+    # alone. Comparing against it by itself read every problem with parts as a summary.
+    from_chunks = [
+        SegmentedProblem(
+            label="Problem 1",
+            number="1",
+            statement="Q1.\nCompute X(jw) of the following signals:\n(a)\nx(t) = e−2tu(t)\n"
+            "(b)\nx(t) = te−4tu(t)",
+            document_id=7,
+        )
+    ]
+    from_model = [
+        SegmentedProblem(
+            label="Q1",
+            number="1",
+            statement="Compute $X(j\\omega)$ of the following signals:",
+            document_id=7,
+            parts=(
+                SegmentedPart("(a)", "$x(t) = e^{-2t}u(t)$"),
+                SegmentedPart("(b)", "$x(t) = te^{-4t}u(t)$"),
+            ),
+        )
+    ]
+
+    merged = segmentation.reconcile(from_chunks, from_model)
+
+    assert merged[0].statement == "Compute $X(j\\omega)$ of the following signals:"
 
 
 def test_a_problem_the_regex_missed_is_added() -> None:

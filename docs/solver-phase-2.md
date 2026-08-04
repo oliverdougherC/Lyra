@@ -222,16 +222,36 @@ the student sees it.
 
 1. **The chunker, already done.** `chunks.problem_number` and `chunks.part_index` are populated
    today for documents detected as `homework`, and `rag/chunk.py` already splits on `1.`,
-   `Problem 1`, `Q1`, and on lettered sub-parts. This is deterministic, free, and correct on the
-   common case.
+   `Problem 1`, `Problem 1 (Parseval)`, `Exercise 3.14`, `Q1`, and on lettered sub-parts. This is
+   deterministic, free, and correct on the common case.
 2. **A model pass**, over the document text, asked to return the problem list as JSON: number,
    label, the first line of the statement, the page it starts on, and its sub-parts. This catches
-   what a regex cannot: a set numbered `Exercise 3.14`, a problem introduced by prose, a sub-part
-   marked in a way `SUBPART_MARKER` deliberately excludes.
+   what a regex cannot: a set numbered by section heading alone, a problem introduced by prose, a
+   sub-part marked in a way `SUBPART_MARKER` deliberately excludes.
 
-The chunker's markers are the spine. The model may add problems it found, split one the regex
-merged, and supply labels. Every difference between the two is still just a row in the reviewable
-list; the reconciliation does not need to be right, because a person is about to look at it.
+The chunker's markers are the spine: they decide **which problems exist**. The model may add
+problems it found, split one the regex merged, and supply labels. Every difference between the two
+is still just a row in the reviewable list; the reconciliation does not need to be right, because a
+person is about to look at it.
+
+Three rules make that reconciliation hold on real sheets, and each one was written after a sheet
+that broke without it:
+
+- **A number that comes back later is a different problem.** Sheets restart their numbering under
+  each section heading. Collecting chunks by number folded twelve problems into five rows carrying
+  three unrelated statements each, and because the chunker is the spine, a model pass that read the
+  sheet correctly was reconciled straight back down to the same five. Equal numbers are matched
+  between the two lists in document order, first to first.
+- **A named marker outranks a bare one.** `Problem 1` above a list of numbered sub-items numbers
+  both, and they are not the same thing. Where a document's first marker is a named one, the named
+  markers are its problems and the bare numbers underneath them are their parts.
+- **The chunker owns which problems exist; the model owns how they read.** The chunker's text is
+  the document's own, character for character, and it is also flattened: extraction turns
+  $e^{-2t}u(t-3)$ into `e−2tu(t −3)`. Presenting that at the gate asks the student to check a
+  reading of their homework against text their sheet does not contain. So the model's statement
+  replaces it **when it is a transcription rather than a summary**, decided by whether the sheet's
+  own words survive in it, counting its sub-parts as part of its reading. A model that dropped what
+  the sheet said keeps nothing, and the chunker's text stands.
 
 ### Multi-file sets
 

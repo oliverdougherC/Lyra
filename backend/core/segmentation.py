@@ -5,14 +5,16 @@ homework on problem markers and stamps `problem_number` and `part_index` on ever
 so a problem list is largely a read over data that exists. That pass is deterministic,
 free, and correct on the common case.
 
-What it cannot do is read. A set numbered `Exercise 3.14`, a problem introduced by prose,
-or a sub-part marked in a way `SUBPART_MARKER` deliberately excludes are all invisible to
-a regex. So a model pass runs alongside it, and the two are reconciled here.
+What it cannot do is read. A set numbered by section heading alone, a problem introduced
+by prose, or a sub-part marked in a way `SUBPART_MARKER` deliberately excludes are all
+invisible to a regex. So a model pass runs alongside it, and the two are reconciled here.
 
-**The chunker is the spine.** Its markers decide which problems exist and what text they
-hold, because that text is the document's, character for character. The model contributes
-labels, sub-parts, and problems the markers missed. Where they disagree about a
-statement, the chunker wins.
+**The chunker is the spine, and the model is the reading.** The markers decide which
+problems exist, because they are positions in the document rather than a recollection of
+it. The model contributes labels, sub-parts, problems the markers missed, and the
+mathematics transcribed back into LaTeX from an extraction that flattened it. Where the
+two disagree about a statement, the model's version is taken only when it kept the
+sheet's own words; a summary loses to the document's own text.
 
 None of this has to be right. It has to be *reviewable*: the job stops at
 `awaiting_review` and a person confirms or corrects the list before a minute of compute is
@@ -127,33 +129,81 @@ def _label_for(proposed: str, number: str) -> str:
     return stripped
 
 
+def _statement_for(problem: SegmentedProblem, proposal: SegmentedProblem) -> str:
+    """Which of the two readings of one problem the student should be shown.
+
+    The chunker's text is the document's own, character for character, which is why it is
+    the spine. What it is not is *readable*: PDF extraction flattens exponents,
+    subscripts, and fractions into the line, so the sheet's $e^{-2t}u(t-3)$ arrives as
+    `e−2tu(t −3)` and a student asked to check Lyra's reading against their homework is
+    comparing something their sheet does not say. Transcribing that back into LaTeX is a
+    large part of what the model pass is for.
+
+    So the model's version wins when it is a transcription and loses when it is a summary,
+    and the two are told apart by whether the sheet's own words survived in it. A
+    transcription changes the notation and keeps the words; a paraphrase drops them. The
+    model's sub-parts count as part of its reading, because the segmentation prompt asks
+    for them separately and comparing against the statement alone would read every problem
+    with lettered parts as a summary.
+    """
+    whole = "\n".join([proposal.statement, *(part.statement for part in proposal.parts)])
+    return proposal.statement if _keeps_the_words(problem.statement, whole) else problem.statement
+
+
+# Words long enough not to be notation, and every run of digits. Both survive being
+# rewritten into LaTeX, which is exactly what makes them evidence that nothing was cut.
+_CONTENT_TOKEN = re.compile(r"[a-z]{4,}|\d+")
+
+# How much of the sheet's own text a reading has to keep to count as a transcription.
+# Below 1.0 because the chunker's text carries page numbers, running heads, and section
+# titles that a faithful reading of one problem is right to leave out.
+_TRANSCRIPTION_SHARE = 0.8
+
+
+def _keeps_the_words(original: str, candidate: str) -> bool:
+    """Whether `candidate` still contains what `original` said, notation aside."""
+    wanted = _CONTENT_TOKEN.findall(original.lower())
+    if not wanted:
+        # Nothing comparable to go on, so the document's own text stands.
+        return False
+    have = set(_CONTENT_TOKEN.findall(candidate.lower()))
+    kept = sum(1 for token in wanted if token in have)
+    return kept >= _TRANSCRIPTION_SHARE * len(wanted)
+
+
 def chunked_problems(conn: sqlite3.Connection, document_id: int) -> list[SegmentedProblem]:
     """The problems the chunker already found in one document.
 
     A problem split across several chunks is reassembled in part order, which is the same
     reassembly retrieval does when one part of a problem matches a query.
+
+    **A number that comes back later is a different problem.** Sheets restart their
+    numbering under each section heading: one real set runs 1 to 3 under `System of LTI
+    systems`, 1 to 4 under the next heading, and 1 to 5 under the one after that, which is
+    twelve problems and not five. Collecting by number folded each of those groups into
+    one row carrying three unrelated statements, and because the chunker is the spine, a
+    model pass that read the sheet correctly was reconciled back down to the same five.
+    Chunks arrive in document order, so a run of one number is one problem and a repeat
+    after a gap is a new one.
     """
-    drafts: dict[str, _Draft] = {}
-    order: list[str] = []
+    drafts: list[_Draft] = []
     for row in conn.execute(_CHUNKS_SQL, (document_id,)):
         number = str(row["problem_number"])
-        draft = drafts.get(number)
-        if draft is None:
-            draft = drafts[number] = _Draft(number=number, page_number=row["page_number"])
-            order.append(number)
-        draft.pieces.append(str(row["content"]))
-        draft.chunk_ids.append(int(row["id"]))
+        if not drafts or drafts[-1].number != number:
+            drafts.append(_Draft(number=number, page_number=row["page_number"]))
+        drafts[-1].pieces.append(str(row["content"]))
+        drafts[-1].chunk_ids.append(int(row["id"]))
 
     return [
         SegmentedProblem(
-            label=f"Problem {drafts[number].number}",
-            number=drafts[number].number,
-            statement="\n\n".join(drafts[number].pieces).strip(),
+            label=f"Problem {draft.number}",
+            number=draft.number,
+            statement="\n\n".join(draft.pieces).strip(),
             document_id=document_id,
-            page_number=drafts[number].page_number,
-            chunk_ids=tuple(drafts[number].chunk_ids),
+            page_number=draft.page_number,
+            chunk_ids=tuple(draft.chunk_ids),
         )
-        for number in order
+        for draft in drafts
     ]
 
 
@@ -238,22 +288,36 @@ def reconcile(
     problem with no match is appended as its own entry, because a problem the regex missed
     is exactly what the model pass is for.
 
+    **A number can appear more than once**, because a sheet that restarts its numbering
+    under each section heading has three problem 1s and they are three problems. Equal
+    numbers are therefore matched in document order, first to first, rather than through a
+    lookup that would silently keep only the last of them.
+
     Order is chunker order first, then the model's additions in the order it found them.
     Both are document order, and a person is about to look at the result anyway.
     """
     if not from_chunks:
         return from_model
 
-    by_number = {problem.number: problem for problem in from_model if problem.number}
+    positions: dict[str, list[int]] = {}
+    for index, problem in enumerate(from_model):
+        if problem.number:
+            positions.setdefault(problem.number, []).append(index)
+
+    taken: dict[str, int] = {}
+    matched: set[int] = set()
     merged: list[SegmentedProblem] = []
-    matched: set[str] = set()
 
     for problem in from_chunks:
-        proposal = by_number.get(problem.number)
-        if proposal is None:
+        candidates = positions.get(problem.number, [])
+        offset = taken.get(problem.number, 0)
+        if offset >= len(candidates):
             merged.append(problem)
             continue
-        matched.add(problem.number)
+        index = candidates[offset]
+        taken[problem.number] = offset + 1
+        matched.add(index)
+        proposal = from_model[index]
         merged.append(
             SegmentedProblem(
                 # The model read the sheet's own wording, which the chunker cannot: it only
@@ -261,7 +325,7 @@ def reconcile(
                 # has added nothing, so the chunker's label stands.
                 label=_label_for(proposal.label, problem.number),
                 number=problem.number,
-                statement=problem.statement,
+                statement=_statement_for(problem, proposal),
                 document_id=problem.document_id,
                 page_number=problem.page_number or proposal.page_number,
                 chunk_ids=problem.chunk_ids,
@@ -269,7 +333,7 @@ def reconcile(
             )
         )
 
-    merged.extend(problem for problem in from_model if problem.number not in matched)
+    merged.extend(problem for index, problem in enumerate(from_model) if index not in matched)
     return merged
 
 
