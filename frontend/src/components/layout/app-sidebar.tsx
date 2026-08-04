@@ -140,9 +140,15 @@ function ClassNavItem({
             </SidebarMenuSubItem>
 
             <SidebarMenuSubItem>
-              <span className="text-text-tertiary mt-2 block px-2 text-[0.6875rem] font-medium tracking-wider uppercase">
+              {/* A link rather than a label. The group heading is the most obvious thing
+                  to click when you are looking for the solver, and a heading that does
+                  nothing sends you back to hunting. */}
+              <Link
+                href={`${href}/solutions`}
+                className="text-text-tertiary hover:text-text-secondary focus-visible:ring-ring mt-2 block rounded-sm px-2 text-[0.6875rem] font-medium tracking-wider uppercase focus-visible:ring-2 focus-visible:outline-none"
+              >
                 Solutions
-              </span>
+              </Link>
             </SidebarMenuSubItem>
             {(solutions ?? []).map((solution) => (
               <SidebarMenuSubItem key={solution.id}>

@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useState } from 'react'
-import { FileText } from 'lucide-react'
+import { FileText, SquareCheckBig } from 'lucide-react'
+import Link from 'next/link'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 
 import { ChatPane } from '@/components/chat/chat-pane'
@@ -112,22 +113,35 @@ export default function ClassWorkspacePage() {
       sessionId={sessionId}
       onSessionIdChange={handleSessionIdChange}
       headerActions={
-        compact ? null : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8"
-            aria-expanded={documentsOpen}
-            aria-controls="documents-pane-body"
-            onClick={() => setDocumentsOpen(!documentsOpen)}
-          >
-            <FileText aria-hidden className="size-3.5" />
-            Documents
-            {documentCount === null ? null : (
-              <span className="text-text-tertiary tabular-nums">{documentCount}</span>
-            )}
+        <>
+          {/* Solve is the third rung of the Guide/Show/Solve ladder, and until this
+              existed it was the only rung with no way into it from the workspace: the
+              solver lived exclusively in a sidebar sub-item below the conversation list.
+              A peer of Documents rather than of Guide and Show, because those two change
+              how the current answer is written and this opens something else. */}
+          <Button variant="ghost" size="sm" className="h-8" asChild>
+            <Link href={`/classes/${classId}/solutions`}>
+              <SquareCheckBig aria-hidden className="size-3.5" />
+              Solve
+            </Link>
           </Button>
-        )
+          {compact ? null : (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8"
+              aria-expanded={documentsOpen}
+              aria-controls="documents-pane-body"
+              onClick={() => setDocumentsOpen(!documentsOpen)}
+            >
+              <FileText aria-hidden className="size-3.5" />
+              Documents
+              {documentCount === null ? null : (
+                <span className="text-text-tertiary tabular-nums">{documentCount}</span>
+              )}
+            </Button>
+          )}
+        </>
       }
     />
   )
