@@ -98,6 +98,35 @@ def test_wrong_dimension_is_an_upstream_error(monkeypatch: pytest.MonkeyPatch) -
         embed_documents(["alpha"])
 
 
+def test_a_healthy_embedding_port_is_not_started_over(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The subprocess outlives the backend that started it, so a restart meets it again.
+
+    It is spawned in its own session and `./run` frees only the backend and frontend
+    ports, so a restarted backend routinely finds a healthy embedding server on 8081.
+    Spawning a second one cannot bind the port, so it exits, and every upload after a
+    restart failed at the embedding stage telling the student to download a model they
+    already had.
+    """
+    monkeypatch.setattr(EmbeddingServer, "_healthy", lambda _self: True)
+    monkeypatch.setattr(
+        EmbeddingServer,
+        "start",
+        lambda _self: pytest.fail("A second server was spawned onto a held port"),
+    )
+
+    EmbeddingServer().ensure_running()
+
+
+def test_a_silent_embedding_port_is_started(monkeypatch: pytest.MonkeyPatch) -> None:
+    started: list[bool] = []
+    monkeypatch.setattr(EmbeddingServer, "_healthy", lambda _self: False)
+    monkeypatch.setattr(EmbeddingServer, "start", lambda _self: started.append(True))
+
+    EmbeddingServer().ensure_running()
+
+    assert started == [True]
+
+
 def test_estimate_tokens_never_returns_zero() -> None:
     # A zero would let a budget loop admit an unbounded number of short chunks.
     assert estimate_tokens("") == 1

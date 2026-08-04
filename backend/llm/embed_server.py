@@ -83,9 +83,21 @@ class EmbeddingServer:
         return f"http://127.0.0.1:{settings.llama_port}"
 
     def ensure_running(self) -> None:
-        """Start the server unless it is already up.
+        """Start the server unless one is already answering on the port.
 
         Idempotent and thread-safe: concurrent embedding calls produce one subprocess.
+
+        A server this process did not start counts. The subprocess is spawned in its own
+        session so it outlives the backend that started it, and `./run` frees the backend
+        and frontend ports without touching this one, so a restarted backend routinely
+        finds a perfectly good embedding server already listening. Spawning a second one
+        cannot bind the port, so it exits, and every upload after a restart failed at the
+        embedding stage with a message telling the student to download a model they
+        already have.
+
+        Adopting whatever answers is safe because it is checked downstream rather than
+        trusted: `rag/embed.py` refuses any vector that is not the expected width, so a
+        different model on the port fails loudly instead of quietly poisoning the index.
 
         Raises:
             ConfigurationError: The binary or the weights are missing, or the server did
@@ -94,7 +106,17 @@ class EmbeddingServer:
         with self._lock:
             if self._process is not None and self._process.poll() is None:
                 return
+            if self._healthy():
+                return
             self.start()
+
+    def _healthy(self) -> bool:
+        """Whether something is already answering `/health` on the embedding port."""
+        try:
+            with httpx.Client(timeout=_HEALTH_REQUEST_TIMEOUT_SECONDS) as client:
+                return client.get(f"{self.base_url}/health").status_code == 200
+        except httpx.HTTPError:
+            return False
 
     def start(self) -> None:
         """Spawn `llama-server` and block until it reports healthy.
