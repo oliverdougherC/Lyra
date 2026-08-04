@@ -40,6 +40,11 @@ class SettingsRead(BaseModel):
     endpoint_host: str | None
     embedding_model: str | None
     embedding_dim: int | None
+    # Null means nobody has asked this endpoint yet, which is distinct from asked and no.
+    # The screen renders all three, because "not checked" and "cannot check" cost the
+    # student different things.
+    tools_supported: bool | None
+    tools_message: str | None
 
 
 class SettingsUpdate(BaseModel):
@@ -63,6 +68,13 @@ class ConnectionTestResult(BaseModel):
 
     ok: bool
     model_count: int
+    message: str
+
+
+class ToolSupportResult(BaseModel):
+    """Whether this endpoint can run the checks Lyra verifies solutions with."""
+
+    ok: bool
     message: str
 
 
@@ -94,6 +106,8 @@ def _settings_response(row: sqlite3.Row) -> SettingsRead:
         endpoint_host=hostname_of(endpoint_url) if endpoint_url else None,
         embedding_model=row["embedding_model"],
         embedding_dim=row["embedding_dim"],
+        tools_supported=None if row["tools_supported"] is None else bool(row["tools_supported"]),
+        tools_message=row["tools_message"],
     )
 
 
@@ -139,6 +153,24 @@ async def test_endpoint_connection(conn: DbConn) -> ConnectionTestResult:
     return ConnectionTestResult(
         ok=result.ok, model_count=result.model_count, message=result.message
     )
+
+
+@router.post("/settings/test-tools", response_model=ToolSupportResult)
+async def test_endpoint_tools(conn: DbConn) -> ToolSupportResult:
+    """Ask the endpoint for one trivial tool call, and record what happened.
+
+    A real inference call, because an OpenAI-compatible server advertises nothing about
+    tool calling and several accept the field and then ignore it. The result is stored so
+    the next solve does not have to ask again, and so the screen can state plainly what
+    this endpoint costs the student: without tool support, solutions are still produced
+    and every one of them carries the verdict `Not checked`.
+    """
+    config = resolve_tutor_config(conn)
+    support = await client.probe_tool_support(config.endpoint_url, config.api_key, config.model)
+    update_settings_row(
+        conn, {"tools_supported": int(support.ok), "tools_message": support.message}
+    )
+    return ToolSupportResult(ok=support.ok, message=support.message)
 
 
 @router.get("/settings/models", response_model=ModelList)

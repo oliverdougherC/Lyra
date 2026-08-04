@@ -52,7 +52,10 @@ export function AppHeader() {
         ]
 
   return (
-    <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b bg-background/85 px-4 supports-[backdrop-filter]:backdrop-blur-sm">
+    <header
+      data-app-header
+      className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b bg-background/85 px-4 supports-[backdrop-filter]:backdrop-blur-sm"
+    >
       <SidebarTrigger className="-ml-1" />
       <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
         <ol className="flex items-center gap-1.5 text-[13px]">

@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from backend.core import sessions
+from backend.core import artifacts, sessions
 from backend.core.app_settings import TutorConfig, resolve_tutor_config
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import LyraError
@@ -67,6 +67,10 @@ class SessionCreate(BaseModel):
     """Body of `POST /api/classes/{class_id}/sessions`."""
 
     title: str | None = None
+    # Set when the conversation was opened by clicking a step of a solution. That step is
+    # pinned into every turn, and the session is otherwise an ordinary conversation: same
+    # composer, same streaming, same place in the sidebar.
+    artifact_part_id: int | None = None
 
 
 class SessionRead(BaseModel):
@@ -76,6 +80,7 @@ class SessionRead(BaseModel):
     class_id: int
     title: str | None
     mode: ChatMode
+    artifact_part_id: int | None
     created_at: str
 
 
@@ -151,12 +156,19 @@ class TurnPlan:
 
 @dataclass(frozen=True)
 class TurnPreparation:
-    """Prompt and budget work completed before the blocking retrieval call."""
+    """Prompt and budget work completed before the blocking retrieval call.
+
+    `anchor` is the step this conversation is about, present only for a session opened
+    from a solution. It is pinned rather than retrieved, because the student is looking at
+    it: retrieval might or might not surface the exact step they clicked, and "might" is
+    not good enough for the subject of the question.
+    """
 
     class_id: int
     system_prompt: str
     history: list[dict[str, object]]
     retrieval_budget: int
+    anchor: str | None = None
 
 
 @dataclass(frozen=True)
@@ -190,7 +202,11 @@ def plan_budget(context_window: int) -> TurnBudget:
 def create_session(class_id: int, payload: SessionCreate, conn: DbConn) -> dict[str, object]:
     # Checked first so an unknown class is a 404 rather than a foreign-key failure.
     get_class(conn, class_id)
-    return sessions.create_session(conn, class_id, payload.title)
+    if payload.artifact_part_id is not None:
+        # Checked here rather than left to the foreign key, so a stale part id is a 404
+        # naming what is missing instead of a 500 out of sqlite3.
+        artifacts.get_part(conn, payload.artifact_part_id)
+    return sessions.create_session(conn, class_id, payload.title, payload.artifact_part_id)
 
 
 @router.get("/classes/{class_id}/sessions", response_model=list[SessionRead])
@@ -396,9 +412,14 @@ def _prepare_turn(
     system_prompt = build_system_prompt(
         request.mode, select_user_facts(conn), select_active_facts(conn, class_id)
     )
+    anchor = sessions.anchored_context(conn, session_id)
     # The system prompt is instruction, not material, so it is never trimmed. An overrun
-    # is charged to retrieval rather than to the generation reserve.
-    system_overrun = max(0, estimate_tokens(system_prompt) - budget.system)
+    # is charged to retrieval rather than to the generation reserve. The pinned step is
+    # charged the same way: it is the subject of the question, so it is never the thing
+    # that gets dropped to make room.
+    system_overrun = max(
+        0, estimate_tokens(system_prompt) + estimate_tokens(anchor or "") - budget.system
+    )
 
     # The question itself is appended last, and a reply being retried is on its way out, so
     # neither belongs in the history the model is shown.
@@ -417,6 +438,7 @@ def _prepare_turn(
         system_prompt=system_prompt,
         history=history,
         retrieval_budget=retrieval_budget,
+        anchor=anchor,
     )
 
 
@@ -425,10 +447,10 @@ def _build_turn(
 ) -> Turn:
     """Assemble the final prompt after retrieval has returned."""
     context_block = format_context_block([_context_entry(chunk) for chunk in result.chunks])
-    system_content = (
-        f"{preparation.system_prompt}\n\n{context_block}"
-        if context_block
-        else preparation.system_prompt
+    # The anchor sits above retrieved material, because it is what the question is about
+    # and the retrieval is background for it.
+    system_content = "\n\n".join(
+        block for block in (preparation.system_prompt, preparation.anchor, context_block) if block
     )
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]

@@ -13,6 +13,7 @@ import type {
   ConnectionTestResult,
   DocumentRead,
   DocumentStatus,
+  DocumentText,
   MessageRead,
   RegenerateRequest,
   SegmentationUpdate,
@@ -21,12 +22,23 @@ import type {
   SettingsUpdate,
   SolutionCreate,
   SolutionDetail,
+  SolutionPart,
   SolutionRead,
+  SolutionRevision,
   SolutionStatus,
+  ToolSupportResult,
   UserProfile,
 } from '@/types'
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://127.0.0.1:8000'
+
+/**
+ * The URL of one rendered source page. An `<img src>` rather than a fetch, so the browser
+ * caches it and the pane does not hold page images in memory.
+ */
+export function documentPageUrl(documentId: number, pageNumber: number): string {
+  return `${API_BASE}/api/documents/${documentId}/pages/${pageNumber}`
+}
 
 /** A backend response that was not 2xx. `status === 0` means the request never landed. */
 export class ApiError extends Error {
@@ -135,8 +147,14 @@ export const api = {
     await send(`/api/documents/${documentId}`, { method: 'DELETE' })
   },
 
-  createSession: (classId: number) =>
-    requestJson<SessionRead>(`/api/classes/${classId}/sessions`, { method: 'POST', body: {} }),
+  getDocumentText: (documentId: number, signal?: AbortSignal) =>
+    requestJson<DocumentText>(`/api/documents/${documentId}/text`, { signal }),
+
+  createSession: (classId: number, artifactPartId: number | null = null) =>
+    requestJson<SessionRead>(`/api/classes/${classId}/sessions`, {
+      method: 'POST',
+      body: { artifact_part_id: artifactPartId },
+    }),
 
   listSessions: (classId: number, signal?: AbortSignal) =>
     requestJson<SessionRead[]>(`/api/classes/${classId}/sessions`, { signal }),
@@ -179,6 +197,8 @@ export const api = {
   testConnection: () =>
     requestJson<ConnectionTestResult>('/api/settings/test-connection', { method: 'POST' }),
 
+  testTools: () => requestJson<ToolSupportResult>('/api/settings/test-tools', { method: 'POST' }),
+
   listModels: (signal?: AbortSignal) =>
     requestJson<{ models: string[] }>('/api/settings/models', { signal }),
 
@@ -198,6 +218,32 @@ export const api = {
     requestJson<SolutionDetail>(`/api/solutions/${artifactId}/segmentation`, {
       method: 'PATCH',
       body,
+    }),
+
+  startSolution: (artifactId: number) =>
+    requestJson<SolutionRead>(`/api/solutions/${artifactId}/start`, { method: 'POST' }),
+
+  updateSolutionPart: (artifactId: number, partId: number, content: string) =>
+    requestJson<SolutionPart>(`/api/solutions/${artifactId}/parts/${partId}`, {
+      method: 'PATCH',
+      body: { content },
+    }),
+
+  regenerateSolutionPart: (artifactId: number, partId: number, correction: string) =>
+    requestJson<SolutionPart>(`/api/solutions/${artifactId}/parts/${partId}/regenerate`, {
+      method: 'POST',
+      body: { correction },
+    }),
+
+  listPartRevisions: (artifactId: number, partId: number, signal?: AbortSignal) =>
+    requestJson<SolutionRevision[]>(`/api/solutions/${artifactId}/parts/${partId}/revisions`, {
+      signal,
+    }),
+
+  restorePartRevision: (artifactId: number, partId: number, revision: number) =>
+    requestJson<SolutionPart>(`/api/solutions/${artifactId}/parts/${partId}/restore`, {
+      method: 'POST',
+      body: { revision },
     }),
 
   resegmentSolution: (artifactId: number) =>

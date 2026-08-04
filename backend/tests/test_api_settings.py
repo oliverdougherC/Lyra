@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.api import routes_settings
+from backend.core.app_settings import update_settings_row
 from backend.storage import secrets
 from backend.storage.database import connect, get_db
 
@@ -156,3 +157,41 @@ def test_locality_is_reported_per_endpoint(client: TestClient) -> None:
 
 def test_context_window_below_the_floor_is_rejected(client: TestClient) -> None:
     assert client.put("/api/settings", json={"context_window": 128}).status_code == 422
+
+
+def test_repointing_the_endpoint_forgets_what_was_measured_about_tool_support(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """Tool support is a property of the server and model together, not of Lyra."""
+    client.put("/api/settings", json={"endpoint_url": "http://127.0.0.1:8080/v1"})
+    update_settings_row(db, {"tools_supported": 1, "tools_message": "It can."})
+
+    body = client.put("/api/settings", json={"endpoint_url": "http://127.0.0.1:9090/v1"}).json()
+
+    # Null, not false: nobody has asked the new endpoint, and "not asked" and "asked and
+    # no" cost the student different things.
+    assert body["tools_supported"] is None
+    assert body["tools_message"] is None
+
+
+def test_changing_only_the_model_also_forgets_it(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    client.put("/api/settings", json={"endpoint_url": "http://127.0.0.1:8080/v1"})
+    update_settings_row(db, {"tools_supported": 1, "tools_message": "It can."})
+
+    body = client.put("/api/settings", json={"model": "some-other-model"}).json()
+
+    assert body["tools_supported"] is None
+
+
+def test_an_unrelated_setting_leaves_tool_support_alone(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    client.put("/api/settings", json={"endpoint_url": "http://127.0.0.1:8080/v1"})
+    update_settings_row(db, {"tools_supported": 1, "tools_message": "It can."})
+
+    body = client.put("/api/settings", json={"context_window": 16384}).json()
+
+    assert body["tools_supported"] is True
+    assert body["tools_message"] == "It can."

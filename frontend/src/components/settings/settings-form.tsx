@@ -22,7 +22,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { api, ApiError } from '@/lib/api'
-import { useSettings, useTestConnection, useUpdateSettings } from '@/lib/hooks/use-settings'
+import {
+  useSettings,
+  useTestConnection,
+  useTestTools,
+  useUpdateSettings,
+} from '@/lib/hooks/use-settings'
 import { useTheme, type Theme } from '@/lib/theme'
 import type { ConnectionTestResult, SettingsRead, SettingsUpdate } from '@/types'
 
@@ -92,6 +97,7 @@ function SettingsSection({
 function SettingsSections({ settings }: { settings: SettingsRead }) {
   const updateSettings = useUpdateSettings()
   const testConnection = useTestConnection()
+  const testTools = useTestTools()
   const { theme, setTheme } = useTheme()
 
   const [endpoint, setEndpoint] = useState(settings.endpoint_url ?? '')
@@ -233,6 +239,26 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               </Button>
               <TestOutcome state={test} />
             </div>
+          </Field>
+
+          <Field>
+            <FieldLabel>Checking solutions</FieldLabel>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={() => testTools.mutate()}
+                disabled={testTools.isPending || !hasEndpoint}
+              >
+                {testTools.isPending ? <Spinner /> : null}
+                Test tool support
+              </Button>
+              <ToolSupportOutcome settings={settings} pending={testTools.isPending} />
+            </div>
+            <FieldDescription>
+              Lyra checks each solution against a computer algebra system, which needs an endpoint
+              that supports tool calls. Without one, solving still works and every solution is
+              marked <span className="whitespace-nowrap">Not checked</span>.
+            </FieldDescription>
           </Field>
 
           <Field>
@@ -482,5 +508,36 @@ function SettingsSkeleton() {
         </div>
       ))}
     </div>
+  )
+}
+
+/**
+ * Three states, not two. Null means nobody has asked this endpoint yet, and saying so is
+ * different from saying no: one costs a click, the other costs every verdict in the app.
+ */
+function ToolSupportOutcome({ settings, pending }: { settings: SettingsRead; pending: boolean }) {
+  if (pending) return <span className="text-muted-foreground text-sm">Asking the endpoint...</span>
+
+  if (settings.tools_supported === null) {
+    return (
+      <span className="text-muted-foreground text-sm">
+        Not checked yet. Lyra will ask the first time you solve a problem set.
+      </span>
+    )
+  }
+
+  if (settings.tools_supported) {
+    return (
+      <span className="text-success-text flex items-center gap-1.5 text-sm">
+        <Check className="size-4" />
+        {settings.tools_message ?? 'This endpoint can run the checks Lyra verifies with.'}
+      </span>
+    )
+  }
+
+  return (
+    <span className="text-info-text text-sm">
+      {settings.tools_message ?? 'This endpoint cannot run tool calls. Solving still works.'}
+    </span>
   )
 }

@@ -118,6 +118,12 @@ create table artifact_provenance (
 create index idx_provenance_part on artifact_provenance(part_id);
 ```
 
+Two later migrations extend this. `006_solving.sql` adds `artifact_checks`, the tool calls behind
+one verdict; `artifact_parts.verdict_detail`, the sentence a verdict is explained by; and
+`settings.tools_supported` plus `tools_message`, the recorded capability probe.
+`007_session_artifact_part.sql` adds the anchored-session column described under Asking About A
+Step.
+
 ### Why it is shaped this way
 
 **Parts are a tree, not a list.** `parent_part_id` is what lets a problem own its steps. It is also
@@ -351,7 +357,9 @@ which is why it is in the first tool set rather than a later refinement.
 
 ### Verdicts
 
-- **`verified`**: every check the verifier ran agreed with the solution.
+- **`verified`**: every check the verifier ran agreed with the solution, and at least one check
+  actually ran. A checker that answers "looks right" without calling anything has ratified its own
+  work, which is what deterministic checking exists to avoid, so that outcome is `uncheckable`.
 - **`refuted`**: a check disagreed. The problem is re-derived once, with the refutation supplied as
   input. If the second attempt is refuted too, the problem is marked `refuted` and the document
   says so plainly, naming the check that failed. It is not silently re-run until it passes.
@@ -412,9 +420,12 @@ it goes away when inference is bundled in Phase 6.
 `backend/llm/tools.py` holds the loop and the tool registry. In the order the requirements matter:
 
 - **Termination is guaranteed.** A call-depth ceiling and a wall-clock timeout, both configurable
-  and both with defaults. A loop that silently stops producing is worse than one that says it gave
-  up, so hitting either is reported: the verdict becomes `unchecked` with the reason, never
-  `verified` by default.
+  and both with defaults. The wall clock is what actually bounds a run; the depth ceiling is the
+  backstop for a model that has stopped making progress, and it is set generously because a
+  homework problem is routinely five lettered sub-parts and a checker works through them a few at
+  a time. Measured against a real signals set, one such problem took fifteen rounds. A loop that
+  silently stops producing is worse than one that says it gave up, so hitting either is reported:
+  the verdict becomes `unchecked` with the reason, never `verified` by default.
 - **Tool calls are visible in the transcript.** The student can always see what was run and what
   came back. This is a debugging affordance now and the precondition for trusting the agent in
   Phase 4.
@@ -453,7 +464,7 @@ Clicking any step opens a Guide-mode exchange scoped to that step. This is what 
 and the conversation one product rather than two.
 
 It reuses the chat stack entirely. `chat_sessions` gains a nullable `artifact_part_id` (migration
-`006_session_artifact_part.sql`), and a session created with one:
+`007_session_artifact_part.sql`), and a session created with one:
 
 - pins that step's content, and its problem's statement, into the turn as context
 - opens in `guide` mode, because dropping from Solve to Guide is the point of the interaction,

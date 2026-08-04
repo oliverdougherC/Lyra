@@ -28,3 +28,15 @@ export function useUpdateSettings() {
 export function useTestConnection() {
   return useMutation({ mutationFn: () => api.testConnection() })
 }
+
+/**
+ * Probes whether the endpoint can run tool calls. The backend records the answer, so the
+ * settings query is invalidated: the stored result is what every later solve reads.
+ */
+export function useTestTools() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.testTools(),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: settingsKeys.all }),
+  })
+}

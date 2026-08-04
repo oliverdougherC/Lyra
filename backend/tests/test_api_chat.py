@@ -563,3 +563,120 @@ def test_a_retry_that_fails_upstream_leaves_the_previous_answer_in_place(
         ("user", QUESTION),
         ("assistant", "The answer they already have."),
     ]
+
+
+# --- Asking about a step ------------------------------------------------------------
+
+
+def _anchored_step(db: sqlite3.Connection, class_id: int) -> int:
+    """One step of a solved problem, which is what a step conversation is anchored to."""
+    from backend.core import artifacts
+
+    created = artifacts.create_artifact(
+        db,
+        class_id,
+        "Problem set 4",
+        [artifacts.SourceSpec(_solver_document(db, class_id))],
+    )
+    artifact_id = int(created["id"])
+    problem_id = artifacts.create_part(
+        db,
+        artifact_id,
+        artifacts.PROBLEM,
+        0,
+        label="Problem 4",
+        content="Find the Laplace transform of a unit ramp.",
+    )
+    return artifacts.create_part(
+        db,
+        artifact_id,
+        artifacts.STEP,
+        0,
+        label="Integrate by parts",
+        content="Let u = t and dv = e^{-st} dt.",
+        parent_part_id=problem_id,
+    )
+
+
+def _solver_document(db: sqlite3.Connection, class_id: int) -> int:
+    cursor = db.execute(
+        "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
+        "values (?, 'hw4.pdf', '/tmp/x', 'application/pdf', 1, 'ready')",
+        (class_id,),
+    )
+    db.commit()
+    return int(cursor.lastrowid or 0)
+
+
+def test_a_session_can_be_anchored_to_a_step(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    step_id = _anchored_step(db, class_id)
+
+    created = client.post(f"/api/classes/{class_id}/sessions", json={"artifact_part_id": step_id})
+
+    assert created.status_code == 201
+    assert created.json()["artifact_part_id"] == step_id
+    # An ordinary conversation in every other respect: same mode, same place in the list.
+    assert created.json()["mode"] == "guide"
+    assert client.get(f"/api/classes/{class_id}/sessions").json() == [created.json()]
+
+
+def test_an_anchored_session_pins_its_step_and_the_problem_into_the_turn(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pinned rather than retrieved: the student clicked this step, so it is the subject."""
+    step_id = _anchored_step(db, class_id)
+    session_id = client.post(
+        f"/api/classes/{class_id}/sessions", json={"artifact_part_id": step_id}
+    ).json()["id"]
+
+    seen: list[list[dict[str, str]]] = []
+
+    async def capture(
+        endpoint_url: str,
+        api_key: str | None,
+        model: str | None,
+        messages: list[dict[str, str]],
+        **kwargs: object,
+    ) -> AsyncIterator[StreamDelta]:
+        seen.append(messages)
+        yield StreamDelta("answer", "Because u is the polynomial factor.")
+
+    monkeypatch.setattr(routes_chat, "stream_chat", capture)
+    _send(client, session_id)
+
+    system = seen[0][0]["content"]
+    assert "Let u = t and dv = e^{-st} dt." in system
+    # The step without its question is ambiguous, and the student is looking at both.
+    assert "Find the Laplace transform of a unit ramp." in system
+    assert "Problem 4" in system
+
+
+def test_an_ordinary_session_pins_nothing(
+    client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[list[dict[str, str]]] = []
+
+    async def capture(
+        endpoint_url: str,
+        api_key: str | None,
+        model: str | None,
+        messages: list[dict[str, str]],
+        **kwargs: object,
+    ) -> AsyncIterator[StreamDelta]:
+        seen.append(messages)
+        yield StreamDelta("answer", "Sure.")
+
+    monkeypatch.setattr(routes_chat, "stream_chat", capture)
+    _send(client, session_id)
+
+    assert "asking about one step" not in seen[0][0]["content"]
+
+
+def test_a_session_anchored_to_a_part_that_does_not_exist_is_refused(
+    client: TestClient, class_id: int
+) -> None:
+    response = client.post(f"/api/classes/{class_id}/sessions", json={"artifact_part_id": 999})
+
+    assert response.status_code == 404

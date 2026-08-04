@@ -27,6 +27,11 @@ type SolveProgressProps = {
   detail?: string | null
   onCancel?: () => void
   cancelling?: boolean
+  /**
+   * `block` centers this in the workbench, for a wait with nothing to read yet. `strip`
+   * puts it above results that are already landing, which is what solving looks like.
+   */
+  variant?: 'block' | 'strip'
 }
 
 /**
@@ -47,10 +52,45 @@ export function SolveProgress({
   detail,
   onCancel,
   cancelling = false,
+  variant = 'block',
 }: SolveProgressProps) {
   const elapsed = useElapsed()
   const counted = problemsTotal !== null && problemsTotal > 0
   const label = STAGE_LABELS[state] ?? 'Working'
+  const headline =
+    counted && state === 'solving'
+      ? `Solving problem ${Math.min(problemsDone + 1, problemsTotal)} of ${problemsTotal}`
+      : label
+
+  if (variant === 'strip') {
+    return (
+      <div className="border-border bg-card flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 print:hidden">
+        <span className="text-accent-primary size-5 shrink-0">
+          <LyraMark thinking />
+        </span>
+        <span className="flex min-w-0 flex-col">
+          <span className="text-text-primary text-sm font-medium">{headline}</span>
+          {detail ? <span className="text-text-tertiary truncate text-xs">{detail}</span> : null}
+        </span>
+        {counted ? (
+          <Progress
+            value={(problemsDone / problemsTotal) * 100}
+            className="w-40"
+            aria-label={`${problemsDone} of ${problemsTotal} problems solved`}
+          />
+        ) : null}
+        {elapsed >= ELAPSED_AFTER_MS ? (
+          <span className="text-text-tertiary text-xs">{formatElapsed(elapsed)}</span>
+        ) : null}
+        <span className="flex-1" />
+        {onCancel ? (
+          <Button variant="outline" size="sm" onClick={onCancel} disabled={cancelling}>
+            {cancelling ? 'Stopping' : 'Stop'}
+          </Button>
+        ) : null}
+      </div>
+    )
+  }
 
   return (
     <div className="flex flex-col items-center gap-4 py-16 text-center">
@@ -58,11 +98,7 @@ export function SolveProgress({
         <LyraMark thinking />
       </span>
       <div className="flex flex-col gap-1">
-        <p className="text-text-primary text-base font-medium">
-          {counted && state === 'solving'
-            ? `Solving problem ${Math.min(problemsDone + 1, problemsTotal)} of ${problemsTotal}`
-            : label}
-        </p>
+        <p className="text-text-primary text-base font-medium">{headline}</p>
         {detail ? <p className="text-text-secondary text-sm">{detail}</p> : null}
         {elapsed >= ELAPSED_AFTER_MS ? (
           <p className="text-text-tertiary text-xs">{formatElapsed(elapsed)}</p>

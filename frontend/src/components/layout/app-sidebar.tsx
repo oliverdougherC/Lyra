@@ -207,7 +207,7 @@ export function AppSidebar() {
 
   const startNewChat = useCallback(() => {
     if (selectedClassId === null) return
-    createSession.mutate(undefined, {
+    createSession.mutate(null, {
       onSuccess: (session) => {
         router.push(`/classes/${selectedClassId}?session=${session.id}`)
       },

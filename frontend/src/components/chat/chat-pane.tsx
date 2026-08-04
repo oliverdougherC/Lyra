@@ -43,6 +43,12 @@ type ChatPaneProps = {
   onSessionIdChange?: (sessionId: number | null) => void
   /** Rendered at the end of the pane header; the workspace owns the documents column. */
   headerActions?: React.ReactNode
+  /**
+   * The empty-state copy, when the class-level one does not fit. A conversation anchored
+   * to a step of a solution opens with the step already on screen, so suggesting "What
+   * are the main topics in this class?" would be answering a question nobody asked.
+   */
+  emptyState?: React.ReactNode
 }
 
 /** How close to the bottom still counts as "following the conversation". */
@@ -78,6 +84,7 @@ export function ChatPane({
   sessionId: sessionIdProp = null,
   onSessionIdChange,
   headerActions,
+  emptyState,
 }: ChatPaneProps) {
   const queryClient = useQueryClient()
   const { data: sessions, isPending: sessionsPending } = useSessions(classId)
@@ -144,7 +151,7 @@ export function ChatPane({
     if (sessionId !== null || sessionsPending || !sessions || sessions.length > 0) return
     if (creationAttemptedRef.current) return
     creationAttemptedRef.current = true
-    createSession.mutate(undefined, {
+    createSession.mutate(null, {
       onSuccess: (session) => {
         onSessionIdChange?.(session.id)
         setMode(session.mode)
@@ -550,6 +557,8 @@ export function ChatPane({
                 <Skeleton className="ml-auto h-12 w-2/3" />
                 <Skeleton className="h-24 w-full" />
               </div>
+            ) : rendered.length === 0 && emptyState !== undefined ? (
+              emptyState
             ) : rendered.length === 0 ? (
               <EmptyConversation
                 className={className}

@@ -13,12 +13,14 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, UploadFile, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.config import settings
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import LyraError, NotFoundError
 from backend.core.ingestion import PENDING, delete_chunks, enqueue
+from backend.rag import render
 from backend.rag.parse import PDF_MIME, UNSUPPORTED_MESSAGE
 from backend.storage.database import get_db
 
@@ -30,6 +32,10 @@ DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
 # reading one upload into memory to check it stays comfortable.
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 TOO_LARGE_MESSAGE = "That file is larger than 50 MB. Upload a smaller file."
+
+# How much of a text source the reading pane serves. Well past a problem set, and short of
+# anything that would make the pane slow to render.
+MAX_TEXT_CHARS = 200_000
 
 # The extension decides the mime, not `UploadFile.content_type`: browsers send
 # `application/octet-stream`, `text/x-markdown`, or nothing at all for `.md`, so trusting
@@ -72,6 +78,14 @@ class DocumentDetail(DocumentRead):
     """One document, plus whether its extracted text is on hand for a re-index."""
 
     has_text: bool
+
+
+class DocumentText(BaseModel):
+    """A text source as the solver's source pane reads it."""
+
+    filename: str
+    text: str
+    truncated: bool
 
 
 class StatusRead(BaseModel):
@@ -150,6 +164,52 @@ def read_document_status(document_id: int, conn: DbConn) -> dict[str, object]:
     return _document_row(conn, document_id)
 
 
+@router.get("/documents/{document_id}/pages/{page_number}")
+def read_document_page(document_id: int, page_number: int, conn: DbConn) -> FileResponse:
+    """One page of a source document, rendered to PNG and cached.
+
+    The solver's source pane shows the page a problem came from beside its solution. Page
+    images rather than an embedded viewer, because that is what buys exact anchoring and
+    identical rendering everywhere, and because Phase 3 needs the same rasterization.
+
+    Cached aggressively on the client: a rendered page of a stored file never changes, and
+    re-ingesting or deleting the document clears the server-side cache.
+    """
+    row = conn.execute(
+        "select id, stored_path, mime from documents where id = ?", (document_id,)
+    ).fetchone()
+    if row is None:
+        raise NotFoundError("That document does not exist.")
+
+    path = render.render_page(
+        document_id, Path(str(row["stored_path"])), str(row["mime"]), page_number
+    )
+    return FileResponse(
+        path,
+        media_type="image/png",
+        headers={"cache-control": "private, max-age=86400"},
+    )
+
+
+@router.get("/documents/{document_id}/text", response_model=DocumentText)
+def read_document_text(document_id: int, conn: DbConn) -> dict[str, object]:
+    """The extracted text of a document that has no pages to draw.
+
+    TXT and MD sources render as their text in the solver's source pane, which is the same
+    anchor as a page image with a different surface. Truncated, because this is a reading
+    pane rather than a download: a source the student wants in full is a file they already
+    have.
+    """
+    document = _document_row(conn, document_id)
+    path = _text_path(document_id)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    return {
+        "filename": document["filename"],
+        "text": text[:MAX_TEXT_CHARS],
+        "truncated": len(text) > MAX_TEXT_CHARS,
+    }
+
+
 @router.post(
     "/documents/{document_id}/reingest",
     response_model=DocumentRead,
@@ -160,6 +220,9 @@ def reingest_document(document_id: int, conn: DbConn) -> dict[str, object]:
     # Clearing the previous run's chunks here as well as in the job keeps the document
     # from serving stale results while it waits in the queue.
     delete_chunks(conn, document_id)
+    # Same reason for the rendered pages: a stale image would show a page from the file
+    # that used to be there.
+    render.discard_pages(document_id)
     conn.execute(
         "update documents set state = ?, stage_detail = null, error_message = null, "
         "pages_done = 0 where id = ?",
@@ -187,6 +250,7 @@ def delete_document(document_id: int, conn: DbConn) -> None:
     if row["stored_path"]:
         Path(row["stored_path"]).unlink(missing_ok=True)
     _text_path(document_id).unlink(missing_ok=True)
+    render.discard_pages(document_id)
 
 
 def _document_row(conn: sqlite3.Connection, document_id: int) -> dict[str, object]:

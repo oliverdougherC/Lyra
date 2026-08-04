@@ -584,3 +584,103 @@
     transform: none;
   }
 }
+
+/* Export is the browser's print path with a stylesheet, not a backend renderer. KaTeX
+   already typesets the mathematics correctly in the page; a Python PDF library would mean
+   re-solving math typesetting and adding a dependency to do it worse.
+
+   The rule this section exists to hold: an exported document that hides a failed check
+   would be worse than no export. Nothing about a verdict, a refutation, or a provenance
+   line is dropped for tidiness. */
+@media print {
+  /* Paper is paper. Both themes print on the light palette, so a dark-mode reader does
+     not get a page of ink or, worse, a light-on-light document. */
+  :root,
+  .dark {
+    --bg-primary: #ffffff;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #f2efea;
+    --border: #cfc6ba;
+    --border-strong: #8a7460;
+    --text-primary: #1b1712;
+    --text-secondary: #3d342c;
+    --text-tertiary: #5b5045;
+    --accent-primary: #2f4a33;
+    --accent-surface: #e6eee2;
+    --accent-surface-foreground: #24361f;
+    --success-fill: #e3ecdd;
+    --success-text: #2f4526;
+    --info-fill: #e0eaec;
+    --info-text: #27454b;
+    --danger-fill: #f0dcd6;
+    --danger-foreground: #2a1d19;
+    --danger-text: #5a3227;
+    --overlay: transparent;
+  }
+
+  html,
+  body {
+    background: #ffffff;
+    height: auto;
+  }
+
+  @page {
+    margin: 18mm 16mm;
+  }
+
+  /* Application chrome carries no information on paper: the sidebar, the header actions,
+     the source pane, and every control are removed rather than shrunk. */
+  [data-slot='sidebar-wrapper'] [data-slot='sidebar'],
+  [data-slot='sidebar-gap'],
+  [data-slot='sidebar-rail'],
+  [data-slot='sidebar-trigger'],
+  header[data-app-header],
+  [data-slot='resizable-handle'],
+  /* Sonner renders its own markup and sets neither a data-slot nor a class of ours, so
+     these are its attributes rather than Lyra's. A toast still on screen when the student
+     hits print would otherwise land in the middle of the page. */
+  [data-sonner-toaster],
+  section[aria-label^='Notifications'] {
+    display: none !important;
+  }
+
+  main,
+  [data-slot='sidebar-inset'] {
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  /* Every scrolling region becomes its full height: a printed page cannot be scrolled, so
+     a clipped region would silently drop the end of a solution. */
+  [data-slot='scroll-area'],
+  [data-slot='scroll-area-viewport'] {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  /* Every problem prints, whatever the accordion was showing on screen. Radix keeps
+     collapsed content mounted with `hidden`, so the attribute has to be overridden as
+     well as the height. */
+  [data-slot='accordion-content'][hidden],
+  [data-slot='accordion-content'][data-state='closed'] {
+    display: block !important;
+    height: auto !important;
+    animation: none !important;
+  }
+
+  [data-slot='accordion-item'] {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* A step is the unit a reader follows, so it is kept whole where the browser allows it. */
+  .assistant-content {
+    break-inside: avoid;
+  }
+
+  a[href]::after {
+    content: '';
+  }
+}

@@ -10,6 +10,7 @@ import sqlite3
 from typing import Literal
 
 from backend.core.errors import NotFoundError
+from backend.llm.prompts import format_step_context
 
 ChatMode = Literal["guide", "show"]
 MessageRole = Literal["user", "assistant"]
@@ -30,17 +31,32 @@ order by id
 """
 
 
+_SESSION_COLUMNS = "id, class_id, title, mode, artifact_part_id, created_at"
+
+
 def create_session(
-    conn: sqlite3.Connection, class_id: int, title: str | None = None
+    conn: sqlite3.Connection,
+    class_id: int,
+    title: str | None = None,
+    artifact_part_id: int | None = None,
 ) -> dict[str, object]:
     """Open a conversation on a class and return it.
 
     Mode is written explicitly rather than left to the column default, because the
     default is a schema detail and the starting mode should be readable here.
+
+    Args:
+        conn: Open database connection.
+        class_id: Class the conversation belongs to.
+        title: Name it opens with, or None to be named from its first message.
+        artifact_part_id: The step of a solution this conversation is about, when it was
+            opened by clicking one. It pins that step into every turn and is why dropping
+            from Solve to Guide is one product rather than two.
     """
     cursor = conn.execute(
-        "insert into chat_sessions (class_id, title, mode) values (?, ?, 'guide')",
-        (class_id, title),
+        "insert into chat_sessions (class_id, title, mode, artifact_part_id) "
+        "values (?, ?, 'guide', ?)",
+        (class_id, title, artifact_part_id),
     )
     conn.commit()
     return get_session(conn, int(cursor.lastrowid or 0))
@@ -54,7 +70,7 @@ def get_session(conn: sqlite3.Connection, session_id: int) -> dict[str, object]:
             its lookup through this one, so the message is written once.
     """
     row = conn.execute(
-        "select id, class_id, title, mode, created_at from chat_sessions where id = ?",
+        f"select {_SESSION_COLUMNS} from chat_sessions where id = ?",  # noqa: S608
         (session_id,),
     ).fetchone()
     if row is None:
@@ -65,11 +81,43 @@ def get_session(conn: sqlite3.Connection, session_id: int) -> dict[str, object]:
 def list_sessions(conn: sqlite3.Connection, class_id: int) -> list[dict[str, object]]:
     """Every session in a class, newest first, which is the order the sidebar shows."""
     rows = conn.execute(
-        "select id, class_id, title, mode, created_at from chat_sessions "
+        f"select {_SESSION_COLUMNS} from chat_sessions "  # noqa: S608
         "where class_id = ? order by created_at desc, id desc",
         (class_id,),
     )
     return [dict(row) for row in rows]
+
+
+def anchored_context(conn: sqlite3.Connection, session_id: int) -> str | None:
+    """The step this conversation is anchored to, rendered for the system prompt.
+
+    Returns None for an ordinary conversation, and also for one whose step has since been
+    deleted: the column is `on delete set null` precisely so losing the anchor does not
+    cost the student the transcript.
+    """
+    part_id = get_session(conn, session_id)["artifact_part_id"]
+    if part_id is None:
+        return None
+
+    row = conn.execute(
+        "select p.label, p.content, parent.content as problem_statement, "
+        "parent.label as problem_label from artifact_parts p "
+        "left join artifact_parts parent on parent.id = p.parent_part_id "
+        "where p.id = ?",
+        (part_id,),
+    ).fetchone()
+    if row is None:
+        return None
+
+    # A step read without its question is ambiguous, and the student clicked it while
+    # looking at both. A part with no parent is its own subject, so it stands alone.
+    problem = str(row["problem_statement"] or row["content"])
+    return format_step_context(
+        problem,
+        str(row["content"]),
+        str(row["label"]) if row["label"] else None,
+        str(row["problem_label"]) if row["problem_label"] else None,
+    )
 
 
 def delete_session(conn: sqlite3.Connection, session_id: int) -> None:

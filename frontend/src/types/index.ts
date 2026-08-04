@@ -75,6 +75,8 @@ export interface SessionRead {
   class_id: number
   title: string | null
   mode: ChatMode
+  /** The step of a solution this conversation is anchored to, pinned into every turn. */
+  artifact_part_id: number | null
   created_at: string
 }
 
@@ -128,6 +130,9 @@ export interface SettingsRead {
   endpoint_host: string | null
   embedding_model: string | null
   embedding_dim: number | null
+  /** Null means nobody has asked this endpoint yet, which is not the same as a no. */
+  tools_supported: boolean | null
+  tools_message: string | null
 }
 
 export interface SettingsUpdate {
@@ -206,6 +211,22 @@ export interface Provenance {
   filename: string | null
 }
 
+/** One tool call the verifier made. The audit trail behind a verdict. */
+export interface SolutionCheck {
+  tool: string
+  arguments: string
+  ok: boolean
+  result: string
+}
+
+export interface SolutionRevision {
+  revision: number
+  content: string
+  origin: PartOrigin
+  note: string | null
+  created_at: string
+}
+
 export interface SolutionPart {
   id: number
   artifact_id: number
@@ -218,8 +239,11 @@ export interface SolutionPart {
   status: PartStatus
   origin: PartOrigin
   verdict: Verdict
+  /** The sentence behind the verdict: what disagreed, or why checking did not run. */
+  verdict_detail: string | null
   error_message: string | null
   provenance: Provenance[]
+  checks: SolutionCheck[]
 }
 
 export interface SolutionRead {
@@ -275,4 +299,16 @@ export interface SegmentationProblem {
 
 export interface SegmentationUpdate {
   problems: SegmentationProblem[]
+}
+
+/** A text source as the solver's source pane reads it. PDFs render as page images. */
+export interface DocumentText {
+  filename: string
+  text: string
+  truncated: boolean
+}
+
+export interface ToolSupportResult {
+  ok: boolean
+  message: string
 }

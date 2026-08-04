@@ -106,6 +106,63 @@ rather than attaching them to the first one.
 Reply with JSON only. No prose, no explanation, and no code fence."""
 
 
+_SOLVE_PROMPT = """\
+You are solving one homework problem for the student whose course material is quoted
+below. Solve it completely and correctly.
+
+Follow the method this course teaches. The retrieved context is what the student's own
+lectures, textbook, and worked examples say; where it shows a technique for this kind of
+problem, use that technique rather than the one you would reach for by default, and name
+it. Where the context does not cover the problem, solve it with general knowledge and say
+which step you did that on.
+
+Return JSON with two fields:
+- "steps": a list, in order. Each step has "title", a short phrase naming what the step
+  does; "content", the working for that step written in markdown with LaTeX for
+  mathematics; and "sources", a list of the bracketed context numbers that step relies
+  on, or an empty list when it relies on none.
+- "answer": the final result, stated plainly. Include units where the problem has them.
+
+Only cite a context number in "sources" if that entry is what the step actually rests on.
+An invented citation is worse than none, because the student is told the step is grounded
+when it is not.
+
+Write mathematics in LaTeX. Put equations in $$...$$ on their own line for display math; \
+reserve $...$ for short inline quantities.
+
+Reply with JSON only. No prose, no explanation, and no code fence."""
+
+_REFERENCE_HEADING = """\
+Solutions the student already has, as examples of the notation, layout, and method their
+course expects. Follow their style. Do not copy their content: they are a different
+problem."""
+
+_VERIFY_PROMPT = """\
+You are checking a solution that has already been written. You are not rewriting it and
+you are not being asked whether you would have solved it differently.
+
+Use the tools to check the claims the solution makes: evaluate the algebra, redo the
+integrals and derivatives, solve the equations, and check that quantities carry the units
+they should. Check the final answer against the problem's own numbers. Run a tool for
+anything a tool can settle rather than judging it by eye.
+
+Ask for every check you can see the need for in the same turn rather than one at a time.
+A problem with several lettered parts is several checks, and requesting them together is
+what lets you finish checking all of them.
+
+When you have finished checking, reply with JSON and nothing else:
+- "verdict": "agrees" if every check you ran matched the solution, "disagrees" if a check
+  contradicted it, or "nothing_to_check" if the solution contains no claim a tool could
+  settle, which is the honest outcome for a proof or a conceptual answer.
+- "detail": one or two sentences. For "disagrees", name the step, what the solution says,
+  and what your check returned. Write about the solution, never about the student.
+
+A check you did not run is not agreement. If you could not settle something, say so in
+"detail" rather than letting it pass."""
+
+_STEP_CONTEXT_HEADING = "The student is asking about one step of a solution Lyra wrote:"
+
+
 def build_segmentation_prompt(text: str, filename: str) -> list[dict[str, str]]:
     """Build the messages that ask the model to list a homework set's problems.
 
@@ -125,6 +182,126 @@ def build_segmentation_prompt(text: str, filename: str) -> list[dict[str, str]]:
         {"role": "system", "content": _SEGMENTATION_PROMPT},
         {"role": "user", "content": f"File: {filename}\n\n{text}"},
     ]
+
+
+def build_solve_prompt(
+    statement: str,
+    label: str,
+    *,
+    sub_parts: list[tuple[str, str]] | None = None,
+    context_block: str = "",
+    reference_block: str = "",
+    correction: str = "",
+) -> list[dict[str, str]]:
+    """Build the messages that ask the model to solve one problem.
+
+    Tools are deliberately not attached to this turn. Solving has to work against any
+    OpenAI-compatible endpoint, including one that does not implement `tools` at all;
+    checking is a separate pass, which is also what makes it worth anything.
+
+    Args:
+        statement: The problem text, as confirmed at the review gate.
+        label: What the sheet calls it, used so the model's own wording matches.
+        sub_parts: Lettered sub-parts as `(label, statement)`, solved in the same turn
+            because they share context.
+        context_block: Retrieved course material, already numbered by
+            `format_context_block`. The step `sources` field cites into it.
+        reference_block: Reference solutions, already rendered by
+            `format_reference_block`.
+        correction: What the student says is wrong with the previous attempt. Present only
+            on a re-solve, and placed last so it is the most recent instruction the model
+            reads.
+
+    Returns:
+        OpenAI-shaped messages.
+    """
+    sections = [f"{label}\n\n{statement}"]
+    if sub_parts:
+        sections.append(
+            "Sub-parts, all of which this solution must answer:\n"
+            + "\n".join(
+                f"{part_label} {part_statement}" for part_label, part_statement in sub_parts
+            )
+        )
+    if reference_block:
+        sections.append(reference_block)
+    if context_block:
+        sections.append(context_block)
+    if correction:
+        # Last, and named as the student's own words. A correction buried above the
+        # course material reads to the model as one more piece of context rather than as
+        # the reason it is being asked again.
+        sections.append(
+            "The student read your previous attempt at this problem and said this was "
+            f"wrong with it. Take it as correct and solve the problem again:\n\n{correction}"
+        )
+    return [
+        {"role": "system", "content": _SOLVE_PROMPT},
+        {"role": "user", "content": "\n\n".join(sections)},
+    ]
+
+
+def build_verification_prompt(
+    statement: str, label: str, solution: str, *, refutation: str = ""
+) -> list[dict[str, object]]:
+    """Build the messages that ask the model to check a finished solution, with tools.
+
+    Args:
+        statement: The problem as confirmed at the gate.
+        label: What the sheet calls it.
+        solution: The written solution, steps and answer together.
+        refutation: What the previous check concluded, present only when this is the
+            second pass over a re-derived solution. Included so the checker looks hardest
+            at the place that already failed.
+
+    Returns:
+        Messages shaped for `complete_with_tools`, which is why the value type is `object`
+        rather than `str`: the same list later carries assistant turns holding tool calls.
+    """
+    sections = [f"{label}\n\n{statement}", f"The solution to check:\n\n{solution}"]
+    if refutation:
+        sections.append(
+            "An earlier check of this problem disagreed with the solution, and it was "
+            f"re-derived after that. What the earlier check said:\n\n{refutation}"
+        )
+    return [
+        {"role": "system", "content": _VERIFY_PROMPT},
+        {"role": "user", "content": "\n\n".join(sections)},
+    ]
+
+
+def format_reference_block(documents: list[tuple[str, str]]) -> str:
+    """Render reference solutions as the labelled examples section of a solve prompt.
+
+    Args:
+        documents: `(filename, text)` pairs, already truncated to their share of the
+            budget by the caller.
+
+    Returns:
+        The block, or an empty string for no documents so callers can append it
+        unconditionally.
+    """
+    if not documents:
+        return ""
+    entries = [f"--- {filename}\n{text}" for filename, text in documents if text.strip()]
+    if not entries:
+        return ""
+    return f"{_REFERENCE_HEADING}\n\n" + "\n\n".join(entries)
+
+
+def format_step_context(
+    problem: str, step: str, label: str | None = None, problem_label: str | None = None
+) -> str:
+    """Render the step a session is anchored to, pinned into its system prompt.
+
+    The step and the problem it belongs to are both included, both with their own labels:
+    a step read without its question is ambiguous, and the student clicked it precisely
+    because they are looking at both. The labels are the sheet's own wording, so the
+    model and the student refer to the same thing by the same name.
+    """
+    heading = f"{_STEP_CONTEXT_HEADING[:-1]}, {label}:" if label else _STEP_CONTEXT_HEADING
+    problem_heading = f"The problem, {problem_label}:" if problem_label else "The problem:"
+    return f"{heading}\n\n{problem_heading}\n{problem}\n\nThe step:\n{step}"
 
 
 def _render_facts(facts: list[sqlite3.Row], heading: str) -> str:

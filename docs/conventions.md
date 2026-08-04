@@ -60,7 +60,9 @@ backend/
     ingestion.py        # Background ingestion job orchestration
     artifacts.py        # Artifact and part CRUD, revisions, provenance (Phase 2)
     segmentation.py     # Problem lists from chunk markers plus a model pass (Phase 2)
-    solver.py           # Background solve job: segment, solve, verify (Phase 2)
+    solver.py           # Background solve job orchestration: segment, solve, verify (Phase 2)
+    solving.py          # One problem: evidence gathered, prompt built, reply parsed (Phase 2)
+    verification.py     # The tool-backed check, and the rules that turn it into a verdict
   tools/                # Pure computation, no prompts, no models, no database (Phase 2)
     __init__.py
     result.py           # ToolResult: the one shape every tool returns
@@ -74,6 +76,7 @@ backend/
     chunk.py            # Semantic chunking, token ceiling
     embed.py            # Embedding, and the ONLY place task prefixes are applied
     retrieve.py         # Brute-force KNN, recency weighting, budgeting
+    render.py           # Source pages rasterized to PNG and cached (Phase 2)
   storage/
     __init__.py
     database.py         # SQLite connection, migrations
@@ -213,6 +216,8 @@ Tests defend observable contracts. A test that restates the implementation is wo
   remote endpoint
 - Profile fact confidence and the rule that unconfirmed low-confidence facts never enter a prompt
 - API request and response contracts
+- That no verdict overstates itself: `unchecked` and `uncheckable` never render as a pass,
+  and `verified` is never reached without a tool call actually having run
 
 **What is not:**
 - That a Pydantic model has the fields it was declared with

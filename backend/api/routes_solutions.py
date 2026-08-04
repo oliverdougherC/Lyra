@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from backend.core import artifacts, solver
 from backend.core.classes import get_class, touch_class
-from backend.core.errors import ConflictError, LyraError
+from backend.core.errors import ConflictError, LyraError, NotFoundError
 from backend.core.segmentation import SegmentedPart, SegmentedProblem
 from backend.storage.database import get_db
 
@@ -31,11 +31,31 @@ DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
 
 MAX_PROBLEMS = 200
 
+# Long enough for a paragraph of "here is what is wrong with step 3", short enough that
+# nothing pathological reaches the prompt builder.
+MAX_CORRECTION_CHARS = 4000
+
 NOT_READY_MESSAGE = "{filename} has not finished processing yet."
 NOT_AT_GATE_MESSAGE = "This solution set is not waiting for review."
 NOT_RUNNING_MESSAGE = "This solution set is not running."
+ALREADY_RUNNING_MESSAGE = "This solution set is already running."
+NO_PROBLEMS_MESSAGE = "There are no problems to solve. Add one first."
+NOT_THIS_SET_MESSAGE = "That part does not belong to this solution set."
+NOT_A_PROBLEM_MESSAGE = "Only a whole problem can be solved again."
 TOO_MANY_PROBLEMS = f"A solution set can hold at most {MAX_PROBLEMS} problems."
 DEFAULT_TITLE = "Solution set"
+EDITED_SINCE_CHECK = "This was edited after it was checked, so the earlier check no longer applies."
+RESTORED_NOTE = "Restored version {revision}."
+
+# States a confirmed problem list may be started from. `cancelled` and `ready` are here on
+# purpose: `Solve the rest` after a stop, and re-running a set whose sources changed, are
+# the same act as starting it, and solving skips problems that are already complete.
+STARTABLE_STATES = (
+    artifacts.AWAITING_REVIEW,
+    artifacts.READY,
+    artifacts.CANCELLED,
+    artifacts.FAILED,
+)
 
 SourceRole = Literal["problem_set", "reference_solutions"]
 
@@ -95,6 +115,36 @@ class SegmentationUpdate(BaseModel):
     problems: list[ProblemUpdate]
 
 
+class PartEdit(BaseModel):
+    """Body of `PATCH /api/solutions/{artifact_id}/parts/{part_id}`."""
+
+    content: str = Field(min_length=1)
+
+    @field_validator("content")
+    @classmethod
+    def _check_content(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("A step cannot be empty.")
+        return cleaned
+
+
+class RegenerateRequest(BaseModel):
+    """Body of `POST /api/solutions/{artifact_id}/parts/{part_id}/regenerate`.
+
+    The correction is optional: `Regenerate` and `Mark wrong and re-solve` are the same
+    endpoint, and the difference between them is whether the student had something to say.
+    """
+
+    correction: str = Field(default="", max_length=MAX_CORRECTION_CHARS)
+
+
+class RestoreRequest(BaseModel):
+    """Body of `POST /api/solutions/{artifact_id}/parts/{part_id}/restore`."""
+
+    revision: int = Field(ge=1)
+
+
 class SourceRead(BaseModel):
     """A source document as the interface sees it."""
 
@@ -114,6 +164,25 @@ class ProvenanceRead(BaseModel):
     filename: str | None
 
 
+class CheckRead(BaseModel):
+    """One tool call the verifier made. The audit trail behind a verdict."""
+
+    tool: str
+    arguments: str
+    ok: bool
+    result: str
+
+
+class RevisionRead(BaseModel):
+    """One stored version of a part, newest first in the list this appears in."""
+
+    revision: int
+    content: str
+    origin: str
+    note: str | None
+    created_at: str
+
+
 class PartRead(BaseModel):
     """One addressable part of a solution set."""
 
@@ -128,8 +197,10 @@ class PartRead(BaseModel):
     status: str
     origin: str
     verdict: str
+    verdict_detail: str | None
     error_message: str | None
     provenance: list[ProvenanceRead]
+    checks: list[CheckRead]
 
 
 class SolutionRead(BaseModel):
@@ -215,7 +286,11 @@ def list_solutions(class_id: int, conn: DbConn) -> list[dict[str, object]]:
 def read_solution(artifact_id: int, conn: DbConn) -> dict[str, object]:
     artifact = artifacts.get_artifact(conn, artifact_id)
     parts = [
-        {**part, "provenance": artifacts.list_provenance(conn, int(part["id"]))}
+        {
+            **part,
+            "provenance": artifacts.list_provenance(conn, int(part["id"])),
+            "checks": artifacts.list_checks(conn, int(part["id"])),
+        }
         for part in artifacts.list_parts(conn, artifact_id)
     ]
     return {**_with_sources(conn, artifact), "parts": parts}
@@ -260,6 +335,106 @@ def update_segmentation(
     solver.write_problems(conn, artifact_id, corrected)
     artifacts.set_problems_total(conn, artifact_id, len(corrected))
     return read_solution(artifact_id, conn)
+
+
+@router.post(
+    "/solutions/{artifact_id}/start",
+    response_model=SolutionRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def start_solution(artifact_id: int, conn: DbConn) -> dict[str, object]:
+    """Confirm the problem list and begin solving.
+
+    Answers `202`: a full set with verification passes runs for tens of minutes on local
+    hardware, and nothing about that belongs on an open connection.
+
+    Also the way back into a stopped run. Solving skips problems that are already
+    complete, so `Solve the rest` after a cancel is this same call rather than a second
+    endpoint with its own resume logic to keep in step.
+    """
+    artifact = artifacts.get_artifact(conn, artifact_id)
+    if artifact["state"] not in STARTABLE_STATES:
+        raise ConflictError(ALREADY_RUNNING_MESSAGE)
+    if not _problem_count(conn, artifact_id):
+        raise LyraError(NO_PROBLEMS_MESSAGE)
+
+    artifacts.set_artifact_state(conn, artifact_id, artifacts.PENDING)
+    solver.enqueue_solve(artifact_id)
+    return _with_sources(conn, artifacts.get_artifact(conn, artifact_id))
+
+
+@router.patch("/solutions/{artifact_id}/parts/{part_id}", response_model=PartRead)
+def update_part(
+    artifact_id: int, part_id: int, payload: PartEdit, conn: DbConn
+) -> dict[str, object]:
+    """Store the student's edit of one step or answer.
+
+    The edit becomes a revision, and the part's origin becomes `user_corrected`, so a
+    later read knows this text is the student's rather than the model's. The verdict is
+    deliberately cleared to `unchecked`: whatever checking concluded, it concluded it
+    about text that is no longer there.
+    """
+    part = _require_part(conn, artifact_id, part_id)
+    artifacts.set_part_content(conn, part_id, payload.content, artifacts.USER_CORRECTED)
+    if part["verdict"] != artifacts.UNCHECKED:
+        artifacts.set_part_verdict(conn, part_id, artifacts.UNCHECKED, EDITED_SINCE_CHECK)
+        artifacts.record_checks(conn, part_id, [])
+    return _part_response(conn, part_id)
+
+
+@router.post(
+    "/solutions/{artifact_id}/parts/{part_id}/regenerate",
+    response_model=PartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def regenerate_part(
+    artifact_id: int, part_id: int, payload: RegenerateRequest, conn: DbConn
+) -> dict[str, object]:
+    """Solve one problem again, optionally carrying what the student says is wrong.
+
+    Only a whole problem, not a single step: a step re-derived without the ones after it
+    would leave a solution that no longer follows from itself.
+
+    This does not move the artifact's state. The rest of the document stays readable while
+    one problem is re-solved, and the existing solution is replaced only once the new one
+    has been written.
+    """
+    part = _require_part(conn, artifact_id, part_id)
+    if part["kind"] != artifacts.PROBLEM or part["parent_part_id"] is not None:
+        raise LyraError(NOT_A_PROBLEM_MESSAGE)
+
+    artifacts.set_part_status(conn, part_id, artifacts.PART_SOLVING)
+    solver.enqueue_regenerate(artifact_id, part_id, payload.correction.strip())
+    return _part_response(conn, part_id)
+
+
+@router.get("/solutions/{artifact_id}/parts/{part_id}/revisions", response_model=list[RevisionRead])
+def read_part_revisions(artifact_id: int, part_id: int, conn: DbConn) -> list[dict[str, object]]:
+    _require_part(conn, artifact_id, part_id)
+    return artifacts.list_revisions(conn, part_id)
+
+
+@router.post("/solutions/{artifact_id}/parts/{part_id}/restore", response_model=PartRead)
+def restore_part_revision(
+    artifact_id: int, part_id: int, payload: RestoreRequest, conn: DbConn
+) -> dict[str, object]:
+    """Put an earlier version of a part back.
+
+    Recorded as a new revision rather than by rewinding the history, so restoring is
+    itself undoable and the sheet still shows what was there in between.
+    """
+    _require_part(conn, artifact_id, part_id)
+    revision = artifacts.get_revision(conn, part_id, payload.revision)
+    artifacts.set_part_content(
+        conn,
+        part_id,
+        str(revision["content"]),
+        artifacts.USER_CORRECTED,
+        RESTORED_NOTE.format(revision=payload.revision),
+    )
+    artifacts.set_part_verdict(conn, part_id, artifacts.UNCHECKED, EDITED_SINCE_CHECK)
+    artifacts.record_checks(conn, part_id, [])
+    return _part_response(conn, part_id)
 
 
 @router.post(
@@ -319,6 +494,38 @@ def _require_ready(conn: sqlite3.Connection, document_id: int) -> sqlite3.Row:
     if row["state"] != "ready":
         raise LyraError(NOT_READY_MESSAGE.format(filename=row["filename"]))
     return row
+
+
+def _require_part(conn: sqlite3.Connection, artifact_id: int, part_id: int) -> dict[str, object]:
+    """One part of this artifact, or a 404 naming which of the two was wrong.
+
+    The artifact is checked first so a stale solution link is a 404 rather than a part
+    that happens not to exist, and the ownership check is what stops one artifact's route
+    from editing another's part.
+    """
+    artifacts.get_artifact(conn, artifact_id)
+    part = artifacts.get_part(conn, part_id)
+    if int(part["artifact_id"]) != artifact_id:
+        raise NotFoundError(NOT_THIS_SET_MESSAGE)
+    return part
+
+
+def _part_response(conn: sqlite3.Connection, part_id: int) -> dict[str, object]:
+    """One part in the shape `PartRead` wants."""
+    return {
+        **artifacts.get_part(conn, part_id),
+        "provenance": artifacts.list_provenance(conn, part_id),
+        "checks": artifacts.list_checks(conn, part_id),
+    }
+
+
+def _problem_count(conn: sqlite3.Connection, artifact_id: int) -> int:
+    """How many top-level problems this set holds."""
+    return sum(
+        1
+        for part in artifacts.list_parts(conn, artifact_id)
+        if part["parent_part_id"] is None and part["kind"] == artifacts.PROBLEM
+    )
 
 
 def _default_title(conn: sqlite3.Connection, payload: SolutionCreate) -> str:

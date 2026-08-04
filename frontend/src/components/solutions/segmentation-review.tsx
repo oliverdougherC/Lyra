@@ -17,6 +17,9 @@ type SegmentationReviewProps = {
   solution: SolutionDetail
   onResegment: () => void
   resegmenting: boolean
+  /** Confirms the list and starts solving. Absent in tests that only exercise the list. */
+  onSolve?: () => void
+  solving?: boolean
 }
 
 /**
@@ -33,6 +36,8 @@ export function SegmentationReview({
   solution,
   onResegment,
   resegmenting,
+  onSolve,
+  solving = false,
 }: SegmentationReviewProps) {
   const [problems, setProblems] = useState<DraftProblem[]>(() => toDrafts(solution.parts))
   const [nextKey, setNextKey] = useState(0)
@@ -112,7 +117,8 @@ export function SegmentationReview({
       },
     ])
 
-  const handleSave = () => {
+  /** Sends the corrected list. `then` runs only once it has landed. */
+  const commit = (then?: () => void) => {
     const blank = problems.findIndex((problem) => !problem.statement.trim())
     if (blank !== -1) {
       toast.error(`${problems[blank].label || `Problem ${blank + 1}`} has no statement yet.`)
@@ -133,12 +139,26 @@ export function SegmentationReview({
       {
         onSuccess: (updated) => {
           setProblems(toDrafts(updated.parts))
-          toast.success(`Saved ${formatCount(updated.parts.length, 'change')}.`)
+          if (then) then()
+          else toast.success(`Saved ${formatCount(updated.parts.length, 'change')}.`)
         },
         onError: (error) =>
           toast.error(error instanceof ApiError ? error.message : 'Could not save your changes.'),
       },
     )
+  }
+
+  const handleSave = () => commit()
+
+  /**
+   * Corrections are saved before the solve starts, never alongside it. A run against the
+   * list the student has just edited on screen but not sent would solve the wrong
+   * problems, which is exactly what this gate exists to prevent.
+   */
+  const handleSolve = () => {
+    if (!onSolve) return
+    if (dirty) commit(onSolve)
+    else onSolve()
   }
 
   if (problems.length === 0) {
@@ -210,9 +230,17 @@ export function SegmentationReview({
           {resegmenting ? 'Reading again' : 'Read it again'}
         </Button>
         <span className="flex-1" />
-        <Button onClick={handleSave} disabled={!dirty || save.isPending}>
+        {/* Save stays available but secondary. Solving is what this screen is a gate in
+            front of, and the primary action says how many problems it is about to spend
+            compute on rather than just "Solve". */}
+        <Button variant="outline" onClick={handleSave} disabled={!dirty || save.isPending}>
           {save.isPending ? 'Saving' : 'Save changes'}
         </Button>
+        {onSolve ? (
+          <Button onClick={handleSolve} disabled={solving || save.isPending}>
+            {solving ? 'Starting' : `Solve ${formatCount(problems.length, 'problem')}`}
+          </Button>
+        ) : null}
       </div>
     </div>
   )

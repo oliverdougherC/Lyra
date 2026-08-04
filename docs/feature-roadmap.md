@@ -167,52 +167,54 @@ Two pieces are built here because the solver is their first consumer, but both a
 Phase 4 depends on them. They are called out separately so the dependency is visible and so neither
 gets designed solely around homework.
 
-- [ ] **Artifact model.** Lyra currently has inputs (documents), a derived index (chunks), a
+- [x] **Artifact model.** Lyra currently has inputs (documents), a derived index (chunks), a
       transcript (messages), and claims about a class (profile facts). It has nothing representing
       a thing Lyra produced that the user keeps, edits, and returns to. An artifact holds mixed
       content (prose, math, and images), carries provenance back to the chunks and pages that
       informed it, has a status, and supports revision at the level of its parts. `profile_facts`
       is this pattern in miniature and is the model to generalize from
-- [ ] **Tool-calling loop.** Send messages plus tool definitions, execute returned calls, append
+- [x] **Tool-calling loop.** Send messages plus tool definitions, execute returned calls, append
       results, repeat to a bounded depth. Built in-house against the existing LLM client rather
       than forked: the tool surface is small, and what agent frameworks provide beyond it is
       multi-provider abstraction, plugin systems, and state management we already have
-- [ ] Tool calls are visible in the transcript, never silent
-- [ ] Termination guarantees: call-depth ceiling, timeout, and honest reporting when a loop is cut
+- [x] Tool calls are visible in the transcript, never silent
+- [x] Termination guarantees: call-depth ceiling, timeout, and honest reporting when a loop is cut
 
 ### Problem segmentation
 
-- [ ] Identify each problem and sub-part in an uploaded homework set. `chunks.problem_number` and
+- [x] Identify each problem and sub-part in an uploaded homework set. `chunks.problem_number` and
       `chunks.part_index` already exist and are populated by the chunker
-- [ ] Handle sets that span multiple uploaded files
-- [ ] Present the segmentation before solving, so a missed or merged problem is correctable
+- [x] Handle sets that span multiple uploaded files
+- [x] Present the segmentation before solving, so a missed or merged problem is correctable
 
 ### Solving
 
-- [ ] Per-problem solution generation grounded in retrieved course material
-- [ ] Method alignment: prefer the approach the course teaches over the approach the model prefers,
+- [x] Per-problem solution generation grounded in retrieved course material
+- [x] Method alignment: prefer the approach the course teaches over the approach the model prefers,
       retrieved from lecture notes and textbook sections
-- [ ] Optional professor solutions as few-shot examples for notation, style, and method. Where a
+- [x] Optional professor solutions as few-shot examples for notation, style, and method. Where a
       student has last term's solutions, this is the strongest available signal and the clearest
       advantage over pasting a problem into a general chatbot
-- [ ] Solutions are structured by step, because steps are what the user clicks, asks about, and
+- [x] Solutions are structured by step, because steps are what the user clicks, asks about, and
       regenerates
-- [ ] Per-problem regeneration, including a correction supplied by the user
+- [x] Per-problem regeneration, including a correction supplied by the user
 
 ### Verification
 
 Accuracy is the entire value proposition. A confidently wrong solution is worse than none.
 
-- [ ] **Computer algebra tool.** SymPy through the tool loop: symbolic integration and
+- [x] **Computer algebra tool.** SymPy through the tool loop: symbolic integration and
       differentiation, equation solving, linear algebra, exact arithmetic. This is deterministic
       verification rather than a second opinion, and it is the single highest-value check available
       for the math and engineering work Lyra is best at
-- [ ] **Unit and dimensional checking.** Cheap, and it catches a large share of physics and
+- [x] **Unit and dimensional checking.** Cheap, and it catches a large share of physics and
       engineering errors
-- [ ] Extract the checkable claims from a solution (final answers, integrals, solved systems) and
-      verify each independently, re-deriving on mismatch
-- [ ] Per-problem confidence surfaced in the document, distinguishing steps grounded in retrieved
-      course material from steps the model supplied on its own
+- [x] Verify a finished solution in a second pass with the tools attached, re-deriving once on a
+      refutation. The tool calls the verifier makes **are** the checkable claims, so there is no
+      separate claim-extraction format to keep in sync with the tool set
+- [x] Grounding surfaced per step, distinguishing steps grounded in retrieved course material from
+      steps the model supplied on its own. Provenance rather than a score: there is no confidence
+      percentage anywhere, because a number nobody can audit reads as precision that does not exist
 
 Deliberately not used for verification: web lookup of existing answers. Answer sites are paywalled
 and hostile to fetching, matching a problem across textbook editions is its own hard problem, and a
@@ -225,16 +227,16 @@ own work.
 
 ### Solver workspace
 
-- [ ] Dedicated route opening on a drop target for one or more homework PDFs
-- [ ] Side-by-side source document and solution document, with problem-level anchoring in both
+- [x] Dedicated route opening on a drop target for one or more homework PDFs
+- [x] Side-by-side source document and solution document, with problem-level anchoring in both
       directions. Overlaying solutions on the PDF stays open as a later refinement; anchored
       side-by-side is a fraction of the work for most of the value
-- [ ] Click any step to ask about it, which opens a Guide-mode exchange scoped to that step
-- [ ] Mark a solution wrong and have that problem re-solved with the correction as input
-- [ ] Stage display driven by real backend events. Built in-house rather than adopting an
+- [x] Click any step to ask about it, which opens a Guide-mode exchange scoped to that step
+- [x] Mark a solution wrong and have that problem re-solved with the correction as input
+- [x] Stage display driven by real backend events. Built in-house rather than adopting an
       off-the-shelf loading component, both for token control and because canned components narrate
       fixed sequences on a timer, which would violate the honesty principle in ui-phase-1.md
-- [ ] Export to PDF
+- [x] Export to PDF
 
 ### Architecture note
 
@@ -250,6 +252,14 @@ phase closes without them.
 **Definition of done:** A student uploads a problem set, watches it segment and solve, reads
 solutions that use the method their course teaches, catches a wrong answer and has that one problem
 re-solved, asks a clarifying question about a single step, and exports the result.
+
+Phase 2 is complete. Verified end to end against a real ECE 203 problem set: segmentation to the
+review gate, a confirmed list solved problem by problem with results landing as they completed,
+verification returning `verified` off twenty-three SymPy calls, a step edited and restored through
+its history, and a Guide exchange opened on a single step. What that run also surfaced, and what a
+reader of this file should know: retrieval is class-scoped, so a student who has uploaded the
+professor's solutions to the set being solved will see the solver ground its steps in them, and the
+provenance line names the file so that is visible rather than hidden.
 
 ## Phase 3: Large Documents
 

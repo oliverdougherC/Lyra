@@ -94,7 +94,7 @@ _ARTIFACT_COLUMNS = (
 
 _PART_COLUMNS = (
     "id, artifact_id, parent_part_id, kind, ordinal, label, content, content_type, "
-    "status, origin, verdict, error_message, created_at, updated_at"
+    "status, origin, verdict, verdict_detail, error_message, created_at, updated_at"
 )
 
 # Parts are a tree of arbitrary depth, so document order is a walk rather than a sort. The
@@ -103,19 +103,19 @@ _PART_COLUMNS = (
 _LIST_PARTS_SQL = """
 with recursive ordered as (
   select p.id, p.artifact_id, p.parent_part_id, p.kind, p.ordinal, p.label, p.content,
-         p.content_type, p.status, p.origin, p.verdict, p.error_message, p.created_at,
-         p.updated_at, printf('%08d', p.ordinal) as path
+         p.content_type, p.status, p.origin, p.verdict, p.verdict_detail, p.error_message,
+         p.created_at, p.updated_at, printf('%08d', p.ordinal) as path
   from artifact_parts p
   where p.artifact_id = ? and p.parent_part_id is null
   union all
   select c.id, c.artifact_id, c.parent_part_id, c.kind, c.ordinal, c.label, c.content,
-         c.content_type, c.status, c.origin, c.verdict, c.error_message, c.created_at,
-         c.updated_at, o.path || '.' || printf('%08d', c.ordinal)
+         c.content_type, c.status, c.origin, c.verdict, c.verdict_detail, c.error_message,
+         c.created_at, c.updated_at, o.path || '.' || printf('%08d', c.ordinal)
   from artifact_parts c
   join ordered o on c.parent_part_id = o.id
 )
 select id, artifact_id, parent_part_id, kind, ordinal, label, content, content_type,
-       status, origin, verdict, error_message, created_at, updated_at
+       status, origin, verdict, verdict_detail, error_message, created_at, updated_at
 from ordered
 order by path, id
 """
@@ -139,6 +139,25 @@ class SourceSpec:
 
     document_id: int
     role: str = PROBLEM_SET
+
+
+@dataclass(frozen=True)
+class CheckEntry:
+    """One tool call the verifier made while checking a part.
+
+    Attributes:
+        tool: Registry name of the tool, such as `cas_integrate`.
+        arguments: The arguments as JSON text, printed by the interface rather than
+            queried, which is why they are not parsed into columns.
+        ok: Whether the tool ran. A refused or malformed call is still recorded: what the
+            verifier tried is part of the audit trail even when it did not work.
+        result: What came back, as JSON text.
+    """
+
+    tool: str
+    arguments: str = "{}"
+    ok: bool = False
+    result: str = "{}"
 
 
 @dataclass(frozen=True)
@@ -350,6 +369,21 @@ def set_problems_total(conn: sqlite3.Connection, artifact_id: int, total: int) -
     conn.commit()
 
 
+def set_problems_done(conn: sqlite3.Connection, artifact_id: int, done: int) -> None:
+    """Set the finished count outright.
+
+    Used at the start of a run to establish the baseline, which is not always zero: a
+    cancelled set resumed with `Solve the rest` already holds finished problems, and
+    counting from zero would report work as undone that the student can read on screen.
+    """
+    get_artifact(conn, artifact_id)
+    conn.execute(
+        "update artifacts set problems_done = ?, updated_at = datetime('now') where id = ?",
+        (max(0, done), artifact_id),
+    )
+    conn.commit()
+
+
 def increment_problems_done(conn: sqlite3.Connection, artifact_id: int) -> int:
     """Count one more finished problem and return the new total.
 
@@ -426,6 +460,7 @@ def create_part(
     parent_part_id: int | None = None,
     status: str = PART_PENDING,
     origin: str = GENERATED,
+    note: str | None = None,
 ) -> int:
     """Create one part and return its id.
 
@@ -444,6 +479,9 @@ def create_part(
         parent_part_id: Owning part, or None for a root part such as a problem.
         status: Lifecycle status. Defaults to `pending`.
         origin: Who wrote the content. Defaults to `generated`.
+        note: Why this content exists, recorded on revision 1. Carries the student's
+            correction on a re-solve, so the history sheet says what prompted the rewrite
+            rather than showing two versions with no reason between them.
 
     Returns:
         The id of the new part.
@@ -484,7 +522,7 @@ def create_part(
         or 0
     )
     if content:
-        _insert_revision(conn, part_id, content, origin, None)
+        _insert_revision(conn, part_id, content, origin, note)
     _touch_artifact(conn, artifact_id)
     conn.commit()
     return part_id
@@ -558,6 +596,28 @@ def set_part_content(
     return revision
 
 
+def set_part_position(
+    conn: sqlite3.Connection, part_id: int, ordinal: int, label: str | None
+) -> None:
+    """Set where a part sits among its siblings and what it is called.
+
+    Separate from `set_part_content` because moving or renaming a part is not a new
+    version of its content, and writing a revision for it would fill the history sheet
+    with entries nobody made.
+
+    Raises:
+        NotFoundError: when no part carries that id.
+    """
+    part = get_part(conn, part_id)
+    conn.execute(
+        "update artifact_parts set ordinal = ?, label = ?, updated_at = datetime('now') "
+        "where id = ?",
+        (ordinal, label, part_id),
+    )
+    _touch_artifact(conn, int(part["artifact_id"]))
+    conn.commit()
+
+
 def _insert_revision(
     conn: sqlite3.Connection, part_id: int, content: str, origin: str, note: str | None
 ) -> int:
@@ -616,12 +676,23 @@ def set_part_status(
     conn.commit()
 
 
-def set_part_verdict(conn: sqlite3.Connection, part_id: int, verdict: str) -> None:
-    """Record what checking concluded about a part.
+def set_part_verdict(
+    conn: sqlite3.Connection, part_id: int, verdict: str, detail: str | None = None
+) -> None:
+    """Record what checking concluded about a part, and why.
 
     Separate from `status` on purpose. A part can be `complete` and `unchecked`, and that
     combination is the honest reading of a solution produced against an endpoint with no
     tool support. Neither `unchecked` nor `uncheckable` may ever be rendered as a pass.
+
+    Args:
+        conn: Open database connection.
+        part_id: Part to record against.
+        verdict: One of `VERDICTS`.
+        detail: The sentence behind the verdict. A refutation names the check that
+            disagreed and what it returned; an `unchecked` names why checking did not run.
+            Written on every verdict including `verified`, where None simply clears a
+            stale reason from a previous attempt.
 
     Raises:
         NotFoundError: when no part carries that id.
@@ -630,11 +701,66 @@ def set_part_verdict(conn: sqlite3.Connection, part_id: int, verdict: str) -> No
     part = get_part(conn, part_id)
     _require(verdict, VERDICTS, "verdict")
     conn.execute(
-        "update artifact_parts set verdict = ?, updated_at = datetime('now') where id = ?",
-        (verdict, part_id),
+        "update artifact_parts set verdict = ?, verdict_detail = ?, "
+        "updated_at = datetime('now') where id = ?",
+        (verdict, detail, part_id),
     )
     _touch_artifact(conn, int(part["artifact_id"]))
     conn.commit()
+
+
+def record_checks(conn: sqlite3.Connection, part_id: int, checks: list[CheckEntry]) -> None:
+    """Replace the tool calls recorded against a part.
+
+    Replace rather than append, for the same reason provenance is replaced: a re-checked
+    part was judged by this pass, and showing this pass's calls alongside a previous
+    pass's would make the count on the interface a sum of two different verdicts.
+
+    Raises:
+        NotFoundError: when no part carries that id.
+    """
+    get_part(conn, part_id)
+    conn.execute("delete from artifact_checks where part_id = ?", (part_id,))
+    conn.executemany(
+        "insert into artifact_checks (part_id, ordinal, tool, arguments, ok, result) "
+        "values (?, ?, ?, ?, ?, ?)",
+        [
+            (part_id, ordinal, check.tool, check.arguments, int(check.ok), check.result)
+            for ordinal, check in enumerate(checks)
+        ],
+    )
+    conn.commit()
+
+
+def list_checks(conn: sqlite3.Connection, part_id: int) -> list[dict[str, object]]:
+    """Every tool call recorded against a part, in the order it ran.
+
+    Raises:
+        NotFoundError: when no part carries that id.
+    """
+    get_part(conn, part_id)
+    rows = conn.execute(
+        "select id, part_id, ordinal, tool, arguments, ok, result, created_at "
+        "from artifact_checks where part_id = ? order by ordinal, id",
+        (part_id,),
+    )
+    return [dict(row) for row in rows]
+
+
+def get_revision(conn: sqlite3.Connection, part_id: int, revision: int) -> dict[str, object]:
+    """One numbered revision of a part.
+
+    Raises:
+        NotFoundError: when the part has no revision with that number.
+    """
+    row = conn.execute(
+        "select id, part_id, revision, content, origin, note, created_at "
+        "from artifact_part_revisions where part_id = ? and revision = ?",
+        (part_id, revision),
+    ).fetchone()
+    if row is None:
+        raise NotFoundError("That version of this part does not exist.")
+    return dict(row)
 
 
 def set_provenance(conn: sqlite3.Connection, part_id: int, entries: list[ProvenanceEntry]) -> None:

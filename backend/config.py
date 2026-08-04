@@ -28,6 +28,11 @@ class Settings(BaseSettings):
         return self.data_dir / "text"
 
     @property
+    def pages_dir(self) -> Path:
+        """Rendered source pages, cached. Disposable: deleting it costs one re-render."""
+        return self.data_dir / "pages"
+
+    @property
     def models_dir(self) -> Path:
         return self.data_dir / "models"
 
@@ -42,7 +47,13 @@ class Settings(BaseSettings):
 
     def ensure_directories(self) -> None:
         """Create the data directories. Called once on startup."""
-        for directory in (self.data_dir, self.uploads_dir, self.text_dir, self.models_dir):
+        for directory in (
+            self.data_dir,
+            self.uploads_dir,
+            self.text_dir,
+            self.pages_dir,
+            self.models_dir,
+        ):
             directory.mkdir(parents=True, exist_ok=True)
 
 

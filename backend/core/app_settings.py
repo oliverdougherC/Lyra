@@ -21,8 +21,15 @@ UPDATABLE_COLUMNS = frozenset(
         "remote_ack",
         "embedding_model",
         "embedding_dim",
+        "tools_supported",
+        "tools_message",
     }
 )
+
+# Changing either of these invalidates what was measured about the endpoint. Tool support
+# is a property of the server and the model together, so a probe result from the previous
+# pair says nothing about the new one and must not be carried over.
+_TOOL_PROBE_INPUTS = ("endpoint_url", "model")
 
 EXTRACTION_DISABLED = "extraction_disabled"
 NO_ENDPOINT = "no_endpoint"
@@ -63,6 +70,13 @@ def update_settings_row(conn: sqlite3.Connection, values: dict[str, object]) -> 
     if unknown:
         raise ValueError(f"Unknown settings column(s): {', '.join(unknown)}")
 
+    values = dict(values)
+    if _changes_endpoint(conn, values):
+        # Forgotten rather than re-probed here: probing is a network call and this is a
+        # synchronous write on the settings screen. The next solve asks again.
+        values.setdefault("tools_supported", None)
+        values.setdefault("tools_message", None)
+
     # Only the column names reach the SQL text, and each has just been checked against
     # the allowlist above. Every value is bound.
     assignments = ", ".join(f"{column} = ?" for column in values)
@@ -71,6 +85,12 @@ def update_settings_row(conn: sqlite3.Connection, values: dict[str, object]) -> 
         tuple(values.values()),
     )
     conn.commit()
+
+
+def _changes_endpoint(conn: sqlite3.Connection, values: dict[str, object]) -> bool:
+    """Whether this write points the tutor at a different server or model."""
+    row = get_settings_row(conn)
+    return any(column in values and values[column] != row[column] for column in _TOOL_PROBE_INPUTS)
 
 
 def resolve_tutor_config(conn: sqlite3.Connection) -> TutorConfig:

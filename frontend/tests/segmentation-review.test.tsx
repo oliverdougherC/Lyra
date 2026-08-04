@@ -25,8 +25,10 @@ function part(overrides: Partial<SolutionPart> & { id: number }): SolutionPart {
     status: 'pending',
     origin: 'generated',
     verdict: 'unchecked',
+    verdict_detail: null,
     error_message: null,
     provenance: [],
+    checks: [],
     ...overrides,
   }
 }

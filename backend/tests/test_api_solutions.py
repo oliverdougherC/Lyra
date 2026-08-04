@@ -449,3 +449,213 @@ def test_a_reworded_sub_part_marks_its_problem_edited(
     ).json()
 
     assert body["parts"][0]["origin"] == "user_corrected"
+
+
+# --- Starting, correcting, and re-solving ------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def no_solve_worker(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, object, object]]:
+    """Record solve and regenerate jobs instead of running them."""
+    jobs: list[tuple[str, object, object]] = []
+    monkeypatch.setattr(
+        routes_solutions.solver,
+        "enqueue_solve",
+        lambda artifact_id: jobs.append(("solve", artifact_id, "")),
+    )
+    monkeypatch.setattr(
+        routes_solutions.solver,
+        "enqueue_regenerate",
+        lambda artifact_id, part_id, correction="": jobs.append(
+            ("regenerate", part_id, correction)
+        ),
+    )
+    return jobs
+
+
+def _solved(db: sqlite3.Connection, class_id: int, document_id: int) -> tuple[int, int, int]:
+    """A finished set: one problem with one step, checked. Returns (artifact, problem, step)."""
+    artifact_id = _at_the_gate(db, class_id, document_id, count=1)
+    problem_id = int(
+        next(
+            part for part in artifacts.list_parts(db, artifact_id) if part["parent_part_id"] is None
+        )["id"]
+    )
+    step_id = artifacts.create_part(
+        db,
+        artifact_id,
+        artifacts.STEP,
+        0,
+        label="Set it up",
+        content="Apply the definition.",
+        parent_part_id=problem_id,
+        status=artifacts.PART_COMPLETE,
+    )
+    artifacts.set_part_status(db, problem_id, artifacts.PART_COMPLETE)
+    artifacts.set_part_verdict(db, problem_id, artifacts.VERIFIED, "The integral matches.")
+    artifacts.record_checks(
+        db, problem_id, [artifacts.CheckEntry(tool="cas_integrate", ok=True, result='{"ok":true}')]
+    )
+    artifacts.set_artifact_state(db, artifact_id, artifacts.READY)
+    return artifact_id, problem_id, step_id
+
+
+def test_start_confirms_the_gate_and_queues_the_solve(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    no_solve_worker: list[tuple[str, object, object]],
+) -> None:
+    artifact_id = _at_the_gate(db, class_id, _document(db, class_id))
+
+    response = client.post(f"/api/solutions/{artifact_id}/start")
+
+    assert response.status_code == 202
+    assert response.json()["state"] == artifacts.PENDING
+    assert no_solve_worker == [("solve", artifact_id, "")]
+
+
+def test_start_is_refused_while_a_run_is_already_going(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id = _at_the_gate(db, class_id, _document(db, class_id))
+    artifacts.set_artifact_state(db, artifact_id, artifacts.SOLVING)
+
+    assert client.post(f"/api/solutions/{artifact_id}/start").status_code == 409
+
+
+def test_start_refuses_a_set_with_nothing_in_it(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    created = artifacts.create_artifact(db, class_id, "Empty", [artifacts.SourceSpec(document_id)])
+    artifacts.set_artifact_state(db, int(created["id"]), artifacts.AWAITING_REVIEW)
+
+    response = client.post(f"/api/solutions/{created['id']}/start")
+
+    assert response.status_code == 400
+    assert "no problems" in response.json()["detail"].lower()
+
+
+def test_a_stopped_run_can_be_started_again(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    no_solve_worker: list[tuple[str, object, object]],
+) -> None:
+    """`Solve the rest` is this endpoint, not a second one with its own resume logic."""
+    artifact_id = _at_the_gate(db, class_id, _document(db, class_id))
+    artifacts.set_artifact_state(db, artifact_id, artifacts.CANCELLED)
+
+    assert client.post(f"/api/solutions/{artifact_id}/start").status_code == 202
+    assert no_solve_worker == [("solve", artifact_id, "")]
+
+
+def test_a_solution_carries_its_verdict_detail_and_the_checks_behind_it(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, problem_id, _ = _solved(db, class_id, _document(db, class_id))
+
+    problem = next(
+        part
+        for part in client.get(f"/api/solutions/{artifact_id}").json()["parts"]
+        if part["id"] == problem_id
+    )
+
+    assert problem["verdict"] == "verified"
+    assert problem["verdict_detail"] == "The integral matches."
+    # The audit trail is the reason to believe the badge, so it travels with it.
+    assert [check["tool"] for check in problem["checks"]] == ["cas_integrate"]
+
+
+def test_editing_a_step_stores_a_revision_and_drops_the_stale_check(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, problem_id, step_id = _solved(db, class_id, _document(db, class_id))
+    artifacts.set_part_verdict(db, step_id, artifacts.VERIFIED, "Checked.")
+
+    body = client.patch(
+        f"/api/solutions/{artifact_id}/parts/{step_id}",
+        json={"content": "Apply the definition, then integrate."},
+    ).json()
+
+    assert body["content"] == "Apply the definition, then integrate."
+    assert body["origin"] == "user_corrected"
+    # Whatever checking concluded, it concluded it about text that is no longer there.
+    assert body["verdict"] == "unchecked"
+    assert [
+        entry["content"]
+        for entry in client.get(f"/api/solutions/{artifact_id}/parts/{step_id}/revisions").json()
+    ] == [
+        "Apply the definition, then integrate.",
+        "Apply the definition.",
+    ]
+
+
+def test_a_part_belonging_to_another_set_is_not_editable_through_this_one(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    first, _, step_id = _solved(db, class_id, document_id)
+    other = _at_the_gate(db, class_id, document_id, count=1)
+
+    response = client.patch(
+        f"/api/solutions/{other}/parts/{step_id}", json={"content": "Not mine."}
+    )
+
+    assert response.status_code == 404
+    assert first != other
+
+
+def test_regenerate_queues_the_problem_with_the_correction(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    no_solve_worker: list[tuple[str, object, object]],
+) -> None:
+    artifact_id, problem_id, _ = _solved(db, class_id, _document(db, class_id))
+
+    response = client.post(
+        f"/api/solutions/{artifact_id}/parts/{problem_id}/regenerate",
+        json={"correction": "You dropped a factor of two."},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "solving"
+    assert no_solve_worker == [("regenerate", problem_id, "You dropped a factor of two.")]
+
+
+def test_only_a_whole_problem_can_be_re_solved(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # A step re-derived without the ones after it would leave a solution that no longer
+    # follows from itself.
+    artifact_id, _, step_id = _solved(db, class_id, _document(db, class_id))
+
+    response = client.post(
+        f"/api/solutions/{artifact_id}/parts/{step_id}/regenerate", json={"correction": ""}
+    )
+
+    assert response.status_code == 400
+
+
+def test_restoring_an_earlier_version_is_itself_a_revision(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, _, step_id = _solved(db, class_id, _document(db, class_id))
+    client.patch(f"/api/solutions/{artifact_id}/parts/{step_id}", json={"content": "My version."})
+
+    body = client.post(
+        f"/api/solutions/{artifact_id}/parts/{step_id}/restore", json={"revision": 1}
+    ).json()
+
+    assert body["content"] == "Apply the definition."
+    revisions = client.get(f"/api/solutions/{artifact_id}/parts/{step_id}/revisions").json()
+    # Restoring rewinds the content, never the history: what was there in between is still
+    # readable, so restoring is itself undoable.
+    assert [entry["content"] for entry in revisions] == [
+        "Apply the definition.",
+        "My version.",
+        "Apply the definition.",
+    ]
+    assert revisions[0]["note"] == "Restored version 1."

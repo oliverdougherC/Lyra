@@ -38,9 +38,15 @@ from backend.tools.result import ToolResult, failure
 logger = logging.getLogger(__name__)
 
 # Rounds of tool calls, not individual calls: a model may ask for four checks at once and
-# that is one round. Eight is well past what checking a single problem needs, and low
-# enough that a model stuck in a loop stops costing time quickly.
-MAX_DEPTH = 8
+# that is one round.
+#
+# Twenty-four rather than a tighter number, because a homework problem is routinely five
+# lettered sub-parts and a checker works through them one at a time. Measured against a
+# real ECE signals set, checking one such problem took fifteen rounds; a ceiling of eight
+# cut it off mid-way and the verdict came back `unchecked` every time, which is honest but
+# useless. The wall clock below is what actually bounds the loop; this is the backstop for
+# a model that has stopped making progress.
+MAX_DEPTH = 24
 
 # Wall clock for one whole loop. Generous because a local model can spend minutes per
 # turn, and this is a background job with nobody waiting on an open connection.
