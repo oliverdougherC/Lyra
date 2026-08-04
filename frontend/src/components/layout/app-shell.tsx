@@ -85,8 +85,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 last button flush against the window edge however much padding was set. A
                 sibling that cannot shrink is part of the content in both cases: it ends
                 the scroll on a long page, and on a full-height route it simply lifts the
-                workbench off the edge. The mobile size also clears the bottom nav. */}
-            <div aria-hidden className="h-28 shrink-0 sm:h-10 md:h-12 print:hidden" />
+                workbench off the edge.
+
+                Its height matches this box's side padding at every breakpoint, so the
+                page is inset by the same amount all the way round. Only the mobile size
+                differs, and only because the bottom nav is sitting there. */}
+            <div aria-hidden className="h-28 shrink-0 sm:h-4 md:h-6 print:hidden" />
           </div>
         </main>
       </SidebarInset>
