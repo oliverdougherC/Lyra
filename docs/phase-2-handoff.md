@@ -82,11 +82,13 @@ was invisible to a test suite that supplies its own homework text:
    also unreadable: extraction turns e^{-2t}u(t-3) into `e−2tu(t −3)`. The student was being asked
    to check a reading of their homework against text their sheet does not contain.
 
-Solving surfaced two more, both about what reaches the screen rather than what reaches the answer.
-The model wrote its context numbers into the prose, so a step read `by the definition [6]` above a
-provenance chip that named the file properly two lines below; those markers are now lifted into the
-step's sources rather than printed or deleted. And a checker that narrated a sentence around its
-JSON had its verdict discarded as unreadable, which is the `unchecked` in the table below.
+Solving surfaced three more. The model wrote its context numbers into the prose, so a step read `by
+the definition [6]` above a provenance chip that named the file properly two lines below; those
+markers are now lifted into the step's sources rather than printed or deleted. A checker that
+narrated a sentence around its JSON had its verdict discarded as unreadable. And a long check hit
+the client's chat read timeout eight rounds in, which the loop reports as an unreachable endpoint,
+throwing away eight checks: tool turns now run against the loop's own wall clock, which is what
+tools.py always said bounded a run.
 
 The first three are in `rag/chunk.py` and `core/segmentation.py` and are covered by tests written
 from the sheets that broke them. The fourth is the reconciliation rule described under Two Sources
@@ -120,6 +122,34 @@ What the two sets do not include is a refutation. Nothing in twelve problems was
 re-derive path, which solver-phase-2.md specifies as running exactly once, was exercised only by
 the test suite. It is the largest untested-against-reality path in the phase.
 
+### Where verification is weakest
+
+A third set, `homework_6`, was solved afterwards as a check on the fixes above, and it is the more
+interesting result: five problems asking the student to **derive** Fourier series properties rather
+than compute with them. All five were solved. The verdicts were two `verified`, one `uncheckable`,
+and two `unchecked`, against ten of twelve on the computational sets.
+
+Each of those four outcomes is a different thing, and the difference is the whole point of having
+four:
+
+- The `uncheckable` ran no tools while its own report claimed everything was verified. That is the
+  rule in `judge` working exactly as specified: a checker that ratifies without computing anything
+  has ratified its own work, and it is never a pass.
+- One `unchecked` was the tool loop hitting the client's chat timeout eight rounds in, discarding
+  eight real checks. Fixed: tool turns now run against the loop's own wall clock.
+- The other `unchecked` came after twenty-five checks with a closing report nothing could read.
+  Re-running that same verification by hand produced a clean `{"verdict": "agrees", ...}` after
+  nineteen calls, so it is intermittent rather than a shape the parser cannot handle. The leading
+  suspect is a final message whose content arrived empty because the server's reasoning parser took
+  it: `complete_with_tools` reads `content` and nothing else. It is not fixed, because guessing at
+  a cause is how a check quietly becomes a pass. What is fixed is that the checker's own words now
+  travel with the verdict, so the next occurrence can be read rather than re-derived.
+
+The lesson to carry forward is that a derivation is not a computation. Verification earns its
+keep on problems with numbers in them, and a course that mostly asks for proofs will see a lot of
+honest non-answers. That is the design working, and it is also a reason the phase's value is
+uneven across subjects in a way the specification does not say out loud.
+
 ## What is known weak
 
 Written plainly, because the next person to touch this will find these anyway.
@@ -142,10 +172,13 @@ Written plainly, because the next person to touch this will find these anyway.
   flattened extraction at the gate rather than typeset mathematics. Correct structure was the right
   thing to keep and readable notation was the wrong thing to lose; a later pass could ask the model
   to transcribe one problem at a time once the list is settled.
-- **Two sets is not a sample.** Twelve problems from one course, one term, one subject, against one
-  model. Fourier transform properties are unusually friendly to a computer algebra check, which is
-  part of why the verdicts look as good as they do. A proof-based course would land on
-  `uncheckable` far more often, and that is the honest outcome rather than a regression.
+- **Three sets is not a sample.** Seventeen problems from one course, one term, one subject,
+  against one model. Fourier transform properties are unusually friendly to a computer algebra
+  check, which is part of why the computational sets look as good as they do, and `homework_6`
+  above is what the other kind of problem costs.
+- **One verdict in seventeen was unreadable and nobody knows why.** It is intermittent, it is now
+  diagnosable, and it is not fixed. Reading it as agreement would be the one mistake verification
+  cannot make, so it stays `unchecked` until someone catches it with the reply in hand.
 - **Grounding is thin where it should be thickest.** Fourteen of forty-three steps carried a
   citation. Some of that is correct, a step that applies the differentiation property is not using
   anything the student uploaded, but a solve of a set the course has lecture notes for should be
