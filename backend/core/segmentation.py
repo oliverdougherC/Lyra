@@ -141,12 +141,17 @@ def _statement_for(problem: SegmentedProblem, proposal: SegmentedProblem) -> str
 
     So the model's version wins when it is a transcription and loses when it is a summary,
     and the two are told apart by whether the sheet's own words survived in it. A
-    transcription changes the notation and keeps the words; a paraphrase drops them. The
-    model's sub-parts count as part of its reading, because the segmentation prompt asks
-    for them separately and comparing against the statement alone would read every problem
-    with lettered parts as a summary.
+    transcription changes the notation and keeps the words; a paraphrase drops them.
+
+    The comparison is against the model's *whole* reading: its label and its sub-parts as
+    well as its statement. The prompt asks for all three separately, so a faithful reading
+    of `Problem 1 (Time Shift)` puts those words in the label and a reading of a problem
+    with lettered parts puts most of its text in the parts. Comparing against the
+    statement alone read both as summaries and printed the flattened extraction instead.
     """
-    whole = "\n".join([proposal.statement, *(part.statement for part in proposal.parts)])
+    whole = "\n".join(
+        [proposal.label, proposal.statement, *(part.statement for part in proposal.parts)]
+    )
     return proposal.statement if _keeps_the_words(problem.statement, whole) else problem.statement
 
 
@@ -278,26 +283,64 @@ def _strip_code_fence(content: str) -> str:
     return "\n".join(lines).strip()
 
 
+# How much coarser the model's reading has to be before the two lists are treated as
+# describing different things rather than disagreeing about the same one. Half is far
+# outside the range of an ordinary disagreement, where the model finds one problem the
+# markers missed or misses one they found.
+_GRAIN_RATIO = 2
+
+
+def _reads_at_a_coarser_grain(
+    from_chunks: list[SegmentedProblem], from_model: list[SegmentedProblem]
+) -> bool:
+    """Whether the model grouped into sections what the markers split into problems.
+
+    One real sheet runs 1 to 3, 1 to 4, and 1 to 5 under three headings. The markers see
+    twelve problems; the model saw three, each with the rest as sub-parts. Neither is
+    wrong, and matching them against each other by number is meaningless: problem 2 of the
+    first heading gets annotated with the second heading, and every problem the model
+    folded into a sub-part is then appended again as its own row. The result is a gate
+    listing the same questions twice.
+
+    So this is detected rather than merged. The chunker's list stands alone, because its
+    entries are positions in the document rather than a recollection of it, and because a
+    per-problem verdict and a per-problem citation are worth more than one verdict covering
+    five questions. The cost is that this sheet's statements stay as extraction left them.
+
+    Recognised by the model's own arithmetic: far fewer problems than the markers found,
+    while its problems and their sub-parts together account for all of them.
+    """
+    if not from_model or len(from_chunks) < _GRAIN_RATIO * len(from_model):
+        return False
+    covered = sum(1 + len(problem.parts) for problem in from_model)
+    return covered >= len(from_chunks)
+
+
 def reconcile(
     from_chunks: list[SegmentedProblem], from_model: list[SegmentedProblem]
 ) -> list[SegmentedProblem]:
     """Merge the two lists, with the chunker as the spine.
 
-    A model problem whose number matches a chunked one contributes its label and its
-    sub-parts, and nothing else: the statement stays the document's own text. A model
-    problem with no match is appended as its own entry, because a problem the regex missed
-    is exactly what the model pass is for.
+    A model problem whose number matches a chunked one contributes its label, its
+    sub-parts, and its transcription of the statement. A model problem with no match is
+    appended as its own entry, because a problem the regex missed is exactly what the
+    model pass is for.
 
     **A number can appear more than once**, because a sheet that restarts its numbering
     under each section heading has three problem 1s and they are three problems. Equal
     numbers are therefore matched in document order, first to first, rather than through a
     lookup that would silently keep only the last of them.
 
+    **The two can also read the same sheet at different granularities**, and then they are
+    not comparable at all. See `_reads_at_a_coarser_grain`.
+
     Order is chunker order first, then the model's additions in the order it found them.
     Both are document order, and a person is about to look at the result anyway.
     """
     if not from_chunks:
         return from_model
+    if _reads_at_a_coarser_grain(from_chunks, from_model):
+        return from_chunks
 
     positions: dict[str, list[int]] = {}
     for index, problem in enumerate(from_model):

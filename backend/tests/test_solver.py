@@ -301,6 +301,34 @@ def test_a_summary_does_not_replace_the_sheets_own_text() -> None:
     assert merged[0].statement.startswith("Sketch the magnitude response")
 
 
+def test_the_label_counts_as_part_of_the_models_reading() -> None:
+    # The chunker's text starts with the whole heading, because that is where it cut. A
+    # faithful reading puts those words in the label, so comparing against the statement
+    # alone read every titled problem as a summary and printed the flattened text.
+    from_chunks = [
+        SegmentedProblem(
+            label="Problem 1",
+            number="1",
+            statement="Problem 1 (Time Shift + Differentiation)\nStarting pair:\ne−2tu(t) ←→\n1\n"
+            "2 + jω\nFind the Fourier Transform of\nx(t) = e−2(t−1)u(t −1)",
+            document_id=7,
+        )
+    ]
+    from_model = [
+        SegmentedProblem(
+            label="Problem 1 (Time Shift + Differentiation)",
+            number="1",
+            statement="Starting pair:\n$$e^{-2t}u(t) \\longleftrightarrow \\frac{1}{2 + j\\omega}$$"
+            "\n\nFind the Fourier Transform of\n$$x(t) = e^{-2(t-1)}u(t-1)$$",
+            document_id=7,
+        )
+    ]
+
+    merged = segmentation.reconcile(from_chunks, from_model)
+
+    assert merged[0].statement.startswith("Starting pair:\n$$e^{-2t}")
+
+
 def test_sub_parts_count_as_part_of_the_models_reading() -> None:
     # The prompt asks for sub-parts separately, so the model's statement is the lead-in
     # alone. Comparing against it by itself read every problem with parts as a summary.
@@ -329,6 +357,54 @@ def test_sub_parts_count_as_part_of_the_models_reading() -> None:
     merged = segmentation.reconcile(from_chunks, from_model)
 
     assert merged[0].statement == "Compute $X(j\\omega)$ of the following signals:"
+
+
+def test_a_model_reading_by_section_does_not_merge_with_one_by_problem() -> None:
+    """The two lists can describe the sheet at different granularities.
+
+    A real set runs 1 to 3 and 1 to 4 under two headings. The markers see seven problems;
+    the model saw two, each with the rest as sub-parts. Matching those by number annotated
+    problem 2 of the first heading with the second heading, and then appended every
+    question the model had folded into a sub-part as its own row, so the gate listed the
+    same questions twice.
+    """
+    from_chunks = [
+        SegmentedProblem(f"Problem {n}", str(n), f"{n}. Question {n}.", 7) for n in "123"
+    ]
+    from_chunks += [
+        SegmentedProblem(f"Problem {n}", str(n), f"{n}. Later question.", 7) for n in "12"
+    ]
+    from_model = [
+        SegmentedProblem(
+            "System of LTI systems",
+            "1",
+            "For each system below:",
+            7,
+            parts=tuple(SegmentedPart(f"({n})", f"Question {n}.") for n in "abc"),
+        ),
+        SegmentedProblem(
+            "Fourier series",
+            "2",
+            "Find the series for:",
+            7,
+            parts=(SegmentedPart("(a)", "Later."), SegmentedPart("(b)", "Later.")),
+        ),
+    ]
+
+    merged = segmentation.reconcile(from_chunks, from_model)
+
+    assert merged == from_chunks
+
+
+def test_an_ordinary_disagreement_is_still_merged() -> None:
+    # The guard above must not fire on the common case: the model finding one problem the
+    # markers missed, or missing one they found, is a disagreement about the same reading.
+    from_chunks = [SegmentedProblem(f"Problem {n}", str(n), f"{n}. Question.", 7) for n in "123"]
+    from_model = [SegmentedProblem("Problem 1 (bonus)", "1", "Question.", 7)]
+
+    merged = segmentation.reconcile(from_chunks, from_model)
+
+    assert [problem.label for problem in merged] == ["Problem 1 (bonus)", "Problem 2", "Problem 3"]
 
 
 def test_a_problem_the_regex_missed_is_added() -> None:
