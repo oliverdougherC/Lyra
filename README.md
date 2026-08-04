@@ -79,11 +79,19 @@ pip install -e '.[dev]'
 cd frontend && pnpm install && cd ..
 
 # Both processes
-scripts/dev
+./run
 ```
 
-The backend serves `127.0.0.1:8000` and the frontend `localhost:3000`. Lyra runs two local
-processes; the native wrapper that collapses them into one launch is Phase 6.
+`./run` clears whatever is holding the ports, checks the toolchain before starting
+anything, and waits for both servers to answer so a failure names itself instead of
+appearing later as a blank page. `./run --stop` kills both, `./run --clean` also rebuilds
+the Next cache, and `./run --prod` serves a production build. `scripts/dev` is the plain
+version that assumes a clean machine.
+
+The backend serves `127.0.0.1:8000` and the frontend `localhost:3000`. The frontend port
+is not interchangeable: `ALLOWED_ORIGINS` in `backend/main.py` allowlists 3000, so a
+frontend on any other port loads and then fails every request with a CORS error. Lyra runs
+two local processes; the native wrapper that collapses them into one launch is Phase 6.
 
 You also need a model server running an OpenAI-compatible API, configured in Settings.
 
