@@ -43,6 +43,20 @@ export function SegmentationReview({
   const [nextKey, setNextKey] = useState(0)
   const save = useUpdateSegmentation(solution.id)
 
+  // The draft is seeded once, so it has to adopt a list that arrives later. It does:
+  // the poll flips the artifact to `awaiting_review` a moment before the detail query
+  // refetches, so this screen commonly mounts with no parts at all and would otherwise
+  // sit on its empty state ("Lyra could not find separate problems") while the backend
+  // holds five. Adjusted during render rather than in an effect, so no frame shows the
+  // wrong list. A re-segmentation lands the same way and is also meant to replace the
+  // draft, which is why this does not try to preserve unsaved edits across it.
+  const signature = partSignature(solution.parts)
+  const [lastSignature, setLastSignature] = useState(signature)
+  if (signature !== lastSignature) {
+    setLastSignature(signature)
+    setProblems(toDrafts(solution.parts))
+  }
+
   const dirty = useMemo(() => !sameAs(problems, solution.parts), [problems, solution.parts])
 
   const makeKey = () => {
@@ -244,6 +258,16 @@ export function SegmentationReview({
       </div>
     </div>
   )
+}
+
+/**
+ * What the server currently holds, as a value that changes exactly when the list does.
+ *
+ * Ids and content both, because a re-segmentation can produce the same number of problems
+ * with different text, and a count alone would not notice.
+ */
+function partSignature(parts: SolutionPart[]): string {
+  return parts.map((part) => `${part.id}:${part.content.length}:${part.label ?? ''}`).join('|')
 }
 
 function toDrafts(parts: SolutionPart[]): DraftProblem[] {

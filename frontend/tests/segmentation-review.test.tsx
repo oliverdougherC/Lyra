@@ -165,3 +165,46 @@ describe('SegmentationReview', () => {
     expect(screen.queryByText('Sketch it.')).not.toBeInTheDocument()
   })
 })
+
+describe('a list that arrives after the screen has mounted', () => {
+  it('adopts it instead of sitting on the empty state', () => {
+    // The poll flips the artifact to `awaiting_review` a moment before the detail query
+    // refetches, so this screen commonly mounts with no parts at all. Seeding the draft
+    // once and never again left it claiming "Lyra could not find separate problems" while
+    // the backend held five.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const view = (parts: SolutionPart[]) => (
+      <QueryClientProvider client={client}>
+        <SegmentationReview solution={solution(parts)} onResegment={vi.fn()} resegmenting={false} />
+      </QueryClientProvider>
+    )
+
+    const { rerender } = render(view([]))
+    expect(screen.getByText('Lyra could not find separate problems')).toBeInTheDocument()
+
+    rerender(view(TWO_PROBLEMS))
+
+    expect(screen.getByText('Lyra found 2 problems')).toBeInTheDocument()
+    expect(screen.getByText('Find the transform.')).toBeInTheDocument()
+  })
+
+  it('adopts a re-segmented list of the same length', () => {
+    // A count alone would not notice this: same number of problems, different text.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const view = (parts: SolutionPart[]) => (
+      <QueryClientProvider client={client}>
+        <SegmentationReview solution={solution(parts)} onResegment={vi.fn()} resegmenting={false} />
+      </QueryClientProvider>
+    )
+
+    const { rerender } = render(view(TWO_PROBLEMS))
+    rerender(
+      view([
+        { ...TWO_PROBLEMS[0], content: 'A completely different first problem.' },
+        TWO_PROBLEMS[1],
+      ]),
+    )
+
+    expect(screen.getByText('A completely different first problem.')).toBeInTheDocument()
+  })
+})
