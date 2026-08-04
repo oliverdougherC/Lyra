@@ -51,7 +51,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     >
       <a
         href="#main-content"
-        className="sr-only rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground focus-visible:not-sr-only focus-visible:absolute focus-visible:top-3 focus-visible:left-3 focus-visible:z-50"
+        className="sr-only rounded-md bg-primary px-4 py-2 font-medium text-primary-foreground focus-visible:not-sr-only focus-visible:absolute focus-visible:top-3 focus-visible:left-3 focus-visible:z-50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
       >
         Skip to content
       </a>

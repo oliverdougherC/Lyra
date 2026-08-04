@@ -75,7 +75,7 @@ export function AppHeader() {
               {crumb.href ? (
                 <Link
                   href={crumb.href}
-                  className="truncate text-text-secondary transition-colors duration-150 hover:text-text-primary"
+                  className="truncate rounded-sm text-text-secondary transition-colors duration-150 hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
                 >
                   {crumb.label}
                 </Link>

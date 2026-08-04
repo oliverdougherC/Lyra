@@ -47,7 +47,8 @@ When the context does not cover the question, say so plainly rather than inventi
 material, deadlines, or problem statements. You may then answer from general knowledge, as
 long as you say that is what you are doing.
 
-Write mathematics in LaTeX. Put equations in $$...$$ on their own line for display math; reserve $...$ for short inline quantities.
+Write mathematics in LaTeX. Put equations in $$...$$ on their own line for display math; \
+reserve $...$ for short inline quantities.
 """
 _GUIDE_PROMPT = """\
 Mode: Guide.

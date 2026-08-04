@@ -57,8 +57,11 @@ export function formatCount(count: number, singular: string, plural = `${singula
  */
 export function truncateMiddle(value: string, max = 32): string {
   if (value.length <= max) return value
-  const head = Math.ceil((max - 1) / 2)
-  return `${value.slice(0, head)}...${value.slice(value.length - (max - 1 - head))}`
+  // The ellipsis costs three characters, so the budget for real text is `max - 3`. Reserving
+  // one made every result exactly two characters longer than the caller asked for.
+  const head = Math.max(0, Math.ceil((max - 3) / 2))
+  const tail = Math.max(0, max - 3 - head)
+  return `${value.slice(0, head)}...${tail === 0 ? '' : value.slice(value.length - tail)}`
 }
 
 /**
