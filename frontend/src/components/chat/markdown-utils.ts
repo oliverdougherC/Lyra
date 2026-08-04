@@ -169,7 +169,16 @@ function appendToken(output: string, token: RenderToken): string {
  * synthetic closers are added only while streaming so an incomplete fragment cannot absorb
  * the rest of the Markdown tree.
  */
-export function normalizeMarkdownForRender(source: string, streaming = false): string {
+export function normalizeMarkdownForRender(
+  source: string,
+  streaming = false,
+  { promoteInlineMath = true }: { promoteInlineMath?: boolean } = {},
+): string {
+  // Promotion suits an answer, where a long expression deserves its own line. It does not
+  // suit a problem statement in a list row: `$x(t) = \sin(t)[u(t+1) - u(t-1)]$` is over
+  // the length threshold, and centring it on its own line while its four siblings sit
+  // inline makes one sub-part look like a different kind of thing.
+  const promote = promoteInlineMath ? shouldPromoteInlineMath : () => false
   const normalized = source.replaceAll('\r\n', '\n').replaceAll('\r', '\n')
   const tokens: RenderToken[] = []
   let plain = ''
@@ -262,14 +271,14 @@ export function normalizeMarkdownForRender(source: string, streaming = false): s
         const inner = normalized.slice(cursor + delimiter.length)
         addToken(
           tokens,
-          display || shouldPromoteInlineMath(inner) ? formatDisplayMath(inner) : `$${inner}$`,
-          display || shouldPromoteInlineMath(inner),
+          display || promote(inner) ? formatDisplayMath(inner) : `$${inner}$`,
+          display || promote(inner),
         )
         cursor = normalized.length
       } else {
         flushPlain()
         const inner = normalized.slice(cursor + delimiter.length, closing)
-        const promoted = !display && shouldPromoteInlineMath(inner)
+        const promoted = !display && promote(inner)
         addToken(
           tokens,
           display || promoted ? formatDisplayMath(inner) : `$${inner}$`,

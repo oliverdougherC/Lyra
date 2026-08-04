@@ -27,12 +27,12 @@ Two principles from Phase 1 carry most of the weight here:
 
 Additional shadcn registry items:
 
-| Purpose | shadcn item |
-|---------|-------------|
-| Split panes | `resizable` (already listed in Phase 1, first used here) |
-| Problem list | `accordion` |
-| Revision history, tool calls | `collapsible`, `hover-card` |
-| Step actions | `context-menu` |
+| Purpose                      | shadcn item                                              |
+| ---------------------------- | -------------------------------------------------------- |
+| Split panes                  | `resizable` (already listed in Phase 1, first used here) |
+| Problem list                 | `accordion`                                              |
+| Revision history, tool calls | `collapsible`, `hover-card`                              |
+| Step actions                 | `context-menu`                                           |
 
 New Lyra components: `SolveProgress`, `SegmentationReview`, `ProblemCard`, `SolutionStep`,
 `VerdictBadge`, `ProvenanceChip`, `SourcePane`, `StepGuidePanel`, `ToolCallTrace`,
@@ -107,13 +107,13 @@ either, and saying so here is better than omitting the file and looking like it 
 Route `/classes/[id]/solutions/[artifactId]`. One route, four phases driven by artifact state. The
 phase is never guessed from elapsed time.
 
-| Artifact state | What the screen is |
-|----------------|--------------------|
-| `pending`, `segmenting` | Finding problems |
-| `awaiting_review` | Segmentation review |
-| `solving` | Solving, with results landing |
-| `ready`, `cancelled` | The solution document |
-| `failed` | Failure, with what failed and what to do |
+| Artifact state          | What the screen is                       |
+| ----------------------- | ---------------------------------------- |
+| `pending`, `segmenting` | Finding problems                         |
+| `awaiting_review`       | Segmentation review                      |
+| `solving`               | Solving, with results landing            |
+| `ready`, `cancelled`    | The solution document                    |
+| `failed`                | Failure, with what failed and what to do |
 
 ### Phase: Finding problems
 
@@ -123,9 +123,9 @@ animates alongside, as it does while a turn is thinking.
 
 Stage labels, verbs rather than internal state names:
 
-| State | Label |
-|-------|-------|
-| `pending` | `Queued` |
+| State        | Label                      |
+| ------------ | -------------------------- |
+| `pending`    | `Queued`                   |
 | `segmenting` | `Reading your problem set` |
 
 Segmentation is a model pass over a whole document and can take a minute on local hardware, so
@@ -150,8 +150,24 @@ Below it, a reorderable list of `ProblemCard`s. Each card carries:
 - Sub-parts as a nested list, each individually removable
 - A `dropdown-menu`: `Merge with next`, `Split here`, `Remove`
 
+Statements and sub-parts are typeset, not printed raw. PDF extraction flattens exponents,
+subscripts, and piecewise definitions into the line, so segmentation transcribes the mathematics
+back into LaTeX and this screen renders it. That is what makes the check possible: a student
+comparing `x(t) = e-2tu(t -3)` against their sheet is comparing something the sheet does not say.
+The collapsible editor stays raw text, because the LaTeX is what a correction has to change.
+
+Where a problem has sub-parts, the statement is cut back to the text that introduces them. The
+segmenter copies verbatim and so repeats the sub-parts inside the statement as well; printing both
+shows the same problem twice.
+
 A card whose text the student edited carries a quiet `Edited` badge, so a later re-read knows the
 statement is not verbatim from the page.
+
+Every structural edit — removing a sub-part or a problem, merging, splitting, adding — is undoable
+with `Cmd/Ctrl+Z`, and an `Undo` button appears beside `Read it again` once there is something to
+take back. Typing is not on that stack: the statement editor keeps the browser's own undo. Removing
+a sub-part is one click on a small target beside text the student is still reading, and the only
+route back used to be re-reading the whole sheet.
 
 The primary action is `Solve 8 problems`. Beside it, `Cancel`, which deletes the artifact after an
 `alert-dialog` confirmation naming what is discarded.
@@ -185,13 +201,13 @@ exactly the dishonesty ui-phase-1.md rules out.
 
 Per-problem status appears on each problem's own row:
 
-| Part status | Indicator |
-|-------------|-----------|
-| `pending` | `--text-tertiary` dot, row dimmed |
-| `solving` | `progress` ring plus `Solving` |
-| `verifying` | `progress` ring plus `Checking` |
-| `complete` | the verdict badge |
-| `failed` | `AlertCircle` in `--danger-text`, with `Try again` |
+| Part status | Indicator                                          |
+| ----------- | -------------------------------------------------- |
+| `pending`   | `--text-tertiary` dot, row dimmed                  |
+| `solving`   | `progress` ring plus `Solving`                     |
+| `verifying` | `progress` ring plus `Checking`                    |
+| `complete`  | the verdict badge                                  |
+| `failed`    | `AlertCircle` in `--danger-text`, with `Try again` |
 
 A newly completed problem enters with the standard `Reveal`: fade plus 8px rise, no scroll jump.
 The view never scrolls itself to a problem that just landed; the student is reading.
@@ -244,12 +260,12 @@ rows right. Never a spinner.
 
 `VerdictBadge` is a compact status pill. Color is never the only signal; the label always differs.
 
-| Verdict | Presentation | Label |
-|---------|--------------|-------|
-| `verified` | `--success-text` on `--success-fill`, `Check` | `Checked` |
-| `refuted` | `--danger-text`, `AlertTriangle` | `Check failed` |
-| `uncheckable` | `--text-tertiary`, hollow dot | `Nothing to check` |
-| `unchecked` | `--text-tertiary`, hollow dot | `Not checked` |
+| Verdict       | Presentation                                  | Label              |
+| ------------- | --------------------------------------------- | ------------------ |
+| `verified`    | `--success-text` on `--success-fill`, `Check` | `Checked`          |
+| `refuted`     | `--danger-text`, `AlertTriangle`              | `Check failed`     |
+| `uncheckable` | `--text-tertiary`, hollow dot                 | `Nothing to check` |
+| `unchecked`   | `--text-tertiary`, hollow dot                 | `Not checked`      |
 
 `uncheckable` and `unchecked` deliberately look alike and read differently, because they are both
 honest non-answers and neither is a pass. Their `hover-card` states the difference: `Nothing in
@@ -348,16 +364,16 @@ arrival if the tab was still open.
 
 Additions to the Phase 1 inventory. Everything there still applies.
 
-| Element | Motion | Duration, easing |
-|---------|--------|------------------|
-| Problem card entry, review | staggered fade plus 8px rise, capped at five steps | 250ms, gentle |
-| Completed problem landing | `Reveal` on the problem row, no scroll movement | 250ms, gentle |
-| Accordion expand | height transition | 200ms |
-| Pane anchor scroll | scroll to the anchored page or problem | 200ms, gentle |
-| Source outline | opacity and border-color change on the selected region | 150ms |
-| Re-solving a problem | existing content dims to 60% opacity, no collapse | 200ms |
-| Step Guide panel | sheet fade plus 8px, per the Phase 1 overlay rule | 200ms |
-| Solve progress bar | width transition to the polled value only | 200ms, linear |
+| Element                    | Motion                                                 | Duration, easing |
+| -------------------------- | ------------------------------------------------------ | ---------------- |
+| Problem card entry, review | staggered fade plus 8px rise, capped at five steps     | 250ms, gentle    |
+| Completed problem landing  | `Reveal` on the problem row, no scroll movement        | 250ms, gentle    |
+| Accordion expand           | height transition                                      | 200ms            |
+| Pane anchor scroll         | scroll to the anchored page or problem                 | 200ms, gentle    |
+| Source outline             | opacity and border-color change on the selected region | 150ms            |
+| Re-solving a problem       | existing content dims to 60% opacity, no collapse      | 200ms            |
+| Step Guide panel           | sheet fade plus 8px, per the Phase 1 overlay rule      | 200ms            |
+| Solve progress bar         | width transition to the polled value only              | 200ms, linear    |
 
 Under `prefers-reduced-motion`: the anchor scroll becomes instant, `Reveal` becomes a 150ms opacity
 fade, the progress bar jumps rather than eases, and the dim on a re-solving problem is applied
@@ -368,12 +384,12 @@ because an eased bar that arrives before its data is a fiction.
 
 Additions to the Phase 1 map. Nothing existing changes.
 
-| Keys | Action |
-|------|--------|
-| Arrows | Move between problem cards in review, and between problems in the solution outline |
-| `Enter` | Expand or collapse the focused problem; commit an inline label edit |
-| `Escape` | Close the step panel, cancel an inline edit, or close a dialog |
-| `Cmd/Ctrl+P` | Browser print, which is the export path, deliberately not overridden |
+| Keys         | Action                                                                             |
+| ------------ | ---------------------------------------------------------------------------------- |
+| Arrows       | Move between problem cards in review, and between problems in the solution outline |
+| `Enter`      | Expand or collapse the focused problem; commit an inline label edit                |
+| `Escape`     | Close the step panel, cancel an inline edit, or close a dialog                     |
+| `Cmd/Ctrl+P` | Browser print, which is the export path, deliberately not overridden               |
 
 Every action in the solution pane is reachable without a pointer, including the per-step action row,
 which becomes visible on focus as well as on hover. The two panes are separate landmarks with
@@ -389,7 +405,7 @@ The Phase 1 guidelines hold in full. Three additions specific to this phase:
 - **Never claim a check that did not happen.** `Not checked` is a complete sentence. Do not soften
   it to `Looks right` or omit the badge.
 - **A refutation names the check, not the student.** `The integral in step 3 does not match: Lyra
-  computed 4/3, the solution says 3/4.` Never `Your solution is wrong`, and never a bare `Error`.
+computed 4/3, the solution says 3/4.` Never `Your solution is wrong`, and never a bare `Error`.
 - **Counts are exact and come from the backend.** `Solving problem 3 of 8`, not `Almost done`. When
   a count is not yet known, say what is happening instead of guessing at a number.
 

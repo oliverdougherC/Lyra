@@ -107,7 +107,11 @@ describe('SegmentationReview', () => {
     await userEvent.click(screen.getByRole('menuitem', { name: 'Merge with next' }))
 
     expect(screen.getByText('Lyra found 1 problem')).toBeInTheDocument()
-    expect(screen.getByText('Find the transform. Compute the convolution.')).toBeInTheDocument()
+    // Both statements survive the merge. They are two paragraphs rather than one string
+    // because the preview is typeset now, and the blank line a merge inserts is what
+    // keeps the two problems legible as two problems.
+    expect(screen.getByText('Find the transform.')).toBeInTheDocument()
+    expect(screen.getByText('Compute the convolution.')).toBeInTheDocument()
     // `Edited` means the statement is no longer verbatim from the sheet, which is exactly
     // what a merge makes true.
     expect(screen.getByText('Edited')).toBeInTheDocument()
@@ -163,6 +167,64 @@ describe('SegmentationReview', () => {
     )
 
     expect(screen.queryByText('Sketch it.')).not.toBeInTheDocument()
+  })
+
+  /**
+   * Removing a sub-part is one click on a small X beside text the student is still
+   * reading, and it used to be final: the only route back was re-reading the whole
+   * sheet. Every structural edit is now reversible, and the shortcut has a button
+   * beside it, because a shortcut nothing on screen mentions is a feature only its
+   * author knows about.
+   */
+  describe('undo', () => {
+    it('brings back a sub-part removed by mistake', async () => {
+      renderReview([
+        TWO_PROBLEMS[0],
+        part({ id: 12, parent_part_id: 10, ordinal: 0, label: '(a)', content: 'Sketch it.' }),
+      ])
+
+      await userEvent.click(screen.getByRole('button', { name: 'Remove part (a) of Problem 1' }))
+      expect(screen.queryByText('Sketch it.')).not.toBeInTheDocument()
+
+      await userEvent.click(screen.getByRole('button', { name: /Undo/ }))
+
+      expect(screen.getByText('Sketch it.')).toBeInTheDocument()
+    })
+
+    it('answers to the keyboard', async () => {
+      renderReview()
+
+      await userEvent.click(screen.getByRole('button', { name: /Actions for Problem 2/ }))
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+      expect(screen.getByText('Lyra found 1 problem')).toBeInTheDocument()
+
+      await userEvent.keyboard('{Meta>}z{/Meta}')
+
+      expect(screen.getByText('Lyra found 2 problems')).toBeInTheDocument()
+      expect(screen.getByText('Compute the convolution.')).toBeInTheDocument()
+    })
+
+    it('leaves the shortcut to the textarea while a statement is being edited', async () => {
+      renderReview()
+
+      await userEvent.click(screen.getByRole('button', { name: /Actions for Problem 2/ }))
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+      await userEvent.click(screen.getAllByRole('button', { name: /full statement/ })[0])
+
+      const editor = screen.getByRole('textbox', { name: /statement/ })
+      editor.focus()
+      await userEvent.keyboard('{Meta>}z{/Meta}')
+
+      // The removed problem stays removed: the browser's own undo owns this keystroke,
+      // and taking it away would make editing a statement worse than the delete this fixes.
+      expect(screen.getByText('Lyra found 1 problem')).toBeInTheDocument()
+    })
+
+    it('stays quiet until there is something to take back', () => {
+      renderReview()
+
+      expect(screen.queryByRole('button', { name: /Undo/ })).not.toBeInTheDocument()
+    })
   })
 })
 

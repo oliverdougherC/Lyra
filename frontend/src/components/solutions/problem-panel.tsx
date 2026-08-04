@@ -2,6 +2,7 @@
 
 import { AlertCircle, History, MoreHorizontal, RefreshCw, XCircle } from 'lucide-react'
 
+import { MathText } from '@/components/solutions/math-text'
 import { SolutionStep } from '@/components/solutions/solution-step'
 import { ToolCallTrace } from '@/components/solutions/tool-call-trace'
 import { VerdictBadge } from '@/components/solutions/verdict-badge'
@@ -15,6 +16,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Spinner } from '@/components/ui/spinner'
 import { formatCount } from '@/lib/format'
+import { statementLeadIn } from '@/lib/statement'
 import { cn } from '@/lib/utils'
 import type { SolutionPart } from '@/types'
 
@@ -54,6 +56,10 @@ export function ProblemPanel({
   const label = problem.label ?? 'Problem'
   const solving = problem.status === 'solving' || problem.status === 'verifying'
   const grounded = steps.filter((step) => step.provenance.length > 0).length
+  const leadIn = statementLeadIn(
+    problem.content,
+    subParts.map((part) => part.label),
+  )
 
   return (
     <AccordionItem value={String(problem.id)} className="print:break-inside-avoid">
@@ -96,16 +102,17 @@ export function ProblemPanel({
       </div>
 
       <AccordionContent className="flex flex-col gap-5">
-        <div className="text-text-secondary text-sm whitespace-pre-wrap">{problem.content}</div>
         {/* The statement is verbatim from the sheet, so it usually already contains the
-            sub-part lines the model extracted. Listing them again prints every one twice,
-            which reads as a rendering fault rather than as structure. */}
-        {addsToStatement(subParts, problem.content) ? (
+            sub-part lines the model extracted. `statementLeadIn` cuts them off where the
+            labels say the list began; `addsToStatement` covers what it could not cut.
+            Between them, no sub-part is printed twice. */}
+        <MathText className="text-text-secondary text-sm">{leadIn}</MathText>
+        {leadIn !== problem.content || addsToStatement(subParts, problem.content) ? (
           <ul className="text-text-secondary flex flex-col gap-1 text-sm">
             {subParts.map((part) => (
               <li key={part.id} className="flex gap-2">
                 <span className="text-text-tertiary shrink-0">{part.label}</span>
-                <span className="whitespace-pre-wrap">{part.content}</span>
+                <MathText className="min-w-0">{part.content}</MathText>
               </li>
             ))}
           </ul>

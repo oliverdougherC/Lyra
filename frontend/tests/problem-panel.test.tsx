@@ -225,8 +225,10 @@ describe('sub-part rendering', () => {
     expect(screen.getAllByText(/x\(t\) = e\^-2t/)).toHaveLength(1)
   })
 
-  it('prints the whole list when one sub-part is missing from the statement', () => {
-    // Dropping only the duplicates would leave a list that looks like it lost entries.
+  it('prints the whole list once when one sub-part is missing from the statement', () => {
+    // Dropping only the duplicates would leave a list that looks like it lost entries, so
+    // the list is printed whole. The statement above it is cut back to its lead-in, so
+    // printing it whole no longer means printing (a) twice.
     renderPanel(
       node({
         problem: { ...PROBLEM, content: 'Compute X.\n(a) x(t) = e^-2t' },
@@ -244,6 +246,7 @@ describe('sub-part rendering', () => {
     )
 
     expect(screen.getByText('Sketch it.')).toBeInTheDocument()
-    expect(screen.getAllByText(/x\(t\) = e\^-2t/).length).toBeGreaterThan(1)
+    expect(screen.getAllByText(/x\(t\) = e\^-2t/)).toHaveLength(1)
+    expect(screen.getByText('Compute X.')).toBeInTheDocument()
   })
 })

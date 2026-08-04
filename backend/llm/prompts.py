@@ -92,13 +92,24 @@ problem has:
   sheet's own wording, not a number you assigned.
 - "number": just the number, as text, such as "4" or "3.14".
 - "statement": the problem text, copied as written. Do not summarise it, do not fix it,
-  and do not add anything the sheet does not say.
+  and do not add anything the sheet does not say. When the problem has lettered sub-parts,
+  this is the text that introduces them and nothing more; the sub-parts go in "parts" and
+  repeating them here prints every one of them twice.
 - "page": the page it starts on, as a whole number, or null if you cannot tell.
 - "parts": a list of its lettered or numbered sub-parts, each with "label" and
   "statement". An empty list when the problem has none.
 
 Copy statements verbatim. A statement you paraphrased is one the student cannot check
 against their own sheet.
+
+Write the mathematics in LaTeX in every statement, the problem's own and each of its
+parts, using $...$ for inline quantities and $$...$$ on its own line for a displayed
+equation. This is not a rewrite: the text you are given came out of a PDF, and extraction
+flattens exponents, subscripts, integrals, and fractions into the line. "x(t) = e-2tu(t
+-3)" on the sheet is $x(t) = e^{-2t}u(t-3)$, and writing it as the former is the
+paraphrase, not the latter. A piecewise definition that arrived as a run of loose numbers
+is a cases environment. Restore what the layout carried and change nothing else: keep the
+sheet's own wording, its numbering, and its order.
 
 Course headers, due dates, and general instructions belong to no problem. Leave them out
 rather than attaching them to the first one.

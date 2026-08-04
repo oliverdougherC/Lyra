@@ -387,6 +387,54 @@
     font-size: 1.12em;
   }
 
+  /* A typeset problem statement. Deliberately much quieter than `.assistant-content`:
+     these appear inside list rows and clamped previews, where the chat's prose rhythm
+     would push a two-line preview to four. Equations inherit the surrounding size rather
+     than growing, so a row stays a row. */
+  .math-text {
+    color: inherit;
+    font-size: inherit;
+    line-height: inherit;
+  }
+
+  .math-text p {
+    margin: 0;
+  }
+
+  .math-text p + p,
+  .math-text p + ul,
+  .math-text p + ol {
+    margin-top: 0.5em;
+  }
+
+  .math-text ul,
+  .math-text ol {
+    margin: 0;
+    padding-left: 1.25rem;
+    list-style: revert;
+  }
+
+  .math-text .katex {
+    color: inherit;
+    font-size: 1.05em;
+  }
+
+  .math-text .katex-display {
+    display: block;
+    margin-block: 0.5em;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  /* One line means one line. A display equation inside a truncated row would otherwise
+     break to its own block and take the row's ellipsis with it. */
+  .math-text-inline .katex-display,
+  .math-text-inline .katex-display > .katex {
+    display: inline;
+    margin: 0;
+  }
+
   /* The thought scrolls itself, but its scrollbar is noise: the faded top edge already says
      there is more above, and a track running down the side of a quiet aside draws more
      attention than the aside does. */

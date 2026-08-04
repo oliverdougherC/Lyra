@@ -194,8 +194,8 @@ export default function NewSolutionPage() {
                   <Lightbulb className="text-accent-primary mt-0.5 size-4 shrink-0" aria-hidden />
                   <span>
                     {suggestions.length === 1
-                      ? 'This file looks like the answers to what you picked. Nothing is selected until you say so.'
-                      : 'These files look like the answers to what you picked. Nothing is selected until you say so.'}
+                      ? 'This file looks like the answers to what you picked.'
+                      : 'These files look like the answers to what you picked.'}
                   </span>
                 </p>
                 <ul className="mt-3 flex flex-col gap-2">

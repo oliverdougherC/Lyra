@@ -1,7 +1,7 @@
 'use client'
 
-import { FileQuestion, Plus } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { FileQuestion, Plus, Undo2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
 import { DraftProblem, ProblemCard } from '@/components/solutions/problem-card'
@@ -12,6 +12,9 @@ import { ApiError } from '@/lib/api'
 import { formatCount } from '@/lib/format'
 import { useUpdateSegmentation } from '@/lib/hooks/use-solutions'
 import type { SolutionDetail, SolutionPart } from '@/types'
+
+/** Deep enough to walk back a run of deletions, shallow enough not to hold the sheet twice. */
+const HISTORY_LIMIT = 25
 
 type SegmentationReviewProps = {
   solution: SolutionDetail
@@ -43,6 +46,50 @@ export function SegmentationReview({
   const [nextKey, setNextKey] = useState(0)
   const save = useUpdateSegmentation(solution.id)
 
+  /**
+   * Structural edits, so they can be taken back.
+   *
+   * Removing a sub-part is one click on a small X beside text the student is still
+   * reading, and until now it was final: the only route back was re-reading the whole
+   * sheet. Typing is deliberately not recorded here. The textarea has the browser's own
+   * undo, and pushing a snapshot per keystroke would bury the delete the student is
+   * actually reaching for.
+   */
+  const [history, setHistory] = useState<{ problems: DraftProblem[]; label: string }[]>([])
+
+  /** Snapshots the list as it stands, before the caller changes it. */
+  const remember = (label: string) =>
+    setHistory((current) => [...current.slice(1 - HISTORY_LIMIT), { problems, label }])
+
+  const undo = useCallback(() => {
+    const previous = history[history.length - 1]
+    if (!previous) {
+      toast('Nothing to undo.')
+      return
+    }
+    setProblems(previous.problems)
+    setHistory((current) => current.slice(0, -1))
+    toast(`Undid ${previous.label}.`)
+  }, [history])
+
+  // Cmd/Ctrl+Z, except while typing: a textarea has its own undo stack and taking that
+  // key away from it would make editing a statement worse than the delete this fixes.
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key.toLowerCase() !== 'z' || event.shiftKey || event.altKey) return
+      if (!(event.metaKey || event.ctrlKey)) return
+      const target = event.target
+      if (target instanceof HTMLElement) {
+        if (target.isContentEditable) return
+        if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return
+      }
+      event.preventDefault()
+      undo()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [undo])
+
   // The draft is seeded once, so it has to adopt a list that arrives later. It does:
   // the poll flips the artifact to `awaiting_review` a moment before the detail query
   // refetches, so this screen commonly mounts with no parts at all and would otherwise
@@ -55,6 +102,9 @@ export function SegmentationReview({
   if (signature !== lastSignature) {
     setLastSignature(signature)
     setProblems(toDrafts(solution.parts))
+    // The undo stack described a list that no longer exists. Keeping it would let one
+    // keystroke restore problems from a previous reading of the sheet.
+    setHistory([])
   }
 
   const dirty = useMemo(() => !sameAs(problems, solution.parts), [problems, solution.parts])
@@ -71,6 +121,7 @@ export function SegmentationReview({
   const handleMerge = (index: number) => {
     const [first, second] = [problems[index], problems[index + 1]]
     if (!second) return
+    remember('merging two problems')
     setProblems((current) => [
       ...current.slice(0, index),
       {
@@ -96,6 +147,7 @@ export function SegmentationReview({
       toast.error('There is nothing to split. Open the statement and cut it where you want.')
       return
     }
+    remember('splitting a problem')
     replace(index, [
       {
         ...problem,
@@ -116,7 +168,8 @@ export function SegmentationReview({
     ])
   }
 
-  const handleAdd = () =>
+  const handleAdd = () => {
+    remember('adding a problem')
     setProblems((current) => [
       ...current,
       {
@@ -130,6 +183,7 @@ export function SegmentationReview({
         edited: true,
       },
     ])
+  }
 
   /** Sends the corrected list. `then` runs only once it has landed. */
   const commit = (then?: () => void) => {
@@ -228,7 +282,21 @@ export function SegmentationReview({
                 onChange={(next) => replace(index, [next])}
                 onMerge={() => handleMerge(index)}
                 onSplit={() => handleSplit(index)}
-                onRemove={() => setProblems((current) => current.filter((_, i) => i !== index))}
+                onRemove={() => {
+                  remember(`removing ${problem.label || `problem ${index + 1}`}`)
+                  setProblems((current) => current.filter((_, i) => i !== index))
+                }}
+                onRemovePart={(position) => {
+                  const part = problem.parts[position]
+                  remember(`removing part ${part.label || position + 1}`)
+                  replace(index, [
+                    {
+                      ...problem,
+                      edited: true,
+                      parts: problem.parts.filter((_, other) => other !== position),
+                    },
+                  ])
+                }}
               />
             </Reveal>
           </li>
@@ -243,6 +311,16 @@ export function SegmentationReview({
         <Button variant="ghost" size="sm" onClick={onResegment} disabled={resegmenting}>
           {resegmenting ? 'Reading again' : 'Read it again'}
         </Button>
+        {/* The shortcut is the point, but a shortcut with nothing on screen is a feature
+            only its author knows about. This appears the moment there is something to
+            take back, and names the key rather than assuming it is guessed. */}
+        {history.length > 0 ? (
+          <Button variant="ghost" size="sm" onClick={undo}>
+            <Undo2 className="size-4" />
+            Undo
+            <kbd className="text-text-tertiary ml-1 text-xs">⌘Z</kbd>
+          </Button>
+        ) : null}
         <span className="flex-1" />
         {/* Save stays available but secondary. Solving is what this screen is a gate in
             front of, and the primary action says how many problems it is about to spend

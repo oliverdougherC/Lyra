@@ -3,7 +3,12 @@
 import re
 import sqlite3
 
-from backend.llm.prompts import build_extraction_prompt, build_system_prompt, format_context_block
+from backend.llm.prompts import (
+    build_extraction_prompt,
+    build_segmentation_prompt,
+    build_system_prompt,
+    format_context_block,
+)
 
 
 def _insert_fact(
@@ -88,6 +93,26 @@ def test_extraction_prompt_quotes_the_specified_block_and_asks_for_bare_json() -
     assert '"confidence"' in system
     assert "no code fence" in system
     assert messages[1] == {"role": "user", "content": "Syllabus text"}
+
+
+def test_segmentation_asks_for_latex_without_licensing_a_rewrite() -> None:
+    """The two halves of this instruction have to arrive together.
+
+    PDF extraction flattens exponents, so a statement copied character for character is
+    already not what the sheet says, and the review gate is where the student compares the
+    two. Asking for LaTeX restores that. Asking for it without repeating the verbatim rule
+    invites a tidied-up paraphrase instead, which is the failure the gate exists to catch.
+    """
+    messages = build_segmentation_prompt("Q1. Compute X(jw).", "homework_5.pdf")
+
+    # Collapsed, because the prompt is hard-wrapped and which words share a line is not
+    # part of the contract.
+    system = re.sub(r"\s+", " ", messages[0]["content"])
+    assert "$...$" in system
+    assert "$$...$$" in system
+    assert "Copy statements verbatim" in system
+    assert "change nothing else" in system
+    assert messages[1]["content"].startswith("File: homework_5.pdf")
 
 
 def test_empty_context_block_is_empty_string() -> None:

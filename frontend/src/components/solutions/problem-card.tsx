@@ -3,6 +3,7 @@
 import { ChevronDown, MoreHorizontal, X } from 'lucide-react'
 import { useState } from 'react'
 
+import { MathText } from '@/components/solutions/math-text'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -13,6 +14,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { statementLeadIn } from '@/lib/statement'
 import { cn } from '@/lib/utils'
 
 /** One problem as the review screen holds it, before it goes back to the backend. */
@@ -39,6 +41,12 @@ type ProblemCardProps = {
   onMerge: () => void
   onSplit: () => void
   onRemove: () => void
+  /**
+   * Separate from `onChange` even though it only drops an entry from `parts`. The parent
+   * keeps the undo stack, and it cannot tell a delete from a keystroke if both arrive as
+   * a whole replacement problem.
+   */
+  onRemovePart: (position: number) => void
 }
 
 const PREVIEW_LINES = 2
@@ -52,6 +60,7 @@ export function ProblemCard({
   onMerge,
   onSplit,
   onRemove,
+  onRemovePart,
 }: ProblemCardProps) {
   const [open, setOpen] = useState(false)
   const [editingLabel, setEditingLabel] = useState(false)
@@ -112,8 +121,12 @@ export function ProblemCard({
               }
             />
           ) : (
-            <p
-              className="text-text-secondary mt-2 text-sm whitespace-pre-line"
+            // Typeset, because this is the screen where the student checks Lyra's reading
+            // against the sheet in front of them, and a flattened exponent is precisely
+            // the kind of misreading the check is for. The editor above stays raw text:
+            // the LaTeX is what they would need to correct.
+            <MathText
+              className="text-text-secondary mt-2 text-sm"
               style={{
                 display: '-webkit-box',
                 WebkitLineClamp: PREVIEW_LINES,
@@ -121,8 +134,11 @@ export function ProblemCard({
                 overflow: 'hidden',
               }}
             >
-              {problem.statement}
-            </p>
+              {statementLeadIn(
+                problem.statement,
+                problem.parts.map((part) => part.label),
+              )}
+            </MathText>
           )}
 
           {problem.parts.length > 0 ? (
@@ -130,21 +146,15 @@ export function ProblemCard({
               {problem.parts.map((part, position) => (
                 <li key={part.key} className="flex items-start gap-2">
                   <span className="text-text-tertiary shrink-0 text-xs">{part.label}</span>
-                  <span className="text-text-secondary min-w-0 flex-1 truncate text-sm">
+                  <MathText inline className="text-text-secondary min-w-0 flex-1 truncate text-sm">
                     {part.statement}
-                  </span>
+                  </MathText>
                   <Button
                     variant="ghost"
                     size="icon"
                     className="size-6 shrink-0"
                     aria-label={`Remove part ${part.label} of ${problem.label}`}
-                    onClick={() =>
-                      onChange({
-                        ...problem,
-                        edited: true,
-                        parts: problem.parts.filter((_, other) => other !== position),
-                      })
-                    }
+                    onClick={() => onRemovePart(position)}
                   >
                     <X className="size-3.5" />
                   </Button>
