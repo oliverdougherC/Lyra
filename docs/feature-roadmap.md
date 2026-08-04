@@ -38,12 +38,14 @@ went into the interface, which is a stated core pillar and the thing a user actu
 [ui-phase-1.md](ui-phase-1.md) for the screen-level specification.
 
 ### Scaffolding
+
 - [x] FastAPI backend bound to `127.0.0.1`, CORS restricted to the local frontend origin
 - [x] SQLite schema and migrations
 - [x] Next.js frontend shell with the Lyra tokens and shadcn bridge in `globals.css`
 - [x] `scripts/dev` and `scripts/start` launching both processes
 
 ### Settings
+
 - [x] Tutor endpoint configuration, API key stored in the OS keychain
 - [x] Test-connection action that validates the endpoint and lists available models
 - [x] Model selection populated from the endpoint
@@ -51,6 +53,7 @@ went into the interface, which is a stated core pillar and the thing a user actu
 - [x] Theme control: system, light, dark
 
 ### Class workspace
+
 - [x] Create a class (name, code, semester)
 - [x] Class list on the home page
 - [x] Workspace view with document sidebar and chat area
@@ -58,6 +61,7 @@ went into the interface, which is a stated core pillar and the thing a user actu
 - [x] Archive and restore a class, keeping its data intact
 
 ### Document upload and ingestion
+
 - [x] Drag-and-drop upload returning `202`
 - [x] Supported in this phase: text-based PDF, TXT, MD
 - [x] Text extraction with PyMuPDF, preserving page numbers
@@ -71,6 +75,7 @@ went into the interface, which is a stated core pillar and the thing a user actu
 - [x] Recursive folder upload with a batch loader reporting stage and progress
 
 ### Contextual chat
+
 - [x] Sessions, message history, and streaming replies over SSE
 - [x] Retrieved context injected from the class's documents
 - [x] Guide and Show toggle (Socratic versus direct explanation)
@@ -83,16 +88,19 @@ went into the interface, which is a stated core pillar and the thing a user actu
 - [x] Scope retrieval to a single selected document for the next turn
 
 ### Automatic profile extraction, proposal-only
+
 - [x] Analysis pass as the `extracting` ingestion stage
 - [x] Facts stored with `confidence`, `confirmed`, and source document
 - [x] High-confidence facts injected as context; low-confidence facts withheld until confirmed
 - [x] Skipped against a non-local endpoint without acknowledgement
 
 ### Class profile view
+
 - [x] Facts grouped by kind, each showing its source document
 - [x] Confirm or reject low-confidence facts, and correct a wrong value
 
 ### Interface and visual quality
+
 Specified screen by screen in [ui-phase-1.md](ui-phase-1.md) and part of the definition of done.
 
 - [x] Every screen implements all four data states: loading, empty, error, and populated
@@ -253,13 +261,19 @@ phase closes without them.
 solutions that use the method their course teaches, catches a wrong answer and has that one problem
 re-solved, asks a clarifying question about a single step, and exports the result.
 
-Phase 2 is complete. Verified end to end against a real ECE 203 problem set: segmentation to the
-review gate, a confirmed list solved problem by problem with results landing as they completed,
-verification returning `verified` off twenty-three SymPy calls, a step edited and restored through
-its history, and a Guide exchange opened on a single step. What that run also surfaced, and what a
-reader of this file should know: retrieval is class-scoped, so a student who has uploaded the
-professor's solutions to the set being solved will see the solver ground its steps in them, and the
-provenance line names the file so that is visible rather than hidden.
+Phase 2 is complete, and it has been measured against a whole course rather than one sheet: eight
+ECE 203 problem sets with the professor's answer keys, through `scripts/eval_solver.py`.
+Segmentation finds the right number of problems on all eight, stably across repeated runs, having
+found it on six of eight before that evaluation surfaced what was wrong. Two sets solved end to end
+without their keys attached produced twelve of twelve answers that agree with those keys, nineteen
+results once sub-parts are counted, verified off 112 computer algebra calls.
+
+[phase-2-handoff.md](phase-2-handoff.md) records the faults that evaluation found, what is still
+weak, and how to re-run it. Two things a reader of this file should know: retrieval is class-scoped,
+so a student who has uploaded the professor's solutions to the set being solved will see the solver
+ground its steps in them and the provenance line names the file, which is visible rather than
+hidden; and nothing in those twelve problems was wrong, so the re-derive-on-refutation path has been
+exercised by the test suite and not yet by a real mistake.
 
 ## Phase 3: Large Documents
 

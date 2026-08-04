@@ -59,13 +59,20 @@ Phase 1, the MVP, is complete. A student can create a class, upload course mater
 ingest, and hold a contextual streaming conversation about it, with extracted syllabus facts
 visible and correctable. The interface has been verified against its own specification: contrast
 contracts recomputed from the tokens, all three breakpoints, the full keyboard map, and both
-themes. 163 backend tests and 146 frontend tests pass.
+themes.
+
+Phase 2, the homework solver, is complete. A student points Lyra at a problem set, corrects its
+reading of the problems before any compute is spent on them, watches solutions land one at a time,
+sees which steps a computer algebra system checked and which the model supplied on its own, fixes a
+wrong one, asks about a single step in Guide mode, and prints the result.
+
+It has been measured against a real course rather than against its own fixtures: one term of ECE
+203, eight problem sets with the professor's answer keys. `scripts/eval_solver.py` runs that
+evaluation and [docs/phase-2-handoff.md](docs/phase-2-handoff.md) records what it found, including
+what is still weak. 369 backend tests and 220 frontend tests pass.
 
 Known limit: this has been exercised on short documents. Textbook-scale ingestion and retrieval are
-untested and are Phase 3 work.
-
-Phase 2 is the homework solver, the first feature that produces something rather than only
-answering. The `docs/` specifications remain the source of truth.
+untested and are Phase 3 work. The `docs/` specifications remain the source of truth.
 
 ## Quick Start
 
@@ -115,7 +122,7 @@ Lyra/
     tests/
   data/             # Uploads, extracted text, GGUF weights (never committed)
   docs/             # Project documentation
-  scripts/          # Dev, start, and model download scripts
+  scripts/          # Dev, start, model download, and the solver evaluation
 ```
 
 ## Documentation
@@ -126,5 +133,6 @@ Lyra/
 - [Phase 1 Interface](docs/ui-phase-1.md) - screen-by-screen specification for the MVP
 - [Homework Solver](docs/solver-phase-2.md) - artifact model, job architecture, verification
 - [Phase 2 Interface](docs/ui-phase-2.md) - screen-by-screen specification for the solver
+- [Phase 2 Handoff](docs/phase-2-handoff.md) - what the solver did against a real course, and what is still weak
 - [Feature Roadmap](docs/feature-roadmap.md) - phased plan and explicit exclusions
 - [Code Conventions](docs/conventions.md) - style, structure, testing, git
