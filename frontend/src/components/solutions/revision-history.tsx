@@ -2,6 +2,7 @@
 
 import { toast } from 'sonner'
 
+import { MathText } from '@/components/solutions/math-text'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
@@ -93,9 +94,10 @@ export function RevisionHistory({ artifactId, part, onClose }: RevisionHistoryPr
                     // refutation that prompted the re-solve.
                     <p className="text-text-secondary text-xs italic">{revision.note}</p>
                   ) : null}
-                  <p className="text-text-secondary line-clamp-6 text-sm whitespace-pre-wrap">
-                    {revision.content}
-                  </p>
+                  {/* Typeset and whole. A version is chosen by reading it, and six
+                      clamped lines of raw LaTeX made restoring one a guess. The sheet
+                      scrolls, so length costs nothing here. */}
+                  <MathText className="text-text-secondary text-sm">{revision.content}</MathText>
                   {index === 0 ? (
                     <span className="text-text-tertiary text-xs">This is what is shown now.</span>
                   ) : (

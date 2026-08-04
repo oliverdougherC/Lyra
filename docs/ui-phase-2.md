@@ -153,20 +153,27 @@ Below it, a reorderable list of `ProblemCard`s. Each card carries:
   `Escape` cancels, matching `FactRow`
 - The source filename and page, `caption` in `--text-tertiary`, shown only when it differs from the
   card above, matching the profile view's source-line rule
-- The first two lines of the problem statement, with a `collapsible` to see the whole thing and
-  edit it
-- Sub-parts as a nested list, each individually removable
+- The whole problem statement, typeset, with a `collapsible` holding the raw text to edit it
+- Sub-parts as a nested list, each shown in full and individually removable
 - A `dropdown-menu`: `Merge with next`, `Split here`, `Remove`
+
+**Nothing on this screen is truncated.** The card showed two clamped lines for one revision and
+that was wrong: on a signals sheet the first two lines are the sentence before the mathematics, so
+the student was asked to confirm a reading of their homework with the equations cut off. A gate is
+worth exactly what can be read at it, and a list of ten problems that is long to scroll is a much
+smaller cost than a merged problem discovered forty minutes into a solve.
 
 Statements and sub-parts are typeset, not printed raw. PDF extraction flattens exponents,
 subscripts, and piecewise definitions into the line, so segmentation transcribes the mathematics
 back into LaTeX and this screen renders it. That is what makes the check possible: a student
 comparing `x(t) = e-2tu(t -3)` against their sheet is comparing something the sheet does not say.
-The collapsible editor stays raw text, because the LaTeX is what a correction has to change.
+The collapsible editor stays raw text, because the LaTeX is what a correction has to change, and
+its control reads `Edit the statement` rather than promising to reveal something already visible.
 
-Where a problem has sub-parts, the statement is cut back to the text that introduces them. The
-segmenter copies verbatim and so repeats the sub-parts inside the statement as well; printing both
-shows the same problem twice.
+Where a problem has sub-parts, the statement is cut back to the text that introduces them, and the
+parts themselves are printed underneath. The segmenter copies verbatim and so repeats the sub-parts
+inside the statement as well; printing both shows the same problem twice. Nothing is lost by the
+cut, because what is cut is the list rendered directly below it.
 
 A card whose text the student edited carries a quiet `Edited` badge, so a later re-read knows the
 statement is not verbatim from the page.

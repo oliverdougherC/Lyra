@@ -155,6 +155,26 @@ describe('SegmentationReview', () => {
     expect(screen.getByRole('button', { name: 'Read it again' })).toBeInTheDocument()
   })
 
+  /**
+   * The gate is worth exactly what can be read at it. The card used to print two clamped
+   * lines of the statement, which on a signals sheet is the sentence before the
+   * mathematics: the student was asked to confirm a reading of their homework with the
+   * equations cut off. Nothing on this screen is truncated any more.
+   */
+  it('shows every problem statement in full, not a clamped preview', () => {
+    const statement =
+      'Starting pair:\n\n$$e^{-2t}u(t) \\longleftrightarrow \\frac{1}{2 + j\\omega}$$\n\n' +
+      'Find the Fourier Transform of the following signals.'
+    renderReview([part({ id: 10, ordinal: 0, label: 'Problem 1', content: statement })])
+
+    const lead = screen.getByText('Starting pair:')
+    const rendered = lead.closest('.math-text')!
+    // A clamp is CSS, so the text was in the DOM either way. What the student could
+    // actually see is the style on the block that holds it.
+    expect(rendered.getAttribute('style')).toBeNull()
+    expect(screen.getByText(/Find the Fourier Transform/)).toBeInTheDocument()
+  })
+
   it('lists a problem sub-part under its problem and lets it be removed', async () => {
     renderReview([
       TWO_PROBLEMS[0],
@@ -209,7 +229,7 @@ describe('SegmentationReview', () => {
 
       await userEvent.click(screen.getByRole('button', { name: /Actions for Problem 2/ }))
       await userEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
-      await userEvent.click(screen.getAllByRole('button', { name: /full statement/ })[0])
+      await userEvent.click(screen.getAllByRole('button', { name: 'Edit the statement' })[0])
 
       const editor = screen.getByRole('textbox', { name: /statement/ })
       editor.focus()

@@ -49,8 +49,6 @@ type ProblemCardProps = {
   onRemovePart: (position: number) => void
 }
 
-const PREVIEW_LINES = 2
-
 export function ProblemCard({
   problem,
   index,
@@ -121,19 +119,12 @@ export function ProblemCard({
               }
             />
           ) : (
-            // Typeset, because this is the screen where the student checks Lyra's reading
-            // against the sheet in front of them, and a flattened exponent is precisely
-            // the kind of misreading the check is for. The editor above stays raw text:
-            // the LaTeX is what they would need to correct.
-            <MathText
-              className="text-text-secondary mt-2 text-sm"
-              style={{
-                display: '-webkit-box',
-                WebkitLineClamp: PREVIEW_LINES,
-                WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-              }}
-            >
+            // Whole, and typeset. This is the screen where the student checks Lyra's
+            // reading against the sheet in front of them, and two clamped lines ending in
+            // an ellipsis hid the half of the problem most likely to be misread: the
+            // equations. A gate whose contents cannot be read is not a gate. The editor
+            // above stays raw text, because the LaTeX is what a correction has to change.
+            <MathText className="text-text-secondary mt-2 text-sm">
               {statementLeadIn(
                 problem.statement,
                 problem.parts.map((part) => part.label),
@@ -145,8 +136,11 @@ export function ProblemCard({
             <ul className="border-border mt-3 flex flex-col gap-2 border-l pl-3">
               {problem.parts.map((part, position) => (
                 <li key={part.key} className="flex items-start gap-2">
-                  <span className="text-text-tertiary shrink-0 text-xs">{part.label}</span>
-                  <MathText inline className="text-text-secondary min-w-0 flex-1 truncate text-sm">
+                  <span className="text-text-tertiary shrink-0 pt-px text-xs">{part.label}</span>
+                  {/* Wrapped rather than truncated, for the same reason the statement
+                      above it is: a sub-part clipped at the pane's edge is the part of
+                      the question the student cannot check. */}
+                  <MathText className="text-text-secondary min-w-0 flex-1 text-sm">
                     {part.statement}
                   </MathText>
                   <Button
@@ -170,7 +164,9 @@ export function ProblemCard({
             aria-expanded={open}
           >
             <ChevronDown className={cn('size-3.5 transition-transform', open && 'rotate-180')} />
-            {open ? 'Show less' : 'Read and edit the full statement'}
+            {/* The statement is already on screen in full, so this no longer reveals it:
+                it swaps the typeset reading for the raw text a correction is made in. */}
+            {open ? 'Done editing' : 'Edit the statement'}
           </button>
         </div>
 
