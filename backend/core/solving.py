@@ -21,6 +21,7 @@ notes or from the model.
 
 import json
 import logging
+import re
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -119,6 +120,46 @@ def _sources(value: object) -> tuple[int, ...]:
     )
 
 
+# A citation marker the model wrote into its prose: `[6]`, or `[2, 5]`. The lookbehind is
+# what keeps `x[6]` and `X[k]` out of it, which matters here more than most places: this is
+# a signals course, and a bracketed index after an identifier is ordinary notation.
+_CITATION_MARKER = re.compile(
+    # The lookbehind sits against the bracket rather than at the start of the match, so
+    # the space before a marker is eaten with it and `x[6]` is still left alone.
+    r"[ \t]*(?<![A-Za-z0-9_}\])])\[[ \t]*(\d+(?:[ \t]*,[ \t]*\d+)*)[ \t]*\]"
+)
+
+# Whitespace a removed marker left behind, mid-line only so indentation survives.
+_LEFTOVER_SPACE = re.compile(r"(?<=\S)[ \t]{2,}")
+
+
+def _lift_citations(content: str, declared: tuple[int, ...]) -> tuple[str, tuple[int, ...]]:
+    """Move `[6]` markers out of a step's prose and into its sources.
+
+    The prompt asks for citations in the `sources` field and says plainly that a number
+    written into the text refers to a list the student cannot see. Models write them into
+    the text anyway, and on screen `[6]` is a footnote marker pointing at nothing.
+
+    Deleting them would throw away a real citation, so they are lifted: added to the
+    step's sources, where the provenance chip turns them into a filename and a page, and
+    removed from the prose. A marker outside the context block is dropped downstream by
+    `_provenance_for`, the same as a declared one.
+    """
+    found: list[int] = []
+
+    def take(match: re.Match[str]) -> str:
+        found.extend(int(number) for number in match.group(1).replace(" ", "").split(","))
+        return ""
+
+    cleaned = _LEFTOVER_SPACE.sub(" ", _CITATION_MARKER.sub(take, content)).strip()
+    if not cleaned:
+        # The step was nothing but a marker. Keeping the original is the safer failure:
+        # a step with no text at all would render as a gap in the working.
+        return content, declared
+    merged = list(declared) + [number for number in found if number not in declared]
+    return cleaned, tuple(dict.fromkeys(merged))
+
+
 def parse_solution(content: str) -> SolvedProblem:
     """Read the model's reply into steps and an answer.
 
@@ -157,17 +198,20 @@ def parse_solution(content: str) -> SolvedProblem:
         step_content = _text(entry.get("content")) or _text(entry.get("text"))
         if not step_content:
             continue
+        step_content, sources = _lift_citations(step_content, _sources(entry.get("sources")))
         steps.append(
             SolvedStep(
                 title=_text(entry.get("title")),
                 content=step_content,
-                sources=_sources(entry.get("sources")),
+                sources=sources,
             )
         )
 
     if not steps and not answer:
         return _as_prose(stripped)
-    return SolvedProblem(steps=tuple(steps), answer=answer)
+    # The answer carries markers too, and it has nowhere to put them: an answer is a
+    # result, not a step, so there is no provenance row for it to become.
+    return SolvedProblem(steps=tuple(steps), answer=_lift_citations(answer, ())[0])
 
 
 def _as_prose(content: str) -> SolvedProblem:

@@ -256,6 +256,44 @@ def test_a_step_can_cite_a_reference_solution(
     assert [entry["page_number"] for entry in entries] == [None]
 
 
+def test_a_citation_written_into_the_prose_becomes_a_source(
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    retrieved: RetrievedChunk,
+) -> None:
+    """`[6]` on screen is a footnote marker pointing at a list the student cannot see.
+
+    The prompt says the numbers belong in `sources` and nowhere else. Models write them
+    into the step text anyway, so they are lifted rather than deleted: the citation is
+    real, and it belongs where the provenance chip can turn it into a filename.
+    """
+    artifact_id = _set(db, class_id, [_STATEMENT])
+    fake_solver(
+        monkeypatch,
+        {
+            "steps": [
+                {
+                    "title": "Apply the definition",
+                    "content": "By the definition [1], the sample $x[1]$ is unchanged.",
+                    "sources": [],
+                }
+            ],
+            "answer": "1/s^2",
+        },
+        chunks=[retrieved],
+    )
+
+    solver.run_solve(artifact_id)
+
+    steps = _children(db, int(_problems(db, artifact_id)[0]["id"]), artifacts.STEP)
+    # The marker is gone and the space it sat in went with it. A bracketed index after an
+    # identifier is notation, not a citation, and this is a signals course.
+    assert steps[0]["content"] == "By the definition, the sample $x[1]$ is unchanged."
+    entries = artifacts.list_provenance(db, int(steps[0]["id"]))
+    assert [entry["chunk_id"] for entry in entries] == [retrieved.chunk_id]
+
+
 def test_a_citation_outside_the_context_block_is_dropped(
     db: sqlite3.Connection,
     class_id: int,
