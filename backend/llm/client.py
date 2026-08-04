@@ -38,6 +38,13 @@ logger = logging.getLogger(__name__)
 CHAT_TIMEOUT = httpx.Timeout(300.0, connect=10.0)
 PROBE_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 
+# A tool turn is patient where a chat turn cannot be. Nobody is waiting on a verification
+# pass, and its later turns carry the whole tool transcript, so generation gets slower as
+# the loop goes on: checking one real problem hit the chat timeout eight rounds in and
+# threw away every check it had run. The loop's own wall clock is the ceiling that should
+# bound a run, so this is set to match it rather than to cut in front of it.
+TOOL_TIMEOUT = httpx.Timeout(600.0, connect=10.0)
+
 _ERROR_UNREACHABLE = "The tutor endpoint is not reachable. Check that the server is running."
 _ERROR_TIMEOUT = "The tutor endpoint did not respond in time."
 _ERROR_UNAUTHORIZED = "The tutor endpoint rejected the API key."
@@ -452,7 +459,7 @@ async def complete_with_tools(
     """
     url = f"{_base_url(endpoint)}/chat/completions"
     body = _chat_body(model, messages, stream=False, tools=tools)
-    async with _client(CHAT_TIMEOUT, api_key, transport) as client:
+    async with _client(TOOL_TIMEOUT, api_key, transport) as client:
         try:
             response = await client.post(url, json=body)
             if response.status_code == 400:

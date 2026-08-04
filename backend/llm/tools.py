@@ -49,7 +49,10 @@ logger = logging.getLogger(__name__)
 MAX_DEPTH = 24
 
 # Wall clock for one whole loop. Generous because a local model can spend minutes per
-# turn, and this is a background job with nobody waiting on an open connection.
+# turn, and this is a background job with nobody waiting on an open connection. It is the
+# ceiling that bounds a run: `client.TOOL_TIMEOUT` matches it rather than cutting in
+# front of it, so a slow turn late in a long transcript is cut here, reported as a
+# timeout with the checks it did run, rather than surfacing as an endpoint failure.
 TIMEOUT_SECONDS = 600.0
 
 COMPLETED = "completed"
