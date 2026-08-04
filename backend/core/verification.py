@@ -187,8 +187,16 @@ def judge(result: tools.ToolLoopResult) -> VerificationOutcome:
         return VerificationOutcome(artifacts.VERIFIED, detail, checks)
 
     # Tools ran but the closing message said nothing readable. Reporting that as agreement
-    # would be inventing a conclusion nobody reached.
-    return VerificationOutcome(artifacts.UNCHECKED, UNREADABLE_DETAIL, checks)
+    # would be inventing a conclusion nobody reached. What it did say is carried through:
+    # a student looking at twenty-five checks and a "not checked" badge is owed the
+    # checker's own words, and without them this outcome cannot be diagnosed at all,
+    # because nothing keeps the reply.
+    said = detail.strip().replace("\n", " ")[:200]
+    return VerificationOutcome(
+        artifacts.UNCHECKED,
+        f"{UNREADABLE_DETAIL} It said: {said}" if said else UNREADABLE_DETAIL,
+        checks,
+    )
 
 
 def verify(
