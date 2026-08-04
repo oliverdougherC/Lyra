@@ -58,6 +58,14 @@ backend/
     sessions.py         # Chat session management
     profiles.py         # Profile facts, confidence, confirmation
     ingestion.py        # Background ingestion job orchestration
+    artifacts.py        # Artifact and part CRUD, revisions, provenance (Phase 2)
+    solver.py           # Background solve job: segment, solve, verify (Phase 2)
+  tools/                # Pure computation, no prompts, no models, no database (Phase 2)
+    __init__.py
+    result.py           # ToolResult: the one shape every tool returns
+    cas.py              # SymPy behind a bounded subprocess
+    _cas_runner.py      # The child process. Executed, never imported
+    units.py            # Dimensional analysis via pint
   rag/
     __init__.py
     parse.py            # PyMuPDF extraction, scanned-page detection
@@ -76,6 +84,7 @@ backend/
     client.py           # OpenAI-compatible client, endpoint locality check
     prompts.py          # System prompt templates
     stream.py           # SSE streaming
+    tools.py            # Tool-calling loop and tool registry (Phase 2)
   tests/
     conftest.py
     test_chunk.py

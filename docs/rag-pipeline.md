@@ -10,17 +10,34 @@ Three models are involved, with strictly separate roles:
 | Role | Model | Runtime | Phase | Configurable |
 |------|-------|---------|-------|--------------|
 | Embedding | `nomic-embed-text-v1.5` (GGUF) | llama.cpp, local | 1 | No |
-| Tutor | user's choice | user's OpenAI-compatible endpoint | 1 | Yes |
-| OCR | `baidu/Unlimited-OCR` (GGUF) | llama.cpp, local | 2 | No |
+| Tutor | user's choice, then bundled | OpenAI-compatible endpoint | 1, bundled in 6 | Until Phase 6 |
+| Text recognition | bundled vision model, then `baidu/Unlimited-OCR` | llama.cpp, local | 3 | No |
 
-Embedding and OCR are infrastructure and always run locally. The tutor model is the product. See
-the Inference Posture section of [architecture.md](architecture.md) for the rules governing remote
-tutor endpoints.
+Embedding and text recognition are infrastructure and always run locally. The tutor model is the
+product. See the Inference Posture section of [architecture.md](architecture.md) for the rules
+governing the transitional period before inference is bundled.
 
-**OCR is Phase 2, not V1.** Phase 1 accepts text-based PDFs, TXT, and MD only. The OCR
-specification below is retained in full because the research behind it is load-bearing and was
-expensive to establish, but it is not V1 scope and nothing in Phase 1 may depend on it. Sections
-that apply only to Phase 2 are marked.
+**Text recognition is Phase 3 and is no longer gating.** Phase 1 and 2 accept text-based PDFs, TXT,
+and MD only. The OCR specification below is retained in full because the research behind it is
+load-bearing and was expensive to establish.
+
+What changed: a vision-capable tutor model is now assumed, and it can transcribe pages itself.
+Bulk transcription therefore sits behind an interface with two implementations, and the choice
+between them is a measurement rather than a prerequisite:
+
+| Path | Cost | When it wins |
+|------|------|--------------|
+| Bundled general vision model | No extra download, slower per page, weaker on dense layout and math | Homework and short scans, most of what users upload |
+| `Unlimited-OCR` specialist | Extra weights to ship and manage, far faster per page, better on multi-column text, tables, and math | Textbook-scale bulk ingestion, where throughput decides whether the feature is viable |
+
+Build the interface, wire the general model first, then time a real sample of pages and extrapolate
+to textbook scale. If bulk transcription is intolerable on modest hardware, the specialist earns its
+download. This removes the serving spike from the critical path without pretending it is settled.
+
+**Text recognition is not only for scanned pages.** PyMuPDF's text layer mangles dense mathematics,
+producing garbled glyph sequences or dropping symbols. A vision pass may produce better equations
+than the text layer does on pages that were never scanned. This is untested and cheap to test, and
+if it holds it changes what transcription is for.
 
 ## Pipeline Stages
 
@@ -32,14 +49,14 @@ Stages 2 through 5 run in a background ingestion job. Upload returns immediately
 
 ### Stage 1: Upload
 
-**Phase 1 accepted formats:**
+**Currently accepted formats:**
 - PDF, text-based
 - Plain text (TXT, MD)
 
-**Phase 2 adds:** scanned PDFs and images (PNG, JPG, WebP).
+**Phase 3 adds:** scanned PDFs and images (PNG, JPG, WebP).
 **Later:** Office documents (DOCX, PPTX).
 
-A file whose extension is accepted but whose content cannot be read as text in Phase 1 is not an
+A file whose extension is accepted but whose content cannot be read as text today is not an
 error in the usual sense. It is a document Lyra will support later, so it terminates in the
 `unsupported` state described in Stage 2 and the original file is kept.
 
@@ -58,11 +75,11 @@ Upload responds `202`. It never blocks on parsing.
 - Read directly
 
 **Scanned-page detection.** A page counts as scanned when its extractable text is below a threshold
-of 20 non-whitespace characters. Detection runs in Phase 1 even though OCR does not, because the
-alternative is worse than an error: a scanned PDF would otherwise ingest "successfully" as an empty
-document, embed nothing, and then quietly fail to answer any question about it.
+of 20 non-whitespace characters. Detection shipped in Phase 1 even though recognition did not,
+because the alternative is worse than an error: a scanned PDF would otherwise ingest "successfully"
+as an empty document, embed nothing, and then quietly fail to answer any question about it.
 
-Phase 1 outcome by document composition:
+Outcome by document composition:
 
 | Composition | Result |
 |-------------|--------|
@@ -72,11 +89,53 @@ Phase 1 outcome by document composition:
 
 `unsupported` is not `failed`. It carries a distinct message telling the user the document needs
 text recognition, which is coming, and that the file has been kept so it can be processed later
-without re-uploading. Phase 2 re-ingests these documents in place.
+without re-uploading. Phase 3 re-ingests these documents in place.
 
-### Stage 2b: OCR (Phase 2)
+### Stage 2a: Structural Parsing (Phase 3)
 
-Everything from here to the end of this stage is Phase 2 scope.
+Retrieval quality over a 900-page textbook is a different problem from reading a scanned page, and
+it is easy to conflate the two. This one exists **today**, for text-based PDFs, and has no external
+dependencies. It is the more valuable of the two and comes first.
+
+Flat semantic chunking over a textbook produces thousands of chunks with no structural awareness.
+Retrieving eight of them for "explain convolution" is a much worse experience than the same
+retrieval over a syllabus, and no amount of embedding quality fixes it, because the information the
+query needs is hierarchical and the index is flat.
+
+**Section hierarchy.**
+
+- Primary source is the PDF outline via PyMuPDF `get_toc()`, which most commercial textbooks carry
+- Fallback is heading detection from span-level font size and weight, which PyMuPDF also exposes
+- Result is a hierarchical `section_path` on each chunk (`5 / 5.2 / 5.2.1`), replacing the current
+  flat `section_title`
+
+`section_path` is the change that matters. A homework problem reading "use the diagram from section
+5.2.1" becomes a **direct lookup** rather than a semantic search that may or may not surface the
+right page. That is the difference between reliable and lucky, and it is what makes the Phase 2
+solver able to follow a textbook's own cross-references.
+
+**Figures.**
+
+- Embedded images via `get_images()`, or a rendered page region for figures that are drawn rather
+  than embedded
+- Caption-to-figure association by matching a caption pattern (`Figure 5.21`) against the nearest
+  image block. This is a heuristic and will fail on some layouts, so it needs an honest fallback
+  rather than a silently wrong association
+- An extracted figure carries provenance back to its source page, so pulling it into a solution
+  document cites correctly
+
+Figures are the first pipeline output that is not text. The artifact model in architecture.md holds
+mixed content from the start for this reason.
+
+**Untested at scale.** Ingestion time, progress reporting, and retrieval quality at textbook scale
+have not been measured. A 900-page book is roughly two orders of magnitude more chunks than a
+syllabus, and while `sqlite-vec` brute-force KNN is comfortable there, local embedding throughput
+during ingestion is the open question.
+
+### Stage 2b: Text Recognition (Phase 3)
+
+Everything from here to the end of this stage is Phase 3 scope. It runs behind the transcription
+interface described at the top of this document, which the bundled vision model also implements.
 
 **Scanned pages and images**
 - Render to PNG at 300 DPI with PyMuPDF
@@ -90,7 +149,7 @@ Unlimited-OCR is DeepSeek-OCR v1's DeepEncoder with a DeepSeek-V2 MoE decoder wh
 replaced by R-SWA (Reference Sliding Window Attention). llama.cpp loads it through MTMD, which
 requires **two** GGUF files: the language model and a multimodal projector (`mmproj`).
 
-Weights live in `data/models/`. V1 pins `Q4_K_M` for the language model and `bf16` for the mmproj.
+Weights live in `data/models/`. Pin `Q4_K_M` for the language model and `bf16` for the mmproj.
 
 **Reference invocation** (from the GGUF publisher, used as the baseline for our integration):
 
@@ -114,7 +173,7 @@ here, so the OCR stage MUST enforce an output token ceiling and mark a page `fai
 hang.
 
 **Prompts.** Single page uses `document parsing.`. The multi-page prompt is
-`Multi page parsing.`, which V1 does not use (see the batching decision below).
+`Multi page parsing.`, which is not used (see the batching decision below).
 
 **Do not treat OCR as a generic OpenAI-compatible call.** The reference vLLM and SGLang recipes pass
 server-specific fields that no standard client sends: `images_config.image_mode`,
@@ -136,16 +195,16 @@ Support arrived through a stacked series of pull requests. Only the first is mer
 | R-SWA in the decoder | [#24975](https://github.com/ggml-org/llama.cpp/pull/24975) | Open | Decoder runs full multi-head attention. The near-constant memory that makes 40-plus-page single-pass parsing viable is lost, so long contexts grow memory and slow down sharply. |
 | `max_tiles` fix | [#25614](https://github.com/ggml-org/llama.cpp/pull/25614) | Open | The projector's `preproc_max_tiles = 32` is ignored and llama.cpp falls back to DeepSeek-OCR v1's cap of 9. Tall or dense pages are split into a coarser tile grid than the reference, reducing accuracy. |
 
-**V1 decision: page-batched OCR, one page per request.** V1 does not use one-shot long-horizon
+**Decision: page-batched OCR, one page per request.** Phase 3 does not use one-shot long-horizon
 multi-page parsing, because that feature depends on R-SWA, which is not upstream. Page-at-a-time
 processing also gives bounded memory, per-page progress reporting, per-page retry, and page numbers
 for later citation. The cost is the loss of cross-page context, so a table or problem spanning a
-page break may be split. That is accepted for V1. Revisit when #24975 merges.
+page break may be split. That is accepted. Revisit when #24975 merges.
 
 Pin the exact llama.cpp build in `scripts/` and record the commit. Do not float on master: this
 model's support surface is actively changing.
 
-#### Required spike before any Phase 2 OCR work
+#### Required spike before the specialist path
 
 One-shot `llama-mtmd-cli` per page reloads several GB of weights per page, which is unacceptable for
 a 40-page document. The alternative is a persistent `llama-server` process with `--mmproj` that
@@ -159,8 +218,11 @@ the chat template made it run but degraded OCR quality.
 `llama-server` and through one-shot `llama-mtmd-cli`, and confirm byte-identical or
 quality-equivalent text with the chat template applied. If llama-server cannot serve this model
 correctly, fall back to a single long-lived `llama-mtmd-cli` invocation per document batch and accept
-the reload cost. Record the outcome in this document. This gates the Phase 2 OCR stage only; the
-Phase 1 ingestion job is built without it and gains OCR as an additional parse path later.
+the reload cost. Record the outcome in this document.
+
+This spike now gates **only the specialist path**, not the phase. Transcription through the bundled
+vision model needs none of it, so Phase 3 can deliver scanned-document support and be measured
+before anyone touches a pinned llama.cpp build.
 
 #### Post-processing
 
@@ -208,6 +270,10 @@ paragraphs with 100-token overlap. Every resulting chunk keeps the same `problem
 
 **Each chunk stores:** `chunk_id`, `document_id`, `class_id`, `content`, `token_count`, and metadata
 (document type, page number, section title, `problem_number`, `part_index`).
+
+`problem_number` and `part_index` are populated today and are the substrate the Phase 2 solver
+segments against, so problem-level addressing is not new work in that phase. `section_title` becomes
+the hierarchical `section_path` in Phase 3.
 
 ### Stage 4: Embed
 
@@ -371,20 +437,23 @@ its own progress stage and can be disabled in Settings.
 
 ## Design Principles
 
-1. **Local-first.** OCR, embedding, chunking, and storage never leave the machine. Only the tutor
-   model may be remote, and only under the constraints in architecture.md.
+1. **Local-first.** Text recognition, embedding, chunking, and storage never leave the machine. Only
+   the tutor model may currently be remote, and only under the transitional constraints in
+   architecture.md. Once inference is bundled in Phase 6, nothing leaves the machine at all.
 2. **Compartmentalized.** Each stage is a discrete module behind a narrow interface. Note the honest
-   limit: the OCR stage is not a drop-in OpenAI client, so swapping OCR models means rewriting
-   `rag/ocr.py`, not changing a setting.
+   limit: the specialist OCR path is not a drop-in OpenAI client, so the transcription interface has
+   to be narrow enough that a general vision model and Unlimited-OCR both satisfy it. Page in, text
+   out, with page-level progress. Anything richer leaks one implementation into the other.
 3. **Semantic chunking.** Structure is respected, subject to the 2048-token hard ceiling.
 4. **Lightweight context.** Retrieval is tight and targeted, budgeted for 8K to 32K windows.
-5. **Class-scoped.** All retrieval is partitioned by class. No cross-class leakage in V1.
+5. **Class-scoped.** All retrieval is partitioned by class. No cross-class leakage until Phase 5.
 6. **Proposal, not assertion.** Automatically extracted facts are proposals until confirmed.
 
 ## Future Extensions
 
-- Long-horizon multi-page OCR once R-SWA (#24975) lands upstream
-- Cross-class retrieval for prerequisite connections
+- Structure-aware retrieval resolving an explicit section reference in a problem (Phase 3)
+- Long-horizon multi-page OCR once R-SWA (#24975) lands upstream (Phase 6)
+- Cross-class retrieval for prerequisite connections (Phase 5)
 - Hybrid retrieval: vector search combined with keyword BM25
 - Conversational RAG: use history to rewrite the retrieval query
 - Citation links from a claim in a response back to the source page

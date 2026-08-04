@@ -3,183 +3,372 @@
 Phased feature plan for Lyra. Each phase must be polished and stable before the next begins. No
 phase is complete until its core flow works without caveats.
 
-**Scope principle for V1:** Phase 1 deliberately excludes OCR. Scanned documents are the single
-largest source of technical risk in the pipeline (an unmerged upstream dependency, an unresolved
-serving question, and multi-GB model weights), and they are not required to prove the product. A
-student uploading a text-based homework PDF or their lecture notes exercises every other part of the
-system. The effort freed by that cut goes into the interface, which is a stated core pillar and the
-thing a user actually judges. See [ui-phase-1.md](ui-phase-1.md) for the screen-level specification.
+**What Lyra is.** A convenience tool built by a student for students. It exists to accelerate the
+way people actually work, not the way they are nominally supposed to. That principle decides design
+arguments: when a feature could either enforce good pedagogy or remove friction, Lyra removes the
+friction and trusts the user. The Guide, Show, and Solve ladder is the shape this takes in the
+product, and Solve is a real rung on it rather than an escape hatch bolted to the side.
+
+**Scope principle.** One feature, deeply polished, before the next. A phase closes when its flow
+works end to end with no caveats, not when its code exists.
 
 ## Phase 0: Foundation Cleanup
 
 The repository previously held a different product, a Jan-derived Tauri writing app. That
-scaffolding must go before new code lands, otherwise it silently misconfigures the new stack.
+scaffolding had to go before new code landed, otherwise it silently misconfigured the new stack.
 
 - [x] Initialize version control and commit a baseline
 - [x] Remove stale scaffolding: Tauri Cargo config, the Jan devcontainer, the Tauri macOS release
       workflow, the Yarn install state, and the husky hook that ran a script with no manifest
 - [x] Replace `.prettierrc` with the config in conventions.md
 - [x] Retarget dependabot at the real project structure
-- [ ] Add `pyproject.toml` with the Ruff and pytest configuration from conventions.md
-- [ ] Add `frontend/package.json`, Tailwind v4, and shadcn/ui with the token bridge in `globals.css`
+- [x] Add `pyproject.toml` with the Ruff and pytest configuration from conventions.md
+- [x] Add `frontend/package.json`, Tailwind v4, and shadcn/ui with the token bridge in `globals.css`
 
-Nothing in Phase 0 is blocked on external work. The OCR serving spike moved to Phase 2, where it
-belongs, and no longer gates the MVP.
+Phase 0 is complete.
 
 ## Phase 1: Foundation (MVP)
 
 **Goal:** Upload text documents, get contextual AI help about them, in an interface that already
-feels finished. Nothing else.
+feels finished.
+
+Phase 1 deliberately excluded OCR. Scanned documents were the single largest source of technical
+risk in the pipeline, and they were not required to prove the product. The effort freed by that cut
+went into the interface, which is a stated core pillar and the thing a user actually judges. See
+[ui-phase-1.md](ui-phase-1.md) for the screen-level specification.
 
 ### Scaffolding
-- [ ] FastAPI backend bound to `127.0.0.1`, CORS restricted to the local frontend origin
-- [ ] SQLite schema and migrations
-- [ ] Next.js frontend shell with the Lyra tokens and shadcn bridge in `globals.css`
-- [ ] `scripts/dev` and `scripts/start` launching both processes
+- [x] FastAPI backend bound to `127.0.0.1`, CORS restricted to the local frontend origin
+- [x] SQLite schema and migrations
+- [x] Next.js frontend shell with the Lyra tokens and shadcn bridge in `globals.css`
+- [x] `scripts/dev` and `scripts/start` launching both processes
 
 ### Settings
-- [ ] Tutor endpoint configuration, API key stored in the OS keychain
-- [ ] Test-connection action that validates the endpoint and lists available models
-- [ ] Model selection populated from the endpoint
-- [ ] Endpoint locality indicator, non-local warning, and one-time acknowledgement
-- [ ] Theme control: system, light, dark
+- [x] Tutor endpoint configuration, API key stored in the OS keychain
+- [x] Test-connection action that validates the endpoint and lists available models
+- [x] Model selection populated from the endpoint
+- [x] Endpoint locality indicator, non-local warning, and one-time acknowledgement
+- [x] Theme control: system, light, dark
 
 ### Class workspace
-- [ ] Create a class (name, code, semester)
-- [ ] Class list on the home page
-- [ ] Workspace view with document sidebar and chat area
-- [ ] Rename a class, and delete a class with everything it owns
+- [x] Create a class (name, code, semester)
+- [x] Class list on the home page
+- [x] Workspace view with document sidebar and chat area
+- [x] Rename a class, and delete a class with everything it owns
+- [x] Archive and restore a class, keeping its data intact
 
 ### Document upload and ingestion
-- [ ] Drag-and-drop upload returning `202`
-- [ ] Supported in this phase: text-based PDF, TXT, MD
-- [ ] Text extraction with PyMuPDF, preserving page numbers
-- [ ] Scanned-page detection that produces a clear `unsupported` state rather than a silent empty
-      document. This is required in Phase 1 precisely because OCR is not: a student will drop a
-      scanned PDF, and the app must say so plainly and offer to keep the file for later.
-- [ ] Background ingestion job with the documented state machine and a polled status endpoint
-- [ ] Semantic chunking with the 2048-token ceiling
-- [ ] Local embeddings with mandatory `search_document: ` prefixes
-- [ ] Vector storage in `sqlite-vec`, with the embedding-model identity recorded
-- [ ] Delete a document and its chunks
+- [x] Drag-and-drop upload returning `202`
+- [x] Supported in this phase: text-based PDF, TXT, MD
+- [x] Text extraction with PyMuPDF, preserving page numbers
+- [x] Scanned-page detection that produces a clear `unsupported` state rather than a silent empty
+      document, offering to keep the file for later
+- [x] Background ingestion job with the documented state machine and a polled status endpoint
+- [x] Semantic chunking with the 2048-token ceiling
+- [x] Local embeddings with mandatory `search_document: ` prefixes
+- [x] Vector storage in `sqlite-vec`, with the embedding-model identity recorded
+- [x] Delete a document and its chunks
+- [x] Recursive folder upload with a batch loader reporting stage and progress
 
 ### Contextual chat
-- [ ] Sessions, message history, and streaming replies over SSE
-- [ ] Retrieved context injected from the class's documents
-- [ ] Guide and Show toggle (Socratic versus direct explanation)
-- [ ] Markdown rendering, incremental during streaming, with math and code blocks
-- [ ] Indicator when retrieval was heavily trimmed
-- [ ] Stop generation, and retry a failed turn
+- [x] Sessions, message history, and streaming replies over SSE
+- [x] Retrieved context injected from the class's documents
+- [x] Guide and Show toggle (Socratic versus direct explanation)
+- [x] Markdown rendering, incremental during streaming, with math and code blocks
+- [x] Indicator when retrieval was heavily trimmed
+- [x] Stop generation, and retry a failed turn as a re-answer rather than a re-ask
+- [x] Reasoning-model support: thoughts streamed and stored separately from the reply, closed by
+      default, with the elapsed duration persisted
+- [x] Conversations named from their first message and addressable at `?session={n}`
+- [x] Scope retrieval to a single selected document for the next turn
 
 ### Automatic profile extraction, proposal-only
-- [ ] Analysis pass as the `extracting` ingestion stage
-- [ ] Facts stored with `confidence`, `confirmed`, and source document
-- [ ] High-confidence facts injected as context; low-confidence facts withheld until confirmed
-- [ ] Skipped against a non-local endpoint without acknowledgement
+- [x] Analysis pass as the `extracting` ingestion stage
+- [x] Facts stored with `confidence`, `confirmed`, and source document
+- [x] High-confidence facts injected as context; low-confidence facts withheld until confirmed
+- [x] Skipped against a non-local endpoint without acknowledgement
 
 ### Class profile view
-- [ ] Facts grouped by kind, each showing its source document
-- [ ] Confirm or reject low-confidence facts, and correct a wrong value
-- [ ] In Phase 1 on purpose: extraction ships in V1, so V1 needs a way to see and fix what it
-      produced. Without it, one misread deadline silently corrupts every conversation in that class.
+- [x] Facts grouped by kind, each showing its source document
+- [x] Confirm or reject low-confidence facts, and correct a wrong value
 
 ### Interface and visual quality
-This is a first-class deliverable, not a finishing pass. It is specified screen by screen in
-[ui-phase-1.md](ui-phase-1.md) and is part of the definition of done.
+Specified screen by screen in [ui-phase-1.md](ui-phase-1.md) and part of the definition of done.
 
-- [ ] Every screen implements all four data states: loading, empty, error, and populated
-- [ ] Skeletons match the real layout; no spinners for page or list loads
-- [ ] Full keyboard operation, `:focus-visible` rings, focus trapping in overlays, skip-to-content
-- [ ] `prefers-reduced-motion` honored in CSS and in Framer Motion variants
-- [ ] Responsive across the three documented breakpoints
-- [ ] Dark mode complete, including code and math rendering
-- [ ] No hardcoded colors; every surface uses a token
-- [ ] Contrast contracts verified against the values recorded in design-system.md
+- [x] Every screen implements all four data states: loading, empty, error, and populated
+- [x] Skeletons match the real layout; no spinners for page or list loads
+- [x] `prefers-reduced-motion` honored in CSS and in Framer Motion variants
+- [x] Dark mode complete, including code and math rendering
+- [x] No hardcoded colors; every surface uses a token
+
+### Phase 1 closeout
+
+**Phase 1 is complete.** Both suites pass: 163 backend tests and 146 frontend tests. The items
+below were the gap between "the code exists" and "the phase is closed", and all of them are
+verification that could not be done by reading code.
+
+One known limit, recorded rather than hidden: the end-to-end run covered short documents. How
+ingestion and retrieval behave on a 900-page textbook is genuinely unknown, and closing it is
+Phase 3 work. No Phase 1 claim depends on it.
+
+- [x] Frontend test suite. Vitest with Testing Library, 146 tests over the modules that carry
+      real logic: markdown normalization, the API client and its SSE frame parsing, theme and
+      local-storage state, the reasoning trace, the streaming renderer, and the document hooks.
+      The vendored shadcn primitives in `components/ui/` are deliberately not covered
+- [x] Contrast contracts verified by recomputing every recorded pair from `globals.css` rather
+      than by eye. All 13 pairs match the documented ratio in both themes, and each clears its
+      floor. The check is scripted, so it can be re-run whenever a token moves
+- [x] Breakpoints verified at 1280, 768, and 375. Desktop shows the two-pane workbench; 768
+      collapses to Chat and Documents line tabs defaulting to Chat; 375 folds the ancestor
+      breadcrumb and moves navigation to the floating bottom shelf. No horizontal body scroll at
+      any width
+- [x] Keyboard map verified end to end: skip-to-content is the first focusable element and is
+      hidden until focused, Cmd+K focuses the composer, Cmd+N opens the class dialog, Cmd+B
+      toggles the rail, Escape closes an overlay, and focus is trapped inside a dialog and
+      restored to its trigger on close
+- [x] `:focus-visible` rings verified on every interactive element in the shell. Two controls, the
+      skip link and the header breadcrumb, were falling back to the browser default 1px outline
+      instead of the documented 2px ring with 2px offset; both now carry the standard ring
+- [x] Dark mode verified for the full workspace, including KaTeX math and document rows. Console
+      is clean on load and after interaction: no errors, no warnings
+- [x] Recorded end-to-end run of the definition of done below, against the baseline model. The
+      full flow works: create a class, upload, watch ingestion finish, ask, and get an answer
+      grounded in the uploaded material. Exercised on short documents only. Textbook-scale
+      ingestion and retrieval are deliberately untested here and are Phase 3 work, so nothing in
+      Phase 1 rests on them
 
 **Definition of done:** A student creates a class, uploads a text-based homework PDF, watches
 ingestion finish, asks about a specific problem, and gets an answer that references the uploaded
 material. Extracted syllabus facts are visible and correctable. Dropping a scanned PDF produces an
 honest, actionable message. Every screen is keyboard-navigable, responsive, correct in both themes,
-and free of placeholder styling. Everything except the tutor endpoint runs locally.
+and free of placeholder styling.
 
-## Phase 2: Scanned Documents (OCR)
+## Phase 2: Homework Solver
 
-**Goal:** Accept the documents Phase 1 rejects.
+**Goal:** Stop being read-only. Upload a homework set and get back a complete, checked, editable set
+of solutions that follow the method the course actually teaches.
 
-- [ ] Resolve the OCR serving spike documented in rag-pipeline.md and record the outcome there.
-      This gates the rest of the phase.
+This is the phase that makes Lyra something other than a chat window pointed at your documents. It
+is also where the Solve rung of the Guide/Show/Solve ladder lands: clicking any step of a solution
+to ask about it drops into Guide on that step, so the solver and the conversation are one product at
+two altitudes rather than two features.
+
+Specified in [solver-phase-2.md](solver-phase-2.md) for the data model, job architecture, and
+verification, and in [ui-phase-2.md](ui-phase-2.md) screen by screen. Four decisions the roadmap
+left open are settled there: the segmentation review is a blocking gate rather than a correction
+after the fact; verification is a separate pass with the tools attached rather than tools available
+during solving; reference solutions are designated per solve run rather than by a role on the
+document; and the build order puts the shared substrate first. The checklist below is the scope; the
+specs are the source of truth for how.
+
+### Shared substrate
+
+Two pieces are built here because the solver is their first consumer, but both are general and
+Phase 4 depends on them. They are called out separately so the dependency is visible and so neither
+gets designed solely around homework.
+
+- [ ] **Artifact model.** Lyra currently has inputs (documents), a derived index (chunks), a
+      transcript (messages), and claims about a class (profile facts). It has nothing representing
+      a thing Lyra produced that the user keeps, edits, and returns to. An artifact holds mixed
+      content (prose, math, and images), carries provenance back to the chunks and pages that
+      informed it, has a status, and supports revision at the level of its parts. `profile_facts`
+      is this pattern in miniature and is the model to generalize from
+- [ ] **Tool-calling loop.** Send messages plus tool definitions, execute returned calls, append
+      results, repeat to a bounded depth. Built in-house against the existing LLM client rather
+      than forked: the tool surface is small, and what agent frameworks provide beyond it is
+      multi-provider abstraction, plugin systems, and state management we already have
+- [ ] Tool calls are visible in the transcript, never silent
+- [ ] Termination guarantees: call-depth ceiling, timeout, and honest reporting when a loop is cut
+
+### Problem segmentation
+
+- [ ] Identify each problem and sub-part in an uploaded homework set. `chunks.problem_number` and
+      `chunks.part_index` already exist and are populated by the chunker
+- [ ] Handle sets that span multiple uploaded files
+- [ ] Present the segmentation before solving, so a missed or merged problem is correctable
+
+### Solving
+
+- [ ] Per-problem solution generation grounded in retrieved course material
+- [ ] Method alignment: prefer the approach the course teaches over the approach the model prefers,
+      retrieved from lecture notes and textbook sections
+- [ ] Optional professor solutions as few-shot examples for notation, style, and method. Where a
+      student has last term's solutions, this is the strongest available signal and the clearest
+      advantage over pasting a problem into a general chatbot
+- [ ] Solutions are structured by step, because steps are what the user clicks, asks about, and
+      regenerates
+- [ ] Per-problem regeneration, including a correction supplied by the user
+
+### Verification
+
+Accuracy is the entire value proposition. A confidently wrong solution is worse than none.
+
+- [ ] **Computer algebra tool.** SymPy through the tool loop: symbolic integration and
+      differentiation, equation solving, linear algebra, exact arithmetic. This is deterministic
+      verification rather than a second opinion, and it is the single highest-value check available
+      for the math and engineering work Lyra is best at
+- [ ] **Unit and dimensional checking.** Cheap, and it catches a large share of physics and
+      engineering errors
+- [ ] Extract the checkable claims from a solution (final answers, integrals, solved systems) and
+      verify each independently, re-deriving on mismatch
+- [ ] Per-problem confidence surfaced in the document, distinguishing steps grounded in retrieved
+      course material from steps the model supplied on its own
+
+Deliberately not used for verification: web lookup of existing answers. Answer sites are paywalled
+and hostile to fetching, matching a problem across textbook editions is its own hard problem, and a
+wrong answer retrieved from the web is more dangerous than the model's own wrong answer because it
+arrives with borrowed authority and the model will defer to it. Web search earns its place looking
+up unfamiliar methods, which is Phase 4.
+
+Self-critique is kept because it is nearly free, but it is not the safety net. Models ratify their
+own work.
+
+### Solver workspace
+
+- [ ] Dedicated route opening on a drop target for one or more homework PDFs
+- [ ] Side-by-side source document and solution document, with problem-level anchoring in both
+      directions. Overlaying solutions on the PDF stays open as a later refinement; anchored
+      side-by-side is a fraction of the work for most of the value
+- [ ] Click any step to ask about it, which opens a Guide-mode exchange scoped to that step
+- [ ] Mark a solution wrong and have that problem re-solved with the correction as input
+- [ ] Stage display driven by real backend events. Built in-house rather than adopting an
+      off-the-shelf loading component, both for token control and because canned components narrate
+      fixed sequences on a timer, which would violate the honesty principle in ui-phase-1.md
+- [ ] Export to PDF
+
+### Architecture note
+
+The solver is **ingestion-shaped, not chat-shaped**. A full problem set with verification passes can
+run for tens of minutes on local hardware, so it must be a background job with a polled status
+endpoint that survives the tab closing, following the pattern already proven by document ingestion.
+Per-problem results are written as they complete, never buffered to the end.
+
+**Deferred within this phase:** figure extraction into solutions, which needs the structural work in
+Phase 3, and web method lookup, which needs the tools in Phase 4. Both make the solver better; the
+phase closes without them.
+
+**Definition of done:** A student uploads a problem set, watches it segment and solve, reads
+solutions that use the method their course teaches, catches a wrong answer and has that one problem
+re-solved, asks a clarifying question about a single step, and exports the result.
+
+## Phase 3: Large Documents
+
+**Goal:** Make a textbook as useful as a syllabus, and accept the documents Phase 1 rejects.
+
+These are two problems that are easy to conflate. Retrieval quality over a 900-page book is a
+problem that exists **today**, for text-based PDFs, and has nothing to do with scanning. Reading
+scanned pages is a separate capability. The structural work is the more valuable of the two and has
+no external dependencies, so it comes first.
+
+### Structural parsing
+
+- [ ] Chapter and section hierarchy from the PDF outline (`get_toc()`), which most commercial
+      textbooks carry, with font and weight heading detection as the fallback
+- [ ] Hierarchical `section_path` on chunks, replacing the flat `section_title`. This is the change
+      that turns "the diagram in section 5.2.1" into a direct lookup instead of a semantic search,
+      which is the difference between reliable and lucky
+- [ ] Structure-aware retrieval that can resolve an explicit section reference in a problem
+- [ ] Ingestion performance and progress reporting at textbook scale, currently untested
+
+### Figures
+
+- [ ] Extract embedded images and rendered page regions with PyMuPDF
+- [ ] Caption-to-figure association (`Figure 5.21` and nearest image block), with an honest fallback
+      when the heuristic fails
+- [ ] Pull a referenced figure into a solution document, with provenance back to its source page.
+      This is the first artifact content that is not text, and the artifact model must hold it
+      from the start rather than gaining it later
+
+### Text recognition
+
+- [ ] Transcription interface: page in, text out, feeding the chunker. Both implementations below
+      sit behind it, so the model choice is swappable and does not need settling in advance
+- [ ] Route scanned pages through the bundled vision model first, since one is present anyway
+- [ ] Measure it: time a real sample of pages and extrapolate to textbook scale. If bulk
+      transcription through the general model is too slow on modest hardware, the specialist earns
+      its download
+- [ ] Unlimited-OCR through llama.cpp, page-batched, as the specialist path. Resolve the serving
+      spike documented in rag-pipeline.md and record the outcome there
 - [ ] Pin a llama.cpp build and record the commit
 - [ ] Model download and management for the OCR weights, with progress and disk-space checks
-- [ ] Unlimited-OCR through llama.cpp, page-batched, for scanned pages and images
 - [ ] Accept PNG, JPG, and WebP uploads
-- [ ] Per-page OCR progress in the ingestion UI, and per-page retry
+- [ ] Per-page progress in the ingestion UI, and per-page retry
 - [ ] Re-ingest documents previously marked `unsupported`
 - [ ] Mixed documents handled per page, so a scan-and-text hybrid works
 
-Deferred within this phase: long-horizon multi-page parsing, which needs R-SWA upstream. See Phase 5.
+A wrinkle worth testing while here: PyMuPDF's text layer mangles dense math, so a vision pass may
+produce better equations than the text layer does even on pages that were never scanned. If that
+holds, transcription stops being a scanned-document feature.
 
-## Phase 3: Study Tools
+**Note on ordering.** OCR was previously the gating item of its own phase, on the strength of an
+unmerged upstream dependency and multi-GB weights. Assuming a bundled vision model, it is no longer
+gating: it becomes a measured optimization behind an interface rather than a prerequisite. The
+research in rag-pipeline.md stands and is still the plan for the specialist path.
 
-**Goal:** Purposeful study features on top of documents and chat.
+## Phase 4: Agent
 
-- [ ] Homework walkthrough mode
-  - Identify each problem in an uploaded homework
-  - Step-by-step walkthrough with checking questions between steps
-  - Track which problems the student struggled with
+**Goal:** Let Lyra act outside its own database.
 
-- [ ] Practice problem generation
-  - Generate new problems from uploaded material
-  - Configurable difficulty and topic focus
-  - Attempt answers and receive feedback
+The tool-calling loop is already built in Phase 2, because verification needs it. This phase is
+therefore additional tools, the security posture that has to come with them, and a surface to use
+them from. That makes it considerably smaller than it looks.
 
-- [ ] Full class profile editor
-  - Editable fields across the whole profile
-  - Deadline calendar view
+- [ ] Web search and fetch through a locally hosted FireCrawl instance
+- [ ] Look up an unfamiliar method a textbook specifies, and offer it as a profile fact through the
+      existing propose-and-confirm flow rather than writing it silently
+- [ ] Read and reason about code for a class or lab
+- [ ] Write and edit code, with changes shown before they are applied
+- [ ] **Security posture, specified before any tool touches the filesystem.** Uploaded documents are
+      untrusted input by design, and once the model holds tools, document content becomes an
+      injection vector. Today the backend is loopback-only and writes only to `data/`, which is a
+      defensible boundary; filesystem and execution tools move it. Required: path allowlisting, no
+      execution without explicit confirmation, every tool call visible in the transcript, and a
+      documented threat model covering a poisoned upload
 
-- [ ] Document viewer
-  - In-app PDF and image viewer beside the chat
-  - Highlight text to ask about it
-  - Citation links from a response back to the source page
+**Note on the local-first pillar.** Web search means outbound requests to arbitrary hosts. That is
+not telemetry and a self-hosted FireCrawl keeps it under the user's control, but the pillar's
+wording has to distinguish "never reports on you" from "never touches the network", or it oversells.
 
-## Phase 4: Knowledge Building
+## Phase 5: Knowledge Building
 
-**Goal:** Help students retain what they learn, not just finish homework.
+**Goal:** Help students retain what they learn, not just finish the work in front of them.
 
+- [ ] Practice problem generation from uploaded material, with configurable difficulty and topic
+      focus, attempts, and feedback
 - [ ] Flashcard generation with spaced repetition
 - [ ] Quiz mode with score tracking and weakness identification
 - [ ] Study guide generation from a test date and topic list
+- [ ] Full class profile editor with a deadline calendar view
 - [ ] User profile refinement across classes
+- [ ] Cross-class connections, referencing concepts from prerequisite courses
+- [ ] Email drafting helper using the class profile for professor contact and tone
 
-## Phase 5: Advanced Features
+## Phase 6: Distribution
 
-**Goal:** Remove the remaining external dependencies and polish for distribution.
+**Goal:** Make the local-first pillar unconditional and ship one application.
 
-- [ ] **Bundled tutor inference engine**
-  - Ship llama.cpp for the tutor model, not just embeddings and OCR
-  - Model download, storage, and selection UI; memory-aware defaults
-  - This is the change that makes the local-first pillar unconditional. It was deliberately
-    excluded from V1 because runtime management, weight distribution, and model selection are a
-    large surface that would have dominated the first release. Until it lands, the tutor endpoint is
-    user-supplied and expected to be a local server, with remote endpoints treated as a testing
-    affordance only. See the Inference Posture section of architecture.md.
+- [ ] **Bundled inference engine.** Ship llama.cpp and weights for the tutor model, not just
+      embeddings and OCR, with model download, storage, selection, and memory-aware defaults. Until
+      this lands, the tutor endpoint is user-supplied and the endpoint locality machinery in the UI
+      is live scaffolding. Once it lands, that machinery becomes unnecessary and the privacy
+      guarantee stops being conditional. This is the item that makes pillar 1 true
+- [ ] Per-feature model requirements, so a user on modest hardware learns which features their
+      model can carry before being disappointed by one
+- [ ] Long-horizon multi-page OCR, adopting one-shot multi-page parsing once R-SWA lands upstream in
+      llama.cpp, recovering cross-page context for tables and problems spanning page breaks
+- [ ] Bulk document import: Canvas or syllabus export ingestion, organized by type
+- [ ] Native wrapper (Tauri or Electron) supervising both processes so the user launches one
+      application, with deadline notifications and signed distribution
 
-- [ ] Long-horizon multi-page OCR
-  - Adopt one-shot multi-page parsing once R-SWA lands upstream in llama.cpp
-  - Recovers cross-page context for tables and problems spanning page breaks
+## Model Baseline
 
-- [ ] Cross-class connections
-  - Reference concepts from prerequisite courses
+Development and testing target **Qwen3.6 27B**, a capable vision-language model, as the reference.
+Gemma4 covers the smaller memory configurations. The rule of thumb: if something does not work on
+the reference model, it will not work on a smaller one.
 
-- [ ] Email drafting helper
-  - Uses the class profile for professor contact and tone
-
-- [ ] Bulk document import
-  - Canvas or syllabus export ingestion, automatic organization by type
-
-- [ ] Native wrapper
-  - Tauri or Electron, supervising both processes so the user launches one application
-  - Deadline notifications
-  - Signed distribution
+A vision-capable tutor model is assumed from Phase 3 onward. Feature work does not currently
+accommodate weaker models; per-feature requirements and the accompanying disclaimer are Phase 6,
+once there is enough built to measure honestly.
 
 ## Not On The Roadmap (Explicitly Excluded)
 

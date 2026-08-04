@@ -30,6 +30,16 @@ class UpstreamError(LyraError):
     status = 502
 
 
+class ToolsUnsupportedError(UpstreamError):
+    """The endpoint will not accept tool definitions.
+
+    Raised rather than returned because it can surface from anywhere in a request. It is
+    a control signal more than a fault: the tool loop catches it and degrades, so solving
+    still works against an endpoint that cannot verify. It reaches a response only if
+    something asks for tools outside that loop.
+    """
+
+
 class ConfigurationError(LyraError):
     """Something the user must configure is missing or unusable."""
 

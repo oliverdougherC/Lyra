@@ -12,6 +12,11 @@ APIs) puts the thought in its own delta field, under one of `reasoning_content`,
 markers inline in the content stream, so `_ReasoningTagSplitter` pulls them back out. A
 model that does not think at all trips neither path and streams exactly as before.
 
+Tool calling lives here too, and is used only by the verification loop in `llm/tools.py`.
+It is non-streaming: the caller wants whole tool calls rather than fragments, and nobody
+reads a verification pass live. Tool definitions are never sent on an ordinary chat turn,
+so an endpoint that cannot accept them still carries the whole Phase 1 conversation.
+
 Every failure becomes an `UpstreamError` with a message written for the user. Those messages,
 and any log line this module writes, never contain the endpoint URL or the API key.
 """
@@ -24,7 +29,7 @@ from typing import Literal
 
 import httpx
 
-from backend.core.errors import UpstreamError
+from backend.core.errors import ToolsUnsupportedError, UpstreamError
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +44,31 @@ _ERROR_UNAUTHORIZED = "The tutor endpoint rejected the API key."
 _ERROR_NOT_FOUND = "The tutor endpoint path looks wrong. The URL should end in /v1."
 _ERROR_UPSTREAM = "The tutor endpoint returned an error."
 _ERROR_UNREADABLE = "The tutor endpoint returned a response that could not be read."
+_ERROR_NO_TOOLS = "The tutor endpoint does not accept tool calls."
+
+# The smallest tool that cannot be answered from prose. Addition is chosen so a model
+# that ignores the tool and answers anyway is still obviously not calling it.
+_PROBE_TOOL: dict[str, object] = {
+    "type": "function",
+    "function": {
+        "name": "add",
+        "description": "Add two numbers and return the sum.",
+        "parameters": {
+            "type": "object",
+            "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+            "required": ["a", "b"],
+        },
+    },
+}
+_PROBE_OK = "This endpoint can run the checks Lyra verifies solutions with."
+_PROBE_REFUSED = (
+    "This endpoint does not support tool calls, so Lyra cannot check solutions against a "
+    "computer algebra system. Solving still works."
+)
+_PROBE_IGNORED = (
+    "This endpoint accepted the request but answered without calling the tool, so Lyra "
+    "cannot rely on it to check solutions. Solving still works."
+)
 
 
 # Delta fields carrying reasoning, in the order they are trusted. `reasoning_content` is
@@ -60,6 +90,48 @@ class ConnectionResult:
 
     ok: bool
     model_count: int
+    message: str
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """One tool the model asked to run.
+
+    `arguments` is the raw JSON text the model produced, not a parsed object. Models emit
+    malformed argument JSON often enough that parsing here would turn a recoverable
+    round trip into a failed one; the tool loop parses it and hands a parse error back to
+    the model as a result it can act on.
+    """
+
+    id: str
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True)
+class AssistantMessage:
+    """One complete assistant turn: what it said, and what it wants run.
+
+    Both may be present. A model commonly narrates a sentence and calls a tool in the
+    same turn, and dropping either half would lose part of the transcript.
+    """
+
+    content: str
+    tool_calls: tuple[ToolCall, ...] = ()
+
+
+@dataclass(frozen=True)
+class ToolSupport:
+    """Whether this endpoint can run tool calls, and how we know.
+
+    Three outcomes, not two. An endpoint that rejects the request cannot do it; one that
+    calls the tool can; and one that accepts the request and answers in prose anyway is
+    reported as cannot, with a message saying that is what happened. Guessing in that
+    third case would either disable verification on a working endpoint or claim
+    verification on one that silently never runs it.
+    """
+
+    ok: bool
     message: str
 
 
@@ -172,12 +244,22 @@ def _mapped_error(exc: Exception) -> UpstreamError:
 
 
 def _chat_body(
-    model: str | None, messages: list[dict[str, str]], stream: bool
+    model: str | None,
+    messages: list[dict[str, object]],
+    stream: bool,
+    tools: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Assemble a chat-completions body, omitting `model` when the user has not picked one."""
+    """Assemble a chat-completions body, omitting `model` when the user has not picked one.
+
+    `tools` is omitted entirely when absent rather than sent empty. A server that does not
+    implement tool calling should never see the field on an ordinary chat turn, which is
+    what keeps the Phase 1 conversation working against endpoints that would reject it.
+    """
     body: dict[str, object] = {"messages": messages, "stream": stream}
     if model is not None:
         body["model"] = model
+    if tools:
+        body["tools"] = tools
     return body
 
 
@@ -300,6 +382,139 @@ async def complete(
     if not isinstance(content, str):
         raise UpstreamError(_ERROR_UNREADABLE)
     return strip_reasoning(content)
+
+
+def _read_tool_calls(message: dict[str, object]) -> tuple[ToolCall, ...]:
+    """Pull the tool calls out of an assistant message, skipping anything malformed.
+
+    A frame that claims a tool call but carries no name is dropped rather than passed on
+    as a call to the empty string: the loop would refuse it a moment later anyway, and
+    the refusal would read as the model's mistake rather than the server's.
+    """
+    raw = message.get("tool_calls")
+    if not isinstance(raw, list):
+        return ()
+    calls: list[ToolCall] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        function = entry.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        arguments = function.get("arguments")
+        calls.append(
+            ToolCall(
+                id=str(entry.get("id") or f"call_{len(calls)}"),
+                name=name,
+                arguments=arguments if isinstance(arguments, str) else "{}",
+            )
+        )
+    return tuple(calls)
+
+
+async def complete_with_tools(
+    endpoint: str,
+    api_key: str | None,
+    model: str | None,
+    messages: list[dict[str, object]],
+    tools: list[dict[str, object]],
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> AssistantMessage:
+    """Run one non-streaming turn with tool definitions attached.
+
+    Not streamed, deliberately. The caller is the verification loop, which wants whole
+    tool calls rather than fragments and which nobody is reading live, so streaming would
+    add reassembly for no benefit.
+
+    Args:
+        endpoint: Endpoint base URL including its version suffix.
+        api_key: Bearer token, or None when the endpoint needs no auth.
+        model: Model identifier, omitted from the request when None.
+        messages: OpenAI-shaped messages, including any prior `assistant` turns carrying
+            `tool_calls` and the `tool` messages answering them.
+        tools: OpenAI-shaped tool definitions.
+
+    Returns:
+        The assistant's content and the tool calls it asked for, either of which may be
+        empty.
+
+    Raises:
+        ToolsUnsupportedError: The endpoint refused the request with a 400. That status
+            is the strongest available signal that it does not implement tool calling.
+            It can also mean something else was wrong with the request, and the cost of
+            reading it the wrong way is bounded: verification degrades and reports itself
+            as not run, while solving is unaffected.
+        UpstreamError: Any other transport or status failure.
+    """
+    url = f"{_base_url(endpoint)}/chat/completions"
+    body = _chat_body(model, messages, stream=False, tools=tools)
+    async with _client(CHAT_TIMEOUT, api_key, transport) as client:
+        try:
+            response = await client.post(url, json=body)
+            if response.status_code == 400:
+                logger.info("Tutor endpoint rejected a request carrying tool definitions")
+                raise ToolsUnsupportedError(_ERROR_NO_TOOLS)
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPError as exc:
+            raise _mapped_error(exc) from exc
+        except ValueError as exc:
+            raise UpstreamError(_ERROR_UNREADABLE) from exc
+
+    choices = payload.get("choices") if isinstance(payload, dict) else None
+    if not choices:
+        raise UpstreamError(_ERROR_UNREADABLE)
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        raise UpstreamError(_ERROR_UNREADABLE)
+
+    content = message.get("content")
+    # A turn that only calls tools carries no content at all, which is not an error.
+    return AssistantMessage(
+        content=strip_reasoning(content) if isinstance(content, str) else "",
+        tool_calls=_read_tool_calls(message),
+    )
+
+
+async def probe_tool_support(
+    endpoint: str,
+    api_key: str | None,
+    model: str | None,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> ToolSupport:
+    """Ask the endpoint to make one trivial tool call, and report what happened.
+
+    A real inference call rather than a capability header, because there is no header to
+    read: an OpenAI-compatible server advertises nothing about tool calling, and several
+    accept the field and then ignore it. The only way to know is to ask for a call and
+    see whether one comes back.
+
+    Returns the outcome as data rather than raising, so the settings screen can render
+    all three states.
+    """
+    messages: list[dict[str, object]] = [
+        {
+            "role": "user",
+            "content": "Call the add tool with a = 2 and b = 3. Do not answer in prose.",
+        }
+    ]
+    try:
+        answer = await complete_with_tools(
+            endpoint, api_key, model, messages, [_PROBE_TOOL], transport=transport
+        )
+    except ToolsUnsupportedError:
+        return ToolSupport(ok=False, message=_PROBE_REFUSED)
+    except UpstreamError as exc:
+        return ToolSupport(ok=False, message=exc.message)
+
+    if answer.tool_calls:
+        return ToolSupport(ok=True, message=_PROBE_OK)
+    return ToolSupport(ok=False, message=_PROBE_IGNORED)
 
 
 def strip_reasoning(content: str) -> str:

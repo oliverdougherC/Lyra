@@ -20,6 +20,11 @@ dependencies = [
   "keyring==25.7.0",
   "httpx==0.28.1",
   "huggingface-hub==1.26.0",
+  # Solution verification. SymPy runs only inside the bounded subprocess in
+  # backend/tools/cas.py, never in the request or worker process: its parser evaluates,
+  # and the expressions it is given come from a model that has read an untrusted upload.
+  "sympy==1.14.0",
+  "pint==0.25.3",
 ]
 
 [project.optional-dependencies]
