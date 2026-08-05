@@ -12,6 +12,7 @@ viewer a second, and nothing else reads it.
 """
 
 import logging
+import os
 from pathlib import Path
 
 import pymupdf
@@ -73,7 +74,20 @@ def render_page(document_id: int, source: Path, mime: str, page_number: int) -> 
                 raise NotFoundError(NOT_A_PAGE)
             pixmap = document[page_number - 1].get_pixmap(dpi=RENDER_DPI)
             cached.parent.mkdir(parents=True, exist_ok=True)
-            pixmap.save(cached)
+            # Written beside the target and moved into place, because the cache is trusted
+            # on the strength of the file existing. A process killed partway through a
+            # direct write would leave a truncated PNG that `cached.exists()` then serves
+            # for good, and nothing short of re-ingesting the document would clear it.
+            # `replace` is atomic within a directory, so the name only ever appears once
+            # the bytes are all there.
+            partial = cached.with_name(f"{cached.name}.{os.getpid()}.partial")
+            try:
+                # `output` is named rather than left to the extension: PyMuPDF picks the
+                # format from the filename, and the temporary name does not end in `.png`.
+                pixmap.save(partial, output="png")
+                partial.replace(cached)
+            finally:
+                partial.unlink(missing_ok=True)
     except (LyraError, NotFoundError):
         raise
     except Exception as exc:
@@ -96,6 +110,12 @@ def discard_pages(document_id: int) -> None:
         return
     for page in directory.glob("*.png"):
         page.unlink(missing_ok=True)
-    # Only removes the directory when it is empty, which is the state the loop just left
-    # it in unless something else is writing there.
-    directory.rmdir()
+    try:
+        directory.rmdir()
+    except OSError:
+        # Something is still in there: a page being rendered right now, or a partial file
+        # from a write that was interrupted. The pages themselves are gone, which is what
+        # this function is for, and the empty directory costs nothing. Deleting a document
+        # while its source pane is loading a page must not fail the delete, which has
+        # already been committed by the time this runs.
+        logger.debug("Left the page cache directory for document %s in place", document_id)
