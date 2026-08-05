@@ -59,6 +59,13 @@ went into the interface, which is a stated core pillar and the thing a user actu
 - [x] Workspace view with document sidebar and chat area
 - [x] Rename a class, and delete a class with everything it owns
 - [x] Archive and restore a class, keeping its data intact
+- [x] A class hub at `/classes/[id]`: its conversations, solution sets, documents, and profile in one
+      place, with every action that belongs to the class. Clicking a class used to open a
+      conversation, which made the class the chat and left everything else reachable only from the
+      sidebar, where it could be opened but never managed
+- [x] Rename or delete a conversation, and rename or delete a solution set
+- [x] Move a document to another class, which re-indexes it there and withdraws the facts it alone
+      supported from the class it left
 
 ### Document upload and ingestion
 

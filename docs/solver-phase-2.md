@@ -89,6 +89,10 @@ create table artifact_parts (
     check (origin in ('generated','regenerated','user_corrected')),
   verdict text not null default 'unchecked'
     check (verdict in ('unchecked','verified','refuted','uncheckable')),
+  -- Added by 011. On a problem with sub-parts: whether they are one solution or a
+  -- question each. See Parts That Are Questions, And Parts That Are Steps.
+  solve_parts text not null default 'together'
+    check (solve_parts in ('together','separately')),
   error_message text,
   created_at text not null default (datetime('now')),
   updated_at text not null default (datetime('now'))
@@ -128,7 +132,37 @@ clickable, and a fraction survives the page being rendered at whatever width the
 coordinate in points does not. `[]` is a real value there, recording that the marker was looked for
 and not found, which is different from not having looked; sets written before positions existed are
 backfilled at startup rather than re-segmented, because re-segmenting would throw away every
-correction the student made at the review gate.
+correction the student made at the review gate. `010_relocate_named_problems.sql` clears the `[]`s so
+the backfill takes a second look at them under the rule below. `011_solve_parts.sql` adds
+`artifact_parts.solve_parts`, whether a problem's lettered parts are one solution or a question
+each, described under Parts That Are Questions; it defaults to `together`, so every set written
+before it keeps the shape it was written in.
+
+**A problem is searched for by its marker, then by its title.** A numbered sheet matches on
+`Problem 3` or `3.`, which is short and precise. A sheet whose problems are *named* - "Linearity and
+Time-Invariance", with no digit anywhere in the label - matched nothing at all under a pattern that
+required a number, so a whole homework set came out with no position for any of its problems and its
+page image had no bands and nothing to click. On those sheets the label is the heading, written on
+the page exactly as segmentation recorded it, so the title is searched for when the marker misses.
+Free text is only tried above a minimum length, because a short one would match a word inside a
+sentence rather than the heading.
+
+**The source pane shows a whole page and does not zoom.** A magnifier that cropped to the problem in
+view was built and then removed. It could only buy magnification two ways, and neither was worth
+having: widening the column moved the split and reflowed the solutions beside it, so switching it on
+rearranged the screen instead of magnifying anything; and cropping inside the page's own box is
+bounded by the width of the text, which on these sheets is a zoom of 1.2 to 1.4 - enough to notice
+the margins go uneven, not enough to be worth the machinery. Reading a problem closely is what the
+focus toggle is for, and it already gives the page the whole window.
+
+What took its place in the header is a **fit control**, which sizes the document column to the width
+that stands a whole page at its largest with nothing to scroll. That width was always known - the
+pane measures it from the page it decoded and reports it as `onFitWidth` - and the column starts
+there. What it was not is recoverable: dragging the split is a choice and a choice outranks a
+measurement, so a reader who dragged once had no way back short of nudging the divider until the
+page looked right. The button clears the stored width, which puts the measurement back in charge and
+keeps it there, so the column tracks the fit again when the window changes height. It is disabled
+rather than hidden while the fit already holds, because the condition flips on every drag.
 
 ### Why it is shaped this way
 
@@ -206,7 +240,10 @@ otherwise-running job.
 
 `GET /api/solutions/{id}/status` returns the artifact state, `stage_detail`, `problems_total`,
 `problems_done`, and a per-part status array. Progress is real: `problems_done` increments when a
-problem's verification finishes, never on a timer and never estimated. When the count is unknown,
+problem's verification finishes, never on a timer and never estimated. It counts what is being
+solved, which on a sheet whose sections split into questions is the questions: four sections of
+five is twenty, and counting sections instead reported such a sheet as a quarter done when it was
+a quarter of the way through its first section. When the count is unknown,
 because segmentation has not finished, `problems_total` is null and the interface says so rather
 than showing a bar at zero.
 
@@ -267,6 +304,57 @@ Duplicate numbering across files is resolved by showing the filename beside the 
 interface, never by renumbering: a student who reads "Problem 1" on the page and "Problem 7" in
 Lyra has to translate between the two on every glance.
 
+### Parts that are questions, and parts that are steps
+
+A lettered part means two different things on two different sheets, and they cannot be solved the
+same way.
+
+```
+For each system below, determine whether     Consider $x(t) = e^{-2t}u(t)$.
+it is linear and time-invariant.               (a) Find $X(j\omega)$.
+  (a) $y(t) = x(t-2) + 3x(t)$                  (b) Using your answer to (a), find its energy.
+  (b) $y(t) = x^2(t)$
+  ...
+five questions, five answers                 one solution, one answer
+```
+
+Solving the left one as a single problem is what the old behaviour did, and it cost more than it
+looks. One run of working covering five unrelated systems; one answer sentence holding five
+results; **one verdict over all five**, so a refutation of (c) marked (a), (b), (d) and (e) wrong
+with it and re-solving (c) meant re-solving the other four. Retrieval was worse still: the query
+was the shared instruction, which names no mathematics at all.
+
+So `artifact_parts.solve_parts` records which of the two a problem is, and `together` is the
+default and the old behaviour. A problem marked `separately` is not solved; each of its parts is,
+with the parts' steps, answer, verdict, and checks hanging off the part rather than off the problem
+above it. The parts of a `together` problem are context in the problem's own turn, exactly as
+before. Nothing about the rows changes - the same `problem` under a `problem` - only where the
+work hangs.
+
+A part solved on its own is sent with the stem above it (`SolveInput.preamble`), because
+`(b) $y(t) = x^2(t)$` is not a question and only becomes one under the sentence that asks something
+of it. That sentence is also half of the retrieval query: the notation is in the part, the
+vocabulary the course indexes under is in the stem.
+
+**Deciding which it is** is `segmentation.parts_are_separate`, and it reads three sources in order
+of how much each can be trusted:
+
+1. **A part that refers to another part settles it, as one solution.** "Using your answer to (a)"
+   cannot be solved in a turn that does not contain (a). This is evidence rather than opinion, so
+   it overrules the model. Bare parentheses do not count - sub-part statements are full of `x(t)`
+   and `(2 + j)` - the reference has to be worded.
+2. **Otherwise the model's own reading.** Segmentation asks for it directly, in `parts_relation`.
+3. **Otherwise the shape of the stem.** "For each of the following" distributes one question over
+   its parts, which is what makes each part a question. A backstop for a model that ignored the
+   field, never asked to overrule one that answered it.
+
+Anything still undecided is `together`. The asymmetry is deliberate: a wrong `separately` solves a
+part against a result it was never given, while a wrong `together` is the behaviour Lyra had
+before any of this existed.
+
+The reading is proposed, never imposed - it is a row in the problem list and the student confirms
+or flips it at the gate like everything else there.
+
 ### The review gate
 
 The job stops at `awaiting_review` and does no further work until the student confirms.
@@ -276,10 +364,11 @@ of minutes of local compute: a merged problem produces one long wrong solution, 
 produces silence, and neither is visible until the run is over. Confirming a correct segmentation
 is one click; recovering from a bad one is a full re-run.
 
-At the gate the student can merge, split, delete, reorder, and relabel problems, and edit a
-problem's statement text. `PATCH /api/solutions/{id}/segmentation` replaces the problem list
-wholesale rather than patching individual rows, because merge and split are not expressible as
-per-row edits. `POST /api/solutions/{id}/start` confirms and begins solving.
+At the gate the student can merge, split, delete, reorder, and relabel problems, edit a problem's
+statement text, and say whether its parts are separate questions or one solution.
+`PATCH /api/solutions/{id}/segmentation` replaces the problem list wholesale rather than patching
+individual rows, because merge and split are not expressible as per-row edits.
+`POST /api/solutions/{id}/start` confirms and begins solving.
 
 An artifact left in `awaiting_review` stays there across restarts. It is listed as `Waiting for
 you` rather than as in progress, because it is.
@@ -345,8 +434,11 @@ failing the problem.
 
 ### Regeneration
 
-`POST /api/solutions/{id}/parts/{part_id}/regenerate` re-solves one problem, optionally carrying a
-correction the student supplied. The correction is passed to the model as input, stored as the
+`POST /api/solutions/{id}/parts/{part_id}/regenerate` re-solves one problem, or one part of a
+problem whose parts were solved separately - those hold a solution of their own, so re-solving one
+is the same act at a smaller size, and it is the point of the split: a wrong (c) costs (c). Never a
+step, and never a sub-part of a problem solved as a whole, whose steps belong to the problem above
+it. It optionally carries a correction the student supplied. The correction is passed to the model as input, stored as the
 `note` on the revision it produces, and never silently discarded.
 
 The existing reply is replaced only once the new one has been written, following the same rule the
@@ -495,6 +587,36 @@ boundary is Phase 4's work, gated behind the written threat model covering a poi
 architecture.md already requires before any tool touches the filesystem. What is true today is that
 the tool set computes and nothing else, the process running it is short-lived and bounded, and a
 crash in it costs one verification rather than the backend.
+
+### It may refuse, but it may never quietly answer a different question
+
+Containment is not the only way a checker's evaluator can be wrong, and it turned out not to be the
+way that actually cost anything. Measured against a real signals set, the runner was **reporting
+success on expressions it had silently read as something else**, and those answers went straight
+into verdicts:
+
+- `abs(t)` parsed as the product `a*b*s*t`, `h(t)` as `h*t`, and `inf` as `f*i*n`, because the
+  parser was configured to split an unrecognised name into its letters and to insert a `*` before a
+  bracket. `integrate(exp(-4*t), t, 0, inf)` therefore returned `1/4 - exp(-4*f*i*n)/4`, and said
+  `ok`.
+- `j` was not bound to the imaginary unit, so twelve true identities in one solve set were reported
+  as certainly unequal, and the solutions were refuted.
+- `certain` was computed as "did `simplify` return something that is not literally zero", which is
+  `not equal` restated. Every difference SymPy declined to reduce, including every definite integral
+  it would not evaluate without assumptions, was reported as a certain disagreement.
+
+So the rule now written at the top of `_cas_runner.py` outranks the four gates: it may refuse, but
+it may never answer a different question than it was asked. Implicit multiplication is gone, and
+`2x` is a refusal that says to write `2*x`. The notation of the material is bound instead: `u` and
+`delta` for the unit step and the impulse, `j` and `I` for the imaginary unit, every spelling of
+infinity, `abs` and `ln`. A name the caller declares as its own variable outranks all of it, so
+`integrate(exp(u), u)` integrates over `u` rather than over the step function.
+
+`certain` now means what the tool description already promised: proven equal, or shown unequal by
+evaluating the difference at sample points. Where neither holds it is false and carries a note
+saying the two were not settled, which is not a disagreement. **The one thing a checker may never
+do is call correct work wrong**, so where this is uncertain it abstains and the verdict falls to
+`uncheckable`, which the interface renders as "Nothing to check" rather than as a pass.
 
 ## Asking About A Step
 

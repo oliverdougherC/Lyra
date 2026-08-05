@@ -99,14 +99,19 @@ promise than pretending the socket is never opened.
 
 **Role:** User interface, state management, streaming rendering.
 
-- Client-side navigation across workspace routes: `/`, `/classes/[id]`, `/settings`
+- Client-side navigation across workspace routes: `/`, `/classes/[id]`, `/classes/[id]/chat`,
+  `/settings`
 - Document upload via drag-and-drop, with ingestion progress
 - Streaming tutor responses rendered incrementally
 - Reads and writes all state through `lib/api.ts`
 
 **Key pages:**
 - **Home:** Class list, recent activity
-- **Class workspace:** Documents, conversation, class profile
+- **Class hub (`/classes/[id]`):** The class as a place. Its conversations, solution sets,
+  documents, and profile in one tab bar, with every action that belongs to the class: rename,
+  archive, delete, rename or delete a chat or a solution set, and move, reindex, or delete files.
+  The open tab is a `?tab=` parameter, so any section of a class is a link.
+- **Class workspace (`/classes/[id]/chat`):** Conversation and documents, side by side
 - **Settings:** Tutor endpoint configuration, model selection, theme
 
 ### 2. Backend (FastAPI)
@@ -160,8 +165,18 @@ student who closes the laptop mid-solve comes back to finished work.
 - `GET /api/classes/{class_id}/documents` - List documents with ingestion state
 - `GET /api/documents/{document_id}` - Document detail, including extracted text availability
 - `GET /api/documents/{document_id}/status` - Ingestion progress. Poll target.
+- `GET /api/documents/{document_id}/pages/{page_number}` - One page rendered to PNG and cached, which
+  is what the solver's source pane shows beside a solution
+- `GET /api/documents/{document_id}/text` - The extracted text of a source with no pages to draw, so
+  a TXT or MD file has the same reading pane as a PDF. Truncated: this is a pane, not a download
 - `POST /api/documents/{document_id}/reingest` - Re-run ingestion, for example once OCR support
   lands for a document previously marked `unsupported`
+- `POST /api/documents/{document_id}/move` - File the document under another class. Returns `202`:
+  a move is a re-ingest, because chunks carry a denormalized `class_id`, their vectors live in a
+  table partitioned by it, and the facts drawn out of the text belong to whichever class asked for
+  them. The file moves on disk, the old class forgets the facts only this document supported, and
+  the document arrives `pending` in its new class. Refused with `409` while the document is still
+  processing, or while a solution set is built from it
 - `DELETE /api/documents/{document_id}` - Delete document, its file, and its chunks
 
 **Ingestion state machine:** `pending -> parsing -> chunking -> embedding -> extracting -> ready`.
@@ -175,6 +190,26 @@ Two terminal states besides `ready`:
 `GET .../status` returns the current stage, a page-level progress counter where known, the count of
 pages skipped for lack of extractable text, and the error if failed.
 
+Nothing is pushed, so the interface polls: the document list re-asks every 1.5s for as long as
+anything in it is non-terminal, derived from the list itself rather than from whichever screen
+mounted it, and it keeps polling while the window is in the background. Ingestion does not pause
+because the student switched windows, and a run long enough to walk away from is exactly the one
+they will.
+
+**On startup**, a document left `pending` is requeued and a document left mid-stage is failed. The
+queue is in memory, so a restart loses it either way, but the two cases are not the same: a queued
+document was never touched, while one caught mid-stage is the likeliest reason the process stopped
+and would otherwise be requeued into the same crash on every restart from then on. Failing both
+meant that dropping a folder into a class and restarting the server turned the whole queue into
+rows the student had to retry one at a time.
+
+**The `extracting` stage reads a bounded prefix**, `min(context_window * 0.6, 6000)` tokens. Tying
+it to the window alone made every upload's cost a function of a number chosen for chat: at a
+262144-token window the stage shipped 629,144 characters per document, overran the client's
+300-second read timeout, and returned no facts at all - while holding every queued upload behind
+it, since the worker takes one document at a time. What extraction looks for is stated near the
+front of a syllabus, so reading further mostly pays to be told nothing.
+
 **Chat**
 - `POST /api/classes/{class_id}/sessions` - Create a chat session
 - `GET /api/classes/{class_id}/sessions` - List sessions
@@ -184,6 +219,9 @@ pages skipped for lack of extractable text, and the error if failed.
   protocol. It carries no message body: the question is already stored, which is what makes this a
   retry of the answer rather than a repeat of the question. The reply being replaced is deleted only
   once a new one has been written, so a retry that fails upstream costs the user nothing
+- `PATCH /api/sessions/{session_id}` - Rename a conversation. A session is named after its first
+  message, which is a guess at what it turned out to be about; this corrects the guess, and a
+  session that carries a name is never renamed again by a later message
 - `DELETE /api/sessions/{session_id}` - Delete a session
 
 Chat is session-scoped, not class-scoped, so conversation history has an unambiguous owner.
@@ -197,8 +235,17 @@ Chat is session-scoped, not class-scoped, so conversation history has an unambig
 - `PATCH /api/solutions/{artifact_id}/segmentation` - Correct the problem list before solving
 - `POST /api/solutions/{artifact_id}/start` - Confirm the segmentation and begin solving
 - `POST /api/solutions/{artifact_id}/cancel` - Stop the run, keeping completed problems
+- `PATCH /api/solutions/{artifact_id}` - Rename the set. Deliberately does not touch `updated_at`:
+  the list is ordered by when the work changed, and renaming is not solving
 - `DELETE /api/solutions/{artifact_id}` - Delete the artifact and everything it owns
-- `PATCH` and `POST .../parts/{part_id}[/regenerate]` - Edit or re-solve one problem
+- `POST /api/solutions/{artifact_id}/resegment` - Read the problem list again from the sources,
+  discarding what is there. The way back from a segmentation that went wrong past correcting
+- `PATCH /api/solutions/{artifact_id}/parts/{part_id}` - Edit one problem's solution by hand
+- `POST /api/solutions/{artifact_id}/parts/{part_id}/regenerate` - Re-solve one problem, given what
+  the student says is wrong with it
+- `GET /api/solutions/{artifact_id}/parts/{part_id}/revisions` and `POST .../restore` - Every earlier
+  version of a part, and the way back to one. Editing and re-solving both write revisions, so no
+  correction is a one-way door
 
 Full specification, including the state machine and the review gate, in
 [solver-phase-2.md](solver-phase-2.md).
@@ -213,6 +260,8 @@ Full specification, including the state machine and the review gate, in
 - `GET /api/settings` - Current settings. Never returns the API key, only whether one is set.
 - `PUT /api/settings` - Update settings
 - `POST /api/settings/test-connection` - Validate the tutor endpoint
+- `POST /api/settings/test-tools` - Ask the endpoint whether it can run tool calls, which is what
+  decides whether the solver can check its own work
 - `GET /api/settings/models` - Fetch models the endpoint advertises
 
 ### 4. RAG Pipeline
@@ -249,11 +298,16 @@ invocations and their currently-known upstream limitations.
 - Discarded when the session is deleted; durable learnings are promoted to the Class Profile
 
 **Extraction and confirmation.** Document ingestion runs an analysis pass that proposes structured
-facts for the Class Profile. Extraction is **proposal-only**: every extracted fact carries a
-`confidence` and a `confirmed` flag.
+facts for the Class Profile, and a second per-class pass merges what the first one restated. The
+profile describes the class; documents are evidence for it, tracked in `profile_fact_sources`, and a
+second document stating something already known adds evidence rather than a duplicate row. See the
+construction section of rag-pipeline.md for the identity and consolidation rules.
+
+Extraction is **proposal-only**: every extracted fact carries a `confidence` and a `confirmed` flag.
 
 - `confidence: high` facts are used as context immediately.
-- `confidence: low` facts are stored but **not injected into prompts** until the user confirms them.
+- `confidence: low` facts are stored but **not injected into prompts** until the user confirms them,
+  unless two documents state them independently, which is corroboration rather than confirmation.
 
 This is a correctness requirement, not a nicety. A misread exam date or grading weight would
 otherwise silently poison the context of every conversation in that class with no way to notice or

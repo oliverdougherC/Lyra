@@ -47,16 +47,20 @@ backend/
   api/
     __init__.py
     routes_classes.py
-    routes_documents.py
+    routes_documents.py   # Upload, status, reingest, move between classes, delete
     routes_chat.py
     routes_profile.py
     routes_settings.py
-    schemas.py          # Pydantic request/response models
+    routes_solutions.py   # The solver's view of the artifact model (Phase 2)
+    schemas.py            # Pydantic request/response models
   core/
     __init__.py
-    classes.py          # Class workspace management
+    app_settings.py     # Resolving the tutor config, key included, from the settings row
+    classes.py          # Class management
+    errors.py           # LyraError and its subclasses, each carrying an HTTP status
     sessions.py         # Chat session management
-    profiles.py         # Profile facts, confidence, confirmation
+    profiles.py         # Class-scoped fact store, extraction, evidence, confirmation
+    consolidation.py    # The per-class pass that merges wording variants and sets noise aside
     ingestion.py        # Background ingestion job orchestration
     artifacts.py        # Artifact and part CRUD, revisions, provenance (Phase 2)
     segmentation.py     # Problem lists from chunk markers plus a model pass (Phase 2)
@@ -72,22 +76,24 @@ backend/
   rag/
     __init__.py
     parse.py            # PyMuPDF extraction, scanned-page detection
-    ocr.py              # Unlimited-OCR via llama.cpp
     chunk.py            # Semantic chunking, token ceiling
     embed.py            # Embedding, and the ONLY place task prefixes are applied
     retrieve.py         # Brute-force KNN, recency weighting, budgeting
+    locate.py           # Where a problem sits on its page, for the source pane (Phase 2)
     render.py           # Source pages rasterized to PNG and cached (Phase 2)
+    tokens.py           # The one token estimate every budget is counted in
   storage/
     __init__.py
     database.py         # SQLite connection, migrations
-    models.py           # Table definitions
-    vector.py           # sqlite-vec wrapper, re-index
+    migrations/         # Numbered, applied in order, never edited once shipped
     secrets.py          # OS keychain access
   llm/
     __init__.py
-    client.py           # OpenAI-compatible client, endpoint locality check
+    client.py           # OpenAI-compatible client, streaming and single completions
+    locality.py         # Whether an endpoint is local, which gates sending document text
+    embed_server.py     # The embedding model's own llama.cpp process, owned by the app
     prompts.py          # System prompt templates
-    stream.py           # SSE streaming
+    replies.py          # Parsing what a model sent back, including its stray prose
     tools.py            # Tool-calling loop and tool registry (Phase 2)
   tests/
     conftest.py
@@ -96,6 +102,11 @@ backend/
     test_ingestion.py
     test_api_*.py
 ```
+
+There is no `storage/models.py` or `storage/vector.py`: table definitions live in the numbered
+migrations, which are the only description of the schema, and the vector table is addressed through
+plain SQL against `sqlite-vec` rather than through a wrapper. There is no `rag/ocr.py` either - OCR
+was cut from Phase 1, and `unsupported` is the state that says so.
 
 ### Error Handling
 - Use Pydantic validation for inputs. Let FastAPI return 422.
@@ -147,28 +158,34 @@ frontend/
   src/
     app/
       layout.tsx
-      page.tsx              # Home, class list
-      classes/[id]/page.tsx # Class workspace
+      page.tsx                                   # Home, class list
+      classes/[id]/page.tsx                      # Class hub: chats, solutions, documents, profile
+      classes/[id]/chat/page.tsx                 # Class workspace: conversation and documents
+      classes/[id]/solutions/page.tsx            # The solver's index (Phase 2)
+      classes/[id]/solutions/new/page.tsx        # Solve setup: sources and title
+      classes/[id]/solutions/[artifactId]/page.tsx  # The solver workspace, one route, four phases
       settings/page.tsx
     components/
       ui/                   # shadcn/ui base components
-      layout/               # Sidebar, header, navigation
+      layout/               # Shell, sidebar, header, bottom nav, header portals
       chat/
-      classes/
-      documents/
+      classes/              # Class list, the class hub and its panels, class dialogs
+      documents/            # The list, a row, the upload well, move between classes
       profile/              # Profile view, fact confirmation
+      solutions/            # The solver's screens (Phase 2)
       settings/
     lib/
       api.ts                # The only module that talks to the backend
-      utils.ts              # cn(), formatters
-      hooks/
+      format.ts             # Shared display formatters
+      utils.ts              # cn()
+      hooks/                # One file per resource, wrapping TanStack Query
     styles/
       globals.css           # Lyra tokens plus the shadcn bridge
     types/
-      index.ts
+      index.ts              # Hand-written mirror of the backend's Pydantic schemas
   tests/
     setup.ts
-    *.test.tsx
+    *.test.{ts,tsx}
 ```
 
 ### State Management

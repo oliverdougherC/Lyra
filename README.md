@@ -109,9 +109,9 @@ Lyra/
   backend/          # Python FastAPI backend
     api/            # Route handlers
     core/           # Business logic, ingestion jobs
-    rag/            # OCR, chunking, embedding, retrieval
-    storage/        # SQLite, vector store, keychain access
-    llm/            # Tutor client, prompts, streaming
+    rag/            # Parsing, chunking, embedding, retrieval, page rendering
+    storage/        # SQLite, migrations, keychain access
+    llm/            # Tutor client, prompts, reply parsing, the tool loop
     tests/
   frontend/         # Next.js frontend
     src/

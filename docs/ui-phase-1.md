@@ -71,7 +71,8 @@ of arcs, because a broken ring still reads as a ring while two arcs read as two 
 - Desktop navigation is a 260px inset raised-paper rail, collapsible to a 60px icon rail with state persisted in `localStorage`
 - Class rows carry the course mark, the class name, and the course code beneath it. The name is the primary line: a rail of bare codes (`ECE 203`, `ECE 380`) does not say which class is which
 - Active class rows use `--accent-primary` text with a 2px sage marker inset within the row's rounded surface, not a `border-l` on its box, which lands outside the corner radius and reads as detached
-- A class row expands into its conversations only while that class is open: each chat links to `/classes/{id}?session={n}`, and a `New chat` action sits at the bottom of the list. Every other class stays a single line
+- A class row links to the class hub, `/classes/{id}`, not into a conversation. Clicking a class used to open a chat, which made the class the chat and left its solution sets, files, and profile reachable only through this rail, where they could be opened but never renamed, moved, or deleted
+- A class row expands into its conversations only while that class is open: each chat links to `/classes/{id}/chat?session={n}`, and a `New chat` action sits at the bottom of the list. Every other class stays a single line
 - Only the five most recent conversations are listed, with a `Show all {n}` row under them. A term's worth of chats is a hundred rows, and a rail that long buries Solutions and everything below it. The conversation being read is always on the list wherever it sits in the history, or the rail would have no highlighted row and no way back to it
 - `New chat` navigates to `?session=new` rather than creating anything. **A conversation starts existing when the first message is sent**: an empty chat is a click, not history, and creating one up front is what filled the rail with untitled conversations nobody had said anything in. Conversations already stored empty are swept once at startup
 - Conversations are named by the backend from their first message, and an untitled one falls back to its creation date. Never by list position, which renumbers whenever a conversation is added or removed, so the same chat keeps changing name
@@ -139,10 +140,39 @@ names the class and states exactly what is removed: documents, chunks, conversat
 Confirmation requires typing the course code, or the class name when no code exists. The destructive
 button uses `--danger-fill` with `--danger-foreground`.
 
+## Screen: Class Hub
+
+Route `/classes/[id]`, and where a class opens. A page, not a workspace: a centred column with the
+course mark, the class name, its code and term, and one line of actions. Under that a tab bar -
+Overview, Chats, Solutions, Documents, Profile - each tab carrying its count, so what the class
+holds is readable without opening anything. The open tab is a `?tab=` parameter rather than state,
+so a class opened on its files is a link, and Back leaves a tab rather than the class.
+
+Overview is a digest, not a fifth list: the three most recent conversations, the three most recent
+solution sets, the first few documents, and a line of what the profile knows, each section headed
+by the one action that starts something new and closed by `View all`.
+
+Documents is the one tab that takes the height it is given rather than asking for one. The file list
+scrolls inside its box and the upload well sits on the box's floor, so the well is on screen at
+every window size and the page itself never scrolls. A fixed height is a guess that is wrong in both
+directions: too tall and a short window has to be scrolled to reach the well, too short and a tall
+window leaves a band of dead page beneath it.
+
+This is the only screen where a class can be managed rather than merely used. Rename or archive or
+delete the class; rename or delete a conversation; rename or delete a solution set; and select
+files to move them to another class, reindex them, or delete them. Bulk delete is confirmed and a
+single row's is not: one file is a mistake you can see coming, several at once is the click that
+empties a term of uploads.
+
+Moving a file states its consequence rather than hiding it. The file arrives in its new class
+unindexed and is read again from scratch, because retrieval is partitioned by class; the toast
+says so. A file a solution set is built from cannot be moved, and the refusal names the set.
+
 ## Screen: Class Workspace
 
-Route `/classes/[id]`. The header carries the class code, name, and the Profile button, so the
-workspace starts at the panes. The conversation is the primary surface and fills the window.
+Route `/classes/[id]/chat`. The header carries the class code, name, and the Profile button, so the
+workspace starts at the panes. The conversation is the primary surface and fills the window. The
+class name in the breadcrumb links back up to the hub.
 
 **A workspace is not a page.** Pages are a padded column inside the shell's rounded surface, which
 is the right frame for a class list or a settings form. A workspace is the student's own material in
@@ -204,10 +234,16 @@ absent: **Reading, Splitting, Indexing, Analyzing**, mapped to `parsing`, `chunk
 
 - Completed steps show a check in `--success-text`; the active step shows the ring; later steps sit
   in `--text-tertiary`
-- Page-level counters appear as `page 4 of 12` when known
-- `Analyzing` carries the subtitle `Reading your syllabus for dates and topics`, because this stage
-  can take minutes on a local model and silence reads as a hang
-- Polled through TanStack Query, backing off from 500ms to 2s, and stopping on a terminal state
+- The document's size appears as `12 pages` once parsing knows it. Not `page 4 of 12`: `pages_done`
+  is written once, at the very end of the run, so a per-page counter read `page 1 of 12` from the
+  first second to the last, which looks like progress that has stalled. How long a document should
+  take is worth saying; a number that never moves while claiming to is not
+- `Analyzing` carries the subtitle `Looking for dates, topics, and course details`, because this
+  stage can take minutes and silence reads as a hang. Not "your syllabus": the stage runs over every
+  upload, so it told a student watching a lab handout that Lyra was reading their syllabus
+- Polled through TanStack Query, backing off from 500ms to 2s, and stopping on a terminal state. The
+  row falls back to the list's answer the moment its own poll is switched off, because a disabled
+  query keeps its last result and would otherwise pin the row to a stage that had ended
 - On completion the row transitions to `ready` and a `sonner` toast confirms it
 
 ### Unsupported Documents
@@ -229,21 +265,35 @@ Persistent target at the bottom of the document pane, and the whole pane accepts
 
 | State | Presentation |
 |-------|--------------|
-| Idle | one row: dashed 1px `--border-strong`, `Drop PDF, TXT, or MD here`, a `Choose files` control, and a folder icon action |
-| Drag over | sage-tinted fill with `--accent-primary` boundary and icon, expanded |
-| Rejected type | clay danger treatment with `--danger-text` error copy naming accepted types, expanded |
-| Uploading | tokenized `progress` bar with filename and queued progress, expanded |
+| Idle | dashed 1px `--border-strong`, centred: upload glyph over `Drop files or a folder here, or click to browse`, with a quiet `choose a folder` link beneath |
+| Drag over | sage-tinted fill with `--accent-primary` boundary and icon |
+| Reading a folder | the walk named while it runs, before any upload starts |
+| Rejected type | clay danger treatment with `--danger-text` error copy naming accepted types |
+| Uploading | tokenized `progress` bar with filename and queued progress |
 
-Idle, the well is a single quiet row, and it grows only when it has something to say. It shares a
-pane with the document list, and a permanently expanded well takes that height from the list: at
-17 documents the difference is between one visible row and eight. Choosing files is the primary
-control and the folder picker is secondary, because a single file is the common case.
+**The whole well is the control, and it is centred.** It was a caption on the left with two buttons
+pinned to the right, which reads as a toolbar that happens to have a label rather than as somewhere
+to put a file, and left the one part it is for - the target itself - as the part you could not
+click. Clicking anywhere in the well opens the file picker.
+
+The folder picker is a text link under the target rather than a second button beside the first:
+picking a folder is the rarer half of the choice, and the only other way to reach it is to drag one
+in. It says `files or a folder` because otherwise nothing does - recursive folder upload was built
+and then effectively hidden behind copy that offered `PDF, TXT, or MD`, which reads as one file at a
+time. A capability nobody can see is not shipped.
 
 Dropped folders are scanned recursively through the file system entry API, and the picker offers
-both a folder input (`webkitdirectory`) and the existing multi-file input. The batch is uploaded
-one file at a time so a large folder does not open dozens of request bodies at once; a `BatchLoader`
-above the well reports the current stage verb and `processed of total` counts while rows poll
-toward a terminal state. The document list is scrollable once rows exceed the pane.
+both a folder input (`webkitdirectory`) and the existing multi-file input. Every dropped entry is
+claimed synchronously in the drop handler, before the walk awaits anything: a `DataTransferItemList`
+is emptied the moment the handler yields, so reading it lazily meant a drop of three week folders
+uploaded the first and silently discarded the rest. The walk can take seconds on a term of notes, so
+the well names what it is doing while it runs rather than sitting idle and then filling up.
+
+The whole pane is one drop target, well included, so a folder dropped on the rows and a folder
+dropped on the well are read and reported the same way. The batch is uploaded one file at a time so
+a large folder does not open dozens of request bodies at once; a `BatchLoader` above the well
+reports the current stage verb and `processed of total` counts while rows poll toward a terminal
+state. The document list is scrollable once rows exceed the pane.
 
 ### Conversation
 

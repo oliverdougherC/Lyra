@@ -406,34 +406,130 @@ first path above.
 A stored thought is **never replayed to the model as history**. It is context for the reader, not for
 the next turn.
 
-## Automatic Profile Extraction
+## Class Profile Construction
 
-Ingestion runs an analysis pass that **proposes** structured facts for the Class Profile. It runs as
-the `extracting` stage of the ingestion job, after chunking, so a failure here never blocks the
-document from becoming searchable.
+A class profile is a description of the **course**, not a pile of per-document extractions. That
+distinction is the whole design. Text only ever arrives one document at a time, so observing has to
+be per-document; but a class with sixteen uploads has one Fourier series topic, not twelve, and one
+grading scheme, not sixteen restatements of the course code.
 
-1. Send document text, or a summary if it exceeds the extraction budget, to the tutor model
+Construction is therefore two phases: **observe**, once per document inside the ingestion job, and
+**consolidate**, once per class after new observations land.
+
+### Phase 1: Observe (per document, the `extracting` stage)
+
+Runs after chunking, so a failure here never blocks the document from becoming searchable.
+
+1. Send document text, truncated to the extraction budget, to the tutor model, together with the
+   class's own name, code, and term, and the document type `detect_doc_type` decided
 2. The model returns structured JSON
-3. Facts are stored as individual rows with `confidence`, `confirmed`, and `source_document_id`
-4. `confidence: high` facts become active context immediately
-5. `confidence: low` facts are stored but **excluded from prompts until the user confirms them**
+3. Each item is **merged into the class profile** by the identity rule below, rather than inserted
+   as a new row per document
+4. The document is recorded in `profile_fact_sources` as evidence for each fact it attested
+
+**The extraction budget is `min(context_window * 0.6, 6000)` tokens.** The share alone tied every
+upload's cost to a number chosen for chat: at a 262144-token window the stage sent 629,144 characters
+per document, overran the client's 300-second read timeout, and so returned no facts at all, while
+holding every queued upload behind it, since ingestion takes one document at a time. The cap is the
+budget an 8192 window gives, which is what this prompt was written against. What extraction is
+looking for is stated near the front of a syllabus rather than spread evenly through a hundred pages.
 
 **Extraction is skipped entirely when the tutor endpoint is non-local and the user has not given the
 one-time acknowledgement described in architecture.md.** It is never performed silently against a
-remote endpoint.
+remote endpoint. The same gate covers Phase 2, which sends fact labels to the same endpoint.
 
-**Extraction prompt:**
-```
-You are analyzing a course document. Extract the following structured information.
-Only extract facts that are explicitly stated. Do not infer or guess.
-Mark any field you are not certain about with confidence "low".
-Return JSON with these fields: deadlines[], topics[], professor_info{}, grading{},
-prerequisites[], notes[]
-```
+**What is a class fact.** The six kinds are defined by what a tutor would need to know, and the
+prompt names what to leave out as explicitly as what to collect. The exclusions matter more than the
+inclusions, because they are what a per-document extractor gets wrong by default:
 
-Extraction is a real cost: it is a full-document pass through the tutor model on every upload, which
-on a local model can take minutes for a long PDF. It therefore runs inside the ingestion job with
-its own progress stage and can be disabled in Settings.
+| Kind | Is | Is not |
+|------|----|--------|
+| `topic` | subject matter, named as a textbook index would name it | the course title, a problem's phrasing, a whole sentence |
+| `deadline` | a dated obligation | an assignment that carries no date |
+| `grading` | anything that determines the grade | a rubric for one worksheet |
+| `professor` | name, contact, office hours | the document's author line |
+| `prerequisite` | knowledge or software the course assumes | a step in one lab's setup |
+| `note` | a convention that holds across the course: a transform's sign or factor convention, required notation, a method the course requires or forbids | anything about the file: its title, type, assignment number, term, course code, or problem count |
+
+`note` was the bucket everything unclassifiable fell into, which is what made a profile unreadable.
+It is now the narrowest kind of the six and the most valuable one: a tutor that knows this course
+writes the Fourier transform without the $1/2\pi$ out front will not quietly contradict the lectures.
+
+**Extraction prompt:** see `_EXTRACTION_PROMPT` in `backend/llm/prompts.py`, which is the single copy.
+
+### The identity rule
+
+A fact is identified by `(class_id, kind, subject)`, where the subject is its label when the model
+gave a real one and its value otherwise, normalized. Two observations with the same identity are the
+same fact; the second one adds evidence rather than a row.
+
+Normalization merges only what differs by **formatting**, never by wording:
+
+- Unicode is NFKD-folded and combining marks dropped, so `naive` and `naïve` agree
+- Case is folded, and every non-alphanumeric run collapses to a single space, so
+  `Linearity and Time-Invariance` and `Linearity and Time Invariance` agree
+- One trailing parenthetical is dropped, because it is a gloss on the subject rather than part of it:
+  `Convolution Property (Periodic Convolution)` and `Convolution Property` agree
+
+That line is deliberate. Formatting differences can be merged with certainty, so they are merged in
+code where the result is free and deterministic. Wording differences (`Time Shift` against
+`Time-Shift Property`) require judgment, so they wait for Phase 2. Nothing in Phase 1 can merge two
+things a student would consider distinct.
+
+Where several wordings collapse to one identity, the **shortest** is kept as the display label. Among
+variants that already agree modulo formatting, the shortest is the canonical name:
+`Fourier Transform` over `Fourier Transform computation (X(jω) and x(t))`.
+
+### Phase 2: Consolidate (per class)
+
+Runs at the end of ingestion, once, over the class's `topic`, `prerequisite`, and `note` facts. It
+sends a numbered list of subjects, never document text, and asks for two judgments:
+
+- **`duplicates`**: groups that name the same thing in different words. The losers' evidence moves to
+  the winner and the loser rows are deleted.
+- **`not_about_the_course`**: entries that describe a file rather than the course. These are
+  **demoted to `low` confidence**, not deleted: they stay visible in the sheet, drop out of every
+  prompt, and wait for the student to confirm or reject them.
+
+Both judgments are conservative and bounded:
+
+- A fact the user has confirmed, rejected, or corrected is never merged away and never demoted. The
+  `edited` column exists for the third case, because correcting a value deliberately does not confirm it.
+- Every number in the reply must be one that was sent. Anything else is dropped.
+- The pass runs only when at least one fact is unconsolidated, so a re-upload that proposes nothing
+  new costs nothing. `consolidated` on each fact is what records that.
+- The entry list is capped, and a truncation is logged.
+
+If the pass fails or answers unusably, the profile is still the deterministically merged one, which
+is the guarantee that makes the model call optional rather than load-bearing.
+
+### What reaches a prompt
+
+`select_active_facts` is the single filter. A fact is active when it is not rejected **and** one of:
+
+1. the user confirmed it,
+2. the model marked it `high`, or
+3. **two or more distinct documents attested it.**
+
+The third rule is new and follows from evidence being tracked at all. A fact that two documents
+state independently has been corroborated, and corroboration is evidence in the same way a model's
+own `high` marking is. The student can still reject it, which is what keeps rule 3 safe.
+
+Ordering is by evidence: within a kind, most-attested first. `_render_facts` then caps each kind, so
+a class with ninety topics spends a bounded share of the system-prompt budget on the profile and
+spends it on the topics the course actually revolves around. Retrieval carries the detail; the
+profile is orientation.
+
+### Cost
+
+Phase 1 is a full-document pass through the tutor model on every upload, which on a local model can
+take minutes for a long PDF. Phase 2 is one short pass over labels. Both run inside the ingestion job
+with its own progress stage, and both are disabled together by the extraction switch in Settings.
+
+### Pruning
+
+Deleting a document withdraws its evidence. A fact left with no sources at all is deleted unless the
+user has confirmed, rejected, or corrected it, so removing an upload removes what it alone claimed.
 
 ## Design Principles
 
@@ -447,7 +543,11 @@ its own progress stage and can be disabled in Settings.
 3. **Semantic chunking.** Structure is respected, subject to the 2048-token hard ceiling.
 4. **Lightweight context.** Retrieval is tight and targeted, budgeted for 8K to 32K windows.
 5. **Class-scoped.** All retrieval is partitioned by class. No cross-class leakage until Phase 5.
-6. **Proposal, not assertion.** Automatically extracted facts are proposals until confirmed.
+6. **Proposal, not assertion.** Automatically extracted facts are proposals. A proposal becomes
+   active on the user's confirmation, on the model's own `high` marking, or on corroboration by a
+   second document, and never on anything else.
+7. **A profile describes the course.** Documents are evidence for it, not sections of it. Anything
+   true of one file and not of the class does not belong in the profile at all.
 
 ## Future Extensions
 

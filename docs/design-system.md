@@ -7,15 +7,15 @@ real desk: parchment canvas, raised paper, warm rules, espresso type, muted terr
 actionable sage. It earns depth through the three paper surfaces, thin boundaries, restrained
 elevation, and exactly one piece of atmosphere: a procedural paper-grain overlay (an inline SVG
 `feTurbulence` data URI in `globals.css`, fixed over the whole window). The noise is keyed into the
-**alpha** channel by `feColorMatrix` — warm espresso speckle in light, warm white in dark — and
+**alpha** channel by `feColorMatrix` - warm espresso speckle in light, warm white in dark - and
 composited by opacity alone. It is deliberately not RGB noise under a blend mode: that noise is
 centred on mid-gray, and the mid-gray-respecting blends (`soft-light` above all) reduce it to a
 near-identity, which measured as *literally invisible at full opacity*. The speckle is also tinted
 rather than neutral, because pure black grain desaturates the parchment to gray. No gradients other
 than functional scrims, no glows, no texture image assets, no marketing-page ornament.
 
-**The layering law.** Content is the canvas (`--bg-primary`); the things that sit *on* it — the
-rail, the composer well, popovers, inputs — are raised paper (`--bg-secondary`). Getting this
+**The layering law.** Content is the canvas (`--bg-primary`); the things that sit *on* it - the
+rail, the composer well, popovers, inputs - are raised paper (`--bg-secondary`). Getting this
 backwards is what made the workspace read as one flat slab: the rail, the pane, and the composer
 all resolved to `--bg-secondary`, so three surfaces at three depths were painted the same colour
 and only hairlines suggested otherwise. A "raised" element on a surface of its own tone is not
@@ -203,22 +203,22 @@ avatars, status dots, switches, and compact metadata badges.
   dropdowns, popovers, selects, tooltips, and Sonner use paper, border, and semantic elevation.
 - **Shell:** the application is one continuous surface, flush to the window. `Sidebar` uses
   `variant="sidebar"`, never `inset`: the inset variant floats everything inside a rounded, bordered,
-  shadowed panel, which is a card — the largest one in the product — and Lyra has no cards. Desktop
+  shadowed panel, which is a card - the largest one in the product - and Lyra has no cards. Desktop
   uses a 260px rail that moves off-canvas when closed; mobile uses a floating 64px paper shelf below
   640px. Main content keeps the 1320px cap. The rail is headed by the Lyra mark and the wordmark set
   in `.font-wordmark`, never a stock icon.
 - **Workspace chrome:** a route gets one header bar. Pane-level title bars that restate what the
   breadcrumb already says are removed, and their controls portal into the app header through
   `HeaderActions`.
-- **Answer-style switch:** Guide/Show is a segmented control — a rounded track with the active
+- **Answer-style switch:** Guide/Show is a segmented control - a rounded track with the active
   segment on raised paper. This does not contradict the Tabs rule below: tabs navigate between
   panes and take the 2px sage rule, whereas this changes how the next answer is written and has no
   pane rule to sit on once it lives in the header.
-- **Class index:** the home page is a ledger, not a card grid — one class per line under hairlines
+- **Class index:** the home page is a ledger, not a card grid - one class per line under hairlines
   in a centered `max-w-3xl` measure, name in the heading face, counts and recency kept to the right
   margin, and a final quiet "New class" line closing the list.
-- **Composer:** one raised writing well — `rounded-2xl` paper on the canvas, `shadow-sm`, accent
-  border and `shadow-md` on focus — laid out as a single row with the send control riding the last
+- **Composer:** one raised writing well - `rounded-2xl` paper on the canvas, `shadow-sm`, accent
+  border and `shadow-md` on focus - laid out as a single row with the send control riding the last
   line of type. A second row holding only a hint is dead air; the hint sits below the well and
   leaves after the first message. `--pane-control-row` is 3.75rem so the documents dropzone across
   the seam still closes on the same line.

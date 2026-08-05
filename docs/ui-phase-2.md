@@ -81,8 +81,8 @@ form and not a workspace.
 2. **Reference solutions, optional.** The same picker over the same documents, with the helper text
    `Worked solutions Lyra should follow for notation and method.` Nothing is selected by default.
 
-   Choosing a problem set offers any file that looks like its answers — `homework_5.pdf` offers
-   `ECE203_homework5_solution.pdf` — naming what it matched, with `Use it` and a dismiss. The match
+   Choosing a problem set offers any file that looks like its answers - `homework_5.pdf` offers
+   `ECE203_homework5_solution.pdf` - naming what it matched, with `Use it` and a dismiss. The match
    requires agreement on both the kind of assignment and its number, so lab 5 is never offered for
    homework 5: a loose match hands the solver a wrong reference that then looks plausible. Nothing
    is ever selected on the student's behalf. The panel says that solutions to the same set steer the
@@ -178,7 +178,7 @@ cut, because what is cut is the list rendered directly below it.
 A card whose text the student edited carries a quiet `Edited` badge, so a later re-read knows the
 statement is not verbatim from the page.
 
-Every structural edit — removing a sub-part or a problem, merging, splitting, adding — is undoable
+Every structural edit - removing a sub-part or a problem, merging, splitting, adding - is undoable
 with `Cmd/Ctrl+Z`, and an `Undo` button appears beside `Read it again` once there is something to
 take back. Typing is not on that stack: the statement editor keeps the browser's own undo. Removing
 a sub-part is one click on a small target beside text the student is still reading, and the only
