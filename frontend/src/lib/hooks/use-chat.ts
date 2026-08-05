@@ -26,12 +26,6 @@ export function useMessages(sessionId: number | null) {
   })
 }
 
-/**
- * Opens a conversation on a class, optionally anchored to a step of a solution.
- *
- * An anchored session is an ordinary conversation in every respect except that the step
- * is pinned into each turn: same composer, same streaming, same place in the sidebar.
- */
 export function useRenameSession(classId: number) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -56,6 +50,12 @@ export function useDeleteSession(classId: number) {
   })
 }
 
+/**
+ * Opens a conversation on a class, optionally anchored to a step of a solution.
+ *
+ * An anchored session is an ordinary conversation in every respect except that the step
+ * is pinned into each turn: same composer, same streaming, same place in the sidebar.
+ */
 export function useCreateSession(classId: number | null) {
   const queryClient = useQueryClient()
   return useMutation({
