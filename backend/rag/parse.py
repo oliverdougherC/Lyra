@@ -6,7 +6,7 @@ chunk: a scanned PDF would otherwise ingest "successfully" and then answer nothi
 Callers distinguish "some pages were scanned" from "all of them were" by comparing
 `pages` against `pages_total`, which is the count before anything was dropped.
 
-OCR is Phase 2. When it lands it becomes an additional parse path here; nothing in this
+OCR is Phase 3. When it lands it becomes an additional parse path here; nothing in this
 module assumes it exists.
 """
 
