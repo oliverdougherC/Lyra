@@ -69,7 +69,7 @@ wrong one, asks about a single step in Guide mode, and prints the result.
 It has been measured against a real course rather than against its own fixtures: one term of ECE
 203, eight problem sets with the professor's answer keys. `scripts/eval_solver.py` runs that
 evaluation and [docs/phase-2-handoff.md](docs/phase-2-handoff.md) records what it found, including
-what is still weak. 369 backend tests and 220 frontend tests pass.
+what is still weak. 501 backend tests and 338 frontend tests pass.
 
 Known limit: this has been exercised on short documents. Textbook-scale ingestion and retrieval are
 untested and are Phase 3 work. The `docs/` specifications remain the source of truth.
