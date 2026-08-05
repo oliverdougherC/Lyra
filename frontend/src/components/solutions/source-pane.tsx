@@ -12,11 +12,49 @@ import { truncateMiddle } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { DocumentRead, SolutionSource } from '@/types'
 
+/** Where one problem starts in its source document, as a fraction of the page box. */
+export type ProblemRegion = {
+  problemId: number
+  documentId: number
+  page: number
+  /** Top of the problem's own marker line. */
+  top: number
+  label: string
+}
+
 type SourcePaneProps = {
   sources: SolutionSource[]
   documents: DocumentRead[]
   /** The page the selected problem was found on, or null when that is not known. */
   anchor: { documentId: number; pageNumber: number | null } | null
+  /** Where each problem sits on its page, for the bands drawn over the image. */
+  regions?: ProblemRegion[]
+  /** The problem being read, which is marked on the page. */
+  activeProblemId?: number | null
+  onSelectProblem?: (problemId: number) => void
+  /** The control that gives this pane the whole window, rendered in its header. */
+  focusToggle?: React.ReactNode
+}
+
+/**
+ * Turn the problems on one page into the bands that cover it.
+ *
+ * A band runs from its own problem's marker to the next one's, so the answer to "where
+ * does problem 3 end" is always "where problem 4 starts". Deriving the extent here rather
+ * than storing it keeps geometry from ever disagreeing with the segmentation the student
+ * confirmed at the review gate.
+ */
+function bandsOn(regions: ProblemRegion[], documentId: number, page: number) {
+  const onPage = regions
+    .filter((region) => region.documentId === documentId && region.page === page)
+    .sort((left, right) => left.top - right.top)
+  return onPage.map((region, index) => ({
+    ...region,
+    // A little above the marker, so the band reads as containing the heading rather than
+    // starting halfway through its letters.
+    from: Math.max(0, region.top - 0.008),
+    to: onPage[index + 1] ? Math.max(0, onPage[index + 1].top - 0.008) : 1,
+  }))
 }
 
 /**
@@ -30,17 +68,30 @@ type SourcePaneProps = {
  * Scrolling away from the anchored page does not change the selection. The reader is
  * allowed to look around.
  */
-export function SourcePane({ sources, documents, anchor }: SourcePaneProps) {
+export function SourcePane({
+  sources,
+  documents,
+  anchor,
+  regions = [],
+  activeProblemId = null,
+  onSelectProblem,
+  focusToggle = null,
+}: SourcePaneProps) {
   const problemSets = sources.filter((source) => source.role === 'problem_set')
   // Where the reader has navigated to by hand, which outranks the anchor until the
   // selected problem changes.
   const [browsing, setBrowsing] = useState<{ documentId: number; page: number } | null>(null)
-  const [lastAnchor, setLastAnchor] = useState(anchor)
+  // Compared by value, not by identity. The caller builds this object fresh on every
+  // render, and the detail query polls while a solve is running, so an identity check
+  // threw away the reader's page turn every couple of seconds: the document simply could
+  // not be paged through for as long as Lyra was working.
+  const anchorKey = anchor ? `${anchor.documentId}:${anchor.pageNumber ?? ''}` : ''
+  const [lastAnchorKey, setLastAnchorKey] = useState(anchorKey)
 
   // Adjusted during render rather than in an effect: a new anchor means a new problem is
   // selected, and the reader's manual page turn belonged to the previous one.
-  if (anchor !== lastAnchor) {
-    setLastAnchor(anchor)
+  if (anchorKey !== lastAnchorKey) {
+    setLastAnchorKey(anchorKey)
     setBrowsing(null)
   }
 
@@ -76,28 +127,40 @@ export function SourcePane({ sources, documents, anchor }: SourcePaneProps) {
             {filename ? truncateMiddle(filename, 30) : 'Source'}
           </span>
         </span>
-        {problemSets.length > 1 ? (
-          <select
-            className="border-border bg-card text-text-secondary rounded-md border px-2 py-1 text-xs"
-            value={documentId}
-            onChange={(event) => setBrowsing({ documentId: Number(event.target.value), page: 1 })}
-            aria-label="Source document"
-          >
-            {problemSets.map((source) => (
-              <option key={source.document_id} value={source.document_id}>
-                {source.filename}
-              </option>
-            ))}
-          </select>
-        ) : null}
+        <span className="flex shrink-0 items-center gap-1">
+          {problemSets.length > 1 ? (
+            <select
+              className="border-border bg-card text-text-secondary rounded-md border px-2 py-1 text-xs"
+              value={documentId}
+              onChange={(event) => setBrowsing({ documentId: Number(event.target.value), page: 1 })}
+              aria-label="Source document"
+            >
+              {problemSets.map((source) => (
+                <option key={source.document_id} value={source.document_id}>
+                  {source.filename}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {focusToggle}
+        </span>
       </header>
 
-      <ScrollArea className="min-h-0 flex-1">
-        <div className="p-4">
+      {/* The desk under the sheet: a slightly sunken tone, so the rendered page reads as
+          a physical page lying on the workspace rather than a white rectangle in a form. */}
+      <ScrollArea className="bg-muted/40 min-h-0 flex-1">
+        <div className="p-5">
           {isPdf ? (
             // Keyed so a page change restarts the load rather than showing the previous
             // page while the next one arrives.
-            <PageImage key={`${documentId}-${page}`} documentId={documentId} page={page} />
+            <PageImage
+              key={`${documentId}-${page}`}
+              documentId={documentId}
+              page={page}
+              bands={onSelectProblem ? bandsOn(regions, documentId, page) : []}
+              activeProblemId={activeProblemId}
+              onSelect={onSelectProblem}
+            />
           ) : (
             <SourceText documentId={documentId} />
           )}
@@ -135,7 +198,19 @@ export function SourcePane({ sources, documents, anchor }: SourcePaneProps) {
   )
 }
 
-function PageImage({ documentId, page }: { documentId: number; page: number }) {
+function PageImage({
+  documentId,
+  page,
+  bands,
+  activeProblemId,
+  onSelect,
+}: {
+  documentId: number
+  page: number
+  bands: ReturnType<typeof bandsOn>
+  activeProblemId: number | null
+  onSelect?: (problemId: number) => void
+}) {
   const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
 
   if (state === 'failed') {
@@ -147,7 +222,7 @@ function PageImage({ documentId, page }: { documentId: number; page: number }) {
   }
 
   return (
-    <>
+    <div className="relative">
       {state === 'loading' ? <Skeleton className="aspect-[8.5/11] w-full rounded-md" /> : null}
       {/* eslint-disable-next-line @next/next/no-img-element -- The backend serves these at
           an unknown intrinsic size and Next's loader would proxy a localhost-only route. */}
@@ -155,13 +230,35 @@ function PageImage({ documentId, page }: { documentId: number; page: number }) {
         src={documentPageUrl(documentId, page)}
         alt={`Page ${page}`}
         className={cn(
-          'border-border w-full rounded-md border bg-white',
+          'border-border/60 w-full rounded-[3px] border bg-white shadow-md',
           state !== 'ready' && 'hidden',
         )}
         onLoad={() => setState('ready')}
         onError={() => setState('failed')}
       />
-    </>
+      {/* Laid over the page rather than drawn into it: the image is a faithful render of
+          the student's own sheet, and marking it up would make the two columns disagree
+          about what the sheet says. Percentages, because the page is rendered at whatever
+          width the pane happens to have. */}
+      {state === 'ready' && onSelect
+        ? bands.map((band) => (
+            <button
+              key={band.problemId}
+              type="button"
+              onClick={() => onSelect(band.problemId)}
+              aria-label={`Go to the solution for ${band.label}`}
+              title={band.label}
+              style={{ top: `${band.from * 100}%`, height: `${(band.to - band.from) * 100}%` }}
+              className={cn(
+                'absolute inset-x-0 border-l-2 transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none',
+                band.problemId === activeProblemId
+                  ? 'border-accent-primary bg-accent-primary/8'
+                  : 'border-transparent hover:border-accent-primary/60 hover:bg-accent-primary/6',
+              )}
+            />
+          ))
+        : null}
+    </div>
   )
 }
 

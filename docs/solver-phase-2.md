@@ -118,11 +118,17 @@ create table artifact_provenance (
 create index idx_provenance_part on artifact_provenance(part_id);
 ```
 
-Two later migrations extend this. `006_solving.sql` adds `artifact_checks`, the tool calls behind
+Three later migrations extend this. `006_solving.sql` adds `artifact_checks`, the tool calls behind
 one verdict; `artifact_parts.verdict_detail`, the sentence a verdict is explained by; and
 `settings.tools_supported` plus `tools_message`, the recorded capability probe.
 `007_session_artifact_part.sql` adds the anchored-session column described under Asking About A
-Step.
+Step. `008_provenance_bbox.sql` adds `artifact_provenance.bbox`, where on its page a problem's
+marker sits, as fractions of the page box: it is what makes the page image beside a solution
+clickable, and a fraction survives the page being rendered at whatever width the pane has while a
+coordinate in points does not. `[]` is a real value there, recording that the marker was looked for
+and not found, which is different from not having looked; sets written before positions existed are
+backfilled at startup rather than re-segmented, because re-segmenting would throw away every
+correction the student made at the review gate.
 
 ### Why it is shaped this way
 
@@ -504,6 +510,16 @@ It reuses the chat stack entirely. `chat_sessions` gains a nullable `artifact_pa
 - retrieves normally on top of the pinned context, so the exchange still reaches the course material
 - appears in the sidebar under its class like any other conversation, named from its first message
 
+**The conversation is scoped to the step, which is narrower than the mode it runs in.** Guide is
+written to teach a problem end to end, and turned loose on a step it does exactly that: the student
+asks why one line follows from the one above it, answers the leading question correctly, and is told
+"perfect, now how do we do the next step?" They did not ask to be walked through the problem. So an
+anchored session carries an extra rule with its pinned step: answer what was asked, at most one
+leading question to get there, then stop. Never continue into the next step, and never offer the
+walkthrough. The student can ask for it, and then it is theirs to ask for rather than Lyra's to
+start. The rule travels with the step rather than living in the mode prompts, because it is a
+property of where the question was asked from: Show has the same appetite for finishing the problem.
+
 No new streaming protocol, no second message store, no parallel prompt builder.
 
 ## API Surface
@@ -559,6 +575,8 @@ backend/
   llm/
     tools.py            # The tool-calling loop and the tool registry
     prompts.py          # Gains the segmentation, solving, and verification prompts
+  rag/
+    locate.py           # Where a problem's marker sits on its source page
   tools/
     __init__.py
     result.py           # ToolResult: the one shape every tool returns

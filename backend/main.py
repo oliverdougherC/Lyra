@@ -21,7 +21,7 @@ from backend.api import (
     routes_solutions,
 )
 from backend.config import settings
-from backend.core import solver
+from backend.core import sessions, solver
 from backend.core.errors import LyraError
 from backend.core.ingestion import reconcile_interrupted, start_worker
 from backend.llm.embed_server import embedding_server
@@ -46,6 +46,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stalled = solver.reconcile_interrupted(conn)
         if stalled:
             logger.warning("Marked %d interrupted solve job(s) as failed", stalled)
+        discarded = sessions.discard_empty_sessions(conn)
+        if discarded:
+            logger.info("Discarded %d conversation(s) that were never used", discarded)
+        # Solution sets written before positions were recorded keep every correction the
+        # student made at the review gate, so they are backfilled rather than re-segmented.
+        located = solver.backfill_problem_locations(conn)
+        if located:
+            logger.info("Located %d problem(s) on their source page", located)
     finally:
         conn.close()
     start_worker()

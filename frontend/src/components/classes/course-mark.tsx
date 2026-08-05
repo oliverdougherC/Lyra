@@ -16,6 +16,7 @@ const COURSE_TONES = [
 const SIZES = {
   sm: 'size-6 rounded-[5px] text-[10px]',
   md: 'size-10 rounded-md text-sm',
+  lg: 'size-12 rounded-md text-base',
 } as const
 
 export function courseToneFor(classId: number): string {

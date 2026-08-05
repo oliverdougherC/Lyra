@@ -1,11 +1,12 @@
 'use client'
 
-import { Suspense, useCallback } from 'react'
-import { Archive, ChevronDown, GraduationCap, Plus, RotateCcw, Settings } from 'lucide-react'
+import { Suspense, useCallback, useState } from 'react'
+import { Archive, ChevronDown, Plus, RotateCcw, Settings } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 
 import { CourseMark } from '@/components/classes/course-mark'
+import { LyraMark } from '@/components/chat/lyra-mark'
 import {
   Sidebar,
   SidebarContent,
@@ -27,13 +28,22 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatSessionFallbackTitle } from '@/lib/format'
 import { useClasses, useUpdateClass } from '@/lib/hooks/use-classes'
-import { useCreateSession, useSessions } from '@/lib/hooks/use-chat'
+import { useSessions } from '@/lib/hooks/use-chat'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
 import { useSolutions } from '@/lib/hooks/use-solutions'
 import { cn } from '@/lib/utils'
 import type { ClassRead, SolutionRead } from '@/types'
 
 const ARCHIVED_STORAGE_KEY = 'lyra-sidebar-archived-open'
+
+/**
+ * How many conversations a class shows before the rest fold away.
+ *
+ * A term's worth of chats is a hundred rows, and a rail that long buries Solutions and
+ * everything under it. Five is enough to cover "the one I was just in" without the list
+ * becoming the sidebar.
+ */
+const VISIBLE_SESSIONS = 5
 
 /**
  * The active marker sits inside the row's rounded surface rather than on its border box.
@@ -61,6 +71,29 @@ function SessionParam({
   return children(searchParams.get('session'))
 }
 
+type SessionSummary = { id: number; title: string | null; mode: string; created_at: string }
+
+function SessionSubItem({
+  session,
+  href,
+  activeSessionId,
+}: {
+  session: SessionSummary
+  href: string
+  activeSessionId: string | null
+}) {
+  const label = session.title || formatSessionFallbackTitle(session.created_at)
+  return (
+    <SidebarMenuSubItem>
+      <SidebarMenuSubButton asChild isActive={activeSessionId === String(session.id)}>
+        <Link href={`${href}?session=${session.id}`} title={label}>
+          <span className="truncate">{label}</span>
+        </Link>
+      </SidebarMenuSubButton>
+    </SidebarMenuSubItem>
+  )
+}
+
 /**
  * One class row. Only the class currently open shows its conversations: every other row
  * stays a single line, so a long class list does not bury the workspace in submenus.
@@ -78,13 +111,27 @@ function ClassNavItem({
   klass: ClassRead
   selected: boolean
   activeSessionId: string | null
-  sessions?: { id: number; title: string | null; mode: string; created_at: string }[]
+  sessions?: SessionSummary[]
   sessionsPending?: boolean
   solutions?: SolutionRead[]
   activeSolutionId: string | null
   onNewChat: () => void
 }) {
   const href = `/classes/${klass.id}`
+  const [showAllSessions, setShowAllSessions] = useState(false)
+
+  const allSessions = sessions ?? []
+  const headSessions = allSessions.slice(0, VISIBLE_SESSIONS)
+  const restSessions = allSessions.slice(VISIBLE_SESSIONS)
+  // The conversation being read is always on the list, wherever it sits in the history.
+  // Folding it away would leave the rail with no highlighted row and no way back to it.
+  const pinnedSessions = showAllSessions
+    ? []
+    : restSessions.filter((session) => activeSessionId === String(session.id))
+  // The rest open *below* the toggle. Growing the list upward would shove the control
+  // you just clicked off under the cursor, so collapsing again means hunting for it.
+  const tailSessions = showAllSessions ? restSessions : []
+  const hiddenCount = restSessions.length - pinnedSessions.length - tailSessions.length
 
   return (
     <Collapsible open={selected}>
@@ -117,21 +164,49 @@ function ClassNavItem({
                 <SidebarMenuSkeleton />
               </SidebarMenuSubItem>
             ) : (
-              (sessions ?? []).map((session) => {
-                const label = session.title || formatSessionFallbackTitle(session.created_at)
-                return (
-                  <SidebarMenuSubItem key={session.id}>
-                    <SidebarMenuSubButton asChild isActive={activeSessionId === String(session.id)}>
-                      <Link href={`${href}?session=${session.id}`} title={label}>
-                        <span className="truncate">{label}</span>
-                      </Link>
-                    </SidebarMenuSubButton>
-                  </SidebarMenuSubItem>
-                )
-              })
+              [...headSessions, ...pinnedSessions].map((session) => (
+                <SessionSubItem
+                  key={session.id}
+                  session={session}
+                  href={href}
+                  activeSessionId={activeSessionId}
+                />
+              ))
             )}
+            {hiddenCount > 0 || showAllSessions ? (
+              <SidebarMenuSubItem>
+                <SidebarMenuSubButton asChild onClick={() => setShowAllSessions(!showAllSessions)}>
+                  <button
+                    type="button"
+                    aria-expanded={showAllSessions}
+                    className="text-text-tertiary"
+                  >
+                    <ChevronDown
+                      aria-hidden
+                      className={cn(
+                        'transition-transform duration-150',
+                        !showAllSessions && '-rotate-90',
+                      )}
+                    />
+                    <span>{showAllSessions ? 'Show fewer' : `Show all ${allSessions.length}`}</span>
+                  </button>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+            ) : null}
+            {tailSessions.map((session) => (
+              <SessionSubItem
+                key={session.id}
+                session={session}
+                href={href}
+                activeSessionId={activeSessionId}
+              />
+            ))}
             <SidebarMenuSubItem>
-              <SidebarMenuSubButton asChild onClick={onNewChat}>
+              <SidebarMenuSubButton
+                asChild
+                onClick={onNewChat}
+                isActive={activeSessionId === 'new'}
+              >
                 <button type="button" aria-label="Start a new chat" className="text-text-secondary">
                   <Plus />
                   <span>New chat</span>
@@ -145,7 +220,7 @@ function ClassNavItem({
                   nothing sends you back to hunting. */}
               <Link
                 href={`${href}/solutions`}
-                className="text-text-tertiary hover:text-text-secondary focus-visible:ring-ring mt-2 block rounded-sm px-2 text-[0.6875rem] font-medium tracking-wider uppercase focus-visible:ring-2 focus-visible:outline-none"
+                className="eyebrow hover:text-text-secondary focus-visible:ring-ring mt-2 block rounded-sm px-2 transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none"
               >
                 Solutions
               </Link>
@@ -209,16 +284,13 @@ export function AppSidebar() {
     selectedClassIsValid,
   )
   const solutionMatch = /^\/classes\/\d+\/solutions\/(\d+)/.exec(pathname)
-  const createSession = useCreateSession(selectedClassIsValid ? selectedClassId : null)
 
+  // Navigation, not creation. The conversation starts existing when the student sends
+  // something into it; until then there is nothing to put in this list.
   const startNewChat = useCallback(() => {
     if (selectedClassId === null) return
-    createSession.mutate(null, {
-      onSuccess: (session) => {
-        router.push(`/classes/${selectedClassId}?session=${session.id}`)
-      },
-    })
-  }, [createSession, router, selectedClassId])
+    router.push(`/classes/${selectedClassId}?session=new`)
+  }, [router, selectedClassId])
 
   const restoreClass = useCallback(
     (classId: number) => {
@@ -232,16 +304,23 @@ export function AppSidebar() {
   const archivedClasses = allClasses.filter((item) => item.archived)
 
   return (
-    <Sidebar variant="inset" collapsible="offcanvas">
+    // `sidebar`, not `inset`. The inset variant floats the whole application inside a
+    // rounded, bordered, shadowed panel — a card, and the largest one in the product. The
+    // app is one continuous surface: a raised paper rail flush against the canvas.
+    <Sidebar variant="sidebar" collapsible="offcanvas">
       <SidebarHeader className="p-1">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" tooltip="Lyra home">
               <Link href="/">
-                <span className="flex size-8 items-center justify-center rounded-md bg-accent-secondary text-accent-secondary-foreground">
-                  <GraduationCap className="size-4" />
+                {/* The product's own mark, not a stock icon: the same star that thinks
+                    beside every answer is the thing that names the app. */}
+                <span className="text-accent-primary flex size-8 items-center justify-center">
+                  <LyraMark className="size-6" />
                 </span>
-                <span className="font-heading text-base font-medium tracking-tight">Lyra</span>
+                <span className="font-wordmark text-text-primary text-[1.2rem] font-medium">
+                  Lyra
+                </span>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -252,7 +331,7 @@ export function AppSidebar() {
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Classes</SidebarGroupLabel>
+          <SidebarGroupLabel className="eyebrow">Classes</SidebarGroupLabel>
           <SidebarMenu>
             {isPending ? (
               <>
@@ -307,8 +386,8 @@ export function AppSidebar() {
               <SidebarGroupLabel asChild>
                 <CollapsibleTrigger className="w-full">
                   <span className="flex w-full items-center gap-2">
-                    <Archive aria-hidden className="size-3.5" />
-                    <span className="flex-1 text-left">Archived</span>
+                    <Archive aria-hidden className="size-3" />
+                    <span className="eyebrow flex-1 text-left">Archived</span>
                     <span className="text-text-tertiary tabular-nums">
                       {archivedClasses.length}
                     </span>

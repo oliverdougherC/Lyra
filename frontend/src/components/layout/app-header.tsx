@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
 import { EndpointLocalityBadge } from '@/components/layout/endpoint-locality-badge'
+import { HEADER_ACTIONS_SLOT, HEADER_CRUMB_SLOT } from '@/components/layout/page-chrome'
 import { ClassProfileSheet } from '@/components/profile/class-profile-sheet'
 import { Button } from '@/components/ui/button'
 import { SidebarTrigger } from '@/components/ui/sidebar'
@@ -96,15 +97,24 @@ export function AppHeader() {
               )}
             </li>
           ))}
+          {/* Where a workspace route puts its own title. It is a crumb rather than a
+              heading of its own, because a heading would cost the route a second bar to
+              put it in and this one is already here. */}
+          <li id={HEADER_CRUMB_SLOT} className="contents" />
         </ol>
       </nav>
+
+      {/* The route's own actions, ahead of the class-level ones: they belong to what is on
+          screen, and a workspace that gives up its title row has nowhere else to put them. */}
+      <div id={HEADER_ACTIONS_SLOT} className="flex shrink-0 items-center gap-1" />
 
       {klass ? (
         <div className="flex shrink-0 items-center gap-2">
           <Button
             ref={profileTriggerRef}
-            variant="outline"
+            variant="ghost"
             size="sm"
+            className="text-text-secondary hover:text-text-primary"
             onClick={() => setProfileOpen(true)}
           >
             <UserRound aria-hidden className="size-3.5" />

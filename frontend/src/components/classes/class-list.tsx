@@ -22,8 +22,9 @@ import { useClasses, useUpdateClass } from '@/lib/hooks/use-classes'
 import { formatCount, parseTimestamp } from '@/lib/format'
 import type { ClassRead } from '@/types'
 
-const SKELETON_COUNT = 6
-const GRID = 'grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3'
+const SKELETON_COUNT = 4
+/** The ledger: one class per line, hairlines between, like a contents page. */
+const LEDGER = 'flex flex-col divide-y divide-border/70 border-y border-border/70'
 
 export function ClassList() {
   const { data, isPending, isError, error, refetch, isFetching } = useClasses()
@@ -81,11 +82,13 @@ export function ClassList() {
   const archivedCount = classes.length - activeClasses.length
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
+    // A reading measure, not a dashboard: the index is a centered column with room to
+    // breathe, because eleven classes is a page of a book, not a wall of tiles.
+    <div className="mx-auto w-full max-w-3xl space-y-8">
+      <div className="flex items-end justify-between gap-4 pt-2 md:pt-6">
         <div>
-          <h1 className="text-3xl leading-tight font-medium md:text-4xl">Classes</h1>
-          <p className="text-muted-foreground text-sm">
+          <h1 className="font-display text-3xl leading-tight md:text-4xl">Classes</h1>
+          <p className="text-text-secondary mt-1.5 text-sm">
             Everything Lyra knows is organized by class.
           </p>
         </div>
@@ -105,7 +108,7 @@ export function ClassList() {
       ) : null}
 
       {isPending ? (
-        <div className={GRID} aria-busy="true" aria-label="Loading classes">
+        <div className={LEDGER} aria-busy="true" aria-label="Loading classes">
           {Array.from({ length: SKELETON_COUNT }, (_, index) => (
             <ClassCardSkeleton key={index} />
           ))}
@@ -169,7 +172,7 @@ export function ClassList() {
           </Empty>
         )
       ) : (
-        <div className={GRID}>
+        <div className={LEDGER}>
           {activeClasses.map((klass, index) => (
             <ClassCard
               key={klass.id}

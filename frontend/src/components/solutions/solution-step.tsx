@@ -22,6 +22,8 @@ type SolutionStepProps = {
   onHistory: (step: SolutionPart) => void
   /** Dimmed while the problem this belongs to is being solved again. */
   dimmed?: boolean
+  /** True while a conversation about this step is open underneath it. */
+  asking?: boolean
 }
 
 /**
@@ -31,7 +33,14 @@ type SolutionStepProps = {
  * matching the message action row. Focus counts as well as hover, because every action in
  * this pane has to be reachable without a pointer.
  */
-export function SolutionStep({ step, index, onAsk, onHistory, dimmed = false }: SolutionStepProps) {
+export function SolutionStep({
+  step,
+  index,
+  onAsk,
+  onHistory,
+  dimmed = false,
+  asking = false,
+}: SolutionStepProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(step.content)
   const [copied, setCopied] = useState(false)
@@ -79,7 +88,7 @@ export function SolutionStep({ step, index, onAsk, onHistory, dimmed = false }: 
     >
       <div className="flex items-baseline gap-2">
         {index !== undefined ? (
-          <span className="text-text-tertiary shrink-0 text-xs tabular-nums">Step {index}</span>
+          <span className="eyebrow shrink-0 tabular-nums">Step {index}</span>
         ) : null}
         <h4
           className={cn(
@@ -132,21 +141,38 @@ export function SolutionStep({ step, index, onAsk, onHistory, dimmed = false }: 
       <ProvenanceChip entries={step.provenance} />
 
       {editing ? null : (
-        <div className="flex gap-0.5 opacity-0 transition-opacity group-focus-within/step:opacity-100 group-hover/step:opacity-100 print:hidden">
-          <StepAction label="Ask about this step" onClick={() => onAsk(step)}>
+        <div className="flex items-center gap-0.5 print:hidden">
+          {/* Always visible, unlike its neighbours. Asking is the thing a student most
+              wants from a step they do not follow, and an affordance that only exists once
+              you are already hovering the right row is one most readers never find. */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className={cn(
+              'h-7 gap-1.5 px-2 text-xs',
+              asking
+                ? 'text-accent-primary hover:text-accent-primary'
+                : 'text-text-tertiary hover:text-text-primary',
+            )}
+            onClick={() => onAsk(step)}
+            aria-expanded={asking}
+          >
             <MessageCircleQuestion className="size-3.5" />
-          </StepAction>
-          <StepAction label="Edit" onClick={startEditing}>
-            <Pencil className="size-3.5" />
-          </StepAction>
-          {/* Beside Edit, because history is what makes editing safe: it is the way back
-              from a change the student decides against. */}
-          <StepAction label="History" onClick={() => onHistory(step)}>
-            <History className="size-3.5" />
-          </StepAction>
-          <StepAction label={copied ? 'Copied' : 'Copy'} onClick={handleCopy}>
-            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-          </StepAction>
+            {asking ? 'Asking about this step' : 'Ask about this step'}
+          </Button>
+          <div className="flex gap-0.5 opacity-0 transition-opacity group-focus-within/step:opacity-100 group-hover/step:opacity-100">
+            <StepAction label="Edit" onClick={startEditing}>
+              <Pencil className="size-3.5" />
+            </StepAction>
+            {/* Beside Edit, because history is what makes editing safe: it is the way back
+                from a change the student decides against. */}
+            <StepAction label="History" onClick={() => onHistory(step)}>
+              <History className="size-3.5" />
+            </StepAction>
+            <StepAction label={copied ? 'Copied' : 'Copy'} onClick={handleCopy}>
+              {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+            </StepAction>
+          </div>
         </div>
       )}
     </div>

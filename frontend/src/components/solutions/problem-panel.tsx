@@ -1,8 +1,10 @@
 'use client'
 
 import { AlertCircle, History, MoreHorizontal, RefreshCw, XCircle } from 'lucide-react'
+import { Fragment } from 'react'
 
 import { MathText } from '@/components/solutions/math-text'
+import { chipLabel } from '@/components/solutions/problem-strip'
 import { SolutionStep } from '@/components/solutions/solution-step'
 import { ToolCallTrace } from '@/components/solutions/tool-call-trace'
 import { VerdictBadge } from '@/components/solutions/verdict-badge'
@@ -35,6 +37,12 @@ type ProblemPanelProps = {
   onRegenerate: (problem: SolutionPart) => void
   onHistory: (part: SolutionPart) => void
   onRetry: (problem: SolutionPart) => void
+  /** The step a conversation is open on, or null. */
+  askingAboutId?: number | null
+  /** That conversation, rendered directly under the step it is about. */
+  thread?: React.ReactNode
+  /** Position in the set, for the number chip when the label carries no number. */
+  index?: number
 }
 
 /**
@@ -51,6 +59,9 @@ export function ProblemPanel({
   onRegenerate,
   onHistory,
   onRetry,
+  askingAboutId = null,
+  thread = null,
+  index = 0,
 }: ProblemPanelProps) {
   const { problem, subParts, steps, answer } = node
   const label = problem.label ?? 'Problem'
@@ -62,34 +73,47 @@ export function ProblemPanel({
   )
 
   return (
-    <AccordionItem value={String(problem.id)} className="print:break-inside-avoid">
-      <div className="flex items-start gap-2">
-        <AccordionTrigger className="min-w-0 flex-1">
-          <span className="flex min-w-0 flex-1 flex-col gap-1">
-            <span className="flex flex-wrap items-center gap-2">
-              <span className="font-heading text-text-primary text-base tracking-tight">
-                {label}
-              </span>
-              {solving ? (
-                <span className="text-text-tertiary inline-flex items-center gap-1.5 text-xs">
-                  <Spinner className="size-3" />
-                  {problem.status === 'verifying' ? 'Checking' : 'Solving'}
-                </span>
-              ) : problem.status === 'failed' ? (
-                <span className="text-danger-text inline-flex items-center gap-1.5 text-xs">
-                  <AlertCircle className="size-3.5" aria-hidden />
-                  Could not be solved
-                </span>
-              ) : (
-                <VerdictBadge verdict={problem.verdict} detail={problem.verdict_detail} />
+    <AccordionItem
+      value={String(problem.id)}
+      // Both an anchor for the strip to jump to and the marker the pane reads to work out
+      // which problem is being looked at, which is what the source page follows.
+      id={`problem-${problem.id}`}
+      data-problem-id={problem.id}
+      // Space above rather than a rule between: one problem ends where the next one's
+      // heading begins, and a solutions document that runs continuously is very easy to
+      // read straight past the seam of.
+      className="scroll-mt-2 border-b-0 pt-8 first:pt-0 print:break-inside-avoid"
+    >
+      {/* Pinned while you are inside this problem. The strip says which number you are on;
+          this says it in the reading column itself, where the eye already is. `bg-card`
+          because it slides over the text underneath it. */}
+      <div className="bg-background border-border sticky top-0 z-10 -mx-4 flex items-start gap-2 border-b px-4">
+        <AccordionTrigger className="min-w-0 flex-1 py-3">
+          <span className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+            {/* The same token the strip uses, so the spine and the document agree. */}
+            <span
+              className={cn(
+                'flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-medium tabular-nums',
+                'bg-accent-secondary text-accent-secondary-foreground',
               )}
+              aria-hidden
+            >
+              {chipLabel(problem.label, index)}
             </span>
-            {/* Grounding is a count of steps carrying provenance, not a score. */}
-            {steps.length > 0 ? (
-              <span className="text-text-tertiary text-xs">
-                {grounded} of {formatCount(steps.length, 'step')} grounded in your material
+            <span className="font-heading text-text-primary text-base tracking-tight">{label}</span>
+            {solving ? (
+              <span className="text-text-tertiary inline-flex items-center gap-1.5 text-xs">
+                <Spinner className="size-3" />
+                {problem.status === 'verifying' ? 'Checking' : 'Solving'}
               </span>
-            ) : null}
+            ) : problem.status === 'failed' ? (
+              <span className="text-danger-text inline-flex items-center gap-1.5 text-xs">
+                <AlertCircle className="size-3.5" aria-hidden />
+                Could not be solved
+              </span>
+            ) : (
+              <VerdictBadge verdict={problem.verdict} detail={problem.verdict_detail} />
+            )}
           </span>
         </AccordionTrigger>
         <ProblemMenu
@@ -101,7 +125,9 @@ export function ProblemPanel({
         />
       </div>
 
-      <AccordionContent className="flex flex-col gap-5">
+      {/* The rail runs the length of the problem, so where one ends and the next begins is
+          a thing you can see rather than a thing you have to notice. */}
+      <AccordionContent className="border-border/70 ml-3 flex flex-col gap-5 border-l pt-4 pl-5">
         {/* The statement is verbatim from the sheet, so it usually already contains the
             sub-part lines the model extracted. `statementLeadIn` cuts them off where the
             labels say the list began; `addsToStatement` covers what it could not cut.
@@ -138,17 +164,29 @@ export function ProblemPanel({
         ) : null}
 
         {steps.map((step, index) => (
-          <SolutionStep
-            key={step.id}
-            step={step}
-            index={index + 1}
-            onAsk={onAsk}
-            onHistory={onHistory}
-            dimmed={solving}
-          />
+          <Fragment key={step.id}>
+            <SolutionStep
+              step={step}
+              index={index + 1}
+              onAsk={onAsk}
+              onHistory={onHistory}
+              dimmed={solving}
+              asking={askingAboutId === step.id}
+            />
+            {askingAboutId === step.id ? thread : null}
+          </Fragment>
         ))}
         {answer ? (
-          <SolutionStep step={answer} onAsk={onAsk} onHistory={onHistory} dimmed={solving} />
+          <Fragment>
+            <SolutionStep
+              step={answer}
+              onAsk={onAsk}
+              onHistory={onHistory}
+              dimmed={solving}
+              asking={askingAboutId === answer.id}
+            />
+            {askingAboutId === answer.id ? thread : null}
+          </Fragment>
         ) : null}
 
         {steps.length === 0 && !answer && problem.status !== 'failed' ? (
@@ -157,7 +195,17 @@ export function ProblemPanel({
           </p>
         ) : null}
 
-        <ToolCallTrace checks={problem.checks} />
+        {/* Grounding is a count of steps carrying provenance, not a score, and it belongs
+            beside the checks rather than under the title: read first it looks like a mark
+            out of ten for work the student has not started reading yet. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <ToolCallTrace checks={problem.checks} />
+          {steps.length > 0 ? (
+            <span className="text-text-tertiary text-xs print:hidden">
+              {grounded} of {formatCount(steps.length, 'step')} grounded in your material
+            </span>
+          ) : null}
+        </div>
       </AccordionContent>
     </AccordionItem>
   )

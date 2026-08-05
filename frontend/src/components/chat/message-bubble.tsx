@@ -29,6 +29,8 @@ export type ChatMessage = {
 
 type MessageRowProps = {
   message: ChatMessage
+  /** Spacing supplied by the caller, which is what knows where a turn begins. */
+  className?: string
   /** True when a visible gap in time separates this message from the previous one. */
   startsTimeGap?: boolean
   streaming?: boolean
@@ -49,6 +51,7 @@ type MessageRowProps = {
 
 export function MessageRow({
   message,
+  className,
   startsTimeGap,
   streaming,
   processingStage,
@@ -61,8 +64,10 @@ export function MessageRow({
 }: MessageRowProps) {
   if (message.role === 'user') {
     return (
-      <div className="group flex flex-col items-end">
-        <div className="bg-muted max-w-[80%] rounded-2xl px-4 py-2.5 text-[0.9375rem] leading-6 whitespace-pre-wrap">
+      <div className={cn('group flex flex-col items-end', className)}>
+        {/* The student's note in the margin: warm tan rather than neutral gray, with one
+            square corner pointing back at the composer it came from. */}
+        <div className="bg-accent-secondary/45 border-accent-secondary/60 max-w-[80%] rounded-2xl rounded-br-md border px-4 py-2.5 text-[0.9375rem] leading-6 whitespace-pre-wrap">
           {message.content}
         </div>
         <MessageActions
@@ -82,7 +87,7 @@ export function MessageRow({
   const waiting = Boolean(streaming) && !hasAnswer && !thinkingNow
 
   return (
-    <div className="group flex w-full gap-3">
+    <div className={cn('group flex w-full gap-3', className)}>
       <LyraAvatar thinking={Boolean(streaming) && !hasAnswer} />
       <div className="min-w-0 flex-1">
         {message.thinking.trim() ? (

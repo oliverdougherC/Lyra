@@ -68,6 +68,32 @@ describe('normalizeMarkdownForRender', () => {
     })
   })
 
+  describe('math is withheld until it has finished arriving', () => {
+    /**
+     * Unlike code and prose, a half-arrived equation cannot be shown while it grows: it
+     * gets typeset out of the text flow, ahead of the sentence holding it, and snaps back
+     * when the closing delimiter lands. Holding it lets the whole equation enter the
+     * reveal cascade in its own place.
+     */
+    it('holds back an unfinished dollar equation while streaming', () => {
+      expect(normalizeMarkdownForRender('we obtain $$\\frac{1}{2', true)).toBe('we obtain ')
+    })
+
+    it('holds back an unfinished bracket equation while streaming', () => {
+      expect(normalizeMarkdownForRender('so \\[x = ', true)).toBe('so ')
+    })
+
+    it('holds back an unfinished environment while streaming', () => {
+      expect(normalizeMarkdownForRender('then \\begin{align}\nx &= 1', true)).toBe('then ')
+    })
+
+    it('renders it whole as soon as the closing delimiter arrives', () => {
+      expect(normalizeMarkdownForRender('we obtain $$\\frac{1}{2}$$', true)).toBe(
+        'we obtain \n\n$$\n\\frac{1}{2}\n$$\n\n',
+      )
+    })
+  })
+
   describe('LaTeX delimiters become dollar math', () => {
     it('converts inline \\( \\) to single dollars', () => {
       expect(normalizeMarkdownForRender('let \\(x\\) be')).toBe('let $x$ be')

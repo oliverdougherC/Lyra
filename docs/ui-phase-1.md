@@ -72,6 +72,8 @@ of arcs, because a broken ring still reads as a ring while two arcs read as two 
 - Class rows carry the course mark, the class name, and the course code beneath it. The name is the primary line: a rail of bare codes (`ECE 203`, `ECE 380`) does not say which class is which
 - Active class rows use `--accent-primary` text with a 2px sage marker inset within the row's rounded surface, not a `border-l` on its box, which lands outside the corner radius and reads as detached
 - A class row expands into its conversations only while that class is open: each chat links to `/classes/{id}?session={n}`, and a `New chat` action sits at the bottom of the list. Every other class stays a single line
+- Only the five most recent conversations are listed, with a `Show all {n}` row under them. A term's worth of chats is a hundred rows, and a rail that long buries Solutions and everything below it. The conversation being read is always on the list wherever it sits in the history, or the rail would have no highlighted row and no way back to it
+- `New chat` navigates to `?session=new` rather than creating anything. **A conversation starts existing when the first message is sent**: an empty chat is a click, not history, and creating one up front is what filled the rail with untitled conversations nobody had said anything in. Conversations already stored empty are swept once at startup
 - Conversations are named by the backend from their first message, and an untitled one falls back to its creation date. Never by list position, which renumbers whenever a conversation is added or removed, so the same chat keeps changing name
 - An `Archived` group below the classes is collapsed by default and holds archived classes, each with a hover restore action
 - A skip-to-content link is the first focusable element and is visually hidden until focused
@@ -140,10 +142,16 @@ button uses `--danger-fill` with `--danger-foreground`.
 ## Screen: Class Workspace
 
 Route `/classes/[id]`. The header carries the class code, name, and the Profile button, so the
-workspace starts at the panes. The conversation is the primary surface and fills a single
-raised-paper workbench. Documents open as a 340px right column inside that same workbench, into the
-gutter the 860px reading measure was never going to use, so the conversation does not narrow when
-the list appears. The column is closed by default and its state is persisted per class; an upload
+workspace starts at the panes. The conversation is the primary surface and fills the window.
+
+**A workspace is not a page.** Pages are a padded column inside the shell's rounded surface, which
+is the right frame for a class list or a settings form. A workspace is the student's own material in
+two panes, and it wants every pixel: framed as a page it sat inside three nested rounded surfaces
+and the reading column came out at 41% of the width and 72% of the height of a 13-inch laptop. So a
+workspace route asks the shell for the whole window (`useFullBleed`), and puts its title and actions
+in the app header (`HeaderCrumb`, `HeaderActions`) rather than spending another row on a title bar.
+Documents open as a 340px right column inside that same surface, into the gutter the 860px reading
+measure was never going to use, so the conversation does not narrow when the list appears. The column is closed by default and its state is persisted per class; an upload
 batch in flight opens it. The active conversation is part of the URL (`?session={n}`) so chats in
 the sidebar are linkable and reloadable.
 
@@ -170,8 +178,7 @@ re-pins instead, because that is a layout change rather than the reader moving. 
 `Jump to latest` control returns.
 
 Below 1024px the panes become Chat and Documents line tabs with a 2px sage active rule, defaulting
-to Chat. Both compact and desktop layouts live in a bordered raised-paper workbench; below 640px
-navigation becomes the floating bottom shelf described in design-system.md.
+to Chat. Below 640px navigation becomes the floating bottom shelf described in design-system.md.
 
 ### Document List
 
@@ -251,7 +258,18 @@ reply is the page's main content, so it gets the page.
 - Equations use `$$...$$` on their own blank-line-separated display rows; `$...$` is reserved for
   short inline quantities, and wide display math scrolls horizontally rather than overlapping prose
 - Newly arriving prose words fade in in source order with a 180ms opacity/2px-rise reveal; code and
-  math remain intact and are never split into visual-only layers
+  math remain intact and are never split into visual-only layers. A typeset equation is one unit of
+  the cascade, revealed whole in its own place
+- **Math that has not finished arriving is withheld rather than typeset.** Code and prose grow a
+  character at a time and read fine doing it; an equation does not. Closing `$\frac{1}{2` on the
+  reader's behalf draws a fraction with one arm, and a fragment long enough to look like display
+  math is centred on its own line only to snap back inline when the closing delimiter lands. That is
+  what made equations look like they populated ahead of the sentences holding them: they were being
+  drawn out of the text flow before the text existed
+- A unit's place in the cascade survives a re-render. Markdown is re-parsed on every frame, so the
+  node holding a word can be replaced while its reveal is still pending, and re-applying the reveal
+  without its delay would jump it ahead of every word queued in front of it. The cascade lives in
+  `components/chat/reveal.ts` and is shared by every surface that shows written work
 - There is no stream caret. Markdown blocks are block-level, so a trailing marker cannot sit
   at the end of the last word: it lands at the start of the line below, reading as stray
   punctuation. The word reveal is already the evidence that text is arriving

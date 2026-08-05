@@ -19,6 +19,7 @@ Nothing here knows about prompts, models, or solving. `backend/core/solver.py` d
 job; this is the store it writes to. See docs/solver-phase-2.md.
 """
 
+import json
 import sqlite3
 from dataclasses import dataclass
 
@@ -172,6 +173,10 @@ class ProvenanceEntry:
     document_id: int | None = None
     page_number: int | None = None
     label: str | None = None
+    # Where on the page this starts, as fractions of the page box. An empty tuple records
+    # that the marker was searched for and not found, which is not the same as not having
+    # looked; None means nothing has looked yet.
+    bbox: tuple[float, ...] | None = None
 
 
 def _require(value: str, allowed: tuple[str, ...], field: str) -> str:
@@ -776,10 +781,17 @@ def set_provenance(conn: sqlite3.Connection, part_id: int, entries: list[Provena
     part = get_part(conn, part_id)
     conn.execute("delete from artifact_provenance where part_id = ?", (part_id,))
     conn.executemany(
-        "insert into artifact_provenance (part_id, chunk_id, document_id, page_number, label) "
-        "values (?, ?, ?, ?, ?)",
+        "insert into artifact_provenance "
+        "(part_id, chunk_id, document_id, page_number, label, bbox) values (?, ?, ?, ?, ?, ?)",
         [
-            (part_id, entry.chunk_id, entry.document_id, entry.page_number, entry.label)
+            (
+                part_id,
+                entry.chunk_id,
+                entry.document_id,
+                entry.page_number,
+                entry.label,
+                None if entry.bbox is None else json.dumps(list(entry.bbox)),
+            )
             for entry in entries
         ],
     )
@@ -800,9 +812,30 @@ def list_provenance(conn: sqlite3.Connection, part_id: int) -> list[dict[str, ob
     get_part(conn, part_id)
     rows = conn.execute(
         "select p.id, p.part_id, p.chunk_id, p.document_id, p.page_number, p.label, "
-        "d.filename from artifact_provenance p "
+        "p.bbox, d.filename from artifact_provenance p "
         "left join documents d on d.id = p.document_id "
         "where p.part_id = ? order by p.id",
         (part_id,),
     )
-    return [dict(row) for row in rows]
+    return [{**dict(row), "bbox": _read_bbox(row["bbox"])} for row in rows]
+
+
+def _read_bbox(raw: object) -> list[float] | None:
+    """A stored rectangle, or None when there is not a usable one.
+
+    A malformed value reads as absent rather than raising: this drives a convenience on a
+    page image, and no part of a solution should fail to load over it.
+    """
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(parsed, list) or len(parsed) != 4:
+        return None
+    return [float(value) for value in parsed] if all(_is_number(v) for v in parsed) else None
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)

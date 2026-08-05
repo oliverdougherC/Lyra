@@ -6,7 +6,6 @@ import { toast } from 'sonner'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -84,13 +83,15 @@ function SettingsSection({
   children: React.ReactNode
 }) {
   return (
-    <Card className="gap-4 py-0">
-      <div className="border-b px-5 pt-5 pb-4">
+    // A section of the page, not a card on it: the hairline above does the separating,
+    // and the fields stand on the same paper as everything else.
+    <section className="border-border/70 border-t pt-6">
+      <div className="mb-5">
         <h2 className="font-heading text-xl leading-tight font-medium tracking-tight">{title}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+        <p className="text-text-secondary mt-1 text-sm">{description}</p>
       </div>
-      <div className="px-5 pb-5">{children}</div>
-    </Card>
+      {children}
+    </section>
   )
 }
 
@@ -156,9 +157,9 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
 
   return (
     <div className="space-y-8">
-      <header>
-        <h1 className="text-3xl leading-tight font-medium md:text-4xl">Settings</h1>
-        <p className="text-muted-foreground text-sm">
+      <header className="pt-2 md:pt-6">
+        <h1 className="font-display text-3xl leading-tight md:text-4xl">Settings</h1>
+        <p className="text-text-secondary mt-1.5 text-sm">
           Lyra stores everything on this machine. These settings control the one part that can leave
           it.
         </p>

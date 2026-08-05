@@ -206,6 +206,16 @@ function appendToken(output: string, token: RenderToken): string {
  * Repairs only the render copy of a streamed answer. Code remains byte-for-byte intact;
  * synthetic closers are added only while streaming so an incomplete fragment cannot absorb
  * the rest of the Markdown tree.
+ *
+ * **Math that has not finished arriving is withheld rather than typeset.** Code and prose
+ * grow a character at a time and read fine doing it. An equation does not: closing
+ * `$\frac{1}{2` synthetically renders a fraction with one arm, and a fragment long enough
+ * to look like display math is centred on its own line, only to snap back inline when the
+ * closing delimiter arrives. That is what made equations look like they populated ahead of
+ * the sentences holding them: they were being drawn out of the text flow before the text
+ * existed. Held back, the whole equation enters the reveal cascade in its own place, and
+ * the settled render (`streaming` false) prints an unterminated one literally, so nothing
+ * is lost either way.
  */
 export function normalizeMarkdownForRender(
   source: string,
@@ -278,12 +288,6 @@ export function normalizeMarkdownForRender(
           continue
         }
         flushPlain()
-        const inner = normalized.slice(cursor + 2)
-        addToken(
-          tokens,
-          opening === '\\(' ? `$${inner}$` : formatDisplayMath(inner),
-          opening === '\\[',
-        )
         cursor = normalized.length
       } else {
         flushPlain()
@@ -309,12 +313,6 @@ export function normalizeMarkdownForRender(
           continue
         }
         flushPlain()
-        const inner = normalized.slice(cursor + delimiter.length)
-        addToken(
-          tokens,
-          display || promote(inner) ? formatDisplayMath(inner) : `$${inner}$`,
-          display || promote(inner),
-        )
         cursor = normalized.length
       } else {
         flushPlain()
@@ -343,8 +341,6 @@ export function normalizeMarkdownForRender(
           continue
         }
         flushPlain()
-        const inner = normalized.slice(cursor) + `\n${closingText}`
-        addToken(tokens, formatDisplayMath(inner), true)
         cursor = normalized.length
       } else {
         flushPlain()

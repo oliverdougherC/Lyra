@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 
+import { HeaderActions, HeaderCrumb, useFullBleed } from '@/components/layout/page-chrome'
 import { SegmentationReview } from '@/components/solutions/segmentation-review'
 import { SolutionWorkspace } from '@/components/solutions/solution-workspace'
 import { SolveProgress } from '@/components/solutions/solve-progress'
@@ -83,6 +84,16 @@ export default function SolutionWorkspacePage() {
     announced.current = polledState
   }, [polledState])
 
+  // Derived before the guards below, because `useFullBleed` is a hook and cannot sit after
+  // an early return. The solution route is a workspace only once there is something to
+  // work in: segmenting and the review gate are ordinary centred pages.
+  const loaded = solution.data
+  const solved = loaded ? countSolved(loaded) : 0
+  const currentState = polledState ?? loaded?.state
+  const isWorkspace =
+    loaded !== undefined && (currentState === 'ready' || currentState === 'cancelled' || solved > 0)
+  useFullBleed(isWorkspace)
+
   if (classId === null || artifactId === null) {
     return (
       <Alert variant="destructive">
@@ -122,8 +133,8 @@ export default function SolutionWorkspacePage() {
   const problemsDone = status.data?.problems_done ?? artifact.problems_done
   const errorMessage = status.data?.error_message ?? artifact.error_message
   const stageDetail = status.data?.stage_detail ?? artifact.stage_detail
-  const solvedCount = countSolved(artifact)
-  const workspace = state === 'ready' || state === 'cancelled' || solvedCount > 0
+  const solvedCount = solved
+  const workspace = isWorkspace
   const className = classes.data?.find((entry) => entry.id === classId)?.name ?? 'Class'
 
   const handleDelete = () =>
@@ -141,42 +152,53 @@ export default function SolutionWorkspacePage() {
         toast.error(error instanceof ApiError ? error.message : 'Could not start solving.'),
     })
 
+  const deleteAction = (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button variant="ghost" size="sm" className="print:hidden">
+          Delete
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete {artifact.title}?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This removes the problem list and anything Lyra has solved so far. Your uploaded
+            documents are not touched.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Keep it</AlertDialogCancel>
+          <AlertDialogAction onClick={handleDelete}>Delete</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+
   return (
     <div
       className={
-        state === 'ready' || state === 'solving' || state === 'cancelled'
-          ? 'flex min-h-0 w-full flex-1 flex-col gap-4'
+        workspace || state === 'solving'
+          ? 'flex min-h-0 w-full flex-1 flex-col gap-3'
           : 'mx-auto flex w-full max-w-[860px] flex-col gap-6'
       }
     >
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        {/* The filenames used to sit under the title. They are already named in the source
-            pane's tab and in the picker that chose them, and the line they occupied is
-            worth more as height for the problems. */}
-        <h1 className="font-heading text-text-primary min-w-0 truncate text-2xl tracking-tight">
-          {artifact.title}
-        </h1>
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button variant="ghost" size="sm" className="print:hidden">
-              Delete
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete {artifact.title}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This removes the problem list and anything Lyra has solved so far. Your uploaded
-                documents are not touched.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Keep it</AlertDialogCancel>
-              <AlertDialogAction onClick={handleDelete}>Delete</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </header>
+      {/* The title and Delete used to own a 48px row of their own above the panes. On a
+          13-inch laptop that row cost more than the problem strip and said less, so the
+          title is a breadcrumb and Delete sits in the header with it. */}
+      {workspace ? (
+        <>
+          <HeaderCrumb>{artifact.title}</HeaderCrumb>
+          <HeaderActions>{deleteAction}</HeaderActions>
+        </>
+      ) : (
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="font-heading text-text-primary min-w-0 truncate text-2xl tracking-tight">
+            {artifact.title}
+          </h1>
+          {deleteAction}
+        </header>
+      )}
 
       {state === 'pending' || state === 'segmenting' ? (
         <SolveProgress

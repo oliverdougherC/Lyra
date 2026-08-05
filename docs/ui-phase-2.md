@@ -229,42 +229,81 @@ The view never scrolls itself to a problem that just landed; the student is read
 
 ### Phase: The solution document
 
-Two panes in a `resizable` group inside the bordered raised-paper workbench, source left at 45% and
-solution right at 55% by default, with the split persisted per class in `localStorage`.
+Two panes in a `resizable` group filling the window, source left at 45% and solution right at 55% by
+default, with the split persisted per class in `localStorage`.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ Classes / ECE 203 / Problem set 4        [Export] [⋯]        │
+│ Classes / ECE 203 / Homework 7                [Delete] [◉]   │
 ├─────────────────────────────┬────────────────────────────────┤
-│ SOURCE  hw4.pdf   page 2/6  │ SOLUTIONS   8 problems         │
-│ ┌─────────────────────────┐ │  ▾ Problem 1        ✓ Checked  │
-│ │                         │ │      Step 1 …                  │
-│ │   rendered page         │ │      Step 2 …        [notes]   │
-│ │   problem 4 outlined    │ │      Answer …                  │
-│ │                         │ │  ▸ Problem 2        ✓ Checked  │
-│ └─────────────────────────┘ │  ▸ Problem 3        ! Refuted  │
-│      ◂ page ▸               │  ▸ Problem 4        – Not check…│
+│ hw7.pdf                 [⤢] │ 1 2 3 4 5 6 7 8   [Export] [⤢] │
+│                             │ ⟨4⟩ Problem 4       ✓ Checked  │
+│    rendered page            │  │   Step 1 …                  │
+│    problem 4 banded         │  │   Step 2 …        [notes]   │
+│                             │  │   Answer …                  │
+│                             │ ⟨5⟩ Problem 5       ! Refuted  │
+│      ◂ page 2 of 6 ▸        │  │   Step 1 …                  │
 └─────────────────────────────┴────────────────────────────────┘
 ```
+
+**No card, and no title row.** This screen is the two panes; they run to the window edges, the app
+header is their title bar, and the pane headers are the only chrome between the header and the work.
+Measured at 1280x800, which is the 13-inch laptop this is built for, the framing this replaced cost
+220px of height and 309px of width, leaving the reading column at 525x580. It is now 560x703, and
+the source page renders 427px wide rather than 398.
+
+**Either pane can take the window.** A `FocusToggle` in each pane header hands it the full width and
+collapses the other; the toggle in the enlarged pane hands the width back. The split is the right
+default, because the point of the screen is a solution beside the sheet it came from, but half of
+what is left after the rail renders a Letter page at about 47 DPI, and reading the sheet closely is
+worth one pane for a minute. Clicking a problem's band on the page while the document has the window
+brings the solutions back with it: asking for a solution is asking to see it.
 
 **Source pane.** PDFs render as page images produced by PyMuPDF and served per page, not as an
 embedded PDF viewer. That choice buys exact anchoring, identical rendering in both themes and every
 browser, no new frontend dependency, and it is the same rasterization Phase 3 needs for figures and
 text recognition. TXT and MD sources render as their extracted text instead, with the same anchors.
 
-The problem currently selected in the solution pane is outlined on the page in `--accent-primary`
-at 2px. Page navigation is a footer control; the pane also scrolls freely, and scrolling it away
-from the anchored page does not change the selection.
+Each problem occupies a band of the page, drawn over the image rather than into it: the render is a
+faithful copy of the student's own sheet, and marking it up would let the two columns disagree
+about what the sheet says. A band runs from its own problem's marker to the next one's, so the
+answer to "where does problem 3 end" is always "where problem 4 starts", and geometry can never
+contradict the segmentation confirmed at the review gate. The problem being read carries a 2px
+`--accent-primary` edge and a wash at 8%; the rest appear on hover.
 
-**Solution pane.** An `accordion` of problems, first expanded by default, the rest collapsed. Each
-problem header carries its label, its verdict badge, and a grounding line reading `6 of 7 steps
-grounded in your material`. Steps render as the assistant reading surface from Phase 1: Source
-Serif 4 at 1.0625rem, KaTeX display math on its own rows, wide math scrolling horizontally rather
-than overlapping prose.
+Where a marker sits comes from `rag/locate.py`, which searches the page for the leading marker of
+the label segmentation recorded (`Problem 3`, `3.`) and stores it as fractions of the page box, so
+it survives the page being rendered at whatever width the pane has. A bare word is never searched
+for: it would hit the first paragraph that happened to use it. A set whose markers could not be
+found simply has no bands.
 
-**Anchoring is bidirectional.** Expanding or selecting a problem scrolls the source to its page and
-outlines it. Clicking an outlined region in the source expands and scrolls to that problem. Neither
-direction animates the other pane's scroll beyond the standard 200ms, and neither steals focus.
+Page navigation is a footer control; the pane also scrolls freely, and scrolling it away from the
+anchored page does not change the selection.
+
+**Solution pane.** A document, not a control panel. Every problem is rendered and the pane scrolls;
+collapsing is still there for a set of fourteen, but it is a thing the reader does rather than a
+state they have to undo. Steps render as the assistant reading surface from Phase 1: Source Serif 4
+at 1.0625rem, KaTeX display math on its own rows, wide math scrolling horizontally rather than
+overlapping prose.
+
+The pane header holds a `ProblemStrip` where its title used to be: one chip per problem, carrying
+the number and a verdict dot, scrolling horizontally rather than wrapping so the two panes' content
+stays on one line. It says where you are and takes one click to be somewhere else. The grounding
+line (`6 of 7 steps grounded in your material`) sits at the foot of a problem beside its check
+trace, not under its title: read first it looks like a mark out of ten for work nobody has read yet.
+
+**A problem is a section, not a row.** Its heading pins to the top of the reading pane while you are
+inside it, carrying a number chip in the same token the strip uses, the label, and the verdict; a
+rail runs down the length of its body; and problems are separated by space rather than a rule, so
+one ends where the next one's heading begins. Reading a set straight through, it was otherwise very
+easy to scroll from one problem into the next without noticing, which on a page of mathematics means
+reading an answer to a question you are not looking at. Colour is on the number chip and nowhere
+else: tinted blocks behind long derivations get tiring in a way a rule and a heading do not.
+
+**Anchoring is bidirectional.** The problem under the top of the reading pane is the selected one,
+measured from scroll position rather than from which panel is open, and the source page follows it
+without the reader selecting anything. Clicking a band in the source scrolls to that problem and
+opens it. Neither direction steals focus.
 
 **Loading.** Skeletons matching the two-pane layout: a page-shaped block left, four problem-header
 rows right. Never a spinner.
@@ -305,13 +344,15 @@ came back. This is the audit trail, and it is the reason to believe the badge.
 
 ### Corrections
 
-Every step and the final answer carry an action row, hidden until the row is hovered or something
-in it takes focus, matching the message action row from Phase 1:
+Every step and the final answer carry an action row:
 
-- `Ask about this step` opens the step Guide panel
-- `Edit` makes the step's markdown editable in place. `Escape` cancels, an explicit `Save` commits,
-  because a step is long enough that `Enter` must insert a newline
-- `Copy`
+- `Ask about this step` is always visible. Asking is the thing a student most wants from a step they
+  do not follow, and an affordance that only exists once you are hovering the right row is one most
+  readers never find
+- `Edit`, `History`, and `Copy` stay hidden until the row is hovered or something in it takes focus,
+  matching the message action row from Phase 1. `Edit` makes the step's markdown editable in place;
+  `Escape` cancels and an explicit `Save` commits, because a step is long enough that `Enter` must
+  insert a newline
 
 At problem level, a `dropdown-menu` offers `Mark wrong and re-solve`, `Regenerate`, and `History`.
 
@@ -323,18 +364,35 @@ the new one is written, so a regeneration that fails upstream costs the student 
 **History** is a `sheet` listing the part's revisions newest first, each with its origin
 (`Generated`, `Regenerated`, `Your edit`), its note where one exists, and a `Restore`.
 
-### Step Guide panel
+### Asking about a step
 
-`Ask about this step` opens a `StepGuidePanel`: a `sheet` from the right at 480px, holding a real
-conversation. The step being discussed is pinned at the top of the panel, quoted and quiet, so the
-subject is never ambiguous.
+`Ask about this step` opens a `StepThread` **underneath that step, in the solutions column**, under
+a rail in `--accent-primary`. Nothing is blurred, nothing is covered, and the step before this one
+stays exactly where it was.
 
-Below it is the Phase 1 conversation surface, unchanged: the same composer, the same streaming
-markdown, the same thinking indicator and reasoning trace, the same Guide and Show toggle opening
-on Guide. It is an ordinary session that happens to be anchored, and it appears in the sidebar
-under Conversations like any other.
+This was a 480px `sheet` with the workspace blurred behind it, and that was wrong: a student asking
+"how did we get here" needs to see the previous step, and the panel covered it. A conversation about
+a passage belongs in the margin of the document, not in a room next to it.
 
-`Escape` closes the panel and returns focus to the step's action row.
+Inside is the Phase 1 conversation surface, unchanged: the same composer, the same streaming
+markdown, the same thinking indicator and reasoning trace, the same Guide and Show toggle opening on
+Guide. `ChatPane` grows an `inline` layout for this, which gives up its own scroll container and
+follows the stream in the pane it was opened inside, so there is one implementation of a turn rather
+than two. It is an ordinary session that happens to be anchored, and it appears in the sidebar under
+Conversations like any other.
+
+**Nothing is created until the first message is sent.** Reading a solution with the thread open on
+six different steps used to leave six untitled conversations behind it.
+
+**It opens ready to type.** The thread scrolls its composer into view and takes focus, and there is
+no empty-state copy at all: the header names the step and the cursor is already in the box, so a
+paragraph explaining that you may type in the box you are typing in was spending a third of the
+thread's height to say nothing.
+
+**The conversation is scoped to the step.** Guide is written to teach a problem end to end, and left
+alone on a step it answers the question and then asks how to do the next one. An anchored session
+answers what was asked, at most one leading question to get there, and stops; the walkthrough is the
+student's to ask for. The rule is in `format_step_context`, described in solver-phase-2.md.
 
 ### Export
 

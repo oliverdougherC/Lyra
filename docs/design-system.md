@@ -2,10 +2,33 @@
 
 ## Core direction
 
-Lyra is a light-first, local-study workspace. Its material language is parchment canvas, raised paper,
-warm rules, espresso type, muted terracotta, and actionable sage. It earns depth through the three
-paper surfaces, thin boundaries, and restrained elevation—not gradients, glow, texture imagery, or
-marketing-page ornament.
+Lyra is a light-first, local-study workspace. Its material language is a well-printed book on a
+real desk: parchment canvas, raised paper, warm rules, espresso type, muted terracotta, and
+actionable sage. It earns depth through the three paper surfaces, thin boundaries, restrained
+elevation, and exactly one piece of atmosphere: a procedural paper-grain overlay (an inline SVG
+`feTurbulence` data URI in `globals.css`, fixed over the whole window). The noise is keyed into the
+**alpha** channel by `feColorMatrix` — warm espresso speckle in light, warm white in dark — and
+composited by opacity alone. It is deliberately not RGB noise under a blend mode: that noise is
+centred on mid-gray, and the mid-gray-respecting blends (`soft-light` above all) reduce it to a
+near-identity, which measured as *literally invisible at full opacity*. The speckle is also tinted
+rather than neutral, because pure black grain desaturates the parchment to gray. No gradients other
+than functional scrims, no glows, no texture image assets, no marketing-page ornament.
+
+**The layering law.** Content is the canvas (`--bg-primary`); the things that sit *on* it — the
+rail, the composer well, popovers, inputs — are raised paper (`--bg-secondary`). Getting this
+backwards is what made the workspace read as one flat slab: the rail, the pane, and the composer
+all resolved to `--bg-secondary`, so three surfaces at three depths were painted the same colour
+and only hairlines suggested otherwise. A "raised" element on a surface of its own tone is not
+raised.
+
+Three recurring editorial devices carry the identity:
+
+- **The eyebrow** (`.eyebrow`): the one small-caps tracked label. Every section micro-heading
+  ("Tutor", "Solutions", "Try asking", "Step 1") is this class, never a hand-tuned imitation.
+- **The asterism** (`components/ui/asterism.tsx`): three concave four-point stars drawn from the
+  Lyra mark, used as a printer's fleuron at empty states and section breaks.
+- **Display Fraunces** (`.font-display`, `.font-wordmark`): titles set with the optical-size and
+  SOFT axes on; the wordmark alone turns WONK on.
 
 `frontend/src/styles/globals.css` is the only visual-token bridge. Components consume semantic
 utilities; they do not introduce component-local hex values, a Tailwind configuration, or a second
@@ -124,7 +147,8 @@ keywords use `--danger-text`; titles and tags use `--accent-primary`; literals a
 ## Typography
 
 `frontend/src/app/layout.tsx` loads DM Sans (`400`, `500`, `600`, `700`) as
-`--font-dm-sans`, Fraunces (`500`, `600`, `700`) as `--font-fraunces`, keeps JetBrains Mono, and
+`--font-dm-sans`, Fraunces as a variable font with its `opsz`, `SOFT`, and `WONK` axes as
+`--font-fraunces`, keeps JetBrains Mono, and
 loads Source Serif 4 (`400`, `600`, both with italics) as `--font-source-serif`.
 `globals.css` maps them to `--font-sans`, `--font-heading`, `--font-mono`, and the assistant-only
 `--font-ai-response` token.
@@ -177,8 +201,35 @@ avatars, status dots, switches, and compact metadata badges.
   Course-mark avatars are rectangular through `rounded-[inherit]` children.
 - **Overlays and surfaces:** AlertDialog, Dialog, and Sheet overlays use `bg-overlay`. Dialogs, sheets,
   dropdowns, popovers, selects, tooltips, and Sonner use paper, border, and semantic elevation.
-- **Shell:** desktop uses a 260px inset rail that moves off-canvas when closed; mobile uses a floating,
-  64px paper shelf below 640px. Main content keeps the 1320px cap.
+- **Shell:** the application is one continuous surface, flush to the window. `Sidebar` uses
+  `variant="sidebar"`, never `inset`: the inset variant floats everything inside a rounded, bordered,
+  shadowed panel, which is a card — the largest one in the product — and Lyra has no cards. Desktop
+  uses a 260px rail that moves off-canvas when closed; mobile uses a floating 64px paper shelf below
+  640px. Main content keeps the 1320px cap. The rail is headed by the Lyra mark and the wordmark set
+  in `.font-wordmark`, never a stock icon.
+- **Workspace chrome:** a route gets one header bar. Pane-level title bars that restate what the
+  breadcrumb already says are removed, and their controls portal into the app header through
+  `HeaderActions`.
+- **Answer-style switch:** Guide/Show is a segmented control — a rounded track with the active
+  segment on raised paper. This does not contradict the Tabs rule below: tabs navigate between
+  panes and take the 2px sage rule, whereas this changes how the next answer is written and has no
+  pane rule to sit on once it lives in the header.
+- **Class index:** the home page is a ledger, not a card grid — one class per line under hairlines
+  in a centered `max-w-3xl` measure, name in the heading face, counts and recency kept to the right
+  margin, and a final quiet "New class" line closing the list.
+- **Composer:** one raised writing well — `rounded-2xl` paper on the canvas, `shadow-sm`, accent
+  border and `shadow-md` on focus — laid out as a single row with the send control riding the last
+  line of type. A second row holding only a hint is dead air; the hint sits below the well and
+  leaves after the first message. `--pane-control-row` is 3.75rem so the documents dropzone across
+  the seam still closes on the same line.
+- **Scroll scrim:** where a scrolling region ends at a fixed control (the conversation above the
+  composer), the content dissolves into the canvas over the last 40px rather than being sliced by a
+  hard edge. This is the one sanctioned gradient: it is the only thing saying the text continues.
+- **Turn rhythm:** a question and its answer are one turn and sit close (20px); the next question
+  opens at a wider interval (44px). Even spacing throughout reads as an undifferentiated stack.
+- **Source pane:** the rendered page lies on a sunken desk tone (`bg-muted/40`) with `shadow-md`,
+  so the student's sheet reads as a sheet.
+- **Settings and setup screens:** hairline-topped sections on the page's own paper, not cards.
 - **Workspace:** compact Documents/Chat uses line tabs, defaulting to Chat; on desktop one
   raised-paper workbench holds the conversation, with documents opening as a 340px right column
   into the gutter the 860px reading measure was never going to use. Document rows are paper items
@@ -195,10 +246,12 @@ avatars, status dots, switches, and compact metadata badges.
 Motion is useful only when it explains structure. Content may fade and move vertically at most 8px;
 no surface slides sideways, zooms, or lasts more than 250ms.
 
-`Reveal` in `frontend/src/components/ui/reveal.tsx` is the only shared visual reveal utility. It
-enters at opacity `0`, `y: 8` over 250ms with `ease: [0.25, 0.1, 0.3, 1]`; delay is capped at 200ms.
-Class cards use the five-step, 50ms stagger through this cap. With reduced motion it uses only a
-150ms opacity fade, zero delay, and no transform.
+`Reveal` in `frontend/src/components/ui/reveal.tsx` is the only shared visual reveal utility. It is
+a CSS animation (`lyra-reveal-enter`: opacity `0`, `y: 8px`, 250ms, `--ease-gentle`, `both` fill),
+deliberately not script-driven: the JS version could stall mid-flight and strand content near
+opacity 0, and a compositor animation with `both` fill always ends visible. Delay is capped at
+200ms; class rows use the five-step, 50ms stagger through this cap. The global reduced-motion rule
+collapses it to a single frame.
 
 `Reveal` takes an `once` id and plays at most once per session for that id. Motion explains that
 something arrived; replaying the cascade every time the user navigates back to a list they have
@@ -224,8 +277,9 @@ the braille thinking loader holds at full brightness, and panel transitions do n
    global syntax styling, and reduced-motion policy.
 2. Do not add a Tailwind config, token file, external theme package, visual registry dependency, or
    component-local hex color.
-3. Do not add gradients, glows, literal texture images, continuous effects, scroll-triggered reveals,
-   model selectors, simulated uploads, or unrelated prompt controls.
+3. Do not add gradients, glows, texture image assets, continuous effects, scroll-triggered reveals,
+   model selectors, simulated uploads, or unrelated prompt controls. The single sanctioned piece of
+   atmosphere is the procedural grain overlay in `globals.css`; do not add a second.
 4. Do not replace Radix behavior, existing keyboard paths, four data states, API behavior, hooks, or
    schema merely to restyle a route.
 5. Keep Light, System, and Dark coherent. A documentation value or contrast claim that differs from

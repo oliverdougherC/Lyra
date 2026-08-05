@@ -2,25 +2,12 @@
 
 import { memo, type ComponentProps, type CSSProperties, type ReactNode } from 'react'
 import Markdown from 'react-markdown'
-import rehypeKatex from 'rehype-katex'
-import remarkGfm from 'remark-gfm'
-import remarkMath from 'remark-math'
 
 import { normalizeMarkdownForRender } from '@/components/chat/markdown-utils'
+import { KATEX_REHYPE_PLUGINS, REMARK_PLUGINS } from '@/components/chat/typeset'
 import { cn } from '@/lib/utils'
 
-const REMARK_PLUGINS = [remarkGfm, remarkMath]
-const KATEX_OPTIONS = {
-  // A problem statement is transcribed from a PDF, so a stray brace is a question of
-  // when rather than whether. A failed equation renders in the danger colour and the
-  // rest of the statement survives; throwing would blank the row the student is meant
-  // to be checking.
-  throwOnError: false,
-  strict: 'ignore' as const,
-  errorColor: 'var(--danger-text)',
-}
 type MarkdownProps = ComponentProps<typeof Markdown>
-const REHYPE_PLUGINS: NonNullable<MarkdownProps['rehypePlugins']> = [[rehypeKatex, KATEX_OPTIONS]]
 
 /** Paragraphs collapse to fragments so an inline render can live inside a flex row. */
 const INLINE_COMPONENTS: MarkdownProps['components'] = {
@@ -57,7 +44,7 @@ export const MathText = memo(function MathText({
     <div className={cn('math-text', inline && 'math-text-inline', className)} style={style}>
       <Markdown
         remarkPlugins={REMARK_PLUGINS}
-        rehypePlugins={REHYPE_PLUGINS}
+        rehypePlugins={KATEX_REHYPE_PLUGINS}
         components={inline ? INLINE_COMPONENTS : undefined}
       >
         {normalizeMarkdownForRender(children, false, { promoteInlineMath: false })}

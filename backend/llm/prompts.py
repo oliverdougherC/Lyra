@@ -186,6 +186,22 @@ A check you did not run is not agreement. If you could not settle something, say
 
 _STEP_CONTEXT_HEADING = "The student is asking about one step of a solution Lyra wrote:"
 
+# The scope of an anchored conversation, which is narrower than the mode it runs in.
+#
+# Guide is written to teach a problem end to end, and turned loose on a step it does what
+# it was built to do: the student asks why one line follows from the one above it, answers
+# the leading question correctly, and is told "perfect, now how do we do the next step?"
+# They did not ask to be walked through the problem. They asked about a step, and the
+# conversation is over when that step makes sense. Offering the walkthrough unprompted
+# takes a thirty-second question and turns it into an assignment.
+_ANCHORED_SCOPE = """\
+This conversation is about that step and nothing else. Answer what the student actually
+asked, then stop. In Guide, at most one leading question to get them there: once they have
+it, confirm it, give them the answer to what they asked, and end the turn. Do not move on
+to the next step, do not recap the steps before it, and never offer to work through the
+rest of the problem. If the student wants that, they will ask, and then it is theirs to
+ask for rather than yours to start."""
+
 
 def build_segmentation_prompt(text: str, filename: str) -> list[dict[str, str]]:
     """Build the messages that ask the model to list a homework set's problems.
@@ -331,10 +347,14 @@ def format_step_context(
     a step read without its question is ambiguous, and the student clicked it precisely
     because they are looking at both. The labels are the sheet's own wording, so the
     model and the student refer to the same thing by the same name.
+
+    The scope rule travels with the step rather than living in the mode prompts, because it
+    is a property of *where the question was asked from*, not of how it is answered: Show
+    has the same appetite for finishing the problem, and both are wrong here.
     """
     heading = f"{_STEP_CONTEXT_HEADING[:-1]}, {label}:" if label else _STEP_CONTEXT_HEADING
     problem_heading = f"The problem, {problem_label}:" if problem_label else "The problem:"
-    return f"{heading}\n\n{problem_heading}\n{problem}\n\nThe step:\n{step}"
+    return f"{heading}\n\n{problem_heading}\n{problem}\n\nThe step:\n{step}\n\n{_ANCHORED_SCOPE}"
 
 
 def _render_facts(facts: list[sqlite3.Row], heading: str) -> str:

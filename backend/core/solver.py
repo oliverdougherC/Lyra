@@ -33,6 +33,7 @@ Two rules run through every path here:
 """
 
 import asyncio
+import json
 import logging
 import queue
 import sqlite3
@@ -56,6 +57,8 @@ from backend.core.errors import LyraError
 from backend.core.segmentation import SegmentedProblem, propose_problems
 from backend.core.solving import SolvedProblem, SolveInput
 from backend.llm import client
+from backend.rag import locate
+from backend.rag.parse import PDF_MIME
 from backend.storage.database import connect
 
 logger = logging.getLogger("lyra.solver")
@@ -255,6 +258,7 @@ def write_problems(
         # provenance rather than a row pointing at document zero. `document_id or None`
         # is what keeps a deleted source from becoming a foreign key that does not resolve.
         if problem.document_id and (problem.chunk_ids or problem.page_number is not None):
+            bbox = _locate(conn, problem.document_id, problem.page_number, problem.label)
             artifacts.set_provenance(
                 conn,
                 part_id,
@@ -263,6 +267,7 @@ def write_problems(
                         chunk_id=chunk_id,
                         document_id=problem.document_id or None,
                         page_number=problem.page_number,
+                        bbox=bbox,
                     )
                     for chunk_id in (problem.chunk_ids or (None,))
                 ],
@@ -715,6 +720,58 @@ def _top_level_problems(conn: sqlite3.Connection, artifact_id: int) -> list[dict
         for part in artifacts.list_parts(conn, artifact_id)
         if part["parent_part_id"] is None and part["kind"] == artifacts.PROBLEM
     ]
+
+
+def _locate(
+    conn: sqlite3.Connection, document_id: int, page_number: int | None, label: str | None
+) -> tuple[float, ...]:
+    """Where a problem's marker sits on its page, empty when it could not be found.
+
+    Empty rather than None on a miss, so the backfill knows this has already been looked
+    for and does not reopen the same PDF on every start.
+    """
+    if not document_id or page_number is None or not label:
+        return ()
+    row = conn.execute(
+        "select stored_path, mime from documents where id = ?", (document_id,)
+    ).fetchone()
+    if row is None or str(row["mime"]) != PDF_MIME:
+        return ()
+    return locate.find_label(Path(str(row["stored_path"])), page_number, label) or ()
+
+
+def backfill_problem_locations(conn: sqlite3.Connection) -> int:
+    """Find the page position of problems written before positions were recorded.
+
+    Solution sets are worth keeping across a version of the app that learns something new
+    about them, and re-segmenting them to pick this up would throw away every correction
+    the student made at the review gate. Runs at startup, does nothing on the second run,
+    and never raises: this drives a click target on a page image.
+    """
+    rows = conn.execute(
+        "select v.id, v.document_id, v.page_number, p.label from artifact_provenance v "
+        "join artifact_parts p on p.id = v.part_id "
+        "where v.bbox is null and p.kind = ? and p.parent_part_id is null "
+        "and v.document_id is not null and v.page_number is not null",
+        (artifacts.PROBLEM,),
+    ).fetchall()
+
+    located = 0
+    for row in rows:
+        found = _locate(
+            conn,
+            int(row["document_id"]),
+            int(row["page_number"]),
+            str(row["label"] or ""),
+        )
+        conn.execute(
+            "update artifact_provenance set bbox = ? where id = ?",
+            (json.dumps(list(found)), int(row["id"])),
+        )
+        if found:
+            located += 1
+    conn.commit()
+    return located
 
 
 def _document_text(document_id: int) -> str:

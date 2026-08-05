@@ -343,7 +343,7 @@ export function DocumentsPane({
 
       {/* Vertical padding matches the composer's bar; horizontal stays at the list's inset so
           the well still lines up with the rows above it. */}
-      <div className="shrink-0 border-t bg-card px-3 py-4">
+      <div className="shrink-0 border-t bg-background px-3 py-4">
         {batchActive ? (
           <BatchLoader
             title={batchTitle}

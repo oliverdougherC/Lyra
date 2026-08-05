@@ -73,7 +73,9 @@ export function EndpointLocalityBadge() {
       <TooltipTrigger
         onClick={() => router.push('/settings')}
         className={cn(
-          'inline-flex items-center gap-2 rounded-md border bg-card px-2.5 py-1.5 text-[13px] font-medium',
+          // Ambient status, not a control: no box until the pointer says otherwise. The
+          // dot and the word carry it, and the header keeps one visual weight.
+          'inline-flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] font-medium',
           'transition-colors duration-150 hover:bg-muted focus-visible:ring-ring',
           'focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none',
           locality.textClass,

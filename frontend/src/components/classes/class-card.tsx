@@ -2,11 +2,10 @@
 
 import Link from 'next/link'
 import { useRef } from 'react'
-import { Archive, MoreVertical, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Archive, ArrowRight, MoreVertical, Pencil, Plus, Trash2 } from 'lucide-react'
 
 import { CourseMark } from '@/components/classes/course-mark'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Reveal } from '@/components/ui/reveal'
 import {
   DropdownMenu,
@@ -30,6 +29,11 @@ type ClassCardProps = {
   onArchive: (klass: ClassRead) => void
 }
 
+/**
+ * One line of the class ledger. The list is an index page, not a card wall: full-width
+ * rows under hairlines, the course name set in the heading face, and the row's metadata
+ * kept to the right margin the way a contents page keeps its page numbers.
+ */
 export function ClassCard({
   klass,
   index,
@@ -46,39 +50,43 @@ export function ClassCard({
     <Reveal
       once={`class-card-${klass.id}`}
       delay={Math.min(index, MAX_STAGGER_STEPS) * STAGGER_SECONDS}
-      className="h-full"
     >
-      <Card className="group relative flex h-full flex-col gap-0 p-5 transition-shadow duration-200 hover:shadow-md">
-        {/* The link covers the card so the whole surface is one target, while the menu
-            button sits above it in the stacking order and stays independently clickable. */}
+      <div className="group relative flex items-center gap-4 py-5 pr-1 pl-1 sm:gap-5">
+        {/* The link covers the row so the whole line is one target, while the menu button
+            sits above it in the stacking order and stays independently clickable. */}
         <Link
           ref={linkRef}
           href={`/classes/${klass.id}`}
           autoFocus={autoFocus}
-          className="absolute inset-0 z-0 rounded-[inherit] focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none"
+          className="absolute inset-0 z-0 rounded-md focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none"
         >
           <span className="sr-only">{klass.name}</span>
         </Link>
 
-        <div className="pointer-events-none relative z-10 flex items-start gap-3 pr-8">
-          <CourseMark klass={klass} />
-          <div className="min-w-0 flex-1">
-            {/* Wraps to two lines rather than truncating: a course name is how the user
-                tells one card from another, and `Continuous-Time Sign...` does not. */}
-            <h2 className="line-clamp-2 text-base leading-6 font-medium">{klass.name}</h2>
-            {subtitle ? <p className="text-muted-foreground truncate text-sm">{subtitle}</p> : null}
-          </div>
+        <CourseMark klass={klass} size="lg" className="pointer-events-none relative z-10" />
+
+        <div className="pointer-events-none relative z-10 min-w-0 flex-1">
+          <h2 className="font-heading group-hover:text-accent-primary line-clamp-2 text-lg leading-snug font-medium tracking-tight transition-colors duration-150 sm:text-xl">
+            {klass.name}
+          </h2>
+          {subtitle ? (
+            <p className="text-text-tertiary mt-0.5 truncate text-sm">{subtitle}</p>
+          ) : null}
         </div>
 
-        {/* Pushed to the card's floor rather than sitting under a fixed margin, so cards
-            in a row square up their footers however long their titles run. */}
-        <div className="text-text-tertiary relative z-10 mt-auto flex items-center gap-2 pt-6 text-xs">
-          <span>{formatCount(klass.document_count, 'document')}</span>
-          <span aria-hidden>·</span>
-          <span>{formatRelativeTime(klass.last_active_at)}</span>
+        <div className="pointer-events-none relative z-10 hidden shrink-0 text-right text-xs leading-5 sm:block">
+          <p className="text-text-secondary tabular-nums">
+            {formatCount(klass.document_count, 'document')}
+          </p>
+          <p className="text-text-tertiary">{formatRelativeTime(klass.last_active_at)}</p>
         </div>
 
-        <div className="absolute top-3 right-3 z-20">
+        <ArrowRight
+          aria-hidden
+          className="text-accent-primary pointer-events-none relative z-10 size-4 shrink-0 -translate-x-1 opacity-0 transition-[opacity,transform] duration-150 group-focus-within:translate-x-0 group-focus-within:opacity-100 group-hover:translate-x-0 group-hover:opacity-100"
+        />
+
+        <div className="relative z-20 shrink-0">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -106,24 +114,25 @@ export function ClassCard({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-      </Card>
+      </div>
     </Reveal>
   )
 }
 
 /**
- * Closes the grid with the one action the screen is for. A row of cards trailing off into
- * empty canvas reads as an unfinished page; a dashed tile reads as an invitation, and it
- * puts New class within reach of wherever the eye already is.
+ * Closes the ledger with the one action the page is for: a final quiet line, not a dashed
+ * placeholder tile pretending to be content.
  */
 export function NewClassCard({ onClick }: { onClick: (trigger: HTMLButtonElement) => void }) {
   return (
     <button
       type="button"
       onClick={(event) => onClick(event.currentTarget)}
-      className="text-text-secondary hover:border-accent-primary hover:text-accent-primary focus-visible:ring-ring/50 flex h-full min-h-[122px] flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border-strong text-sm transition-colors duration-200 focus-visible:ring-[3px] focus-visible:outline-none"
+      className="group/new text-text-secondary hover:text-accent-primary focus-visible:ring-ring/50 flex w-full items-center gap-4 py-5 pr-1 pl-1 text-left text-sm font-medium transition-colors duration-150 focus-visible:ring-[3px] focus-visible:outline-none sm:gap-5"
     >
-      <Plus className="size-5" aria-hidden />
+      <span className="border-border-strong text-text-tertiary group-hover/new:border-accent-primary group-hover/new:text-accent-primary flex size-12 shrink-0 items-center justify-center rounded-md border border-dashed transition-colors duration-150">
+        <Plus className="size-5" aria-hidden />
+      </span>
       New class
     </button>
   )
@@ -132,17 +141,16 @@ export function NewClassCard({ onClick }: { onClick: (trigger: HTMLButtonElement
 /** Mirrors ClassCard's box model exactly, so data arriving causes no layout shift. */
 export function ClassCardSkeleton() {
   return (
-    <Card className="flex h-full flex-col gap-0 p-5 shadow-sm" aria-hidden>
-      <div className="flex items-start gap-3">
-        <div className="bg-muted size-10 motion-safe:animate-pulse rounded-md" />
-        <div className="min-w-0 flex-1 space-y-2 py-1">
-          <div className="bg-muted h-4 w-3/4 motion-safe:animate-pulse rounded" />
-          <div className="bg-muted h-3 w-1/2 motion-safe:animate-pulse rounded" />
-        </div>
+    <div className="flex items-center gap-4 py-5 pr-1 pl-1 sm:gap-5" aria-hidden>
+      <div className="bg-muted size-12 shrink-0 motion-safe:animate-pulse rounded-md" />
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="bg-muted h-5 w-2/5 motion-safe:animate-pulse rounded" />
+        <div className="bg-muted h-3 w-1/4 motion-safe:animate-pulse rounded" />
       </div>
-      <div className="mt-auto flex h-4 items-center pt-6">
-        <div className="bg-muted h-3 w-2/5 motion-safe:animate-pulse rounded" />
+      <div className="hidden shrink-0 space-y-2 sm:block">
+        <div className="bg-muted ml-auto h-3 w-20 motion-safe:animate-pulse rounded" />
+        <div className="bg-muted ml-auto h-3 w-14 motion-safe:animate-pulse rounded" />
       </div>
-    </Card>
+    </div>
   )
 }

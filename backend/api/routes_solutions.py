@@ -162,6 +162,9 @@ class ProvenanceRead(BaseModel):
     page_number: int | None
     label: str | None
     filename: str | None
+    # Where on the page this starts, as `[x0, y0, x1, y1]` fractions of the page box.
+    # Null when nothing looked, or when the marker was not found.
+    bbox: list[float] | None = None
 
 
 class CheckRead(BaseModel):

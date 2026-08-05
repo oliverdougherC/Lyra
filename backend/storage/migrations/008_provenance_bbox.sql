@@ -1,0 +1,11 @@
+-- Where on the page a problem begins.
+--
+-- Stored so the page image beside a solution can be clicked: without geometry the two
+-- columns are a document and a transcript that happen to sit next to each other, and the
+-- only way from a problem on the sheet to its solution is to find it by eye.
+--
+-- Normalized to the page box (0..1) rather than kept in points, because the frontend
+-- renders pages as images at whatever width the pane has, and a fraction survives that
+-- while a coordinate in points does not. `[]` is a real value here: it records that the
+-- marker was looked for and not found, which is different from not having looked.
+alter table artifact_provenance add column bbox text;

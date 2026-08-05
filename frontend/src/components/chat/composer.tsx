@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useCallback, useLayoutEffect, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { ArrowUp, Square, X } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
@@ -11,7 +11,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
 import { cn } from '@/lib/utils'
 
-const MAX_ROWS = 3
+const MAX_ROWS = 6
 const LINE_HEIGHT_PX = 24
 const HINT_KEY = 'lyra-composer-hint-dismissed'
 
@@ -28,6 +28,8 @@ type ComposerProps = {
   disabledReason: string | null
   scopedDocumentName: string | null
   onClearScope: () => void
+  /** Take focus on mount, for a composer the reader has just opened deliberately. */
+  autoFocus?: boolean
 }
 
 export function Composer({
@@ -39,9 +41,16 @@ export function Composer({
   disabledReason,
   scopedDocumentName,
   onClearScope,
+  autoFocus = false,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [hintDismissed, setHintDismissed] = useLocalStorageState(HINT_KEY, false, parseDismissed)
+
+  // `preventScroll` because the caller places this composer itself. Letting the browser
+  // scroll to it would fight that and land somewhere neither of them chose.
+  useEffect(() => {
+    if (autoFocus) textareaRef.current?.focus({ preventScroll: true })
+  }, [autoFocus])
 
   // Auto-grow up to three rows, then let the textarea scroll internally.
   useLayoutEffect(() => {
@@ -60,7 +69,7 @@ export function Composer({
 
   if (disabledReason) {
     return (
-      <div className="rounded-[10px] border border-border-strong bg-muted p-3 text-sm">
+      <div className="min-h-[var(--pane-control-row)] rounded-2xl border border-border-strong bg-muted p-4 text-sm">
         <p className="text-text-secondary">{disabledReason}</p>
         <Button asChild variant="outline" size="sm" className="mt-2">
           <Link href="/settings">Open settings</Link>
@@ -85,9 +94,17 @@ export function Composer({
         </Badge>
       ) : null}
 
-      {/* The shared control-row height is what keeps this and the documents well across the
-          seam closing their columns on one line. */}
-      <div className="flex min-h-[var(--pane-control-row)] items-end gap-2 rounded-[10px] border border-input bg-card p-2 shadow-sm transition-colors focus-within:border-accent-primary focus-within:ring-2 focus-within:ring-ring/20">
+      {/* A sheet of writing paper laid on the canvas: one row, the send control riding the
+          last line of type. The lift comes from the surface being genuinely a different
+          paper from the pane behind it, not from a heavier border. The shared control-row
+          height keeps this and the documents well across the seam on one line. */}
+      <div
+        className={cn(
+          'flex min-h-[var(--pane-control-row)] items-end gap-2 rounded-2xl bg-card p-2.5',
+          'border border-border/80 shadow-sm transition-[border-color,box-shadow] duration-200',
+          'focus-within:border-accent-primary/60 focus-within:shadow-md',
+        )}
+      >
         <Textarea
           ref={textareaRef}
           rows={1}
@@ -95,7 +112,7 @@ export function Composer({
           name="message"
           value={value}
           disabled={streaming}
-          placeholder="Ask about your material"
+          placeholder="Ask about your material…"
           aria-label="Message Lyra"
           onChange={(event) => onChange(event.target.value)}
           onKeyDown={(event) => {
@@ -104,31 +121,34 @@ export function Composer({
               send()
             }
           }}
-          className="max-h-[88px] min-h-0 flex-1 resize-none border-0 bg-transparent px-1.5 py-1.5 leading-6 shadow-none focus-visible:ring-0 disabled:cursor-text disabled:bg-transparent disabled:opacity-100"
+          className="max-h-[160px] min-h-0 flex-1 resize-none border-0 bg-transparent px-2 py-1.5 text-[0.9375rem] leading-6 shadow-none focus-visible:ring-0 disabled:cursor-text disabled:bg-transparent disabled:opacity-100"
         />
 
         {streaming ? (
           <Button
             type="button"
-            size="icon"
+            size="icon-sm"
             variant="outline"
-            className="shrink-0 rounded-full"
+            className="size-9 shrink-0 rounded-full"
             onClick={onStop}
             aria-label="Stop generating"
           >
-            <Square className="size-3.5" />
+            <Square className="size-3" />
           </Button>
         ) : (
           <Button
             type="button"
-            size="icon"
-            variant={hasDraft ? 'default' : 'secondary'}
-            className={cn('shrink-0 rounded-full', !hasDraft && 'text-text-tertiary')}
+            size="icon-sm"
+            variant={hasDraft ? 'default' : 'ghost'}
+            className={cn(
+              'size-9 shrink-0 rounded-full transition-all duration-200',
+              hasDraft ? 'shadow-sm' : 'bg-muted text-text-tertiary',
+            )}
             onClick={send}
             disabled={!hasDraft}
             aria-label="Send message"
           >
-            <ArrowUp />
+            <ArrowUp className="size-4" />
           </Button>
         )}
       </div>
@@ -136,8 +156,8 @@ export function Composer({
       {/* Shown until the first message is sent, and never on a phone, where there is no
           physical Enter key to explain and the row costs real reading height. */}
       {hintDismissed ? null : (
-        <p className="text-text-tertiary hidden text-xs sm:block">
-          <Kbd>Enter</Kbd> sends, <Kbd>Shift</Kbd> <Kbd>Enter</Kbd> starts a new line.
+        <p className="text-text-tertiary hidden px-1 text-xs sm:block">
+          <Kbd>Enter</Kbd> sends · <Kbd>Shift</Kbd> <Kbd>Enter</Kbd> for a new line
         </p>
       )}
     </div>

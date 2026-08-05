@@ -56,7 +56,14 @@ function node(overrides: Partial<ProblemTree> = {}): ProblemTree {
         label: 'Set up the integral',
         content: 'Apply the definition.',
         provenance: [
-          { chunk_id: 5, document_id: 3, page_number: 12, label: null, filename: 'lecture3.pdf' },
+          {
+            chunk_id: 5,
+            document_id: 3,
+            page_number: 12,
+            label: null,
+            filename: 'lecture3.pdf',
+            bbox: null,
+          },
         ],
       }),
       part({ id: 3, parent_part_id: 1, ordinal: 1, label: 'Evaluate', content: 'Integrate.' }),

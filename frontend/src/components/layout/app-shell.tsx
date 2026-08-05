@@ -1,14 +1,16 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 
 import { AppHeader } from '@/components/layout/app-header'
 import { AppSidebar } from '@/components/layout/app-sidebar'
+import { FullBleedProvider } from '@/components/layout/page-chrome'
 import { MobileBottomNav } from '@/components/layout/mobile-bottom-nav'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { useAppShortcuts } from '@/lib/hooks/use-app-shortcuts'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
+import { cn } from '@/lib/utils'
 
 const SIDEBAR_STORAGE_KEY = 'lyra-sidebar-open'
 
@@ -25,7 +27,11 @@ function parseOpen(raw: string): boolean | null {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useLocalStorageState(SIDEBAR_STORAGE_KEY, true, parseOpen)
+  const [bleed, setBleed] = useState(false)
   const router = useRouter()
+
+  // Stable, so a route's effect does not re-run on every render of the shell.
+  const handleBleedChange = useCallback((next: boolean) => setBleed(next), [])
 
   const shortcuts = useMemo(
     () => [
@@ -63,7 +69,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           Focusing one made the browser scroll a box with no scrollbar and no wheel
           handling, which read to the user as the page disappearing. `clip` cannot
           scroll, so that failure is now unreachable rather than merely unlikely. */}
-      <SidebarInset className="min-h-0 min-w-0 overflow-clip border-border md:peer-data-[variant=inset]:border">
+      {/* The canvas, flush to the window on every route. `bleed` no longer changes the
+          frame — there is no frame — only the reading measure and padding below. */}
+      <SidebarInset className="min-h-0 min-w-0 overflow-clip">
         <AppHeader />
         {/* `main` is the one scroll container below the header, so the rail and header
             stay put on long routes while a full-height route (the workspace) can still
@@ -76,8 +84,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           tabIndex={-1}
           className="relative flex min-h-0 flex-1 flex-col overflow-y-auto"
         >
-          <div className="mx-auto flex min-h-0 w-full max-w-[1320px] flex-1 flex-col p-4 pb-0 md:p-6 md:pb-0">
-            {children}
+          <div
+            className={cn(
+              'mx-auto flex min-h-0 w-full flex-1 flex-col',
+              bleed ? 'max-w-none' : 'max-w-[1320px] p-4 pb-0 md:p-6 md:pb-0',
+            )}
+          >
+            <FullBleedProvider onChange={handleBleedChange}>{children}</FullBleedProvider>
             {/* Breathing room as a spacer rather than as padding on this box.
                 `flex-1` is `1 1 0%`, so this box is always exactly the scroll container's
                 height and a long page's content overflows it; padding here would sit above
@@ -89,8 +102,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
                 Its height matches this box's side padding at every breakpoint, so the
                 page is inset by the same amount all the way round. Only the mobile size
-                differs, and only because the bottom nav is sitting there. */}
-            <div aria-hidden className="h-28 shrink-0 sm:h-4 md:h-6 print:hidden" />
+                differs, and only because the bottom nav is sitting there.
+
+                A full-bleed route keeps only the mobile part of it, which is clearance for
+                the bottom nav rather than page inset. */}
+            <div
+              aria-hidden
+              className={cn('h-28 shrink-0 print:hidden', bleed ? 'sm:h-0' : 'sm:h-4 md:h-6')}
+            />
           </div>
         </main>
       </SidebarInset>

@@ -7,6 +7,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation'
 
 import { ChatPane } from '@/components/chat/chat-pane'
 import { DocumentsPane } from '@/components/documents/documents-pane'
+import { useFullBleed } from '@/components/layout/page-chrome'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -20,6 +21,9 @@ function readClassId(value: string | string[] | undefined): number | null {
   const classId = Number(raw)
   return Number.isSafeInteger(classId) && classId > 0 ? classId : null
 }
+
+/** The URL value meaning "a conversation that has not been started yet". */
+const DRAFT_SESSION = 'new'
 
 function readSessionId(value: string | null): number | null {
   const sessionId = Number(value)
@@ -41,7 +45,12 @@ export default function ClassWorkspacePage() {
   // The conversation is part of the URL so sidebar chats are linkable and reloadable.
   // The URL is the only source of truth here: mirroring it into state meant every
   // navigation set state from an effect and re-rendered the workspace twice.
-  const sessionId = readSessionId(searchParams.get('session'))
+  const sessionParam = searchParams.get('session')
+  const sessionId = readSessionId(sessionParam)
+  // `?session=new` is a conversation the student has opened but not yet started. It has no
+  // row on the server until they send something, which is what keeps unused chats out of
+  // the rail entirely rather than cleaning them up afterwards.
+  const draftSession = sessionParam === DRAFT_SESSION
 
   const handleSessionIdChange = useCallback(
     (next: number | null) => {
@@ -63,6 +72,10 @@ export default function ClassWorkspacePage() {
   const classQuery = useClass(classId ?? Number.NaN)
   const { data: documentList } = useDocuments(classId ?? Number.NaN)
   const documentCount = documentList?.length ?? null
+
+  // The workspace is the page here, so it gets the window. Not while the class failed to
+  // load: that is an alert in a column, which wants the ordinary frame.
+  useFullBleed(classId !== null && !classQuery.isError)
 
   if (classId === null) {
     return (
@@ -111,6 +124,7 @@ export default function ClassWorkspacePage() {
       selectedDocumentId={selectedDocumentId}
       onClearSelectedDocument={() => setSelectedDocumentId(null)}
       sessionId={sessionId}
+      draft={draftSession}
       onSessionIdChange={handleSessionIdChange}
       headerActions={
         <>
@@ -146,14 +160,14 @@ export default function ClassWorkspacePage() {
     />
   )
 
-  // One raised-paper workbench, not two floating cards: the conversation and its
-  // documents are one workspace and read as one surface.
+  // One workbench filling the window, not a card floating in the middle of it. The
+  // conversation and its documents are the page here, so they get the page.
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {compact ? (
         <Tabs
           defaultValue="chat"
-          className="min-h-0 flex-1 gap-0 overflow-hidden rounded-lg border bg-card shadow-sm"
+          className="min-h-0 flex-1 gap-0 overflow-hidden border-t bg-background"
         >
           <TabsList variant="line" aria-label="Workspace panes" className="px-4">
             <TabsTrigger value="chat">Chat</TabsTrigger>
@@ -178,7 +192,7 @@ export default function ClassWorkspacePage() {
           </TabsContent>
         </Tabs>
       ) : (
-        <div className="flex min-h-0 flex-1 overflow-hidden rounded-lg border bg-card shadow-sm">
+        <div className="flex min-h-0 flex-1 overflow-hidden border-t bg-background">
           <div className="min-w-0 flex-1">{chat}</div>
           {documentsOpen ? (
             <div className="w-[340px] shrink-0 border-l xl:w-[380px]">{documents}</div>

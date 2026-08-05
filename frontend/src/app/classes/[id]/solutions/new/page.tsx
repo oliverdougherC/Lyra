@@ -8,7 +8,6 @@ import { toast } from 'sonner'
 import { SourcePicker } from '@/components/solutions/source-picker'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -19,14 +18,7 @@ import { useDocuments } from '@/lib/hooks/use-documents'
 import { useCreateSolution } from '@/lib/hooks/use-solutions'
 import { suggestReferences } from '@/lib/reference-match'
 
-/**
- * A raised-paper section, matching the Settings screen.
- *
- * The vendored `Card` leaves `--card-spacing` unset at its default size, so `CardHeader`
- * and `CardContent` resolve their padding to nothing and the title sits on the border.
- * Settings already works around this by supplying its own padding, and this follows that
- * rather than editing a primitive in `components/ui/`.
- */
+/** A section of the page, matching the Settings screen: hairline above, no card. */
 function SetupSection({
   title,
   description,
@@ -37,13 +29,13 @@ function SetupSection({
   children: ReactNode
 }) {
   return (
-    <Card className="gap-4 py-0">
-      <div className="border-b px-5 pt-5 pb-4">
+    <section className="border-border/70 border-t pt-6">
+      <div className="mb-5">
         <h2 className="font-heading text-xl leading-tight font-medium tracking-tight">{title}</h2>
         <p className="text-text-secondary mt-1 text-sm">{description}</p>
       </div>
-      <div className="px-5 pb-5">{children}</div>
-    </Card>
+      {children}
+    </section>
   )
 }
 
@@ -131,8 +123,8 @@ export default function NewSolutionPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6">
-      <header className="flex flex-col gap-1">
-        <h1 className="font-heading text-text-primary text-2xl tracking-tight">New solution set</h1>
+      <header className="flex flex-col gap-1 pt-2 md:pt-6">
+        <h1 className="font-display text-text-primary text-3xl">New solution set</h1>
         <p className="text-text-secondary text-sm">
           {classQuery.data
             ? `Lyra will read a problem set from ${classQuery.data.name} and list its problems for you to check.`

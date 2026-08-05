@@ -13,10 +13,16 @@ const dmSans = DM_Sans({
   display: 'swap',
 })
 
+/**
+ * Loaded as a variable font with its optical-size and softness axes, not as three static
+ * instances. Fraunces is designed to change shape with size — small text sharpens, display
+ * text relaxes — and the axes are what make a heading set in it look typeset rather than
+ * scaled up. `.font-heading` in globals.css turns the soft axis on for display work.
+ */
 const fraunces = Fraunces({
   variable: '--font-fraunces',
   subsets: ['latin'],
-  weight: ['500', '600', '700'],
+  axes: ['opsz', 'SOFT', 'WONK'],
   display: 'swap',
 })
 

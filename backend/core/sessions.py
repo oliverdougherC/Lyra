@@ -132,6 +132,24 @@ def delete_session(conn: sqlite3.Connection, session_id: int) -> None:
     conn.commit()
 
 
+def discard_empty_sessions(conn: sqlite3.Connection) -> int:
+    """Delete every conversation that holds no messages, and say how many went.
+
+    A conversation with nothing in it is not history, it is a click. The frontend no
+    longer opens one until the first message is sent, so this exists for the ones already
+    stored from when it did: browsing six steps of a solution used to leave six untitled
+    chats in the rail, and no student is going to clear those out by hand.
+
+    Safe to run at startup precisely because nothing is in flight then. A live sweep would
+    race a panel that has opened its conversation but not yet sent into it.
+    """
+    cursor = conn.execute(
+        "delete from chat_sessions where id not in (select distinct session_id from messages)"
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
 def set_session_mode(
     conn: sqlite3.Connection, session_id: int, mode: ChatMode
 ) -> dict[str, object]:

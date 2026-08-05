@@ -125,6 +125,27 @@ describe('StreamingMarkdown', () => {
       }
     })
 
+    it('keeps a pending unit in its slot when its node is replaced', () => {
+      // Markdown is re-parsed on every frame, so React can replace the node holding a word
+      // while its reveal is still pending. Re-applying the class without its delay would
+      // jump it to the front of the queue, ahead of every word waiting in front of it.
+      const { container, rerender } = render(
+        <StreamingMarkdown content="one two three four five" streaming />,
+      )
+      const pending = words(container).at(-1)
+      const scheduled = Number.parseFloat(pending!.style.getPropertyValue('--stream-word-delay'))
+      pending!.classList.remove('stream-word-visible')
+      pending!.style.removeProperty('--stream-word-delay')
+
+      rerender(<StreamingMarkdown content="one two three four five six" streaming />)
+
+      const restored = words(container)[4]
+      expect(restored.classList.contains('stream-word-visible')).toBe(true)
+      const delay = Number.parseFloat(restored.style.getPropertyValue('--stream-word-delay'))
+      expect(delay).toBeGreaterThan(0)
+      expect(delay).toBeLessThanOrEqual(scheduled)
+    })
+
     it('gives a later word a non-zero delay so the cascade is ordered', () => {
       const { container } = render(
         <StreamingMarkdown content="one two three four five" streaming />,

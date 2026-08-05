@@ -7,6 +7,8 @@ import { toast } from 'sonner'
 
 import { Composer } from '@/components/chat/composer'
 import { LyraMark } from '@/components/chat/lyra-mark'
+import { Asterism } from '@/components/ui/asterism'
+import { HeaderActions } from '@/components/layout/page-chrome'
 import { MessageRow, type ChatMessage } from '@/components/chat/message-bubble'
 import { isProcessingStage, type ProcessingStage } from '@/components/chat/thinking-indicator'
 import { buildSuggestedPrompts } from '@/components/chat/suggested-prompts'
@@ -18,6 +20,7 @@ import { ApiError, streamChat, streamRegenerate } from '@/lib/api'
 import { formatCount, parseTimestamp } from '@/lib/format'
 import { chatKeys, useCreateSession, useMessages, useSessions } from '@/lib/hooks/use-chat'
 import { useDocuments } from '@/lib/hooks/use-documents'
+import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { cn } from '@/lib/utils'
@@ -39,6 +42,29 @@ type ChatPaneProps = {
   onClearSelectedDocument: () => void
   /** The conversation to show; `null` falls back to the newest one. */
   sessionId?: number | null
+  /**
+   * Start a fresh conversation rather than falling back to the newest.
+   *
+   * Nothing is created on the server until the first message is sent. An empty chat is a
+   * click, not history, and creating one up front is what used to fill the rail with
+   * untitled conversations nobody had said anything in.
+   */
+  draft?: boolean
+  /**
+   * The step of a solution a newly opened conversation is about.
+   *
+   * Pins that step into every turn. It is what makes asking about step 2 a conversation
+   * rather than a fresh question that happens to quote one.
+   */
+  anchorPartId?: number | null
+  /**
+   * `pane` fills its column and scrolls itself. `inline` flows into whatever is around it
+   * and follows the stream in the scroll container named by `scrollViewportRef`, which is
+   * what lets a conversation open underneath the step it is about without covering it.
+   */
+  layout?: 'pane' | 'inline'
+  /** The scrolling ancestor to follow, required by `inline`. */
+  scrollViewportRef?: React.RefObject<HTMLDivElement | null>
   /** Called whenever the active conversation changes, so the URL can track it. */
   onSessionIdChange?: (sessionId: number | null) => void
   /** Rendered at the end of the pane header; the workspace owns the documents column. */
@@ -82,10 +108,18 @@ export function ChatPane({
   selectedDocumentId,
   onClearSelectedDocument,
   sessionId: sessionIdProp = null,
+  draft: isDraft = false,
+  anchorPartId = null,
+  layout = 'pane',
+  scrollViewportRef,
   onSessionIdChange,
   headerActions,
   emptyState,
 }: ChatPaneProps) {
+  const inline = layout === 'inline'
+  // Matches the workspace's own desktop breakpoint, so the controls move into the header
+  // exactly when the Chat/Documents tab bar stops existing.
+  const wide = useMediaQuery('(min-width: 1024px)')
   const queryClient = useQueryClient()
   const { data: sessions, isPending: sessionsPending } = useSessions(classId)
   const createSession = useCreateSession(classId)
@@ -110,7 +144,6 @@ export function ChatPane({
   const [turnKind, setTurnKind] = useState<TurnKind>('send')
   const [revealDrained, setRevealDrained] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
-  const creationAttemptedRef = useRef(false)
   const outcomeRef = useRef<TurnOutcome | null>(null)
   const streamTextRef = useRef('')
   const revealDrainedRef = useRef(false)
@@ -123,14 +156,18 @@ export function ChatPane({
     () => (sessions && sessions.length > 0 ? [...sessions].sort((a, b) => b.id - a.id)[0] : null),
     [sessions],
   )
-  const activeSessionId = sessionId ?? newestSession?.id ?? null
-  const activeMode = sessionId === null ? (newestSession?.mode ?? mode) : mode
+  const activeSessionId = isDraft ? null : (sessionId ?? newestSession?.id ?? null)
+  const activeMode = sessionId === null && !isDraft ? (newestSession?.mode ?? mode) : mode
   const scopedDocument = useMemo(
     () => documents?.find((document) => document.id === selectedDocumentId) ?? null,
     [documents, selectedDocumentId],
   )
 
-  const { data: persisted, isPending: messagesPending } = useMessages(activeSessionId)
+  const { data: persisted, isPending: messagesQueryPending } = useMessages(activeSessionId)
+  // A conversation that does not exist yet is not loading. Without this the query sits at
+  // `pending` forever, because it is disabled, and a new chat would show a skeleton
+  // instead of somewhere to type.
+  const messagesPending = activeSessionId !== null && messagesQueryPending
   const messages: ChatMessage[] = useMemo(() => {
     const base = persisted ?? []
     if (!pendingTurn || turnOutcome === 'failed') return base
@@ -145,20 +182,25 @@ export function ChatPane({
     return [...base, ...pendingTurn]
   }, [pendingTurn, persisted, turnKind, turnOutcome])
 
-  // Only an empty class needs a new session. Existing sessions are derived directly from
-  // the query result, avoiding an effect-time state update after every refetch.
-  useEffect(() => {
-    if (sessionId !== null || sessionsPending || !sessions || sessions.length > 0) return
-    if (creationAttemptedRef.current) return
-    creationAttemptedRef.current = true
-    createSession.mutate(null, {
-      onSuccess: (session) => {
-        onSessionIdChange?.(session.id)
-        setMode(session.mode)
-      },
-      onError: () => toast.error('Could not start a conversation for this class.'),
-    })
-  }, [createSession, onSessionIdChange, sessionId, sessions, sessionsPending])
+  /**
+   * The conversation this turn belongs to, opening one if there is not one yet.
+   *
+   * Sending is the moment a conversation starts existing. Opening the pane, clicking New
+   * chat, and browsing away again all used to create a row, which is why a class ended up
+   * with a rail full of chats containing nothing.
+   */
+  const ensureSession = useCallback(async (): Promise<number | null> => {
+    if (activeSessionId !== null) return activeSessionId
+    try {
+      const session = await createSession.mutateAsync(anchorPartId)
+      onSessionIdChange?.(session.id)
+      setMode(session.mode)
+      return session.id
+    } catch {
+      toast.error('Could not start a conversation for this class.')
+      return null
+    }
+  }, [activeSessionId, anchorPartId, createSession, onSessionIdChange])
 
   useEffect(() => {
     return () => abortRef.current?.abort()
@@ -229,8 +271,8 @@ export function ChatPane({
    * and in which optimistic rows stand in for the answer while it streams.
    */
   const runTurn = useCallback(
-    async (kind: TurnKind, content: string) => {
-      if (!activeSessionId || pendingTurn !== null) return
+    async (kind: TurnKind, content: string, turnSessionId: number) => {
+      if (pendingTurn !== null) return
 
       const controller = new AbortController()
       abortRef.current = controller
@@ -316,13 +358,13 @@ export function ChatPane({
         const documentId = scopedDocument?.id ?? null
         await (kind === 'regenerate'
           ? streamRegenerate(
-              activeSessionId,
+              turnSessionId,
               { mode: activeMode, document_id: documentId },
               onEvent,
               controller.signal,
             )
           : streamChat(
-              activeSessionId,
+              turnSessionId,
               { content, mode: activeMode, document_id: documentId },
               onEvent,
               controller.signal,
@@ -348,7 +390,7 @@ export function ChatPane({
         }
       }
     },
-    [activeMode, activeSessionId, pendingTurn, placeholderReply, scopedDocument, setOutcome],
+    [activeMode, pendingTurn, placeholderReply, scopedDocument, setOutcome],
   )
 
   const send = useCallback(
@@ -356,9 +398,18 @@ export function ChatPane({
       const trimmed = content.trim()
       if (trimmed.length === 0) return
       setDraft('')
-      void runTurn('send', trimmed)
+      void (async () => {
+        const target = await ensureSession()
+        // The question goes back in the box rather than into the void: the conversation
+        // could not be opened, so there is nowhere for it to have gone.
+        if (target === null) {
+          setDraft(trimmed)
+          return
+        }
+        await runTurn('send', trimmed, target)
+      })()
     },
-    [runTurn],
+    [ensureSession, runTurn],
   )
 
   /**
@@ -366,7 +417,11 @@ export function ChatPane({
    * replaced, which is the only reading of the button that makes sense: a student presses
    * it because the answer was wrong, not because they forgot they had asked.
    */
-  const regenerate = useCallback(() => void runTurn('regenerate', ''), [runTurn])
+  const regenerate = useCallback(() => {
+    // Reachable only from an answer that is already on screen, so the conversation exists.
+    if (activeSessionId === null) return
+    void runTurn('regenerate', '', activeSessionId)
+  }, [activeSessionId, runTurn])
 
   const stop = useCallback(() => {
     if (!abortRef.current) return
@@ -406,17 +461,51 @@ export function ChatPane({
   // A conversation opens at its latest message, and follows the stream while the reader
   // is already at the tail. Scrolling up to re-read detaches the follow, and the jump
   // button is the way back.
-  const viewportRef = useRef<HTMLDivElement>(null)
+  // Inline, the conversation does not own a scroll container: it flows into the pane it
+  // was opened inside, and follows the stream there. Everything below reads `viewportRef`,
+  // so the follow, the jump button, and the re-pin work the same either way. One real ref
+  // resolved once per render rather than a ternary at each use: a conditional ref is not
+  // one the compiler can see through, and half of this file depends on it being stable.
+  const ownViewportRef = useRef<HTMLDivElement>(null)
+  const viewportRef = useRef<HTMLDivElement | null>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const [following, setFollowing] = useState(true)
   const followingRef = useRef(true)
   const userScrollAtRef = useRef(0)
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior) => {
+  useEffect(() => {
+    viewportRef.current = inline ? (scrollViewportRef?.current ?? null) : ownViewportRef.current
+  })
+
+  /** How far the tail of the conversation sits below the bottom of the viewport. */
+  const distanceBelowFold = useCallback((): number => {
     const node = viewportRef.current
-    if (!node) return
-    node.scrollTo({ top: node.scrollHeight, behavior })
-  }, [])
+    if (!node) return 0
+    // Inline, the tail is the end of this thread, not the end of the pane: the pane
+    // continues with the next problem, and scrolling to its bottom would carry the reader
+    // straight past the answer they are waiting on.
+    const content = inline ? contentRef.current : null
+    if (content) {
+      return content.getBoundingClientRect().bottom - node.getBoundingClientRect().bottom
+    }
+    return node.scrollHeight - node.scrollTop - node.clientHeight
+  }, [inline])
+
+  const scrollToBottom = useCallback(
+    (behavior: ScrollBehavior) => {
+      const node = viewportRef.current
+      if (!node) return
+      const distance = distanceBelowFold()
+      // Nothing below the fold is nothing to follow. Inline, a thread that already fits on
+      // screen has a negative distance, and "scrolling to the bottom" of it would drag the
+      // pane *upward* to sit its last line on the last pixel. That fired on every reasoning
+      // token, which is why the pane could not be scrolled at all while Lyra was thinking
+      // and came free the moment the answer grew past the fold.
+      if (distance <= 0) return
+      node.scrollTo({ top: Math.max(0, node.scrollTop + distance), behavior })
+    },
+    [distanceBelowFold],
+  )
 
   // Only the reader can stop the conversation following its own tail. Content that grows
   // under a scroll that already ran (KaTeX re-laying out, the documents column opening)
@@ -430,8 +519,7 @@ export function ChatPane({
       userScrollAtRef.current = performance.now()
     }
     const onScroll = () => {
-      const distance = node.scrollHeight - node.scrollTop - node.clientHeight
-      const atBottom = distance <= STICK_THRESHOLD_PX
+      const atBottom = distanceBelowFold() <= STICK_THRESHOLD_PX
       // Arriving at the bottom always resumes following, however it happened. Leaving it
       // only counts when the reader drove it.
       const byUser = performance.now() - userScrollAtRef.current < USER_SCROLL_WINDOW_MS
@@ -450,15 +538,16 @@ export function ChatPane({
       node.removeEventListener('touchmove', noteUserScroll)
       node.removeEventListener('keydown', noteUserScroll)
     }
-  }, [])
+  }, [distanceBelowFold])
 
   // Opening a conversation jumps straight to the end, with no visible travel through
-  // history the reader did not ask to see.
+  // history the reader did not ask to see. Not inline: the reader opened this thread from
+  // a step they were reading, and moving the pane under them would take that step away.
   useLayoutEffect(() => {
-    if (messagesPending) return
+    if (messagesPending || inline) return
     followingRef.current = true
     scrollToBottom('instant')
-  }, [activeSessionId, messagesPending, scrollToBottom])
+  }, [activeSessionId, inline, messagesPending, scrollToBottom])
 
   // Sending a question, or asking for the answer again, is an unambiguous request to be at
   // the tail: the reply lands at the bottom and the reader is now waiting on it. This is
@@ -502,96 +591,150 @@ export function ChatPane({
     return () => observer.disconnect()
   }, [scrollToBottom])
 
+  // A segmented control rather than underlined tabs. These do not navigate anywhere — they
+  // change how the next answer is written — and in the header bar there is no pane rule for
+  // an underline to sit on, so the honest idiom is a switch with a travelling thumb.
+  const modeToggle = (
+    <div
+      className="border-border/70 bg-muted/70 flex items-center rounded-full border p-0.5"
+      role="group"
+      aria-label="Answer style"
+    >
+      {MODES.map((option) => (
+        <Tooltip key={option.value}>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-pressed={activeMode === option.value}
+              className={cn(
+                'h-7 rounded-full px-3 text-xs transition-colors duration-150',
+                activeMode === option.value
+                  ? 'bg-card text-foreground hover:bg-card shadow-sm'
+                  : 'text-text-secondary hover:bg-transparent hover:text-foreground',
+              )}
+              onClick={() => {
+                if (!inline && sessionId === null && activeSessionId !== null) {
+                  onSessionIdChange?.(activeSessionId)
+                }
+                setMode(option.value)
+              }}
+            >
+              {option.label}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{option.hint}</TooltipContent>
+        </Tooltip>
+      ))}
+    </div>
+  )
+
+  const paneControls = (
+    <div className="flex items-center gap-1.5">
+      {modeToggle}
+      {headerActions}
+    </div>
+  )
+
+  const conversation = (
+    <div
+      ref={contentRef}
+      className={cn(inline ? 'space-y-5' : 'mx-auto max-w-[860px] p-4 md:px-6')}
+    >
+      {sessionsPending || messagesPending ? (
+        <div className="space-y-4" aria-busy="true" aria-label="Loading conversation">
+          <Skeleton className="ml-auto h-12 w-2/3" />
+          <Skeleton className="h-24 w-full" />
+        </div>
+      ) : rendered.length === 0 && emptyState !== undefined ? (
+        emptyState
+      ) : rendered.length === 0 ? (
+        <EmptyConversation
+          className={className}
+          readyCount={readyCount}
+          hasProfile={(profile?.facts.length ?? 0) > 0}
+          suggestions={suggestions}
+          onPick={setDraft}
+        />
+      ) : (
+        rendered.map((message, index) => {
+          const isStreamingReply = optimisticTurn && message.id === -2
+          return (
+            <MessageRow
+              key={message.id}
+              message={message}
+              // A question and the answer under it are one turn, so they sit close; the
+              // next question opens at a wider interval. Even spacing throughout is what
+              // made a transcript read as an undifferentiated stack of blocks.
+              className={cn(!inline && index > 0 && (message.role === 'user' ? 'mt-11' : 'mt-5'))}
+              startsTimeGap={startsTimeGap(rendered, index)}
+              streaming={isStreamingReply}
+              processingStage={isStreamingReply ? processingStage : null}
+              turnStartedAt={isStreamingReply ? turnStartedAt : null}
+              thinkingDurationMs={isStreamingReply ? thinkingDurationMs : null}
+              turnEnded={
+                isStreamingReply
+                  ? turnOutcome === 'completed' || turnOutcome === 'stopped'
+                  : undefined
+              }
+              onRevealComplete={isStreamingReply ? handleRevealComplete : undefined}
+              canRetry={!optimisticTurn && index === lastAssistantIndex}
+              onRetry={regenerate}
+            />
+          )
+        })
+      )}
+    </div>
+  )
+
+  const composer = (
+    <Composer
+      value={draft}
+      onChange={setDraft}
+      onSend={() => send(draft)}
+      onStop={stop}
+      streaming={turnActive}
+      disabledReason={disabledReason}
+      scopedDocumentName={scopedDocument?.filename ?? null}
+      onClearScope={onClearSelectedDocument}
+      // Inline, the reader clicked to open this and the next thing they do is type.
+      autoFocus={inline}
+    />
+  )
+
+  if (inline) {
+    // No scroll container of its own and no header rule: this is a passage of the page it
+    // was opened inside, not a panel sitting on top of one.
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-2">
+          {modeToggle}
+          {headerActions ? (
+            <div className="ml-auto flex shrink-0 items-center gap-1">{headerActions}</div>
+          ) : null}
+        </div>
+        {conversation}
+        {composer}
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Stated rather than left to the mode buttons to set, because the documents column
-          matches this height to keep the rule under both columns on one line. */}
-      <div className="flex h-9 shrink-0 items-center gap-3 border-b px-4 lg:h-10">
-        {/* Below the desktop layout a Chat tab already names this pane, so repeating
-            "Tutor" underneath it spends a second row of a small screen saying nothing. */}
-        <h2 className="hidden text-xs font-medium tracking-[0.14em] uppercase lg:block">Tutor</h2>
-        {/* Right-aligned beside the Tutor label on desktop; on compact the label is gone,
-            so it sits left under the Chat tab rather than stranded across empty space. */}
-        <div
-          className="flex items-stretch self-stretch lg:ml-auto"
-          role="group"
-          aria-label="Answer style"
-        >
-          {MODES.map((option) => (
-            <Tooltip key={option.value}>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-pressed={activeMode === option.value}
-                  className={cn(
-                    'relative h-9 rounded-none border-b-2 border-transparent px-3 text-xs after:absolute after:inset-x-3 after:bottom-[-1px] after:h-0.5 after:bg-accent-primary after:opacity-0 lg:h-10',
-                    activeMode === option.value
-                      ? 'text-foreground after:opacity-100 hover:bg-transparent'
-                      : 'text-text-secondary hover:bg-transparent hover:text-foreground',
-                  )}
-                  onClick={() => {
-                    if (sessionId === null && activeSessionId !== null) {
-                      onSessionIdChange?.(activeSessionId)
-                    }
-                    setMode(option.value)
-                  }}
-                >
-                  {option.label}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{option.hint}</TooltipContent>
-            </Tooltip>
-          ))}
-        </div>
-        {headerActions ? (
-          <div className="flex shrink-0 items-center gap-1 pl-1">{headerActions}</div>
-        ) : null}
-      </div>
+      {/* On a wide screen these go into the header bar the route already has, rather than a
+          second full-width rule directly beneath it: the old bar cost 40px to say "TUTOR",
+          a word the breadcrumb above it and the composer below it both already imply.
+          Narrow, that header is already holding a breadcrumb, Profile, and the endpoint
+          badge in 375px, so the controls stay in the pane instead of crushing it. */}
+      {wide ? (
+        <HeaderActions>{paneControls}</HeaderActions>
+      ) : (
+        <div className="flex shrink-0 items-center gap-2 px-4 pt-3">{paneControls}</div>
+      )}
 
       <div className="relative min-h-0 flex-1">
         <ScrollArea viewportRef={viewportRef} className="h-full">
-          <div ref={contentRef} className="mx-auto max-w-[860px] space-y-6 p-4 md:px-6">
-            {sessionsPending || messagesPending ? (
-              <div className="space-y-4" aria-busy="true" aria-label="Loading conversation">
-                <Skeleton className="ml-auto h-12 w-2/3" />
-                <Skeleton className="h-24 w-full" />
-              </div>
-            ) : rendered.length === 0 && emptyState !== undefined ? (
-              emptyState
-            ) : rendered.length === 0 ? (
-              <EmptyConversation
-                className={className}
-                readyCount={readyCount}
-                hasProfile={(profile?.facts.length ?? 0) > 0}
-                suggestions={suggestions}
-                onPick={setDraft}
-              />
-            ) : (
-              rendered.map((message, index) => {
-                const isStreamingReply = optimisticTurn && message.id === -2
-                return (
-                  <MessageRow
-                    key={message.id}
-                    message={message}
-                    startsTimeGap={startsTimeGap(rendered, index)}
-                    streaming={isStreamingReply}
-                    processingStage={isStreamingReply ? processingStage : null}
-                    turnStartedAt={isStreamingReply ? turnStartedAt : null}
-                    thinkingDurationMs={isStreamingReply ? thinkingDurationMs : null}
-                    turnEnded={
-                      isStreamingReply
-                        ? turnOutcome === 'completed' || turnOutcome === 'stopped'
-                        : undefined
-                    }
-                    onRevealComplete={isStreamingReply ? handleRevealComplete : undefined}
-                    canRetry={!optimisticTurn && index === lastAssistantIndex}
-                    onRetry={regenerate}
-                  />
-                )
-              })
-            )}
-          </div>
+          {conversation}
         </ScrollArea>
 
         {!following && rendered.length > 0 ? (
@@ -607,21 +750,17 @@ export function ChatPane({
         ) : null}
       </div>
 
-      <div className="shrink-0 border-t bg-card p-4 md:px-6">
-        <div className="mx-auto max-w-[860px]">
-          <Composer
-            value={draft}
-            onChange={setDraft}
-            onSend={() => send(draft)}
-            onStop={stop}
-            streaming={turnActive}
-            disabledReason={
-              activeSessionId === null ? 'Opening this conversation...' : disabledReason
-            }
-            scopedDocumentName={scopedDocument?.filename ?? null}
-            onClearScope={onClearSelectedDocument}
-          />
-        </div>
+      {/* No rule above the well: the composer is a raised object standing on the pane, and
+          it carries its own edge. What separates them is a scrim instead — the conversation
+          dissolves into the canvas over the last few millimetres rather than being sliced
+          off mid-line by a hard edge. Functional, not ornament: it is the only thing saying
+          the text continues above. */}
+      <div className="relative shrink-0 p-4 pt-2 md:px-6">
+        <div
+          aria-hidden
+          className="from-background/0 to-background pointer-events-none absolute inset-x-0 -top-10 h-10 bg-gradient-to-b"
+        />
+        <div className="relative mx-auto max-w-[860px]">{composer}</div>
       </div>
     </div>
   )
@@ -643,30 +782,36 @@ function EmptyConversation({
   onPick,
 }: EmptyConversationProps) {
   return (
-    <div className="flex min-h-[60vh] flex-col justify-center py-8">
-      <div className="text-accent-primary mb-4 size-10">
+    // A title page, not a dashboard: centered, set in the display face, opened by the
+    // house fleuron. The suggestions read as a contents list rather than a button pile.
+    <div className="mx-auto flex min-h-[60vh] w-full max-w-xl flex-col items-center justify-center py-8 text-center">
+      <div className="text-accent-primary mb-5 size-9" aria-hidden>
         <LyraMark />
       </div>
-      <h2 className="text-2xl font-medium">{className}</h2>
-      <p className="text-text-secondary mt-1 text-sm">
+      <h2 className="font-display text-[2rem] leading-tight text-balance">{className}</h2>
+      <p className="text-text-secondary mt-2 text-sm">
         {readyCount === 0
           ? 'Nothing indexed yet. Upload a document and Lyra will have something to work from.'
           : `${formatCount(readyCount, 'document')} indexed${hasProfile ? ', syllabus analyzed' : ''}.`}
       </p>
-      <p className="text-text-tertiary mt-6 mb-2 text-xs font-medium tracking-[0.14em] uppercase">
-        Try asking
-      </p>
-      <div className="flex flex-col items-start gap-2">
+      <Asterism className="text-border-strong mt-8 mb-6" />
+      <p className="eyebrow mb-1">Try asking</p>
+      <div className="flex w-full flex-col items-stretch">
         {suggestions.map((prompt) => (
-          <Button
+          <button
             key={prompt}
-            variant="outline"
-            size="sm"
-            className="h-auto max-w-full py-2 text-left whitespace-normal"
+            type="button"
             onClick={() => onPick(prompt)}
+            className="group/prompt border-border/70 text-text-secondary hover:text-text-primary focus-visible:ring-ring flex items-baseline justify-between gap-3 border-b py-3 text-left text-sm transition-colors duration-150 last:border-b-0 focus-visible:ring-2 focus-visible:outline-none"
           >
-            {prompt}
-          </Button>
+            <span className="min-w-0">{prompt}</span>
+            <span
+              aria-hidden
+              className="text-accent-primary shrink-0 translate-x-0 opacity-0 transition-[opacity,transform] duration-150 group-hover/prompt:translate-x-0.5 group-hover/prompt:opacity-100 group-focus-visible/prompt:opacity-100"
+            >
+              →
+            </span>
+          </button>
         ))}
       </div>
     </div>

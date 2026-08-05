@@ -209,6 +209,11 @@ export interface Provenance {
   page_number: number | null
   label: string | null
   filename: string | null
+  /**
+   * Where on the page this starts, as `[x0, y0, x1, y1]` fractions of the page box.
+   * Null when the marker was never looked for or could not be found.
+   */
+  bbox: number[] | null
 }
 
 /** One tool call the verifier made. The audit trail behind a verdict. */

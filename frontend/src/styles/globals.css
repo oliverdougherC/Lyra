@@ -46,7 +46,10 @@
      bar's control row from this rather than from whatever their own contents measure: the
      composer is sized by its send button, the dropzone by a smaller pair of controls, and
      left alone they part company by 16px. */
-  --pane-control-row: 3.625rem;
+  --pane-control-row: 3.75rem;
+  /* Fractal paper fiber. See `body::after`. */
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.62' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.188 0 0 0 0 0.157 0 0 0 0 0.129 0.34 0.34 0.34 0 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-grain-opacity: 0.055;
   --elevation-sm: 0 2px 8px rgb(48 40 33 / 0.05);
   --elevation-md: 0 12px 30px rgb(48 40 33 / 0.08);
   --elevation-lg: 0 24px 60px rgb(48 40 33 / 0.12);
@@ -81,6 +84,9 @@
   --danger-text: #d7bfb7;
   --focus-ring: #9fc6a3;
   --overlay: rgb(14 12 10 / 0.48);
+  /* White fiber: black speckle on a dark ground is invisible. */
+  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.62' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 0.98 0 0 0 0 0.957 0.34 0.34 0.34 0 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23g)'/%3E%3C/svg%3E");
+  --paper-grain-opacity: 0.045;
   /* A drop shadow is a light-theme device: on a dark canvas it darkens dark and reads as
      nothing. Dark earns the same separation with a hairline of lifted paper along the top
      of each surface, so raised paper still reads as raised. */
@@ -206,6 +212,43 @@
     @apply font-heading tracking-tight;
   }
 
+  /* Paper is a material, not a hex value. One fixed sheet of fractal grain over the whole
+     window — above every surface, blended so it only modulates what is already there —
+     is what stops the parchment palette reading as flat beige rectangles. It sits on the
+     compositor, costs one paint, and never intercepts a pointer. */
+  /* Paper is a material, not a hex value. One fixed sheet of fractal fiber over the whole
+     window is what stops the parchment palette reading as flat beige rectangles.
+
+     The noise is keyed into the *alpha* channel by `feColorMatrix` -- flat black speckles
+     in light, flat white in dark, whose opacity varies -- rather than left as RGB noise
+     under a blend mode. Blended RGB noise is centred on mid-gray, and the blends that
+     respect mid-gray (soft-light above all) treat it as a near-identity: measured at full
+     opacity it was literally invisible. Alpha-keyed speckle cannot be a no-op.
+
+     It sits on the compositor, costs one paint, and never intercepts a pointer. */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 2147483647;
+    pointer-events: none;
+    background-image: var(--paper-grain);
+    background-size: 180px 180px;
+    opacity: var(--paper-grain-opacity);
+  }
+
+  /* Selection in the house accent rather than the browser's blue: the one default that
+     most loudly announces "nobody styled this". */
+  ::selection {
+    background: color-mix(in srgb, var(--accent-primary) 24%, transparent);
+  }
+
+  /* Scrollbars on the paper, not on the OS. Thin, warm, and quiet until used. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in srgb, var(--border-strong) 55%, transparent) transparent;
+  }
+
   /* Highlight.js syntax roles resolve through the Lyra token bridge. */
   .hljs,
   .hljs-subst {
@@ -246,6 +289,40 @@
 }
 
 @layer components {
+  /* The one small-caps editorial label, defined once. Every "TUTOR", "SOLUTIONS", and
+     "Try asking" in the product is this class, so they are all the same label instead of
+     five hand-tuned approximations of one. */
+  .eyebrow {
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+  }
+
+  /* Display setting for Fraunces: large optical size and the soft axis on, so a title is
+     the warm, slightly flared face the type was drawn to be at size — not body-text
+     letterforms scaled up. Wonk stays off here; it is reserved for the wordmark. */
+  .font-display {
+    font-family: var(--font-fraunces), ui-serif, Georgia, serif;
+    font-variation-settings:
+      'opsz' 72,
+      'SOFT' 60,
+      'WONK' 0;
+    letter-spacing: -0.02em;
+  }
+
+  /* The wordmark alone earns the wonky letterforms: at one word, quirk is identity. */
+  .font-wordmark {
+    font-family: var(--font-fraunces), ui-serif, Georgia, serif;
+    font-variation-settings:
+      'opsz' 44,
+      'SOFT' 40,
+      'WONK' 1;
+    letter-spacing: -0.01em;
+  }
+
   /* The tutor's reading surface. Slightly larger than the interface sans, because a serif
      at the same nominal size reads smaller, and set to the one bold weight actually
      loaded so emphasis is drawn rather than synthesized. */
@@ -579,6 +656,23 @@
     lyra-shimmer-sweep 2.6s linear infinite;
 }
 
+/* The shared arrival reveal. `both` fill: whatever happens to frame scheduling, the
+   element ends visible. Under reduced motion the global rule collapses it to one frame. */
+@keyframes lyra-reveal-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.lyra-reveal {
+  animation: lyra-reveal-enter 250ms var(--ease-gentle) both;
+}
+
 @keyframes lyra-stream-word-reveal {
   from {
     opacity: 0;
@@ -641,6 +735,11 @@
    would be worse than no export. Nothing about a verdict, a refutation, or a provenance
    line is dropped for tidiness. */
 @media print {
+  /* Screen atmosphere. Printed paper brings its own grain. */
+  body::after {
+    display: none;
+  }
+
   /* Paper is paper. Both themes print on the light palette, so a dark-mode reader does
      not get a page of ink or, worse, a light-on-light document. */
   :root,

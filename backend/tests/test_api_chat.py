@@ -408,6 +408,26 @@ def test_a_blank_message_is_rejected_before_anything_is_stored(
     assert sessions.list_messages(db, session_id) == []
 
 
+def test_a_conversation_nobody_said_anything_in_is_discarded(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The sweep for chats left behind before the frontend opened them lazily.
+
+    Browsing six steps of a solution used to leave six untitled conversations in the rail,
+    and no student is going to clear those out by hand.
+    """
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Here it is."))
+    used = int(sessions.create_session(db, class_id)["id"])
+    _send(client, used)
+    sessions.create_session(db, class_id)
+    sessions.create_session(db, class_id)
+
+    discarded = sessions.discard_empty_sessions(db)
+
+    assert discarded == 2
+    assert [row["id"] for row in sessions.list_sessions(db, class_id)] == [used]
+
+
 async def test_a_disconnect_keeps_the_part_of_the_answer_that_arrived(
     db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -651,6 +671,12 @@ def test_an_anchored_session_pins_its_step_and_the_problem_into_the_turn(
     # The step without its question is ambiguous, and the student is looking at both.
     assert "Find the Laplace transform of a unit ramp." in system
     assert "Problem 4" in system
+    # Asking about a step is a question, not an invitation to teach the problem. Guide is
+    # built to work through one end to end, and left alone it answers the question, then
+    # asks how to do the next step, and keeps going.
+    assert "about that step and nothing else" in system
+    assert "Do not move on" in system
+    assert "never offer to work through the" in system
 
 
 def test_an_ordinary_session_pins_nothing(
