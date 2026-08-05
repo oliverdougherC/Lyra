@@ -284,6 +284,14 @@ def reference_documents(
 
     The budget is split evenly across the documents rather than first-come, so two
     references contribute one half each instead of the first one taking all of it.
+
+    A reference is dropped when what survives truncation has nothing in it. That test is on
+    the truncated body rather than the whole document on purpose, and it is the only place
+    the question is asked: this list is what `solver._provenance_for` resolves a citation
+    against by position, while `prompts.format_reference_block` numbers what it is given and
+    skips a blank one. Deciding it twice, on two different strings, let the two lists fall
+    out of step, and a step citing the reference it was shown was then credited to a
+    document that had never been in the prompt at all.
     """
     sources = artifacts.list_sources(conn, artifact_id, artifacts.REFERENCE_SOLUTIONS)
     if not sources or budget_tokens <= 0:
@@ -293,11 +301,9 @@ def reference_documents(
     documents: list[ReferenceDocument] = []
     for source in sources:
         document_id = int(source["document_id"])
-        text = _document_text(document_id)
-        if text:
-            documents.append(
-                ReferenceDocument(document_id, str(source["filename"]), text[:per_document])
-            )
+        body = _document_text(document_id)[:per_document]
+        if body.strip():
+            documents.append(ReferenceDocument(document_id, str(source["filename"]), body))
     return documents
 
 

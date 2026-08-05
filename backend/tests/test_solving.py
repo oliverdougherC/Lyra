@@ -26,6 +26,7 @@ from backend.config import settings
 from backend.core import artifacts, solver, solving, verification
 from backend.core.artifacts import SourceSpec
 from backend.llm import tools
+from backend.llm.prompts import format_reference_block
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk
 
 _STATEMENT = "Find the Laplace transform of a unit ramp."
@@ -1083,3 +1084,39 @@ def test_a_section_marked_separately_with_no_parts_left_is_solved_as_itself(
     solver.run_solve(artifact_id)
 
     assert len(_children(db, section_id, artifacts.STEP)) == 2
+
+
+def test_a_reference_the_prompt_never_showed_cannot_be_cited_against(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """The prompt's numbering and the list a citation resolves against are one list.
+
+    `format_reference_block` numbers what it is handed and skips a blank body; the solver
+    resolves a citation by its position in `reference_documents`. When those two disagreed
+    about which references counted, every number after the blank one pointed one place too
+    early, and a step citing the answer key it had actually been shown was reported to the
+    student as grounded in a document that was never in the prompt.
+    """
+    blank = _document(db, class_id, "blank_key.pdf")
+    Path(settings.text_dir / f"{blank}.txt").write_text("   \n  ", encoding="utf-8")
+    real = _document(db, class_id, "real_key.pdf")
+    problem_document = _document(db, class_id)
+    created = artifacts.create_artifact(
+        db,
+        class_id,
+        "Problem set 4",
+        [
+            SourceSpec(problem_document),
+            SourceSpec(blank, artifacts.REFERENCE_SOLUTIONS),
+            SourceSpec(real, artifacts.REFERENCE_SOLUTIONS),
+        ],
+    )
+
+    references = solving.reference_documents(db, int(created["id"]), 4000)
+
+    # One entry, because one of the two carries nothing to follow. The block numbers it [1]
+    # and position 0 of this list is the same document.
+    assert [one.document_id for one in references] == [real]
+    block = format_reference_block([(one.filename, one.text) for one in references])
+    assert "[1] real_key.pdf" in block
+    assert "blank_key.pdf" not in block
