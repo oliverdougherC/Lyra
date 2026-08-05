@@ -32,7 +32,12 @@ ExtractionSkipReason = Literal[
 
 
 class FactRead(BaseModel):
-    """One profile fact. `class_id` is null for a fact about the student themselves."""
+    """One claim about a class, and the documents that attest it.
+
+    `class_id` is null for a fact about the student themselves. `sources` is the whole
+    evidence list, most useful as its length: a topic four uploads agree on is what the
+    course is about, and one mentioned once is not.
+    """
 
     id: int
     class_id: int | None
@@ -42,8 +47,10 @@ class FactRead(BaseModel):
     confidence: Confidence
     confirmed: bool
     rejected: bool
+    edited: bool
     source_document_id: int | None
     source_filename: str | None
+    sources: list[str]
     created_at: str
 
 

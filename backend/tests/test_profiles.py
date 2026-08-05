@@ -9,6 +9,7 @@ import json
 import socket
 import sqlite3
 from collections.abc import Iterator
+from pathlib import Path
 from typing import cast
 
 import keyring.errors
@@ -23,7 +24,7 @@ from backend.core.app_settings import update_settings_row
 from backend.core.errors import LyraError, NotFoundError
 from backend.llm.prompts import build_system_prompt
 from backend.storage import secrets
-from backend.storage.database import connect, get_db
+from backend.storage.database import MIGRATIONS_DIR, connect, get_db, migrate
 
 LOCAL_ENDPOINT = "http://127.0.0.1:8080/v1"
 REMOTE_ENDPOINT = "https://tutor.example.com/v1"
@@ -145,8 +146,16 @@ def _insert_fact(
         "source_document_id) values (?, ?, ?, ?, ?, ?, ?)",
         (class_id, kind, label, value, confidence, confirmed, source_document_id),
     )
+    fact_id = int(cursor.lastrowid or 0)
+    # Extraction records the document as evidence as well as naming it on the row, and the
+    # evidence is what the profile counts, orders, and prunes by.
+    if source_document_id is not None:
+        db.execute(
+            "insert into profile_fact_sources (fact_id, document_id) values (?, ?)",
+            (fact_id, source_document_id),
+        )
     db.commit()
-    return int(cursor.lastrowid or 0)
+    return fact_id
 
 
 @pytest.fixture
@@ -393,7 +402,9 @@ def test_every_key_maps_onto_its_kind_across_shapes(
         # No value key, so the object is read as labels and values rather than dropped.
         ("professor", "name", "Dr Chen"),
         ("professor", "email", "chen@example.edu"),
-        ("prerequisite", "Calculus I", "MATH 101"),
+        # A prerequisite is a name, so the entry names one thing however many fields the
+        # model wrapped it in. `MATH 101` is that course's code, not a second prerequisite.
+        ("prerequisite", "Prerequisite", "Calculus I"),
         ("note", "Note", "Attendance is required"),
     }
     # A marking in the model's own casing still normalises.
@@ -467,6 +478,233 @@ def test_reingesting_does_not_double_the_profile(
     assert _fact_count(db) == 1
 
 
+def _topics(*names: str) -> str:
+    """An extraction reply proposing each name as a high-confidence topic."""
+    return json.dumps({"topics": [{"name": name, "confidence": "high"} for name in names]})
+
+
+def test_a_second_document_saying_the_same_thing_adds_evidence_not_a_row(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole point: sixteen uploads make one profile, not sixteen stacked on each other."""
+    second = _insert_document(db, class_id, filename="homework_2.pdf")
+    _reply(monkeypatch, _topics("Fourier series"))
+    profiles.extract_facts(db, document_id, "Homework 1")
+    profiles.extract_facts(db, second, "Homework 2")
+
+    facts = _facts(db, class_id)
+
+    assert len(facts) == 1
+    assert facts[0]["value"] == "Fourier series"
+    assert facts[0]["sources"] == ["syllabus.pdf", "homework_2.pdf"]
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        # Punctuation and case are formatting, so they merge with certainty.
+        ("Linearity and Time-Invariance", "Linearity and time invariance"),
+        # A trailing parenthetical glosses the subject rather than naming it.
+        ("Fourier Transform", "Fourier Transform (computation of X(jw))"),
+        ("Convolution Property", "Convolution property (periodic convolution)"),
+    ],
+)
+def test_wordings_that_differ_only_by_formatting_are_one_fact(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+    first: str,
+    second: str,
+) -> None:
+    _reply(monkeypatch, _topics(first, second))
+
+    profiles.extract_facts(db, document_id, "Homework 1")
+
+    facts = _facts(db, class_id)
+    # The shortest wording survives: among variants that already agree, it is the name.
+    assert [fact["value"] for fact in facts] == [min(first, second, key=len)]
+
+
+def test_a_topic_list_answered_as_a_mapping_keeps_every_entry(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The prompt asks for a list; a model may answer with a numbered object instead."""
+    _reply(
+        monkeypatch,
+        json.dumps({"topics": {"1": "Convolution", "2": "Fourier series"}}),
+    )
+
+    profiles.extract_facts(db, document_id, "Homework 1")
+
+    assert _identities(_facts(db, class_id)) == {
+        ("topic", "Topic", "Convolution"),
+        ("topic", "Topic", "Fourier series"),
+    }
+
+
+def test_wordings_that_differ_by_wording_are_left_for_consolidation(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing here may merge two things a student would call distinct.
+
+    `Time Shift` and `Time-Shift Property` really are one topic, and `Fourier series` and
+    `Inverse Fourier series` really are two. Telling those pairs apart takes judgment about
+    the subject, so both are left alone and `backend.core.consolidation` decides.
+    """
+    _reply(monkeypatch, _topics("Time Shift", "Time-Shift Property", "Inverse Fourier series"))
+
+    profiles.extract_facts(db, document_id, "Homework 7")
+
+    assert len(_facts(db, class_id)) == 3
+
+
+def test_two_documents_corroborate_a_fact_neither_was_sure_of(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    second = _insert_document(db, class_id, filename="homework_2.pdf")
+    _reply(monkeypatch, json.dumps({"topics": ["Convolution"]}))
+
+    profiles.extract_facts(db, document_id, "Homework 1")
+    assert profiles.select_active_facts(db, class_id) == []
+
+    profiles.extract_facts(db, second, "Homework 2")
+
+    active = profiles.select_active_facts(db, class_id)
+    assert [row["value"] for row in active] == ["Convolution"]
+    # Corroboration is evidence, not confirmation. The fact still says nobody has checked it.
+    assert active[0]["confirmed"] == 0
+
+
+def test_the_most_attested_facts_lead_the_profile(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    second = _insert_document(db, class_id, filename="homework_2.pdf")
+    _reply(monkeypatch, _topics("Mentioned once", "Convolution"))
+    profiles.extract_facts(db, document_id, "Homework 1")
+    _reply(monkeypatch, _topics("Convolution"))
+    profiles.extract_facts(db, second, "Homework 2")
+
+    assert [fact["value"] for fact in _facts(db, class_id)] == ["Convolution", "Mentioned once"]
+
+
+def test_rejecting_a_fact_holds_against_every_later_document(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One rejection, not one per file. Rejecting per document is what made the sheet unusable."""
+    second = _insert_document(db, class_id, filename="homework_2.pdf")
+    _reply(monkeypatch, _topics("Continuous-Signal Processing"))
+    profiles.extract_facts(db, document_id, "Homework 1")
+    profiles.reject_fact(db, int(db.execute("select id from profile_facts").fetchone()["id"]))
+
+    profiles.extract_facts(db, second, "Homework 2")
+
+    assert _facts(db, class_id) == []
+    assert _fact_count(db) == 1
+
+
+def test_correcting_a_value_marks_the_fact_as_the_users(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """`edited` is what stops the consolidation pass merging a correction away."""
+    fact_id = _insert_fact(db, class_id)
+
+    profiles.update_fact_value(db, fact_id, "2026-03-11")
+
+    assert profiles.get_fact(db, fact_id)["edited"] == 1
+
+
+def test_deleting_a_document_withdraws_what_only_it_claimed(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    shared = _insert_document(db, class_id, filename="homework_1.pdf")
+    other = _insert_document(db, class_id, filename="homework_2.pdf")
+    sole = _insert_fact(db, class_id, kind="topic", value="Only here", source_document_id=shared)
+    corroborated = _insert_fact(
+        db, class_id, kind="topic", value="Said twice", source_document_id=shared
+    )
+    db.execute(
+        "insert into profile_fact_sources (fact_id, document_id) values (?, ?)",
+        (corroborated, other),
+    )
+    mine = _insert_fact(db, class_id, kind="note", value="I kept this", source_document_id=shared)
+    profiles.confirm_fact(db, mine)
+    db.commit()
+
+    assert profiles.forget_document_evidence(db, shared) == 1
+    db.commit()
+
+    remaining = {int(row["id"]) for row in db.execute("select id from profile_facts")}
+    assert sole not in remaining
+    # Still evidenced elsewhere, and still the user's own decision.
+    assert {corroborated, mine} <= remaining
+
+
+def test_upgrading_folds_the_duplicates_already_on_disk(tmp_path: Path) -> None:
+    """The class that prompted this change already has sixteen copies of its course code.
+
+    An upgrade that only changed the rule going forward would leave every one of them
+    sitting there, so the migration folds the exact duplicates and carries their decisions.
+    """
+    conn = connect(tmp_path / "old.db")
+    try:
+        for path in sorted(MIGRATIONS_DIR.glob("*.sql"))[:8]:
+            conn.executescript(path.read_text(encoding="utf-8"))
+        conn.execute("insert into classes (name) values ('ECE203')")
+        for index in range(3):
+            conn.execute(
+                "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
+                "values (1, ?, ?, 'application/pdf', 1024, 'ready')",
+                (f"homework_{index}.pdf", f"1/homework_{index}.pdf"),
+            )
+            conn.execute(
+                "insert into profile_facts (class_id, kind, label, value, confidence, "
+                "rejected, source_document_id) values (1, 'note', 'Course', 'ECE203', 'high', "
+                "?, ?)",
+                (1 if index == 2 else 0, index + 1),
+            )
+        conn.execute("pragma user_version = 8")
+        conn.commit()
+
+        migrate(conn)
+
+        rows = conn.execute("select id, rejected from profile_facts").fetchall()
+        assert len(rows) == 1
+        # One copy was rejected, so the survivor is. A decision does not get lost in a fold.
+        assert rows[0]["rejected"] == 1
+        evidence = conn.execute(
+            "select count(*) from profile_fact_sources where fact_id = ?", (rows[0]["id"],)
+        ).fetchone()[0]
+        assert evidence == 3
+    finally:
+        conn.close()
+
+
 def test_document_text_is_truncated_to_the_extraction_budget(
     db: sqlite3.Connection,
     document_id: int,
@@ -480,6 +718,42 @@ def test_document_text_is_truncated_to_the_extraction_budget(
 
     # 60 percent of a 1000 token window, at four characters per token.
     assert len(sent[0][1]["content"]) == 2400
+
+
+def test_a_large_context_window_does_not_enlarge_the_extraction_prompt(
+    db: sqlite3.Connection,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A window sized for chat must not decide how much of a document extraction reads.
+
+    Left uncapped, a 262144-token window sent 629,144 characters of a problem set per
+    upload. That overran the client's read timeout, so the pass returned nothing at all,
+    and because ingestion runs one document at a time it held every later upload behind it.
+    """
+    update_settings_row(db, {"context_window": 262_144})
+    sent = _reply(monkeypatch, "{}")
+
+    profiles.extract_facts(db, document_id, "x" * 1_000_000)
+
+    assert len(sent[0][1]["content"]) == profiles.EXTRACTION_MAX_TOKENS * 4
+
+
+def test_the_default_window_is_unaffected_by_the_cap(
+    db: sqlite3.Connection,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The cap exists to stop a raised window inflating the prompt, not to shrink the
+    # budget the extraction prompt was written against.
+    update_settings_row(db, {"context_window": 8192})
+    sent = _reply(monkeypatch, "{}")
+
+    profiles.extract_facts(db, document_id, "x" * 1_000_000)
+
+    assert len(sent[0][1]["content"]) == int(8192 * profiles.EXTRACTION_BUDGET_SHARE) * 4
 
 
 def test_extracted_facts_carry_the_document_class_and_source(

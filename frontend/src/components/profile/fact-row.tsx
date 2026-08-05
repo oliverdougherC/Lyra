@@ -13,8 +13,18 @@ type FactRowProps = {
   onCorrect: (value: string) => void
   onResolve: (action: 'confirm' | 'reject') => void
   busy: boolean
-  /** False when the row above cites the same document, so the source is not repeated. */
-  showSource?: boolean
+}
+
+/**
+ * Where a fact came from, as evidence rather than as provenance. One document is worth
+ * naming; four is worth counting, and the count is the more useful fact of the two, because
+ * a topic four uploads agree on is what the course is actually about.
+ */
+function sourceLine(fact: FactRead): string | null {
+  const count = fact.sources.length
+  if (count === 0) return null
+  if (count === 1) return `From ${fact.sources[0]}`
+  return `In ${count} documents`
 }
 
 /**
@@ -47,12 +57,13 @@ function displayLabel(fact: FactRead): string | null {
   return label
 }
 
-export function FactRow({ fact, onCorrect, onResolve, busy, showSource = true }: FactRowProps) {
+export function FactRow({ fact, onCorrect, onResolve, busy }: FactRowProps) {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState(fact.value)
 
   const needsConfirmation = !fact.confirmed && fact.confidence === 'low'
   const label = displayLabel(fact)
+  const source = sourceLine(fact)
 
   // A success surface is a claim that the user checked this. Only a confirmed fact earns
   // it: everything else is still something Lyra proposed on its own.
@@ -150,9 +161,7 @@ export function FactRow({ fact, onCorrect, onResolve, busy, showSource = true }:
             </button>
           )}
 
-          {showSource && fact.source_filename ? (
-            <p className="text-text-tertiary mt-1 text-xs">From {fact.source_filename}</p>
-          ) : null}
+          {source ? <p className="text-text-tertiary mt-1 text-xs">{source}</p> : null}
 
           {needsConfirmation ? (
             <>
