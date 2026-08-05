@@ -2,6 +2,7 @@
 
 import { Check } from 'lucide-react'
 
+import { formatCount } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { DocumentState } from '@/types'
 
@@ -16,7 +17,11 @@ const STEPS: { state: DocumentState; label: string; subtitle?: string }[] = [
   {
     state: 'extracting',
     label: 'Analyzing',
-    subtitle: 'Reading your syllabus for dates and topics',
+    // Not "your syllabus". This stage runs over every upload, so it told a student
+    // watching a lab handout that Lyra was reading their syllabus. What it actually does
+    // is look for course facts wherever they happen to be, and most documents hold none,
+    // which is a fine outcome and not worth misdescribing to avoid.
+    subtitle: 'Looking for dates, topics, and course details',
   },
 ]
 
@@ -24,11 +29,10 @@ const ORDER: DocumentState[] = ['pending', 'parsing', 'chunking', 'embedding', '
 
 type IngestionProgressProps = {
   state: DocumentState
-  pagesDone: number
   pagesTotal: number | null
 }
 
-export function IngestionProgress({ state, pagesDone, pagesTotal }: IngestionProgressProps) {
+export function IngestionProgress({ state, pagesTotal }: IngestionProgressProps) {
   const activeIndex = ORDER.indexOf(state) - 1
   const active = STEPS[activeIndex]
 
@@ -72,9 +76,14 @@ export function IngestionProgress({ state, pagesDone, pagesTotal }: IngestionPro
         })}
       </ol>
 
+      {/* The document's size, not a page counter. `pages_done` is written once, at the very
+          end of the run, so it is zero for every frame this is on screen: the old line read
+          "page 1 of 32" from the first second to the last, which looks like progress that
+          has stalled. How long a document should take is worth saying; a number that never
+          moves while claiming to is not. */}
       <p className="text-text-tertiary text-xs">
         {active?.subtitle ?? 'Preparing this document'}
-        {pagesTotal ? ` · page ${Math.max(pagesDone, 1)} of ${pagesTotal}` : ''}
+        {pagesTotal ? ` · ${formatCount(pagesTotal, 'page')}` : ''}
       </p>
     </div>
   )

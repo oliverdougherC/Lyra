@@ -143,6 +143,12 @@ export const api = {
   reingestDocument: (documentId: number) =>
     requestJson<DocumentRead>(`/api/documents/${documentId}/reingest`, { method: 'POST' }),
 
+  moveDocument: (documentId: number, classId: number) =>
+    requestJson<DocumentRead>(`/api/documents/${documentId}/move`, {
+      method: 'POST',
+      body: { class_id: classId },
+    }),
+
   deleteDocument: async (documentId: number) => {
     await send(`/api/documents/${documentId}`, { method: 'DELETE' })
   },
@@ -161,6 +167,9 @@ export const api = {
 
   listMessages: (sessionId: number, signal?: AbortSignal) =>
     requestJson<MessageRead[]>(`/api/sessions/${sessionId}/messages`, { signal }),
+
+  renameSession: (sessionId: number, title: string) =>
+    requestJson<SessionRead>(`/api/sessions/${sessionId}`, { method: 'PATCH', body: { title } }),
 
   deleteSession: async (sessionId: number) => {
     await send(`/api/sessions/${sessionId}`, { method: 'DELETE' })
@@ -251,6 +260,9 @@ export const api = {
 
   cancelSolution: (artifactId: number) =>
     requestJson<SolutionRead>(`/api/solutions/${artifactId}/cancel`, { method: 'POST' }),
+
+  renameSolution: (artifactId: number, title: string) =>
+    requestJson<SolutionRead>(`/api/solutions/${artifactId}`, { method: 'PATCH', body: { title } }),
 
   deleteSolution: async (artifactId: number) => {
     await send(`/api/solutions/${artifactId}`, { method: 'DELETE' })

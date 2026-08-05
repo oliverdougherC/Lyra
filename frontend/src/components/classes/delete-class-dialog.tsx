@@ -23,9 +23,11 @@ import type { ClassRead } from '@/types'
 type DeleteClassDialogProps = {
   klass: ClassRead | null
   onOpenChange: (open: boolean) => void
+  /** Called once the class is gone, for callers standing on a page that no longer exists. */
+  onDeleted?: () => void
 }
 
-export function DeleteClassDialog({ klass, onOpenChange }: DeleteClassDialogProps) {
+export function DeleteClassDialog({ klass, onOpenChange, onDeleted }: DeleteClassDialogProps) {
   const inputId = useId()
   const [typed, setTyped] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -49,6 +51,7 @@ export function DeleteClassDialog({ klass, onOpenChange }: DeleteClassDialogProp
       await deleteClass.mutateAsync(klass.id)
       toast.success(`${klass.name} deleted.`)
       onOpenChange(false)
+      onDeleted?.()
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not delete this class.')
     }

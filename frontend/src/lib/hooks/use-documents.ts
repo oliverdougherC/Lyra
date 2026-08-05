@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '@/lib/api'
 import { classKeys } from '@/lib/hooks/use-classes'
-import type { DocumentState } from '@/types'
+import type { DocumentRead, DocumentState } from '@/types'
 
 export const documentKeys = {
   list: (classId: number) => ['documents', classId] as const,
@@ -17,6 +17,30 @@ export function isTerminal(state: DocumentState): boolean {
   return TERMINAL_STATES.includes(state)
 }
 
+/** How often the list asks again while the server is still working on something in it. */
+const IN_FLIGHT_POLL_MS = 1500
+
+/**
+ * How often to ask for the list again, given what the list currently says.
+ *
+ * Ingestion is a background job on the server: nothing is pushed, so the only way the
+ * interface learns that a document moved from `extracting` to `ready` is to ask. Deriving
+ * that from the data rather than from the caller is what makes it self-healing - the list
+ * cannot be left sitting on a stage that finished minutes ago because whichever component
+ * happened to mount it did not think to ask for polling.
+ *
+ * A caller's own interval is a floor, never a ceiling: a screen that wants the list every
+ * two seconds for its own reasons still gets the faster poll while work is in flight.
+ */
+export function documentsPollInterval(
+  documents: DocumentRead[] | undefined,
+  override: number | false | undefined,
+): number | false {
+  const inFlight = documents?.some((document) => !isTerminal(document.state)) ?? false
+  if (!inFlight) return override ?? false
+  return Math.min(override || Number.POSITIVE_INFINITY, IN_FLIGHT_POLL_MS)
+}
+
 export function useDocuments(
   classId: number,
   options: { enabled?: boolean; refetchInterval?: number | false } = {},
@@ -25,7 +49,13 @@ export function useDocuments(
     queryKey: documentKeys.list(classId),
     queryFn: ({ signal }) => api.listDocuments(classId, signal),
     enabled: options.enabled ?? Number.isFinite(classId),
-    refetchInterval: options.refetchInterval ?? false,
+    refetchInterval: (query) => documentsPollInterval(query.state.data, options.refetchInterval),
+    // Ingestion does not pause because the student switched windows, and a minute of it is
+    // exactly when they would: reading a document is slow enough to go and do something
+    // else. Without this the poll stops on blur and, since the app turns off
+    // refetch-on-focus, coming back showed the stage it was on when they left until the
+    // page was reloaded by hand.
+    refetchIntervalInBackground: true,
   })
 }
 
@@ -45,6 +75,8 @@ export function useDocumentStatus(documentId: number, enabled = true) {
       const polls = query.state.dataUpdateCount
       return Math.min(500 + polls * 250, 2000)
     },
+    // Same reason as the list: a backgrounded tab must not freeze a run in progress.
+    refetchIntervalInBackground: true,
   })
 }
 
@@ -66,6 +98,25 @@ export function useReingestDocument(classId: number) {
     onSuccess: (document) => {
       queryClient.invalidateQueries({ queryKey: documentKeys.list(classId) })
       queryClient.invalidateQueries({ queryKey: documentKeys.status(document.id) })
+    },
+  })
+}
+
+/**
+ * Refiles a document under another class. Both lists are invalidated: the document leaves
+ * one and arrives in the other, and the sidebar's document counts come from the class
+ * list, which changes on both sides too.
+ */
+export function useMoveDocument(classId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ documentId, targetClassId }: { documentId: number; targetClassId: number }) =>
+      api.moveDocument(documentId, targetClassId),
+    onSuccess: (document, { targetClassId }) => {
+      queryClient.invalidateQueries({ queryKey: documentKeys.list(classId) })
+      queryClient.invalidateQueries({ queryKey: documentKeys.list(targetClassId) })
+      queryClient.invalidateQueries({ queryKey: documentKeys.status(document.id) })
+      queryClient.invalidateQueries({ queryKey: classKeys.all })
     },
   })
 }

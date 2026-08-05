@@ -132,6 +132,30 @@ def delete_session(conn: sqlite3.Connection, session_id: int) -> None:
     conn.commit()
 
 
+def rename_session(conn: sqlite3.Connection, session_id: int, title: str) -> dict[str, object]:
+    """Give a conversation a name the student chose, and return the updated row.
+
+    A title written by hand is not a title waiting to be filled in, so this sets the same
+    column `set_session_title_if_unset` writes to, which stops naming a session once it
+    carries anything at all.
+
+    Raises:
+        NotFoundError: when no session carries that id.
+        ValueError: when the title is blank. Clearing a name would put the conversation
+            back to being named by its first message, which has already been sent.
+    """
+    get_session(conn, session_id)
+    cleaned = " ".join(title.split())
+    if not cleaned:
+        raise ValueError("A conversation name cannot be blank.")
+    conn.execute(
+        "update chat_sessions set title = ? where id = ?",
+        (cleaned[:_TITLE_MAX_CHARS], session_id),
+    )
+    conn.commit()
+    return get_session(conn, session_id)
+
+
 def discard_empty_sessions(conn: sqlite3.Connection) -> int:
     """Delete every conversation that holds no messages, and say how many went.
 

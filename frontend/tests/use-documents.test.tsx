@@ -7,6 +7,7 @@ import { api } from '@/lib/api'
 import { classKeys } from '@/lib/hooks/use-classes'
 import {
   documentKeys,
+  documentsPollInterval,
   isTerminal,
   useDeleteDocument,
   useDocumentStatus,
@@ -54,6 +55,45 @@ describe('isTerminal', () => {
     ['extracting', false],
   ])('treats %s as terminal=%s', (state, expected) => {
     expect(isTerminal(state)).toBe(expected)
+  })
+})
+
+describe('documentsPollInterval', () => {
+  const list = (...states: DocumentState[]) =>
+    states.map((state, index) => ({ id: index, state })) as DocumentRead[]
+
+  it('keeps asking while the server is still working on something', () => {
+    // The reported bug: a document sat on `extracting` - the "Analyzing" step, a model pass
+    // over the whole document - and only showed as finished after a manual reload.
+    expect(documentsPollInterval(list('ready', 'extracting'), undefined)).toBe(1500)
+  })
+
+  it.each<DocumentState>(['pending', 'parsing', 'chunking', 'embedding', 'extracting'])(
+    'polls while a document is %s',
+    (state) => {
+      expect(documentsPollInterval(list(state), undefined)).toBe(1500)
+    },
+  )
+
+  it('stops once every document has settled', () => {
+    expect(documentsPollInterval(list('ready', 'failed', 'unsupported'), undefined)).toBe(false)
+  })
+
+  it('does not poll an empty or unloaded list', () => {
+    expect(documentsPollInterval([], undefined)).toBe(false)
+    expect(documentsPollInterval(undefined, undefined)).toBe(false)
+  })
+
+  it("treats a caller's interval as a floor, never a ceiling", () => {
+    // The solver's setup screen asks for 2s so newly uploaded files become selectable. While
+    // something is actually in flight it should still get the faster poll.
+    expect(documentsPollInterval(list('extracting'), 2000)).toBe(1500)
+    expect(documentsPollInterval(list('ready'), 2000)).toBe(2000)
+  })
+
+  it('ignores a caller that asked for no polling at all while work is in flight', () => {
+    expect(documentsPollInterval(list('extracting'), false)).toBe(1500)
+    expect(documentsPollInterval(list('ready'), false)).toBe(false)
   })
 })
 

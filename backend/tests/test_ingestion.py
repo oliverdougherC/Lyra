@@ -36,9 +36,10 @@ def _vectors(texts: list[str]) -> list[list[float]]:
 
 @pytest.fixture(autouse=True)
 def fake_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fake the embedding server and profile extraction where ingestion looks them up."""
+    """Fake the embedding server and both profile passes where ingestion looks them up."""
     monkeypatch.setattr(ingestion, "embed_documents", _vectors)
-    monkeypatch.setattr(ingestion, "extract_facts", lambda conn, document_id, text: None)
+    monkeypatch.setattr(ingestion, "extract_facts", lambda conn, document_id, text, doc_type: None)
+    monkeypatch.setattr(ingestion, "consolidate_class", lambda conn, class_id: None)
 
 
 def _prose(words: int, seed: int = 0) -> str:
@@ -231,7 +232,7 @@ def test_extracted_text_is_kept_so_a_reindex_never_reparses(
 def test_a_failed_extraction_still_lands_the_document_ready(
     db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def boom(conn: sqlite3.Connection, document_id: int, text: str) -> str | None:
+    def boom(conn: sqlite3.Connection, document_id: int, text: str, doc_type: str) -> str | None:
         raise RuntimeError("the tutor endpoint hung up")
 
     monkeypatch.setattr(ingestion, "extract_facts", boom)
@@ -251,7 +252,9 @@ def test_a_skipped_extraction_records_its_reason(
     db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        ingestion, "extract_facts", lambda conn, document_id, text: "remote_unacknowledged"
+        ingestion,
+        "extract_facts",
+        lambda conn, document_id, text, doc_type: "remote_unacknowledged",
     )
     stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
     document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
@@ -325,7 +328,7 @@ def test_reconcile_interrupted_fails_a_document_stuck_in_embedding(
     db.execute("update documents set state = 'ready' where id = ?", (finished,))
     db.commit()
 
-    assert reconcile_interrupted(db) == 1
+    assert reconcile_interrupted(db) == (0, 1)
 
     row = _document(db, stuck)
     assert row["state"] == "failed"
@@ -335,9 +338,39 @@ def test_reconcile_interrupted_fails_a_document_stuck_in_embedding(
     assert _document(db, finished)["state"] == "ready"
 
 
-def test_reconcile_interrupted_counts_every_non_terminal_state(
-    db: sqlite3.Connection, class_id: int
+def test_reconcile_requeues_what_had_not_started_and_fails_only_what_had(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """A queued upload is not an interrupted one.
+
+    The queue is in memory, so a restart loses it, but a `pending` document was never
+    touched: nothing is half-written and the file is still there. Failing those meant that
+    dropping a folder into a class and restarting the server - in development, any code
+    edit - turned the whole queue into rows the student had to retry one at a time.
+    """
+    queued: list[int] = []
+    monkeypatch.setattr("backend.core.ingestion.enqueue", queued.append)
+    stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
+    waiting = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    working = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    db.execute("update documents set state = 'pending' where id = ?", (waiting,))
+    db.execute("update documents set state = 'extracting' where id = ?", (working,))
+    db.commit()
+
+    assert reconcile_interrupted(db) == (1, 1)
+
+    assert queued == [waiting]
+    assert _document(db, waiting)["state"] == "pending"
+    assert _document(db, waiting)["error_message"] is None
+    # The one that was mid-stage is the likeliest reason the process stopped, so it waits
+    # for the student rather than being requeued into the same crash on every restart.
+    assert _document(db, working)["state"] == "failed"
+
+
+def test_reconcile_interrupted_counts_every_non_terminal_state(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("backend.core.ingestion.enqueue", lambda _document_id: None)
     stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
     for state in ("pending", "parsing", "chunking", "embedding", "extracting"):
         document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
@@ -347,5 +380,6 @@ def test_reconcile_interrupted_counts_every_non_terminal_state(
         db.execute("update documents set state = ? where id = ?", (state, document_id))
     db.commit()
 
-    assert reconcile_interrupted(db) == 5
-    assert reconcile_interrupted(db) == 0
+    assert reconcile_interrupted(db) == (1, 4)
+    # Idempotent: the requeued one is still pending, and nothing new is failed.
+    assert reconcile_interrupted(db) == (1, 0)

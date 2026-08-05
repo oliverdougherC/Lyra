@@ -38,7 +38,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     conn = connect()
     try:
         migrate(conn)
-        interrupted = reconcile_interrupted(conn)
+        requeued, interrupted = reconcile_interrupted(conn)
+        if requeued:
+            logger.info("Requeued %d ingestion job(s) that had not started", requeued)
         if interrupted:
             logger.warning("Marked %d interrupted ingestion job(s) as failed", interrupted)
         # An artifact left `awaiting_review` is deliberately untouched by this: it was not

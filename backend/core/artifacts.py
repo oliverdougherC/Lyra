@@ -84,6 +84,14 @@ REFUTED = "refuted"
 UNCHECKABLE = "uncheckable"
 VERDICTS: tuple[str, ...] = (UNCHECKED, VERIFIED, REFUTED, UNCHECKABLE)
 
+TOGETHER = "together"
+SEPARATELY = "separately"
+# How a problem's lettered parts are solved. `together` is one solution answering all of
+# them, which is what a problem with dependent parts needs; `separately` is one solution,
+# one answer, and one verdict per part, which is what a section of independent questions
+# needs. See migration 011.
+SOLVE_PARTS: tuple[str, ...] = (TOGETHER, SEPARATELY)
+
 PROBLEM_SET = "problem_set"
 REFERENCE_SOLUTIONS = "reference_solutions"
 SOURCE_ROLES: tuple[str, ...] = (PROBLEM_SET, REFERENCE_SOLUTIONS)
@@ -95,7 +103,8 @@ _ARTIFACT_COLUMNS = (
 
 _PART_COLUMNS = (
     "id, artifact_id, parent_part_id, kind, ordinal, label, content, content_type, "
-    "status, origin, verdict, verdict_detail, error_message, created_at, updated_at"
+    "status, origin, verdict, verdict_detail, solve_parts, error_message, created_at, "
+    "updated_at"
 )
 
 # Parts are a tree of arbitrary depth, so document order is a walk rather than a sort. The
@@ -104,27 +113,29 @@ _PART_COLUMNS = (
 _LIST_PARTS_SQL = """
 with recursive ordered as (
   select p.id, p.artifact_id, p.parent_part_id, p.kind, p.ordinal, p.label, p.content,
-         p.content_type, p.status, p.origin, p.verdict, p.verdict_detail, p.error_message,
-         p.created_at, p.updated_at, printf('%08d', p.ordinal) as path
+         p.content_type, p.status, p.origin, p.verdict, p.verdict_detail, p.solve_parts,
+         p.error_message, p.created_at, p.updated_at, printf('%08d', p.ordinal) as path
   from artifact_parts p
   where p.artifact_id = ? and p.parent_part_id is null
   union all
   select c.id, c.artifact_id, c.parent_part_id, c.kind, c.ordinal, c.label, c.content,
-         c.content_type, c.status, c.origin, c.verdict, c.verdict_detail, c.error_message,
-         c.created_at, c.updated_at, o.path || '.' || printf('%08d', c.ordinal)
+         c.content_type, c.status, c.origin, c.verdict, c.verdict_detail, c.solve_parts,
+         c.error_message, c.created_at, c.updated_at, o.path || '.' || printf('%08d', c.ordinal)
   from artifact_parts c
   join ordered o on c.parent_part_id = o.id
 )
 select id, artifact_id, parent_part_id, kind, ordinal, label, content, content_type,
-       status, origin, verdict, verdict_detail, error_message, created_at, updated_at
+       status, origin, verdict, verdict_detail, solve_parts, error_message, created_at,
+       updated_at
 from ordered
 order by path, id
 """
 
 _INSERT_PART_SQL = """
 insert into artifact_parts (
-  artifact_id, parent_part_id, kind, ordinal, label, content, content_type, status, origin
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  artifact_id, parent_part_id, kind, ordinal, label, content, content_type, status, origin,
+  solve_parts
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 
@@ -291,6 +302,25 @@ def create_artifact(
             for ordinal, spec in enumerate(sources)
         ],
     )
+    conn.commit()
+    return get_artifact(conn, artifact_id)
+
+
+def rename_artifact(conn: sqlite3.Connection, artifact_id: int, title: str) -> dict[str, object]:
+    """Rename an artifact and return the updated row.
+
+    Deliberately not a touch of `updated_at`: the list is ordered by when the work
+    changed, and renaming a set does not make it the one the student was last solving.
+
+    Raises:
+        NotFoundError: when no artifact carries that id.
+        ValueError: on a blank title, for the same reason creation refuses one.
+    """
+    get_artifact(conn, artifact_id)
+    cleaned = title.strip()
+    if not cleaned:
+        raise ValueError("Artifact title cannot be blank.")
+    conn.execute("update artifacts set title = ? where id = ?", (cleaned, artifact_id))
     conn.commit()
     return get_artifact(conn, artifact_id)
 
@@ -465,6 +495,7 @@ def create_part(
     parent_part_id: int | None = None,
     status: str = PART_PENDING,
     origin: str = GENERATED,
+    solve_parts: str = TOGETHER,
     note: str | None = None,
 ) -> int:
     """Create one part and return its id.
@@ -484,6 +515,9 @@ def create_part(
         parent_part_id: Owning part, or None for a root part such as a problem.
         status: Lifecycle status. Defaults to `pending`.
         origin: Who wrote the content. Defaults to `generated`.
+        solve_parts: For a problem with sub-parts, whether they are solved `together` as
+            one solution or `separately` as a question each. Meaningless on any other
+            kind, and defaulted so nothing but a problem has to name it.
         note: Why this content exists, recorded on revision 1. Carries the student's
             correction on a re-solve, so the history sheet says what prompted the rewrite
             rather than showing two versions with no reason between them.
@@ -501,6 +535,7 @@ def create_part(
     _require(content_type, CONTENT_TYPES, "content type")
     _require(status, PART_STATUSES, "part status")
     _require(origin, ORIGINS, "part origin")
+    _require(solve_parts, SOLVE_PARTS, "solve parts")
 
     if parent_part_id is not None:
         parent = get_part(conn, parent_part_id)
@@ -522,6 +557,7 @@ def create_part(
                 content_type,
                 status,
                 origin,
+                solve_parts,
             ),
         ).lastrowid
         or 0

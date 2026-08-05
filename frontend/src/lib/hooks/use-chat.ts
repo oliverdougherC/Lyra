@@ -32,6 +32,30 @@ export function useMessages(sessionId: number | null) {
  * An anchored session is an ordinary conversation in every respect except that the step
  * is pinned into each turn: same composer, same streaming, same place in the sidebar.
  */
+export function useRenameSession(classId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ sessionId, title }: { sessionId: number; title: string }) =>
+      api.renameSession(sessionId, title),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: chatKeys.sessions(classId) }),
+  })
+}
+
+/**
+ * Deleting a conversation takes its messages with it, so the message cache for that
+ * session is dropped rather than invalidated: refetching it would only 404.
+ */
+export function useDeleteSession(classId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (sessionId: number) => api.deleteSession(sessionId),
+    onSuccess: (_result, sessionId) => {
+      queryClient.removeQueries({ queryKey: chatKeys.messages(sessionId) })
+      queryClient.invalidateQueries({ queryKey: chatKeys.sessions(classId) })
+    },
+  })
+}
+
 export function useCreateSession(classId: number | null) {
   const queryClient = useQueryClient()
   return useMutation({

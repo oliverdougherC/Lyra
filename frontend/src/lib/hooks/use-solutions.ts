@@ -177,6 +177,18 @@ export function useCancelSolution(artifactId: number, classId: number) {
   })
 }
 
+export function useRenameSolution(classId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ artifactId, title }: { artifactId: number; title: string }) =>
+      api.renameSolution(artifactId, title),
+    onSuccess: (solution) => {
+      queryClient.invalidateQueries({ queryKey: solutionKeys.list(classId) })
+      queryClient.invalidateQueries({ queryKey: solutionKeys.detail(solution.id) })
+    },
+  })
+}
+
 export function useDeleteSolution(classId: number) {
   const queryClient = useQueryClient()
   return useMutation({

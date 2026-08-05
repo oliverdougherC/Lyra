@@ -37,6 +37,10 @@ export function AppHeader() {
 
   const classId = readClassId(pathname)
   const klass = classId !== null ? (classes?.find((item) => item.id === classId) ?? null) : null
+  // The class now has a page of its own, so on any route inside it the class crumb is the
+  // way back up to that page rather than a label naming where you already are.
+  const insideClass = classId !== null && pathname !== `/classes/${classId}`
+  const classHref = insideClass ? `/classes/${classId}` : undefined
 
   // Settings is a root, not a child of Classes: nothing about it lives inside a class.
   const crumbs: Crumb[] =
@@ -45,9 +49,9 @@ export function AppHeader() {
       : [
           { label: 'Classes', href: '/' },
           ...(klass
-            ? [{ label: klass.name, detail: klass.code ?? undefined }]
+            ? [{ label: klass.name, detail: klass.code ?? undefined, href: classHref }]
             : classId !== null
-              ? [{ label: 'Class' }]
+              ? [{ label: 'Class', href: classHref }]
               : []),
         ]
 
@@ -78,9 +82,14 @@ export function AppHeader() {
               {crumb.href ? (
                 <Link
                   href={crumb.href}
-                  className="truncate rounded-sm text-text-secondary transition-colors duration-150 hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
+                  title={crumb.detail ? `${crumb.detail} · ${crumb.label}` : crumb.label}
+                  className="flex min-w-0 items-baseline gap-1.5 rounded-sm text-text-secondary transition-colors duration-150 hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
                 >
-                  {crumb.label}
+                  {/* The course code travels with the name whether or not the crumb links
+                      anywhere: it is half of what identifies the class, and dropping it on
+                      the routes inside the class was the one place it disappeared. */}
+                  {crumb.detail ? <span className="shrink-0">{crumb.detail}</span> : null}
+                  <span className="truncate">{crumb.label}</span>
                 </Link>
               ) : (
                 <span

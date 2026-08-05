@@ -86,7 +86,7 @@ function SessionSubItem({
   return (
     <SidebarMenuSubItem>
       <SidebarMenuSubButton asChild isActive={activeSessionId === String(session.id)}>
-        <Link href={`${href}?session=${session.id}`} title={label}>
+        <Link href={`${href}/chat?session=${session.id}`} title={label}>
           <span className="truncate">{label}</span>
         </Link>
       </SidebarMenuSubButton>
@@ -296,7 +296,7 @@ export function AppSidebar() {
   // something into it; until then there is nothing to put in this list.
   const startNewChat = useCallback(() => {
     if (selectedClassId === null) return
-    router.push(`/classes/${selectedClassId}?session=new`)
+    router.push(`/classes/${selectedClassId}/chat?session=new`)
   }, [router, selectedClassId])
 
   const restoreClass = useCallback(

@@ -1,33 +1,21 @@
 'use client'
 
-import { FileWarning, Plus, SquareCheckBig } from 'lucide-react'
+import { Plus, SquareCheckBig } from 'lucide-react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 
+import { SolutionRow } from '@/components/solutions/solution-row'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError } from '@/lib/api'
-import { formatCount, formatRelativeTime } from '@/lib/format'
 import { useSolutions } from '@/lib/hooks/use-solutions'
-import type { SolutionRead, SolutionState } from '@/types'
 
 function readId(value: string | string[] | undefined): number | null {
   const raw = Array.isArray(value) ? value[0] : value
   const parsed = Number(raw)
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
-}
-
-/** Where a run has got to, in words rather than internal state names. */
-const STATE_LABELS: Record<SolutionState, string> = {
-  pending: 'Queued',
-  segmenting: 'Reading the problem set',
-  awaiting_review: 'Waiting for you',
-  solving: 'Solving',
-  ready: 'Ready',
-  failed: 'Could not finish',
-  cancelled: 'Stopped',
 }
 
 /**
@@ -180,51 +168,4 @@ export default function SolutionsIndexPage() {
       )}
     </div>
   )
-}
-
-function SolutionRow({ classId, solution }: { classId: number; solution: SolutionRead }) {
-  const waiting = solution.state === 'awaiting_review'
-  const failed = solution.state === 'failed'
-
-  return (
-    <Link
-      href={`/classes/${classId}/solutions/${solution.id}`}
-      className="border-border bg-card hover:border-border-strong focus-visible:ring-ring flex flex-col gap-1 rounded-md border px-4 py-3 transition-colors focus-visible:ring-2 focus-visible:outline-none"
-    >
-      <span className="flex flex-wrap items-center gap-2">
-        <span className="text-text-primary min-w-0 flex-1 truncate font-medium">
-          {solution.title}
-        </span>
-        {failed ? (
-          <span className="text-danger-text inline-flex items-center gap-1.5 text-xs">
-            <FileWarning className="size-3.5" aria-hidden />
-            {STATE_LABELS[solution.state]}
-          </span>
-        ) : (
-          <span className={waiting ? 'text-info-text text-xs' : 'text-text-tertiary text-xs'}>
-            {STATE_LABELS[solution.state]}
-          </span>
-        )}
-        {/* Deliberately no verdict badge here. Verdicts are per problem, and a set that
-            reached `ready` may hold problems that nothing checked; one badge on the row
-            would claim a check for all of them. The badges live inside, per problem. */}
-      </span>
-      <span className="text-text-tertiary text-xs">
-        {describe(solution)} · {formatRelativeTime(solution.updated_at)}
-      </span>
-    </Link>
-  )
-}
-
-/** The counts, said only when they are real. */
-function describe(solution: SolutionRead): string {
-  const sources = solution.sources
-    .filter((source) => source.role === 'problem_set')
-    .map((source) => source.filename)
-    .join(', ')
-  if (solution.problems_total === null) return sources || 'No sources left'
-  if (solution.state === 'solving') {
-    return `${solution.problems_done} of ${solution.problems_total} solved`
-  }
-  return `${formatCount(solution.problems_total, 'problem')} · ${sources}`
 }

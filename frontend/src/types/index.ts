@@ -103,8 +103,12 @@ export interface FactRead {
   confidence: Confidence
   confirmed: boolean
   rejected: boolean
+  /** True once the user has corrected the value, which protects it from consolidation. */
+  edited: boolean
   source_document_id: number | null
   source_filename: string | null
+  /** Every document that states this fact. Its length is how well evidenced the fact is. */
+  sources: string[]
   created_at: string
 }
 
@@ -188,6 +192,13 @@ export type PartStatus = 'pending' | 'solving' | 'verifying' | 'complete' | 'fai
 export type PartOrigin = 'generated' | 'regenerated' | 'user_corrected'
 
 /**
+ * How a problem's lettered parts are solved. A section reading "For each system below,
+ * determine whether it is linear: (a) ... (e)" is five questions with five answers, and
+ * splits; a problem whose part (b) uses the result from (a) is one solution and cannot.
+ */
+export type SolveParts = 'together' | 'separately'
+
+/**
  * What checking concluded. `unchecked` (checking did not run) and `uncheckable` (nothing
  * here could be checked) are both honest non-answers, and neither may render as a pass.
  */
@@ -246,6 +257,13 @@ export interface SolutionPart {
   verdict: Verdict
   /** The sentence behind the verdict: what disagreed, or why checking did not run. */
   verdict_detail: string | null
+  /**
+   * On a problem with sub-parts, whether those parts are questions in their own right.
+   * `separately` means each one carries its own steps, answer, and verdict and the
+   * problem itself carries none; `together` means the problem holds one solution
+   * answering all of them. Always `together` on anything without parts to relate.
+   */
+  solve_parts: SolveParts
   error_message: string | null
   provenance: Provenance[]
   checks: SolutionCheck[]

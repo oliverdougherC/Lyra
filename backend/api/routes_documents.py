@@ -18,8 +18,9 @@ from pydantic import BaseModel
 
 from backend.config import settings
 from backend.core.classes import get_class, touch_class
-from backend.core.errors import LyraError, NotFoundError
+from backend.core.errors import ConflictError, LyraError, NotFoundError
 from backend.core.ingestion import PENDING, delete_chunks, enqueue
+from backend.core.profiles import forget_document_evidence
 from backend.rag import render
 from backend.rag.parse import PDF_MIME, UNSUPPORTED_MESSAGE
 from backend.storage.database import get_db
@@ -47,6 +48,15 @@ MIME_BY_SUFFIX = {
 }
 
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
+
+# States in which nothing is reading the file or about to write the document's row.
+TERMINAL_STATES = ("ready", "failed", "unsupported")
+
+STILL_PROCESSING_MESSAGE = "{filename} is still being processed. Move it once it has finished."
+IN_USE_MESSAGE = (
+    "{filename} is a source for {count} solution set(s) in this class. "
+    "Delete those first, or upload the file to the other class instead."
+)
 
 _DOCUMENT_COLUMNS = (
     "id, class_id, filename, mime, byte_size, state, stage_detail, "
@@ -78,6 +88,12 @@ class DocumentDetail(DocumentRead):
     """One document, plus whether its extracted text is on hand for a re-index."""
 
     has_text: bool
+
+
+class DocumentMove(BaseModel):
+    """Body of `POST /api/documents/{document_id}/move`: where the file belongs."""
+
+    class_id: int
 
 
 class DocumentText(BaseModel):
@@ -234,6 +250,77 @@ def reingest_document(document_id: int, conn: DbConn) -> dict[str, object]:
     return _document_row(conn, document_id)
 
 
+@router.post(
+    "/documents/{document_id}/move",
+    response_model=DocumentRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def move_document(document_id: int, payload: DocumentMove, conn: DbConn) -> dict[str, object]:
+    """File a document under a different class.
+
+    A misfiled document is worse than a missing one: retrieval is partitioned by class, so
+    the lecture notes sitting in the wrong workspace are invisible where they are needed
+    and are quietly answering questions where they are not. The alternative on offer was
+    delete and upload again, which throws the file away to fix its label.
+
+    The move is a re-ingest, not a relabel. Chunks carry a denormalized `class_id`, their
+    vectors live in a table partitioned by it, and the profile facts drawn out of the text
+    belong to whichever class asked for them, so the document arrives in its new class the
+    same way an upload does: `pending`, and indexed from there. Its rendered pages survive,
+    because those depend on the file's bytes rather than on where it is filed.
+    """
+    document = _document_row(conn, document_id)
+    source_class_id = int(document["class_id"])
+    # Before any work, so an unknown target is a 404 rather than a half-moved file.
+    get_class(conn, payload.class_id)
+    if payload.class_id == source_class_id:
+        return document
+
+    # A document mid-ingestion is being read by the worker from the path this would move,
+    # and the state it lands in would overwrite the `pending` written here.
+    if document["state"] not in TERMINAL_STATES:
+        raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
+
+    used_by = int(
+        conn.execute(
+            "select count(*) from artifact_sources where document_id = ?", (document_id,)
+        ).fetchone()[0]
+    )
+    if used_by:
+        raise ConflictError(IN_USE_MESSAGE.format(filename=document["filename"], count=used_by))
+
+    # Read separately: `_DOCUMENT_COLUMNS` deliberately omits the stored path, because it
+    # is the shape the interface receives and the interface never sees a filesystem path.
+    stored = conn.execute(
+        "select stored_path from documents where id = ?", (document_id,)
+    ).fetchone()["stored_path"]
+    stored_path = Path(str(stored)) if stored else None
+    moved_path = (
+        settings.uploads_dir
+        / str(payload.class_id)
+        / f"{document_id}-{_safe_filename(str(document['filename']))}"
+    )
+    if stored_path is not None and stored_path.exists():
+        moved_path.parent.mkdir(parents=True, exist_ok=True)
+        stored_path.replace(moved_path)
+
+    delete_chunks(conn, document_id)
+    # The old class stops asserting what only this file ever said, exactly as it would
+    # have had the student deleted it. The new class learns it from the re-ingest below.
+    forget_document_evidence(conn, document_id)
+    conn.execute(
+        "update documents set class_id = ?, stored_path = ?, state = ?, stage_detail = null, "
+        "error_message = null, pages_done = 0 where id = ?",
+        (payload.class_id, str(moved_path), PENDING, document_id),
+    )
+    conn.commit()
+
+    touch_class(conn, source_class_id)
+    touch_class(conn, payload.class_id)
+    enqueue(document_id)
+    return _document_row(conn, document_id)
+
+
 @router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_document(document_id: int, conn: DbConn) -> None:
     row = conn.execute(
@@ -243,6 +330,9 @@ def delete_document(document_id: int, conn: DbConn) -> None:
         raise NotFoundError("That document does not exist.")
 
     delete_chunks(conn, document_id)
+    # Before the delete, while the evidence rows are still there to be counted. Their
+    # cascade would otherwise leave the class asserting what only this upload ever said.
+    forget_document_evidence(conn, document_id)
     conn.execute("delete from documents where id = ?", (document_id,))
     conn.commit()
 

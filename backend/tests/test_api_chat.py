@@ -197,6 +197,30 @@ def test_sessions_round_trip_through_their_class(client: TestClient, class_id: i
     assert client.get("/api/classes/404/sessions").status_code == 404
 
 
+def test_a_conversation_can_be_renamed_by_hand(client: TestClient, class_id: int) -> None:
+    session_id = client.post(f"/api/classes/{class_id}/sessions", json={}).json()["id"]
+
+    renamed = client.patch(f"/api/sessions/{session_id}", json={"title": "  Fourier week  "})
+
+    assert renamed.status_code == 200
+    # Trimmed, because the name is what the rail shows and leading space is not a name.
+    assert renamed.json()["title"] == "Fourier week"
+    assert client.get(f"/api/classes/{class_id}/sessions").json()[0]["title"] == "Fourier week"
+    assert client.patch(f"/api/sessions/{session_id}", json={"title": "   "}).status_code == 422
+    assert client.patch("/api/sessions/404", json={"title": "Gone"}).status_code == 404
+
+
+def test_a_renamed_conversation_is_not_renamed_again_by_its_first_message(
+    client: TestClient, class_id: int, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Sure."))
+    client.patch(f"/api/sessions/{session_id}", json={"title": "Fourier week"})
+
+    _send(client, session_id)
+
+    assert client.get(f"/api/classes/{class_id}/sessions").json()[0]["title"] == "Fourier week"
+
+
 def test_a_normal_turn_streams_start_then_tokens_then_done(
     client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:

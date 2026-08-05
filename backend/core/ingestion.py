@@ -19,6 +19,7 @@ from pathlib import Path
 import sqlite_vec
 
 from backend.config import settings
+from backend.core.consolidation import consolidate_class
 from backend.core.errors import LyraError
 from backend.core.profiles import extract_facts
 from backend.rag.chunk import Chunk, chunk_document, detect_doc_type
@@ -160,24 +161,42 @@ def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
     _store_chunks(conn, document_id, int(document["class_id"]), doc_type, chunks)
 
     _set_state(conn, document_id, EXTRACTING)
-    detail = _extract_profile_facts(conn, document_id, text)
+    detail = _extract_profile_facts(conn, document_id, text, doc_type)
+    if detail is None:
+        _consolidate_profile(conn, int(document["class_id"]))
 
     _mark_ready(conn, document_id, parsed, detail)
 
 
-def _extract_profile_facts(conn: sqlite3.Connection, document_id: int, text: str) -> str | None:
+def _extract_profile_facts(
+    conn: sqlite3.Connection, document_id: int, text: str, doc_type: str
+) -> str | None:
     """Propose profile facts, never letting that stage decide the document's fate.
 
     Returns:
         A skip reason to record in `stage_detail`, or None when extraction ran.
     """
     try:
-        return extract_facts(conn, document_id, text)
+        return extract_facts(conn, document_id, text, doc_type)
     except Exception:
         # The chunks are already stored, so the document is searchable and lands `ready`
         # either way. A missed fact proposal is not worth failing an upload over.
         logger.exception("Profile extraction failed for document %s", document_id)
         return EXTRACTION_FAILED_DETAIL
+
+
+def _consolidate_profile(conn: sqlite3.Connection, class_id: int) -> None:
+    """Tidy the class profile now this document has added to it.
+
+    Guarded separately from extraction and deliberately without a `stage_detail` of its own.
+    Extraction succeeded, so the facts are stored and the profile is at worst the
+    deterministically merged one; a document that says so would be reporting a failure the
+    student cannot act on and that the next upload retries anyway.
+    """
+    try:
+        consolidate_class(conn, class_id)
+    except Exception:
+        logger.exception("Profile consolidation failed for class %s", class_id)
 
 
 def _store_chunks(
@@ -235,22 +254,46 @@ def delete_chunks(conn: sqlite3.Connection, document_id: int) -> None:
     conn.execute("delete from chunks where document_id = ?", (document_id,))
 
 
-def reconcile_interrupted(conn: sqlite3.Connection) -> int:
-    """Fail every document left mid-flight by a shutdown. Returns the row count.
+def reconcile_interrupted(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Settle every document the last shutdown caught, and say what happened to each.
 
-    The queue lives in memory, so a document caught between `pending` and `extracting`
-    when the process stopped would otherwise sit there forever claiming to be working.
+    The queue lives in memory, so a document left non-terminal would otherwise sit there
+    forever claiming to be working. What it deserves depends on how far it had got.
+
+    A `pending` document was queued and never touched: nothing was interrupted, the file
+    and its row are intact, and the student's instruction was "index this". It goes back
+    in the queue. Failing those was punishing: dropping twenty-eight files into a class
+    and restarting the server - which in development is any code edit at all - turned the
+    whole queue into a wall of red the student had to retry one row at a time.
+
+    A document that was mid-stage is failed instead, deliberately. It had already started
+    when the process died, which makes it the most likely reason the process died, and a
+    file that crashes the worker would otherwise be requeued into the same crash on every
+    restart from now on. Retrying it is one click, and that click is the student's.
+
+    Returns:
+        How many were requeued, and how many were failed.
     """
-    placeholders = ", ".join("?" for _ in NON_TERMINAL_STATES)
+    queued = [
+        int(row[0]) for row in conn.execute("select id from documents where state = ?", (PENDING,))
+    ]
+
+    mid_flight = tuple(state for state in NON_TERMINAL_STATES if state != PENDING)
+    placeholders = ", ".join("?" for _ in mid_flight)
     cursor = conn.execute(
         # The placeholders are generated from a module constant, and every value is
         # bound. `stage_detail` reads the pre-update row, so it keeps the lost stage.
         f"update documents set stage_detail = state, state = '{FAILED}', "  # noqa: S608
         f"error_message = ? where state in ({placeholders})",
-        (INTERRUPTED_MESSAGE, *NON_TERMINAL_STATES),
+        (INTERRUPTED_MESSAGE, *mid_flight),
     )
     conn.commit()
-    return cursor.rowcount
+
+    # After the commit, so a queue that starts draining immediately cannot race the write
+    # that failed its neighbours.
+    for document_id in queued:
+        enqueue(document_id)
+    return len(queued), cursor.rowcount
 
 
 def _write_extracted_text(document_id: int, text: str) -> None:

@@ -73,6 +73,20 @@ class SessionCreate(BaseModel):
     artifact_part_id: int | None = None
 
 
+class SessionRename(BaseModel):
+    """Body of `PATCH /api/sessions/{session_id}`."""
+
+    title: str = Field(min_length=1)
+
+    @field_validator("title")
+    @classmethod
+    def _check_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("A conversation name cannot be blank.")
+        return cleaned
+
+
 class SessionRead(BaseModel):
     """A conversation as the interface sees it."""
 
@@ -218,6 +232,17 @@ def read_sessions(class_id: int, conn: DbConn) -> list[dict[str, object]]:
 @router.get("/sessions/{session_id}/messages", response_model=list[MessageRead])
 def read_messages(session_id: int, conn: DbConn) -> list[dict[str, object]]:
     return sessions.list_messages(conn, session_id)
+
+
+@router.patch("/sessions/{session_id}", response_model=SessionRead)
+def rename_session(session_id: int, payload: SessionRename, conn: DbConn) -> dict[str, object]:
+    """Name a conversation by hand.
+
+    A conversation is named after its first message, which is a guess at what it turned
+    out to be about. Once a class holds a term of them, being able to correct that guess
+    is the difference between a list and an archive.
+    """
+    return sessions.rename_session(conn, session_id, payload.title)
 
 
 @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)

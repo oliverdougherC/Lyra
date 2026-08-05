@@ -1,7 +1,7 @@
 'use client'
 
 import { useQueryClient } from '@tanstack/react-query'
-import { FileText, PanelRightClose } from 'lucide-react'
+import { FileText, FolderInput, PanelRightClose, Trash2 } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from 'react'
 import { toast } from 'sonner'
@@ -14,13 +14,24 @@ import {
   partitionFiles,
 } from '@/components/documents/document-dropzone'
 import { DocumentRow } from '@/components/documents/document-row'
+import { MoveDocumentDialog } from '@/components/documents/move-document-dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '@/lib/api'
-import { parseTimestamp } from '@/lib/format'
+import { formatCount, parseTimestamp } from '@/lib/format'
 import {
   isTerminal,
   documentKeys,
@@ -33,11 +44,26 @@ import { profileKeys } from '@/lib/hooks/use-profile'
 import { cn } from '@/lib/utils'
 import type { DocumentRead, DocumentState, DocumentStatus } from '@/types'
 
+/**
+ * What this list of documents is for.
+ *
+ * `ask` is the column beside the conversation, where picking a document narrows the next
+ * question to it. `manage` is the class hub's Documents tab, where the same list is the
+ * filing cabinet: several files at a time, moved between classes or thrown away.
+ *
+ * One component rather than two because everything underneath - the upload queue, the
+ * per-file ingestion poll, the batch readout - is the same work, and the copy that was not
+ * being looked at is the one that would rot.
+ */
+type DocumentsPaneVariant = 'ask' | 'manage'
+
 type DocumentsPaneProps = {
   classId: number
   className?: string
-  selectedDocumentId: number | null
-  onSelectDocument: (documentId: number | null) => void
+  variant?: DocumentsPaneVariant
+  /** Scoping the conversation. Unused, and unread, in the `manage` variant. */
+  selectedDocumentId?: number | null
+  onSelectDocument?: (documentId: number | null) => void
   /** When set, the pane draws its own header with a close control (desktop column). */
   onClose?: () => void
 }
@@ -45,10 +71,17 @@ type DocumentsPaneProps = {
 export function DocumentsPane({
   classId,
   className,
-  selectedDocumentId,
+  variant = 'ask',
+  selectedDocumentId = null,
   onSelectDocument,
   onClose,
 }: DocumentsPaneProps) {
+  const managing = variant === 'manage'
+  // Which files the next bulk action applies to. Ids rather than documents, so a list that
+  // refetches mid-selection does not hold onto rows that have since changed state.
+  const [checkedIds, setCheckedIds] = useState<number[]>([])
+  const [moving, setMoving] = useState<DocumentRead[]>([])
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const queueRef = useRef<File[]>([])
   const drainingRef = useRef(false)
   // Hoisted to the pane root: the collapsed strip header's Upload button must be able to
@@ -57,6 +90,9 @@ export function DocumentsPane({
   const folderInputRef = useRef<HTMLInputElement>(null)
   const [terminalStateById, setTerminalStateById] = useState(() => new Map<number, DocumentState>())
   const [uploading, setUploading] = useState<string | null>(null)
+  // A dropped folder is walked before a single byte is uploaded, and a term of notes takes
+  // long enough that silence reads as nothing having happened.
+  const [scanning, setScanning] = useState(false)
   const [rejectedFiles, setRejectedFiles] = useState<string[] | null>(null)
   const [batch, setBatch] = useState<{
     total: number
@@ -67,11 +103,11 @@ export function DocumentsPane({
   }>({ total: 0, uploaded: 0, failed: 0, documentIds: [], currentName: null })
   const batchActive = batch.total > 0
 
-  const { data, isPending, isError, error, refetch } = useDocuments(classId, {
-    // While a batch is draining or ingesting, keep the list fresh so the batch loader
-    // reports real stage verbs (Reading, Splitting, ...) and terminal counts.
-    refetchInterval: batchActive ? 1500 : false,
-  })
+  // The list polls itself while anything in it is mid-ingestion, so no interval is asked
+  // for here. Tying it to the upload batch was the bug: the batch clears a couple of
+  // seconds after the last byte is sent, and `extracting` - a model pass over the whole
+  // document - runs long after that, so the readout sat on "Analyzing" until a reload.
+  const { data, isPending, isError, error, refetch } = useDocuments(classId)
   const uploadDocument = useUploadDocument(classId)
   const reingestDocument = useReingestDocument(classId)
   const deleteDocument = useDeleteDocument(classId)
@@ -176,7 +212,8 @@ export function DocumentsPane({
 
   const onDelete = useCallback(
     (document: DocumentRead) => {
-      if (selectedDocumentId === document.id) onSelectDocument(null)
+      if (selectedDocumentId === document.id) onSelectDocument?.(null)
+      setCheckedIds((current) => current.filter((id) => id !== document.id))
       deleteDocument.mutate(document.id, {
         onSuccess: () => toast.success(`${document.filename} deleted.`),
         onError: (caught) =>
@@ -186,6 +223,21 @@ export function DocumentsPane({
       })
     },
     [deleteDocument, onSelectDocument, selectedDocumentId],
+  )
+
+  const onRowSelect = useCallback(
+    (document: DocumentRead) => {
+      if (managing) {
+        setCheckedIds((current) =>
+          current.includes(document.id)
+            ? current.filter((id) => id !== document.id)
+            : [...current, document.id],
+        )
+        return
+      }
+      onSelectDocument?.(document.id === selectedDocumentId ? null : document.id)
+    },
+    [managing, onSelectDocument, selectedDocumentId],
   )
 
   const onStatus = useCallback(
@@ -198,11 +250,18 @@ export function DocumentsPane({
           return next
         })
       }
-      queryClient.setQueryData<DocumentRead[]>(documentKeys.list(classId), (current) =>
-        current?.map((document) =>
+      queryClient.setQueryData<DocumentRead[]>(documentKeys.list(classId), (current) => {
+        const listed = current?.find((document) => document.id === documentId)
+        // Same array back when the poll reported nothing new. Every row now reports each
+        // poll rather than only its last one, and a class of thirty-six documents polls
+        // roughly eighteen times a second between them: writing an identical list on each
+        // of those would re-render every row and every count that reads the list, for no
+        // change at all.
+        if (!current || !listed || !hasProgressed(listed, status)) return current
+        return current.map((document) =>
           document.id === documentId ? { ...document, ...status } : document,
-        ),
-      )
+        )
+      })
       if (status.state === 'ready') {
         queryClient.invalidateQueries({ queryKey: profileKeys.forClass(classId) })
       }
@@ -215,6 +274,20 @@ export function DocumentsPane({
         (a, b) => parseTimestamp(b.created_at).getTime() - parseTimestamp(a.created_at).getTime(),
       )
     : []
+  const checked = documents.filter((document) => checkedIds.includes(document.id))
+
+  async function onDeleteChecked() {
+    const results = await Promise.allSettled(
+      checked.map((document) => deleteDocument.mutateAsync(document.id)),
+    )
+    const failed = results.filter((result) => result.status === 'rejected').length
+    if (failed < results.length) {
+      toast.success(`${formatCount(results.length - failed, 'file')} deleted.`)
+    }
+    if (failed > 0) toast.error(`${formatCount(failed, 'file')} could not be deleted.`)
+    setCheckedIds([])
+    setConfirmingDelete(false)
+  }
 
   return (
     <div
@@ -222,7 +295,12 @@ export function DocumentsPane({
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault()
-        void filesFromDrop(event.dataTransfer).then(({ files }) => onFiles(files))
+        // `filesFromDrop` claims the dropped entries synchronously, so it has to be called
+        // here rather than after any await: the item list is gone once this handler yields.
+        void filesFromDrop(event.dataTransfer, () => setScanning(true)).then(({ files }) => {
+          setScanning(false)
+          onFiles(files)
+        })
       }}
     >
       <input
@@ -272,6 +350,39 @@ export function DocumentsPane({
             aria-label="Hide the documents panel"
           >
             <PanelRightClose />
+          </Button>
+        </div>
+      ) : null}
+
+      {managing && checked.length > 0 ? (
+        // Present only once something is picked, rather than sitting there greyed out: a
+        // permanently visible bar of dead controls says the list is mostly buttons, when
+        // in fact it is mostly files. Rendered away rather than hidden, so its controls
+        // are not left in the tab order describing an action that cannot be taken.
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
+          <span className="text-text-secondary text-sm tabular-nums">
+            {formatCount(checked.length, 'file')} selected
+          </span>
+          <Button variant="outline" size="sm" className="h-8" onClick={() => setMoving(checked)}>
+            <FolderInput aria-hidden className="size-3.5" />
+            Move to class
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-danger-text hover:text-danger-text h-8"
+            onClick={() => setConfirmingDelete(true)}
+          >
+            <Trash2 aria-hidden className="size-3.5" />
+            Delete
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto h-8"
+            onClick={() => setCheckedIds([])}
+          >
+            Clear
           </Button>
         </div>
       ) : null}
@@ -326,13 +437,17 @@ export function DocumentsPane({
                 >
                   <DocumentRow
                     document={document}
-                    selected={document.id === selectedDocumentId}
-                    onSelect={(picked) =>
-                      onSelectDocument(picked.id === selectedDocumentId ? null : picked.id)
+                    mode={variant}
+                    selected={
+                      managing
+                        ? checkedIds.includes(document.id)
+                        : document.id === selectedDocumentId
                     }
+                    onSelect={onRowSelect}
                     onRetry={onRetry}
                     onDelete={onDelete}
                     onStatus={onStatus}
+                    onMove={managing ? (picked) => setMoving([picked]) : undefined}
                   />
                 </motion.li>
               ))}
@@ -356,16 +471,65 @@ export function DocumentsPane({
           />
         ) : null}
         <DocumentDropzone
-          onFiles={onFiles}
           rejectedFiles={rejectedFiles}
           uploadingName={uploading}
+          scanning={scanning}
           uploadedCount={batch.uploaded}
           queueLength={Math.max(batch.total - batch.uploaded, 0)}
           fileInputRef={fileInputRef}
           folderInputRef={folderInputRef}
         />
       </div>
+
+      {managing ? (
+        <>
+          <MoveDocumentDialog
+            documents={moving}
+            classId={classId}
+            onOpenChange={(open) => {
+              if (!open) setMoving([])
+            }}
+            onMoved={() => setCheckedIds([])}
+          />
+          {/* Confirmed, unlike a single row's Delete. One file is a mistake you can see
+              coming; several at once is the click that empties a term's uploads. */}
+          <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete {formatCount(checked.length, 'file')}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This removes the files and everything Lyra indexed from them. Answers will stop
+                  citing them. It cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <Button
+                  variant="destructive"
+                  disabled={deleteDocument.isPending}
+                  onClick={() => void onDeleteChecked()}
+                >
+                  {deleteDocument.isPending ? <Spinner /> : null}
+                  Delete
+                </Button>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </>
+      ) : null}
     </div>
+  )
+}
+
+/** Whether a polled status says anything the list does not already show. */
+function hasProgressed(listed: DocumentRead, status: DocumentStatus): boolean {
+  return (
+    listed.state !== status.state ||
+    listed.stage_detail !== status.stage_detail ||
+    listed.pages_done !== status.pages_done ||
+    listed.pages_total !== status.pages_total ||
+    listed.pages_skipped !== status.pages_skipped ||
+    listed.error_message !== status.error_message
   )
 }
 
