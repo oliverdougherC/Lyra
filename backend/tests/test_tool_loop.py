@@ -347,3 +347,46 @@ def test_a_tool_result_never_reports_a_value_alongside_a_failure() -> None:
     assert success(answer="4").as_payload() == {"ok": True, "answer": "4"}
     payload = ToolResult(ok=False, error="nope").as_payload()
     assert payload == {"ok": False, "error": "nope"}
+
+
+async def test_a_result_that_cannot_be_serialized_costs_one_check_and_not_the_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The loop writes every result out twice, and neither write is inside a guard.
+
+    A payload `json.dumps` refuses therefore did not fail the tool that produced it: the
+    raise travelled out of the loop, past the only handler above it, and was reported as
+    the whole pass having been impossible to run, taking every check that had already
+    succeeded with it. Proving the result here keeps a bad one to its own row.
+    """
+
+    def unserializable(**_: object) -> ToolResult:
+        return success(value=object())
+
+    monkeypatch.setitem(
+        tools.REGISTRY,
+        "cas_evaluate",
+        tools.ToolDefinition(
+            name="cas_evaluate",
+            description="",
+            parameters={"type": "object", "properties": {"expression": {"type": "string"}}},
+            handler=unserializable,
+        ),
+    )
+    transport, _ = _scripted(
+        _reply(
+            tool_calls=[
+                _tool_call("cas_evaluate", {"expression": "x"}),
+                _tool_call("check_units", {"expression": "9.8 m/s^2", "expected": "m/s^2"}),
+            ]
+        ),
+        _reply(content='{"verdict": "agrees", "detail": "Checked."}'),
+    )
+
+    result = await _run(transport)
+
+    assert result.stopped == tools.COMPLETED
+    assert result.calls[0].ok is False
+    # The check beside it ran, and a pass that reaches the model is a pass that can be read.
+    assert result.calls[1].ok is True
+    json.dumps([call.result for call in result.calls])

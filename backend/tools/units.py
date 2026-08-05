@@ -6,16 +6,23 @@ in the first tool set rather than a later refinement.
 
 Unlike `cas`, this runs in the backend process, and the difference is deliberate rather
 than an inconsistency. SymPy is out of process because its parser evaluates and its work
-is unbounded. Pint's parser is neither: it walks the expression as an AST and asserts
-every node against a small whitelist, refusing anything else before evaluation, and unit
-arithmetic terminates. The two gates kept here are the cheap ones that cost nothing to
-apply: a length cap, and a character allowlist that ends at mathematical notation.
+is unbounded. Pint's parser walks the expression as an AST and asserts every node against
+a small whitelist, refusing anything else before evaluation, and unit arithmetic
+terminates.
+
+Terminating is not the same as being bounded, and that difference is what the gates here
+have to cover. Arithmetic on plain numbers is exactly what the whitelist allows, so
+`2**999999999` is evaluated rather than refused: it finishes, and it builds an integer a
+billion bits wide in this process, where there is no child to absorb it. The gates are
+therefore a length cap, a character allowlist that ends at mathematical notation, a
+ceiling on any literal exponent, and a ceiling on the magnitude that may be reported back.
 
 If pint ever grows an evaluator that runs arbitrary work, this belongs in the runner
 beside SymPy, and the honest reason it is not there today is stated above rather than
 assumed.
 """
 
+import math
 import re
 from typing import TYPE_CHECKING
 
@@ -25,6 +32,25 @@ if TYPE_CHECKING:
     from pint import UnitRegistry
 
 MAX_EXPRESSION_CHARS = 500
+
+# The largest power a unit expression has any business raising anything to.
+#
+# `2**999999999` is a whitelisted AST of arithmetic on numbers, so pint evaluates it, and
+# it terminates: the property this module's gates were written against holds, and it is
+# not the property that matters. What it builds is an integer a billion bits wide, in the
+# backend process, because unlike `cas` there is no child here to absorb it. Terminating
+# and being bounded are two different things, and only the first was ever checked.
+MAX_EXPONENT = 1000
+
+# `2**30`, `2^30`, `2**(30)`. Only a literal exponent is read: a symbolic one is not a
+# number pint will raise anything to, and it fails as an undefined unit either way.
+_EXPONENT = re.compile(r"(?:\*\*|\^)\s*\(?\s*(\d+)")
+
+# An integer wider than this cannot be written into the tool transcript. `json.dumps`
+# refuses an integer above CPython's 4300-digit conversion limit, and that refusal happens
+# where nothing can act on it, so the ceiling is enforced here instead. Far above any
+# magnitude a real quantity carries.
+_MAX_MAGNITUDE_BITS = 4096
 
 # Narrower than the CAS allowlist: a unit expression needs no comparison operators. The
 # two sets are written separately rather than shared because they gate two different
@@ -62,7 +88,31 @@ def _check(text: str, label: str) -> str:
         raise ValueError(f"{label} contains a double underscore.")
     if not _SAFE_CHARACTERS.match(stripped):
         raise ValueError(f"{label} contains characters that are not a unit expression.")
+    # Before pint evaluates, because the cost of this one is paid during evaluation and
+    # there is no process boundary here to pay it on our behalf.
+    if any(int(found) > MAX_EXPONENT for found in _EXPONENT.findall(stripped)):
+        raise ValueError(f"{label} raises something to a power above {MAX_EXPONENT}.")
     return stripped
+
+
+def _reportable(magnitude: object) -> bool:
+    """Whether a magnitude can be written into the tool transcript at all.
+
+    The transcript is serialized with `json.dumps`, which raises on an integer wider than
+    CPython's conversion limit. That raise happens in the tool loop, outside the guard
+    around the handler, so it does not fail one check: it travels out of the loop and
+    costs the whole verification pass, discarding every check that had already run and
+    reporting the problem as one nobody could check.
+
+    A magnitude that cannot be written is therefore left out. The dimensional answer,
+    which is what this tool exists for, still gets through.
+    """
+    if isinstance(magnitude, bool) or not isinstance(magnitude, int | float):
+        return False
+    if isinstance(magnitude, float):
+        # A non-finite float is written as a bare `Infinity`, which is not JSON.
+        return math.isfinite(magnitude)
+    return magnitude.bit_length() <= _MAX_MAGNITUDE_BITS
 
 
 def _dimensionality(quantity: object) -> str:
@@ -118,6 +168,6 @@ def check(expression: str, expected: str) -> ToolResult:
         "expected_dimensionality": wanted,
     }
     magnitude = getattr(value, "magnitude", value)
-    if isinstance(magnitude, int | float):
+    if _reportable(magnitude):
         result["magnitude"] = magnitude
     return success(**result)

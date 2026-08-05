@@ -5,6 +5,7 @@ exactly, so it is. The containment tests matter as much as the arithmetic: this 
 first path on which model output reaches an evaluator.
 """
 
+import json
 import subprocess
 
 import pytest
@@ -205,6 +206,12 @@ def test_a_bare_number_is_dimensionless_rather_than_an_error() -> None:
         ("open('x')", "m", "not a unit expression"),
         ("3 flurbles", "m", "Could not read"),
         ("3 m", "notaunit", "Not a unit"),
+        # Arithmetic on numbers is exactly what pint's whitelist allows, so these evaluate
+        # rather than being refused, and they evaluate in the backend process: there is no
+        # child here to absorb an integer a billion bits wide the way `cas` has one.
+        ("2**8000000", "m", "power above"),
+        ("2^999999999", "m", "power above"),
+        ("2**(999999999)", "m", "power above"),
     ],
 )
 def test_unit_input_is_gated_and_failures_explain_themselves(
@@ -214,6 +221,24 @@ def test_unit_input_is_gated_and_failures_explain_themselves(
 
     assert result.ok is False
     assert fragment in result.error
+
+
+def test_a_unit_check_always_returns_something_the_transcript_can_hold() -> None:
+    """A magnitude that cannot be serialized is left out rather than carried.
+
+    The loop writes this payload into the model's turn and into the audit trail with
+    `json.dumps`, neither of which is guarded. An integer past CPython's conversion limit
+    raised there does not fail one check: it leaves the loop and costs the whole
+    verification pass, discarding every check that had already run.
+    """
+    for expression in ("9.8 m/s^2", "6.02e23 mol", "1 km", "2**1000", "0.1 m"):
+        result = units.check(expression, "m")
+        json.dumps(result.as_payload())
+
+    # The dimensional answer is what the tool is for, and it survives a dropped magnitude.
+    ordinary = units.check("9.8 m/s^2", "m/s^2")
+    assert ordinary.as_payload()["matches"] is True
+    assert ordinary.as_payload()["magnitude"] == pytest.approx(9.8)
 
 
 # The notation of a continuous-signals course, which is what this tool is used on. Every

@@ -340,7 +340,19 @@ def _dispatch(call: ToolCall) -> RecordedCall:
         # raises anyway is a bug here, and it must still not take the loop down.
         logger.exception("Tool %s raised instead of returning a result", call.name)
         return _recorded(call, accepted, failure("That check could not be run."))
-    return _recorded(call, accepted, result)
+
+    recorded = _recorded(call, accepted, result)
+    try:
+        # Proved here, where a failure is still one tool's failure. The loop serializes
+        # this payload twice afterwards, into the model's turn and into the audit trail,
+        # and neither of those is inside a guard: an unserializable result raised there
+        # instead travelled out of the loop and cost the whole verification pass, taking
+        # every check that had already run with it.
+        json.dumps(recorded.result)
+    except (TypeError, ValueError):
+        logger.warning("Tool %s returned a result that cannot be serialized", call.name)
+        return _recorded(call, accepted, failure("That check produced a result Lyra cannot read."))
+    return recorded
 
 
 def _recorded(call: ToolCall, arguments: dict[str, object], result: ToolResult) -> RecordedCall:
