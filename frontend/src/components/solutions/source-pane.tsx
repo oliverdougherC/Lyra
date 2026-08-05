@@ -1,12 +1,13 @@
 'use client'
 
-import { ChevronLeft, ChevronRight, FileText } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChevronLeft, ChevronRight, FileText, Minimize2, ZoomIn } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api, documentPageUrl } from '@/lib/api'
 import { truncateMiddle } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -33,16 +34,29 @@ type SourcePaneProps = {
   activeProblemId?: number | null
   onSelectProblem?: (problemId: number) => void
   /**
-   * The width, in pixels, this pane would need for its page to stand whole. Reported from
-   * the load that first reveals a page, so the column can be sized in the same commit.
+   * The width, in pixels, this pane would need for its page to stand whole — or, when
+   * magnified, for the active problem's band to. Reported from the load that first reveals
+   * a page, so the column can be sized in the same commit.
    */
   onFitWidth?: (width: number) => void
+  /** Crop to the active problem's band and scale it up to fill the pane. */
+  magnified?: boolean
+  onMagnifiedChange?: (magnified: boolean) => void
   /** The control that gives this pane the whole window, rendered in its header. */
   focusToggle?: React.ReactNode
 }
 
 /** The padding around the page inside the scrolling area, per side. Matches `p-5`. */
 const PAGE_GUTTER_PX = 20
+
+/**
+ * The smallest slice of a page the magnifier will treat as a problem.
+ *
+ * A band this short is almost certainly a marker that landed badly rather than a problem
+ * two lines long, and dividing by it would ask for a column some twenty times the width of
+ * the window. The clamp turns a bad measurement into a merely large one.
+ */
+const MIN_BAND_SPAN = 0.06
 
 /**
  * Turn the problems on one page into the bands that cover it.
@@ -84,27 +98,15 @@ export function SourcePane({
   activeProblemId = null,
   onSelectProblem,
   onFitWidth,
+  magnified = false,
+  onMagnifiedChange,
   focusToggle = null,
 }: SourcePaneProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null)
-
-  /**
-   * Turn a decoded page's shape into the width this column wants.
-   *
-   * The height available to the page is a property of the window, not of this column, so
-   * the arithmetic runs one way only: a page of a given aspect needs a particular width to
-   * fill that height exactly, and asking for it cannot feed back into the measurement.
-   */
-  const reportFit = useCallback(
-    (aspect: number) => {
-      const viewport = viewportRef.current
-      if (!viewport || !onFitWidth || !Number.isFinite(aspect) || aspect <= 0) return
-      const available = viewport.clientHeight - PAGE_GUTTER_PX * 2
-      if (available <= 0) return
-      onFitWidth(available * aspect + PAGE_GUTTER_PX * 2)
-    },
-    [onFitWidth],
-  )
+  // The shape of the page on screen, learned when it decoded. Held here rather than inside
+  // the image, because the width this column wants also depends on which band is in focus,
+  // and that changes as the reader moves without any page being loaded again.
+  const [pageAspect, setPageAspect] = useState<number | null>(null)
   const problemSets = sources.filter((source) => source.role === 'problem_set')
   // Where the reader has navigated to by hand, which outranks the anchor until the
   // selected problem changes.
@@ -133,6 +135,87 @@ export function SourcePane({
   const isPdf = document?.mime === 'application/pdf'
   const pages = document?.pages_total ?? 1
   const filename = document?.filename ?? sources.find((s) => s.document_id === documentId)?.filename
+
+  // Measured rather than assumed, because what the magnifier can actually show depends on
+  // the width the column was allowed to reach, and that is capped by the panel minimums.
+  const [paneSize, setPaneSize] = useState<{ width: number; height: number } | null>(null)
+  const measurePane = useCallback(() => {
+    const viewport = viewportRef.current
+    if (!viewport) return
+    const width = viewport.clientWidth
+    const height = viewport.clientHeight
+    // Same numbers, same object: this runs after every commit, and a fresh object each
+    // time would re-render forever.
+    setPaneSize((current) =>
+      current && current.width === width && current.height === height ? current : { width, height },
+    )
+  }, [])
+
+  // Measured after every commit as well as on resize. A ResizeObserver alone is not enough:
+  // like animation frames, its callbacks are delivered as part of rendering, so a document
+  // that is never rendered would leave the magnifier unmeasured and quietly disabled.
+  useLayoutEffect(measurePane)
+
+  useEffect(() => {
+    const viewport = viewportRef.current
+    if (!viewport || typeof ResizeObserver === 'undefined') return
+    // Dragging the split changes this pane's width without re-rendering it.
+    const observer = new ResizeObserver(measurePane)
+    observer.observe(viewport)
+    return () => observer.disconnect()
+  }, [measurePane])
+
+  const pageBands = documentId === null ? [] : bandsOn(regions, documentId, page)
+  // The slice the magnifier is trained on. Null whenever there is nothing to train it on —
+  // a page whose problems were never located, or a problem that is not on this page — and
+  // the pane then behaves exactly as it does unmagnified rather than guessing at a crop.
+  const focusBand =
+    (magnified && pageBands.find((band) => band.problemId === activeProblemId)) || null
+  const bandSpan = focusBand ? Math.max(MIN_BAND_SPAN, focusBand.to - focusBand.from) : 1
+
+  /** The height a page has to fit into, inside the gutter. Null before it is measured. */
+  const available = paneSize ? paneSize.height - PAGE_GUTTER_PX * 2 : null
+
+  /**
+   * Ask for the width this column needs.
+   *
+   * The height available is a property of the window, not of this column, so the arithmetic
+   * runs one way only: a page — or a band of one — of a given shape needs a particular width
+   * to fill that height exactly, and asking for it cannot feed back into the measurement.
+   * Dividing by the band's span is the whole of the magnification: showing a fifth of a page
+   * in the same height means the page wants to be five times as wide.
+   *
+   * Measured rather than read once, so a window that changes height asks for the width that
+   * new height wants. A shorter window needs a narrower column to hold a whole page, and a
+   * column that stayed put would leave the reader scrolling a sheet that used to stand whole.
+   */
+  useEffect(() => {
+    if (!onFitWidth || !pageAspect || available === null || available <= 0) return
+    onFitWidth((available * pageAspect) / bandSpan + PAGE_GUTTER_PX * 2)
+  }, [available, bandSpan, onFitWidth, pageAspect])
+
+  /**
+   * The slice of the page to show, once the column has settled at whatever width it was
+   * allowed.
+   *
+   * Not the band itself. Asking for a band five times wider than tall asks for a column no
+   * layout will grant, and cropping to it anyway left a letterbox stranded at the top of a
+   * pane four times its height. So the window is always exactly as tall as the pane, and
+   * the band sits in the middle of it: the magnification is however much the column managed,
+   * and the leftover height is spent on the surrounding page rather than on nothing.
+   */
+  const crop = (() => {
+    if (!focusBand || !pageAspect || !paneSize) return null
+    const width = paneSize.width - PAGE_GUTTER_PX * 2
+    const height = paneSize.height - PAGE_GUTTER_PX * 2
+    if (width <= 0 || height <= 0) return null
+    const visible = Math.min(1, height / (width / pageAspect))
+    // The page already stands whole; there is nothing to crop and nothing to centre.
+    if (visible >= 1) return null
+    const centre = (focusBand.from + focusBand.to) / 2
+    const from = Math.min(Math.max(centre - visible / 2, 0), 1 - visible)
+    return { from, to: from + visible }
+  })()
 
   if (documentId === null) {
     return (
@@ -170,6 +253,30 @@ export function SourcePane({
               ))}
             </select>
           ) : null}
+          {/* Offered only when Lyra actually found the problems on the page. With no bands
+              there is nothing to magnify to, and a control that silently does nothing is
+              worse than one that is not there. */}
+          {onMagnifiedChange && regions.length > 0 ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={cn('size-7 p-0', magnified && 'text-accent-primary bg-accent-surface')}
+                  aria-pressed={magnified}
+                  aria-label={magnified ? 'Show the whole page' : 'Magnify the problem being read'}
+                  onClick={() => onMagnifiedChange(!magnified)}
+                >
+                  {magnified ? <Minimize2 className="size-4" /> : <ZoomIn className="size-4" />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {magnified
+                  ? 'Show the whole page'
+                  : 'Magnify the problem being read, and follow it'}
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
           {focusToggle}
         </span>
       </header>
@@ -185,10 +292,14 @@ export function SourcePane({
               key={documentId}
               documentId={documentId}
               page={page}
-              bands={onSelectProblem ? bandsOn(regions, documentId, page) : []}
+              // Magnified, the view already is one problem; a band drawn over the whole
+              // window would only restate that, and the others are off-screen anyway.
+              bands={onSelectProblem && !crop ? pageBands : []}
               activeProblemId={activeProblemId}
               onSelect={onSelectProblem}
-              onDecoded={reportFit}
+              onDecoded={setPageAspect}
+              crop={crop}
+              availableHeight={available}
             />
           ) : (
             <SourceText documentId={documentId} />
@@ -244,6 +355,8 @@ function PageImage({
   activeProblemId,
   onSelect,
   onDecoded,
+  crop = null,
+  availableHeight = null,
 }: {
   documentId: number
   page: number
@@ -252,9 +365,13 @@ function PageImage({
   onSelect?: (problemId: number) => void
   /** The decoded page's aspect ratio, width over height. */
   onDecoded?: (aspect: number) => void
+  /** The slice of the page to show, as fractions of its height. Null shows all of it. */
+  crop?: { from: number; to: number } | null
+  /** The height the page has to stand in, inside the gutter. Null before it is measured. */
+  availableHeight?: number | null
 }) {
   const src = documentPageUrl(documentId, page)
-  const [shown, setShown] = useState<{ src: string; page: number } | null>(null)
+  const [shown, setShown] = useState<{ src: string; page: number; aspect: number } | null>(null)
   // Which page failed, rather than a flag that has to be cleared as each new load starts.
   // A flag would mean writing state from the effect body on every page turn, and the reset
   // is not information the effect owns: whether *this* page has failed is derivable.
@@ -266,10 +383,11 @@ function PageImage({
     const image = new Image()
     const settle = () => {
       if (cancelled) return
+      const aspect = image.naturalHeight > 0 ? image.naturalWidth / image.naturalHeight : 0
       // Both updates land in one commit, so the page appears at the width it was measured
       // for rather than arriving and then being resized under the reader.
-      setShown({ src, page })
-      if (image.naturalHeight > 0) onDecoded?.(image.naturalWidth / image.naturalHeight)
+      setShown({ src, page, aspect })
+      if (aspect > 0) onDecoded?.(aspect)
     }
 
     image.onload = settle
@@ -295,25 +413,52 @@ function PageImage({
     )
   }
 
+  if (shown === null) {
+    return <Skeleton className="aspect-[8.5/11] w-full rounded-[3px]" />
+  }
+
+  // A window onto the page rather than the page itself. Uncropped the two are the same
+  // thing — the window is exactly page-shaped and the sheet sits at its origin — so there
+  // is one rendering path and no second layout to keep in step with the first.
+  const span = crop ? Math.max(MIN_BAND_SPAN, crop.to - crop.from) : 1
+  const offset = crop ? -crop.from / span : 0
+
   return (
-    <div className="relative">
-      {shown === null ? <Skeleton className="aspect-[8.5/11] w-full rounded-[3px]" /> : null}
-      {shown === null ? null : (
-        // The backend serves these at an unknown intrinsic size and Next's loader would
-        // proxy a localhost-only route.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={shown.src}
-          alt={`Page ${shown.page}`}
-          className="border-border/60 w-full rounded-[3px] border bg-white shadow-md"
-        />
-      )}
+    <div
+      // Never taller than the pane it stands in. The column is sized to the width this page
+      // wants, but it has floors and ceilings of its own — a minimum width, the share the
+      // solutions column will not give up — and the difference has to go somewhere. Spent
+      // on desk to either side of a whole page, rather than on a page grown past the fold:
+      // a sheet the reader has to scroll to see the bottom of is the one thing this pane
+      // exists to avoid.
+      className="border-border/60 relative mx-auto w-full overflow-hidden rounded-[3px] border bg-white shadow-md"
+      style={
+        shown.aspect > 0
+          ? {
+              aspectRatio: String(shown.aspect / span),
+              maxWidth:
+                availableHeight && availableHeight > 0
+                  ? `${(availableHeight * shown.aspect) / span}px`
+                  : undefined,
+            }
+          : undefined
+      }
+    >
+      {/* The backend serves these at an unknown intrinsic size and Next's loader would
+          proxy a localhost-only route. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={shown.src}
+        alt={`Page ${shown.page}`}
+        className="absolute left-0 w-full"
+        style={{ top: `${offset * 100}%` }}
+      />
       {/* Laid over the page rather than drawn into it: the image is a faithful render of
           the student's own sheet, and marking it up would make the two columns disagree
           about what the sheet says. Percentages, because the page is rendered at whatever
           width the pane happens to have. Withheld while a turn is still in flight, so a
           band is never drawn over the page it does not belong to. */}
-      {shown?.page === page && onSelect
+      {shown.page === page && onSelect
         ? bands.map((band) => (
             <button
               key={band.problemId}

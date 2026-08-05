@@ -5,7 +5,6 @@ import { ChevronRight, UserRound } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
-import { EndpointLocalityBadge } from '@/components/layout/endpoint-locality-badge'
 import { HEADER_ACTIONS_SLOT, HEADER_CRUMB_SLOT } from '@/components/layout/page-chrome'
 import { ClassProfileSheet } from '@/components/profile/class-profile-sheet'
 import { Button } from '@/components/ui/button'
@@ -127,7 +126,6 @@ export function AppHeader() {
           />
         </div>
       ) : null}
-      <EndpointLocalityBadge />
     </header>
   )
 }

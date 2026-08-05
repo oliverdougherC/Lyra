@@ -135,6 +135,7 @@ export function ChatPane({
   const [mode, setMode] = useState<ChatMode>('guide')
   const [draft, setDraft] = useState('')
   const [pendingTurn, setPendingTurn] = useState<ChatMessage[] | null>(null)
+  const [turnBase, setTurnBase] = useState<ChatMessage[] | null>(null)
   const [streamText, setStreamText] = useState('')
   const [streamThinking, setStreamThinking] = useState('')
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
@@ -169,18 +170,25 @@ export function ChatPane({
   // instead of somewhere to type.
   const messagesPending = activeSessionId !== null && messagesQueryPending
   const messages: ChatMessage[] = useMemo(() => {
-    const base = persisted ?? []
-    if (!pendingTurn || turnOutcome === 'failed') return base
+    const live = persisted ?? []
+    if (!pendingTurn || turnOutcome === 'failed') return live
+    // A turn is appended to the transcript it started from, not to whatever the message
+    // query happens to be holding mid-stream. The server stores the question the moment the
+    // turn opens, and on the first message of a new conversation that write races the first
+    // fetch of the message list — which only becomes possible once the conversation exists.
+    // Reading `live` here meant the fetch came back with the question already in it and the
+    // student watched their own question sit on screen twice until the turn settled.
+    const base = turnBase ?? live
     // A retry answers the question already on screen, so its optimistic reply stands where
     // the previous one did rather than below it. The server holds the old reply until the
-    // new one is written, which is why a failed retry falls back to `base` intact.
+    // new one is written, which is why a failed retry falls back to `live` intact.
     if (turnKind === 'regenerate') {
       const withoutLastReply =
         base.length > 0 && base[base.length - 1].role === 'assistant' ? base.slice(0, -1) : base
       return [...withoutLastReply, ...pendingTurn]
     }
     return [...base, ...pendingTurn]
-  }, [pendingTurn, persisted, turnKind, turnOutcome])
+  }, [pendingTurn, persisted, turnBase, turnKind, turnOutcome])
 
   /**
    * The conversation this turn belongs to, opening one if there is not one yet.
@@ -208,6 +216,7 @@ export function ChatPane({
 
   const clearOptimisticTurn = useCallback(() => {
     setPendingTurn(null)
+    setTurnBase(null)
     setStreamText('')
     setStreamThinking('')
     setTurnStartedAt(null)
@@ -294,6 +303,10 @@ export function ChatPane({
 
       setStreamText('')
       setStreamThinking('')
+      // Fixed for the length of the turn, and taken from the render the student sent from:
+      // for a conversation that did not exist a moment ago that is an empty transcript,
+      // which is exactly what this turn is being appended to.
+      setTurnBase(persisted ?? [])
       setPendingTurn(
         kind === 'regenerate'
           ? [placeholderReply(now)]
@@ -390,7 +403,7 @@ export function ChatPane({
         }
       }
     },
-    [activeMode, pendingTurn, placeholderReply, scopedDocument, setOutcome],
+    [activeMode, pendingTurn, persisted, placeholderReply, scopedDocument, setOutcome],
   )
 
   const send = useCallback(

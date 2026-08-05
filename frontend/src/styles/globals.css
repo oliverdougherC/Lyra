@@ -696,6 +696,15 @@
   display: block;
 }
 
+/* A list item is a unit so that its marker fades with it — the bullet or the number is
+   painted from `list-item`, not from any text node, so it is the one glyph on the line the
+   word splitter cannot reach and it was landing complete before the words beside it.
+   `list-item` explicitly, because the blanket `inline-block` above would take the marker
+   away altogether. */
+li[data-stream-word] {
+  display: list-item;
+}
+
 [data-stream-word].stream-word-visible {
   animation: lyra-stream-word-reveal 180ms var(--ease-gentle) var(--stream-word-delay, 0ms) both;
 }

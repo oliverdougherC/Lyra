@@ -87,7 +87,14 @@ export function ProblemPanel({
       {/* Pinned while you are inside this problem. The strip says which number you are on;
           this says it in the reading column itself, where the eye already is. `bg-card`
           because it slides over the text underneath it. */}
-      <div className="bg-background border-border sticky top-0 z-10 -mx-4 flex items-start gap-2 border-b px-4">
+      <div
+        // What a jump aims at. The item's own box starts a whole `pt-8` above this, and
+        // scrolling to that box left the title stranded 56px down the pane with nothing
+        // above it — the gap that separates two problems, hoisted to the top of the screen
+        // where it separates the problem from nothing at all.
+        data-problem-heading
+        className="bg-background border-border sticky top-0 z-10 -mx-4 flex items-start gap-2 border-b px-4"
+      >
         <AccordionTrigger className="min-w-0 flex-1 py-3">
           <span className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
             {/* The same token the strip uses, so the spine and the document agree. */}

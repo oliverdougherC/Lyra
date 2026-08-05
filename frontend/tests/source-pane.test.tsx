@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SourcePane, type ProblemRegion } from '@/components/solutions/source-pane'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import type { DocumentRead, SolutionSource } from '@/types'
 
 /**
@@ -89,18 +90,21 @@ function renderPane(
   extra: Partial<React.ComponentProps<typeof SourcePane>> = {},
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  const view = render(
+  // Mirrors the providers the app mounts around every route: the magnifier's control is a
+  // tooltip trigger, and Radix requires the provider to be somewhere above it.
+  const wrap = (node: React.ReactNode) => (
     <QueryClientProvider client={client}>
-      <SourcePane sources={SOURCES} documents={[DOCUMENT]} anchor={anchor} {...extra} />
-    </QueryClientProvider>,
+      <TooltipProvider>{node}</TooltipProvider>
+    </QueryClientProvider>
+  )
+  const view = render(
+    wrap(<SourcePane sources={SOURCES} documents={[DOCUMENT]} anchor={anchor} {...extra} />),
   )
   return {
     ...view,
     reanchor: (next: { documentId: number; pageNumber: number | null } | null) =>
       view.rerender(
-        <QueryClientProvider client={client}>
-          <SourcePane sources={SOURCES} documents={[DOCUMENT]} anchor={next} {...extra} />
-        </QueryClientProvider>,
+        wrap(<SourcePane sources={SOURCES} documents={[DOCUMENT]} anchor={next} {...extra} />),
       ),
   }
 }
@@ -193,6 +197,101 @@ describe('SourcePane', () => {
     await decodePages()
 
     expect(screen.queryByRole('button', { name: /Go to the solution/ })).not.toBeInTheDocument()
+  })
+
+  describe('magnified', () => {
+    // jsdom lays nothing out and never delivers resize notifications, so the pane's
+    // measurements are supplied here. The numbers are a real column: 800x700 of viewport
+    // around a 20px gutter, holding a letter-shaped page.
+    const PANE_WIDTH = 800
+    const PANE_HEIGHT = 700
+    const PAGE_ASPECT = 850 / 1100
+
+    beforeEach(() => {
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          constructor(private readonly callback: () => void) {}
+          observe() {
+            this.callback()
+          }
+          disconnect() {}
+        },
+      )
+      Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+        configurable: true,
+        get: () => PANE_WIDTH,
+      })
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+        configurable: true,
+        get: () => PANE_HEIGHT,
+      })
+    })
+
+    afterEach(() => {
+      // @ts-expect-error -- restoring jsdom's own zero-size getters.
+      delete HTMLElement.prototype.clientWidth
+      // @ts-expect-error -- restoring jsdom's own zero-size getters.
+      delete HTMLElement.prototype.clientHeight
+    })
+
+    /**
+     * The page's own shape. A window wider than this is one that has been cropped.
+     *
+     * Parsed rather than read as a number: the style is normalised to `"<w> / <h>"` form.
+     */
+    function windowAspect(): number {
+      const image = screen.getByAltText(/^Page/)
+      const [width, height = '1'] = (image.parentElement as HTMLElement).style.aspectRatio
+        .split('/')
+        .map((part) => part.trim())
+      return Number(width) / Number(height)
+    }
+
+    it('crops to a window centred on the problem in view', async () => {
+      renderPane(
+        { documentId: 7, pageNumber: 1 },
+        { regions: REGIONS, activeProblemId: 1, magnified: true, onMagnifiedChange: vi.fn() },
+      )
+      await decodePages()
+
+      // Cropped: the window is wider relative to its height than the page it looks onto.
+      expect(windowAspect()).toBeGreaterThan(PAGE_ASPECT)
+      // The page is pulled up behind the window so the band sits inside it, never so far
+      // that blank space appears above the sheet.
+      const top = Number.parseFloat(screen.getByAltText(/^Page/).style.top)
+      expect(top).toBeLessThanOrEqual(0)
+      expect(top).toBeGreaterThan(-100)
+    })
+
+    it('asks for a wider column than the whole page would need', async () => {
+      const whole = vi.fn()
+      renderPane({ documentId: 7, pageNumber: 1 }, { regions: REGIONS, onFitWidth: whole })
+      await decodePages()
+
+      const magnifiedFit = vi.fn()
+      renderPane(
+        { documentId: 7, pageNumber: 1 },
+        { regions: REGIONS, activeProblemId: 1, magnified: true, onFitWidth: magnifiedFit },
+      )
+      await decodePages()
+
+      const wholeWidth = whole.mock.calls.at(-1)?.[0] as number
+      const zoomedWidth = magnifiedFit.mock.calls.at(-1)?.[0] as number
+      expect(zoomedWidth).toBeGreaterThan(wholeWidth)
+    })
+
+    it('leaves the page whole when the problem in view was never located', async () => {
+      // Problem 3 lives on page 2, so page 1 has no band to train the magnifier on. The
+      // pane falls back to the plain page rather than inventing a crop.
+      renderPane(
+        { documentId: 7, pageNumber: 1 },
+        { regions: REGIONS, activeProblemId: 3, magnified: true, onMagnifiedChange: vi.fn() },
+      )
+      await decodePages()
+
+      expect(windowAspect()).toBeCloseTo(PAGE_ASPECT, 3)
+    })
   })
 
   it('follows a newly selected problem back to its own page', async () => {

@@ -29,6 +29,13 @@ type ProblemStripProps = {
   /** The problem currently under the top of the reading pane. */
   activeId: number | null
   onSelect: (problemId: number) => void
+  /**
+   * The problem the pointer is resting on, or null when it has left the strip.
+   *
+   * The magnifier trains on this, so running the pointer along the numbers scans the
+   * document through them without committing to any of them.
+   */
+  onHover?: (problemId: number | null) => void
 }
 
 /**
@@ -39,7 +46,7 @@ type ProblemStripProps = {
  * which this fixes: the strip is the spine of the document, it says where you are, and it
  * takes one click to be somewhere else.
  */
-export function ProblemStrip({ problems, activeId, onSelect }: ProblemStripProps) {
+export function ProblemStrip({ problems, activeId, onSelect, onHover }: ProblemStripProps) {
   if (problems.length < 2) return null
 
   return (
@@ -48,6 +55,7 @@ export function ProblemStrip({ problems, activeId, onSelect }: ProblemStripProps
       // Scrolls in its own right rather than wrapping: a second row here would push the
       // two panes' content out of line with each other.
       className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+      onMouseLeave={() => onHover?.(null)}
     >
       {problems.map((problem, index) => {
         const active = problem.id === activeId
@@ -57,6 +65,11 @@ export function ProblemStrip({ problems, activeId, onSelect }: ProblemStripProps
             key={problem.id}
             type="button"
             onClick={() => onSelect(problem.id)}
+            onMouseEnter={() => onHover?.(problem.id)}
+            // Keyboard reaches the same preview: tabbing the strip scans it the way the
+            // pointer does, rather than the magnifier being a mouse-only affordance.
+            onFocus={() => onHover?.(problem.id)}
+            onBlur={() => onHover?.(null)}
             aria-current={active ? 'true' : undefined}
             title={problem.label ?? `Problem ${index + 1}`}
             className={cn(

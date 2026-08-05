@@ -12,6 +12,10 @@
  * 1. **A typeset equation is one unit.** Splitting it would fade in half a fraction at a
  *    time; skipping it would paint it instantly while the sentence around it was still
  *    arriving.
+ * 1a. **Anything the browser draws that is not a text node still needs a unit.** A list
+ *    marker — the bullet, or the number — is drawn from `display: list-item`, not from any
+ *    text the splitter below could reach, so a list left to itself stamps its bullets down
+ *    complete and the words then fall into place around them. The item carries the unit.
  * 2. **Pacing is CSS animation delay, never a timer chain.** SSE frames land in network
  *    chunks, so a burst of words can arrive in one commit, and timers throttle in a hidden
  *    tab and would strand the reveal mid-answer.
@@ -71,10 +75,12 @@ function hasClass(node: RenderNode, name: string): boolean {
 export function rehypeRevealUnits() {
   return (tree: RenderNode) => {
     let fallbackOffset = 0
-    // Equations are keyed by their order in the answer rather than by a source offset. A
-    // streamed answer only ever grows, so the third equation stays the third equation,
-    // while its source offset moves as the normalizer reshapes the text around it.
+    // Equations and list items are keyed by their order in the answer rather than by a
+    // source offset. A streamed answer only ever grows, so the third equation stays the
+    // third equation, while its source offset moves as the normalizer reshapes the text
+    // around it.
     let equationIndex = 0
+    let itemIndex = 0
 
     const visit = (node: RenderNode): void => {
       if (node.type === 'element') {
@@ -89,6 +95,16 @@ export function rehypeRevealUnits() {
           }
           equationIndex += 1
           return
+        }
+        // The item, not a return: its marker rides on the item and its words are still
+        // split below. Tagged on the way in, so it takes the slot immediately ahead of its
+        // own first word and the bullet arrives just before the line it belongs to.
+        if (tagName === 'li') {
+          node.properties = {
+            ...node.properties,
+            [REVEAL_ATTRIBUTE]: `item-${itemIndex}`,
+          }
+          itemIndex += 1
         }
       }
 

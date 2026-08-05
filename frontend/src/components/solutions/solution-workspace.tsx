@@ -31,9 +31,28 @@ import type { SolutionDetail, SolutionPart } from '@/types'
  */
 const DEFAULT_SPLIT = 45
 
-/** The bounds the two panes' own minimums allow, as a share of the group. */
-const MIN_SPLIT = 25
+/**
+ * The narrowest the source column may be, in pixels.
+ *
+ * A pixel floor rather than a share, because the column itself is now a pixel width: a
+ * share floor of a quarter is 320px on a laptop and 860px on an ultrawide, and on the
+ * ultrawide it would take 160px off the solutions column to show margin around a page that
+ * already stood whole.
+ */
+const MIN_SOURCE_PX = 320
+
+/** The most of the group the source column may take, so the solutions stay readable. */
 const MAX_SPLIT = 70
+
+/**
+ * How wide the magnifier is allowed to push the document.
+ *
+ * Short of `MAX_SPLIT`: a band is far wider than it is tall, so it always asks for more
+ * width than the window has and simply takes whatever ceiling it is given. At the full 70
+ * the solutions beside it are squeezed into a column that wraps its own headings, and the
+ * two are meant to be read together.
+ */
+const MAX_MAGNIFIED_SPLIT = 64
 
 /**
  * One panel's share of the group, as a percentage.
@@ -48,11 +67,18 @@ function shareOf(layout: Record<string, number>, id: string): number {
   return Math.round(((layout[id] ?? 0) / total) * 100)
 }
 
-function parseSplit(raw: string): number | null {
+/**
+ * A width the student dragged the source column to, in pixels. Zero means they never did.
+ *
+ * Pixels rather than a share of the window, because a share is not what a reader chooses
+ * when they drag: they widen the column until the page looks right, and that is a size in
+ * pixels which the window getting wider should leave alone. A stored value narrower than
+ * the column's own minimum would make it unusable, so a corrupt entry falls back rather
+ * than being honoured.
+ */
+function parseSourceWidth(raw: string): number | null {
   const parsed = Number(raw)
-  // A stored value outside the panes' own minimums would make one column unusable, so a
-  // corrupt entry falls back rather than being honoured.
-  return Number.isFinite(parsed) && parsed >= MIN_SPLIT && parsed <= MAX_SPLIT ? parsed : null
+  return Number.isFinite(parsed) && parsed >= MIN_SOURCE_PX ? parsed : null
 }
 
 /** Whether the reader has asked not to be moved around. */
@@ -64,6 +90,9 @@ function prefersReducedMotion(): boolean {
 
 /** How long a jump between problems takes to travel. Matches the house motion ceiling. */
 const JUMP_DURATION_MS = 240
+
+/** Breathing room left above a problem's heading once a jump has landed. */
+const JUMP_GAP_PX = 8
 
 function easeOutCubic(progress: number): number {
   return 1 - (1 - progress) ** 3
@@ -133,34 +162,38 @@ type SolutionWorkspaceProps = {
  */
 export function SolutionWorkspace({ solution, classId, className }: SolutionWorkspaceProps) {
   const wide = useMediaQuery('(min-width: 1024px)')
-  // `-v2-`: the previous key was written on every layout change the library reported,
-  // including the one it reports for the initial layout, so almost every existing reader
-  // has a stored "preference" they never expressed — and it would suppress the fit below
-  // forever. The old entries are deliberately abandoned rather than migrated: there is no
-  // way to tell a real drag from that noise, and a pane width is cheap to set again.
-  const splitKey = `lyra-solution-split-v2-${classId}`
-  const [split, setSplit] = useLocalStorageState(splitKey, DEFAULT_SPLIT, parseSplit)
-  // A split the student dragged for themselves outranks the fit. Read once, because the
-  // hook cannot tell "nothing stored" from "stored value equal to the default".
-  const [hadStoredSplit] = useState(
-    () => typeof window !== 'undefined' && window.localStorage.getItem(splitKey) !== null,
+  // A width, not a share: see `parseSourceWidth`. The share-keyed entries the earlier keys
+  // hold are deliberately abandoned rather than migrated — a share cannot say what the
+  // window it was measured against was, so there is nothing in one to convert.
+  const [chosenWidth, setChosenWidth] = useLocalStorageState(
+    `lyra-solution-source-width-${classId}`,
+    0,
+    parseSourceWidth,
   )
-  const chosenSplitRef = useRef(hadStoredSplit)
   const groupRef = useRef<GroupImperativeHandle | null>(null)
   const groupElementRef = useRef<HTMLDivElement | null>(null)
   // The width the source column needs for its page to stand whole, in pixels, as measured
-  // by the pane that renders it.
+  // by the pane that renders it. Remeasured whenever the window changes height, because
+  // that is what a page has to fit into.
   const [fitWidth, setFitWidth] = useState<number | null>(null)
-  // The share this component put there itself, so `onLayoutChanged` can tell its own work
-  // from a drag and avoid persisting either the default or a fit as though the student had
-  // chosen it. Seeded with the layout this render starts from, because the library reports
-  // that initial layout too and taking it for a choice is exactly how the old key filled up
-  // with widths nobody picked.
-  const appliedFitRef = useRef<number | null>(split)
   const [collapsed, setCollapsed] = useState<string[]>([])
   // Which pane, if either, has the window to itself. Not persisted: it is a thing you do
   // to read one page closely, not a layout you live in.
   const [focused, setFocused] = useState<'source' | 'solutions' | null>(null)
+  // Crop the document to the problem in view and scale it up. Not persisted, like `focused`:
+  // it is a way of reading one problem closely, not a layout to live in.
+  const [magnified, setMagnified] = useState(false)
+  const [hoveredId, setHoveredId] = useState<number | null>(null)
+  // Whether the reader has dragged the split since the magnifier was last switched. Reset
+  // during render rather than from an effect: the layout effect that applies the fit runs
+  // before any passive effect could clear this, and would spend the commit the magnifier
+  // turns on reading the previous session's answer.
+  const [magnifyOverridden, setMagnifyOverridden] = useState(false)
+  const [lastMagnified, setLastMagnified] = useState(magnified)
+  if (lastMagnified !== magnified) {
+    setLastMagnified(magnified)
+    setMagnifyOverridden(false)
+  }
   const [askingAbout, setAskingAbout] = useState<SolutionPart | null>(null)
   const [markingWrong, setMarkingWrong] = useState<SolutionPart | null>(null)
   const [showingHistory, setShowingHistory] = useState<SolutionPart | null>(null)
@@ -198,8 +231,14 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
     solution.parts.length,
     tree[0]?.problem.id ?? null,
   )
-  const active = tree.find((node) => node.problem.id === activeId)
-  const anchor = active ? anchorOf(active.problem) : null
+  // Which problem the document is showing. Normally the one being read; while magnified,
+  // the pointer may borrow it, so running along the strip scans the sheet through the
+  // numbers. Only while magnified: unasked-for, a hover that turned the page would move the
+  // document out from under someone who was only on their way to clicking something.
+  const previewId = magnified ? hoveredId : null
+  const shownId = previewId ?? activeId
+  const shown = tree.find((node) => node.problem.id === shownId)
+  const anchor = shown ? anchorOf(shown.problem) : null
 
   // The problem to scroll to once there is a pane to scroll. Clicking a band on the page
   // while the document has the window to itself has to bring the solutions back first, and
@@ -227,9 +266,13 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
   useLayoutEffect(() => {
     const problemId = pendingJump.current
     if (problemId === null || !viewport) return
-    const target = viewport.querySelector(`[data-problem-id="${problemId}"]`)
+    const item = viewport.querySelector(`[data-problem-id="${problemId}"]`)
     pendingJump.current = null
-    if (!target) return
+    if (!item) return
+    // The heading, not the item that contains it: the item opens with the margin that
+    // separates it from the problem above, and aiming at that put the title 56px down an
+    // otherwise empty pane. Nothing above a heading is the point of jumping to it.
+    const target = item.querySelector('[data-problem-heading]') ?? item
     // Positioned rather than left to `scrollIntoView`, which lands the problem hard against
     // the top of the pane and, in some browsers, does nothing at all when it is asked to do
     // it smoothly.
@@ -237,7 +280,7 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
       viewport.scrollTop +
       target.getBoundingClientRect().top -
       viewport.getBoundingClientRect().top -
-      READING_LINE_PX / 2
+      JUMP_GAP_PX
     // Travelled rather than cut to. A jump between two problems that look alike leaves the
     // reader to work out whether the pane moved at all and in which direction; the movement
     // itself is the answer. Returned as cleanup, so a second jump abandons the first rather
@@ -251,17 +294,31 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
    * Run as a layout effect, in the same commit that first paints the page image: the pane
    * reports its fit from the load that reveals the page, so the column is already the right
    * width by the time there is anything in it to see, and no resize is ever visible.
+   *
+   * Only the column's own reasons to change width run through here — a page of a different
+   * shape, a window of a different height, the magnifier. A window that changed *width* is
+   * not one of them: the source column keeps its pixels across that (see the panel's
+   * `groupResizeBehavior`) and the solutions column spends the difference, which is the
+   * only reading of a wider window that leaves the page exactly as readable as it was.
    */
   useLayoutEffect(() => {
-    if (!wide || focused !== null || fitWidth === null || chosenSplitRef.current) return
+    if (!wide || focused !== null) return
     const group = groupRef.current
     const total = groupElementRef.current?.clientWidth ?? 0
     if (!group || !total) return
-    const target = Math.round(Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, (fitWidth / total) * 100)))
-    if (Math.abs(shareOf(group.getLayout(), 'source') - target) < 1) return
-    appliedFitRef.current = target
-    group.setLayout({ source: target, solutions: 100 - target })
-  }, [fitWidth, focused, wide])
+
+    // Magnifying is an explicit request to make the document bigger, so it outranks a width
+    // the reader dragged earlier — and switching it off hands that width straight back.
+    // Unless they have since dragged *while* magnified, which is a choice about this view
+    // and would otherwise be undone by the next render.
+    const target = (magnified && !magnifyOverridden) || chosenWidth === 0 ? fitWidth : chosenWidth
+    if (target === null) return
+    const ceiling = magnified ? MAX_MAGNIFIED_SPLIT : MAX_SPLIT
+    const width = Math.min(Math.max(target, MIN_SOURCE_PX), (total * ceiling) / 100)
+    const share = Math.round((width / total) * 100)
+    if (Math.abs(shareOf(group.getLayout(), 'source') - share) < 1) return
+    group.setLayout({ source: share, solutions: 100 - share })
+  }, [chosenWidth, fitWidth, focused, magnified, magnifyOverridden, wide])
 
   const handleRegenerate = (problem: SolutionPart, correction: string) => {
     regenerate.mutate(
@@ -286,7 +343,12 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
         {/* The strip stands where the pane's title used to. A row of numbers says what it
             is more directly than the word "Solutions" did, and it says where you are. */}
         {tree.length > 1 ? (
-          <ProblemStrip problems={problems} activeId={activeId} onSelect={jumpTo} />
+          <ProblemStrip
+            problems={problems}
+            activeId={activeId}
+            onSelect={jumpTo}
+            onHover={setHoveredId}
+          />
         ) : (
           <span className="text-text-tertiary text-xs tracking-wide uppercase">Solutions</span>
         )}
@@ -356,9 +418,11 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
       documents={documents.data ?? []}
       anchor={anchor}
       regions={regions}
-      activeProblemId={activeId}
+      activeProblemId={shownId}
       onSelectProblem={jumpTo}
       onFitWidth={setFitWidth}
+      magnified={magnified}
+      onMagnifiedChange={setMagnified}
       focusToggle={
         wide ? (
           <FocusToggle
@@ -390,22 +454,31 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
             orientation="horizontal"
             groupRef={groupRef}
             elementRef={groupElementRef}
-            defaultLayout={{ source: split, solutions: 100 - split }}
+            defaultLayout={{ source: DEFAULT_SPLIT, solutions: 100 - DEFAULT_SPLIT }}
             // `onLayoutChanged` rather than `onLayoutChange`: the latter fires on every
             // pointer move, and this writes to localStorage.
-            onLayoutChanged={(layout) => {
-              const share = shareOf(layout, 'source')
-              // A fit this component applied is not a width the student asked for. Storing
-              // it would freeze the column at whatever suited the first document opened and
-              // stop every later one from being fitted at all.
-              if (appliedFitRef.current !== null && Math.abs(share - appliedFitRef.current) <= 1) {
-                return
-              }
-              chosenSplitRef.current = true
-              setSplit(share)
+            onLayoutChanged={(layout, meta) => {
+              // Only a drag is a choice. The library reports its own work under the same
+              // callback — the fit applied above, the recompute after a window resize — and
+              // storing that is exactly how the old key filled up with widths nobody picked.
+              if (!meta.isUserInteraction) return
+              const total = groupElementRef.current?.clientWidth ?? 0
+              if (!total) return
+              // Stops the fit from putting the magnified width straight back.
+              setMagnifyOverridden(true)
+              setChosenWidth(Math.round((shareOf(layout, 'source') / 100) * total))
             }}
           >
-            <ResizablePanel id="source" minSize="25" className="print:hidden">
+            {/* The document column is a width in pixels, and a window that grows or shrinks
+                horizontally is not a reason to change it: the page inside was already the
+                size it needed to be. The solutions column absorbs the whole difference,
+                which is where a wider window is worth something. */}
+            <ResizablePanel
+              id="source"
+              minSize={MIN_SOURCE_PX}
+              groupResizeBehavior="preserve-pixel-size"
+              className="print:hidden"
+            >
               {sourcePane}
             </ResizablePanel>
             <ResizableHandle withHandle className="print:hidden" />

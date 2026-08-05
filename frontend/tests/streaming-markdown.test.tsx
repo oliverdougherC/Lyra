@@ -92,6 +92,26 @@ describe('StreamingMarkdown', () => {
       expect(revealed[0].dataset.streamWord).toBe('equation-0')
     })
 
+    it('reveals a list item with its marker, which no text node carries', () => {
+      // The bullet is painted from `list-item`, so an untagged item stamps its marker down
+      // complete and the words then fall into place around it.
+      const { container } = render(<StreamingMarkdown content={'- one\n- two'} streaming />)
+      const items = Array.from(container.querySelectorAll<HTMLElement>('li[data-stream-word]'))
+      expect(items.map((item) => item.dataset.streamWord)).toEqual(['item-0', 'item-1'])
+      // Still a marker, and still its own words: the item is a unit, not a replacement for
+      // the split below it.
+      expect(items[0].querySelectorAll('span[data-stream-word]')).toHaveLength(1)
+    })
+
+    it('reveals a numbered item ahead of the words on its line', () => {
+      const { container } = render(<StreamingMarkdown content={'1. alpha beta'} streaming />)
+      const units = words(container)
+      const delayOf = (node: HTMLElement) =>
+        Number.parseFloat(node.style.getPropertyValue('--stream-word-delay'))
+      expect(units[0].tagName).toBe('LI')
+      expect(delayOf(units[0])).toBeLessThan(delayOf(units[1]))
+    })
+
     it('keys equations by order, not by source offset', () => {
       // A streamed answer only grows, so the third equation stays the third equation even as
       // its source offset moves while the fragment is closed and reopened.
