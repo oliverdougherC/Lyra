@@ -10,6 +10,7 @@ import sqlite3
 
 from backend.config import settings
 from backend.core.errors import NotFoundError
+from backend.rag import render
 
 UPDATABLE_FIELDS = frozenset({"name", "code", "semester", "archived"})
 
@@ -95,12 +96,17 @@ def update_class(
 
 
 def delete_class(conn: sqlite3.Connection, class_id: int) -> None:
-    """Delete a class, everything it owns, and its upload directory.
+    """Delete a class, everything it owns, and everything its documents left on disk.
 
     Raises:
         NotFoundError: when no class carries that id.
     """
     get_class(conn, class_id)
+    # Read before the rows cascade away, because the files below are named after them.
+    document_ids = [
+        int(row[0])
+        for row in conn.execute("select id from documents where class_id = ?", (class_id,))
+    ]
     # `chunk_embeddings` is a vec0 virtual table, and a virtual table receives no
     # foreign-key cascade. Its rows have to go explicitly, before the class row does.
     conn.execute("delete from chunk_embeddings where class_id = ?", (class_id,))
@@ -109,6 +115,14 @@ def delete_class(conn: sqlite3.Connection, class_id: int) -> None:
     conn.commit()
     # An upload directory that was never created is not an error worth surfacing.
     shutil.rmtree(settings.uploads_dir / str(class_id), ignore_errors=True)
+    # The uploads are only what the student handed over. Ingestion also writes the text it
+    # extracted, and the reader the pages it rendered, and neither lives under the directory
+    # above: deleting a class removed the files the student gave Lyra and left the text of
+    # every one of them sitting in `data/`. Deleting one document has always cleared both,
+    # and a class is every document in it.
+    for document_id in document_ids:
+        (settings.text_dir / f"{document_id}.txt").unlink(missing_ok=True)
+        render.discard_pages(document_id)
 
 
 def touch_class(conn: sqlite3.Connection, class_id: int) -> None:

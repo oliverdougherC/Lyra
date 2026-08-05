@@ -200,3 +200,36 @@ def test_delete_succeeds_without_an_upload_directory(client: TestClient) -> None
     assert not (settings.uploads_dir / str(class_id)).exists()
 
     assert client.delete(f"/api/classes/{class_id}").status_code == 204
+
+
+def test_delete_takes_the_extracted_text_and_rendered_pages_with_it(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """The uploads are only what the student handed over.
+
+    Ingestion writes the text it extracted and the reader writes the pages it rendered,
+    both outside the class's upload directory. Removing that directory alone left the text
+    of every document in the class on disk after the student deleted the class, which is
+    the one thing a local-first tool cannot get wrong.
+    """
+    class_id = client.post("/api/classes", json={"name": "Signals"}).json()["id"]
+    document_id = int(
+        db.execute(
+            "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
+            "values (?, 'hw4.pdf', '/x', 'application/pdf', 1, 'ready')",
+            (class_id,),
+        ).lastrowid
+        or 0
+    )
+    db.commit()
+    settings.text_dir.mkdir(parents=True, exist_ok=True)
+    text = settings.text_dir / f"{document_id}.txt"
+    text.write_text("the student's own course material", encoding="utf-8")
+    pages = settings.pages_dir / str(document_id)
+    pages.mkdir(parents=True, exist_ok=True)
+    (pages / "1.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    assert client.delete(f"/api/classes/{class_id}").status_code == 204
+
+    assert not text.exists()
+    assert not (pages / "1.png").exists()
