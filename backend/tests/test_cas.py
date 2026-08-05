@@ -107,14 +107,16 @@ def test_code_shaped_input_never_reaches_the_evaluator(attack: str) -> None:
     assert "double underscore" in result.error or "not mathematical notation" in result.error
 
 
-def test_unknown_names_become_symbols_rather_than_calls() -> None:
-    # `eval` and `chr` are not in the allowed namespace, so they parse as free symbols and
-    # multiply out. This is the behaviour that makes the empty `__builtins__` load-bearing:
-    # a name that is not on the list resolves to nothing callable.
+def test_unknown_names_resolve_to_symbols_that_compute_nothing() -> None:
+    # `eval` and `chr` are not in the allowed namespace, so they parse as an undefined
+    # function applied to another one: a SymPy expression tree that holds the names and
+    # evaluates neither. This is what the empty `__builtins__` buys, and it is unchanged by
+    # the parser no longer splitting names into letters. What matters is not the shape the
+    # expression takes but that nothing on this machine is reachable through it.
     result = cas.evaluate("eval(chr(105))")
 
     assert result.ok is True
-    assert result.value["simplified"] == "105*a*c*e*h*l*r*v"
+    assert result.value["simplified"] == "eval(chr(105))"
 
 
 def test_an_over_long_expression_is_refused_before_parsing() -> None:
@@ -212,3 +214,166 @@ def test_unit_input_is_gated_and_failures_explain_themselves(
 
     assert result.ok is False
     assert fragment in result.error
+
+
+# The notation of a continuous-signals course, which is what this tool is used on. Every
+# one of these came off a real solve where the check failed and the student was told their
+# work had not been checked. `u` and `delta` were the reported failure: with no unit step
+# and no impulse, nothing in a convolution or impulse-response problem can be settled.
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("u(t - tau)", "Heaviside(t - tau)"),
+        ("delta(t - 2)", "DiracDelta(t - 2)"),
+        ("step(t)", "Heaviside(t)"),
+        # Engineering writes the imaginary unit `j`, both applied and as a literal.
+        ("j*w", "I*w"),
+        ("4j*w", "4*I*w"),
+        # `abs` and `ln` are what a model types; SymPy calls them something else.
+        ("abs(t)", "Abs(t)"),
+        ("ln(E)", "1"),
+        # A subscripted symbol. This died on a bare NameError, because the transformation
+        # that produced it emitted a `Number` the namespace did not hold.
+        ("x1 + t0", "t0 + x1"),
+        # An undefined function, which is how every system property is written.
+        ("h(t)", "h(t)"),
+        ("x(t - t0)", "x(t - t0)"),
+        # `inf` unbound became a free symbol, so an improper integral came back plausible
+        # and wrong rather than refused.
+        ("limit(exp(-2*t), t, inf)", "0"),
+    ],
+)
+def test_the_notation_this_course_is_written_in_parses(expression: str, expected: str) -> None:
+    result = cas.evaluate(expression)
+
+    assert result.ok is True, result.error
+    assert result.value["simplified"] == expected
+
+
+def test_a_definite_integral_may_be_written_the_way_the_tool_takes_one() -> None:
+    """`integrate(f, t, a, b)` is the shape of `cas_integrate`, so it is what a model writes."""
+    flat = cas.evaluate("integrate(exp(-2*t), t, 0, oo)")
+    tupled = cas.evaluate("integrate(exp(-2*t), (t, 0, oo))")
+
+    assert flat.ok is True, flat.error
+    assert flat.value["simplified"] == "1/2"
+    assert tupled.value["simplified"] == "1/2"
+
+
+def test_an_expression_is_never_read_as_something_it_does_not_say() -> None:
+    """The rule the whole runner answers to: refuse, but never quietly answer differently.
+
+    Each of these parsed silently into something else. `abs(t)` became the product
+    `a*b*s*t` and `h(t)` became `h*t`, so a checker comparing an impulse response against
+    a claim was comparing two expressions that had nothing to do with either.
+    """
+    assert cas.evaluate("abs(t)").value["simplified"] == "Abs(t)"
+    assert cas.evaluate("h(t)").value["simplified"] == "h(t)"
+    assert cas.evaluate("foo(t)").value["simplified"] == "foo(t)"
+
+
+@pytest.mark.parametrize("expression", ["2x", "3(x + 1)", "sin(2t)"])
+def test_a_missing_multiplication_sign_is_refused_with_the_fix(expression: str) -> None:
+    """Refusing is the cost of the rule above, so the refusal has to be worth reading."""
+    result = cas.evaluate(expression)
+
+    assert result.ok is False
+    assert "write multiplication explicitly" in result.error
+
+
+def test_a_boolean_expression_says_what_to_do_instead() -> None:
+    result = cas.evaluate("-2 <= -1 and -1 <= 3")
+
+    assert result.ok is False
+    assert "`and`, `or` or `not`" in result.error
+    assert "compare_to" in result.error
+
+
+def test_an_unreducible_difference_is_reported_as_unsettled_not_as_disagreement() -> None:
+    """The verdict-level bug: `certain` used to be `not equal` restated.
+
+    SymPy declines this transform pair without assumptions on the parameter and leaves an
+    unevaluated integral behind. A difference that is not zero was read as proof of
+    inequality, so the tool asserted with certainty that correct work was wrong, and the
+    checker refuted it. `certain` false is what "we could not settle this" looks like, and
+    the tool description already told the model to read it that way.
+    """
+    result = cas.evaluate("2 * integrate(exp(-4*t)*cos(w*t), t, 0, oo)", "8 / (16 + w**2)")
+
+    assert result.ok is True, result.error
+    assert result.value["equal"] is False
+    assert result.value["certain"] is False
+    assert "not a disagreement" in result.value["note"]
+
+
+def test_a_real_difference_is_still_reported_with_certainty() -> None:
+    """Abstaining may not become the answer to everything, or the check stops checking."""
+    result = cas.evaluate("(a*x1 + b*x2)**2", "a*x1**2 + b*x2**2")
+
+    assert result.value["equal"] is False
+    assert result.value["certain"] is True
+    assert "note" not in result.value
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ["sin(x)**2 + cos(x)**2", "integrate(exp(-2*t), t, 0, oo) + 1/2", "(a + b)**2"],
+)
+def test_a_true_identity_is_equal_and_certain(expression: str) -> None:
+    comparisons = {
+        "sin(x)**2 + cos(x)**2": "1",
+        "integrate(exp(-2*t), t, 0, oo) + 1/2": "1",
+        "(a + b)**2": "a**2 + 2*a*b + b**2",
+    }
+    result = cas.evaluate(expression, comparisons[expression])
+
+    assert result.value["equal"] is True
+    assert result.value["certain"] is True
+
+
+def test_an_identity_that_only_holds_on_part_of_the_domain_is_not_called_certain() -> None:
+    """`sqrt(x**2)` is `x` for positive x and not otherwise, so neither answer is available."""
+    result = cas.evaluate("sqrt(x**2)", "x")
+
+    assert result.value["equal"] is False
+    assert result.value["certain"] is False
+
+
+@pytest.mark.parametrize("spelling", ["oo", "inf", "infty", "infinity", "Infinity"])
+def test_every_spelling_of_infinity_is_a_bound_and_not_a_symbol(spelling: str) -> None:
+    """An unbound spelling is not a failed parse, it is a wrong answer that looks right.
+
+    `inf` used to reach the evaluator as a free symbol, so this integral came back as
+    `1/4 - exp(-4*inf)/4` and reported success. The checker then made a verdict on it.
+    """
+    result = cas.integrate("exp(-4*t)", "t", "0", spelling)
+
+    assert result.ok is True, result.error
+    assert result.value["result"] == "1/4"
+
+
+def test_a_declared_variable_outranks_a_name_this_module_binds() -> None:
+    """`u` is the unit step until the caller says `u` is what it is integrating over.
+
+    Both readings were in play at once: the integrand parsed `u` as the step while the
+    variable was the symbol `u`, so the integral answered neither question and said so
+    with an `ok`.
+    """
+    assert cas.integrate("exp(u)", "u").value["result"] == "exp(u)"
+    assert cas.differentiate("u**2", "u").value["result"] == "2*u"
+    assert cas.solve(["u**2 - 4 = 0"], ["u"]).value["solutions"] == [{"u": "-2"}, {"u": "2"}]
+    # And with any other variable, `u` is the step again.
+    assert cas.integrate("u(t - 1)*exp(-t)", "t", "0", "oo").value["result"] == "exp(-1)"
+
+
+def test_the_imaginary_unit_is_the_imaginary_unit_however_it_is_written() -> None:
+    """`j` reaching the evaluator as a free symbol refuted correct work with certainty.
+
+    Twelve comparisons in a single real solve set were reported `equal: false,
+    certain: true` for no reason other than this, each of them a true identity.
+    """
+    result = cas.evaluate("j * (-j / (2 + j*w)**2)", "1/(2 + j*w)**2")
+
+    assert result.value["equal"] is True
+    assert result.value["certain"] is True
+    assert cas.evaluate("(2 + j)*(1 - 3*j)", "5 - 5*j").value["equal"] is True

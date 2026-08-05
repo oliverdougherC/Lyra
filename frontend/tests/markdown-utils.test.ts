@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { normalizeMarkdownForRender, repairUndelimitedMath } from '@/components/chat/markdown-utils'
+import {
+  normalizeMarkdownForRender,
+  repairLabelMath,
+  repairUndelimitedMath,
+} from '@/components/chat/markdown-utils'
 
 /**
  * Contracts from docs/ui-phase-1.md: display math sits on its own blank-line-separated rows,
@@ -123,6 +127,25 @@ describe('normalizeMarkdownForRender', () => {
     it('always treats double dollars as display', () => {
       expect(normalizeMarkdownForRender('$$x$$')).toBe('$$\nx\n$$\n\n')
     })
+
+    it('promotes an equation the sentence ends on', () => {
+      const long = 'a'.repeat(33)
+      expect(normalizeMarkdownForRender(`Therefore $${long}$.`)).toBe(
+        `Therefore \n\n$$\n${long}\\text{.}\n$$\n\n`,
+      )
+    })
+
+    it('leaves an equation inline when the sentence carries on past it', () => {
+      const long = 'a'.repeat(33)
+      const source = `(a) $${long}$; (b) $x$`
+      expect(normalizeMarkdownForRender(source)).toBe(source)
+    })
+
+    it('leaves the last of a run of equations inline with its siblings', () => {
+      const long = 'a'.repeat(33)
+      const source = `(a) $x$; (b) $${long}$.`
+      expect(normalizeMarkdownForRender(source)).toBe(source)
+    })
   })
 
   describe('display environments', () => {
@@ -232,5 +255,58 @@ describe('repairUndelimitedMath', () => {
     const source = 'Both parts converge.\n(a) x = \\frac{1}{2}'
 
     expect(repairUndelimitedMath(source)).toBe('Both parts converge.\n(a) $x = \\frac{1}{2}$')
+  })
+})
+
+/**
+ * A step title is prose with mathematics in it, which is neither of the two things
+ * `repairUndelimitedMath` handles. Wrapping the whole line typesets the words; wrapping
+ * nothing prints the LaTeX source at the top of a step whose body renders properly.
+ */
+describe('repairLabelMath', () => {
+  it('wraps the mathematics and leaves the words alone', () => {
+    expect(repairLabelMath('Part (a) Convolution of u(t) and e^{-t}u(t)')).toBe(
+      'Part (a) Convolution of $u(t)$ and $e^{-t}u(t)$',
+    )
+  })
+
+  it('keeps an enumeration label out of the mathematics', () => {
+    // `(a)` is a bracket with no function in front of it. Typeset, it would become an
+    // italic variable in the middle of a heading.
+    expect(repairLabelMath('Part (c) Convolution of u(t-1) and u(t)')).toBe(
+      'Part (c) Convolution of $u(t-1)$ and $u(t)$',
+    )
+  })
+
+  it('carries an operator that joins two expressions into one span', () => {
+    expect(repairLabelMath('Properties of h(t) = e^{t}u(-t)')).toBe(
+      'Properties of $h(t) = e^{t}u(-t)$',
+    )
+  })
+
+  it('leaves a label that delimited its own mathematics untouched', () => {
+    const already = 'Determine $h(t)$ for system (a)'
+
+    expect(repairLabelMath(already)).toBe(already)
+  })
+
+  it.each([
+    'Answer',
+    'Set up the convolution integral.',
+    'Linearity and Time-Invariance',
+    'Step 1: apply the sifting property.',
+  ])('leaves prose with no mathematics in it exactly as it was: %s', (label) => {
+    expect(repairLabelMath(label)).toBe(label)
+  })
+
+  it('leaves the sentence its closing punctuation', () => {
+    expect(repairLabelMath('Compute X(jw) for the signal.')).toBe('Compute $X(jw)$ for the signal.')
+    expect(repairLabelMath('Evaluate u(t).')).toBe('Evaluate $u(t)$.')
+  })
+
+  it('wraps a LaTeX command it finds undelimited', () => {
+    expect(repairLabelMath('Part (d) Convolution of \\delta(t-2) and e^{-t}u(t)')).toBe(
+      'Part (d) Convolution of $\\delta(t-2)$ and $e^{-t}u(t)$',
+    )
   })
 })

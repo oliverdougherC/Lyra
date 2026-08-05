@@ -27,14 +27,29 @@ describe('VerdictBadge', () => {
     expect(screen.getByText(label)).toBeInTheDocument()
   })
 
-  it('never renders a non-check as agreement', () => {
+  it('never renders a non-check as a check', () => {
     // `Not checked` is a complete sentence. Softening it to `Looks right`, or dropping the
-    // badge entirely, would leave the student believing a check happened.
+    // badge entirely, would leave the student believing a check happened. `Nothing to
+    // check` reads as fine — nothing went wrong — but it still may not claim the word.
     for (const verdict of ['unchecked', 'uncheckable'] as const) {
       const { unmount } = render(<VerdictBadge verdict={verdict} />)
       expect(screen.queryByText(VERDICTS.verified.label)).not.toBeInTheDocument()
       unmount()
     }
+  })
+
+  it('says no calculation was run before saying anything went well', () => {
+    // The sentence that reconciles a green badge reading `Nothing to check` with a checker
+    // that wrote a paragraph about why every step is correct. Without it the two contradict
+    // each other on screen and the student has no way to tell which to believe.
+    expect(VERDICTS.uncheckable.explanation).toMatch(/^Nothing here could be settled/)
+  })
+
+  it('keeps a job left undone looking undone', () => {
+    // `unchecked` is the one state where something was owed and did not arrive, so it is
+    // the one state that must not read as fine.
+    expect(VERDICTS.unchecked.className).not.toContain('success')
+    expect(VERDICTS.uncheckable.className).toContain('success')
   })
 
   it('prefers the backend reason over the generic one', () => {

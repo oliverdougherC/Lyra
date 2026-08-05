@@ -65,6 +65,9 @@ logger = logging.getLogger("lyra.solver")
 
 NO_SOURCES = "The documents this solution set was built from are no longer there."
 NO_PROBLEMS = "There are no problems to solve. Add one at the review step first."
+NOT_A_UNIT = (
+    "This part is solved as part of its problem, so the whole problem has to be solved again."
+)
 INTERRUPTED_MESSAGE = "Interrupted, please retry"
 _DEFAULT_FAILURE = "Something went wrong while reading this problem set."
 _SOLVE_FAILURE = "Something went wrong while solving this problem set."
@@ -237,8 +240,10 @@ def write_problems(
 
     A sub-part is stored as a `problem` under a `problem`, not as a `step`. It is
     something to be solved, which is what a problem is; a step is a line of the solution.
-    Solving works on top-level problems, so a problem and its sub-parts are solved
-    together, which is also what the model wants: the parts share context.
+
+    Whether a problem's sub-parts are then solved with it or one at a time is
+    `solve_parts`, written here and read by `_solve_units`. Both readings put the same
+    rows in the same shape; what changes is where the steps and the answer hang.
 
     Returns:
         The ids of the top-level problem parts, in order.
@@ -253,6 +258,11 @@ def write_problems(
             label=problem.label,
             content=problem.statement,
             origin=problem.origin,
+            solve_parts=(
+                artifacts.SEPARATELY
+                if problem.separate_parts and problem.parts
+                else artifacts.TOGETHER
+            ),
         )
         # A problem the student typed in at the gate belongs to no file, so it gets no
         # provenance rather than a row pointing at document zero. `document_id or None`
@@ -285,6 +295,93 @@ def write_problems(
             )
         written.append(part_id)
     return written
+
+
+@dataclass(frozen=True)
+class _Unit:
+    """One thing to solve: a problem, or one part of a problem that splits.
+
+    Attributes:
+        part: The row the steps, the answer, and the verdict hang off. For a split
+            problem this is the sub-part, not the problem above it.
+        parent: The problem the part sits under, or None when the unit *is* the problem.
+            Carried because the part's statement means nothing without the stem above it,
+            and because the parent's status is settled once its last part is done.
+    """
+
+    part: dict[str, object]
+    parent: dict[str, object] | None = None
+
+    @property
+    def id(self) -> int:
+        return int(self.part["id"])
+
+    @property
+    def label(self) -> str:
+        """What to call this unit, in the sheet's own words.
+
+        A part's own label is `(b)`, which says nothing on its own -- in the progress
+        line, in a failure message, or as the heading the model is asked to solve under.
+        Under its problem it becomes `Properties of LTI Systems (b)`, which is what the
+        student would call it if you asked them.
+        """
+        own = str(self.part["label"] or "")
+        if self.parent is None:
+            return own or "This problem"
+        above = str(self.parent["label"] or "")
+        return f"{above} {own}".strip() or "This problem"
+
+    @property
+    def preamble(self) -> str:
+        """The stem this part sits under. Empty when the unit is a whole problem."""
+        return "" if self.parent is None else str(self.parent["content"])
+
+
+def _solve_units(conn: sqlite3.Connection, artifact_id: int) -> list[_Unit]:
+    """Everything this run has to solve, in document order.
+
+    A problem whose parts are one solution is one unit and its parts are context, which
+    is what solving has always done. A problem whose parts are separate questions is one
+    unit *per part*: each gets its own retrieval, its own turn, its own answer, and its
+    own checked verdict, because each of those things was per-question all along and only
+    ever had one place to go.
+
+    A problem marked `separately` that has no parts left -- the student deleted them at
+    the gate -- is solved as itself. The marking describes parts; with none, there is
+    nothing it can mean.
+    """
+    units: list[_Unit] = []
+    for problem in _top_level_problems(conn, artifact_id):
+        parts = [
+            child
+            for child in artifacts.list_child_parts(conn, int(problem["id"]))
+            if child["kind"] == artifacts.PROBLEM
+        ]
+        if problem["solve_parts"] == artifacts.SEPARATELY and parts:
+            units.extend(_Unit(part=part, parent=problem) for part in parts)
+        else:
+            units.append(_Unit(part=problem))
+    return units
+
+
+def _unit_for(conn: sqlite3.Connection, part_id: int) -> _Unit:
+    """Rebuild one unit from the part it hangs its work off.
+
+    What the whole run knows from `_solve_units`, a re-solve of one part has to work out
+    from the part alone: whether this is a problem, or one part of a problem that splits.
+    Read the same way both times -- from `solve_parts` on the row above -- so a re-solve
+    asks the model exactly what the first pass asked it.
+    """
+    part = artifacts.get_part(conn, part_id)
+    parent_id = part["parent_part_id"]
+    if parent_id is None:
+        return _Unit(part=part)
+    parent = artifacts.get_part(conn, int(parent_id))
+    if parent["solve_parts"] != artifacts.SEPARATELY:
+        # A sub-part of a problem solved as a whole is not a unit at all. The API refuses
+        # to target one, and this is the same refusal a step further down.
+        raise LyraError(NOT_A_UNIT)
+    return _Unit(part=part, parent=parent)
 
 
 def run_solve(artifact_id: int) -> None:
@@ -323,28 +420,29 @@ def _solve(conn: sqlite3.Connection, artifact_id: int) -> None:
         raise LyraError(BLOCKED_MESSAGES.get(blocked, BLOCKED_MESSAGES[NO_ENDPOINT]))
     config = resolve_tutor_config(conn)
 
-    problems = _top_level_problems(conn, artifact_id)
-    if not problems:
+    # Units, not problems: a section of five independent questions is five things to
+    # solve and the progress line should say so. Counting sections instead reported a
+    # sheet as a fifth done when it was a fifth of the way through its first section.
+    units = _solve_units(conn, artifact_id)
+    if not units:
         raise LyraError(NO_PROBLEMS)
 
     artifacts.set_artifact_state(conn, artifact_id, artifacts.SOLVING)
-    artifacts.set_problems_total(conn, artifact_id, len(problems))
+    artifacts.set_problems_total(conn, artifact_id, len(units))
     # A resumed run already holds finished problems. Counting from zero would report work
     # as undone that the student can read on screen right now.
-    done = sum(1 for problem in problems if problem["status"] == artifacts.PART_COMPLETE)
+    done = sum(1 for unit in units if unit.part["status"] == artifacts.PART_COMPLETE)
     artifacts.set_problems_done(conn, artifact_id, done)
 
-    for problem in problems:
+    for unit in units:
         if _current_state(conn, artifact_id) == artifacts.CANCELLED:
             logger.info("Solve of artifact %s stopped: cancelled", artifact_id)
             return
-        if problem["status"] == artifacts.PART_COMPLETE:
+        if unit.part["status"] == artifacts.PART_COMPLETE:
             continue
-        part_id = int(problem["id"])
-        artifacts.set_artifact_state(
-            conn, artifact_id, artifacts.SOLVING, stage_detail=str(problem["label"] or "")
-        )
-        _solve_one(conn, artifact_id, class_id, config, part_id)
+        artifacts.set_artifact_state(conn, artifact_id, artifacts.SOLVING, stage_detail=unit.label)
+        _solve_one(conn, artifact_id, class_id, config, unit)
+        _settle_parent(conn, unit)
         artifacts.increment_problems_done(conn, artifact_id)
 
     if _current_state(conn, artifact_id) == artifacts.CANCELLED:
@@ -357,19 +455,20 @@ def _solve_one(
     artifact_id: int,
     class_id: int,
     config: TutorConfig,
-    part_id: int,
+    unit: _Unit,
     correction: str = "",
 ) -> None:
-    """Solve one problem and check it, recording a failure on the problem itself.
+    """Solve one unit and check it, recording a failure on the unit itself.
 
     A problem that cannot be solved carries its own error and its own `failed` status. The
     artifact keeps going: a set with one gap in it is worth more than a set that stopped.
+    On a split problem that is per part, so one part that failed leaves the other four
+    readable and one part marked wrong sends one part back to the model.
     """
-    problem = artifacts.get_part(conn, part_id)
-    label = str(problem["label"] or "This problem")
+    part_id = unit.id
     try:
         artifacts.set_part_status(conn, part_id, artifacts.PART_SOLVING)
-        solved, provenance = _generate(conn, artifact_id, class_id, config, problem, correction)
+        solved, provenance = _generate(conn, artifact_id, class_id, config, unit, correction)
         origin = artifacts.REGENERATED if correction else artifacts.GENERATED
         _write_solution(
             conn, artifact_id, part_id, solved, provenance, origin, note=correction or None
@@ -382,8 +481,31 @@ def _solve_one(
         artifacts.set_part_verdict(conn, part_id, artifacts.UNCHECKED, _NOT_SOLVED_DETAIL)
         return
 
-    _check(conn, artifact_id, class_id, config, part_id, label, solved)
+    _check(conn, artifact_id, class_id, config, unit, solved)
     artifacts.set_part_status(conn, part_id, artifacts.PART_COMPLETE)
+
+
+def _settle_parent(conn: sqlite3.Connection, unit: _Unit) -> None:
+    """Mark a split problem finished once its last part is.
+
+    The problem above a set of separately solved parts is never solved itself, so nothing
+    would ever move it off `pending` and the interface would show a section that looks
+    like it is still queued while every question inside it is answered. It is complete
+    when none of its parts is still waiting; a part that failed is a failure the student
+    can see on that part, not a section that never finished.
+    """
+    if unit.parent is None:
+        return
+    parent_id = int(unit.parent["id"])
+    unsettled = {artifacts.PART_PENDING, artifacts.PART_SOLVING, artifacts.PART_VERIFYING}
+    parts = [
+        child
+        for child in artifacts.list_child_parts(conn, parent_id)
+        if child["kind"] == artifacts.PROBLEM
+    ]
+    if any(child["status"] in unsettled for child in parts):
+        return
+    artifacts.set_part_status(conn, parent_id, artifacts.PART_COMPLETE)
 
 
 def _generate(
@@ -391,10 +513,10 @@ def _generate(
     artifact_id: int,
     class_id: int,
     config: TutorConfig,
-    problem: dict[str, object],
+    unit: _Unit,
     correction: str,
 ) -> tuple[SolvedProblem, list[list[ProvenanceEntry]]]:
-    """Gather this problem's evidence, ask the model, and read the reply.
+    """Gather this unit's evidence, ask the model, and read the reply.
 
     Returns:
         The solution, and one provenance list per step in the same order. The provenance
@@ -405,25 +527,29 @@ def _generate(
         LyraError: The reply held nothing usable at all. Every softer failure, including
             a model that ignored the structure entirely, is handled by the parser.
     """
-    statement = str(problem["content"])
-    sub_parts = tuple(
-        (str(child["label"] or ""), str(child["content"]))
-        for child in artifacts.list_child_parts(conn, int(problem["id"]))
-        if child["kind"] == artifacts.PROBLEM
+    # A unit that is one part of a split problem answers for itself alone, so it carries
+    # no sub-parts: the only rows under it are its own steps, and the parts beside it are
+    # other units with their own turns.
+    sub_parts = (
+        ()
+        if unit.parent is not None
+        else tuple(
+            (str(child["label"] or ""), str(child["content"]))
+            for child in artifacts.list_child_parts(conn, unit.id)
+            if child["kind"] == artifacts.PROBLEM
+        )
+    )
+    problem = SolveInput(
+        statement=str(unit.part["content"]),
+        label=unit.label,
+        preamble=unit.preamble,
+        sub_parts=sub_parts,
+        correction=correction,
     )
     retrieval_budget, reference_budget = solving.plan_budgets(config)
-    retrieval = solving.retrieve_for(conn, class_id, statement, retrieval_budget)
+    retrieval = solving.retrieve_for(conn, class_id, problem.query(), retrieval_budget)
     references = solving.reference_documents(conn, artifact_id, reference_budget)
-    messages = solving.build_prompt(
-        SolveInput(
-            statement=statement,
-            label=str(problem["label"] or "Problem"),
-            sub_parts=sub_parts,
-            correction=correction,
-        ),
-        retrieval,
-        references,
-    )
+    messages = solving.build_prompt(problem, retrieval, references)
 
     # The worker is a plain thread with no event loop, and `complete` is async. Owning a
     # loop for the length of the call keeps this function synchronous.
@@ -581,15 +707,20 @@ def _check(
     artifact_id: int,
     class_id: int,
     config: TutorConfig,
-    part_id: int,
-    label: str,
+    unit: _Unit,
     solved: SolvedProblem,
 ) -> None:
     """Check a finished solution, re-deriving once if a check disagrees.
 
     Exactly once. A problem re-run until it passes is a problem nobody checked, so a
     second refutation is recorded as the verdict rather than triggering a third attempt.
+
+    The checker is given the stem as well as the part, because one part of a split problem
+    states a case and not a question: "is $y(t) = x^2(t)$ correct" is not something anyone
+    can check, and "is it linear and time-invariant" is.
     """
+    part_id = unit.id
+    label = unit.label
     if not _tool_support(conn, config):
         artifacts.record_checks(conn, part_id, [])
         artifacts.set_part_verdict(
@@ -597,8 +728,9 @@ def _check(
         )
         return
 
-    problem = artifacts.get_part(conn, part_id)
-    statement = str(problem["content"])
+    statement = solving.SolveInput(
+        statement=str(unit.part["content"]), label=label, preamble=unit.preamble
+    ).query()
     artifacts.set_part_status(conn, part_id, artifacts.PART_VERIFYING)
     outcome = verification.verify(config, statement, label, solved.as_markdown())
 
@@ -606,7 +738,7 @@ def _check(
         logger.info("Check disagreed with part %s, re-deriving once", part_id)
         try:
             redone, provenance = _generate(
-                conn, artifact_id, class_id, config, problem, outcome.detail
+                conn, artifact_id, class_id, config, unit, outcome.detail
             )
             _write_solution(
                 conn,
@@ -668,9 +800,11 @@ def run_regeneration(artifact_id: int, part_id: int, correction: str = "") -> No
         if blocked is not None:
             raise LyraError(BLOCKED_MESSAGES.get(blocked, BLOCKED_MESSAGES[NO_ENDPOINT]))
         config = resolve_tutor_config(conn)
+        unit = _unit_for(conn, part_id)
         _solve_one(
-            conn, artifact_id, int(artifact["class_id"]), config, part_id, correction=correction
+            conn, artifact_id, int(artifact["class_id"]), config, unit, correction=correction
         )
+        _settle_parent(conn, unit)
     except Exception as exc:
         logger.exception("Could not regenerate part %s", part_id)
         try:

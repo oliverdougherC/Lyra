@@ -30,6 +30,13 @@ Rect = tuple[float, float, float, float]
 # not be on the page verbatim.
 _MARKER = re.compile(r"^\s*((?:problem|exercise|question|q|p)?\s*\.?\s*\d+[a-z]?)", re.IGNORECASE)
 
+# One trailing parenthetical, which a model adds to say what a problem is about.
+_TRAILING_PARENTHETICAL = re.compile(r"\s*\([^()]*\)\s*$")
+
+# The shortest free text worth searching a page for. Below this a label is not specific
+# enough to be sure the first hit is the heading rather than a word inside a sentence.
+_MIN_TEXT_MARKER = 8
+
 
 def _marker_of(label: str) -> str | None:
     """The searchable part of a problem label, or None when there is nothing to search."""
@@ -38,6 +45,40 @@ def _marker_of(label: str) -> str | None:
         return None
     marker = " ".join(match.group(1).split())
     return marker or None
+
+
+def _searches_for(label: str) -> list[str]:
+    """What to look for on the page, most specific first.
+
+    A numbered sheet is searched by its marker, which is precise and short. A sheet whose
+    problems are *named* rather than numbered has no marker at all, and until this existed
+    it got no position and nothing on its page image to click: `Linearity and Time-Invariance`
+    matches nothing in a pattern that requires a digit. For those the label is the heading,
+    written on the page exactly as segmentation recorded it, so the label itself is the
+    thing to search for.
+
+    The title is tried after the marker rather than instead of it, so a numbered sheet keeps
+    the precise short match it already had and only falls through when that misses.
+    """
+    cleaned = " ".join(label.split())
+    if not cleaned:
+        return []
+
+    searches: list[str] = []
+    marker = _marker_of(cleaned)
+    if marker:
+        searches.append(marker)
+        # A sheet that writes "Problem 3" matches the first; one that writes "3." only
+        # matches this. The bare number is never searched on its own, because "3" appears
+        # in every equation on the page and the first hit would be one of those.
+        if " " in marker:
+            searches.append(marker.split()[-1] + ".")
+
+    # The label as written, then without the parenthetical gloss a model tends to append.
+    for candidate in (cleaned, _TRAILING_PARENTHETICAL.sub("", cleaned)):
+        if len(candidate) >= _MIN_TEXT_MARKER and candidate not in searches:
+            searches.append(candidate)
+    return searches
 
 
 def find_label(path: Path, page_number: int, label: str) -> Rect | None:
@@ -53,8 +94,8 @@ def find_label(path: Path, page_number: int, label: str) -> Rect | None:
         not be found. Never raises: a source page that cannot be searched costs a
         convenience, and losing the solution over it would be absurd.
     """
-    marker = _marker_of(label)
-    if marker is None:
+    searches = _searches_for(label)
+    if not searches:
         return None
 
     try:
@@ -65,13 +106,11 @@ def find_label(path: Path, page_number: int, label: str) -> Rect | None:
             box = page.rect
             if not box.width or not box.height:
                 return None
-            # Tried whole first, then without the word: a sheet that writes "Problem 3"
-            # matches the first, and one that writes "3." only matches the second. The
-            # bare number is not searched on its own, because "3" appears in every
-            # equation on the page and the first hit would be one of those.
-            hits = page.search_for(marker)
-            if not hits and " " in marker:
-                hits = page.search_for(marker.split()[-1] + ".")
+            hits: list[pymupdf.Rect] = []
+            for search in searches:
+                hits = page.search_for(search)
+                if hits:
+                    break
             if not hits:
                 return None
             # The topmost hit. A marker repeated further down the page is a reference back

@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError } from '@/lib/api'
 import { formatCount } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import { useClasses } from '@/lib/hooks/use-classes'
 import {
   solutionKeys,
@@ -178,9 +179,14 @@ export default function SolutionWorkspacePage() {
   return (
     <div
       className={
-        workspace || state === 'solving'
-          ? 'flex min-h-0 w-full flex-1 flex-col gap-3'
-          : 'mx-auto flex w-full max-w-[860px] flex-col gap-6'
+        workspace
+          ? // No gap: what stacks here is the progress band and the workbench, and they
+            // are meant to meet on a rule the way the panes below them do. Anything else
+            // that can stand here carries its own padding.
+            'flex min-h-0 w-full flex-1 flex-col'
+          : state === 'solving'
+            ? 'flex min-h-0 w-full flex-1 flex-col gap-3'
+            : 'mx-auto flex w-full max-w-[860px] flex-col gap-6'
       }
     >
       {/* The title and Delete used to own a 48px row of their own above the panes. On a
@@ -212,20 +218,27 @@ export default function SolutionWorkspacePage() {
       ) : null}
 
       {state === 'awaiting_review' ? (
-        <SegmentationReview
-          solution={artifact}
-          onResegment={() => resegment.mutate()}
-          resegmenting={resegment.isPending}
-          onSolve={handleStart}
-          solving={start.isPending}
-        />
+        // Padded here rather than by the column, which no longer spaces its children: a
+        // set sent back to the review gate after part of it was solved stands above a
+        // workbench that is already up, and only the progress band wants to touch it.
+        <div className={cn('flex flex-col', workspace && 'shrink-0 p-4')}>
+          <SegmentationReview
+            solution={artifact}
+            onResegment={() => resegment.mutate()}
+            resegmenting={resegment.isPending}
+            onSolve={handleStart}
+            solving={start.isPending}
+          />
+        </div>
       ) : null}
 
       {state === 'solving' ? (
         // The strip, not the centered block: results land underneath it as they complete,
-        // and the reader can be reading problem 1 while problem 7 is still running.
+        // and the reader can be reading problem 1 while problem 7 is still running. And
+        // once they have — once the workbench is up — a bar rather than a card, so the run
+        // reports itself in the chrome instead of on top of the work.
         <SolveProgress
-          variant="strip"
+          variant={workspace ? 'band' : 'strip'}
           state={state}
           problemsTotal={problemsTotal}
           problemsDone={problemsDone}
@@ -236,7 +249,7 @@ export default function SolutionWorkspacePage() {
       ) : null}
 
       {state === 'failed' ? (
-        <div className="flex flex-col gap-4">
+        <div className={cn('flex flex-col gap-4', workspace && 'shrink-0 p-4')}>
           <Alert variant="destructive">
             <AlertTitle>{failureHeading(artifact)}</AlertTitle>
             <AlertDescription>
@@ -259,7 +272,7 @@ export default function SolutionWorkspacePage() {
       ) : null}
 
       {state === 'cancelled' ? (
-        <div className="flex flex-col gap-4">
+        <div className={cn('flex flex-col gap-4', workspace && 'shrink-0 p-4')}>
           {/* Stopping is not a failure and is not styled as one. */}
           <Alert>
             <AlertTitle>

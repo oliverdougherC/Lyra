@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { LyraMark } from '@/components/chat/lyra-mark'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
+import { cn } from '@/lib/utils'
 import type { SolutionState } from '@/types'
 
 /**
@@ -30,8 +31,12 @@ type SolveProgressProps = {
   /**
    * `block` centers this in the workbench, for a wait with nothing to read yet. `strip`
    * puts it above results that are already landing, which is what solving looks like.
+   * `band` is that same row once the workbench itself is on screen: a rule-bottomed bar
+   * across the window rather than a card, because by then it is one of the bars the
+   * workspace is already made of and a card floating over two panes reads as a dialog
+   * that forgot to open.
    */
-  variant?: 'block' | 'strip'
+  variant?: 'block' | 'strip' | 'band'
 }
 
 /**
@@ -62,9 +67,20 @@ export function SolveProgress({
       ? `Solving problem ${Math.min(problemsDone + 1, problemsTotal)} of ${problemsTotal}`
       : label
 
-  if (variant === 'strip') {
+  if (variant === 'strip' || variant === 'band') {
     return (
-      <div className="border-border bg-card flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3 print:hidden">
+      <div
+        className={cn(
+          'flex flex-wrap items-center gap-3 print:hidden',
+          variant === 'band'
+            ? // The same measurements as the panes' own headers below it — the rule, the
+              // px-4 — so the three read as one piece of chrome rather than as a notice
+              // resting on top of one. No card surface and no radius: nothing here is a
+              // separate object, and the row leaves without a trace when the run ends.
+              'border-border shrink-0 border-b px-4 py-2'
+            : 'border-border bg-card rounded-lg border px-4 py-3',
+        )}
+      >
         <span className="text-accent-primary size-5 shrink-0">
           <LyraMark thinking />
         </span>

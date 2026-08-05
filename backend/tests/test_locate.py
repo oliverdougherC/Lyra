@@ -27,6 +27,19 @@ def _sheet(path: Path) -> Path:
     return path
 
 
+def _named_sheet(path: Path) -> Path:
+    """A sheet whose problems are titled rather than numbered, which many are."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 100), "Linearity and Time-Invariance", fontsize=11)
+    page.insert_text((72, 300), "Properties of LTI Systems", fontsize=11)
+    page.insert_text((72, 500), "Continuous-Time Graphical Convolution", fontsize=11)
+    document.save(path)
+    document.close()
+    return path
+
+
 def test_a_named_marker_is_found_where_it_sits(tmp_path: Path) -> None:
     sheet = _sheet(tmp_path / "homework.pdf")
 
@@ -56,11 +69,42 @@ def test_a_marker_that_is_not_on_the_page_is_not_invented(tmp_path: Path) -> Non
     assert find_label(sheet, 2, "Problem 9 (Nowhere)") is None
 
 
-def test_a_label_with_no_number_is_not_searched_for(tmp_path: Path) -> None:
-    # Searching for a bare word would hit the first paragraph that happens to use it.
+def test_a_sheet_titled_rather_than_numbered_is_still_found(tmp_path: Path) -> None:
+    """The labels here carry no digit anywhere, so a pattern needing one found nothing.
+
+    A whole homework set came out with no position for any of its problems, so its page
+    image had no bands and nothing to click, because the marker rule required a number and
+    "Linearity and Time-Invariance" has none. The title is the heading on these sheets, so
+    the title is what to search for.
+    """
+    sheet = _named_sheet(tmp_path / "named.pdf")
+
+    first = find_label(sheet, 1, "Linearity and Time-Invariance")
+    second = find_label(sheet, 1, "Properties of LTI Systems")
+    third = find_label(sheet, 1, "Continuous-Time Graphical Convolution")
+
+    assert first is not None and second is not None and third is not None
+    assert first[1] < second[1] < third[1]
+
+
+def test_a_label_too_short_to_be_sure_of_is_not_searched_for(tmp_path: Path) -> None:
+    # Free text is only searched when it is long enough that the first hit is the heading
+    # rather than a word inside a sentence.
     sheet = _sheet(tmp_path / "homework.pdf")
 
-    assert find_label(sheet, 1, "Convolution") is None
+    assert find_label(sheet, 2, "Conv") is None
+
+
+def test_a_numbered_sheet_still_matches_on_its_marker(tmp_path: Path) -> None:
+    """The title is tried after the marker, never instead of it.
+
+    Here the sheet writes "Problem 1 (Time Shift)" and segmentation recorded a different
+    gloss. The marker still matches, which is the precise short match that was already
+    working and must not be traded away for the fallback.
+    """
+    sheet = _sheet(tmp_path / "homework.pdf")
+
+    assert find_label(sheet, 1, "Problem 1 (Something Else Entirely)") is not None
 
 
 def test_a_missing_file_costs_the_position_and_nothing_else(tmp_path: Path) -> None:

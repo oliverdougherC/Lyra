@@ -41,7 +41,7 @@ NOT_RUNNING_MESSAGE = "This solution set is not running."
 ALREADY_RUNNING_MESSAGE = "This solution set is already running."
 NO_PROBLEMS_MESSAGE = "There are no problems to solve. Add one first."
 NOT_THIS_SET_MESSAGE = "That part does not belong to this solution set."
-NOT_A_PROBLEM_MESSAGE = "Only a whole problem can be solved again."
+NOT_A_PROBLEM_MESSAGE = "Only a problem, or a part solved on its own, can be solved again."
 TOO_MANY_PROBLEMS = f"A solution set can hold at most {MAX_PROBLEMS} problems."
 DEFAULT_TITLE = "Solution set"
 EDITED_SINCE_CHECK = "This was edited after it was checked, so the earlier check no longer applies."
@@ -74,6 +74,20 @@ class SolutionCreate(BaseModel):
     title: str | None = None
 
 
+class SolutionRename(BaseModel):
+    """Body of `PATCH /api/solutions/{artifact_id}`."""
+
+    title: str = Field(min_length=1)
+
+    @field_validator("title")
+    @classmethod
+    def _check_title(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("A solution set name cannot be blank.")
+        return cleaned
+
+
 class PartUpdate(BaseModel):
     """One sub-part in a corrected problem list."""
 
@@ -88,12 +102,17 @@ class ProblemUpdate(BaseModel):
     edited problem keep the page and chunks it was found in. Merge and split produce
     entries with no id, which is correct: a problem assembled from two others did not come
     from either one alone.
+
+    `separate_parts` is the student's reading of how the sub-parts relate, which is the
+    one field here Lyra proposes and they confirm rather than the other way round. It is
+    ignored for a problem with no parts.
     """
 
     id: int | None = None
     label: str | None = None
     statement: str = Field(min_length=1)
     parts: list[PartUpdate] = Field(default_factory=list)
+    separate_parts: bool = False
 
     @field_validator("statement")
     @classmethod
@@ -201,6 +220,10 @@ class PartRead(BaseModel):
     origin: str
     verdict: str
     verdict_detail: str | None
+    # `separately` on a problem means its sub-parts each carry their own steps, answer,
+    # and verdict, and the problem itself carries none. Always `together` on a step, an
+    # answer, and on a sub-part, none of which have parts of their own.
+    solve_parts: str
     error_message: str | None
     provenance: list[ProvenanceRead]
     checks: list[CheckRead]
@@ -395,15 +418,18 @@ def regenerate_part(
 ) -> dict[str, object]:
     """Solve one problem again, optionally carrying what the student says is wrong.
 
-    Only a whole problem, not a single step: a step re-derived without the ones after it
-    would leave a solution that no longer follows from itself.
+    A problem, or one part of a problem whose parts were solved separately -- those parts
+    each carry a solution of their own, so re-solving one is the same act at a smaller
+    size. Never a step: a step re-derived without the ones after it would leave a
+    solution that no longer follows from itself. And never a sub-part of a problem solved
+    as a whole, whose steps belong to the problem and not to it.
 
     This does not move the artifact's state. The rest of the document stays readable while
     one problem is re-solved, and the existing solution is replaced only once the new one
     has been written.
     """
     part = _require_part(conn, artifact_id, part_id)
-    if part["kind"] != artifacts.PROBLEM or part["parent_part_id"] is not None:
+    if part["kind"] != artifacts.PROBLEM or not _solved_on_its_own(conn, part):
         raise LyraError(NOT_A_PROBLEM_MESSAGE)
 
     artifacts.set_part_status(conn, part_id, artifacts.PART_SOLVING)
@@ -475,6 +501,16 @@ def cancel_solution(artifact_id: int, conn: DbConn) -> dict[str, object]:
 
     artifacts.set_artifact_state(conn, artifact_id, artifacts.CANCELLED)
     return _with_sources(conn, artifacts.get_artifact(conn, artifact_id))
+
+
+@router.patch("/solutions/{artifact_id}", response_model=SolutionRead)
+def rename_solution(artifact_id: int, payload: SolutionRename, conn: DbConn) -> dict[str, object]:
+    """Rename a solution set.
+
+    The default name is the problem set's filename with its extension dropped, which is
+    what the file happened to be called rather than what the work is.
+    """
+    return _with_sources(conn, artifacts.rename_artifact(conn, artifact_id, payload.title))
 
 
 @router.delete("/solutions/{artifact_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -549,6 +585,21 @@ def _with_sources(conn: sqlite3.Connection, artifact: dict[str, object]) -> dict
     return {**artifact, "sources": artifacts.list_sources(conn, int(artifact["id"]))}
 
 
+def _solved_on_its_own(conn: sqlite3.Connection, part: dict[str, object]) -> bool:
+    """Whether this part holds a solution of its own that could be replaced.
+
+    True for a top-level problem, and for a sub-part of a problem marked `separately`,
+    which is where that problem's steps and answers actually live. The same question
+    `solver._unit_for` asks, asked here so the refusal is a 4xx with a sentence in it
+    rather than an exception out of a worker thread nobody is watching.
+    """
+    parent_id = part["parent_part_id"]
+    if parent_id is None:
+        return True
+    parent = artifacts.get_part(conn, int(parent_id))
+    return parent["solve_parts"] == artifacts.SEPARATELY
+
+
 def _to_segmented(
     conn: sqlite3.Connection, artifact_id: int, payload: SegmentationUpdate
 ) -> list[SegmentedProblem]:
@@ -594,6 +645,7 @@ def _to_segmented(
                     )
                     for position, part in enumerate(problem.parts)
                 ),
+                separate_parts=problem.separate_parts,
             )
         )
     return problems

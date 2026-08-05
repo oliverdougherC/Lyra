@@ -99,6 +99,20 @@ def _at_the_gate(db: sqlite3.Connection, class_id: int, document_id: int, count:
     return artifact_id
 
 
+def test_a_solution_set_can_be_renamed(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id = _at_the_gate(db, class_id, _document(db, class_id))
+
+    renamed = client.patch(f"/api/solutions/{artifact_id}", json={"title": "  Week 4 homework "})
+
+    assert renamed.status_code == 200
+    assert renamed.json()["title"] == "Week 4 homework"
+    assert client.get(f"/api/classes/{class_id}/solutions").json()[0]["title"] == "Week 4 homework"
+    assert client.patch(f"/api/solutions/{artifact_id}", json={"title": " "}).status_code == 422
+    assert client.patch("/api/solutions/404", json={"title": "Gone"}).status_code == 404
+
+
 def test_creating_a_solution_set_returns_202_and_queues_it(
     client: TestClient, db: sqlite3.Connection, class_id: int, no_worker: list[int]
 ) -> None:
@@ -659,3 +673,96 @@ def test_restoring_an_earlier_version_is_itself_a_revision(
         "Apply the definition.",
     ]
     assert revisions[0]["note"] == "Restored version 1."
+
+
+def test_the_gate_can_say_a_problems_parts_are_separate_questions(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """Lyra proposes the reading; the student confirms it, like every other field here."""
+    artifact_id = _at_the_gate(db, class_id, _document(db, class_id), count=1)
+    existing = client.get(f"/api/solutions/{artifact_id}").json()["parts"]
+
+    response = client.patch(
+        f"/api/solutions/{artifact_id}/segmentation",
+        json={
+            "problems": [
+                {
+                    "id": existing[0]["id"],
+                    "label": "Properties of LTI Systems",
+                    "statement": "For each of the following, determine whether it is stable.",
+                    "parts": [
+                        {"label": "(a)", "statement": "$h(t) = u(t)$"},
+                        {"label": "(b)", "statement": "$h(t) = e^{-t}u(t)$"},
+                    ],
+                    "separate_parts": True,
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    roots = [part for part in response.json()["parts"] if part["parent_part_id"] is None]
+    assert roots[0]["solve_parts"] == "separately"
+
+
+def test_a_problem_with_no_parts_is_read_as_one_solution_whatever_it_says(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id = _at_the_gate(db, class_id, _document(db, class_id), count=1)
+
+    body = client.patch(
+        f"/api/solutions/{artifact_id}/segmentation",
+        json={
+            "problems": [
+                {"label": "Problem 1", "statement": "Find $X(j\\omega)$.", "separate_parts": True}
+            ]
+        },
+    ).json()
+
+    # There is nothing for it to mean, and a part list that grows later should not
+    # inherit a reading nobody made about it.
+    assert body["parts"][0]["solve_parts"] == "together"
+
+
+def test_a_part_solved_on_its_own_can_be_re_solved_on_its_own(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    no_solve_worker: list[tuple[str, object, object]],
+) -> None:
+    artifact_id = _at_the_gate(db, class_id, _document(db, class_id), count=1)
+    problem_id = int(
+        next(
+            part for part in artifacts.list_parts(db, artifact_id) if part["parent_part_id"] is None
+        )["id"]
+    )
+    db.execute("update artifact_parts set solve_parts = 'separately' where id = ?", (problem_id,))
+    db.commit()
+    part_id = int(artifacts.list_child_parts(db, problem_id)[0]["id"])
+
+    response = client.post(
+        f"/api/solutions/{artifact_id}/parts/{part_id}/regenerate",
+        json={"correction": "The sketch is upside down."},
+    )
+
+    assert response.status_code == 202
+    assert no_solve_worker == [("regenerate", part_id, "The sketch is upside down.")]
+
+
+def test_a_sub_part_of_a_problem_solved_as_a_whole_cannot_be_re_solved_alone(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # Its steps belong to the problem above it, so there is nothing here to replace.
+    artifact_id = _at_the_gate(db, class_id, _document(db, class_id), count=1)
+    problem_id = int(
+        next(
+            part for part in artifacts.list_parts(db, artifact_id) if part["parent_part_id"] is None
+        )["id"]
+    )
+    part_id = int(artifacts.list_child_parts(db, problem_id)[0]["id"])
+
+    response = client.post(
+        f"/api/solutions/{artifact_id}/parts/{part_id}/regenerate", json={"correction": ""}
+    )
+
+    assert response.status_code == 400

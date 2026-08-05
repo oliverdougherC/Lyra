@@ -23,7 +23,6 @@ failing the run, and why nothing here raises on a reply it cannot read.
 """
 
 import asyncio
-import json
 import logging
 import re
 import sqlite3
@@ -32,7 +31,7 @@ from dataclasses import dataclass, field
 
 from backend.core.app_settings import document_text_allowed, resolve_tutor_config
 from backend.core.errors import ConfigurationError
-from backend.llm import client
+from backend.llm import client, replies
 from backend.llm.prompts import build_segmentation_prompt
 from backend.rag.tokens import CHARS_PER_TOKEN
 
@@ -62,6 +61,11 @@ class SegmentedPart:
     statement: str
 
 
+# What the model is asked to say about a problem's parts, and what it means here.
+_SEPARATE = "separate"
+_ONE_SOLUTION = "one_solution"
+
+
 @dataclass(frozen=True)
 class SegmentedProblem:
     """One problem proposed for review.
@@ -76,6 +80,11 @@ class SegmentedProblem:
         page_number: Page it starts on, when known.
         chunk_ids: Chunks this problem came from, kept as its provenance.
         parts: Sub-parts, in order. Empty for a problem with none.
+        separate_parts: Whether those sub-parts are questions in their own right, each
+            with its own answer, rather than steps of one solution. False for a problem
+            with no parts, and false whenever the reading is uncertain: solving parts
+            together is what Lyra has always done, and a wrong `True` solves a part
+            without the earlier part it depends on. See `parts_are_separate`.
         origin: Who wrote this entry. `generated` for anything Lyra proposed,
             `user_corrected` for a problem the student edited, merged, split, or typed at
             the review gate. Carried here rather than decided by the writer because only
@@ -91,6 +100,7 @@ class SegmentedProblem:
     page_number: int | None = None
     chunk_ids: tuple[int, ...] = ()
     parts: tuple[SegmentedPart, ...] = ()
+    separate_parts: bool = False
     origin: str = "generated"
 
 
@@ -230,6 +240,83 @@ def _read_parts(value: object) -> tuple[SegmentedPart, ...]:
     return tuple(parts)
 
 
+# A part pointing at another part: "using your answer to (a)", "from part (b)", "repeat
+# the above for", "as in (i)". Any one of these means the parts are a chain, because a
+# part that names another cannot be handed to a model on its own -- the thing it refers
+# to would simply not be in the turn.
+#
+# Bare "(a)" is deliberately not enough. Sub-part statements are full of parentheses that
+# are mathematics: `x(t)`, `u(t-1)`, `(2 + j)`. The reference has to be worded.
+_CROSS_REFERENCE = re.compile(
+    r"""
+    \b(?:part|parts)\s*\(?[a-z0-9]{1,3}\)?        # part (a), parts b
+    | \byour\s+(?:answer|result|expression|sketch|solution)   # your answer to ...
+    | \b(?:from|in|of|using|use)\s+\(\s*[a-z]\s*\)             # from (a), using (b)
+    | \b(?:the\s+)?(?:previous|preceding|earlier|above)\s+(?:part|result|answer)
+    | \brepeat\s+(?:the\s+)?(?:above|previous)
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# A stem that hands the same question to every part: the parts are its instances, and
+# each instance has an answer of its own. "For each system below, determine whether it is
+# linear" is five questions, and reading it as one is what put five results in one answer
+# sentence and one verdict over all five.
+_DISTRIBUTES = re.compile(
+    r"""
+    \bfor\s+each\b
+    | \bfor\s+every\b
+    | \bfor\s+(?:all\s+of\s+)?the\s+following\b
+    | \beach\s+of\s+the\s+following\b
+    | \b(?:determine|find|compute|evaluate|sketch|state|classify|simplify|solve)
+      \s+(?:\w+\s+){0,4}?following\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def parts_are_separate(
+    statement: str, parts: tuple[SegmentedPart, ...], claimed: str | None
+) -> bool:
+    """Whether a problem's parts are questions of their own or steps of one solution.
+
+    Three readings, in order of how much they can be trusted:
+
+    1. **A part that refers to another part settles it, and settles it as one solution.**
+       This is evidence rather than opinion: "using your answer to (a)" cannot be solved
+       in a turn that does not contain (a). It overrides everything below, including the
+       model, because the cost of being wrong here is a part solved against a result it
+       was never given.
+    2. **Otherwise the model's own reading, which saw the whole sheet.** It is asked
+       directly, in the words of the thing it is deciding, and it is right on the cases
+       that matter most: a section of five systems to classify, and a derivation whose
+       parts hand results forward.
+    3. **Otherwise the shape of the stem.** "For each of the following" distributes one
+       question over its parts, which is exactly what makes each part a question. This is
+       a backstop for a model that ignored the field or answered it with something that
+       is neither value, and it is never asked to overrule a model that did answer.
+
+    Anything still undecided is one solution. That is what Lyra did before this existed,
+    so an uncertain reading costs the student nothing they had.
+
+    Args:
+        statement: The problem's own text -- the stem above the parts.
+        parts: Its sub-parts. No parts, nothing to separate.
+        claimed: What the model said, or None when it said nothing usable.
+
+    Returns:
+        True when each part should be solved, answered, and checked on its own.
+    """
+    if len(parts) < 2:
+        # One part is not a set of questions; it is a problem whose statement runs on.
+        return False
+    if any(_CROSS_REFERENCE.search(part.statement) for part in parts):
+        return False
+    if claimed in (_SEPARATE, _ONE_SOLUTION):
+        return claimed == _SEPARATE
+    return bool(_DISTRIBUTES.search(statement))
+
+
 def parse_segmentation(content: str, document_id: int) -> list[SegmentedProblem]:
     """Read the model's reply into problems, tolerating everything except nonsense.
 
@@ -237,9 +324,10 @@ def parse_segmentation(content: str, document_id: int) -> list[SegmentedProblem]
     failure anywhere: it means this source of evidence contributed nothing, and the
     chunker's list stands on its own.
     """
-    try:
-        payload = json.loads(_strip_code_fence(content))
-    except ValueError:
+    # A problem statement carries the notation it was set in, and reading it strictly makes
+    # a `\theta` anywhere in the sheet cost the whole segmentation.
+    payload = replies.loads(_strip_code_fence(content))
+    if payload is None:
         logger.warning("Segmentation returned a reply that is not JSON")
         return []
     if not isinstance(payload, Mapping):
@@ -259,6 +347,7 @@ def parse_segmentation(content: str, document_id: int) -> list[SegmentedProblem]
         label = _text(entry.get("label"))
         number = _normalise(entry.get("number")) or _normalise(label) or str(index)
         page = entry.get("page")
+        parts = _read_parts(entry.get("parts"))
         problems.append(
             SegmentedProblem(
                 label=_label_for(label, number),
@@ -266,7 +355,10 @@ def parse_segmentation(content: str, document_id: int) -> list[SegmentedProblem]
                 statement=statement,
                 document_id=document_id,
                 page_number=page if isinstance(page, int) and page > 0 else None,
-                parts=_read_parts(entry.get("parts")),
+                parts=parts,
+                separate_parts=parts_are_separate(
+                    statement, parts, _text(entry.get("parts_relation")).lower() or None
+                ),
             )
         )
     return problems
@@ -372,7 +464,11 @@ def reconcile(
                 document_id=problem.document_id,
                 page_number=problem.page_number or proposal.page_number,
                 chunk_ids=problem.chunk_ids,
+                # Both from the proposal, and they have to travel together: the reading
+                # of how the parts relate was made about *these* parts, and the chunker
+                # never had either.
                 parts=proposal.parts,
+                separate_parts=proposal.separate_parts,
             )
         )
 

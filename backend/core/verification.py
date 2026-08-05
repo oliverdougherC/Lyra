@@ -18,6 +18,11 @@ The rules this module exists to hold, in the order they matter:
    checking exists to avoid.
 3. **A stated disagreement is never softened.** If the checker says a step is wrong, that
    is `refuted` and the student is told, whether or not a tool settled it.
+4. **Every verdict says why it is that verdict.** `uncheckable` in particular is not a
+   complaint and not a failure — most of it is a solution whose steps are prose — so it
+   carries the reason it could not be settled by calculation, ahead of whatever the checker
+   said about the work. Without that, a student meets "Nothing to check" sitting above a
+   paragraph explaining why every step is right and has no way to tell which to believe.
 """
 
 import asyncio
@@ -29,7 +34,7 @@ from dataclasses import dataclass
 from backend.core import artifacts
 from backend.core.app_settings import TutorConfig
 from backend.core.artifacts import CheckEntry
-from backend.llm import tools
+from backend.llm import replies, tools
 from backend.llm.prompts import build_verification_prompt
 
 logger = logging.getLogger(__name__)
@@ -42,7 +47,14 @@ NO_TOOL_SUPPORT_DETAIL = (
     "Your model endpoint cannot run the checks Lyra verifies with, so this solution was "
     "not checked."
 )
-NO_CHECKS_DETAIL = "Nothing in this solution could be settled by a calculation."
+NO_CHECKS_DETAIL = (
+    "Nothing here could be settled by a calculation, so Lyra read the working through "
+    "instead and found nothing to disagree with."
+)
+CHECKS_FAILED_DETAIL = (
+    "There was something here to settle, but every calculation Lyra ran failed, so this "
+    "solution has not been checked."
+)
 UNREADABLE_DETAIL = "The check did not report a result Lyra could read."
 REFUTED_FALLBACK = "A check disagreed with this solution."
 
@@ -96,10 +108,7 @@ def _embedded_report(text: str) -> Mapping[str, object] | None:
                 depth -= 1
                 if depth:
                     continue
-                try:
-                    candidate = json.loads(text[start : index + 1])
-                except ValueError:
-                    break
+                candidate = replies.loads(text[start : index + 1])
                 if isinstance(candidate, Mapping) and "verdict" in candidate:
                     return candidate
                 break
@@ -118,9 +127,12 @@ def read_report(content: str) -> tuple[str, str]:
         reply says nothing usable.
     """
     stripped = _strip_code_fence(content)
-    try:
-        payload: object = json.loads(stripped)
-    except ValueError:
+    # Read through `replies`, so a report whose detail says what it checked in the notation
+    # it checked it in — "the angular frequency $\omega$ is correct" — is a report and not
+    # a formatting error. A bare `json.loads` refuses that outright, and the check it threw
+    # away had run, called its tools, and agreed.
+    payload: object | None = replies.loads(stripped)
+    if payload is None:
         # A checker that narrated a sentence before its JSON, or added one after it, has
         # still reported a verdict. Measured against a real signals set, one problem in
         # ten came back this way and its verdict was thrown away as unreadable, which
@@ -175,28 +187,46 @@ def judge(result: tools.ToolLoopResult) -> VerificationOutcome:
     if word == DISAGREES:
         return VerificationOutcome(artifacts.REFUTED, detail or REFUTED_FALLBACK, checks)
 
-    ran = any(check.ok for check in checks)
-    if not ran:
-        # Either the checker said so itself, or it claimed agreement without running
-        # anything. Both are `uncheckable`: no calculation settled any of this.
-        return VerificationOutcome(artifacts.UNCHECKABLE, detail or NO_CHECKS_DETAIL, checks)
+    if not word:
+        # The closing message said nothing readable. Reporting that as agreement would be
+        # inventing a conclusion nobody reached, and it is settled here — before anything
+        # below reads `detail` as the checker's opinion — because that text is not an
+        # opinion, it is whatever the reply happened to contain. What it did say is carried
+        # through: a student looking at twenty-five checks and a "not checked" badge is owed
+        # the checker's own words, and without them this outcome cannot be diagnosed at all,
+        # because nothing keeps the reply.
+        said = detail.strip().replace("\n", " ")[:200]
+        return VerificationOutcome(
+            artifacts.UNCHECKED,
+            f"{UNREADABLE_DETAIL} It said: {said}" if said else UNREADABLE_DETAIL,
+            checks,
+        )
+
+    if not any(check.ok for check in checks):
+        if checks:
+            # Calls were made and every one of them failed. Something here was worth
+            # settling and settling it did not work, which is a check that did not happen
+            # rather than a solution with nothing in it to check — and it must not be shown
+            # as one, because the difference is the whole reason the badge is trusted.
+            return VerificationOutcome(artifacts.UNCHECKED, CHECKS_FAILED_DETAIL, checks)
+        # Nothing was called at all. The checker read the work and had nothing to compute
+        # about it, whether it said so outright or simply agreed — and either way no
+        # calculation settled any of this, so it is not `verified`.
+        #
+        # Its own sentence is kept behind the reason rather than instead of it. A student
+        # met by "Nothing to check" above a paragraph explaining why every step is correct
+        # is owed the sentence that reconciles the two, and that sentence is not the
+        # checker's: it is why what the checker said is not a check.
+        said = detail.strip()
+        return VerificationOutcome(
+            artifacts.UNCHECKABLE,
+            f"{NO_CHECKS_DETAIL} It said: {said}" if said else NO_CHECKS_DETAIL,
+            checks,
+        )
 
     if word == NOTHING_TO_CHECK:
         return VerificationOutcome(artifacts.UNCHECKABLE, detail or NO_CHECKS_DETAIL, checks)
-    if word == AGREES:
-        return VerificationOutcome(artifacts.VERIFIED, detail, checks)
-
-    # Tools ran but the closing message said nothing readable. Reporting that as agreement
-    # would be inventing a conclusion nobody reached. What it did say is carried through:
-    # a student looking at twenty-five checks and a "not checked" badge is owed the
-    # checker's own words, and without them this outcome cannot be diagnosed at all,
-    # because nothing keeps the reply.
-    said = detail.strip().replace("\n", " ")[:200]
-    return VerificationOutcome(
-        artifacts.UNCHECKED,
-        f"{UNREADABLE_DETAIL} It said: {said}" if said else UNREADABLE_DETAIL,
-        checks,
-    )
+    return VerificationOutcome(artifacts.VERIFIED, detail, checks)
 
 
 def verify(

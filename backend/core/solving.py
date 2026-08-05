@@ -19,7 +19,6 @@ A student who knows their course can then see at a glance whether a step came fr
 notes or from the model.
 """
 
-import json
 import logging
 import re
 import sqlite3
@@ -30,6 +29,7 @@ from pathlib import Path
 from backend.config import settings
 from backend.core import artifacts
 from backend.core.app_settings import TutorConfig
+from backend.llm import replies
 from backend.llm.prompts import build_solve_prompt, format_context_block, format_reference_block
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk, retrieve
 from backend.rag.tokens import CHARS_PER_TOKEN
@@ -87,12 +87,34 @@ class SolvedProblem:
 
 @dataclass(frozen=True)
 class SolveInput:
-    """Everything one problem needs solving, gathered before the model is called."""
+    """Everything one problem needs solving, gathered before the model is called.
+
+    Attributes:
+        statement: What is being solved. For a part solved on its own, this is the part's
+            own text and nothing else.
+        label: What to call it, in the sheet's own words.
+        preamble: The stem this statement sits under, when it is one part of a set being
+            solved separately. Empty for a whole problem, which carries its own.
+        sub_parts: Lettered sub-parts answered in this same turn. Empty when the parts
+            are being solved one at a time, because then this *is* one of them.
+        correction: What the student said was wrong with the previous attempt.
+    """
 
     statement: str
     label: str
+    preamble: str = ""
     sub_parts: tuple[tuple[str, str], ...] = ()
     correction: str = ""
+
+    def query(self) -> str:
+        """What to retrieve course material with.
+
+        The stem is included, and on a split problem it is most of what makes the query
+        worth running: "(b) $h(t) = u(t+1)$" retrieves on notation alone, while the
+        sentence above it says the words the course says -- BIBO stable, causal, memory --
+        which is what the student's own lecture notes are indexed under.
+        """
+        return f"{self.preamble}\n\n{self.statement}".strip() if self.preamble else self.statement
 
 
 def _strip_code_fence(content: str) -> str:
@@ -172,10 +194,11 @@ def parse_solution(content: str) -> SolvedProblem:
         and no answer, which is the one case the caller treats as a failed problem.
     """
     stripped = _strip_code_fence(content)
-    try:
-        payload = json.loads(stripped)
-    except ValueError:
-        return _as_prose(stripped)
+    # Through `replies`, because a solution is mathematics and mathematics is backslashes:
+    # read strictly, `$\omega$` makes the whole reply unparseable and a solved problem is
+    # served to the student as a wall of raw JSON, while `$\frac{1}{2}$` parses cleanly into
+    # a form feed and `rac{1}{2}`, which nothing reports at all.
+    payload = replies.loads(stripped)
     if not isinstance(payload, Mapping):
         return _as_prose(stripped)
 
@@ -299,6 +322,7 @@ def build_prompt(
     return build_solve_prompt(
         problem.statement,
         problem.label,
+        preamble=problem.preamble,
         sub_parts=list(problem.sub_parts),
         context_block=format_context_block([_context_entry(c) for c in retrieval.chunks]),
         reference_block=format_reference_block(

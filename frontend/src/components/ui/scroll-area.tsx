@@ -9,6 +9,7 @@ function ScrollArea({
   className,
   children,
   viewportRef,
+  scrollbar = true,
   ...props
 }: React.ComponentProps<typeof ScrollAreaPrimitive.Root> & {
   /**
@@ -17,6 +18,11 @@ function ScrollArea({
    * viewport, so a React `onScroll` prop passed down here would be overwritten.
    */
   viewportRef?: React.Ref<HTMLDivElement>
+  /**
+   * Draw the bar. Off leaves the area scrolling exactly as it did — the primitive hides
+   * the platform scrollbar either way — with nothing drawn down the edge.
+   */
+  scrollbar?: boolean
 }) {
   return (
     <ScrollAreaPrimitive.Root
@@ -31,12 +37,22 @@ function ScrollArea({
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
         ref={viewportRef}
+        // The primitive makes the viewport scroll only where it has drawn a bar to scroll
+        // it with — no bar, `overflow: hidden`, and a pane that a wheel cannot move. Said
+        // here rather than left implied: the bar is a drawing, and whether one is drawn is
+        // not the same question as whether the pane scrolls. The primitive hides the
+        // platform's own scrollbar for every viewport it renders, so this shows nothing.
+        style={scrollbar ? undefined : { overflowY: 'auto' }}
         className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 [&>div]:!block"
       >
         {children}
       </ScrollAreaPrimitive.Viewport>
-      <ScrollBar />
-      <ScrollAreaPrimitive.Corner />
+      {scrollbar ? (
+        <>
+          <ScrollBar />
+          <ScrollAreaPrimitive.Corner />
+        </>
+      ) : null}
     </ScrollAreaPrimitive.Root>
   )
 }

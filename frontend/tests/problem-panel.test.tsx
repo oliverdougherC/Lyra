@@ -3,7 +3,11 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
-import { ProblemPanel, type ProblemTree } from '@/components/solutions/problem-panel'
+import {
+  ProblemPanel,
+  type ProblemTree,
+  type SubPartTree,
+} from '@/components/solutions/problem-panel'
 import { buildTree } from '@/components/solutions/solution-workspace'
 import { Accordion } from '@/components/ui/accordion'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -31,6 +35,7 @@ function part(overrides: Partial<SolutionPart> & { id: number }): SolutionPart {
     origin: 'generated',
     verdict: 'unchecked',
     verdict_detail: null,
+    solve_parts: 'together',
     error_message: null,
     provenance: [],
     checks: [],
@@ -45,10 +50,16 @@ const PROBLEM = part({
   content: 'Find the Laplace transform of a unit ramp.',
 })
 
+/** A sub-part of the question, with whatever solution it carries. */
+function subPart(problem: SolutionPart, steps: SolutionPart[] = []): SubPartTree {
+  return { problem, steps, answer: null }
+}
+
 function node(overrides: Partial<ProblemTree> = {}): ProblemTree {
   return {
     problem: PROBLEM,
     subParts: [],
+    separate: false,
     steps: [
       part({
         id: 2,
@@ -197,7 +208,7 @@ describe('buildTree', () => {
 
     const [tree] = buildTree(parts)
 
-    expect(tree.subParts.map((one) => one.label)).toEqual(['(a)'])
+    expect(tree.subParts.map((one) => one.problem.label)).toEqual(['(a)'])
     expect(tree.steps.map((one) => one.id)).toEqual([11])
     expect(tree.answer?.id).toBe(12)
   })
@@ -211,20 +222,24 @@ describe('sub-part rendering', () => {
       node({
         problem: { ...PROBLEM, content: 'Compute X.\n(a) x(t) = e^-2t\n(b) x(t) = e^-4|t|' },
         subParts: [
-          part({
-            id: 20,
-            parent_part_id: 1,
-            kind: 'problem',
-            label: '(a)',
-            content: 'x(t) = e^-2t',
-          }),
-          part({
-            id: 21,
-            parent_part_id: 1,
-            kind: 'problem',
-            label: '(b)',
-            content: 'x(t) = e^-4|t|',
-          }),
+          subPart(
+            part({
+              id: 20,
+              parent_part_id: 1,
+              kind: 'problem',
+              label: '(a)',
+              content: 'x(t) = e^-2t',
+            }),
+          ),
+          subPart(
+            part({
+              id: 21,
+              parent_part_id: 1,
+              kind: 'problem',
+              label: '(b)',
+              content: 'x(t) = e^-4|t|',
+            }),
+          ),
         ],
       }),
     )
@@ -240,14 +255,24 @@ describe('sub-part rendering', () => {
       node({
         problem: { ...PROBLEM, content: 'Compute X.\n(a) x(t) = e^-2t' },
         subParts: [
-          part({
-            id: 20,
-            parent_part_id: 1,
-            kind: 'problem',
-            label: '(a)',
-            content: 'x(t) = e^-2t',
-          }),
-          part({ id: 21, parent_part_id: 1, kind: 'problem', label: '(b)', content: 'Sketch it.' }),
+          subPart(
+            part({
+              id: 20,
+              parent_part_id: 1,
+              kind: 'problem',
+              label: '(a)',
+              content: 'x(t) = e^-2t',
+            }),
+          ),
+          subPart(
+            part({
+              id: 21,
+              parent_part_id: 1,
+              kind: 'problem',
+              label: '(b)',
+              content: 'Sketch it.',
+            }),
+          ),
         ],
       }),
     )
@@ -255,5 +280,135 @@ describe('sub-part rendering', () => {
     expect(screen.getByText('Sketch it.')).toBeInTheDocument()
     expect(screen.getAllByText(/x\(t\) = e\^-2t/)).toHaveLength(1)
     expect(screen.getByText('Compute X.')).toBeInTheDocument()
+  })
+})
+
+describe('a section whose parts are questions of their own', () => {
+  const SECTION = part({
+    id: 1,
+    kind: 'problem',
+    label: 'Properties of LTI Systems',
+    content: 'For each of the following, determine whether the system is BIBO stable.',
+    solve_parts: 'separately',
+  })
+
+  /** Two parts, each carrying its own working and its own verdict. */
+  function section(overrides: Partial<SolutionPart>[] = [{}, {}]): ProblemTree {
+    return {
+      problem: SECTION,
+      separate: true,
+      steps: [],
+      answer: null,
+      subParts: overrides.map((extra, index) => ({
+        problem: part({
+          id: 10 + index,
+          parent_part_id: 1,
+          kind: 'problem',
+          label: `(${'ab'[index]})`,
+          content: `h(t) = ${index}`,
+          verdict: 'verified',
+          ...extra,
+        }),
+        steps: [
+          part({
+            id: 20 + index,
+            parent_part_id: 10 + index,
+            label: 'Apply the criterion',
+            content: `Working for part ${index}.`,
+          }),
+        ],
+        answer: part({
+          id: 30 + index,
+          parent_part_id: 10 + index,
+          kind: 'answer',
+          content: `Answer ${index}.`,
+        }),
+      })),
+    }
+  }
+
+  it('gives each part its own working, answer, and verdict', () => {
+    renderPanel(section())
+
+    expect(screen.getByText('Working for part 0.')).toBeInTheDocument()
+    expect(screen.getByText('Answer 0.')).toBeInTheDocument()
+    expect(screen.getByText('Working for part 1.')).toBeInTheDocument()
+    expect(screen.getByText('Answer 1.')).toBeInTheDocument()
+    // One badge per part, and one summarising them on the section heading.
+    expect(screen.getAllByText('Checked')).toHaveLength(3)
+  })
+
+  it('sums the parts into the worst verdict among them, never an average', () => {
+    // Four of five passing is not a section that passed. A header calling this `Checked`
+    // would claim a check that did not conclude what it appears to.
+    renderPanel(section([{}, { verdict: 'refuted', verdict_detail: 'The integral diverges.' }]))
+
+    const heading = screen.getByRole('button', { name: /Properties of LTI Systems/ })
+    expect(within(heading).getByText('Check failed')).toBeInTheDocument()
+    expect(screen.getByText('The integral diverges.')).toBeInTheDocument()
+  })
+
+  it('offers to re-solve one part rather than the whole section', async () => {
+    const onMarkWrong = vi.fn()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <TooltipProvider>
+          <Accordion type="multiple" defaultValue={['1']}>
+            <ProblemPanel
+              node={section()}
+              onAsk={vi.fn()}
+              onMarkWrong={onMarkWrong}
+              onRegenerate={vi.fn()}
+              onHistory={vi.fn()}
+              onRetry={vi.fn()}
+            />
+          </Accordion>
+        </TooltipProvider>
+      </QueryClientProvider>,
+    )
+
+    // The section itself has no solution to re-solve, so it carries no menu at all.
+    expect(screen.queryByRole('button', { name: /Actions for Properties/ })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for (b)' }))
+    await userEvent.click(screen.getByRole('menuitem', { name: /Mark wrong/ }))
+
+    expect(onMarkWrong).toHaveBeenCalledWith(expect.objectContaining({ id: 11, label: '(b)' }))
+  })
+
+  it('prints each part once, as a heading over its own answer', () => {
+    // Printed as a list above and as headings below, a five-part section says the same
+    // five things twice, and only the second copy carries the answers.
+    renderPanel(section())
+
+    expect(screen.getAllByText('(a)')).toHaveLength(1)
+  })
+
+  it('reads a split section out of the flat part list', () => {
+    const parts = [
+      SECTION,
+      part({ id: 10, parent_part_id: 1, kind: 'problem', label: '(a)', content: 'h = 1' }),
+      part({ id: 20, parent_part_id: 10, kind: 'step', content: 'Working.' }),
+      part({ id: 30, parent_part_id: 10, kind: 'answer', content: 'Stable.' }),
+    ]
+
+    const [tree] = buildTree(parts)
+
+    expect(tree.separate).toBe(true)
+    expect(tree.steps).toEqual([])
+    expect(tree.subParts[0].steps.map((one) => one.id)).toEqual([20])
+    expect(tree.subParts[0].answer?.id).toBe(30)
+  })
+
+  it('is one problem until its parts have somewhere to hang their work', () => {
+    // Read off the problem, not off whether the parts happen to have steps yet: a section
+    // part-way through its first solve has neither, and inferring it would reshape the
+    // page under the student mid-solve.
+    const [tree] = buildTree([
+      { ...SECTION, solve_parts: 'together' },
+      part({ id: 10, parent_part_id: 1, kind: 'problem', label: '(a)', content: 'h = 1' }),
+    ])
+
+    expect(tree.separate).toBe(false)
   })
 })

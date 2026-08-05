@@ -26,6 +26,7 @@ function part(overrides: Partial<SolutionPart> & { id: number }): SolutionPart {
     origin: 'generated',
     verdict: 'unchecked',
     verdict_detail: null,
+    solve_parts: 'together',
     error_message: null,
     provenance: [],
     checks: [],
@@ -289,5 +290,62 @@ describe('a list that arrives after the screen has mounted', () => {
     )
 
     expect(screen.getByText('A completely different first problem.')).toBeInTheDocument()
+  })
+})
+
+/**
+ * How a problem's parts relate is the one reading on this screen Lyra makes and the
+ * student confirms rather than the other way round, so it has to be visible and it has to
+ * be changeable before a minute of compute is spent on it.
+ */
+describe("how a problem's parts are solved", () => {
+  const SECTION = [
+    part({
+      id: 10,
+      ordinal: 0,
+      label: 'Properties of LTI Systems',
+      content: 'For each of the following, determine whether the system is BIBO stable.',
+      solve_parts: 'separately',
+    }),
+    part({ id: 12, parent_part_id: 10, ordinal: 0, label: '(a)', content: 'h(t) = u(t)' }),
+    part({ id: 13, parent_part_id: 10, ordinal: 1, label: '(b)', content: 'h(t) = e^-t u(t)' }),
+  ]
+
+  it('shows what Lyra read, in the words of what it decides', () => {
+    renderReview(SECTION)
+
+    const toggle = screen.getByRole('switch', {
+      name: 'Solve each part of Properties of LTI Systems on its own',
+    })
+    expect(toggle).toBeChecked()
+    expect(
+      screen.getByText(/2 separate questions, each with its own answer and its own check/),
+    ).toBeInTheDocument()
+  })
+
+  it('lets the student say the parts are one solution after all', async () => {
+    renderReview(SECTION)
+
+    await userEvent.click(
+      screen.getByRole('switch', {
+        name: 'Solve each part of Properties of LTI Systems on its own',
+      }),
+    )
+
+    expect(
+      screen.getByText(/Leave it this way when a part needs the answer to an earlier one/),
+    ).toBeInTheDocument()
+    // A reading is a change like any other on this screen: it goes back with Save.
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
+  })
+
+  it('says nothing about a problem with nothing to relate', () => {
+    renderReview([
+      TWO_PROBLEMS[0],
+      part({ id: 12, parent_part_id: 10, ordinal: 0, label: '(a)', content: 'Sketch it.' }),
+    ])
+
+    // One part is not a set of questions; it is a problem whose statement runs on.
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
   })
 })

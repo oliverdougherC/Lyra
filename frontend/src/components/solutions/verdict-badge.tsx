@@ -16,11 +16,22 @@ type VerdictPresentation = {
 }
 
 /**
- * Color is never the only signal: the label always differs, and the icon differs too.
+ * Colour is never the only signal: every label is a different sentence, and the two that
+ * share a colour do not share a weight.
  *
- * `uncheckable` and `unchecked` deliberately look alike and read differently. Both are
- * honest non-answers and neither is a pass, which is the single rule this file exists to
- * hold: there is no presentation here that reads as agreement without one.
+ * Three states, not two. `refuted` is the only one that went wrong. `unchecked` is the only
+ * one where something was owed and did not arrive — an endpoint that cannot run tools, a
+ * loop that timed out, calculations that failed — and it stays grey and open, because it is
+ * a job unfinished. Between them sits `uncheckable`: a solution whose steps are prose, or
+ * an argument, with nothing in it a calculation could settle. Nothing went wrong there, so
+ * it is green, and it is the one thing a student can safely skip past.
+ *
+ * What green does *not* say here is "checked". `uncheckable` is outlined rather than
+ * filled, its label is its own sentence, and its explanation opens by saying no calculation
+ * was run. The rule the file exists to hold is unchanged and is narrower than it looks: no
+ * presentation may claim a check that did not happen. Reading as "fine" is not that claim —
+ * marking every prose proof in a set with a warning grey was, in the other direction,
+ * telling the student something was wrong with work nobody had found anything wrong with.
  */
 export const VERDICTS: Record<Verdict, VerdictPresentation> = {
   verified: {
@@ -37,10 +48,10 @@ export const VERDICTS: Record<Verdict, VerdictPresentation> = {
   },
   uncheckable: {
     label: 'Nothing to check',
-    className: 'text-text-tertiary border-border border',
-    icon: Circle,
+    className: 'text-success-text border-success-text/35 border',
+    icon: Check,
     explanation:
-      'Nothing in this solution could be checked by calculation. This is normal for a proof or a conceptual answer.',
+      'Nothing here could be settled by a calculation, so Lyra read the working through instead and found nothing to disagree with. This is the normal outcome for a proof or a conceptual answer.',
   },
   unchecked: {
     label: 'Not checked',

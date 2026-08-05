@@ -114,6 +114,38 @@ function shouldPromoteInlineMath(content: string): boolean {
   return content.length > 32 || DISPLAY_COMMAND_PATTERN.test(content)
 }
 
+/** Nothing after an equation but the punctuation that ends the sentence it closed. */
+const ONLY_PUNCTUATION = /^\s*[.,;:!?]*\s*$/
+
+/** Whether an unescaped `$` — the start of other mathematics — sits in `[from, to)`. */
+function hasMathBefore(source: string, from: number, to: number): boolean {
+  for (let at = source.indexOf('$', from); at !== -1 && at < to; at = source.indexOf('$', at + 1)) {
+    if (!isEscaped(source, at)) return true
+  }
+  return false
+}
+
+/**
+ * Whether the span between `start` and `end` has its line to itself.
+ *
+ * Promotion moves an equation out of the paragraph and onto a row of its own, which is right
+ * when the equation is the point of the line and wrong when it is a phrase inside a sentence.
+ * An answer reading `(a) $y = ...$; (b) $y = ...$; (c) ...` is the case that made this
+ * necessary: one of the five ran past the inline ceiling, so one of the five was lifted out,
+ * centred, and left the sentence broken around it while its siblings stayed in the text.
+ *
+ * Two conditions, and the second is what keeps a list from being singled out by its last
+ * member: nothing may follow the span on its line but the punctuation that ends the sentence,
+ * and no other mathematics may precede it there. A sentence that simply ends on an equation —
+ * `Therefore $y(t) = ...$.` — satisfies both and is still given its own row.
+ */
+function ownsItsLine(source: string, start: number, end: number): boolean {
+  const lineStart = source.lastIndexOf('\n', start - 1) + 1
+  const lineEnd = source.indexOf('\n', end)
+  const after = source.slice(end, lineEnd === -1 ? source.length : lineEnd)
+  return ONLY_PUNCTUATION.test(after) && !hasMathBefore(source, lineStart, start)
+}
+
 /** LaTeX commands common enough in an answer that seeing one means mathematics. */
 const MATH_COMMAND =
   /\\(?:d?frac|int|iint|oint|sum|prod|sqrt|left|right|cdot|times|div|infty|partial|nabla|lim|log|ln|sin|cos|tan|sec|csc|cot|sinh|cosh|tanh|exp|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|kappa|lambda|mu|nu|xi|pi|rho|sigma|tau|phi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Sigma|Phi|Psi|Omega|neq|leq|geq|ll|gg|approx|equiv|propto|pm|mp|to|rightarrow|Rightarrow|text|mathrm|mathbb|hat|bar|tilde|vec|overline|underline|langle|rangle|lfloor|rfloor|quad|qquad)\b/
@@ -150,6 +182,91 @@ export function repairUndelimitedMath(source: string): string {
       return rest ? `${prefix}$${rest}$` : line
     })
     .join('\n')
+}
+
+/**
+ * A whitespace-separated token that is mathematics rather than a word. Three signs count,
+ * and each is something prose does not do: a superscript or subscript, a LaTeX command, or
+ * a single-letter function applied to an argument, which is `u(t)`, `x(t-1)`, `X(jw)`.
+ *
+ * The single-letter rule is what keeps `(a)` out. An enumeration label is a bracket with no
+ * function in front of it, so it stays the label it is instead of being typeset as a
+ * variable in the middle of a heading.
+ */
+const MATH_TOKEN = /[\^_](\{|[A-Za-z0-9])|\\[A-Za-z]+|(?:^|[^A-Za-z])[A-Za-z]\(/
+
+/** Trailing punctuation belongs to the sentence, not to the mathematics it follows. */
+const TRAILING_PUNCTUATION = /[.,;:!?]+$/
+
+/**
+ * A token that is nothing but an operator. Alone it says nothing, but between two
+ * mathematical tokens it joins them into one expression, so `h(t) = e^{t}u(-t)` is set as
+ * one equation rather than as two spans with a full-size prose `=` stranded between them.
+ */
+const MATH_OPERATOR = /^[=+\-*/<>|]+$/
+
+/**
+ * Wrap the mathematical spans of a short label, leaving its words alone.
+ *
+ * `repairUndelimitedMath` wraps a whole line, which is right for an answer that is nothing
+ * but an equation and wrong for a step title. "Part (a) Convolution of u(t) and e^{-t}u(t)"
+ * is a real title, and wrapping all of it would typeset "Part", "Convolution", "of" and
+ * "and" as strings of italic variables. So this wraps the runs of mathematics and nothing
+ * else, giving "Part (a) Convolution of $u(t)$ and $e^{-t}u(t)$".
+ *
+ * Skipped entirely the moment the label carries a `$` or a backtick of its own: a label
+ * that delimited its own mathematics is already right, and a second pass over it could only
+ * make it wrong.
+ */
+export function repairLabelMath(label: string): string {
+  if (label.includes('$') || label.includes('`')) return label
+
+  const pieces = label.split(/(\s+)/).filter(Boolean)
+  const space = pieces.map((piece) => /^\s+$/.test(piece))
+  const math = pieces.map((piece, index) => !space[index] && MATH_TOKEN.test(piece))
+  if (!math.some(Boolean)) return label
+
+  // A run reaches from one mathematical token to the next across the spaces and bare
+  // operators between them, and stops at the first word. Anything else splits an equation
+  // at its own equals sign.
+  const inRun = [...math]
+  let previous = -1
+  for (let index = 0; index < pieces.length; index += 1) {
+    if (!math[index]) continue
+    const between = pieces.slice(previous + 1, index)
+    if (
+      previous >= 0 &&
+      between.every((piece) => /^\s+$/.test(piece) || MATH_OPERATOR.test(piece))
+    ) {
+      for (let filled = previous + 1; filled < index; filled += 1) inRun[filled] = true
+    }
+    previous = index
+  }
+
+  const out: string[] = []
+  let run: string[] = []
+
+  const flushRun = () => {
+    if (run.length === 0) return
+    // Punctuation that ended the run belongs to the sentence, so a title closing on a full
+    // stop does not typeset the full stop as part of the mathematics.
+    const joined = run.join('')
+    const tail = TRAILING_PUNCTUATION.exec(joined)?.[0] ?? ''
+    out.push(`$${tail ? joined.slice(0, -tail.length) : joined}$${tail}`)
+    run = []
+  }
+
+  pieces.forEach((piece, index) => {
+    if (inRun[index]) {
+      run.push(piece)
+      return
+    }
+    flushRun()
+    out.push(piece)
+  })
+  flushRun()
+
+  return out.join('')
 }
 
 function addToken(tokens: RenderToken[], text: string, display = false): void {
@@ -317,7 +434,8 @@ export function normalizeMarkdownForRender(
       } else {
         flushPlain()
         const inner = normalized.slice(cursor + delimiter.length, closing)
-        const promoted = !display && promote(inner)
+        const promoted =
+          !display && promote(inner) && ownsItsLine(normalized, cursor, closing + delimiter.length)
         addToken(
           tokens,
           display || promoted ? formatDisplayMath(inner) : `$${inner}$`,

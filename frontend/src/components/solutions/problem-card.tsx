@@ -13,7 +13,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { formatCount } from '@/lib/format'
 import { statementLeadIn } from '@/lib/statement'
 import { cn } from '@/lib/utils'
 
@@ -26,6 +28,12 @@ export type DraftProblem = {
   label: string
   statement: string
   parts: { key: string; label: string; statement: string }[]
+  /**
+   * Whether those parts are questions in their own right rather than steps of one
+   * solution. Lyra reads it off the sheet and the student confirms it here, which is the
+   * one field on this screen that works that way round.
+   */
+  separateParts: boolean
   source: string | null
   page: number | null
   edited: boolean
@@ -155,6 +163,30 @@ export function ProblemCard({
                 </li>
               ))}
             </ul>
+          ) : null}
+
+          {/* The one reading on this screen Lyra makes and the student confirms, rather
+              than the other way round. It is here, under the parts it is about, because
+              it is a claim about them: whether answering (a) tells you anything about
+              (b). What it decides is whether each part gets a solution, an answer, and a
+              check of its own, or whether one solution answers all of them. */}
+          {problem.parts.length > 1 ? (
+            <label className="mt-3 flex cursor-pointer items-start gap-2.5">
+              <Switch
+                checked={problem.separateParts}
+                onCheckedChange={(checked) =>
+                  onChange({ ...problem, separateParts: checked === true })
+                }
+                aria-label={`Solve each part of ${problem.label} on its own`}
+                className="mt-0.5"
+              />
+              <span className="text-text-tertiary text-xs">
+                <span className="text-text-secondary">Solve each part on its own.</span>{' '}
+                {problem.separateParts
+                  ? `${formatCount(problem.parts.length, 'separate question')}, each with its own answer and its own check.`
+                  : 'One solution, answering all of them together. Leave it this way when a part needs the answer to an earlier one.'}
+              </span>
+            </label>
           ) : null}
 
           <button

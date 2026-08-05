@@ -12,6 +12,7 @@ again: a second copy of the rule is a second place for it to drift.
 """
 
 import sqlite3
+from collections.abc import Mapping
 from typing import Literal
 
 ChatMode = Literal["guide", "show"]
@@ -23,8 +24,13 @@ _KIND_HEADINGS: dict[str, str] = {
     "grading": "Grading",
     "professor": "Professor",
     "prerequisite": "Prerequisites",
-    "note": "Notes",
+    "note": "Conventions this course follows",
 }
+
+# How many facts of one kind may enter the system prompt. The profile shares 15% of the
+# window with the system prompt itself (see the context budget in docs/rag-pipeline.md), and
+# a course with ninety extracted topics would otherwise spend all of it listing them.
+MAX_FACTS_PER_KIND = 15
 
 _BASE_PROMPT = """\
 You are Lyra, a study tutor for one student. The retrieved context below comes from
@@ -67,17 +73,88 @@ leads to it in order, naming the rule or definition each step relies on. Close w
 summary of the idea worth carrying forward. Do not withhold the answer and do not turn the
 reply into a quiz."""
 
-# Quoted verbatim from the "Extraction prompt" block in docs/rag-pipeline.md. Edit that
-# document first if this needs to change.
+# The single copy of the extraction prompt. `docs/rag-pipeline.md` describes what it is for
+# and what each kind is defined to exclude; read that before changing this.
+#
+# The exclusions carry more of the weight than the inclusions. A model reading one homework
+# sheet has no idea it is the ninth of sixteen, so left to itself it reports the course code,
+# the term, and the sheet's own title as findings, every single time. Sixteen uploads then
+# bury the profile under sixteen copies of what the student typed when they made the class.
 _EXTRACTION_PROMPT = """\
-You are analyzing a course document. Extract the following structured information.
-Only extract facts that are explicitly stated. Do not infer or guess.
-Mark any field you are not certain about with confidence "low".
-Return JSON with these fields: deadlines[], topics[], professor_info{}, grading{},
-prerequisites[], notes[]"""
+You are reading one document from a student's course, and recording what it says about the
+course itself. You are building a profile of the class, not a summary of this file.
+
+Return JSON with these fields. Every one is optional: omit a field rather than filling it
+with something you had to reach for.
+
+- "topics": a list of {"name", "confidence"} objects. The subject matter this document
+  teaches or exercises, each named the way a textbook index would name it: "Convolution",
+  "Fourier series", "Region of convergence". One idea per entry, in its plainest form. Not
+  the course title, not a problem restated, not a sentence.
+- "deadlines": a list of {"label", "value", "confidence"} objects, where the label names
+  the obligation and the value carries its date. Something with no date is not a deadline.
+- "grading": a list of {"label", "value", "confidence"} objects. What determines the grade:
+  weights, the letter scale, the late policy.
+- "professor_info": a list of {"label", "value", "confidence"} objects. Name, contact,
+  office hours.
+- "prerequisites": a list of {"name", "confidence"} objects. Knowledge or software the
+  course assumes the student already has.
+- "notes": a list of {"label", "value", "confidence"} objects. Conventions this course
+  holds that a tutor would otherwise get wrong: the sign or factor convention it uses for a
+  transform, the notation it uses for a standard quantity, a method it requires or forbids,
+  a standing rule about how work is to be presented. A convention that holds beyond this one
+  document, and nothing that does not.
+
+Leave out anything that describes the document rather than the course. Its title, its type,
+its assignment number, its term, its course code, how many problems or pages it has, and any
+instruction that applies only to this one assignment. Those are already known, and repeating
+them once per file is what makes a profile useless.
+
+Only record what the document states. Do not infer and do not guess."""
 
 _EXTRACTION_SUFFIX = """\
-Give every item a "confidence" of either "high" or "low".
+Give every entry a "confidence" of either "high" or "low", and use "low" for anything you are
+not certain the document states outright.
+Reply with JSON only. No prose, no explanation, and no code fence."""
+
+# What each document type is worth reading for. A homework sheet is not a syllabus, and a
+# model told which one it holds stops looking for grading policy in a problem set.
+_EXTRACTION_DOC_TYPES = {
+    "homework": (
+        "This document is a homework assignment. Its topics are what its problems exercise. "
+        "Beyond those, the only class-level facts it usually carries are its due date and any "
+        "convention it states for the whole course."
+    ),
+    "syllabus": (
+        "This document is a syllabus. This is where grading, deadlines, prerequisites, and "
+        "the instructor's details actually live, so read it for all of them."
+    ),
+    "lecture_notes": (
+        "This document is a set of lecture notes. Its topics are what it teaches, and its "
+        "notation and conventions are the course's own."
+    ),
+}
+
+_CONSOLIDATION_PROMPT = """\
+You are tidying the profile of one course. The entries below were pulled out of the student's
+documents one file at a time, so the same thing often appears more than once in different
+words, and some of them turned out to describe a file rather than the course.
+
+Return JSON with two fields:
+
+- "duplicates": a list of groups, each group a list of the numbers that name the same thing,
+  best-worded first. The first number in a group is kept and the rest are folded into it.
+  Group two entries only when a student would call them one entry written twice. Related is
+  not the same: "Fourier transform" and "inverse Fourier transform" stay separate, and so do
+  "convolution" and "circular convolution".
+- "not_about_the_course": a list of the numbers that describe a file rather than the course.
+  An assignment's number, a document's title or type, how many problems it contains, the
+  course code or term, an instruction that applies to one worksheet only. Nothing is deleted;
+  these are set aside for the student to look at.
+
+Leave a number out of both lists when you are not sure. Every number you return must be one
+from the list below. Do not invent entries and do not rename anything.
+
 Reply with JSON only. No prose, no explanation, and no code fence."""
 
 _CONTEXT_HEADING = "Retrieved context from the student's uploaded material:"
@@ -98,6 +175,17 @@ problem has:
 - "page": the page it starts on, as a whole number, or null if you cannot tell.
 - "parts": a list of its lettered or numbered sub-parts, each with "label" and
   "statement". An empty list when the problem has none.
+- "parts_relation": how those sub-parts relate to each other. Omit it when there are none.
+  - "separate" when each part is its own question with its own final answer, and
+    answering one does not need the answer to another. A stem that hands the same
+    question to a list of cases -- "For each system below, determine whether it is
+    linear", "Sketch each of the following signals" -- is this: the parts are the cases,
+    and the sheet expects one answer per case.
+  - "one_solution" when the parts build a single solution: a later part uses an earlier
+    part's result, the parts are stages of one derivation, or the problem asks for one
+    final answer that all of them lead to.
+  Decide it from the sheet, not from how many parts there are. Five parts can be one
+  derivation and two parts can be two questions.
 
 Copy statements verbatim. A statement you paraphrased is one the student cannot check
 against their own sheet.
@@ -132,6 +220,10 @@ Return JSON with two fields:
   does; "content", the working for that step written in markdown with LaTeX for
   mathematics; and "sources", a list of the bracketed context numbers that step relies
   on, or an empty list when it relies on none.
+  A title is mostly words, but any mathematics in one is mathematics and takes $...$ the
+  same as the content does: "Part (a) Convolution of $u(t)$ and $e^{-t}u(t)$", never
+  "Part (a) Convolution of u(t) and e^{-t}u(t)". A title is a heading, so it never takes
+  display math.
 - "answer": the final result, stated plainly. Include units where the problem has them.
 
 Cite in "sources" every numbered entry a step actually used, and only those. The reference
@@ -228,6 +320,7 @@ def build_solve_prompt(
     statement: str,
     label: str,
     *,
+    preamble: str = "",
     sub_parts: list[tuple[str, str]] | None = None,
     context_block: str = "",
     reference_block: str = "",
@@ -242,6 +335,11 @@ def build_solve_prompt(
     Args:
         statement: The problem text, as confirmed at the review gate.
         label: What the sheet calls it, used so the model's own wording matches.
+        preamble: The instruction above this part, when the problem being solved is one
+            part of a set of them. `(b) $y(t) = x^2(t)$` is not a question; it becomes
+            one under "For each system below, determine whether it is linear", and
+            sending the part without the sentence that asks something of it is sending
+            the model an expression and hoping.
         sub_parts: Lettered sub-parts as `(label, statement)`, solved in the same turn
             because they share context.
         context_block: Retrieved course material, already numbered by
@@ -255,7 +353,12 @@ def build_solve_prompt(
     Returns:
         OpenAI-shaped messages.
     """
-    sections = [f"{label}\n\n{statement}"]
+    sections = [
+        f"{label}\n\n{preamble}\n\n{statement}\n\nSolve this part only. Its neighbours are "
+        "being solved separately and are not yours to answer."
+        if preamble
+        else f"{label}\n\n{statement}"
+    ]
     if sub_parts:
         sections.append(
             "Sub-parts, all of which this solution must answer:\n"
@@ -357,8 +460,26 @@ def format_step_context(
     return f"{heading}\n\n{problem_heading}\n{problem}\n\nThe step:\n{step}\n\n{_ANCHORED_SCOPE}"
 
 
+def _fact_line(row: sqlite3.Row) -> str:
+    """One fact as a prompt line, without a label that only restates its section heading."""
+    label = str(row["label"]).strip()
+    value = str(row["value"]).strip()
+    if not value:
+        return f"- {label}"
+    # A topic arrives labelled "Topic" under a heading that already reads "Topics". Printing
+    # both spends tokens to say nothing and shows the model the shape of the extractor.
+    if not label or label.casefold() == str(row["kind"]).casefold():
+        return f"- {value}"
+    return f"- {label}: {value}"
+
+
 def _render_facts(facts: list[sqlite3.Row], heading: str) -> str:
-    """Render one already-filtered fact list, or an empty string when there is nothing to show."""
+    """Render one already-filtered fact list, or an empty string when there is nothing to show.
+
+    Rows arrive from `select_active_facts` ordered by evidence, most-attested first, so the
+    per-kind cap keeps the topics the course revolves around and drops the ones a single
+    document mentioned once. The profile is orientation; retrieval carries the detail.
+    """
     if not facts:
         return ""
     grouped: dict[str, list[sqlite3.Row]] = {}
@@ -372,7 +493,7 @@ def _render_facts(facts: list[sqlite3.Row], heading: str) -> str:
         if not rows:
             continue
         lines = [f"{_KIND_HEADINGS.get(kind, kind.capitalize())}:"]
-        lines += [f"- {row['label']}: {row['value']}" for row in rows]
+        lines += [_fact_line(row) for row in rows[:MAX_FACTS_PER_KIND]]
         sections.append("\n".join(lines))
     return f"{heading}\n" + "\n".join(sections)
 
@@ -403,19 +524,70 @@ def build_system_prompt(
     return "\n\n".join(parts)
 
 
-def build_extraction_prompt(text: str) -> list[dict[str, str]]:
+def _course_identity(course: Mapping[str, object] | None) -> str:
+    """Tell the model what the class already is, so it stops reporting it as a finding."""
+    if course is None:
+        return ""
+    described = ", ".join(
+        str(course[key]).strip()
+        for key in ("name", "code", "semester")
+        if str(course.get(key) or "").strip()
+    )
+    if not described:
+        return ""
+    return (
+        f"The student has already recorded this class as: {described}. That is settled, so "
+        "do not report any part of it back as a fact you found."
+    )
+
+
+def build_extraction_prompt(
+    text: str,
+    doc_type: str | None = None,
+    course: Mapping[str, object] | None = None,
+) -> list[dict[str, str]]:
     """Build the profile-extraction messages for one document.
 
     Args:
         text: Document text, already truncated to the extraction budget by the caller.
+        doc_type: What `detect_doc_type` decided, which tells the model what this document
+            is worth reading for. An unrecognised or missing type adds nothing.
+        course: The class row, for its `name`, `code`, and `semester`. Naming them is what
+            stops every upload proposing them again as if they were discoveries.
 
     Returns:
         OpenAI-shaped messages. The parser downstream is defensive regardless, but asking
         for bare JSON keeps the common case clean.
     """
+    parts = [_EXTRACTION_PROMPT]
+    guidance = _EXTRACTION_DOC_TYPES.get(doc_type or "")
+    if guidance:
+        parts.append(guidance)
+    identity = _course_identity(course)
+    if identity:
+        parts.append(identity)
+    parts.append(_EXTRACTION_SUFFIX)
     return [
-        {"role": "system", "content": f"{_EXTRACTION_PROMPT}\n\n{_EXTRACTION_SUFFIX}"},
+        {"role": "system", "content": "\n\n".join(parts)},
         {"role": "user", "content": text},
+    ]
+
+
+def build_consolidation_prompt(entries: list[str]) -> list[dict[str, str]]:
+    """Build the class-scope consolidation messages.
+
+    Args:
+        entries: Fact subjects, already prefixed with their kind by the caller, in the order
+            the caller will read the reply's numbers back against.
+
+    Returns:
+        OpenAI-shaped messages. Entries are numbered from one, because a model handles a
+        short ordinal far more reliably than a database id.
+    """
+    numbered = "\n".join(f"{index}. {entry}" for index, entry in enumerate(entries, start=1))
+    return [
+        {"role": "system", "content": _CONSOLIDATION_PROMPT},
+        {"role": "user", "content": numbered},
     ]
 
 

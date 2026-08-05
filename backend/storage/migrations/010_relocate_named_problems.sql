@@ -1,0 +1,12 @@
+-- A second look for the problems that were searched for under a weaker rule.
+--
+-- `[]` in `bbox` means "looked for and not found", which is what stopped the startup
+-- backfill reopening the same PDF on every start. The rule that decided it has changed: a
+-- sheet whose problems are named rather than numbered -- "Linearity and Time-Invariance",
+-- with no digit anywhere in the label -- could not be searched for at all, so every one of
+-- its problems came back empty and its page image had no bands and nothing to click.
+--
+-- Clearing the empties puts exactly those rows back in front of the backfill, which runs
+-- once at the next start and settles them under the new rule. A row that is genuinely
+-- unfindable writes `[]` again and is skipped from then on, as before.
+update artifact_provenance set bbox = null where bbox = '[]';

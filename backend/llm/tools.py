@@ -31,6 +31,7 @@ from dataclasses import dataclass
 import httpx
 
 from backend.core.errors import ToolsUnsupportedError
+from backend.llm import replies
 from backend.llm.client import AssistantMessage, ToolCall, complete_with_tools
 from backend.tools import cas, units
 from backend.tools.result import ToolResult, failure
@@ -189,9 +190,18 @@ def _clean(schema: object) -> object:
     return {key: value for key, value in schema.items() if key != "optional"}
 
 
+# Naming the notation is cheaper than refusing it. Measured against a real signals set, the
+# checker reached for `2x`, `i` for the imaginary unit, and `u(t)` for the unit step; two of
+# those now work and the third has to be written differently, so the description says which.
 _NUMBER_EXPRESSION = {
     "type": "string",
-    "description": "A mathematical expression in plain notation, such as 3*x**2 + 1.",
+    "description": (
+        "A mathematical expression in plain notation, such as 3*x**2 + 1. Write every "
+        "multiplication: `2*x`, not `2x`. `u(t)` is the unit step and `delta(t)` the "
+        "impulse. Use `I` or `j` for the imaginary unit, never `i`. `oo` or `inf` is "
+        "infinity. `integrate(f, t, a, b)`, `diff(f, t)` and `limit(f, t, a)` may be used "
+        "inside an expression, which is how to compare an integral against a closed form."
+    ),
 }
 
 REGISTRY: dict[str, ToolDefinition] = {
@@ -294,11 +304,13 @@ def tool_schemas() -> list[dict[str, object]]:
 
 
 def _parse_arguments(raw: str) -> dict[str, object] | None:
-    """Read the model's argument JSON, or None when it is not a usable object."""
-    try:
-        parsed = json.loads(raw or "{}")
-    except ValueError:
-        return None
+    """Read the model's argument JSON, or None when it is not a usable object.
+
+    Through `replies`, so an expression a model wrote in the notation it had been reading —
+    `\\frac{1}{2}` rather than `1/2` — reaches the tool and is refused there, with a message
+    saying what was wrong with it, rather than being dropped as unparseable arguments.
+    """
+    parsed = replies.loads(raw or "{}")
     return parsed if isinstance(parsed, dict) else None
 
 

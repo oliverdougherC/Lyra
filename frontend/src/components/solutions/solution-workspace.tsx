@@ -4,6 +4,7 @@ import { Printer } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
+import { FitPageButton } from '@/components/solutions/fit-page-button'
 import { FocusToggle } from '@/components/solutions/focus-toggle'
 import { MarkWrongDialog } from '@/components/solutions/mark-wrong-dialog'
 import { ProblemPanel, type ProblemTree } from '@/components/solutions/problem-panel'
@@ -45,26 +46,21 @@ const MIN_SOURCE_PX = 320
 const MAX_SPLIT = 70
 
 /**
- * How wide the magnifier is allowed to push the document.
- *
- * Short of `MAX_SPLIT`: a band is far wider than it is tall, so it always asks for more
- * width than the window has and simply takes whatever ceiling it is given. At the full 70
- * the solutions beside it are squeezed into a column that wraps its own headings, and the
- * two are meant to be read together.
- */
-const MAX_MAGNIFIED_SPLIT = 64
-
-/**
  * One panel's share of the group, as a percentage.
  *
  * The library reports a layout as flex-grow values whose total is whatever the panels
  * happen to sum to, so the share is computed rather than read: assuming they add to 100
  * would silently drift.
+ *
+ * Returned unrounded. A share is a percentage of a window, so one whole percent is fourteen
+ * pixels on a laptop and thirty on an ultrawide: rounding here is how a column asked for a
+ * particular width in pixels ended up somewhere else, and how the same width, recomputed
+ * against a window that had moved a little, kept landing on a different whole percent.
  */
 function shareOf(layout: Record<string, number>, id: string): number {
   const total = Object.values(layout).reduce((sum, value) => sum + value, 0)
   if (!total) return DEFAULT_SPLIT
-  return Math.round(((layout[id] ?? 0) / total) * 100)
+  return ((layout[id] ?? 0) / total) * 100
 }
 
 /**
@@ -96,6 +92,30 @@ const JUMP_GAP_PX = 8
 
 function easeOutCubic(progress: number): number {
   return 1 - (1 - progress) ** 3
+}
+
+/**
+ * Where the viewport has to sit for `item`'s heading to be at the top of the pane.
+ *
+ * Computed from the item, never measured off the heading, and that is the whole point of
+ * the function. The heading is `sticky top-0` inside its item, so a heading that has
+ * scrolled out of view is not left behind above the pane: it is pinned to the bottom edge
+ * of its own container. Ask a problem above the reader where its heading is and it answers
+ * with the end of that problem, which is the start of the next one, so a jump backwards
+ * from problem four to problem one landed on the top of problem two. Jumps forward were
+ * always right, because a heading below the fold has never stuck to anything, which is what
+ * made this look like a bug about direction. `offsetTop` reports the same displacement and
+ * is no way out.
+ *
+ * The item's own box is static and therefore honest, and the heading begins exactly where
+ * the item's top padding ends. Reading that padding rather than hardcoding it keeps the
+ * first problem, which carries no gap above it, from needing a case of its own.
+ */
+export function jumpTargetTop(viewport: HTMLElement, item: HTMLElement, gap: number): number {
+  const paddingTop = parseFloat(getComputedStyle(item).paddingTop) || 0
+  const offset =
+    item.getBoundingClientRect().top - viewport.getBoundingClientRect().top + paddingTop
+  return Math.max(0, viewport.scrollTop + offset - gap)
 }
 
 /**
@@ -172,6 +192,10 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
   )
   const groupRef = useRef<GroupImperativeHandle | null>(null)
   const groupElementRef = useRef<HTMLDivElement | null>(null)
+  // The width the two columns share, watched rather than read once: a layout held as
+  // percentages says nothing about how wide the window was when they were computed, and the
+  // effect below needs that to keep the document column at a fixed size in pixels.
+  const [groupWidth, setGroupWidth] = useState(0)
   // The width the source column needs for its page to stand whole, in pixels, as measured
   // by the pane that renders it. Remeasured whenever the window changes height, because
   // that is what a page has to fit into.
@@ -180,20 +204,6 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
   // Which pane, if either, has the window to itself. Not persisted: it is a thing you do
   // to read one page closely, not a layout you live in.
   const [focused, setFocused] = useState<'source' | 'solutions' | null>(null)
-  // Crop the document to the problem in view and scale it up. Not persisted, like `focused`:
-  // it is a way of reading one problem closely, not a layout to live in.
-  const [magnified, setMagnified] = useState(false)
-  const [hoveredId, setHoveredId] = useState<number | null>(null)
-  // Whether the reader has dragged the split since the magnifier was last switched. Reset
-  // during render rather than from an effect: the layout effect that applies the fit runs
-  // before any passive effect could clear this, and would spend the commit the magnifier
-  // turns on reading the previous session's answer.
-  const [magnifyOverridden, setMagnifyOverridden] = useState(false)
-  const [lastMagnified, setLastMagnified] = useState(magnified)
-  if (lastMagnified !== magnified) {
-    setLastMagnified(magnified)
-    setMagnifyOverridden(false)
-  }
   const [askingAbout, setAskingAbout] = useState<SolutionPart | null>(null)
   const [markingWrong, setMarkingWrong] = useState<SolutionPart | null>(null)
   const [showingHistory, setShowingHistory] = useState<SolutionPart | null>(null)
@@ -231,13 +241,7 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
     solution.parts.length,
     tree[0]?.problem.id ?? null,
   )
-  // Which problem the document is showing. Normally the one being read; while magnified,
-  // the pointer may borrow it, so running along the strip scans the sheet through the
-  // numbers. Only while magnified: unasked-for, a hover that turned the page would move the
-  // document out from under someone who was only on their way to clicking something.
-  const previewId = magnified ? hoveredId : null
-  const shownId = previewId ?? activeId
-  const shown = tree.find((node) => node.problem.id === shownId)
+  const shown = tree.find((node) => node.problem.id === activeId)
   const anchor = shown ? anchorOf(shown.problem) : null
 
   // The problem to scroll to once there is a pane to scroll. Clicking a band on the page
@@ -266,26 +270,18 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
   useLayoutEffect(() => {
     const problemId = pendingJump.current
     if (problemId === null || !viewport) return
-    const item = viewport.querySelector(`[data-problem-id="${problemId}"]`)
+    const item = viewport.querySelector<HTMLElement>(`[data-problem-id="${problemId}"]`)
     pendingJump.current = null
     if (!item) return
-    // The heading, not the item that contains it: the item opens with the margin that
-    // separates it from the problem above, and aiming at that put the title 56px down an
-    // otherwise empty pane. Nothing above a heading is the point of jumping to it.
-    const target = item.querySelector('[data-problem-heading]') ?? item
     // Positioned rather than left to `scrollIntoView`, which lands the problem hard against
     // the top of the pane and, in some browsers, does nothing at all when it is asked to do
-    // it smoothly.
-    const top =
-      viewport.scrollTop +
-      target.getBoundingClientRect().top -
-      viewport.getBoundingClientRect().top -
-      JUMP_GAP_PX
+    // it smoothly. `jumpTargetTop` explains why the heading is computed and not measured.
+    const top = jumpTargetTop(viewport, item, JUMP_GAP_PX)
     // Travelled rather than cut to. A jump between two problems that look alike leaves the
     // reader to work out whether the pane moved at all and in which direction; the movement
     // itself is the answer. Returned as cleanup, so a second jump abandons the first rather
     // than two animations fighting over the same scrollTop.
-    return travelTo(viewport, Math.max(0, top))
+    return travelTo(viewport, top)
   }, [jumpVersion, viewport])
 
   /**
@@ -295,30 +291,49 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
    * reports its fit from the load that reveals the page, so the column is already the right
    * width by the time there is anything in it to see, and no resize is ever visible.
    *
-   * Only the column's own reasons to change width run through here — a page of a different
-   * shape, a window of a different height, the magnifier. A window that changed *width* is
-   * not one of them: the source column keeps its pixels across that (see the panel's
-   * `groupResizeBehavior`) and the solutions column spends the difference, which is the
-   * only reading of a wider window that leaves the page exactly as readable as it was.
+   * This sets the width; it does not defend it. Defending it is `preserve-pixel-size` on the
+   * panel, which is applied while the group is being laid out and so is never a frame behind
+   * it. Defending it from here meant reading the new group width, re-rendering, and setting
+   * a new share — a correction that always arrived after the thing it was correcting, and
+   * with the rail sliding open beside it that read as the document lurching wider and being
+   * snatched back, over and over, for the fifth of a second the rail takes.
+   *
+   * So this runs when the *target* changes and at essentially no other time: a page decoded,
+   * a window whose new height wants a different width, a reader dragging the split.
    */
   useLayoutEffect(() => {
     if (!wide || focused !== null) return
     const group = groupRef.current
-    const total = groupElementRef.current?.clientWidth ?? 0
-    if (!group || !total) return
-
-    // Magnifying is an explicit request to make the document bigger, so it outranks a width
-    // the reader dragged earlier — and switching it off hands that width straight back.
-    // Unless they have since dragged *while* magnified, which is a choice about this view
-    // and would otherwise be undone by the next render.
-    const target = (magnified && !magnifyOverridden) || chosenWidth === 0 ? fitWidth : chosenWidth
-    if (target === null) return
-    const ceiling = magnified ? MAX_MAGNIFIED_SPLIT : MAX_SPLIT
-    const width = Math.min(Math.max(target, MIN_SOURCE_PX), (total * ceiling) / 100)
-    const share = Math.round((width / total) * 100)
-    if (Math.abs(shareOf(group.getLayout(), 'source') - share) < 1) return
+    // Read live rather than taken from `groupWidth`, which is only what told this effect to
+    // run again: reading the element here is a measurement taken now, and a share computed
+    // from a width the window has already moved past puts the column at the wrong size.
+    const total = groupElementRef.current?.clientWidth || groupWidth
+    const target = chosenWidth === 0 ? fitWidth : chosenWidth
+    if (!group || !total || target === null) return
+    const width = Math.min(Math.max(target, MIN_SOURCE_PX), (total * MAX_SPLIT) / 100)
+    const share = (width / total) * 100
+    // Half a pixel, not a percent. The guard is here to stop this effect from setting a
+    // layout it just set, and a threshold of a whole percent was wide enough to swallow the
+    // difference between the width asked for and the width applied.
+    if (Math.abs(shareOf(group.getLayout(), 'source') - share) * (total / 100) < 0.5) return
     group.setLayout({ source: share, solutions: 100 - share })
-  }, [chosenWidth, fitWidth, focused, magnified, magnifyOverridden, wide])
+  }, [chosenWidth, fitWidth, focused, groupWidth, wide])
+
+  // The group's own width, which nothing else reports. Only the window is listened to, and
+  // deliberately: a group that changed width because something inside the page moved — the
+  // rail folding away, the shell reflowing — needs no answer from here, because the column
+  // holds its pixel width on its own. The window is different only in that its edges are
+  // also what `MAX_SPLIT` is measured against, so a window dragged narrow enough to squeeze
+  // the column, and then wide again, has to be told it may have its width back.
+  useEffect(() => {
+    const node = groupElementRef.current
+    if (!node) return
+    const measure = () => setGroupWidth(node.clientWidth)
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+    // The element exists only while the two columns are actually split.
+  }, [focused, wide])
 
   const handleRegenerate = (problem: SolutionPart, correction: string) => {
     regenerate.mutate(
@@ -343,12 +358,7 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
         {/* The strip stands where the pane's title used to. A row of numbers says what it
             is more directly than the word "Solutions" did, and it says where you are. */}
         {tree.length > 1 ? (
-          <ProblemStrip
-            problems={problems}
-            activeId={activeId}
-            onSelect={jumpTo}
-            onHover={setHoveredId}
-          />
+          <ProblemStrip problems={problems} activeId={activeId} onSelect={jumpTo} />
         ) : (
           <span className="text-text-tertiary text-xs tracking-wide uppercase">Solutions</span>
         )}
@@ -366,7 +376,11 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
           ) : null}
         </span>
       </header>
-      <ScrollArea viewportRef={attachViewport} className="min-h-0 flex-1">
+      {/* No bar down the edge. Every problem's heading is `sticky top-0` and paints over
+          the rail's top end, so the one part of it that says where you are was the part
+          that was covered. The strip in the header above already answers that question,
+          and better. */}
+      <ScrollArea viewportRef={attachViewport} scrollbar={false} className="min-h-0 flex-1">
         {/* The last problem needs somewhere to end. Matching the top padding left it
             touching the bottom edge of the pane. */}
         <div className="px-4 pt-2 pb-10">
@@ -418,11 +432,19 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
       documents={documents.data ?? []}
       anchor={anchor}
       regions={regions}
-      activeProblemId={shownId}
+      activeProblemId={activeId}
       onSelectProblem={jumpTo}
       onFitWidth={setFitWidth}
-      magnified={magnified}
-      onMagnifiedChange={setMagnified}
+      // Only where there is a split to size. Focused, the pane already has the window;
+      // narrow, the two panes stack and neither has a width of its own to set.
+      fitToggle={
+        wide && focused === null ? (
+          // Zero is "never dragged", which is what puts the measured fit back in charge —
+          // and keeps it there, so the column tracks the fit again when the window changes
+          // height rather than holding a width that was right for the old one.
+          <FitPageButton fitted={chosenWidth === 0} onFit={() => setChosenWidth(0)} />
+        ) : null
+      }
       focusToggle={
         wide ? (
           <FocusToggle
@@ -464,18 +486,23 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
               if (!meta.isUserInteraction) return
               const total = groupElementRef.current?.clientWidth ?? 0
               if (!total) return
-              // Stops the fit from putting the magnified width straight back.
-              setMagnifyOverridden(true)
               setChosenWidth(Math.round((shareOf(layout, 'source') / 100) * total))
             }}
           >
-            {/* The document column is a width in pixels, and a window that grows or shrinks
-                horizontally is not a reason to change it: the page inside was already the
-                size it needed to be. The solutions column absorbs the whole difference,
-                which is where a wider window is worth something. */}
+            {/* The document column is a width in pixels, and a group that grows or shrinks
+                around it is not a reason to change it: the page inside was already the size
+                it needed to be. `preserve-pixel-size` is that sentence as a layout rule, and
+                it holds during the layout pass itself — so the rail sliding open, or the
+                window being dragged, moves only the edge between the two columns and never
+                the page. The solutions column absorbs the whole difference, which is where
+                a wider window is worth something.
+
+                The ceiling lives here too rather than in the effect above, so a window
+                dragged narrow squeezes the column on the way past rather than after. */}
             <ResizablePanel
               id="source"
               minSize={MIN_SOURCE_PX}
+              maxSize={`${MAX_SPLIT}`}
               groupResizeBehavior="preserve-pixel-size"
               className="print:hidden"
             >
@@ -590,14 +617,30 @@ function useActiveProblem(
  * The backend returns a depth-first walk, so one pass is enough. Sub-parts are `problem`
  * kind under a problem: they are part of the question, not of the answer, and rendering
  * them as steps would present the question as working.
+ *
+ * A sub-part carries a solution of its own when its problem says its parts are separate
+ * questions. The same rows in the same shape either way — what moves is where the steps
+ * hang — so this reads both and the panel renders whichever it was given.
  */
 export function buildTree(parts: SolutionPart[]): ProblemTree[] {
   const roots = parts.filter((part) => part.parent_part_id === null && part.kind === 'problem')
   return roots.map((problem) => {
     const children = parts.filter((part) => part.parent_part_id === problem.id)
+    const subParts = children.filter((part) => part.kind === 'problem')
     return {
       problem,
-      subParts: children.filter((part) => part.kind === 'problem'),
+      // Read off the problem rather than inferred from whether the parts have steps: a
+      // section part-way through its first solve has neither, and reading it that way
+      // would render it as one problem and then reshape it under the student mid-solve.
+      separate: problem.solve_parts === 'separately' && subParts.length > 0,
+      subParts: subParts.map((part) => {
+        const own = parts.filter((entry) => entry.parent_part_id === part.id)
+        return {
+          problem: part,
+          steps: own.filter((entry) => entry.kind === 'step'),
+          answer: own.find((entry) => entry.kind === 'answer') ?? null,
+        }
+      }),
       steps: children.filter((part) => part.kind === 'step'),
       answer: children.find((part) => part.kind === 'answer') ?? null,
     }

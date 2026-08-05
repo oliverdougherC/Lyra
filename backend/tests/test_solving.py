@@ -646,6 +646,48 @@ def test_agreement_without_a_single_tool_call_is_not_a_pass() -> None:
     assert outcome.verdict == artifacts.UNCHECKABLE
 
 
+def test_an_agreement_nothing_settled_says_why_before_it_says_what() -> None:
+    """A "Nothing to check" badge above a paragraph on why every step is right, reconciled.
+
+    The checker read the work and agreed, and no calculation settled any of it. Both halves
+    are true and the student was shown only the second, so the badge and the sentence under
+    it contradicted each other with nothing to say which to believe.
+    """
+    outcome = verification.judge(
+        _loop('{"verdict": "agrees", "detail": "The factorisation is correct."}')
+    )
+
+    assert outcome.verdict == artifacts.UNCHECKABLE
+    # The reason first, because that is what the badge is saying.
+    assert outcome.detail.startswith(verification.NO_CHECKS_DETAIL)
+    # And the checker's own words after it, not instead of it.
+    assert "The factorisation is correct." in outcome.detail
+
+
+def test_a_check_whose_every_calculation_failed_is_not_nothing_to_check() -> None:
+    """Something here was worth settling. Settling it broke, which is a different outcome.
+
+    Reading it as `uncheckable` files a broken check under "this solution had nothing in it
+    to check", which is the one reading that makes a failure invisible.
+    """
+    outcome = verification.judge(
+        _loop('{"verdict": "agrees", "detail": "Looks right."}', (_call(ok=False),))
+    )
+
+    assert outcome.verdict == artifacts.UNCHECKED
+    assert outcome.detail == verification.CHECKS_FAILED_DETAIL
+
+
+def test_an_unreadable_reply_with_no_tool_calls_is_unchecked_not_uncheckable() -> None:
+    # Whatever that reply holds, it is not an opinion about the work, so it must not be
+    # dressed as one. It used to arrive as the detail of a `Nothing to check` badge, raw
+    # braces and all.
+    outcome = verification.judge(_loop("I had a look and it seems fine to me"))
+
+    assert outcome.verdict == artifacts.UNCHECKED
+    assert outcome.detail.startswith(verification.UNREADABLE_DETAIL)
+
+
 def test_agreement_backed_by_a_tool_call_is_verified() -> None:
     outcome = verification.judge(
         _loop('{"verdict": "agrees", "detail": "The integral matches."}', (_call(),))
@@ -653,6 +695,25 @@ def test_agreement_backed_by_a_tool_call_is_verified() -> None:
 
     assert outcome.verdict == artifacts.VERIFIED
     assert outcome.detail == "The integral matches."
+
+
+def test_a_report_written_in_the_notation_it_checked_is_still_a_report() -> None:
+    """A check that ran, called its tools, and agreed, reported as unchecked.
+
+    `$\\omega$` is not a valid JSON escape, so the whole report was refused and the student
+    was shown "the check did not report a result Lyra could read", quoting the very verdict
+    it had just declined to read. In a signals class every other detail says `\\omega`.
+    """
+    outcome = verification.judge(
+        _loop(
+            '{"verdict": "agrees", "detail": "The fundamental period $T$ and the angular '
+            'frequency $\\omega = 2\\pi f$ are both correct."}',
+            (_call(),),
+        )
+    )
+
+    assert outcome.verdict == artifacts.VERIFIED
+    assert "\\omega = 2\\pi f" in outcome.detail
 
 
 def test_a_disagreement_is_refuted_and_names_what_disagreed() -> None:
@@ -788,3 +849,237 @@ def test_the_tool_calls_behind_a_verdict_are_stored(
     assert [check["tool"] for check in checks] == ["cas_integrate"]
     assert json.loads(str(checks[0]["result"]))["value"] == "t**2/2"
     assert problem["verdict"] == artifacts.VERIFIED
+
+
+# A section whose lettered parts are questions of their own. The sheet that made this
+# necessary reads "For each system below, determine whether it is linear: (a) ... (e)":
+# five questions, five answers, five verdicts, and five things that can be re-solved
+# without touching the other four.
+
+_STEM = "For each system below, determine whether the system is linear and time-invariant."
+
+
+def _section(
+    db: sqlite3.Connection,
+    class_id: int,
+    parts: list[str],
+    *,
+    solve_parts: str = artifacts.SEPARATELY,
+) -> tuple[int, int]:
+    """A one-section set at the gate. Returns `(artifact_id, section_part_id)`."""
+    document_id = _document(db, class_id)
+    created = artifacts.create_artifact(db, class_id, "Problem set 2", [SourceSpec(document_id)])
+    artifact_id = int(created["id"])
+    section_id = artifacts.create_part(
+        db,
+        artifact_id,
+        artifacts.PROBLEM,
+        0,
+        label="Linearity and Time-Invariance",
+        content=_STEM,
+        solve_parts=solve_parts,
+    )
+    for index, statement in enumerate(parts):
+        artifacts.create_part(
+            db,
+            artifact_id,
+            artifacts.PROBLEM,
+            index,
+            label=f"({chr(ord('a') + index)})",
+            content=statement,
+            parent_part_id=section_id,
+        )
+    artifacts.set_artifact_state(db, artifact_id, artifacts.AWAITING_REVIEW)
+    return artifact_id, section_id
+
+
+def test_each_part_of_a_split_section_is_solved_on_its_own(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_id, section_id = _section(db, class_id, ["$y(t) = x(t-2)$", "$y(t) = x^2(t)$"])
+    sent = fake_solver(monkeypatch, _SOLUTION)
+
+    solver.run_solve(artifact_id)
+
+    # One turn per part, not one for the section.
+    assert len(sent) == 2
+    parts = _children(db, section_id, artifacts.PROBLEM)
+    for part in parts:
+        part_id = int(part["id"])
+        assert len(_children(db, part_id, artifacts.STEP)) == 2
+        assert len(_children(db, part_id, artifacts.ANSWER)) == 1
+    # And nothing hangs off the section itself: it asks the question, it does not answer.
+    assert _children(db, section_id, artifacts.STEP) == []
+    assert _children(db, section_id, artifacts.ANSWER) == []
+
+
+def test_a_part_reaches_the_model_under_the_sentence_that_asks_something_of_it(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`$y(t) = x^2(t)$` is not a question. Under the stem it is."""
+    artifact_id, _ = _section(db, class_id, ["$y(t) = x(t-2)$", "$y(t) = x^2(t)$"])
+    sent = fake_solver(monkeypatch, _SOLUTION)
+
+    solver.run_solve(artifact_id)
+
+    second = sent[1][1]["content"]
+    assert _STEM in second
+    assert "$y(t) = x^2(t)$" in second
+    # The part beside it belongs to another turn. Left in, the model answers both and the
+    # student reads the same working twice under two headings.
+    assert "$y(t) = x(t-2)$" not in second
+    assert "Linearity and Time-Invariance (b)" in second
+
+
+def test_a_split_part_retrieves_on_the_words_the_course_uses(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The notation is in the part; the vocabulary is in the stem. Retrieval needs both."""
+    artifact_id, _ = _section(db, class_id, ["$y(t) = x^2(t)$"])
+    queries: list[str] = []
+    fake_solver(monkeypatch, _SOLUTION)
+    monkeypatch.setattr(
+        solving,
+        "retrieve",
+        lambda conn, class_id, query, budget: (
+            queries.append(query)
+            or RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+        ),
+    )
+
+    solver.run_solve(artifact_id)
+
+    assert "linear and time-invariant" in queries[0]
+    assert "x^2(t)" in queries[0]
+
+
+def test_a_split_section_counts_its_parts_as_the_work(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_id, _ = _section(db, class_id, ["First.", "Second.", "Third."])
+    fake_solver(monkeypatch, _SOLUTION)
+
+    solver.run_solve(artifact_id)
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    # One section, three questions. Counting sections reported a sheet as a third done
+    # when it was a third of the way through its first section.
+    assert artifact["problems_total"] == 3
+    assert artifact["problems_done"] == 3
+
+
+def test_a_section_is_finished_when_its_last_part_is(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing solves the section itself, so nothing else would ever move it off pending."""
+    artifact_id, section_id = _section(db, class_id, ["First.", "Second."])
+    fake_solver(monkeypatch, _SOLUTION)
+
+    solver.run_solve(artifact_id)
+
+    assert artifacts.get_part(db, section_id)["status"] == artifacts.PART_COMPLETE
+
+
+def test_one_part_that_fails_leaves_the_rest_of_its_section_readable(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.core.errors import UpstreamError
+
+    artifact_id, section_id = _section(db, class_id, ["First.", "Second."])
+    fake_solver(monkeypatch, [UpstreamError("The tutor endpoint is not reachable."), _SOLUTION])
+
+    solver.run_solve(artifact_id)
+
+    first, second = _children(db, section_id, artifacts.PROBLEM)
+    assert first["status"] == artifacts.PART_FAILED
+    assert second["status"] == artifacts.PART_COMPLETE
+    assert len(_children(db, int(second["id"]), artifacts.STEP)) == 2
+    # The section is done being worked through either way, and the failure is visible on
+    # the one part it belongs to.
+    assert artifacts.get_part(db, section_id)["status"] == artifacts.PART_COMPLETE
+    assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.READY
+
+
+def test_re_solving_one_part_leaves_its_neighbours_alone(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The point of the whole split: a wrong (c) costs (c), not the section."""
+    artifact_id, section_id = _section(db, class_id, ["First.", "Second."])
+    fake_solver(monkeypatch, _SOLUTION)
+    solver.run_solve(artifact_id)
+
+    first, second = _children(db, section_id, artifacts.PROBLEM)
+    untouched = [step["content"] for step in _children(db, int(first["id"]), artifacts.STEP)]
+
+    sent = fake_solver(
+        monkeypatch,
+        {"steps": [{"title": "Redone", "content": "A better reading."}], "answer": "Not LTI"},
+    )
+    solver.run_regeneration(artifact_id, int(second["id"]), "You dropped the squaring.")
+
+    assert len(sent) == 1
+    assert [
+        step["content"] for step in _children(db, int(first["id"]), artifacts.STEP)
+    ] == untouched
+    assert [step["content"] for step in _children(db, int(second["id"]), artifacts.STEP)] == [
+        "A better reading."
+    ]
+
+
+def test_a_part_is_checked_as_a_question_rather_than_as_an_expression(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each part gets its own verdict, and the checker is given something checkable."""
+    artifact_id, section_id = _section(db, class_id, ["$y(t) = x(t-2)$", "$y(t) = x^2(t)$"])
+    fake_solver(monkeypatch, _SOLUTION, tool_support=True)
+    asked: list[tuple[str, str]] = []
+
+    def verify(config: object, statement: str, label: str, solution: str, **kwargs: object):
+        asked.append((statement, label))
+        return verification.VerificationOutcome(
+            verdict=artifacts.VERIFIED, detail="Checked.", checks=()
+        )
+
+    monkeypatch.setattr(solver.verification, "verify", verify)
+    solver.run_solve(artifact_id)
+
+    assert [label for _, label in asked] == [
+        "Linearity and Time-Invariance (a)",
+        "Linearity and Time-Invariance (b)",
+    ]
+    # "Is $y(t) = x^2(t)$ correct" is not a question anyone can check.
+    assert all(_STEM in statement for statement, _ in asked)
+    assert [part["verdict"] for part in _children(db, section_id, artifacts.PROBLEM)] == [
+        artifacts.VERIFIED,
+        artifacts.VERIFIED,
+    ]
+
+
+def test_a_section_kept_together_is_solved_exactly_as_it_always_was(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_id, section_id = _section(
+        db, class_id, ["First.", "Second."], solve_parts=artifacts.TOGETHER
+    )
+    sent = fake_solver(monkeypatch, _SOLUTION)
+
+    solver.run_solve(artifact_id)
+
+    assert len(sent) == 1
+    assert "Sub-parts, all of which this solution must answer:" in sent[0][1]["content"]
+    assert len(_children(db, section_id, artifacts.STEP)) == 2
+    assert len(_children(db, section_id, artifacts.ANSWER)) == 1
+    for part in _children(db, section_id, artifacts.PROBLEM):
+        assert _children(db, int(part["id"]), artifacts.STEP) == []
+
+
+def test_a_section_marked_separately_with_no_parts_left_is_solved_as_itself(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The student deleted its parts at the gate. The marking describes parts it no longer has."""
+    artifact_id, section_id = _section(db, class_id, [])
+    fake_solver(monkeypatch, _SOLUTION)
+
+    solver.run_solve(artifact_id)
+
+    assert len(_children(db, section_id, artifacts.STEP)) == 2

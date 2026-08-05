@@ -4,7 +4,9 @@ import { Check, Copy, History, MessageCircleQuestion, Pencil } from 'lucide-reac
 import { useState } from 'react'
 import { toast } from 'sonner'
 
+import { repairLabelMath } from '@/components/chat/markdown-utils'
 import { StreamingMarkdown } from '@/components/chat/streaming-markdown'
+import { MathText } from '@/components/solutions/math-text'
 import { ProvenanceChip } from '@/components/solutions/provenance-chip'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -47,6 +49,10 @@ export function SolutionStep({
   const save = useUpdatePart(step.artifact_id)
 
   const isAnswer = step.kind === 'answer'
+  // The solve prompt asks for delimiters in a title and mostly gets them; `repairLabelMath`
+  // is what happens the rest of the time, and what makes every title already on disk read
+  // the way it was meant to.
+  const label = repairLabelMath(step.label ?? (isAnswer ? 'Answer' : ''))
 
   const handleCopy = async () => {
     try {
@@ -90,14 +96,20 @@ export function SolutionStep({
         {index !== undefined ? (
           <span className="eyebrow shrink-0 tabular-nums">Step {index}</span>
         ) : null}
-        <h4
-          className={cn(
-            'text-text-primary min-w-0 text-sm font-medium',
-            isAnswer && 'text-accent-surface-foreground',
-          )}
-        >
-          {step.label ?? (isAnswer ? 'Answer' : null)}
-        </h4>
+        {/* Typeset, like every other piece of mathematics on this screen. A title such as
+            "Part (a) Convolution of u(t) and e^{-t}u(t)" was the one line in the solution
+            printing its own LaTeX source, directly above content that renders properly. */}
+        {label ? (
+          <MathText
+            inline
+            className={cn(
+              'text-text-primary min-w-0 text-sm font-medium',
+              isAnswer && 'text-accent-surface-foreground',
+            )}
+          >
+            {label}
+          </MathText>
+        ) : null}
         {step.origin === 'user_corrected' ? (
           <span className="text-text-tertiary shrink-0 text-xs">Your edit</span>
         ) : null}

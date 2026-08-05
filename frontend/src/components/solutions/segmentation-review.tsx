@@ -132,6 +132,9 @@ export function SegmentationReview({
         label: first.label,
         statement: `${first.statement}\n\n${second.statement}`,
         parts: [...first.parts, ...second.parts],
+        // Two problems merged into one is not evidence that their parts stand alone, and
+        // the two halves may well have disagreed about it. Back to the safe reading.
+        separateParts: false,
         source: first.source,
         page: first.page,
         edited: true,
@@ -155,6 +158,7 @@ export function SegmentationReview({
         id: null,
         statement: problem.statement.slice(0, midpoint).trim(),
         parts: [],
+        separateParts: false,
         edited: true,
       },
       {
@@ -178,6 +182,7 @@ export function SegmentationReview({
         label: `Problem ${current.length + 1}`,
         statement: '',
         parts: [],
+        separateParts: false,
         source: null,
         page: null,
         edited: true,
@@ -202,6 +207,7 @@ export function SegmentationReview({
             label: part.label.trim() || null,
             statement: part.statement.trim(),
           })),
+          separate_parts: problem.separateParts,
         })),
       },
       {
@@ -362,6 +368,7 @@ function toDrafts(parts: SolutionPart[]): DraftProblem[] {
         label: part.label ?? '',
         statement: part.content,
       })),
+    separateParts: root.solve_parts === 'separately',
     source: root.provenance[0]?.filename ?? null,
     page: root.provenance[0]?.page_number ?? null,
     edited: root.origin === 'user_corrected',
@@ -379,6 +386,7 @@ function sameAs(problems: DraftProblem[], parts: SolutionPart[]): boolean {
       problem.label === other.label &&
       problem.statement === other.statement &&
       problem.parts.length === other.parts.length &&
+      problem.separateParts === other.separateParts &&
       problem.parts.every(
         (part, position) =>
           part.label === other.parts[position].label &&

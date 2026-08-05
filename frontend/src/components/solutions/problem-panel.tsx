@@ -20,12 +20,24 @@ import { Spinner } from '@/components/ui/spinner'
 import { formatCount } from '@/lib/format'
 import { statementLeadIn } from '@/lib/statement'
 import { cn } from '@/lib/utils'
-import type { SolutionPart } from '@/types'
+import type { SolutionPart, Verdict } from '@/types'
+
+/** One lettered part of a question, with the solution it carries when it has one. */
+export type SubPartTree = {
+  problem: SolutionPart
+  steps: SolutionPart[]
+  answer: SolutionPart | null
+}
 
 export type ProblemTree = {
   problem: SolutionPart
   /** Lettered sub-parts of the question, which are parts of the problem, not the answer. */
-  subParts: SolutionPart[]
+  subParts: SubPartTree[]
+  /**
+   * Whether each of those sub-parts was solved as a question of its own. When it was,
+   * the steps and the answer below are empty and each sub-part carries its own.
+   */
+  separate: boolean
   steps: SolutionPart[]
   answer: SolutionPart | null
 }
@@ -63,13 +75,14 @@ export function ProblemPanel({
   thread = null,
   index = 0,
 }: ProblemPanelProps) {
-  const { problem, subParts, steps, answer } = node
+  const { problem, subParts, separate, steps, answer } = node
+  const section = sectionVerdict(subParts)
   const label = problem.label ?? 'Problem'
   const solving = problem.status === 'solving' || problem.status === 'verifying'
   const grounded = steps.filter((step) => step.provenance.length > 0).length
   const leadIn = statementLeadIn(
     problem.content,
-    subParts.map((part) => part.label),
+    subParts.map((part) => part.problem.label),
   )
 
   return (
@@ -95,7 +108,11 @@ export function ProblemPanel({
         data-problem-heading
         className="bg-background border-border sticky top-0 z-10 -mx-4 flex items-start gap-2 border-b px-4"
       >
-        <AccordionTrigger className="min-w-0 flex-1 py-3">
+        {/* The chevron's own `translate-y-0.5` centres it against a 20px line of text,
+            which is what an accordion header usually opens with. This one opens with the
+            24px number chip, so it needs the extra 2px to sit on the same line as the
+            title and as the menu button beside it. */}
+        <AccordionTrigger className="min-w-0 flex-1 py-3 [&>svg]:translate-y-1">
           <span className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
             {/* The same token the strip uses, so the spine and the document agree. */}
             <span
@@ -108,7 +125,18 @@ export function ProblemPanel({
               {chipLabel(problem.label, index)}
             </span>
             <span className="font-heading text-text-primary text-base tracking-tight">{label}</span>
-            {solving ? (
+            {separate ? (
+              // Read off the parts, because the section itself is never solved and its
+              // own row would say `pending` under five finished answers.
+              section.solving ? (
+                <span className="text-text-tertiary inline-flex items-center gap-1.5 text-xs">
+                  <Spinner className="size-3" />
+                  {formatCount(subParts.length, 'part')}
+                </span>
+              ) : (
+                <VerdictBadge verdict={section.verdict} detail={section.detail} />
+              )
+            ) : solving ? (
               <span className="text-text-tertiary inline-flex items-center gap-1.5 text-xs">
                 <Spinner className="size-3" />
                 {problem.status === 'verifying' ? 'Checking' : 'Solving'}
@@ -123,13 +151,17 @@ export function ProblemPanel({
             )}
           </span>
         </AccordionTrigger>
-        <ProblemMenu
-          problem={problem}
-          disabled={solving}
-          onMarkWrong={onMarkWrong}
-          onRegenerate={onRegenerate}
-          onHistory={onHistory}
-        />
+        {/* A section holds no solution of its own, so there is nothing here to re-solve,
+            mark wrong, or show a history of. Each part carries its own menu instead. */}
+        {separate ? null : (
+          <ProblemMenu
+            problem={problem}
+            disabled={solving}
+            onMarkWrong={onMarkWrong}
+            onRegenerate={onRegenerate}
+            onHistory={onHistory}
+          />
+        )}
       </div>
 
       {/* The rail runs the length of the problem, so where one ends and the next begins is
@@ -140,9 +172,12 @@ export function ProblemPanel({
             labels say the list began; `addsToStatement` covers what it could not cut.
             Between them, no sub-part is printed twice. */}
         <MathText className="text-text-secondary text-sm">{leadIn}</MathText>
-        {leadIn !== problem.content || addsToStatement(subParts, problem.content) ? (
+        {/* Only where the parts are read as one question. Where each is a question of its
+            own, printing them here as a list and then again as headings below says the
+            same five things twice, and the second time is the one carrying the answers. */}
+        {!separate && (leadIn !== problem.content || addsToStatement(subParts, problem.content)) ? (
           <ul className="text-text-secondary flex flex-col gap-1 text-sm">
-            {subParts.map((part) => (
+            {subParts.map(({ problem: part }) => (
               <li key={part.id} className="flex gap-2">
                 <span className="text-text-tertiary shrink-0">{part.label}</span>
                 <MathText className="min-w-0">{part.content}</MathText>
@@ -151,71 +186,259 @@ export function ProblemPanel({
           </ul>
         ) : null}
 
-        {problem.verdict === 'refuted' && problem.verdict_detail ? (
-          // Never quiet. The badge says a check failed; this says which one and what it
-          // returned, and it is about the solution rather than about the student.
-          <p className="bg-danger-fill text-danger-foreground rounded-md px-3 py-2 text-sm">
-            {problem.verdict_detail}
-          </p>
-        ) : null}
-
-        {problem.status === 'failed' ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <p className="text-danger-text text-sm">
-              {problem.error_message ?? 'Something went wrong solving this problem.'}
-            </p>
-            <Button size="sm" variant="outline" onClick={() => onRetry(problem)}>
-              Try again
-            </Button>
-          </div>
-        ) : null}
-
-        {steps.map((step, index) => (
-          <Fragment key={step.id}>
-            <SolutionStep
-              step={step}
-              index={index + 1}
+        {separate ? (
+          subParts.map((part) => (
+            <SolvedPart
+              key={part.problem.id}
+              node={part}
               onAsk={onAsk}
+              onMarkWrong={onMarkWrong}
+              onRegenerate={onRegenerate}
               onHistory={onHistory}
-              dimmed={solving}
-              asking={askingAboutId === step.id}
+              onRetry={onRetry}
+              askingAboutId={askingAboutId}
+              thread={thread}
             />
-            {askingAboutId === step.id ? thread : null}
-          </Fragment>
-        ))}
-        {answer ? (
-          <Fragment>
-            <SolutionStep
-              step={answer}
-              onAsk={onAsk}
-              onHistory={onHistory}
-              dimmed={solving}
-              asking={askingAboutId === answer.id}
-            />
-            {askingAboutId === answer.id ? thread : null}
-          </Fragment>
-        ) : null}
-
-        {steps.length === 0 && !answer && problem.status !== 'failed' ? (
-          <p className={cn('text-text-tertiary text-sm')}>
-            {solving ? 'Lyra is working on this one.' : 'Not solved yet.'}
-          </p>
-        ) : null}
-
-        {/* Grounding is a count of steps carrying provenance, not a score, and it belongs
-            beside the checks rather than under the title: read first it looks like a mark
-            out of ten for work the student has not started reading yet. */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <ToolCallTrace checks={problem.checks} />
-          {steps.length > 0 ? (
-            <span className="text-text-tertiary text-xs print:hidden">
-              {grounded} of {formatCount(steps.length, 'step')} grounded in your material
-            </span>
-          ) : null}
-        </div>
+          ))
+        ) : (
+          <Working
+            problem={problem}
+            steps={steps}
+            answer={answer}
+            solving={solving}
+            grounded={grounded}
+            onAsk={onAsk}
+            onHistory={onHistory}
+            onRetry={onRetry}
+            askingAboutId={askingAboutId}
+            thread={thread}
+          />
+        )}
       </AccordionContent>
     </AccordionItem>
   )
+}
+
+/**
+ * One lettered question inside a section, with the solution it carries.
+ *
+ * A heading rather than a list row, because this part has a body: its own working, its
+ * own answer, its own verdict, and its own menu. It is a problem in every way except
+ * that the sentence asking it is the one printed above the section.
+ */
+function SolvedPart({
+  node,
+  onAsk,
+  onMarkWrong,
+  onRegenerate,
+  onHistory,
+  onRetry,
+  askingAboutId,
+  thread,
+}: {
+  node: SubPartTree
+  onAsk: (step: SolutionPart) => void
+  onMarkWrong: (problem: SolutionPart) => void
+  onRegenerate: (problem: SolutionPart) => void
+  onHistory: (part: SolutionPart) => void
+  onRetry: (problem: SolutionPart) => void
+  askingAboutId: number | null
+  thread: React.ReactNode
+}) {
+  const { problem, steps, answer } = node
+  const solving = problem.status === 'solving' || problem.status === 'verifying'
+  const grounded = steps.filter((step) => step.provenance.length > 0).length
+
+  return (
+    <section
+      // Addressable in its own right: this is what a click on the page image, a link, or
+      // a jump from the strip can land on once a part is a question of its own.
+      id={`part-${problem.id}`}
+      className="flex flex-col gap-4 print:break-inside-avoid"
+    >
+      <div className="flex items-start gap-2">
+        <span className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="text-text-primary shrink-0 text-sm font-medium tabular-nums">
+            {problem.label ?? 'Part'}
+          </span>
+          <MathText className="text-text-secondary min-w-0 text-sm">{problem.content}</MathText>
+          {solving ? (
+            <span className="text-text-tertiary inline-flex items-center gap-1.5 text-xs">
+              <Spinner className="size-3" />
+              {problem.status === 'verifying' ? 'Checking' : 'Solving'}
+            </span>
+          ) : problem.status === 'failed' ? (
+            <span className="text-danger-text inline-flex items-center gap-1.5 text-xs">
+              <AlertCircle className="size-3.5" aria-hidden />
+              Could not be solved
+            </span>
+          ) : (
+            <VerdictBadge verdict={problem.verdict} detail={problem.verdict_detail} />
+          )}
+        </span>
+        <ProblemMenu
+          problem={problem}
+          disabled={solving}
+          onMarkWrong={onMarkWrong}
+          onRegenerate={onRegenerate}
+          onHistory={onHistory}
+        />
+      </div>
+      {/* Indented under its own heading, so a run of five questions reads as five and not
+          as one long column of working. */}
+      <div className="border-border/50 ml-1 flex flex-col gap-5 border-l pl-4">
+        <Working
+          problem={problem}
+          steps={steps}
+          answer={answer}
+          solving={solving}
+          grounded={grounded}
+          onAsk={onAsk}
+          onHistory={onHistory}
+          onRetry={onRetry}
+          askingAboutId={askingAboutId}
+          thread={thread}
+        />
+      </div>
+    </section>
+  )
+}
+
+/**
+ * The solution to one question: what disagreed with it, its steps, its answer, the checks
+ * behind it.
+ *
+ * The same body under a problem and under one part of a split problem, because it is the
+ * same thing in both places. What differs above it is the heading; what a student reads
+ * below the heading should not be a second design.
+ */
+function Working({
+  problem,
+  steps,
+  answer,
+  solving,
+  grounded,
+  onAsk,
+  onHistory,
+  onRetry,
+  askingAboutId,
+  thread,
+}: {
+  problem: SolutionPart
+  steps: SolutionPart[]
+  answer: SolutionPart | null
+  solving: boolean
+  grounded: number
+  onAsk: (step: SolutionPart) => void
+  onHistory: (part: SolutionPart) => void
+  onRetry: (problem: SolutionPart) => void
+  askingAboutId: number | null
+  thread: React.ReactNode
+}) {
+  return (
+    <>
+      {problem.verdict === 'refuted' && problem.verdict_detail ? (
+        // Never quiet. The badge says a check failed; this says which one and what it
+        // returned, and it is about the solution rather than about the student.
+        <p className="bg-danger-fill text-danger-foreground rounded-md px-3 py-2 text-sm">
+          {problem.verdict_detail}
+        </p>
+      ) : null}
+
+      {problem.status === 'failed' ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-danger-text text-sm">
+            {problem.error_message ?? 'Something went wrong solving this problem.'}
+          </p>
+          <Button size="sm" variant="outline" onClick={() => onRetry(problem)}>
+            Try again
+          </Button>
+        </div>
+      ) : null}
+
+      {steps.map((step, index) => (
+        <Fragment key={step.id}>
+          <SolutionStep
+            step={step}
+            index={index + 1}
+            onAsk={onAsk}
+            onHistory={onHistory}
+            dimmed={solving}
+            asking={askingAboutId === step.id}
+          />
+          {askingAboutId === step.id ? thread : null}
+        </Fragment>
+      ))}
+      {answer ? (
+        <Fragment>
+          <SolutionStep
+            step={answer}
+            onAsk={onAsk}
+            onHistory={onHistory}
+            dimmed={solving}
+            asking={askingAboutId === answer.id}
+          />
+          {askingAboutId === answer.id ? thread : null}
+        </Fragment>
+      ) : null}
+
+      {steps.length === 0 && !answer && problem.status !== 'failed' ? (
+        <p className={cn('text-text-tertiary text-sm')}>
+          {solving ? 'Lyra is working on this one.' : 'Not solved yet.'}
+        </p>
+      ) : null}
+
+      {/* Grounding is a count of steps carrying provenance, not a score, and it belongs
+          beside the checks rather than under the title: read first it looks like a mark
+          out of ten for work the student has not started reading yet. */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <ToolCallTrace checks={problem.checks} />
+        {steps.length > 0 ? (
+          <span className="text-text-tertiary text-xs print:hidden">
+            {grounded} of {formatCount(steps.length, 'step')} grounded in your material
+          </span>
+        ) : null}
+      </div>
+    </>
+  )
+}
+
+/**
+ * What a section of separately solved parts is doing, and what checking made of it.
+ *
+ * A section is never solved itself, so its own row says `pending` while five questions
+ * inside it are answered and checked. Everything the header shows about it is therefore
+ * read off its parts.
+ *
+ * The verdict is the worst one among them, not an average and not a tally. A section
+ * holding one refuted part is a section with something wrong in it, and a header that
+ * called it `Checked` because four of five passed would be the one thing this project
+ * does not do: claim a check that did not conclude what it appears to claim.
+ */
+function sectionVerdict(subParts: SubPartTree[]): {
+  solving: boolean
+  verdict: Verdict
+  detail: string | null
+} {
+  const parts = subParts.map((part) => part.problem)
+  const solving = parts.some(
+    (part) => part.status === 'solving' || part.status === 'verifying' || part.status === 'pending',
+  )
+  const refuted = parts.filter((part) => part.verdict === 'refuted')
+  if (refuted.length > 0) {
+    const names = refuted.map((part) => part.label ?? 'a part').join(', ')
+    return {
+      solving,
+      verdict: 'refuted',
+      detail: `A check disagreed with ${names}. The rest of this problem is unaffected.`,
+    }
+  }
+  for (const verdict of ['unchecked', 'uncheckable'] as const) {
+    if (parts.some((part) => part.verdict === verdict)) {
+      return { solving, verdict, detail: null }
+    }
+  }
+  return { solving, verdict: 'verified', detail: null }
 }
 
 /**
@@ -226,10 +449,10 @@ export function ProblemPanel({
  * enough to show the whole list: dropping only the duplicates would leave a list that
  * looks like it lost entries.
  */
-function addsToStatement(subParts: SolutionPart[], statement: string): boolean {
+function addsToStatement(subParts: SubPartTree[], statement: string): boolean {
   if (subParts.length === 0) return false
   const flattened = collapse(statement)
-  return subParts.some((part) => !flattened.includes(collapse(part.content)))
+  return subParts.some((part) => !flattened.includes(collapse(part.problem.content)))
 }
 
 function collapse(value: string): string {
@@ -255,7 +478,11 @@ function ProblemMenu({
         <Button
           variant="ghost"
           size="sm"
-          className="text-text-tertiary mt-3 size-8 shrink-0 p-0 print:hidden"
+          // `mt-2` puts this 32px button's centre on 24px, the centre of the header's
+          // first line, which is where the collapse chevron sits too. The header is
+          // `items-start`, so a title that wraps to two lines leaves both of them here
+          // rather than dragging them down to the middle of the block.
+          className="text-text-tertiary mt-2 size-8 shrink-0 p-0 print:hidden"
           aria-label={`Actions for ${problem.label ?? 'this problem'}`}
         >
           <MoreHorizontal className="size-4" />

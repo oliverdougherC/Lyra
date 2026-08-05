@@ -737,3 +737,156 @@ def test_a_label_that_is_only_the_number_falls_back(proposed: str, expected: str
     # A card labelled `4` sitting beside its own position index prints the same digit
     # twice, and tells the reader nothing the sheet did not already number.
     assert merged[0].label == expected
+
+
+# Whether a problem's parts are questions of their own. The three readings are ordered:
+# a part naming another part settles it as one solution and overrules the model; the
+# model's own reading comes next; the shape of the stem is the backstop under both.
+
+
+def _parts(*statements: str) -> tuple[SegmentedPart, ...]:
+    return tuple(
+        SegmentedPart(f"({chr(ord('a') + index)})", statement)
+        for index, statement in enumerate(statements)
+    )
+
+
+def test_a_section_of_cases_is_read_as_a_question_each() -> None:
+    separate = segmentation.parts_are_separate(
+        "For each system below, determine whether the system is linear and time-invariant.",
+        _parts("$y(t) = x(t-2) + 3x(t)$", "$y(t) = x^2(t)$", "$y(t) = t x(t)$"),
+        "separate",
+    )
+
+    assert separate is True
+
+
+def test_a_derivation_that_hands_results_forward_stays_one_solution() -> None:
+    together = segmentation.parts_are_separate(
+        "Consider the signal $x(t) = e^{-2t}u(t)$.",
+        _parts("Find $X(j\\omega)$.", "Using your answer to (a), find the energy of $x$."),
+        "separate",
+    )
+
+    # The model said separate and it is overruled, because being wrong the other way is a
+    # part solved against a result it was never given. Being wrong this way is the
+    # behaviour Lyra had before any of this existed.
+    assert together is False
+
+
+def test_a_part_that_names_another_part_is_not_separable() -> None:
+    for reference in (
+        "Repeat part (a) for $h(t) = u(t)$.",
+        "Sketch the result from (b).",
+        "State the width of your sketch.",
+        "Use the previous result to find $y(t)$.",
+    ):
+        assert (
+            segmentation.parts_are_separate(
+                "For each of the following, do the thing.",
+                _parts("Find $X(j\\omega)$.", reference),
+                "separate",
+            )
+            is False
+        ), reference
+
+
+def test_mathematics_in_brackets_is_not_a_reference_to_another_part() -> None:
+    # Sub-part statements are mostly parentheses, and almost none of them are citations:
+    # `x(t)`, `u(t-1)`, `(2 + j)`. A bare bracket must never cost a section its split.
+    separate = segmentation.parts_are_separate(
+        "For each pair below, compute the output $y(t)$.",
+        _parts("$x(t) = u(t)$, $h(t) = e^{-t}u(t)$", "$x(t) = \\delta(t-2)$, $h(t) = (2+j)u(t)$"),
+        None,
+    )
+
+    assert separate is True
+
+
+def test_a_distributive_stem_decides_when_the_model_says_nothing() -> None:
+    for stem in (
+        "For each system below, determine whether it is BIBO stable.",
+        "Sketch each of the following signals.",
+        "Determine the impulse response for each of the following systems.",
+        "Evaluate the following integrals.",
+    ):
+        assert (
+            segmentation.parts_are_separate(stem, _parts("$h(t) = u(t)$", "$h(t) = t$"), None)
+            is True
+        ), stem
+
+
+def test_a_model_that_read_one_solution_is_believed_over_the_stem() -> None:
+    together = segmentation.parts_are_separate(
+        "Find the Fourier transform of each of the following, then add them.",
+        _parts("$x_1(t) = u(t)$", "$x_2(t) = e^{-t}u(t)$"),
+        "one_solution",
+    )
+
+    assert together is False
+
+
+def test_an_undecidable_problem_keeps_its_parts_together() -> None:
+    assert (
+        segmentation.parts_are_separate(
+            "Consider the circuit shown.",
+            _parts("Find $v(t)$.", "Find $i(t)$."),
+            None,
+        )
+        is False
+    )
+
+
+def test_one_part_is_never_a_set_of_questions() -> None:
+    assert (
+        segmentation.parts_are_separate(
+            "For each of the following, find the transform.", _parts("$x(t) = u(t)$"), "separate"
+        )
+        is False
+    )
+
+
+def test_the_reading_of_a_sections_parts_survives_reconciliation() -> None:
+    from_chunks = [SegmentedProblem("Problem 2", "2", "2. The document's own words.", 7)]
+    from_model = [
+        SegmentedProblem(
+            label="Properties of LTI Systems",
+            number="2",
+            statement="For each of the following, determine whether the system is stable.",
+            document_id=7,
+            parts=_parts("$h(t) = e^{-2t}u(t)$", "$h(t) = u(t+1)$"),
+            separate_parts=True,
+        )
+    ]
+
+    merged = segmentation.reconcile(from_chunks, from_model)
+
+    # The parts and the reading of them were made together, about each other, and the
+    # chunker never had either. They travel as one or the section is split on a reading
+    # of parts it no longer has.
+    assert merged[0].parts == from_model[0].parts
+    assert merged[0].separate_parts is True
+
+
+def test_a_reply_that_calls_its_parts_separate_is_read_that_way() -> None:
+    problems = segmentation.parse_segmentation(
+        json.dumps(
+            {
+                "problems": [
+                    {
+                        "label": "Linearity and Time-Invariance",
+                        "number": "1",
+                        "statement": "For each system below, determine whether it is linear.",
+                        "parts": [
+                            {"label": "(a)", "statement": "$y(t) = x(t-2)$"},
+                            {"label": "(b)", "statement": "$y(t) = x^2(t)$"},
+                        ],
+                        "parts_relation": "separate",
+                    }
+                ]
+            }
+        ),
+        7,
+    )
+
+    assert problems[0].separate_parts is True
