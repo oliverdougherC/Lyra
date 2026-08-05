@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -128,12 +128,17 @@ describe('ChatPane', () => {
     await user.click(screen.getByLabelText('Send message'))
 
     await waitFor(() => expect(api.listMessages).toHaveBeenCalledWith(7, expect.anything()))
-    stream.emit?.({ type: 'token', text: 'A sum is periodic when…' })
+    // Emitting a frame is the transport calling back into React, so it is the test's job
+    // to say so. Left unwrapped it still passes, on a warning saying the render it just
+    // triggered was not awaited.
+    await act(async () => stream.emit?.({ type: 'token', text: 'A sum is periodic when…' }))
 
     await waitFor(() => expect(screen.getAllByText(QUESTION)).toHaveLength(1))
 
-    stream.emit?.({ type: 'done', message_id: 12 })
-    stream.finish?.()
+    await act(async () => {
+      stream.emit?.({ type: 'done', message_id: 12 })
+      stream.finish?.()
+    })
 
     // And once the turn settles onto the persisted transcript, still once.
     await waitFor(() => expect(screen.getAllByText(QUESTION)).toHaveLength(1))
@@ -155,7 +160,7 @@ describe('ChatPane', () => {
     await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
     await user.click(screen.getByLabelText('Send message'))
     await waitFor(() => expect(streamChat).toHaveBeenCalled())
-    stream.emit?.({ type: 'token', text: 'A sum is periodic when…' })
+    await act(async () => stream.emit?.({ type: 'token', text: 'A sum is periodic when…' }))
     await waitFor(() => expect(screen.getAllByText(QUESTION)).toHaveLength(1))
 
     // The click lands now, not whenever the model stops talking: the conversation goes,
