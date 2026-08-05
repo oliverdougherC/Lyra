@@ -159,6 +159,22 @@ function ClassNavItem({
 
         {selected ? (
           <SidebarMenuSub>
+            {/* Above the history, not under it: starting a chat is the one thing here that
+                does not depend on what is already in the list, so it should not move down
+                the rail as the term fills it up. */}
+            <SidebarMenuSubItem>
+              <SidebarMenuSubButton
+                asChild
+                onClick={onNewChat}
+                isActive={activeSessionId === 'new'}
+              >
+                <button type="button" aria-label="Start a new chat" className="text-text-secondary">
+                  <Plus />
+                  <span>New chat</span>
+                </button>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+
             {sessionsPending ? (
               <SidebarMenuSubItem aria-busy="true">
                 <SidebarMenuSkeleton />
@@ -201,18 +217,6 @@ function ClassNavItem({
                 activeSessionId={activeSessionId}
               />
             ))}
-            <SidebarMenuSubItem>
-              <SidebarMenuSubButton
-                asChild
-                onClick={onNewChat}
-                isActive={activeSessionId === 'new'}
-              >
-                <button type="button" aria-label="Start a new chat" className="text-text-secondary">
-                  <Plus />
-                  <span>New chat</span>
-                </button>
-              </SidebarMenuSubButton>
-            </SidebarMenuSubItem>
 
             <SidebarMenuSubItem>
               {/* A link rather than a label. The group heading is the most obvious thing
@@ -224,6 +228,21 @@ function ClassNavItem({
               >
                 Solutions
               </Link>
+            </SidebarMenuSubItem>
+            {/* Directly under its heading, for the same reason as New chat: the one entry
+                point that does not depend on the list below it should not sit at the end
+                of that list. */}
+            <SidebarMenuSubItem>
+              <SidebarMenuSubButton asChild>
+                <Link
+                  href={`${href}/solutions/new`}
+                  aria-label="Start a new solution set"
+                  className="text-text-secondary"
+                >
+                  <Plus />
+                  <span>New solution set</span>
+                </Link>
+              </SidebarMenuSubButton>
             </SidebarMenuSubItem>
             {(solutions ?? []).map((solution) => (
               <SidebarMenuSubItem key={solution.id}>
@@ -241,18 +260,6 @@ function ClassNavItem({
                 </SidebarMenuSubButton>
               </SidebarMenuSubItem>
             ))}
-            <SidebarMenuSubItem>
-              <SidebarMenuSubButton asChild>
-                <Link
-                  href={`${href}/solutions/new`}
-                  aria-label="Start a new solution set"
-                  className="text-text-secondary"
-                >
-                  <Plus />
-                  <span>New solution set</span>
-                </Link>
-              </SidebarMenuSubButton>
-            </SidebarMenuSubItem>
           </SidebarMenuSub>
         ) : null}
       </SidebarMenuItem>
@@ -308,16 +315,25 @@ export function AppSidebar() {
     // rounded, bordered, shadowed panel — a card, and the largest one in the product. The
     // app is one continuous surface: a raised paper rail flush against the canvas.
     <Sidebar variant="sidebar" collapsible="offcanvas">
-      <SidebarHeader className="p-1">
+      {/* `px-2 py-1`, not `p-1`: the horizontal padding puts the mark on the same column as
+          the class marks below, while the vertical padding keeps the header 56px so its rule
+          still meets the app header's border. */}
+      {/* The same 56px box as the app header, closed by its own bottom border rather than
+          a separator sitting underneath it. A separator is a sibling *below* the box, so
+          its hairline landed 1px lower than the header's border-bottom and the two halves
+          of what should be one rule were offset by a pixel. */}
+      <SidebarHeader className="h-14 shrink-0 justify-center border-b px-2 py-0">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg" tooltip="Lyra home">
               <Link href="/">
                 {/* The product's own mark, not a stock icon: the same star that thinks
-                    beside every answer is the thing that names the app. */}
-                <span className="text-accent-primary flex size-8 items-center justify-center">
-                  <LyraMark className="size-6" />
-                </span>
+                    beside every answer is the thing that names the app. Sized `!`, because
+                    the menu button shrinks every descendant svg to an icon's 16px and the
+                    wordmark's own mark is not an icon — at 16px its ink reads smaller than
+                    the capital it stands beside. 24px puts the orbit at the word's own ink
+                    height, and centred on the row it sits on the cap's optical centre. */}
+                <LyraMark className="text-accent-primary size-6!" />
                 <span className="font-wordmark text-text-primary text-[1.2rem] font-medium">
                   Lyra
                 </span>
@@ -326,8 +342,6 @@ export function AppSidebar() {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
-
-      <SidebarSeparator />
 
       <SidebarContent>
         <SidebarGroup>

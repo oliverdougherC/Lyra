@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SourcePane, type ProblemRegion } from '@/components/solutions/source-pane'
 import type { DocumentRead, SolutionSource } from '@/types'
@@ -39,11 +39,59 @@ const REGIONS: ProblemRegion[] = [
   { problemId: 3, documentId: 7, page: 2, top: 0.2, label: 'Problem 3' },
 ]
 
-function renderPane(anchor: { documentId: number; pageNumber: number | null } | null) {
+/**
+ * Pages decode off-screen now, so nothing renders until a load resolves. jsdom never
+ * fetches, so the tests own the timing: `decodePages` is the moment the browser would have
+ * finished decoding, which is exactly the seam a page turn has to survive without blanking.
+ */
+let pendingDecodes: Array<() => void> = []
+
+class FakeImage {
+  onload: (() => void) | null = null
+  onerror: (() => void) | null = null
+  naturalWidth = 850
+  naturalHeight = 1100
+  complete = false
+  #src = ''
+
+  get src(): string {
+    return this.#src
+  }
+
+  set src(value: string) {
+    this.#src = value
+    pendingDecodes.push(() => {
+      this.complete = true
+      this.onload?.()
+    })
+  }
+}
+
+async function decodePages(): Promise<void> {
+  const queued = pendingDecodes
+  pendingDecodes = []
+  await act(async () => {
+    queued.forEach((resolve) => resolve())
+  })
+}
+
+beforeEach(() => {
+  pendingDecodes = []
+  vi.stubGlobal('Image', FakeImage)
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
+function renderPane(
+  anchor: { documentId: number; pageNumber: number | null } | null,
+  extra: Partial<React.ComponentProps<typeof SourcePane>> = {},
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const view = render(
     <QueryClientProvider client={client}>
-      <SourcePane sources={SOURCES} documents={[DOCUMENT]} anchor={anchor} />
+      <SourcePane sources={SOURCES} documents={[DOCUMENT]} anchor={anchor} {...extra} />
     </QueryClientProvider>,
   )
   return {
@@ -51,7 +99,7 @@ function renderPane(anchor: { documentId: number; pageNumber: number | null } | 
     reanchor: (next: { documentId: number; pageNumber: number | null } | null) =>
       view.rerender(
         <QueryClientProvider client={client}>
-          <SourcePane sources={SOURCES} documents={[DOCUMENT]} anchor={next} />
+          <SourcePane sources={SOURCES} documents={[DOCUMENT]} anchor={next} {...extra} />
         </QueryClientProvider>,
       ),
   }
@@ -63,6 +111,7 @@ describe('SourcePane', () => {
     // query polls while a solve runs, so an identity comparison here made the document
     // unpageable for as long as Lyra was working.
     const { reanchor } = renderPane({ documentId: 7, pageNumber: 1 })
+    await decodePages()
 
     await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
     expect(screen.getByText('page 2 of 3')).toBeInTheDocument()
@@ -72,25 +121,46 @@ describe('SourcePane', () => {
     expect(screen.getByText('page 2 of 3')).toBeInTheDocument()
   })
 
+  it('holds the current page on screen until the next one has decoded', async () => {
+    // A turn must never blank the pane. The previous page stays put for the whole of the
+    // next one's load and is replaced in a single swap, so there is no frame showing
+    // neither page.
+    renderPane({ documentId: 7, pageNumber: 1 })
+    await decodePages()
+    expect(screen.getByAltText('Page 1')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    // Mid-turn: page 2 is requested but not yet decoded, and page 1 is still standing.
+    expect(screen.getByAltText('Page 1')).toBeInTheDocument()
+    expect(screen.queryByAltText('Page 2')).not.toBeInTheDocument()
+
+    await decodePages()
+
+    expect(screen.getByAltText('Page 2')).toBeInTheDocument()
+    expect(screen.queryByAltText('Page 1')).not.toBeInTheDocument()
+  })
+
+  it('reports the width its page needs so the column can be fitted to it', async () => {
+    const onFitWidth = vi.fn()
+    renderPane({ documentId: 7, pageNumber: 1 }, { onFitWidth })
+    await decodePages()
+
+    // jsdom lays nothing out, so the viewport measures zero and there is no honest width
+    // to report. The contract under test is that a zero measurement is declined rather
+    // than turned into a nonsense column width.
+    expect(onFitWidth).not.toHaveBeenCalled()
+  })
+
   it('runs each problem band from its own marker to the next one', async () => {
     // Where a problem ends is never decided from geometry: it ends where the next one
     // starts, so the page can never disagree with the segmentation the student confirmed.
     const onSelectProblem = vi.fn()
-    render(
-      <QueryClientProvider
-        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
-      >
-        <SourcePane
-          sources={SOURCES}
-          documents={[DOCUMENT]}
-          anchor={{ documentId: 7, pageNumber: 1 }}
-          regions={REGIONS}
-          activeProblemId={2}
-          onSelectProblem={onSelectProblem}
-        />
-      </QueryClientProvider>,
+    renderPane(
+      { documentId: 7, pageNumber: 1 },
+      { regions: REGIONS, activeProblemId: 2, onSelectProblem },
     )
-    fireEvent.load(screen.getByAltText('Page 1'))
+    await decodePages()
 
     const first = screen.getByRole('button', { name: 'Go to the solution for Problem 1' })
     const second = screen.getByRole('button', { name: 'Go to the solution for Problem 2' })
@@ -106,15 +176,28 @@ describe('SourcePane', () => {
     expect(onSelectProblem).toHaveBeenCalledWith(1)
   })
 
-  it('draws nothing over a page whose problems were never located', () => {
+  it('withholds the bands while a page turn is still in flight', async () => {
+    // The bands belong to the page being requested, and the page on screen is still the
+    // previous one. Drawing them early would put problem 3's band over page 1.
+    renderPane({ documentId: 7, pageNumber: 1 }, { regions: REGIONS, onSelectProblem: vi.fn() })
+    await decodePages()
+    expect(screen.getByRole('button', { name: 'Go to the solution for Problem 1' })).toBeVisible()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
+
+    expect(screen.queryByRole('button', { name: /Go to the solution/ })).not.toBeInTheDocument()
+  })
+
+  it('draws nothing over a page whose problems were never located', async () => {
     renderPane({ documentId: 7, pageNumber: 1 })
-    fireEvent.load(screen.getByAltText('Page 1'))
+    await decodePages()
 
     expect(screen.queryByRole('button', { name: /Go to the solution/ })).not.toBeInTheDocument()
   })
 
   it('follows a newly selected problem back to its own page', async () => {
     const { reanchor } = renderPane({ documentId: 7, pageNumber: 1 })
+    await decodePages()
 
     await userEvent.click(screen.getByRole('button', { name: 'Next page' }))
     reanchor({ documentId: 7, pageNumber: 3 })

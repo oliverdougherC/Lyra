@@ -165,10 +165,7 @@ export default function ClassWorkspacePage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {compact ? (
-        <Tabs
-          defaultValue="chat"
-          className="min-h-0 flex-1 gap-0 overflow-hidden border-t bg-background"
-        >
+        <Tabs defaultValue="chat" className="min-h-0 flex-1 gap-0 overflow-hidden bg-background">
           <TabsList variant="line" aria-label="Workspace panes" className="px-4">
             <TabsTrigger value="chat">Chat</TabsTrigger>
             <TabsTrigger value="documents">
@@ -192,7 +189,7 @@ export default function ClassWorkspacePage() {
           </TabsContent>
         </Tabs>
       ) : (
-        <div className="flex min-h-0 flex-1 overflow-hidden border-t bg-background">
+        <div className="flex min-h-0 flex-1 overflow-hidden bg-background">
           <div className="min-w-0 flex-1">{chat}</div>
           {documentsOpen ? (
             <div className="w-[340px] shrink-0 border-l xl:w-[380px]">{documents}</div>

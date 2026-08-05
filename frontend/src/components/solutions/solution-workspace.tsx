@@ -14,6 +14,7 @@ import { StepThread } from '@/components/solutions/step-thread'
 import { Accordion } from '@/components/ui/accordion'
 import { Button } from '@/components/ui/button'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
+import type { GroupImperativeHandle } from 'react-resizable-panels'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ApiError } from '@/lib/api'
@@ -23,8 +24,16 @@ import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { useRegeneratePart } from '@/lib/hooks/use-solutions'
 import type { SolutionDetail, SolutionPart } from '@/types'
 
-/** Source left at 45%, solutions right at 55%, per the layout in docs/ui-phase-2.md. */
+/**
+ * Where the split sits before the page has been measured, and the fallback for a document
+ * whose page never renders. Once the first page is decoded the source column is sized to
+ * fit that page whole, which is what a reader actually wants: a sheet they can see all of.
+ */
 const DEFAULT_SPLIT = 45
+
+/** The bounds the two panes' own minimums allow, as a share of the group. */
+const MIN_SPLIT = 25
+const MAX_SPLIT = 70
 
 /**
  * One panel's share of the group, as a percentage.
@@ -43,7 +52,70 @@ function parseSplit(raw: string): number | null {
   const parsed = Number(raw)
   // A stored value outside the panes' own minimums would make one column unusable, so a
   // corrupt entry falls back rather than being honoured.
-  return Number.isFinite(parsed) && parsed >= 25 && parsed <= 70 ? parsed : null
+  return Number.isFinite(parsed) && parsed >= MIN_SPLIT && parsed <= MAX_SPLIT ? parsed : null
+}
+
+/** Whether the reader has asked not to be moved around. */
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  )
+}
+
+/** How long a jump between problems takes to travel. Matches the house motion ceiling. */
+const JUMP_DURATION_MS = 240
+
+function easeOutCubic(progress: number): number {
+  return 1 - (1 - progress) ** 3
+}
+
+/**
+ * Travel `viewport` to `top`, returning a function that abandons the trip.
+ *
+ * Animated frame by frame rather than through `scrollTo({ behavior: 'smooth' })`. Native
+ * smooth scrolling is silently dropped in some environments — the container never moves at
+ * all, verified here against a bare probe element — and a jump that quietly does nothing is
+ * far worse than one that does not animate. A frame loop behaves the same everywhere, and
+ * it can be abandoned the instant the reader takes the scroll back.
+ */
+function travelTo(viewport: HTMLElement, top: number): () => void {
+  // A hidden document is served no animation frames at all, so an animated trip would
+  // simply never depart and the reader would come back to find nothing had moved. Arriving
+  // matters more than travelling; the same holds when stillness was asked for.
+  if (prefersReducedMotion() || (typeof document !== 'undefined' && document.hidden)) {
+    viewport.scrollTop = top
+    return () => undefined
+  }
+
+  const from = viewport.scrollTop
+  const distance = top - from
+  if (distance === 0) return () => undefined
+
+  let frame = 0
+  let startedAt = 0
+
+  const abandon = () => {
+    if (frame) cancelAnimationFrame(frame)
+    frame = 0
+    viewport.removeEventListener('wheel', abandon)
+    viewport.removeEventListener('touchstart', abandon)
+    viewport.removeEventListener('keydown', abandon)
+  }
+
+  const step = (now: number) => {
+    if (!startedAt) startedAt = now
+    const progress = Math.min(1, (now - startedAt) / JUMP_DURATION_MS)
+    viewport.scrollTop = from + distance * easeOutCubic(progress)
+    if (progress < 1) frame = requestAnimationFrame(step)
+    else abandon()
+  }
+
+  // Whatever the reader does with the scroll outranks where this was taking them.
+  viewport.addEventListener('wheel', abandon, { passive: true })
+  viewport.addEventListener('touchstart', abandon, { passive: true })
+  viewport.addEventListener('keydown', abandon)
+  frame = requestAnimationFrame(step)
+  return abandon
 }
 
 type SolutionWorkspaceProps = {
@@ -61,11 +133,30 @@ type SolutionWorkspaceProps = {
  */
 export function SolutionWorkspace({ solution, classId, className }: SolutionWorkspaceProps) {
   const wide = useMediaQuery('(min-width: 1024px)')
-  const [split, setSplit] = useLocalStorageState(
-    `lyra-solution-split-${classId}`,
-    DEFAULT_SPLIT,
-    parseSplit,
+  // `-v2-`: the previous key was written on every layout change the library reported,
+  // including the one it reports for the initial layout, so almost every existing reader
+  // has a stored "preference" they never expressed — and it would suppress the fit below
+  // forever. The old entries are deliberately abandoned rather than migrated: there is no
+  // way to tell a real drag from that noise, and a pane width is cheap to set again.
+  const splitKey = `lyra-solution-split-v2-${classId}`
+  const [split, setSplit] = useLocalStorageState(splitKey, DEFAULT_SPLIT, parseSplit)
+  // A split the student dragged for themselves outranks the fit. Read once, because the
+  // hook cannot tell "nothing stored" from "stored value equal to the default".
+  const [hadStoredSplit] = useState(
+    () => typeof window !== 'undefined' && window.localStorage.getItem(splitKey) !== null,
   )
+  const chosenSplitRef = useRef(hadStoredSplit)
+  const groupRef = useRef<GroupImperativeHandle | null>(null)
+  const groupElementRef = useRef<HTMLDivElement | null>(null)
+  // The width the source column needs for its page to stand whole, in pixels, as measured
+  // by the pane that renders it.
+  const [fitWidth, setFitWidth] = useState<number | null>(null)
+  // The share this component put there itself, so `onLayoutChanged` can tell its own work
+  // from a drag and avoid persisting either the default or a fit as though the student had
+  // chosen it. Seeded with the layout this render starts from, because the library reports
+  // that initial layout too and taking it for a choice is exactly how the old key filled up
+  // with widths nobody picked.
+  const appliedFitRef = useRef<number | null>(split)
   const [collapsed, setCollapsed] = useState<string[]>([])
   // Which pane, if either, has the window to itself. Not persisted: it is a thing you do
   // to read one page closely, not a layout you live in.
@@ -147,8 +238,30 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
       target.getBoundingClientRect().top -
       viewport.getBoundingClientRect().top -
       READING_LINE_PX / 2
-    viewport.scrollTo({ top: Math.max(0, top) })
+    // Travelled rather than cut to. A jump between two problems that look alike leaves the
+    // reader to work out whether the pane moved at all and in which direction; the movement
+    // itself is the answer. Returned as cleanup, so a second jump abandons the first rather
+    // than two animations fighting over the same scrollTop.
+    return travelTo(viewport, Math.max(0, top))
   }, [jumpVersion, viewport])
+
+  /**
+   * Size the source column so its page stands whole.
+   *
+   * Run as a layout effect, in the same commit that first paints the page image: the pane
+   * reports its fit from the load that reveals the page, so the column is already the right
+   * width by the time there is anything in it to see, and no resize is ever visible.
+   */
+  useLayoutEffect(() => {
+    if (!wide || focused !== null || fitWidth === null || chosenSplitRef.current) return
+    const group = groupRef.current
+    const total = groupElementRef.current?.clientWidth ?? 0
+    if (!group || !total) return
+    const target = Math.round(Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, (fitWidth / total) * 100)))
+    if (Math.abs(shareOf(group.getLayout(), 'source') - target) < 1) return
+    appliedFitRef.current = target
+    group.setLayout({ source: target, solutions: 100 - target })
+  }, [fitWidth, focused, wide])
 
   const handleRegenerate = (problem: SolutionPart, correction: string) => {
     regenerate.mutate(
@@ -245,6 +358,7 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
       regions={regions}
       activeProblemId={activeId}
       onSelectProblem={jumpTo}
+      onFitWidth={setFitWidth}
       focusToggle={
         wide ? (
           <FocusToggle
@@ -267,14 +381,29 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
           No card. The two panes are the page: a border and a corner radius around them
           only said "this is a widget on a screen", and on a 13-inch laptop the widget was
           most of the screen anyway. */}
-      <div className="bg-background border-border min-h-[420px] flex-1 overflow-hidden border-t print:h-auto print:min-h-0 print:flex-none print:overflow-visible print:border-0">
+      {/* No `border-t`: the app header directly above already draws that rule with its own
+          `border-b`, and stacking the two made the line 2px on this side of the window
+          while the rail's was 1px. */}
+      <div className="bg-background min-h-[420px] flex-1 overflow-hidden print:h-auto print:min-h-0 print:flex-none print:overflow-visible">
         {wide && focused === null ? (
           <ResizablePanelGroup
             orientation="horizontal"
+            groupRef={groupRef}
+            elementRef={groupElementRef}
             defaultLayout={{ source: split, solutions: 100 - split }}
             // `onLayoutChanged` rather than `onLayoutChange`: the latter fires on every
             // pointer move, and this writes to localStorage.
-            onLayoutChanged={(layout) => setSplit(shareOf(layout, 'source'))}
+            onLayoutChanged={(layout) => {
+              const share = shareOf(layout, 'source')
+              // A fit this component applied is not a width the student asked for. Storing
+              // it would freeze the column at whatever suited the first document opened and
+              // stop every later one from being fitted at all.
+              if (appliedFitRef.current !== null && Math.abs(share - appliedFitRef.current) <= 1) {
+                return
+              }
+              chosenSplitRef.current = true
+              setSplit(share)
+            }}
           >
             <ResizablePanel id="source" minSize="25" className="print:hidden">
               {sourcePane}

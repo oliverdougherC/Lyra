@@ -1,7 +1,7 @@
 'use client'
 
 import { ChevronLeft, ChevronRight, FileText } from 'lucide-react'
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { Button } from '@/components/ui/button'
@@ -32,9 +32,17 @@ type SourcePaneProps = {
   /** The problem being read, which is marked on the page. */
   activeProblemId?: number | null
   onSelectProblem?: (problemId: number) => void
+  /**
+   * The width, in pixels, this pane would need for its page to stand whole. Reported from
+   * the load that first reveals a page, so the column can be sized in the same commit.
+   */
+  onFitWidth?: (width: number) => void
   /** The control that gives this pane the whole window, rendered in its header. */
   focusToggle?: React.ReactNode
 }
+
+/** The padding around the page inside the scrolling area, per side. Matches `p-5`. */
+const PAGE_GUTTER_PX = 20
 
 /**
  * Turn the problems on one page into the bands that cover it.
@@ -75,8 +83,28 @@ export function SourcePane({
   regions = [],
   activeProblemId = null,
   onSelectProblem,
+  onFitWidth,
   focusToggle = null,
 }: SourcePaneProps) {
+  const viewportRef = useRef<HTMLDivElement | null>(null)
+
+  /**
+   * Turn a decoded page's shape into the width this column wants.
+   *
+   * The height available to the page is a property of the window, not of this column, so
+   * the arithmetic runs one way only: a page of a given aspect needs a particular width to
+   * fill that height exactly, and asking for it cannot feed back into the measurement.
+   */
+  const reportFit = useCallback(
+    (aspect: number) => {
+      const viewport = viewportRef.current
+      if (!viewport || !onFitWidth || !Number.isFinite(aspect) || aspect <= 0) return
+      const available = viewport.clientHeight - PAGE_GUTTER_PX * 2
+      if (available <= 0) return
+      onFitWidth(available * aspect + PAGE_GUTTER_PX * 2)
+    },
+    [onFitWidth],
+  )
   const problemSets = sources.filter((source) => source.role === 'problem_set')
   // Where the reader has navigated to by hand, which outranks the anchor until the
   // selected problem changes.
@@ -148,18 +176,19 @@ export function SourcePane({
 
       {/* The desk under the sheet: a slightly sunken tone, so the rendered page reads as
           a physical page lying on the workspace rather than a white rectangle in a form. */}
-      <ScrollArea className="bg-muted/40 min-h-0 flex-1">
+      <ScrollArea viewportRef={viewportRef} className="bg-muted/40 min-h-0 flex-1">
         <div className="p-5">
           {isPdf ? (
-            // Keyed so a page change restarts the load rather than showing the previous
-            // page while the next one arrives.
+            // Keyed by document alone. Keying by page too remounted the element on every
+            // turn, which is what made a page change blink.
             <PageImage
-              key={`${documentId}-${page}`}
+              key={documentId}
               documentId={documentId}
               page={page}
               bands={onSelectProblem ? bandsOn(regions, documentId, page) : []}
               activeProblemId={activeProblemId}
               onSelect={onSelectProblem}
+              onDecoded={reportFit}
             />
           ) : (
             <SourceText documentId={documentId} />
@@ -198,22 +227,67 @@ export function SourcePane({
   )
 }
 
+/**
+ * One rendered page of the source document.
+ *
+ * The page on screen is held in state rather than driven straight from the `page` prop, so
+ * that turning a page never blanks the pane. Pointing a live `<img>` at a new `src`, or
+ * remounting it per page, clears the element the moment the request starts and leaves it
+ * empty until the next render decodes — a flash of nothing on every turn, however fast the
+ * backend answers. Here the next page is decoded off-screen first and only replaces the
+ * current one once it is ready to paint, so a turn is a single clean swap.
+ */
 function PageImage({
   documentId,
   page,
   bands,
   activeProblemId,
   onSelect,
+  onDecoded,
 }: {
   documentId: number
   page: number
   bands: ReturnType<typeof bandsOn>
   activeProblemId: number | null
   onSelect?: (problemId: number) => void
+  /** The decoded page's aspect ratio, width over height. */
+  onDecoded?: (aspect: number) => void
 }) {
-  const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading')
+  const src = documentPageUrl(documentId, page)
+  const [shown, setShown] = useState<{ src: string; page: number } | null>(null)
+  // Which page failed, rather than a flag that has to be cleared as each new load starts.
+  // A flag would mean writing state from the effect body on every page turn, and the reset
+  // is not information the effect owns: whether *this* page has failed is derivable.
+  const [failedSrc, setFailedSrc] = useState<string | null>(null)
+  const failed = failedSrc === src
 
-  if (state === 'failed') {
+  useEffect(() => {
+    let cancelled = false
+    const image = new Image()
+    const settle = () => {
+      if (cancelled) return
+      // Both updates land in one commit, so the page appears at the width it was measured
+      // for rather than arriving and then being resized under the reader.
+      setShown({ src, page })
+      if (image.naturalHeight > 0) onDecoded?.(image.naturalWidth / image.naturalHeight)
+    }
+
+    image.onload = settle
+    image.onerror = () => {
+      if (!cancelled) setFailedSrc(src)
+    }
+    image.src = src
+    // A cached page is already complete before the handlers were attached.
+    if (image.complete && image.naturalWidth > 0) settle()
+
+    return () => {
+      cancelled = true
+      image.onload = null
+      image.onerror = null
+    }
+  }, [src, page, onDecoded])
+
+  if (failed) {
     return (
       <p className="text-text-tertiary py-8 text-center text-sm">
         That page could not be rendered.
@@ -223,24 +297,23 @@ function PageImage({
 
   return (
     <div className="relative">
-      {state === 'loading' ? <Skeleton className="aspect-[8.5/11] w-full rounded-md" /> : null}
-      {/* eslint-disable-next-line @next/next/no-img-element -- The backend serves these at
-          an unknown intrinsic size and Next's loader would proxy a localhost-only route. */}
-      <img
-        src={documentPageUrl(documentId, page)}
-        alt={`Page ${page}`}
-        className={cn(
-          'border-border/60 w-full rounded-[3px] border bg-white shadow-md',
-          state !== 'ready' && 'hidden',
-        )}
-        onLoad={() => setState('ready')}
-        onError={() => setState('failed')}
-      />
+      {shown === null ? <Skeleton className="aspect-[8.5/11] w-full rounded-[3px]" /> : null}
+      {shown === null ? null : (
+        // The backend serves these at an unknown intrinsic size and Next's loader would
+        // proxy a localhost-only route.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={shown.src}
+          alt={`Page ${shown.page}`}
+          className="border-border/60 w-full rounded-[3px] border bg-white shadow-md"
+        />
+      )}
       {/* Laid over the page rather than drawn into it: the image is a faithful render of
           the student's own sheet, and marking it up would make the two columns disagree
           about what the sheet says. Percentages, because the page is rendered at whatever
-          width the pane happens to have. */}
-      {state === 'ready' && onSelect
+          width the pane happens to have. Withheld while a turn is still in flight, so a
+          band is never drawn over the page it does not belong to. */}
+      {shown?.page === page && onSelect
         ? bands.map((band) => (
             <button
               key={band.problemId}
