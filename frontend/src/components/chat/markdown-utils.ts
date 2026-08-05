@@ -154,6 +154,16 @@ const MATH_COMMAND =
 const LEADING_LABEL = /^(\s*\(?[0-9a-z]{1,4}[).]\s*)/i
 
 /**
+ * A fence opened with tildes rather than backticks, which is the same rule
+ * `lineStartsFence` reads: up to three spaces of indent, then three or more tildes.
+ *
+ * Matched on its own rather than folded into the backtick guard below, because a bare `~`
+ * is ordinary text — "~10 minutes" — and refusing the repair on one would disable it for
+ * prose that has nothing to do with code.
+ */
+const TILDE_FENCE = /^ {0,3}~{3,}/m
+
+/**
  * Wrap mathematics a model wrote without delimiters.
  *
  * `"answer": "(a) x(t) = \\frac{1}{2\\pi(2-jt)}"` is a real reply, and without `$` around
@@ -161,13 +171,19 @@ const LEADING_LABEL = /^(\s*\(?[0-9a-z]{1,4}[).]\s*)/i
  * asks for the delimiters and mostly gets them; this is what happens the rest of the time.
  *
  * Every guard here exists to keep the repair away from text it would damage. It runs only
- * when the source contains no `$`, no backtick, and no `\(` or `\[` — that is, only when
- * there is no delimited mathematics and no code for a stray `$` to break, so the source
- * cannot already be rendering correctly. Within that, only lines carrying a known LaTeX
- * command are touched.
+ * when the source contains no `$`, no backtick, no tilde fence, and no `\(` or `\[` — that
+ * is, only when there is no delimited mathematics and no code for a stray `$` to break, so
+ * the source cannot already be rendering correctly. Within that, only lines carrying a
+ * known LaTeX command are touched.
+ *
+ * The tilde fence is a guard in its own right because the backtick one does not imply it.
+ * A `~~~` block holding a LaTeX command, in a reply with no `$` and no backtick anywhere,
+ * was rewritten to `$\frac{1}{2}$` inside the code block: the one thing this module
+ * promises never to touch.
  */
 export function repairUndelimitedMath(source: string): string {
   if (source.includes('$') || source.includes('`')) return source
+  if (TILDE_FENCE.test(source)) return source
   if (source.includes('\\(') || source.includes('\\[')) return source
   // A `\begin{align*}` block already delimits itself and the tokenizer below promotes it.
   if (source.includes('\\begin{')) return source

@@ -46,6 +46,25 @@ describe('normalizeMarkdownForRender', () => {
       const source = '~~~python\nx = 1\n~~~\n'
       expect(normalizeMarkdownForRender(source)).toBe(source)
     })
+
+    it('leaves a tilde fence holding a LaTeX command intact', () => {
+      // The case above passes for the wrong reason: `x = 1` carries no LaTeX command, so
+      // the undelimited-math repair declines it whatever the fence is made of. Only a
+      // tilde fence whose contents look like mathematics reaches the guard, and until one
+      // did, `\frac` inside a `~~~` block was rewritten to `$\frac{1}{2}$` in the code.
+      const source = '~~~\n\\frac{1}{2}\n~~~\n'
+      expect(normalizeMarkdownForRender(source)).toBe(source)
+    })
+
+    it('still repairs undelimited math beside an ordinary tilde', () => {
+      // The guard is a tilde *fence*, not a tilde: `~` is ordinary text, and refusing the
+      // repair on one would disable it for prose that has nothing to do with code. The
+      // whole line is wrapped, which is what this function does to a line of mathematics;
+      // `repairLabelMath` is the one that wraps spans and leaves words alone.
+      expect(repairUndelimitedMath('about ~10 terms, so \\frac{1}{2}')).toBe(
+        '$about ~10 terms, so \\frac{1}{2}$',
+      )
+    })
   })
 
   describe('synthetic closers are streaming-only', () => {
