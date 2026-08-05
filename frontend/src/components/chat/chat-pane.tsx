@@ -144,8 +144,32 @@ export function ChatPane({
   const [turnOutcome, setTurnOutcome] = useState<TurnOutcome | null>(null)
   const [turnKind, setTurnKind] = useState<TurnKind>('send')
   const [revealDrained, setRevealDrained] = useState(false)
+  /**
+   * The pane has been pointed at a different conversation than the turn in flight.
+   *
+   * The turn keeps streaming; it just has nowhere to show. Set from a change in which
+   * conversation is on screen rather than from comparing the two — while a first message
+   * is in the air the pane is still the draft it was sent from, and the URL only catches
+   * up once the conversation exists.
+   */
+  const [detached, setDetached] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const outcomeRef = useRef<TurnOutcome | null>(null)
+  /**
+   * The conversation the turn in flight was sent to.
+   *
+   * A turn outlives the render that started it, and the pane can be pointed somewhere
+   * else while it is still streaming, so which conversation it belongs to cannot be read
+   * back off the props. Held from the moment the turn has a conversation to belong to —
+   * inside `ensureSession`, before the URL is told about it.
+   */
+  const turnSessionRef = useRef<number | null>(null)
+  /**
+   * Which turn owns the pane. Starting a turn somewhere else leaves the previous one
+   * running with nothing to draw on: the answer is still being written and the server
+   * still stores it, so cutting it off would throw away work the student asked for.
+   */
+  const turnIdRef = useRef(0)
   const streamTextRef = useRef('')
   const revealDrainedRef = useRef(false)
   const settledRef = useRef(false)
@@ -165,13 +189,19 @@ export function ChatPane({
   )
 
   const { data: persisted, isPending: messagesQueryPending } = useMessages(activeSessionId)
+  /** A turn is in flight *and* it belongs to the conversation being read. */
+  const showingTurn = !detached && pendingTurn !== null
   // A conversation that does not exist yet is not loading. Without this the query sits at
   // `pending` forever, because it is disabled, and a new chat would show a skeleton
   // instead of somewhere to type.
-  const messagesPending = activeSessionId !== null && messagesQueryPending
+  // Neither is one whose turn is already on screen. Sending the first message is what
+  // brings the conversation into being, which is what first enables this query — so the
+  // skeleton used to cut in between the empty state and the question, for exactly as long
+  // as the first fetch took. That is the blink after picking a suggested prompt.
+  const messagesPending = activeSessionId !== null && messagesQueryPending && !showingTurn
   const messages: ChatMessage[] = useMemo(() => {
     const live = persisted ?? []
-    if (!pendingTurn || turnOutcome === 'failed') return live
+    if (!showingTurn || !pendingTurn || turnOutcome === 'failed') return live
     // A turn is appended to the transcript it started from, not to whatever the message
     // query happens to be holding mid-stream. The server stores the question the moment the
     // turn opens, and on the first message of a new conversation that write races the first
@@ -188,7 +218,7 @@ export function ChatPane({
       return [...withoutLastReply, ...pendingTurn]
     }
     return [...base, ...pendingTurn]
-  }, [pendingTurn, persisted, turnBase, turnKind, turnOutcome])
+  }, [pendingTurn, persisted, showingTurn, turnBase, turnKind, turnOutcome])
 
   /**
    * The conversation this turn belongs to, opening one if there is not one yet.
@@ -201,6 +231,7 @@ export function ChatPane({
     if (activeSessionId !== null) return activeSessionId
     try {
       const session = await createSession.mutateAsync(anchorPartId)
+      turnSessionRef.current = session.id
       onSessionIdChange?.(session.id)
       setMode(session.mode)
       return session.id
@@ -215,6 +246,10 @@ export function ChatPane({
   }, [])
 
   const clearOptimisticTurn = useCallback(() => {
+    // Nothing on screen belongs to a particular conversation any more, so leaving one is
+    // no longer something that puts anything away.
+    turnSessionRef.current = null
+    setDetached(false)
     setPendingTurn(null)
     setTurnBase(null)
     setStreamText('')
@@ -229,17 +264,45 @@ export function ChatPane({
     revealDrainedRef.current = false
   }, [])
 
+  /**
+   * Which conversation the pane is showing, and whether the turn in flight is still in it.
+   *
+   * Clicking New chat mid-answer used to change the URL and leave the previous
+   * conversation and its half-written reply on screen until the turn settled — only then
+   * did the empty chat appear. The optimistic rows had nothing tying them to the
+   * conversation they belonged to, so pointing the pane elsewhere did not put them away.
+   *
+   * Only the answer's *place* moves: it goes on streaming, is still written to the
+   * conversation it was asked in, and comes back on screen mid-sentence when the student
+   * returns to it. Layout, not passive: a frame of the old conversation under a click
+   * that was meant to leave it is the flicker this is here to prevent.
+   */
+  const shownSessionRef = useRef(activeSessionId)
+  useLayoutEffect(() => {
+    if (shownSessionRef.current === activeSessionId) return
+    shownSessionRef.current = activeSessionId
+    // No turn to place. A first message is sent from a draft and only then gets a
+    // conversation, so `null` here also covers the window before the URL catches up: the
+    // pane has not gone anywhere, and nothing about the turn has changed hands.
+    if (turnSessionRef.current === null) return
+    setDetached(activeSessionId !== turnSessionRef.current)
+  }, [activeSessionId])
+
   const settleTurn = useCallback(
     async (immediate: boolean) => {
       if (settledRef.current) return
       settledRef.current = true
+      // The conversation the turn was sent to, which is not always the one on screen: a
+      // turn can settle after the pane has moved on, and refetching whatever is being read
+      // now would leave the answer's own transcript holding a stale copy of itself.
+      const turnSessionId = turnSessionRef.current
       if (immediate) clearOptimisticTurn()
-      if (activeSessionId !== null) {
-        await queryClient.invalidateQueries({ queryKey: chatKeys.messages(activeSessionId) })
+      if (turnSessionId !== null) {
+        await queryClient.invalidateQueries({ queryKey: chatKeys.messages(turnSessionId) })
       }
       if (!immediate) clearOptimisticTurn()
     },
-    [activeSessionId, clearOptimisticTurn, queryClient],
+    [clearOptimisticTurn, queryClient],
   )
 
   useEffect(() => {
@@ -281,10 +344,21 @@ export function ChatPane({
    */
   const runTurn = useCallback(
     async (kind: TurnKind, content: string, turnSessionId: number) => {
-      if (pendingTurn !== null) return
+      // One question at a time in a conversation — but only in that conversation. A turn
+      // still running in the chat the student just left is not a reason the chat they
+      // opened instead cannot be typed in, which is what `detached` says about it.
+      if (pendingTurn !== null && !detached) return
+
+      // Whatever was running is now unwatched: it keeps streaming into the conversation it
+      // was asked in, and stops writing to a pane that has become someone else's.
+      const turnId = turnIdRef.current + 1
+      turnIdRef.current = turnId
+      const owns = () => turnIdRef.current === turnId
 
       const controller = new AbortController()
       abortRef.current = controller
+      turnSessionRef.current = turnSessionId
+      setDetached(false)
       settledRef.current = false
       outcomeRef.current = 'active'
       revealDrainedRef.current = false
@@ -326,6 +400,9 @@ export function ChatPane({
       )
 
       const onEvent = (event: ChatEvent) => {
+        // A turn the pane has handed on still has an answer coming, and the server still
+        // writes it down. It just has no rows of its own to put it in any more.
+        if (!owns()) return
         if (event.type === 'token') {
           // The first word of the answer is what ends thinking, so the elapsed time is
           // fixed here rather than when the reasoning channel happens to fall quiet.
@@ -383,7 +460,9 @@ export function ChatPane({
               controller.signal,
             ))
       } catch (caught) {
-        if (caught instanceof DOMException && caught.name === 'AbortError') {
+        if (!owns()) {
+          // Nothing to report and nobody to report it to: this turn's rows are gone.
+        } else if (caught instanceof DOMException && caught.name === 'AbortError') {
           if (outcomeRef.current === 'active') {
             setOutcome('stopped')
             if (streamTextRef.current.trim().length === 0) {
@@ -396,14 +475,30 @@ export function ChatPane({
           setOutcome('failed')
         }
       } finally {
-        abortRef.current = null
-        if (outcomeRef.current === 'active') {
-          toast.error('The answer stopped early.')
-          setOutcome('failed')
+        if (owns()) {
+          abortRef.current = null
+          if (outcomeRef.current === 'active') {
+            toast.error('The answer stopped early.')
+            setOutcome('failed')
+          }
+        } else {
+          // An answer written while the student was reading something else. Marking its
+          // transcript stale is the whole of how it reaches them: there were no optimistic
+          // rows to settle, so opening that conversation is what fetches what it said.
+          void queryClient.invalidateQueries({ queryKey: chatKeys.messages(turnSessionId) })
         }
       }
     },
-    [activeMode, pendingTurn, persisted, placeholderReply, scopedDocument, setOutcome],
+    [
+      activeMode,
+      detached,
+      pendingTurn,
+      persisted,
+      placeholderReply,
+      queryClient,
+      scopedDocument,
+      setOutcome,
+    ],
   )
 
   const send = useCallback(
@@ -459,8 +554,10 @@ export function ChatPane({
 
   const suggestions = useMemo(() => buildSuggestedPrompts(profile?.facts ?? []), [profile?.facts])
 
-  const optimisticTurn = pendingTurn !== null && turnOutcome !== 'failed'
-  const turnActive = pendingTurn !== null && turnOutcome === 'active'
+  // Detached, the turn is somewhere else's: the composer here offers Send rather than the
+  // Stop belonging to an answer this conversation is not the one waiting on.
+  const optimisticTurn = showingTurn && turnOutcome !== 'failed'
+  const turnActive = showingTurn && turnOutcome === 'active'
   const rendered = optimisticTurn
     ? messages.map((message) =>
         message.id === -2 ? { ...message, content: streamText, thinking: streamThinking } : message,
