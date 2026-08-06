@@ -128,6 +128,10 @@ def run_ingestion(document_id: int) -> None:
     try:
         _ingest(conn, document_id)
     except Exception as exc:
+        # First, discard whatever the failed stage had half-written but not committed.
+        # The connection is reused for the failure write below, and without the rollback
+        # those uncommitted rows would ride along silently on its commit.
+        conn.rollback()
         # The state column is written at the start of every stage and committed, so it
         # names the stage that just failed.
         stage = _current_state(conn, document_id) or PENDING
@@ -140,12 +144,18 @@ def run_ingestion(document_id: int) -> None:
 def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
     """The state machine itself, committing at every transition."""
     document = conn.execute(
-        "select id, class_id, filename, stored_path, mime, recognize from documents where id = ?",
+        "select id, class_id, filename, stored_path, mime, recognize, created_at "
+        "from documents where id = ?",
         (document_id,),
     ).fetchone()
     if document is None:
         logger.warning("Ingestion skipped: document %s no longer exists", document_id)
         return
+    # The row's identity, held for the whole run. Deleting a document mid-ingestion is
+    # allowed - it is the de facto cancel for a long recognition run - and a re-upload can
+    # put a different file behind this id, so every stage below re-checks the row before
+    # writing and aborts quietly when it is gone or replaced.
+    started_at = str(document["created_at"])
 
     _set_state(conn, document_id, PARSING)
     parsed = parse_document(Path(document["stored_path"]), document["mime"])
@@ -158,6 +168,10 @@ def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
     skipped = None
     if document["recognize"]:
         skipped = recognition.recognize_pages(conn, document, parsed)
+        # Recognition is the stage long enough for a delete to be aimed at, so the run is
+        # re-checked the moment it hands control back.
+        if _vanished(conn, document_id, started_at):
+            return
         parsed = recognition.merge_recognized(conn, document_id, parsed)
         _record_page_counts(conn, document_id, parsed)
 
@@ -181,15 +195,39 @@ def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
         _mark_unsupported(conn, document_id, SCANNED_MESSAGE)
         return
 
+    if _vanished(conn, document_id, started_at):
+        return
     _set_state(conn, document_id, EMBEDDING, doc_type)
-    _store_chunks(conn, document_id, int(document["class_id"]), doc_type, chunks)
+    stored = _store_chunks(
+        conn, document_id, int(document["class_id"]), doc_type, chunks, started_at
+    )
+    if not stored:
+        return
 
+    if _vanished(conn, document_id, started_at):
+        return
     _set_state(conn, document_id, EXTRACTING)
     detail = _extract_profile_facts(conn, document_id, text, doc_type)
     if detail is None:
         _consolidate_profile(conn, int(document["class_id"]))
 
-    _mark_ready(conn, document_id, parsed, detail)
+    if _vanished(conn, document_id, started_at):
+        return
+    # A requested recognition that could not run must not vanish just because the rest of
+    # the document was readable. The reason lands in `error_message`, where the row's
+    # "pages skipped" popover already looks for it, so a mixed document that quietly read
+    # only its text pages says why the rest were not attempted.
+    _mark_ready(conn, document_id, parsed, detail, recognition.skip_message(skipped))
+
+
+def _vanished(conn: sqlite3.Connection, document_id: int, started_at: str) -> bool:
+    """Whether the document this run started from is gone or replaced. Logged once here."""
+    if recognition.document_replaced(conn, document_id, started_at):
+        logger.warning(
+            "Ingestion of document %s abandoned: deleted or replaced mid-run", document_id
+        )
+        return True
+    return False
 
 
 def _record_figures(conn: sqlite3.Connection, document_id: int, source: Path, mime: str) -> None:
@@ -204,6 +242,11 @@ def _record_figures(conn: sqlite3.Connection, document_id: int, source: Path, mi
         store_figures(conn, document_id, extract_figures(source, mime))
         conn.commit()
     except Exception:
+        # `store_figures` deletes the previous run's figures before inserting the new
+        # ones, all uncommitted. A failure in between must not leave that delete waiting
+        # to ride along on the next commit, which would silently take figures the
+        # document still legitimately has.
+        conn.rollback()
         logger.exception("Figure extraction failed for document %s", document_id)
 
 
@@ -218,6 +261,9 @@ def _extract_profile_facts(
     try:
         return extract_facts(conn, document_id, text, doc_type)
     except Exception:
+        # Whatever the failed pass half-wrote is discarded rather than left uncommitted
+        # on the shared connection, where the next commit would silently keep it.
+        conn.rollback()
         # The chunks are already stored, so the document is searchable and lands `ready`
         # either way. A missed fact proposal is not worth failing an upload over.
         logger.exception("Profile extraction failed for document %s", document_id)
@@ -235,6 +281,9 @@ def _consolidate_profile(conn: sqlite3.Connection, class_id: int) -> None:
     try:
         consolidate_class(conn, class_id)
     except Exception:
+        # Same discipline as extraction: a merge half-applied when the endpoint died must
+        # not sit uncommitted waiting for an unrelated commit to make it real.
+        conn.rollback()
         logger.exception("Profile consolidation failed for class %s", class_id)
 
 
@@ -244,14 +293,33 @@ def _store_chunks(
     class_id: int,
     doc_type: str,
     chunks: list[Chunk],
-) -> None:
-    """Embed and insert every chunk, replacing whatever this document had before."""
+    started_at: str,
+) -> bool:
+    """Embed and insert every chunk, replacing whatever this document had before.
+
+    Committed per batch so a restart loses at most one batch of embedding time; the
+    stages that follow only run once every batch is in. Which is why a mid-run failure
+    cannot be left as it lies: the committed early batches would serve as this document's
+    index while the row says `failed`. `_mark_failed` deletes them again for exactly that
+    reason, in the same transaction as the state write.
+
+    Returns:
+        False when the run was abandoned because the document was deleted or replaced
+        while a batch was embedding - the long call of this stage - so nothing of this
+        file's index can land on whatever the id points at now. True otherwise.
+    """
     # A reingest must replace, not accumulate, so the old rows go before the first insert.
     delete_chunks(conn, document_id)
 
     for start in range(0, len(chunks), EMBED_BATCH_SIZE):
         batch = chunks[start : start + EMBED_BATCH_SIZE]
         vectors = embed_documents([chunk.content for chunk in batch])
+        if recognition.document_replaced(conn, document_id, started_at):
+            conn.rollback()
+            logger.warning(
+                "Embedding of document %s abandoned: deleted or replaced mid-run", document_id
+            )
+            return False
         for chunk, vector in zip(batch, vectors, strict=True):
             chunk_id = conn.execute(
                 _INSERT_CHUNK_SQL,
@@ -278,6 +346,7 @@ def _store_chunks(
                 (chunk_id, class_id, sqlite_vec.serialize_float32(vector)),
             )
         conn.commit()
+    return True
 
 
 def delete_chunks(conn: sqlite3.Connection, document_id: int) -> None:
@@ -321,6 +390,19 @@ def reconcile_interrupted(conn: sqlite3.Connection) -> tuple[int, int]:
 
     mid_flight = tuple(state for state in NON_TERMINAL_STATES if state != PENDING)
     placeholders = ", ".join("?" for _ in mid_flight)
+    stalled = [
+        int(row[0])
+        for row in conn.execute(
+            f"select id from documents where state in ({placeholders})",  # noqa: S608
+            mid_flight,
+        )
+    ]
+    # A document about to be marked failed must not keep serving whatever chunks its
+    # interrupted run had already committed - `_store_chunks` lands them a batch at a
+    # time. Deleted in the same transaction as the state write, so there is no moment at
+    # which a failed document still answers searches.
+    for document_id in stalled:
+        delete_chunks(conn, document_id)
     cursor = conn.execute(
         # The placeholders are generated from a module constant, and every value is
         # bound. `stage_detail` reads the pre-update row, so it keeps the lost stage.
@@ -369,18 +451,32 @@ def _record_page_counts(conn: sqlite3.Connection, document_id: int, parsed: Pars
 def _settle_unreadable(conn: sqlite3.Connection, document_id: int, skipped: str | None) -> None:
     """Land a document that yielded no text at all, saying which kind of nothing it was.
 
-    Three different situations end up here and they are not the same fact. A document
+    Four different situations end up here and they are not the same fact. A document
     recognition was never asked to read is `unsupported`, which is where it has always
-    been. A document where recognition ran and every page failed is `failed`, because
-    something was tried and did not work and there is nothing to keep. A document where
-    recognition was asked for but could not start - no endpoint, or a remote one the
-    student has not acknowledged - is `unsupported` again, but carrying the reason, since
-    that reason is the one thing the student can act on.
+    been. A document where recognition was asked for but could not start - no endpoint,
+    or a remote one the student has not acknowledged - is `unsupported` again, but
+    carrying the reason, since that reason is the one thing the student can act on. A
+    document whose run the breaker stopped is `failed` and blames the endpoint, because
+    three consecutive failures out of hundreds of unattempted pages is an endpoint fact,
+    not a document fact. And a document where recognition genuinely tried every page and
+    read none is `failed` with nothing to keep.
+
+    The order matters. What this run learned outranks what old page rows still say: a
+    retry after the endpoint was removed skips before it attempts anything, and reporting
+    the previous run's stale "none of the pages could be read" instead of "add an
+    endpoint" would hide the one thing the student can act on.
     """
+    message = recognition.skip_message(skipped)
+    if message is not None:
+        _mark_unsupported(conn, document_id, message)
+        return
+    if skipped == recognition.ENDPOINT_FAILED:
+        _mark_failed(conn, document_id, PARSING, recognition.ENDPOINT_FAILED_MESSAGE)
+        return
     if recognition.failed_page_count(conn, document_id):
         _mark_failed(conn, document_id, PARSING, recognition.ALL_PAGES_FAILED_MESSAGE)
         return
-    _mark_unsupported(conn, document_id, recognition.skip_message(skipped) or SCANNED_MESSAGE)
+    _mark_unsupported(conn, document_id, SCANNED_MESSAGE)
 
 
 def _mark_unsupported(conn: sqlite3.Connection, document_id: int, message: str) -> None:
@@ -397,14 +493,21 @@ def _mark_ready(
     document_id: int,
     parsed: ParsedDocument,
     stage_detail: str | None,
+    notice: str | None = None,
 ) -> None:
-    """Land the document searchable, with the page tally the UI reports."""
+    """Land the document searchable, with the page tally the UI reports.
+
+    `notice` is the reason a requested recognition read nothing, on the one path where
+    the document is otherwise fine: a mixed file whose text pages carried it to `ready`.
+    Dropped, the student's explicit "read this document" would have silently done nothing.
+    """
     conn.execute(
-        "update documents set state = ?, stage_detail = ?, error_message = null, "
+        "update documents set state = ?, stage_detail = ?, error_message = ?, "
         "pages_total = ?, pages_done = ?, pages_skipped = ? where id = ?",
         (
             READY,
             stage_detail,
+            notice,
             parsed.pages_total,
             len(parsed.pages),
             parsed.pages_skipped,
@@ -415,7 +518,14 @@ def _mark_ready(
 
 
 def _mark_failed(conn: sqlite3.Connection, document_id: int, stage: str, message: str) -> None:
-    """Record the failure with the stage it happened in."""
+    """Record the failure with the stage it happened in.
+
+    The document's chunks go in the same transaction. `_store_chunks` commits a batch at
+    a time, so a failure - or a restart reconciled later - can catch a document with part
+    of its index already committed, and a `failed` row must not go on answering searches
+    with half an index.
+    """
+    delete_chunks(conn, document_id)
     conn.execute(
         "update documents set state = ?, stage_detail = ?, error_message = ? where id = ?",
         (FAILED, stage, message, document_id),

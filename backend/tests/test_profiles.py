@@ -822,6 +822,86 @@ def test_no_skip_reason_when_no_document_carries_one(db: sqlite3.Connection, cla
     assert profiles.get_class_profile(db, class_id)["extraction_skipped_reason"] is None
 
 
+def _chunk_for(db: sqlite3.Connection, class_id: int, document_id: int) -> None:
+    """One chunk row, standing in for an ingestion that reached the extraction stage.
+
+    Chunk ids are the only per-ingestion write order the schema records, and every
+    document whose `stage_detail` can carry a skip reason has chunks, because extraction
+    runs only after the chunks are stored.
+    """
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, doc_type, "
+        "embedding_model, embedding_dim) values (?, ?, 'text', 1, 'notes', 'nomic', 768)",
+        (document_id, class_id),
+    )
+    db.commit()
+
+
+def test_skip_reason_follows_ingestion_order_not_document_id(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """Re-ingesting the oldest document in a class is still the latest ingestion.
+
+    `max(document id)` called the newest *row* the newest *run*, so re-ingesting an older
+    upload most recently - after removing the endpoint, say - reported whatever the
+    higher-id document's outcome had been instead of the run the student just watched.
+    """
+    older = _insert_document(db, class_id, filename="one.pdf", stage_detail="no_endpoint")
+    newer = _insert_document(db, class_id, filename="two.pdf", stage_detail=None)
+    # two.pdf ingested after one.pdf, then one.pdf re-ingested last: its chunks are
+    # replaced, so its surviving chunk ids are the highest in the class.
+    _chunk_for(db, class_id, older)
+    _chunk_for(db, class_id, newer)
+    db.execute("delete from chunks where document_id = ?", (older,))
+    db.commit()
+    _chunk_for(db, class_id, older)
+
+    profile = profiles.get_class_profile(db, class_id)
+
+    assert profile["extraction_skipped_reason"] == "no_endpoint"
+
+
+def test_facts_are_never_attested_against_a_replaced_document(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Delete mid-extraction, re-upload, and the old file's facts must not land at all.
+
+    The model call takes minutes and deleting the document mid-run is the de facto cancel
+    for a long ingestion. A delete followed by an immediate re-upload can put a different
+    file behind the same id, and attesting the old file's facts against it would
+    contaminate the new document permanently.
+    """
+
+    async def replace_mid_call(*args: object, **kwargs: object) -> str:
+        # The student deletes the document and uploads a different file that lands on the
+        # same id, all while the model is reading the old one.
+        other = connect()
+        try:
+            other.execute("delete from documents where id = ?", (document_id,))
+            other.execute(
+                "insert into documents (id, class_id, filename, stored_path, mime, "
+                "byte_size, state, created_at) "
+                "values (?, ?, 'newer.pdf', 'x/newer.pdf', 'application/pdf', 1, "
+                "'pending', '2099-01-01 00:00:00')",
+                (document_id, class_id),
+            )
+            other.commit()
+        finally:
+            other.close()
+        return MIDTERM_REPLY
+
+    monkeypatch.setattr(profiles.client, "complete", replace_mid_call)
+
+    profiles.extract_facts(db, document_id, SYLLABUS_TEXT)
+
+    assert db.execute("select count(*) from profile_facts").fetchone()[0] == 0
+    assert db.execute("select count(*) from profile_fact_sources").fetchone()[0] == 0
+
+
 def test_a_failed_extraction_records_its_reason_for_the_profile_to_explain(
     db: sqlite3.Connection,
     class_id: int,

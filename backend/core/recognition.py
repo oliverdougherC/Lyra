@@ -60,9 +60,12 @@ RECOGNIZED = "recognized"
 FAILED = "failed"
 
 READABLE_STATES = (TEXT, RECOGNIZED)
-# States a recognition run picks up. A retry is the same call as a first run, so `Try those
-# pages` needs no endpoint of its own: pages that already worked are simply not in this set.
-PENDING_STATES = (SCANNED, FAILED)
+# What a run in flight picks up: only pages nothing has attempted yet. `failed` is
+# deliberately not here. A page that failed permanently would otherwise be re-paid for on
+# every plain re-index - a chunking-tuning pass re-reads no images at all - so re-attempting
+# a `failed` page takes the explicit recognize/retry action, which flips it back to
+# `scanned` through `reset_failed_pages` before the run starts.
+PENDING_STATES = (SCANNED,)
 
 # Written into `documents.stage_detail` while pages are being read. Recognition is not a
 # fifth ingestion step and does not get a state of its own: ui-phase-3.md renders it under
@@ -76,6 +79,15 @@ ALL_PAGES_FAILED_MESSAGE = "None of the pages in this document could be read."
 NO_ENDPOINT_MESSAGE = (
     "Reading pages needs a model that can see images. Add an endpoint in Settings."
 )
+# What a tripped breaker means, in the student's words. Distinct from
+# `ALL_PAGES_FAILED_MESSAGE` on purpose: when three pages in a row fail and six hundred
+# were never attempted, "none of the pages could be read" is false and points the student
+# at the document. The endpoint is the fault, and the endpoint is what they can fix.
+ENDPOINT_FAILED_MESSAGE = (
+    "The endpoint reading this document failed several pages in a row, so Lyra stopped "
+    "rather than paying a timeout on every page. Check the endpoint in Settings, then try "
+    "again."
+)
 
 # Why a requested run did not read anything, in the student's words. A skip is not a page
 # failure: nothing was attempted, so no page is marked `failed` and the document lands
@@ -84,6 +96,11 @@ _SKIP_MESSAGES = {
     NO_ENDPOINT: NO_ENDPOINT_MESSAGE,
     REMOTE_UNACKNOWLEDGED: transcribe.REMOTE_MESSAGE,
 }
+
+# Returned by `recognize_pages` when the breaker below tripped. Not in `_SKIP_MESSAGES`,
+# because it is a different fact: a skip means nothing was attempted, and this means
+# attempts were made and the endpoint failed every one of them.
+ENDPOINT_FAILED = "endpoint_failed"
 
 # How many pages in a row may fail before the run gives up on the rest.
 #
@@ -200,17 +217,18 @@ def recognize_pages(
         parsed: The parse that just ran, only for its page total.
 
     Returns:
-        None when pages were read or there were none to read, otherwise the reason nothing
-        was attempted: `no_endpoint` or `remote_unacknowledged`.
+        None when pages were read or there were none to read. Otherwise the reason the run
+        stopped short: `no_endpoint` or `remote_unacknowledged` when nothing was attempted,
+        or `ENDPOINT_FAILED` when attempts were made and the breaker below gave up.
     """
     document_id = int(document["id"])
     pending = [
         int(row[0])
         for row in conn.execute(
-            # `PENDING_STATES` is two values and the placeholders are written out to match,
+            # `PENDING_STATES` is one value and the placeholder is written out to match,
             # so this stays ordinary bound SQL rather than SQL assembled from a constant.
             "select page_number from document_pages "
-            "where document_id = ? and state in (?, ?) order by page_number",
+            "where document_id = ? and state = ? order by page_number",
             (document_id, *PENDING_STATES),
         )
     ]
@@ -235,26 +253,38 @@ def recognize_pages(
     )
     conn.commit()
 
+    started_at = str(document["created_at"])
     consecutive = 0
     for page_number in pending:
         try:
             text = _read_one_page(config, remote_ack, document_id, source, mime, page_number)
         except Exception as exc:
-            consecutive += 1
-            _settle_page(conn, document_id, page_number, FAILED, None, _page_error(exc))
+            state, error = FAILED, _page_error(exc)
+            text = None
             logger.warning(
                 "Could not read page %s of document %s", page_number, document_id, exc_info=True
             )
+        else:
+            state, error = RECOGNIZED, None
+        # After the model call and before anything is written, because the call is the long
+        # part of a run that can take hours and deleting the document is its de facto
+        # cancel. A delete followed by a fresh upload can put a different file behind this
+        # id, and settling would write this run's page - or its failure - onto that file.
+        if document_replaced(conn, document_id, started_at):
+            logger.info("Stopped reading document %s: deleted or replaced mid-run", document_id)
+            return None
+        _settle_page(conn, document_id, page_number, state, text, error)
+        if state == FAILED:
+            consecutive += 1
             if consecutive >= MAX_CONSECUTIVE_FAILURES:
                 logger.warning(
                     "Stopped reading document %s after %s pages failed in a row",
                     document_id,
                     consecutive,
                 )
-                break
+                return ENDPOINT_FAILED
         else:
             consecutive = 0
-            _settle_page(conn, document_id, page_number, RECOGNIZED, text, None)
     return None
 
 
@@ -274,6 +304,38 @@ def failed_page_count(conn: sqlite3.Connection, document_id: int) -> int:
 def skip_message(reason: str | None) -> str | None:
     """The student-facing reason a requested run read nothing, if there is one."""
     return None if reason is None else _SKIP_MESSAGES.get(reason)
+
+
+def reset_failed_pages(conn: sqlite3.Connection, document_id: int) -> int:
+    """Put this document's failed pages back in the pending set. The caller commits.
+
+    This is what makes a retry explicit. `Try those pages` and `Read this document` mean
+    "attempt them again", so the pages they cover go back to `scanned` - the truth once a
+    new attempt is coming - and the next run picks them up. A plain re-index never calls
+    this, which is exactly why it never re-pays model time on a page that failed for good.
+
+    Returns:
+        How many pages were reset.
+    """
+    cursor = conn.execute(
+        "update document_pages set state = ?, error_message = null "
+        "where document_id = ? and state = ?",
+        (SCANNED, document_id, FAILED),
+    )
+    return cursor.rowcount
+
+
+def document_replaced(conn: sqlite3.Connection, document_id: int, started_at: str) -> bool:
+    """Whether the row a worker started from is gone, or re-created under the same id.
+
+    Deleting a document is the de facto cancel for a run that can take hours, and a delete
+    followed by an immediate re-upload can hand this id to a different file. `started_at`
+    is the row's `created_at` captured when the run began; a row that no longer matches it
+    is not the document the worker was asked to read, and nothing this run produced -
+    pages, chunks, or profile facts - may be written onto it.
+    """
+    row = conn.execute("select created_at from documents where id = ?", (document_id,)).fetchone()
+    return row is None or str(row["created_at"]) != str(started_at)
 
 
 def _read_one_page(

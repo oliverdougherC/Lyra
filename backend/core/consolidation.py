@@ -214,9 +214,17 @@ def consolidate_class(conn: sqlite3.Connection, class_id: int) -> None:
         _mark_consolidated(conn, rows)
         return
 
-    removed = _apply_merges(conn, _merge_groups(payload, rows))
-    demoted = _apply_demotions(conn, payload, rows)
-    _mark_consolidated(conn, rows)
+    # One transaction from the first merge to the commit inside `_mark_consolidated`. An
+    # exception in between - and the shared worker connection it would leave holding
+    # uncommitted deletes - must roll everything back, or the next unrelated commit on
+    # that connection would silently make a half-applied merge real.
+    try:
+        removed = _apply_merges(conn, _merge_groups(payload, rows))
+        demoted = _apply_demotions(conn, payload, rows)
+        _mark_consolidated(conn, rows)
+    except Exception:
+        conn.rollback()
+        raise
     logger.info(
         "Consolidated class %s: %s facts merged away, %s set aside as document metadata",
         class_id,

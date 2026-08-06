@@ -27,9 +27,13 @@ Two rules run through every path here:
 - **Results land as they are produced.** Every problem is written when it completes, never
   buffered until the end, so a student who closes the laptop mid-solve comes back to
   finished work.
-- **A failed problem never fails the artifact.** One problem that could not be solved
-  carries its own error and the run continues; the set lands `ready` with a gap in it,
-  which is worth more than nothing.
+- **A failed problem never fails the artifact - but a failed endpoint does.** One problem
+  that could not be solved carries its own error and the run continues; the set lands
+  `ready` with a gap in it, which is worth more than nothing. What that rule must not be
+  allowed to mean is grinding twelve problems through a 600-second timeout each against a
+  dead endpoint and then calling the result ready: several failures *in a row* are an
+  endpoint fact rather than a problem fact and stop the run, and a set in which nothing
+  at all was solved is `failed`, because "ready" with zero solutions is a lie.
 """
 
 import asyncio
@@ -76,6 +80,22 @@ _SOLVE_FAILURE = "Something went wrong while solving this problem set."
 _PROBLEM_FAILURE = "Lyra could not solve this problem."
 _EMPTY_REPLY = "The tutor model returned nothing for this problem."
 _NOT_SOLVED_DETAIL = "This problem was not solved, so there was nothing to check."
+
+# How many problems in a row may fail before the run gives up on the rest, mirroring
+# `recognition.MAX_CONSECUTIVE_FAILURES` for the same reason. One problem failing is
+# ordinary; every problem failing in sequence is the endpoint being down, and each attempt
+# against a dead endpoint costs the student the full background timeout. The problems
+# never reached stay `pending`, which is the truth, and `Solve the rest` picks them up.
+MAX_CONSECUTIVE_FAILURES = 3
+ENDPOINT_SUSPECT_MESSAGE = (
+    "Several problems in a row could not be solved, so the run stopped. A streak like "
+    "that is almost always the tutor endpoint being down or unreachable, not the problems "
+    "themselves. Check the endpoint in Settings, then solve again."
+)
+NOTHING_SOLVED_MESSAGE = (
+    "None of the problems in this set could be solved. Check the tutor endpoint in "
+    "Settings, then solve again."
+)
 
 # Why document text may not be sent, said in the words the student needs to act on. The
 # rule itself lives in `app_settings.document_text_allowed`; these are its consequences
@@ -350,11 +370,19 @@ def _write_figures(
     rather than freeze a crop taken on the day it was solved.
     """
     # The problems on each page, in document order, which is what decides both whether "the
-    # figures on this page" identifies anything and whether the page alternates.
+    # figures on this page" identifies anything and whether the page alternates. A problem
+    # whose page never resolved cannot be placed in it, and its document is remembered for
+    # exactly that reason: the census over that document is incomplete, so "the only
+    # problem on its page" is not a fact the census can state. A page really holding
+    # problems 3 and 4, where only 4's page survived segmentation, would otherwise compute
+    # 4 as alone and hand it every figure on the page, including 3's.
     pages: dict[tuple[int, int], list[int]] = {}
+    unplaced: set[int] = set()
     for index, problem in enumerate(problems):
         if problem.document_id and problem.page_number is not None:
             pages.setdefault((problem.document_id, problem.page_number), []).append(index)
+        elif problem.document_id:
+            unplaced.add(problem.document_id)
 
     for (document_id, page_number), indexes in pages.items():
         available = figures.list_figures(conn, document_id, [page_number])
@@ -363,7 +391,7 @@ def _write_figures(
                 figure
                 for figure in available
                 if isinstance(figure["label"], str)
-                and _mentions(problems[index].statement, figure["label"])
+                and _mentions(_problem_text(problems[index]), figure["label"])
             ]
             for index in indexes
         }
@@ -373,10 +401,17 @@ def _write_figures(
             if anything_named
             else _pair_by_alternation([positions[index] for index in indexes], available)
         )
+        # The unambiguous-shortcut precondition: this problem is alone on its page *and*
+        # the census that says so is complete. With any problem of this document unplaced,
+        # the shortcut falls through to naming and alternation, which refuse rather than
+        # guess.
+        census_complete = document_id not in unplaced
 
         for position, index in enumerate(indexes):
             chosen = named[index] or (
-                available if len(indexes) == 1 else _figures_at(paired, position)
+                available
+                if len(indexes) == 1 and census_complete
+                else _figures_at(paired, position)
             )
             _attach_figures(conn, artifact_id, part_ids[index], problems[index], chosen)
 
@@ -472,6 +507,16 @@ def _pair_in_direction(ordered: list[tuple[float, int, int]], step: int) -> dict
         pairs[index] = ordered[beside][2]
     # Two diagrams reaching for the same question is not a list.
     return None if len(set(pairs.values())) != len(pairs) else pairs
+
+
+def _problem_text(problem: SegmentedProblem) -> str:
+    """Everything a problem says, sub-parts included, for the naming rule to search.
+
+    "See Figure 2" sits inside part (b) at least as often as in the stem, and a reference
+    is a reference wherever the sheet chose to print it. Searching the stem alone let the
+    single-problem shortcut hand out figures the parts had already named for themselves.
+    """
+    return " ".join([problem.statement, *(part.statement for part in problem.parts)])
 
 
 def _mentions(statement: str, label: str) -> bool:
@@ -656,6 +701,7 @@ def _solve(conn: sqlite3.Connection, artifact_id: int) -> None:
     done = sum(1 for unit in units if unit.part["status"] == artifacts.PART_COMPLETE)
     artifacts.set_problems_done(conn, artifact_id, done)
 
+    consecutive = 0
     for unit in units:
         if _current_state(conn, artifact_id) == artifacts.CANCELLED:
             logger.info("Solve of artifact %s stopped: cancelled", artifact_id)
@@ -663,12 +709,31 @@ def _solve(conn: sqlite3.Connection, artifact_id: int) -> None:
         if unit.part["status"] == artifacts.PART_COMPLETE:
             continue
         artifacts.set_artifact_state(conn, artifact_id, artifacts.SOLVING, stage_detail=unit.label)
-        _solve_one(conn, artifact_id, class_id, config, unit)
+        solved = _solve_one(conn, artifact_id, class_id, config, unit)
         _settle_parent(conn, unit)
-        artifacts.increment_problems_done(conn, artifact_id)
+        if solved:
+            consecutive = 0
+            # Only successes count. The interface renders this as "3 of 12 solved", and a
+            # tally that included failures would read "12 of 12" over a page of errors.
+            artifacts.increment_problems_done(conn, artifact_id)
+            continue
+        consecutive += 1
+        if consecutive >= MAX_CONSECUTIVE_FAILURES:
+            logger.warning(
+                "Stopped solving artifact %s after %s problems failed in a row",
+                artifact_id,
+                consecutive,
+            )
+            raise LyraError(ENDPOINT_SUSPECT_MESSAGE)
 
     if _current_state(conn, artifact_id) == artifacts.CANCELLED:
         return
+    # Re-read rather than trusted from the loop, because a resumed run's `units` carry the
+    # statuses they had when the run began. A set in which not one problem was solved -
+    # this run or any before it - is not ready by any honest reading of the word.
+    statuses = [str(artifacts.get_part(conn, unit.id)["status"]) for unit in units]
+    if statuses and all(status == artifacts.PART_FAILED for status in statuses):
+        raise LyraError(NOTHING_SOLVED_MESSAGE)
     artifacts.set_artifact_state(conn, artifact_id, artifacts.READY)
 
 
@@ -679,13 +744,17 @@ def _solve_one(
     config: TutorConfig,
     unit: _Unit,
     correction: str = "",
-) -> None:
+) -> bool:
     """Solve one unit and check it, recording a failure on the unit itself.
 
     A problem that cannot be solved carries its own error and its own `failed` status. The
     artifact keeps going: a set with one gap in it is worth more than a set that stopped.
     On a split problem that is per part, so one part that failed leaves the other four
     readable and one part marked wrong sends one part back to the model.
+
+    Returns:
+        Whether the unit was solved. The caller's circuit breaker and its progress count
+        both need the distinction: a failure is recorded here, but it is not progress.
     """
     part_id = unit.id
     try:
@@ -701,10 +770,11 @@ def _solve_one(
             conn, part_id, artifacts.PART_FAILED, _failure_message(exc, _PROBLEM_FAILURE)
         )
         artifacts.set_part_verdict(conn, part_id, artifacts.UNCHECKED, _NOT_SOLVED_DETAIL)
-        return
+        return False
 
     _check(conn, artifact_id, class_id, config, unit, solved)
     artifacts.set_part_status(conn, part_id, artifacts.PART_COMPLETE)
+    return True
 
 
 def _settle_parent(conn: sqlite3.Connection, unit: _Unit) -> None:
@@ -1052,33 +1122,90 @@ def run_regeneration(artifact_id: int, part_id: int, correction: str = "") -> No
 
 
 def reconcile_interrupted(conn: sqlite3.Connection) -> int:
-    """Fail every artifact left mid-flight by a shutdown. Returns the row count.
+    """Settle every artifact the last shutdown caught. Returns how many were failed.
 
-    The queue lives in memory, so an artifact caught in `segmenting` or `solving` when the
-    process stopped would otherwise sit there forever claiming to be working. Parts left
-    mid-flight are reconciled too, so a problem does not keep a spinner across a restart.
+    The queue lives in memory, so an artifact left non-terminal would otherwise sit there
+    forever claiming to be working. What it deserves depends on what it was doing, and the
+    reasoning is the same as ingestion's `reconcile_interrupted`:
+
+    A `pending` artifact was queued and never touched: nothing was interrupted, and
+    failing it was a punishment it did nothing to earn - every restart during development
+    turned freshly created sets into rows the student had to retry by hand. What it was
+    queued *for* is not written down, though, because both segmentation and solving pass
+    through `pending`. An artifact with no problem parts can only have been waiting to
+    segment and is requeued outright. One that has parts might be a confirmed list
+    waiting to solve or a set the student asked to re-read, and guessing wrong either
+    burns model time on a list the student rejected or - worse - re-segments over their
+    gate corrections. So it goes back to the gate instead: everything it had is intact,
+    and resuming is the one click that says which of the two they meant.
+
+    An artifact caught in `segmenting` or `solving` had started when the process died and
+    is failed, with its mid-flight parts reset to `pending`: nothing is wrong with those
+    parts, they simply never ran, and the retry should pick them up as unsolved work.
+
+    A mid-flight part whose artifact is *not* being failed - a regeneration caught inside
+    a `ready` set - is marked `failed` instead. Resetting it to `pending` left a status no
+    run would ever pick up, which on screen is a spinner that never stops; `failed` with
+    the interrupted message is the truth, and the part's previous content is untouched, so
+    the student keeps what they had and can regenerate.
 
     An artifact in `awaiting_review` is deliberately left alone. It was not working, it
     was waiting, and a restart does not change what it is waiting for.
     """
-    placeholders = ", ".join("?" for _ in artifacts.RUNNING_STATES)
-    cursor = conn.execute(
+    pending = [
+        int(row[0])
+        for row in conn.execute("select id from artifacts where state = ?", (artifacts.PENDING,))
+    ]
+    queued = [artifact_id for artifact_id in pending if not _top_level_problems(conn, artifact_id)]
+    gated = [artifact_id for artifact_id in pending if artifact_id not in queued]
+    for artifact_id in gated:
+        artifacts.set_artifact_state(conn, artifact_id, artifacts.AWAITING_REVIEW)
+
+    mid_flight = tuple(state for state in artifacts.RUNNING_STATES if state != artifacts.PENDING)
+    placeholders = ", ".join("?" for _ in mid_flight)
+    stalled = [
+        int(row[0])
+        for row in conn.execute(
+            f"select id from artifacts where state in ({placeholders})",  # noqa: S608
+            mid_flight,
+        )
+    ]
+    conn.execute(
         # The placeholders are generated from a module constant and every value is bound.
         # `stage_detail` reads the pre-update row, so it keeps the lost stage.
         f"update artifacts set stage_detail = state, state = '{artifacts.FAILED}', "  # noqa: S608
         f"error_message = ?, updated_at = datetime('now') where state in ({placeholders})",
-        (INTERRUPTED_MESSAGE, *artifacts.RUNNING_STATES),
+        (INTERRUPTED_MESSAGE, *mid_flight),
     )
+
+    retried = [*stalled, *pending]
+    mid_parts = f"('{artifacts.PART_SOLVING}', '{artifacts.PART_VERIFYING}')"
+    if retried:
+        retried_placeholders = ", ".join("?" for _ in retried)
+        conn.execute(
+            f"update artifact_parts set status = '{artifacts.PART_PENDING}', "  # noqa: S608
+            f"updated_at = datetime('now') where status in {mid_parts} "
+            f"and artifact_id in ({retried_placeholders})",
+            retried,
+        )
+        stray_scope = f"and artifact_id not in ({retried_placeholders})"
+        stray_values: tuple[object, ...] = (INTERRUPTED_MESSAGE, *retried)
+    else:
+        stray_scope = ""
+        stray_values = (INTERRUPTED_MESSAGE,)
     conn.execute(
-        # A part that was solving when the process died is `pending` again rather than
-        # `failed`: nothing is wrong with it, it simply never ran, and the retry that
-        # follows a failed artifact should pick it up as unsolved work.
-        f"update artifact_parts set status = '{artifacts.PART_PENDING}', "  # noqa: S608
-        f"updated_at = datetime('now') where status in "
-        f"('{artifacts.PART_SOLVING}', '{artifacts.PART_VERIFYING}')"
+        f"update artifact_parts set status = '{artifacts.PART_FAILED}', "  # noqa: S608
+        f"error_message = ?, updated_at = datetime('now') "
+        f"where status in {mid_parts} {stray_scope}",
+        stray_values,
     )
     conn.commit()
-    return cursor.rowcount
+
+    # After the commit, so a queue that starts draining immediately cannot race the
+    # writes above.
+    for artifact_id in queued:
+        enqueue(artifact_id)
+    return len(stalled)
 
 
 def _top_level_problems(conn: sqlite3.Connection, artifact_id: int) -> list[dict[str, object]]:

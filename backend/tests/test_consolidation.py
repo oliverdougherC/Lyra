@@ -296,6 +296,42 @@ def test_an_unusable_reply_leaves_the_profile_as_it_was(
     assert _values(db, class_id) == list(SEVEN)
 
 
+def test_a_failure_mid_apply_rolls_the_merges_back(
+    db: sqlite3.Connection,
+    class_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A merge is only real once the whole pass commits.
+
+    `_apply_merges` deletes losing rows without committing; the commit lives at the end,
+    inside `_mark_consolidated`. An exception in between used to leave those deletes
+    sitting uncommitted on the shared worker connection, where the next unrelated commit
+    would silently make half a consolidation real. Now the pass rolls back and the
+    profile is exactly what it was.
+    """
+    ids = _seed(db, class_id, *SEVEN)
+    _reply(monkeypatch, json.dumps({"duplicates": [[1, 2]]}))
+    monkeypatch.setattr(
+        consolidation,
+        "_apply_demotions",
+        lambda conn, payload, rows: (_ for _ in ()).throw(RuntimeError("died mid-apply")),
+    )
+
+    with pytest.raises(RuntimeError):
+        consolidation.consolidate_class(db, class_id)
+    # The next unrelated commit on the shared connection, which is the write that used to
+    # smuggle the uncommitted deletes in.
+    db.commit()
+
+    assert _values(db, class_id) == list(SEVEN)
+    assert ids[1] in {int(row["id"]) for row in db.execute("select id from profile_facts")}
+    # Nothing was marked either, so the pass runs in full on the next upload.
+    assert (
+        db.execute("select count(*) from profile_facts where consolidated = 1").fetchone()[0] == 0
+    )
+
+
 def test_an_unacknowledged_remote_endpoint_is_never_sent_to(
     db: sqlite3.Connection, class_id: int
 ) -> None:

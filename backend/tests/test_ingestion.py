@@ -321,6 +321,170 @@ def test_a_document_deleted_before_its_turn_is_skipped(db: sqlite3.Connection) -
     assert db.execute("select count(*) from documents").fetchone()[0] == 0
 
 
+def test_reingest_refuses_a_document_that_is_still_processing(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """The guard move and recognize have always had, extended to reingest.
+
+    Without it, a reingest of a mid-flight document deleted chunks the in-flight run was
+    still committing and wrote a `pending` the run would immediately overwrite - and a
+    delete-then-reupload against a running worker is the race that contaminates a new
+    document with the old file's data.
+    """
+    from backend.api.routes_documents import reingest_document
+    from backend.core.errors import ConflictError
+
+    stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    db.execute("update documents set state = 'embedding' where id = ?", (document_id,))
+    db.commit()
+
+    with pytest.raises(ConflictError):
+        reingest_document(document_id, db)
+
+    assert _document(db, document_id)["state"] == "embedding"
+
+
+def test_a_failure_mid_embed_leaves_no_chunks_behind(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed document must not go on answering searches with half an index.
+
+    `_store_chunks` commits a batch at a time, so an embedding server that dies mid-run
+    leaves the earlier batches durably committed. The failure path deletes them again in
+    the same transaction as the `failed` state write, because retrieval serves whatever
+    chunks exist and a document marked failed would otherwise keep answering from the
+    part of it that got in.
+    """
+    calls = {"count": 0}
+
+    def dies_on_the_second_batch(texts: list[str]) -> list[list[float]]:
+        calls["count"] += 1
+        if calls["count"] > 1:
+            raise RuntimeError("the embedding server went away")
+        return _vectors(texts)
+
+    monkeypatch.setattr(ingestion, "embed_documents", dies_on_the_second_batch)
+    # One chunk per batch, so the first batch is committed before the second one dies.
+    monkeypatch.setattr(ingestion, "EMBED_BATCH_SIZE", 1)
+    stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+
+    run_ingestion(document_id)
+
+    row = _document(db, document_id)
+    assert row["state"] == "failed"
+    assert calls["count"] > 1
+    assert _chunk_count(db, document_id) == 0
+    assert db.execute("select count(*) from chunk_embeddings").fetchone()[0] == 0
+
+
+def test_reconcile_takes_the_chunks_of_the_documents_it_fails(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """The restart flavour of the same honesty: failed means not serving."""
+    stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
+    stuck = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    # A batch the interrupted run had already committed.
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, doc_type, "
+        "embedding_model, embedding_dim) values (?, ?, 'orphan', 1, 'homework', 'nomic', 768)",
+        (stuck, class_id),
+    )
+    db.execute("update documents set state = 'embedding' where id = ?", (stuck,))
+    db.commit()
+
+    assert reconcile_interrupted(db) == (0, 1)
+
+    assert _document(db, stuck)["state"] == "failed"
+    assert _chunk_count(db, stuck) == 0
+
+
+def test_a_failed_figure_pass_rolls_back_rather_than_leaving_a_half_applied_delete(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The missing-rollback trap, caught at its most visible seam.
+
+    `store_figures` deletes the previous run's figures and inserts the new ones in one
+    uncommitted sweep. When the insert half fails, that delete is left sitting on the
+    shared worker connection, and without a rollback the next commit - a state
+    transition, a page count - would silently make it real and the document would lose
+    figures it still legitimately has.
+    """
+    stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    db.execute(
+        "insert into document_figures (document_id, page_number, figure_index, bbox) "
+        "values (?, 1, 1, '[0.1, 0.1, 0.5, 0.5]')",
+        (document_id,),
+    )
+    db.commit()
+
+    def deletes_then_dies(conn: sqlite3.Connection, doc_id: int, figures: object) -> None:
+        conn.execute("delete from document_figures where document_id = ?", (doc_id,))
+        raise RuntimeError("died between the delete and the insert")
+
+    monkeypatch.setattr(ingestion, "store_figures", deletes_then_dies)
+    run_ingestion(document_id)
+
+    # The document still ingested fine, and the figure it had is still there.
+    assert _document(db, document_id)["state"] == "ready"
+    figures = db.execute(
+        "select count(*) from document_figures where document_id = ?", (document_id,)
+    ).fetchone()[0]
+    assert figures == 1
+
+
+def test_a_document_replaced_mid_embed_gets_none_of_the_old_files_chunks(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Delete mid-run plus re-upload must not contaminate the id's new owner.
+
+    Deleting a document is the de facto cancel for a long run, so the route allows it
+    while the worker is mid-flight. The worker re-checks the row's identity between
+    batches and stages and abandons the run, so the old file's index never lands on
+    whatever document holds the id now.
+    """
+    stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+    monkeypatch.setattr(ingestion, "EMBED_BATCH_SIZE", 1)
+    calls = {"count": 0}
+
+    def replace_mid_embed(texts: list[str]) -> list[list[float]]:
+        # On the second batch, after the first batch's commit released the write lock.
+        # That is the only moment a delete can land mid-embed in production too: while
+        # the worker holds its per-batch transaction, a concurrent delete waits.
+        calls["count"] += 1
+        if calls["count"] == 2:
+            other = connect()
+            try:
+                # What the delete route does: chunk embeddings live in a vec0 table that
+                # receives no cascade, so they go explicitly before the row.
+                ingestion.delete_chunks(other, document_id)
+                other.execute("delete from documents where id = ?", (document_id,))
+                other.execute(
+                    "insert into documents (id, class_id, filename, stored_path, mime, "
+                    "byte_size, state, created_at) "
+                    "values (?, ?, 'newer.md', ?, 'text/markdown', 1, 'pending', "
+                    "'2099-01-01 00:00:00')",
+                    (document_id, class_id, str(stored)),
+                )
+                other.commit()
+            finally:
+                other.close()
+        return _vectors(texts)
+
+    monkeypatch.setattr(ingestion, "embed_documents", replace_mid_embed)
+    run_ingestion(document_id)
+
+    row = _document(db, document_id)
+    # The run was abandoned: the new row is exactly as the re-upload left it, with none
+    # of the old file's chunks, state transitions, or page counts written onto it.
+    assert (row["filename"], row["state"]) == ("newer.md", "pending")
+    assert _chunk_count(db, document_id) == 0
+    assert db.execute("select count(*) from chunk_embeddings").fetchone()[0] == 0
+
+
 def test_reconcile_interrupted_fails_a_document_stuck_in_embedding(
     db: sqlite3.Connection, class_id: int
 ) -> None:

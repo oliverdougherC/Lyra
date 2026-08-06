@@ -205,6 +205,39 @@ describe('DocumentRow, text recognition', () => {
     expect(screen.getByRole('button', { name: 'Read this document' })).toBeInTheDocument()
   })
 
+  it('surfaces why a requested recognition read nothing on a ready mixed document', async () => {
+    // A fully scanned file lands `unsupported` carrying the reason. A mixed file lands
+    // `ready` on its text pages alone, and the student's explicit "read this document"
+    // must not look like it silently did nothing.
+    const onRecognize = vi.fn()
+    renderRow(
+      {
+        ...documentAt('ready'),
+        pages_skipped: 2,
+        recognize: true,
+        error_message:
+          'Reading pages needs a model that can see images. Add an endpoint in Settings.',
+      },
+      onRecognize,
+      true,
+    )
+
+    await userEvent.click(screen.getByText(/2 pages skipped/))
+
+    expect(screen.getByText(/Add an endpoint in Settings/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(onRecognize).toHaveBeenCalledWith(7)
+  })
+
+  it('keeps the plain skipped-pages copy when recognition was never asked for', async () => {
+    renderRow({ ...documentAt('ready'), pages_skipped: 1 }, vi.fn(), true)
+
+    await userEvent.click(screen.getByText(/1 page skipped/))
+
+    expect(screen.getByText(/had no text to find/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Read that page' })).toBeInTheDocument()
+  })
+
   it('reports pages that could not be read without calling the document failed', async () => {
     // Thirty-nine good pages and one bad one is a document that works.
     const onRecognize = vi.fn()

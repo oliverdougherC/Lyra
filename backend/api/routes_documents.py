@@ -301,7 +301,20 @@ def read_document_text(document_id: int, conn: DbConn) -> dict[str, object]:
     status_code=status.HTTP_202_ACCEPTED,
 )
 def reingest_document(document_id: int, conn: DbConn) -> dict[str, object]:
-    _document_row(conn, document_id)
+    document = _document_row(conn, document_id)
+    # The same guard move and recognize have always had, for the same reason: the worker
+    # is reading this row and about to write its state, so the `pending` written below
+    # would be overwritten by whatever the in-flight run lands in, and the chunk delete
+    # below would race the batches that run is still committing.
+    if document["state"] not in TERMINAL_STATES:
+        raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
+
+    if document["state"] == "failed":
+        # Retrying a failed document is an explicit retry, so pages that failed go back in
+        # the pending set. A re-index of a `ready` document deliberately does not do this:
+        # that is a chunking pass, and it must not re-pay model time on pages that failed
+        # for good. See `recognition.reset_failed_pages`.
+        recognition.reset_failed_pages(conn, document_id)
     # Clearing the previous run's chunks here as well as in the job keeps the document
     # from serving stale results while it waits in the queue.
     delete_chunks(conn, document_id)
@@ -429,6 +442,10 @@ def recognize_document(document_id: int, conn: DbConn) -> dict[str, object]:
     if document["state"] not in TERMINAL_STATES:
         raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
 
+    # This is the explicit "attempt them again", so failed pages rejoin the pending set.
+    # An in-flight run never re-attempts `failed` pages on its own - that would make
+    # every plain re-index re-pay for pages that failed for good.
+    recognition.reset_failed_pages(conn, document_id)
     delete_chunks(conn, document_id)
     # Deliberately no `render.discard_pages` here, unlike the re-ingest below. The rendered
     # pages are what recognition reads, they were rendered from bytes that have not changed,
@@ -517,6 +534,13 @@ def move_document(document_id: int, payload: DocumentMove, conn: DbConn) -> dict
 
 @router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_document(document_id: int, conn: DbConn) -> None:
+    # Deliberately no still-processing guard, unlike move, recognize, and reingest.
+    # Deleting is the de facto cancel for a run in flight - a two-hour recognition pass
+    # has no other stop button - so refusing it here would trap the student inside the
+    # very run they are trying to abandon. The worker defends itself instead: it re-checks
+    # this row's existence and `created_at` between pages and between stages, and aborts
+    # quietly rather than writing onto a row that is gone or has been re-created by a
+    # newer upload.
     row = conn.execute(
         "select id, stored_path from documents where id = ?", (document_id,)
     ).fetchone()

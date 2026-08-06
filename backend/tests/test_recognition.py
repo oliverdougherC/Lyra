@@ -274,7 +274,10 @@ def test_a_run_gives_up_rather_than_grinding_through_a_dead_endpoint(
     """Every page failing in sequence is the endpoint, not the document.
 
     Discovering that six hundred times costs the student the timeout on each one. The pages
-    never reached stay `scanned`, which is the truth: nothing was attempted on them.
+    never reached stay `scanned`, which is the truth: nothing was attempted on them. And
+    the document's own message blames the endpoint, not the document: "none of the pages
+    could be read" would be false about a file whose pages were 99% never attempted, and
+    would point the student away from the one thing they can fix.
     """
     _configure_endpoint(db)
     stored = _write_pdf(settings.uploads_dir / "book.pdf", ["1", "2", "3", "4", "5", "6"])
@@ -287,15 +290,19 @@ def test_a_run_gives_up_rather_than_grinding_through_a_dead_endpoint(
     states = _page_states(db, document_id)
     assert [states[page] for page in (1, 2, 3)] == ["failed", "failed", "failed"]
     assert [states[page] for page in (4, 5, 6)] == ["scanned", "scanned", "scanned"]
+    row = _document(db, document_id)
+    assert row["state"] == "failed"
+    assert row["error_message"] == recognition.ENDPOINT_FAILED_MESSAGE
 
 
 def test_a_retry_reads_the_failed_pages_and_leaves_the_rest_alone(
     db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`Try those pages` is the same call as `Read this document`.
+    """`Try those pages` re-attempts exactly what failed, and nothing that worked.
 
-    Both mean "attempt every page that does not currently have text", and the page rows
-    already know which those are, so a retry never spends model time on a page that worked.
+    The explicit action puts failed pages back in the pending set - that is what
+    `reset_failed_pages` is, and the recognize route calls it - so a retry never spends
+    model time on a page that already has text.
     """
     _configure_endpoint(db)
     stored = _write_pdf(settings.uploads_dir / "scanned.pdf", ["1", "2", "3"])
@@ -303,6 +310,9 @@ def test_a_retry_reads_the_failed_pages_and_leaves_the_rest_alone(
     _reader(monkeypatch, replies=lambda n: UpstreamError("Timed out.") if n == 2 else TRANSCRIPT)
     run_ingestion(document_id)
 
+    # What the recognize endpoint does before requeueing: the retry is explicit.
+    recognition.reset_failed_pages(db, document_id)
+    db.commit()
     second = _reader(monkeypatch)
     run_ingestion(document_id)
 
@@ -312,6 +322,127 @@ def test_a_retry_reads_the_failed_pages_and_leaves_the_rest_alone(
         2: "recognized",
         3: "recognized",
     }
+
+
+def test_a_plain_reindex_never_re_pays_for_a_page_that_failed_for_good(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-reading failed pages takes the explicit retry action, not any re-index.
+
+    A chunking-tuning re-index runs on every document of a class after an upgrade. With
+    `failed` in the pending set, each of those runs re-attempted every permanently failed
+    page and paid the model time again to reach the same answer.
+    """
+    _configure_endpoint(db)
+    stored = _write_pdf(settings.uploads_dir / "scanned.pdf", ["1", "2", "3"])
+    document_id = _seed_document(db, class_id, stored, recognize=True)
+    _reader(monkeypatch, replies=lambda n: UpstreamError("Timed out.") if n == 2 else TRANSCRIPT)
+    run_ingestion(document_id)
+
+    # A plain re-index: no reset, straight back through the worker.
+    second = _reader(monkeypatch)
+    run_ingestion(document_id)
+
+    assert second == []
+    assert _page_states(db, document_id) == {1: "recognized", 2: "failed", 3: "recognized"}
+    assert _document(db, document_id)["state"] == "ready"
+
+
+def test_a_retry_without_the_endpoint_says_so_instead_of_repeating_the_old_failure(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The actionable reason outranks stale page rows.
+
+    A document whose last run failed pages still carries those rows. When the student
+    removes the endpoint and retries, the new run skips before attempting anything, and
+    the message has to be "add an endpoint" - the thing they can act on - rather than the
+    previous run's "none of the pages could be read".
+    """
+    _configure_endpoint(db)
+    stored = _write_pdf(settings.uploads_dir / "book.pdf", ["1", "2", "3", "4"])
+    document_id = _seed_document(db, class_id, stored, recognize=True)
+    _reader(monkeypatch, replies=lambda n: UpstreamError("Connection refused."))
+    run_ingestion(document_id)
+    assert _document(db, document_id)["state"] == "failed"
+
+    # The endpoint is removed; the retry runs with failed rows still on pages 1-3.
+    db.execute("update settings set endpoint_url = null where id = 1")
+    db.commit()
+    calls = _reader(monkeypatch)
+    run_ingestion(document_id)
+
+    assert calls == []
+    row = _document(db, document_id)
+    assert row["state"] == "unsupported"
+    assert row["error_message"] == recognition.NO_ENDPOINT_MESSAGE
+
+
+def test_a_requested_recognition_that_could_not_run_says_so_on_a_ready_document(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mixed-document case, where the skip reason used to vanish.
+
+    A fully scanned file lands `unsupported` carrying the reason. A mixed file lands
+    `ready` on its text pages alone, and dropping the reason there meant the student's
+    explicit "read this document" silently did nothing.
+    """
+    stored = _write_pdf(
+        settings.uploads_dir / "mixed.pdf", [_prose(180), "7", _prose(180, seed=13)]
+    )
+    # Recognition requested, but no endpoint is configured.
+    document_id = _seed_document(db, class_id, stored, recognize=True)
+    calls = _reader(monkeypatch)
+
+    run_ingestion(document_id)
+
+    assert calls == []
+    row = _document(db, document_id)
+    assert row["state"] == "ready"
+    assert row["pages_skipped"] == 1
+    # The reason is where DocumentRow's skipped-pages popover reads it.
+    assert row["error_message"] == recognition.NO_ENDPOINT_MESSAGE
+
+
+def test_a_document_deleted_mid_recognition_is_abandoned_without_a_trace(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting is the de facto cancel for a run that can take hours, and it must be safe.
+
+    A delete followed by an immediate re-upload can put a different file behind the same
+    document id. The worker re-checks the row's identity after every model call, so
+    nothing from the old file - pages, counts, or state - lands on the new one.
+    """
+    _configure_endpoint(db)
+    stored = _write_pdf(settings.uploads_dir / "scanned.pdf", ["1", "2", "3"])
+    document_id = _seed_document(db, class_id, stored, recognize=True)
+
+    async def delete_and_replace(
+        endpoint: str, api_key: str | None, model: str | None, image: bytes, **kwargs: object
+    ) -> str:
+        other = connect()
+        try:
+            other.execute("delete from documents where id = ?", (document_id,))
+            other.execute(
+                "insert into documents (id, class_id, filename, stored_path, mime, "
+                "byte_size, state, created_at) "
+                "values (?, ?, 'newer.pdf', ?, 'application/pdf', 1, 'pending', "
+                "'2099-01-01 00:00:00')",
+                (document_id, class_id, str(stored)),
+            )
+            other.commit()
+        finally:
+            other.close()
+        return TRANSCRIPT
+
+    monkeypatch.setattr(transcribe, "transcribe_page", delete_and_replace)
+    run_ingestion(document_id)
+
+    row = _document(db, document_id)
+    # The new row is exactly as the re-upload left it: nothing of the old run touched it.
+    assert (row["filename"], row["state"]) == ("newer.pdf", "pending")
+    assert row["pages_done"] == 0
+    assert _page_states(db, document_id) == {}
+    assert db.execute("select count(*) from chunks").fetchone()[0] == 0
 
 
 def test_reindexing_never_reruns_recognition(

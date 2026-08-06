@@ -215,11 +215,21 @@ where f.confirmed = 0 and f.rejected = 0 and f.edited = 0
 """
 
 # The class profile explains only the latest ingestion. An older skipped upload must not
-# obscure a later successful extraction.
+# obscure a later successful extraction - nor the other way around: re-ingesting the
+# *oldest* document in a class is still the latest ingestion, and its outcome is the one
+# the profile should explain.
+#
+# `documents` carries no per-ingestion timestamp, so recency is read from the one thing
+# every extraction-relevant ingestion writes in order: its chunks. Extraction only runs
+# after `_store_chunks`, so every document whose `stage_detail` can hold a skip reason has
+# chunks, and the run that wrote the highest chunk id is the run that finished last. SQLite
+# sorts nulls as smallest, so documents with no chunks - failed or unsupported before
+# extraction was ever reached, with nothing to say about it - fall to the back of the
+# descending sort rather than masking a real answer.
 _SELECT_SKIP_REASON = """
 select stage_detail from documents
 where class_id = ?
-order by id desc
+order by (select max(id) from chunks where chunks.document_id = documents.id) desc, id desc
 limit 1
 """
 
@@ -416,8 +426,14 @@ def _parse_payload(content: str) -> dict[str, object] | None:
 
 
 def _get_document(conn: sqlite3.Connection, document_id: int) -> sqlite3.Row:
-    """The document being extracted, for its `class_id`."""
-    row = conn.execute("select id, class_id from documents where id = ?", (document_id,)).fetchone()
+    """The document being extracted, for its `class_id` and its identity.
+
+    `created_at` rides along so `_store_facts` can prove, after the model call, that the
+    row it is about to attest is still the row the text came from.
+    """
+    row = conn.execute(
+        "select id, class_id, created_at from documents where id = ?", (document_id,)
+    ).fetchone()
     if row is None:
         raise NotFoundError("That document does not exist.")
     return row
@@ -561,6 +577,21 @@ def _store_facts(
         text: The document text the model was shown. Every entry's quote is checked
             against this, and that check is what sets confidence.
     """
+    # The model call between fetching this row and reaching here can take minutes, and
+    # deleting the document mid-run is allowed - it is the de facto cancel. A delete
+    # followed by a re-upload can put a different file behind this id, and attesting the
+    # old file's facts against it would contaminate the new document permanently. Facts
+    # only land on the row the text actually came from.
+    current = conn.execute(
+        "select created_at from documents where id = ?", (document["id"],)
+    ).fetchone()
+    if current is None or str(current["created_at"]) != str(document["created_at"]):
+        logger.warning(
+            "Discarding extracted facts for document %s: deleted or replaced mid-run",
+            document["id"],
+        )
+        return
+
     class_id = document["class_id"]
     # Converted once rather than per entry: a syllabus can propose thirty facts, and
     # normalizing the whole document thirty times is thirty passes over the same string.

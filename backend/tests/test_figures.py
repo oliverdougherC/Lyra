@@ -479,6 +479,84 @@ def test_a_problem_whose_marker_is_not_on_the_page_stops_the_pairing(
     assert _figure_parts(db, artifact_id) == {}
 
 
+def test_a_problem_with_an_unplaced_neighbour_is_not_alone_on_its_page(
+    db: sqlite3.Connection, class_id: int, tmp_path: Path
+) -> None:
+    """The single-problem shortcut may only fire when the census behind it is complete.
+
+    "The only problem on its page" is computed over the problems whose pages resolved. A
+    page really holding problems 3 and 4, where only 4's page survived segmentation,
+    would otherwise compute 4 as alone and hand it every figure on the page - including
+    3's. With any problem of the document unplaced, the shortcut stands down and the
+    naming and alternation rules, which refuse rather than guess, are all that remain.
+    """
+    from backend.core import solver
+    from backend.core.segmentation import SegmentedProblem
+
+    source = _pdf(tmp_path / "hw.pdf", [(100, 200, 400, 290)])
+    document_id = _document(db, class_id, source)
+    store.store_figures(db, document_id, figures.extract_figures(source, "application/pdf"))
+    db.commit()
+    artifact_id = _artifact(db, class_id)
+
+    solver.write_problems(
+        db,
+        artifact_id,
+        [
+            SegmentedProblem(
+                label="Problem 3",
+                number="3",
+                statement="Determine h(t).",
+                document_id=document_id,
+                page_number=None,
+            ),
+            _segmented("Problem 4", "Determine z(t).", document_id, 1),
+        ],
+    )
+
+    assert _figure_parts(db, artifact_id) == {}
+
+
+def test_a_figure_named_inside_a_sub_part_is_attached(
+    db: sqlite3.Connection, class_id: int, tmp_path: Path
+) -> None:
+    """ "See Figure 2" lives inside part (b) as often as in the stem.
+
+    The naming rule used to read only the problem's own statement, so a reference printed
+    in a sub-part did not fire it - and on a crowded page that meant no attachment at all,
+    or worse, left the field to a shortcut that guessed.
+    """
+    from backend.core import solver
+    from backend.core.segmentation import SegmentedPart, SegmentedProblem
+
+    source = _pdf(tmp_path / "set.pdf", [(100, 200, 400, 290)], caption="Figure 3: Low pass filter")
+    document_id = _document(db, class_id, source)
+    store.store_figures(db, document_id, figures.extract_figures(source, "application/pdf"))
+    db.commit()
+    artifact_id = _artifact(db, class_id)
+
+    solver.write_problems(
+        db,
+        artifact_id,
+        [
+            SegmentedProblem(
+                label="Problem 1",
+                number="1",
+                statement="Consider the filter below.",
+                document_id=document_id,
+                page_number=1,
+                parts=(
+                    SegmentedPart("(a)", "Sketch its impulse response."),
+                    SegmentedPart("(b)", "Find the cutoff of the system in figure 3."),
+                ),
+            ),
+            _segmented("Problem 2", "State the Nyquist rate.", document_id, 1),
+        ],
+    )
+
+    assert _figure_parts(db, artifact_id) == {"Problem 1": ["Figure 3"]}
+
+
 def test_a_problem_that_names_a_figure_gets_that_one(
     db: sqlite3.Connection, class_id: int, tmp_path: Path
 ) -> None:

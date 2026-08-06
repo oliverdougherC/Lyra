@@ -369,6 +369,63 @@ def test_a_failed_problem_does_not_fail_the_artifact(
     assert problems[0]["error_message"] == "The tutor endpoint is not reachable."
     assert problems[1]["status"] == artifacts.PART_COMPLETE
     assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.READY
+    # The progress line reads "1 of 2 solved", and the failure is not part of the 1: a
+    # tally that counted failures would report "12 of 12" over a page of errors.
+    assert artifacts.get_artifact(db, artifact_id)["problems_done"] == 1
+
+
+def test_three_failures_in_a_row_stop_the_run_and_blame_the_endpoint(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The circuit breaker, mirroring recognition's.
+
+    Every problem failing in sequence is the endpoint being down, and each attempt
+    against a dead endpoint costs the full background timeout. Grinding all twelve
+    problems of a set through that to land `ready` over zero solutions reported success
+    for what was two hours of failure.
+    """
+    from backend.core.errors import UpstreamError
+
+    artifact_id = _set(db, class_id, ["First.", "Second.", "Third.", "Fourth."])
+    sent = fake_solver(monkeypatch, UpstreamError("Connection refused."))
+
+    solver.run_solve(artifact_id)
+
+    # The fourth problem is never attempted: the pattern is already established.
+    assert len(sent) == solver.MAX_CONSECUTIVE_FAILURES
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    # The message points at the likely cause, which is the endpoint and not the problems.
+    assert "endpoint" in str(artifact["error_message"])
+    assert "Settings" in str(artifact["error_message"])
+    problems = _problems(db, artifact_id)
+    assert [problem["status"] for problem in problems[:3]] == [artifacts.PART_FAILED] * 3
+    # The unreached problem stays pending, which is the truth: nothing was attempted on
+    # it, and `Solve the rest` picks it up once the endpoint is back.
+    assert problems[3]["status"] == artifacts.PART_PENDING
+    assert artifact["problems_done"] == 0
+
+
+def test_a_set_where_every_problem_failed_is_a_failure_not_ready(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ready` over zero solutions is a lie, whatever each part's row says."""
+    from backend.core.errors import UpstreamError
+
+    artifact_id = _set(db, class_id, ["First.", "Second."])
+    fake_solver(
+        monkeypatch,
+        [UpstreamError("The model refused."), UpstreamError("The model refused.")],
+    )
+
+    solver.run_solve(artifact_id)
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert artifact["error_message"] == solver.NOTHING_SOLVED_MESSAGE
+    assert artifact["problems_done"] == 0
+    # The per-problem records are still there for the student to read.
+    assert all(problem["status"] == artifacts.PART_FAILED for problem in _problems(db, artifact_id))
 
 
 def test_a_failed_problem_is_never_reported_as_checked(
@@ -500,12 +557,14 @@ def test_a_prose_reply_becomes_one_step_rather_than_a_failure(
 def test_an_empty_reply_fails_only_that_problem(
     db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    artifact_id = _set(db, class_id, [_STATEMENT])
-    fake_solver(monkeypatch, "   ")
+    artifact_id = _set(db, class_id, ["First.", "Second."])
+    fake_solver(monkeypatch, ["   ", _SOLUTION])
 
     solver.run_solve(artifact_id)
 
-    assert _problems(db, artifact_id)[0]["status"] == artifacts.PART_FAILED
+    problems = _problems(db, artifact_id)
+    assert problems[0]["status"] == artifacts.PART_FAILED
+    assert problems[1]["status"] == artifacts.PART_COMPLETE
     assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.READY
 
 
@@ -625,6 +684,85 @@ def test_a_waiting_set_survives_a_restart_untouched(db: sqlite3.Connection, clas
     solver.reconcile_interrupted(db)
 
     assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.AWAITING_REVIEW
+
+
+def test_a_queued_set_that_never_segmented_is_requeued_rather_than_failed(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A queued artifact is not an interrupted one, exactly as ingestion already holds.
+
+    The queue is in memory, so a restart loses it, but a `pending` artifact was never
+    touched: nothing is half-written, and failing it turned every development restart
+    into rows the student had to retry by hand.
+    """
+    queued: list[int] = []
+    monkeypatch.setattr("backend.core.solver.enqueue", queued.append)
+    document_id = _document(db, class_id)
+    created = artifacts.create_artifact(db, class_id, "Fresh", [SourceSpec(document_id)])
+    artifact_id = int(created["id"])
+    artifacts.set_artifact_state(db, artifact_id, artifacts.PENDING)
+
+    assert solver.reconcile_interrupted(db) == 0
+
+    assert queued == [artifact_id]
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.PENDING
+    assert artifact["error_message"] is None
+
+
+def test_a_confirmed_set_queued_to_solve_goes_back_to_the_gate(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pending artifact that already has problems must not be re-segmented.
+
+    `pending` does not record whether segmentation or solving was queued, and
+    re-segmenting replaces the parts wholesale, which would throw away every correction
+    the student made at the gate. The gate is where it goes instead: everything is
+    intact, and resuming is one click.
+    """
+    queued: list[int] = []
+    monkeypatch.setattr("backend.core.solver.enqueue", queued.append)
+    artifact_id = _set(db, class_id, [_STATEMENT])
+    # The student pressed Solve just before the restart: `start_solution` writes
+    # `pending` and the queue entry died with the process.
+    artifacts.set_artifact_state(db, artifact_id, artifacts.PENDING)
+
+    solver.reconcile_interrupted(db)
+
+    assert queued == []
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.AWAITING_REVIEW
+    assert artifact["error_message"] is None
+    # The confirmed list is exactly as the student left it.
+    assert [part["content"] for part in _problems(db, artifact_id)] == [_STATEMENT]
+
+
+def test_a_regeneration_caught_inside_a_ready_set_fails_the_part_not_the_set(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A mid-flight part of a terminal artifact must not become a spinner nobody stops.
+
+    Resetting it to `pending` left a status no run ever picks up: only failed and retried
+    artifacts get a new run, and this artifact is `ready`. `failed` with the interrupted
+    message is the truth, the previous solution is untouched, and the student can
+    regenerate.
+    """
+    artifact_id = _set(db, class_id, [_STATEMENT])
+    fake_solver(monkeypatch, _SOLUTION)
+    solver.run_solve(artifact_id)
+    part_id = int(_problems(db, artifact_id)[0]["id"])
+    # A regeneration was in flight when the process died.
+    artifacts.set_part_status(db, part_id, artifacts.PART_SOLVING)
+
+    solver.reconcile_interrupted(db)
+
+    part = artifacts.get_part(db, part_id)
+    assert part["status"] == artifacts.PART_FAILED
+    assert part["error_message"] == solver.INTERRUPTED_MESSAGE
+    # The set itself was not working and is not touched.
+    assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.READY
+    # The steps the student already had are still there to read.
+    assert len(_children(db, part_id, artifacts.STEP)) == 2
 
 
 # --- Verification -----------------------------------------------------------------

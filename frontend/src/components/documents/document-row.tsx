@@ -255,8 +255,18 @@ export function DocumentRow({
         <div className="mt-2 pl-6">
           <ScannedPopover
             trigger={`${pagesSkipped} ${pagesSkipped === 1 ? 'page' : 'pages'} skipped, no readable text`}
-            body={skippedBody(pagesSkipped)}
-            actionLabel={pagesSkipped === 1 ? 'Read that page' : 'Read those pages'}
+            // Same rule as the unsupported branch above: once reading was asked for, the
+            // backend puts the reason it could not run in `error_message`, and a mixed
+            // document that landed ready on its text pages alone must say why the rest
+            // were not attempted rather than pretending nobody asked.
+            body={requested && errorMessage ? errorMessage : skippedBody(pagesSkipped)}
+            actionLabel={
+              requested && errorMessage
+                ? 'Try again'
+                : pagesSkipped === 1
+                  ? 'Read that page'
+                  : 'Read those pages'
+            }
             onAction={() => onRecognize(document.id)}
           />
         </div>
