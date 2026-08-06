@@ -59,6 +59,7 @@ beforeEach(() => {
     { id: 3, class_id: 1, filename: 'homework_2.pdf', state: 'ready' },
     { id: 5, class_id: 1, filename: 'syllabus.pdf', state: 'failed' },
   ] as DocumentRead[])
+  vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
   vi.spyOn(api, 'getClassProfile').mockResolvedValue({
     facts: [],
     extraction_skipped_reason: null,
@@ -81,7 +82,7 @@ describe('ClassHub', () => {
     render(<ClassHub classId={1} tab="overview" />, { wrapper })
 
     expect(await screen.findByRole('heading', { name: 'Continuous-Time Signals' })).toBeVisible()
-    for (const name of ['Overview', 'Chats', 'Solutions', 'Documents', 'Profile']) {
+    for (const name of ['Overview', 'Chats', 'Solutions', 'Study', 'Documents', 'Profile']) {
       expect(screen.getByRole('tab', { name: new RegExp(`^${name}`) })).toBeInTheDocument()
     }
   })

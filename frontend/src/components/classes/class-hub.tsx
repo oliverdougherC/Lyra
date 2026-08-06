@@ -21,6 +21,7 @@ import { toast } from 'sonner'
 import { ClassChatsPanel } from '@/components/classes/class-chats-panel'
 import { ClassFormDialog } from '@/components/classes/class-form-dialog'
 import { ClassSolutionsPanel } from '@/components/classes/class-solutions-panel'
+import { ClassStudyPanel } from '@/components/classes/class-study-panel'
 import { CourseMark } from '@/components/classes/course-mark'
 import { DeleteClassDialog } from '@/components/classes/delete-class-dialog'
 import { DocumentsPane } from '@/components/documents/documents-pane'
@@ -42,9 +43,10 @@ import { useClass, useUpdateClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
 import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useSolutions } from '@/lib/hooks/use-solutions'
+import { useStudyList } from '@/lib/hooks/use-study'
 import { cn } from '@/lib/utils'
 
-export const HUB_TABS = ['overview', 'chats', 'solutions', 'documents', 'profile'] as const
+export const HUB_TABS = ['overview', 'chats', 'solutions', 'study', 'documents', 'profile'] as const
 
 export type HubTab = (typeof HUB_TABS)[number]
 
@@ -93,6 +95,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
   const classQuery = useClass(classId)
   const { data: sessions } = useSessions(classId)
   const { data: solutions } = useSolutions(classId)
+  const { data: study } = useStudyList(classId)
   const { data: documents } = useDocuments(classId)
   const { data: profile } = useClassProfile(classId)
   const updateClass = useUpdateClass()
@@ -103,6 +106,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
   const klass = classQuery.data
   const chatCount = sessions?.length ?? null
   const solutionCount = solutions?.length ?? null
+  const studyCount = study ? study.decks.length + study.quizzes.length : null
   const documentCount = documents?.length ?? klass?.document_count ?? null
   const factCount = profile?.facts.length ?? null
 
@@ -227,6 +231,10 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
             Solutions
             <TabCount value={solutionCount} />
           </TabsTrigger>
+          <TabsTrigger value="study">
+            Study
+            <TabCount value={studyCount} />
+          </TabsTrigger>
           <TabsTrigger value="documents">
             Documents
             <TabCount value={documentCount} />
@@ -254,6 +262,10 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
 
         <TabsContent value="solutions">
           <ClassSolutionsPanel classId={classId} />
+        </TabsContent>
+
+        <TabsContent value="study">
+          <ClassStudyPanel classId={classId} />
         </TabsContent>
 
         {/* The one tab that takes the height it is given rather than asking for a height of
