@@ -34,10 +34,21 @@ Build the interface, wire the general model first, then time a real sample of pa
 to textbook scale. If bulk transcription is intolerable on modest hardware, the specialist earns its
 download. This removes the serving spike from the critical path without pretending it is settled.
 
-**Text recognition is not only for scanned pages.** PyMuPDF's text layer mangles dense mathematics,
-producing garbled glyph sequences or dropping symbols. A vision pass may produce better equations
-than the text layer does on pages that were never scanned. This is untested and cheap to test, and
-if it holds it changes what transcription is for.
+**Text recognition is not only for scanned pages, and this is now the strongest argument for it.**
+PyMuPDF's text layer mangles dense mathematics. Phase 2 already paid for this once, at the
+segmentation gate, where `e^{-2t}u(t-3)` extracts as `e−2tu(t −3)` and the student was being asked
+to check a reading of their homework against text their sheet does not contain.
+
+On the reference textbook in Stage 2a it is far worse than garbled: it is lossy. Every matrix
+extracts as a column of loose digits with its shape discarded, so the identity matrix and a row swap
+both arrive as `1 0 0 1` down four lines, and nothing downstream can tell them apart or tell either
+from a list of numbers. In a linear algebra textbook that is most of the content, on pages that were
+never scanned and that Lyra currently reports as ingested successfully.
+
+So a vision pass is not a scanned-document feature that might also help elsewhere. On mathematical
+material it is a **quality** feature for every document, and the phase treats it as one: measuring
+vision against the text layer on pages that already have one comes before bulk transcription of
+pages that do not. See the build order in [feature-roadmap.md](feature-roadmap.md).
 
 ## Pipeline Stages
 
@@ -102,19 +113,73 @@ Retrieving eight of them for "explain convolution" is a much worse experience th
 retrieval over a syllabus, and no amount of embedding quality fixes it, because the information the
 query needs is hierarchical and the index is flat.
 
-**Section hierarchy.**
+#### The reference book, and what it measured
+
+This stage was specified against a real book rather than against an estimate, in the same way
+Phase 2 was specified against a real course. The reference is Kuttler, *Linear Algebra: A First
+Course* (2017A): 608 pages, 3.3 MB, a PDF outline of 131 entries nested four levels deep. Every
+number below was produced by running the shipping code over it.
+
+| Measurement | Result |
+| --- | --- |
+| Parse, 608 pages | 0.8 s, 596 pages kept, 12 detected as scanned |
+| Extracted text | 855,045 characters |
+| `detect_doc_type` | `homework` |
+| Chunked as detected | 1312 chunks, mean 162 tokens, **0 carrying a `section_title`** |
+| Chunked as `textbook` | 596 chunks, 595 carrying a `section_title`, most of them wrong |
+| Embedding | 25 ms per chunk, so 15 s to 33 s for the whole book |
+
+Three of those rows are faults. The last one is the good news, and it is the row that reorders the
+phase.
+
+#### A textbook is chunked as homework today
+
+`detect_doc_type` has no rule for `textbook` at all. The strategy table below defines one, and
+`CHUNK_RULES` implements one, but nothing reaches it: the filename patterns do not include a
+textbook case, so classification falls through to the content heuristic, and a book full of
+numbered exercises and numbered theorems trips `PROBLEM_MARKER` thousands of times. The reference
+book classifies as `homework` and is cut at every numbered line in it.
+
+The result is not "flat chunking that retrieves poorly", which is what the roadmap describes. It is
+1312 fragments averaging 162 tokens, carrying no structural metadata whatsoever, with problem
+boundaries drawn through the middle of proofs. A textbook detection rule is therefore the first
+change in this stage and the highest value per line in the phase.
+
+Detection must not lean on the filename. A student saves a book under whatever the publisher called
+it, and the reference book's name says nothing. The signals that do separate a textbook from a
+problem set are structural: a PDF outline with real depth, a page count in the hundreds, and a body
+whose numbered markers are spread evenly through it rather than concentrated on two pages.
+
+#### Section hierarchy
 
 - Primary source is the PDF outline via PyMuPDF `get_toc()`, which most commercial textbooks carry
 - Fallback is heading detection from span-level font size and weight, which PyMuPDF also exposes
-- Result is a hierarchical `section_path` on each chunk (`5 / 5.2 / 5.2.1`), replacing the current
-  flat `section_title`
+- Result is a hierarchical `section_path` on each chunk, replacing the current flat `section_title`
 
 `section_path` is the change that matters. A homework problem reading "use the diagram from section
 5.2.1" becomes a **direct lookup** rather than a semantic search that may or may not surface the
 right page. That is the difference between reliable and lucky, and it is what makes the Phase 2
 solver able to follow a textbook's own cross-references.
 
-**Figures.**
+**The path is titles, not numbers.** An earlier draft of this document wrote `section_path` as
+`5 / 5.2 / 5.2.1` and assumed the outline carries section numbers. The reference book's outline does
+not: its entries read `Systems of Equations`, `Systems Of Equations, Algebraic Procedures`,
+`Gaussian Elimination`, with the hierarchy carried by nesting depth and the numbers appearing only
+in the page text. So the path is built from outline titles, and a section number is recovered where
+the page text under that outline entry supplies one. Designing around numbers that are frequently
+absent would have produced a field that is null on exactly the books this stage exists for.
+
+**The current heading regex cannot be promoted to do this.** `SECTION_HEADING` in `rag/chunk.py`
+matches whole lines out of already-flattened text, which is all it can do, and forced over the
+reference book it returns a `section_title` on 595 of 596 chunks. That coverage is worthless: among
+the titles it finds are `3 times the second row to the first row.`, `Sn`, `I1`, `0 . However, it is
+written as V/V0. This is called the Mach number`, and table-of-contents lines complete with their
+dot leaders. High coverage of wrong values is worse than no coverage, because a wrong
+`section_path` is a lookup that confidently returns the wrong section. The regex stays as the
+fallback for documents with no outline, where it is doing a different and easier job, and it is
+never the primary source for a book that has one.
+
+#### Figures
 
 - Embedded images via `get_images()`, or a rendered page region for figures that are drawn rather
   than embedded
@@ -125,23 +190,86 @@ solver able to follow a textbook's own cross-references.
   document cites correctly
 
 Figures are the first pipeline output that is not text. The artifact model in architecture.md holds
-mixed content from the start for this reason.
+mixed content from the start for this reason, and `artifact_parts` already accepts `kind = 'figure'`
+with `content_type = 'image'`, so this lands without a migration.
 
-**Untested at scale.** Ingestion time, progress reporting, and retrieval quality at textbook scale
-have not been measured. A 900-page book is roughly two orders of magnitude more chunks than a
-syllabus, and while `sqlite-vec` brute-force KNN is comfortable there, local embedding throughput
-during ingestion is the open question.
+Geometry follows the convention `rag/locate.py` and `artifact_provenance.bbox` already established:
+fractions of the page box rather than points, because pages render as images at whatever width the
+pane has.
+
+#### Scale, measured
+
+The open question this section used to record was local embedding throughput during ingestion. It
+is answered, and it is not a problem.
+
+Embedding the reference book runs at 25 ms per chunk, so the whole 608-page book indexes in 15 s at
+596 chunks or 33 s at 1312. Parsing is 0.8 s and chunking is below the resolution of the timer.
+Ingestion cost at textbook scale is therefore almost entirely embedding, and embedding is fast
+enough that no batching, parallelism, or streaming work is justified by this measurement.
+
+Stated honestly, because it is one measurement and not a benchmark: this was Apple Silicon, against
+an embedding server that was already warm, over 64 chunks of one book. What it rules out is an order
+of magnitude, not a factor of two. A cold start pays the server's own load time once, which
+`embed_server.py` already absorbs on the first call of any ingestion.
+
+Two costs at this scale are still unmeasured and are Step 1 work rather than assumptions:
+`extract_facts` runs a model call per document and is the one stage that does not scale with chunk
+count, and retrieval quality over 596 chunks has never been compared against retrieval quality over
+127. The first is a number to record; the second is the whole point of the stage.
 
 ### Stage 2b: Text Recognition (Phase 3)
 
 Everything from here to the end of this stage is Phase 3 scope. It runs behind the transcription
-interface described at the top of this document, which the bundled vision model also implements.
+interface described at the top of this document, which the general vision model also implements.
 
 **Scanned pages and images**
 - Render to PNG at 300 DPI with PyMuPDF
 - Run Unlimited-OCR (see below)
 - Strip detection markers and regroup blocks
 - Output clean text with block structure
+
+#### The general path is not free, and "bundled" is Phase 6
+
+The roadmap phrase for the first implementation is "route scanned pages through the bundled vision
+model, since one is present anyway". Nothing is bundled yet. Inference is bundled in Phase 6, and
+until then the tutor endpoint is whatever the student configured, which may not accept images at
+all. The general path therefore needs three things that do not exist today, and the phase should not
+be planned as though it needs none:
+
+- **Image content parts in `llm/client.py`.** The client sends and parses text. Sending a page means
+  the OpenAI content-part array shape, which is new code rather than a flag, exactly as tool calling
+  was in Phase 2
+- **A vision capability probe**, mirroring `probe_tool_support`. An endpoint that cannot see is a
+  normal configuration and not an error, and it degrades the same way an endpoint without tools
+  degrades verification: honestly, in the interface, with the feature unavailable rather than
+  silently wrong
+- **The same locality rule the extraction stage already follows.** Transcription sends the page
+  image of a student's document to the configured endpoint. Against a non-local endpoint without
+  acknowledgement it must skip, for the reason `extract_facts` skips
+
+#### Rendering for recognition is not rendering for reading
+
+`rag/render.py` already rasterizes pages and caches them under `data/pages/{document_id}/`, and its
+docstring says it was built for this stage. It renders at 144 DPI, which is chosen for a source pane
+on a HiDPI display. Recognition wants 300 DPI per the reference invocation below.
+
+These are two different artifacts and they must not share a cache entry. A page rendered for reading
+that silently satisfied a recognition request would degrade transcription with nothing on screen to
+say so, and a page rendered at 300 DPI served to the source pane wastes several times the bytes. The
+DPI belongs in the cache path.
+
+#### Per-page state has nowhere to live yet
+
+Per-page progress and per-page retry are both listed as Phase 3 scope, and neither is possible
+against the current schema. `documents` carries `pages_total`, `pages_done`, and `pages_skipped`,
+and `pages_done` is written exactly once, at the end of a run: ui-phase-1.md documents this and
+deliberately shows a page count rather than a counter that would never move.
+
+Recognition changes that. A page is now a unit of work that can succeed, fail, or be retried on its
+own, which is a row rather than a column. This stage therefore introduces per-page rows carrying the
+page number, its state, and its error, and `pages_done` becomes a count over them rather than a
+number written at the end. A document whose page 7 failed is a document with 39 good pages and one
+retry, not a failed document.
 
 #### OCR runtime
 
@@ -264,16 +392,29 @@ paragraphs with 100-token overlap. Every resulting chunk keeps the same `problem
 
 **Detection order:**
 1. Detect document type from filename patterns and content heuristics
-2. Homework: split on problem markers (`1.`, `Problem 1`, `Q1`)
-3. Textbook or notes: split on heading markers (`#`, `##`, numbered sections)
-4. No structure detected: paragraph grouping with overlap
+2. Textbook: structural signals, principally a PDF outline with real depth over a long document
+3. Homework: split on problem markers (`1.`, `Problem 1`, `Q1`)
+4. Textbook or notes: split on heading markers (`#`, `##`, numbered sections)
+5. No structure detected: paragraph grouping with overlap
+
+Step 2 does not exist yet, and its absence is why the reference textbook in Stage 2a is chunked as
+homework. It is placed above homework deliberately: the two are separated by structure rather than
+by markers, and a book of exercises will always out-vote a marker count.
 
 **Each chunk stores:** `chunk_id`, `document_id`, `class_id`, `content`, `token_count`, and metadata
 (document type, page number, section title, `problem_number`, `part_index`).
 
 `problem_number` and `part_index` are populated today and are the substrate the Phase 2 solver
 segments against, so problem-level addressing is not new work in that phase. `section_title` becomes
-the hierarchical `section_path` in Phase 3.
+the hierarchical `section_path` in Phase 3, described in Stage 2a.
+
+**Existing chunks keep their flat `section_title` until their document is re-ingested.** A
+`section_path` is derived from a PDF outline, and the outline is in the source file rather than in
+the database, so there is nothing to backfill from: a migration can add the column but only a
+re-parse can fill it. The column is therefore nullable, retrieval treats a null path as "this
+document predates structural parsing" rather than as an error, and the student is offered a
+re-index rather than having one run on their behalf. This is the same posture the embedding-model
+identity rule takes in Stage 5, and for the same reason.
 
 ### Stage 4: Embed
 
@@ -347,6 +488,27 @@ score = cosine_similarity + 0.05 * recency_factor
 where `recency_factor` decays linearly from 1.0 for a document uploaded today to 0.0 at 120 days.
 The 0.05 coefficient is deliberately smaller than meaningful similarity gaps; it breaks ties, it does
 not reorder strong matches.
+
+**Structural lookup, added in Phase 3.** A query that names a section is not a similarity problem
+and must not be answered with one. When a query carries an explicit reference (`section 5.2.1`,
+`Chapter 4`, `Theorem 2.63`), the matching `section_path` is resolved directly and those chunks are
+placed ahead of the KNN result rather than left to compete with it on cosine distance. The KNN still
+runs and still fills the remaining budget, because a section reference tells you where to look and
+not what the student needs from it.
+
+Three rules keep this from becoming a worse retrieval than the one it improves:
+
+- A reference that resolves to nothing falls through to the KNN silently. A student may cite a
+  section of a book they never uploaded, and a hard failure there would be a regression
+- A resolved section larger than the budget is trimmed by KNN score within the section, so the part
+  of section 5.2 that answers the question outranks the part that does not
+- Structural chunks are still labelled with their source in the context block, so a step grounded in
+  a looked-up section carries the same provenance as one grounded in a retrieved one
+
+**`k = 8` is a Phase 1 constant and is unmeasured.** It was chosen for chat turns over syllabi, and
+the Phase 2 handoff already records it as a known weakness in solving. Textbook-scale retrieval is
+the first thing that can measure it honestly, so Phase 3 measures it rather than adjusting it by
+feel. Nothing else in this document assumes the number stays at 8.
 
 **Output:** Ranked chunks with content and metadata
 

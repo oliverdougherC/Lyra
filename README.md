@@ -34,7 +34,8 @@ rung on it.
 - **Data:** SQLite, single-user and local, with `sqlite-vec` for vector search
 - **Embeddings:** `nomic-embed-text-v1.5` (GGUF) through llama.cpp
 - **Tutor LLM:** OpenAI-compatible endpoint. User-configured today, bundled in the shipped product
-- **OCR (Phase 3):** `baidu/Unlimited-OCR` (GGUF) through llama.cpp
+- **Text recognition (Phase 3):** the vision-capable tutor model first, with `baidu/Unlimited-OCR`
+  (GGUF) through llama.cpp as the specialist path if bulk transcription needs it
 
 llama.cpp on GGUF weights is the single runtime for local models: embeddings today, text recognition
 from Phase 3, and the tutor model itself once inference is bundled. That keeps PyTorch out of the
@@ -71,8 +72,10 @@ It has been measured against a real course rather than against its own fixtures:
 evaluation and [docs/phase-2-handoff.md](docs/phase-2-handoff.md) records what it found, including
 what is still weak. 508 backend tests and 340 frontend tests pass.
 
-Known limit: this has been exercised on short documents. Textbook-scale ingestion and retrieval are
-untested and are Phase 3 work. The `docs/` specifications remain the source of truth.
+Phase 3, large documents, is in progress. Its opening measurements against a 608-page textbook are
+recorded in [docs/feature-roadmap.md](docs/feature-roadmap.md): ingestion is fast enough at that
+scale to need no work, and ingestion *quality* is worse than expected, because a textbook is
+currently classified and chunked as homework. The `docs/` specifications remain the source of truth.
 
 ## Quick Start
 
@@ -134,5 +137,6 @@ Lyra/
 - [Homework Solver](docs/solver-phase-2.md) - artifact model, job architecture, verification
 - [Phase 2 Interface](docs/ui-phase-2.md) - screen-by-screen specification for the solver
 - [Phase 2 Handoff](docs/phase-2-handoff.md) - what the solver did against a real course, and what is still weak
+- [Phase 3 Interface](docs/ui-phase-3.md) - screen-by-screen specification for large documents
 - [Feature Roadmap](docs/feature-roadmap.md) - phased plan and explicit exclusions
 - [Code Conventions](docs/conventions.md) - style, structure, testing, git

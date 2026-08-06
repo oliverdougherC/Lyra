@@ -291,15 +291,79 @@ problem that exists **today**, for text-based PDFs, and has nothing to do with s
 scanned pages is a separate capability. The structural work is the more valuable of the two and has
 no external dependencies, so it comes first.
 
+Specified in [rag-pipeline.md](rag-pipeline.md) stages 2a, 2b, 3, and 6 for the pipeline, and in
+[ui-phase-3.md](ui-phase-3.md) screen by screen. The checklist below is the scope; those documents
+are the source of truth for how.
+
+### What measuring the reference book found, before anything was planned
+
+Phase 2 was specified against a real course rather than its own fixtures, and four faults surfaced
+that no test suite could have found. Phase 3 opened the same way, against Kuttler's *Linear Algebra:
+A First Course*: 608 pages, a 131-entry outline nested four levels deep. Four findings, and they
+decide the order of everything below.
+
+1. **Ingestion performance at textbook scale is a non-issue, and was the phase's stated open
+   question.** 0.8 s to parse 608 pages, 25 ms per chunk to embed, so the whole book indexes in
+   well under a minute. No batching or parallelism work is justified.
+2. **A textbook is chunked as homework today.** `detect_doc_type` has no textbook rule at all, so a
+   book of numbered exercises trips the problem-marker heuristic and is cut at every numbered line
+   in it: 1312 fragments averaging 162 tokens, none carrying any structural metadata. This is worse
+   than the "flat chunking retrieves poorly" this phase was written to fix.
+3. **The heading regex cannot be promoted.** Forced over the book it labels 595 of 596 chunks, and
+   the labels are things like `3 times the second row to the first row.`, `Sn`, and
+   table-of-contents dot leaders. High coverage of wrong values is worse than none.
+4. **The text layer loses the mathematics on pages that were never scanned.** Every matrix extracts
+   as a column of loose digits with its shape discarded. In a linear algebra textbook that is most
+   of the content, and Lyra currently reports those pages as ingested successfully.
+
+Finding 4 is the one that moves an item between tracks. A vision pass over pages that already have a
+text layer is a **quality** feature for every document rather than a scanned-document feature, so it
+is measured before bulk transcription rather than after it.
+
+### Build order
+
+Sequenced because the tracks have different risk, not because the checklists are ordered.
+
+| Step | What | Why here |
+| ---- | ---- | -------- |
+| 1 | `scripts/eval_ingest.py`, and a measurement | Nothing below is claimable without it |
+| 2 | Structural parsing | No external dependency, and finding 2 makes it the largest single win |
+| 3 | Vision against the text layer | Finding 4, and it sizes the whole recognition track |
+| 4 | Text recognition for scanned pages | Depends on step 3's interface |
+| 5 | Figures | Depends on step 2's structure, and unblocks a known Phase 2 fault |
+
+### Measurement
+
+- [ ] `scripts/eval_ingest.py`, the sibling of `eval_solver.py`: staged, resumable, with its own
+      workspace database, ingest and retrieve and report. The Phase 2 harness is the model, and the
+      reason is the same: a result from the real code path is evidence about the product rather
+      than about the harness
+- [ ] A retrieval question set with known section answers, written by hand from the reference book,
+      so structure-aware retrieval can be shown to work rather than asserted to
+- [ ] Record what `extract_facts` costs on a 608-page document. It is one model call per document
+      and the one ingestion stage that does not scale with chunk count
+- [ ] Measure `k = 8`. It is a Phase 1 constant chosen for chat turns over syllabi, the Phase 2
+      handoff already lists it as a known weakness in solving, and textbook-scale retrieval is the
+      first thing that can judge it honestly
+
 ### Structural parsing
 
+- [ ] **A textbook detection rule in `detect_doc_type`.** Structural signals, principally a PDF
+      outline with real depth over a long document, checked ahead of the homework marker heuristic.
+      Highest value per line in the phase, and finding 2 above is why
 - [ ] Chapter and section hierarchy from the PDF outline (`get_toc()`), which most commercial
       textbooks carry, with font and weight heading detection as the fallback
 - [ ] Hierarchical `section_path` on chunks, replacing the flat `section_title`. This is the change
       that turns "the diagram in section 5.2.1" into a direct lookup instead of a semantic search,
-      which is the difference between reliable and lucky
-- [ ] Structure-aware retrieval that can resolve an explicit section reference in a problem
-- [ ] Ingestion performance and progress reporting at textbook scale, currently untested
+      which is the difference between reliable and lucky. Built from outline titles, with section
+      numbers recovered from page text where they exist: the reference book's outline carries no
+      numbers, so a numeric path would be null on exactly the books this exists for
+- [ ] Structure-aware retrieval that can resolve an explicit section reference in a problem, placed
+      ahead of the KNN rather than competing with it, and falling through silently when it resolves
+      to nothing
+- [ ] Documents ingested before this lands keep a null `section_path` and are offered a re-index
+      rather than having one run for them. A path is derived from the source file's outline, so
+      there is nothing in the database to backfill from
 
 ### Figures
 
@@ -307,34 +371,55 @@ no external dependencies, so it comes first.
 - [ ] Caption-to-figure association (`Figure 5.21` and nearest image block), with an honest fallback
       when the heuristic fails
 - [ ] Pull a referenced figure into a solution document, with provenance back to its source page.
-      This is the first artifact content that is not text, and the artifact model must hold it
-      from the start rather than gaining it later
+      This is the first artifact content that is not text. `artifact_parts` already accepts
+      `kind = 'figure'` with `content_type = 'image'`, so this lands without a migration, but
+      nothing produces one today and nothing in the frontend renders one
+- [ ] Figures survive export. The print stylesheet has never seen an image
 
 ### Text recognition
 
 - [ ] Transcription interface: page in, text out, feeding the chunker. Both implementations below
       sit behind it, so the model choice is swappable and does not need settling in advance
-- [ ] Route scanned pages through the bundled vision model first, since one is present anyway
-- [ ] Measure it: time a real sample of pages and extrapolate to textbook scale. If bulk
-      transcription through the general model is too slow on modest hardware, the specialist earns
-      its download
+- [ ] **Image content parts in `llm/client.py`.** The client sends and parses text only. This is new
+      code rather than a flag, exactly as tool calling was in Phase 2
+- [ ] **A vision capability probe**, mirroring `probe_tool_support`, with honest degradation in the
+      interface when the configured endpoint cannot see. Inference is bundled in Phase 6, so until
+      then a vision-capable tutor model is something the student happens to have rather than
+      something Lyra ships
+- [ ] Skip transcription against a non-local endpoint without acknowledgement, the rule
+      `extract_facts` already follows. A page image of the student's document is what gets sent
+- [ ] Measure vision against the text layer on pages that already have one, on the reference book's
+      matrix-heavy pages. If it wins, transcription is a quality feature for every document
+- [ ] Route scanned pages through the same interface, and time a real sample to extrapolate to
+      textbook scale. If bulk transcription through the general model is too slow on modest
+      hardware, the specialist earns its download
+- [ ] Render for recognition at 300 DPI, cached separately from the 144 DPI the source pane reads.
+      One cache entry serving both would silently degrade whichever asked second
+- [ ] Per-page rows carrying page number, state, and error, so `pages_done` becomes a count rather
+      than a number written once at the end. Per-page progress and per-page retry are both
+      impossible without this
 - [ ] Unlimited-OCR through llama.cpp, page-batched, as the specialist path. Resolve the serving
       spike documented in rag-pipeline.md and record the outcome there
-- [ ] Pin a llama.cpp build and record the commit
+- [ ] Pin a llama.cpp build and record the commit. `scripts/fetch_models.py` pins a release tag
+      today, which is not the same thing
 - [ ] Model download and management for the OCR weights, with progress and disk-space checks
 - [ ] Accept PNG, JPG, and WebP uploads
-- [ ] Per-page progress in the ingestion UI, and per-page retry
-- [ ] Re-ingest documents previously marked `unsupported`
+- [ ] Re-ingest documents previously marked `unsupported`, which the backend route already supports
+      and the interface offers no way to reach
 - [ ] Mixed documents handled per page, so a scan-and-text hybrid works
 
-A wrinkle worth testing while here: PyMuPDF's text layer mangles dense math, so a vision pass may
-produce better equations than the text layer does even on pages that were never scanned. If that
-holds, transcription stops being a scanned-document feature.
-
 **Note on ordering.** OCR was previously the gating item of its own phase, on the strength of an
-unmerged upstream dependency and multi-GB weights. Assuming a bundled vision model, it is no longer
-gating: it becomes a measured optimization behind an interface rather than a prerequisite. The
-research in rag-pipeline.md stands and is still the plan for the specialist path.
+unmerged upstream dependency and multi-GB weights. It is no longer gating: it becomes a measured
+optimization behind an interface rather than a prerequisite. The research in rag-pipeline.md stands
+and is still the plan for the specialist path.
+
+**Definition of done:** A student uploads a 600-page textbook, watches it ingest in a time the
+screen states honestly, and asks a question whose answer lives in one section. The answer cites that
+section by its path rather than by a page number alone, and a problem that says "use the result from
+section 5.2" resolves it directly. A scanned document that Phase 1 refused is re-read in place
+without being uploaded again, with per-page progress while it runs and a retry on the one page that
+failed. A figure the solution refers to appears in the solution document with provenance back to its
+page, and survives export. Everything the phase cannot do, it says.
 
 ## Phase 4: Agent
 
