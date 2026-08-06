@@ -118,7 +118,11 @@ def fake_solver(
     monkeypatch.setattr(solving, "retrieve", lambda conn, class_id, query, budget: result)
 
     async def complete(
-        endpoint: str, api_key: object, model: object, messages: list[dict[str, str]]
+        endpoint: str,
+        api_key: object,
+        model: object,
+        messages: list[dict[str, str]],
+        **kwargs: object,
     ) -> str:
         sent.append(messages)
         reply = queue.pop(0) if queue else replies

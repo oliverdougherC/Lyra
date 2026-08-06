@@ -16,8 +16,18 @@ from backend.core.errors import LyraError
 from backend.rag import figures, render
 
 
-def _pdf(path: Path, blocks: list[tuple[float, float, float, float]], caption: str = "") -> Path:
-    """A one-page PDF carrying an image at each given rect, and an optional caption."""
+def _pdf(
+    path: Path,
+    blocks: list[tuple[float, float, float, float]],
+    caption: str = "",
+    markers: list[tuple[str, float]] | None = None,
+) -> Path:
+    """A one-page PDF carrying an image at each given rect, and an optional caption.
+
+    `markers` writes the sheet's own problem numbers at given baselines, which is what
+    `locate` reads to give each problem a position. A test about pairing needs them; a test
+    about extraction does not, and leaving them off is how it says so.
+    """
     document = pymupdf.open()
     # US Letter, so the rects below are the ones the reference corpus actually uses.
     page = document.new_page(width=612, height=792)
@@ -29,6 +39,8 @@ def _pdf(path: Path, blocks: list[tuple[float, float, float, float]], caption: s
         page.insert_image(pymupdf.Rect(x0, y0, x1, y1), pixmap=pixmap, keep_proportion=False)
     if caption:
         page.insert_text((72, 300), caption, fontsize=9)
+    for text, baseline in markers or []:
+        page.insert_text((72, baseline), text, fontsize=11)
     document.save(path)
     document.close()
     return path
@@ -301,6 +313,166 @@ def test_a_crowded_page_with_no_captions_files_nothing_under_a_problem(
         [
             _segmented("Problem 1", "Determine h(t).", document_id, 1),
             _segmented("Problem 2", "Determine z(t).", document_id, 1),
+        ],
+    )
+
+    assert _figure_parts(db, artifact_id) == {}
+
+
+def test_a_page_that_reads_as_a_list_pairs_each_diagram_with_its_own_problem(
+    db: sqlite3.Connection, class_id: int, tmp_path: Path
+) -> None:
+    """The acceptance layout, measured off the real sheet.
+
+    On homework 3 three block diagrams sit at the top of a page of seven questions, each
+    with its list marker *underneath* it, and then four more questions with no diagrams at
+    all. Nothing about distance decides this: what decides it is that the page alternates
+    diagram, marker, diagram, marker, which is the shape of a list rather than a guess. The
+    four questions left over once the diagrams run out get nothing, which is correct.
+    """
+    from backend.core import solver
+
+    source = _pdf(
+        tmp_path / "hw.pdf",
+        [(181, 179, 433, 200), (181, 239, 433, 290), (181, 331, 433, 382)],
+        markers=[("1.", 215), ("2.", 305), ("3.", 397), ("4.", 460), ("5.", 500)],
+    )
+    document_id = _document(db, class_id, source)
+    store.store_figures(db, document_id, figures.extract_figures(source, "application/pdf"))
+    db.commit()
+    artifact_id = _artifact(db, class_id)
+
+    solver.write_problems(
+        db,
+        artifact_id,
+        [_segmented(f"Problem {number}", f"{number}.", document_id, 1) for number in range(1, 6)],
+    )
+
+    assert _figure_parts(db, artifact_id) == {
+        "Problem 1": ["Page 1, figure 1"],
+        "Problem 2": ["Page 1, figure 2"],
+        "Problem 3": ["Page 1, figure 3"],
+    }
+
+
+def test_a_sheet_that_numbers_above_its_diagrams_pairs_the_other_way(
+    db: sqlite3.Connection, class_id: int, tmp_path: Path
+) -> None:
+    """The other common layout, and the reason the direction is read rather than assumed.
+
+    Here every marker sits above the diagram it introduces. Pairing by "nearest preceding
+    marker" would be right on this sheet and wrong on the one above, which is exactly why
+    neither is hard-coded: the page says which way round it is by which kind comes first.
+    """
+    from backend.core import solver
+
+    source = _pdf(
+        tmp_path / "notes.pdf",
+        [(181, 200, 433, 260), (181, 340, 433, 400)],
+        markers=[("1.", 190), ("2.", 330)],
+    )
+    document_id = _document(db, class_id, source)
+    store.store_figures(db, document_id, figures.extract_figures(source, "application/pdf"))
+    db.commit()
+    artifact_id = _artifact(db, class_id)
+
+    solver.write_problems(
+        db,
+        artifact_id,
+        [_segmented(f"Problem {number}", f"{number}.", document_id, 1) for number in (1, 2)],
+    )
+
+    assert _figure_parts(db, artifact_id) == {
+        "Problem 1": ["Page 1, figure 1"],
+        "Problem 2": ["Page 1, figure 2"],
+    }
+
+
+def test_one_diagram_among_several_problems_is_still_nobody_s(
+    db: sqlite3.Connection, class_id: int, tmp_path: Path
+) -> None:
+    """The ambiguous case, which alternation must not be allowed to swallow.
+
+    A single figure has a marker beside it on both sides, because on a page of questions
+    everything has a marker beside it. There is no repetition to read, so there is no
+    layout, and a lone diagram between two questions belongs to neither until something
+    says otherwise.
+    """
+    from backend.core import solver
+
+    source = _pdf(
+        tmp_path / "hw.pdf",
+        [(181, 239, 433, 290)],
+        markers=[("1.", 190), ("2.", 320), ("3.", 400)],
+    )
+    document_id = _document(db, class_id, source)
+    store.store_figures(db, document_id, figures.extract_figures(source, "application/pdf"))
+    db.commit()
+    artifact_id = _artifact(db, class_id)
+
+    solver.write_problems(
+        db,
+        artifact_id,
+        [_segmented(f"Problem {number}", f"{number}.", document_id, 1) for number in (1, 2, 3)],
+    )
+
+    assert _figure_parts(db, artifact_id) == {}
+
+
+def test_two_diagrams_with_nothing_between_them_pair_with_nothing(
+    db: sqlite3.Connection, class_id: int, tmp_path: Path
+) -> None:
+    """A run that is not alternating is not a list, and half a pairing is not on offer."""
+    from backend.core import solver
+
+    source = _pdf(
+        tmp_path / "hw.pdf",
+        [(181, 200, 433, 250), (181, 255, 433, 305), (181, 400, 433, 450)],
+        markers=[("1.", 330), ("2.", 470)],
+    )
+    document_id = _document(db, class_id, source)
+    store.store_figures(db, document_id, figures.extract_figures(source, "application/pdf"))
+    db.commit()
+    artifact_id = _artifact(db, class_id)
+
+    solver.write_problems(
+        db,
+        artifact_id,
+        [_segmented(f"Problem {number}", f"{number}.", document_id, 1) for number in (1, 2)],
+    )
+
+    assert _figure_parts(db, artifact_id) == {}
+
+
+def test_a_problem_whose_marker_is_not_on_the_page_stops_the_pairing(
+    db: sqlite3.Connection, class_id: int, tmp_path: Path
+) -> None:
+    """An unplaced problem cannot take part in an ordering, so the page gets none.
+
+    Refusing the whole page rather than pairing around the gap: a problem missing from the
+    sequence shifts every diagram after it onto the wrong question, which is worse than
+    attaching nothing.
+    """
+    from backend.core import solver
+
+    source = _pdf(
+        tmp_path / "hw.pdf",
+        [(181, 179, 433, 200), (181, 239, 433, 290)],
+        markers=[("1.", 215), ("2.", 305)],
+    )
+    document_id = _document(db, class_id, source)
+    store.store_figures(db, document_id, figures.extract_figures(source, "application/pdf"))
+    db.commit()
+    artifact_id = _artifact(db, class_id)
+
+    solver.write_problems(
+        db,
+        artifact_id,
+        [
+            _segmented("Problem 1", "1.", document_id, 1),
+            _segmented("Problem 2", "2.", document_id, 1),
+            # Segmentation found a third problem the sheet does not number anywhere.
+            _segmented("Problem 9", "9.", document_id, 1),
         ],
     )
 

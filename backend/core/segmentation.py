@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from backend.core.app_settings import document_text_allowed, resolve_tutor_config
 from backend.core.errors import ConfigurationError
 from backend.llm import client, replies
-from backend.llm.prompts import build_segmentation_prompt
+from backend.llm.prompts import SEGMENTATION_SCHEMA, build_segmentation_prompt
 from backend.rag.tokens import CHARS_PER_TOKEN
 
 logger = logging.getLogger(__name__)
@@ -520,7 +520,15 @@ def propose_problems(
         # The solver worker is a plain thread with no event loop, and `complete` is async.
         # Owning a loop for the length of the call keeps this function synchronous.
         content = asyncio.run(
-            client.complete(config.endpoint_url, config.api_key, config.model, messages)
+            client.complete(
+                config.endpoint_url,
+                config.api_key,
+                config.model,
+                messages,
+                temperature=client.DETERMINISTIC_TEMPERATURE,
+                schema=SEGMENTATION_SCHEMA,
+                request_timeout=client.BACKGROUND_TIMEOUT,
+            )
         )
     except Exception:
         logger.exception("Segmentation model pass failed for document %s", document_id)

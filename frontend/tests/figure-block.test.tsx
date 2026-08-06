@@ -64,4 +64,15 @@ describe('FigureBlock', () => {
 
     expect(screen.getByRole('img').className).toContain('max-w-full')
   })
+
+  it('is never blown up past the size the crop was taken at', () => {
+    // Found at 1280 in the browser, where the reading column is wider than a crop. The
+    // figure is a flex column, so a stretched image takes the column's full width whatever
+    // its own is: the acceptance homework's block diagrams are 771px and were rendering at
+    // 1215, which is a blurred picture of a diagram drawn in hairlines. `self-start` is
+    // what keeps the scaling one-directional.
+    render(<FigureBlock figure={figurePart()} />)
+
+    expect(screen.getByRole('img').className).toContain('self-start')
+  })
 })

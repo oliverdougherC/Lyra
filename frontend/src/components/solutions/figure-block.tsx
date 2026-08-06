@@ -39,12 +39,18 @@ export function FigureBlock({ figure, className }: FigureBlockProps) {
         // Never wider than the reading column, and a wide figure scales down rather than
         // scrolling. Math scrolls because cutting an equation loses information; a figure
         // twenty percent smaller loses none.
+        //
+        // `self-start` is what keeps that one-directional. This figure is a flex column, so
+        // a stretched item takes the column's full width whatever its own is, and at 1280
+        // the reading column is wider than a crop: the block diagrams on the acceptance
+        // homework are 771px and were being blown up to 1215, which is a blurred picture of
+        // a diagram made of hairlines. Scaling down loses nothing; scaling up invents.
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={figureUrl(Number(figure.content))}
           alt={name}
           onError={() => setBroken(true)}
-          className="border-border bg-card h-auto max-w-full rounded-md border"
+          className="border-border bg-card h-auto max-w-full self-start rounded-md border"
         />
       )}
       <figcaption className="text-text-tertiary flex flex-wrap items-center gap-2 text-xs">

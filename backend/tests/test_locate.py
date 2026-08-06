@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pymupdf
 
-from backend.rag.locate import find_label
+from backend.rag.locate import find_label, find_labels
 
 
 def _sheet(path: Path) -> Path:
@@ -105,6 +105,86 @@ def test_a_numbered_sheet_still_matches_on_its_marker(tmp_path: Path) -> None:
     sheet = _sheet(tmp_path / "homework.pdf")
 
     assert find_label(sheet, 1, "Problem 1 (Something Else Entirely)") is not None
+
+
+def _renumbered_sheet(path: Path) -> Path:
+    """A sheet of two sections that both number from 1, which is how real ones are written.
+
+    The acceptance homework is exactly this shape: three warm-up questions, a section
+    heading, and then four more questions starting again at 1.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = pymupdf.open()
+    page = document.new_page()
+    for index, height in enumerate((100, 160, 220), start=1):
+        page.insert_text((72, height), f"{index}. First section", fontsize=11)
+    page.insert_text((72, 300), "Fourier Series", fontsize=11)
+    for index, height in enumerate((360, 420, 480), start=1):
+        page.insert_text((72, height), f"{index}. Second section", fontsize=11)
+    document.save(path)
+    document.close()
+    return path
+
+
+def test_two_sections_numbered_the_same_get_different_positions(tmp_path: Path) -> None:
+    """The fault this whole interface exists to fix.
+
+    Asked one at a time, both sections' "1." resolved to the first section's marker, so the
+    source pane drew its highlight band at the wrong problem and no figure could be paired
+    against a position that several problems shared.
+    """
+    sheet = _renumbered_sheet(tmp_path / "renumbered.pdf")
+
+    found = find_labels(sheet, 1, ["1.", "2.", "3.", "1.", "2.", "3."])
+
+    assert all(rect is not None for rect in found)
+    tops = [rect[1] for rect in found if rect is not None]
+    assert len(set(tops)) == 6
+    # And in the order the sheet writes them, which is what makes the second section's
+    # first problem the fourth marker down rather than the first.
+    assert tops == sorted(tops)
+
+
+def test_a_label_with_nothing_left_below_it_falls_back_to_the_first(tmp_path: Path) -> None:
+    """Never worse than the rule this replaced.
+
+    A page whose labels cannot be walked in order - because segmentation read them out of
+    order, or because one of them is missing - still gets the topmost hit for the rest,
+    which is the answer the single-label rule always gave.
+    """
+    sheet = _renumbered_sheet(tmp_path / "renumbered.pdf")
+
+    # Asked for the same marker four times, though the sheet only writes it twice.
+    found = find_labels(sheet, 1, ["1.", "1.", "1.", "1."])
+
+    assert all(rect is not None for rect in found)
+    assert found[0] != found[1]
+    # The third and fourth have run out of page, so they take the first hit again rather
+    # than nothing at all.
+    assert found[2] == found[0]
+    assert found[3] == found[0]
+
+
+def test_one_label_that_is_missing_does_not_move_the_others(tmp_path: Path) -> None:
+    sheet = _renumbered_sheet(tmp_path / "renumbered.pdf")
+
+    found = find_labels(sheet, 1, ["1.", "Problem 9 (Nowhere)", "2."])
+
+    assert found[1] is None
+    assert found[0] is not None and found[2] is not None
+    assert found[2][1] > found[0][1]
+
+
+def test_no_labels_is_no_work(tmp_path: Path) -> None:
+    sheet = _sheet(tmp_path / "homework.pdf")
+
+    assert find_labels(sheet, 1, []) == []
+
+
+def test_a_missing_file_costs_every_position_and_nothing_else(tmp_path: Path) -> None:
+    # One entry per label even when the file is gone, so a caller zipping the answers
+    # against its problems cannot silently misalign them.
+    assert find_labels(tmp_path / "gone.pdf", 1, ["Problem 1", "Problem 2"]) == [None, None]
 
 
 def test_a_missing_file_costs_the_position_and_nothing_else(tmp_path: Path) -> None:

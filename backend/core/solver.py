@@ -39,6 +39,7 @@ import queue
 import sqlite3
 import threading
 from dataclasses import dataclass
+from itertools import groupby
 from pathlib import Path
 
 from backend.config import settings
@@ -57,6 +58,7 @@ from backend.core.errors import LyraError
 from backend.core.segmentation import SegmentedProblem, propose_problems
 from backend.core.solving import SolvedProblem, SolveInput
 from backend.llm import client
+from backend.llm.prompts import SOLVE_SCHEMA
 from backend.rag import locate
 from backend.rag.parse import PDF_MIME
 from backend.storage.database import connect
@@ -248,6 +250,12 @@ def write_problems(
     Returns:
         The ids of the top-level problem parts, in order.
     """
+    # Every problem's position, found before any of them are written, because a marker is
+    # only unambiguous beside the other markers on its page.
+    positions = _locate_all(
+        conn, [(problem.document_id, problem.page_number, problem.label) for problem in problems]
+    )
+
     written: list[int] = []
     for ordinal, problem in enumerate(problems):
         part_id = artifacts.create_part(
@@ -268,7 +276,7 @@ def write_problems(
         # provenance rather than a row pointing at document zero. `document_id or None`
         # is what keeps a deleted source from becoming a foreign key that does not resolve.
         if problem.document_id and (problem.chunk_ids or problem.page_number is not None):
-            bbox = _locate(conn, problem.document_id, problem.page_number, problem.label)
+            bbox = positions[ordinal]
             artifacts.set_provenance(
                 conn,
                 part_id,
@@ -295,7 +303,7 @@ def write_problems(
             )
         written.append(part_id)
 
-    _write_figures(conn, artifact_id, problems, written)
+    _write_figures(conn, artifact_id, problems, written, positions)
     return written
 
 
@@ -304,52 +312,166 @@ def _write_figures(
     artifact_id: int,
     problems: list[SegmentedProblem],
     part_ids: list[int],
+    positions: list[tuple[float, ...]],
 ) -> None:
     """Pull the figures a problem refers to into the solution.
 
-    Two rules, and both are exact. A figure is attached when the problem's statement names
-    it - "the system in Figure 3" - or when the problem is the only one on its page, where
-    "the figures on this page" is not a guess at all. Anything else gets nothing.
+    Three rules, and all three are exact. A figure is attached when the problem's statement
+    names it - "the system in Figure 3" - or when the problem is the only one on its page,
+    where "the figures on this page" is not a guess at all, or when the page's diagrams and
+    problem markers alternate, where the pairing is forced by which of the two the page puts
+    first. Anything else gets nothing.
 
-    That is deliberately less than it could be, and the reason is worth stating because it
-    was tried. Attaching every figure on a page to every problem on it was the first
-    version, and on the acceptance homework it gave twenty-one attachments of which twelve
-    were wrong: four Fourier-series problems each received three block diagrams belonging
-    to other questions. Geometry cannot fix it either. The list markers on that page sit
-    *below* their diagrams, so "nearest preceding marker" is off by one; "nearest marker by
-    distance" gets figure two wrong by three thousandths of a page; and pairing an
-    alternating run of figures and markers, which would be exact, needs each problem to
-    have a distinct position, which `_locate` cannot give here - it finds a label's first
-    occurrence, so the second section's "1." resolves to the first section's marker.
+    That is deliberately less than it could be, and the reason is worth stating because the
+    alternatives were tried. Attaching every figure on a page to every problem on it was the
+    first version, and on the acceptance homework it gave twenty-one attachments of which
+    twelve were wrong: four Fourier-series problems each received three block diagrams
+    belonging to other questions. Distance does not fix it either: the list markers on that
+    page sit *below* their diagrams, so "nearest preceding marker" is off by one, and
+    "nearest marker by distance" gets figure two wrong by three thousandths of a page.
 
-    So the figures of a multi-problem page with no captions are extracted, served, and
-    shown on the page image beside the solution, but they are not filed under a problem.
+    The alternation rule is not a distance guess, which is why it is allowed where those
+    were not. It reads no gap and no threshold; it asks whether the page has the shape of a
+    list, one diagram to one question, and refuses the moment it does not. It needs every
+    problem on the page to have a marker of its own, which is what `locate.find_labels`
+    resolving a page in one walk now gives it, and which is why this could not be built
+    until that was.
+
+    A page where any figure is named by any problem is left to naming alone. A caption the
+    text refers to is better evidence than the page's shape, and running both would let one
+    diagram be filed under two different problems.
+
+    So the figures of a page that satisfies none of the three are still extracted, served,
+    and shown on the page image beside the solution, but they are not filed under a problem.
     A student sees the diagram; Lyra does not claim to know which question it answers.
 
     The part carries the figure's id as its content. Nothing here copies the image: the
     figure belongs to the document, and a solution referring to it should follow the source
     rather than freeze a crop taken on the day it was solved.
     """
-    # How many problems sit on each page, which is what decides whether "the figures on
-    # this page" identifies anything.
-    crowd: dict[tuple[int, int], int] = {}
-    for problem in problems:
+    # The problems on each page, in document order, which is what decides both whether "the
+    # figures on this page" identifies anything and whether the page alternates.
+    pages: dict[tuple[int, int], list[int]] = {}
+    for index, problem in enumerate(problems):
         if problem.document_id and problem.page_number is not None:
-            key = (problem.document_id, problem.page_number)
-            crowd[key] = crowd.get(key, 0) + 1
+            pages.setdefault((problem.document_id, problem.page_number), []).append(index)
 
-    for problem, part_id in zip(problems, part_ids, strict=True):
-        if not problem.document_id or problem.page_number is None:
+    for (document_id, page_number), indexes in pages.items():
+        available = figures.list_figures(conn, document_id, [page_number])
+        named = {
+            index: [
+                figure
+                for figure in available
+                if isinstance(figure["label"], str)
+                and _mentions(problems[index].statement, figure["label"])
+            ]
+            for index in indexes
+        }
+        anything_named = any(named[index] for index in indexes)
+        paired = (
+            {}
+            if anything_named
+            else _pair_by_alternation([positions[index] for index in indexes], available)
+        )
+
+        for position, index in enumerate(indexes):
+            chosen = named[index] or (
+                available if len(indexes) == 1 else _figures_at(paired, position)
+            )
+            _attach_figures(conn, artifact_id, part_ids[index], problems[index], chosen)
+
+
+def _figures_at(paired: dict[int, dict[str, object]], position: int) -> list[dict[str, object]]:
+    """The one figure paired with the problem at `position`, as a list, or none."""
+    figure = paired.get(position)
+    return [] if figure is None else [figure]
+
+
+def _top_of(bbox: object) -> float | None:
+    """The top edge of a rectangle stored as four fractions of the page box."""
+    if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+        return float(bbox[1])
+    return None
+
+
+# The fewest figures that make a page a list rather than an illustration.
+#
+# One diagram among several problems is the ambiguous case, not the easy one: it may belong
+# to the question above it, the question below it, or to all of them, and its neighbour
+# being a marker says nothing, because on a page of questions everything's neighbour is a
+# marker. Two diagrams each with their own marker is a repetition, and a repetition is
+# evidence of a layout. This is the guard that keeps a lone figure unattached.
+MIN_ALTERNATING_FIGURES = 2
+
+_FIGURE, _MARKER = 0, 1
+
+
+def _pair_by_alternation(
+    positions: list[tuple[float, ...]], available: list[dict[str, object]]
+) -> dict[int, dict[str, object]]:
+    """One figure per problem where a page reads as a list, and nothing where it does not.
+
+    Every figure must have a problem marker immediately beside it, all of them on the same
+    side, and no two may want the same marker. That is the whole test, and each part of it
+    is doing work. *Immediately beside* is what makes this structural rather than a distance
+    guess: the question is whether anything sits between a diagram and the marker, not how
+    far apart they are. *All on the same side* is what settles the layout the acceptance
+    homework has, where the list markers sit below their diagrams rather than above them -
+    if both readings work, the page has not said which it is and gets neither. And *no two
+    to the same marker* is what refuses two diagrams sharing a question.
+
+    Markers left over once the figures run out are not a problem and are what the real page
+    looks like: three diagrams at the top of a sheet of seven questions pair with the first
+    three, and the other four get nothing.
+
+    Args:
+        positions: Where each problem's marker sits, in document order. A problem whose
+            marker was not found has an empty rectangle, and one of those is enough to
+            refuse the whole page: an unplaced problem cannot take part in an ordering.
+        available: The page's figures, in reading order.
+
+    Returns:
+        Position in `positions` to figure, for the problems that pair, or an empty mapping
+        when the page does not read as a list. Empty is the common answer and is a refusal
+        rather than a failure.
+    """
+    if len(available) < MIN_ALTERNATING_FIGURES or not positions:
+        return {}
+
+    markers = [(_top_of(bbox), index) for index, bbox in enumerate(positions)]
+    diagrams = [(_top_of(figure["bbox"]), index) for index, figure in enumerate(available)]
+    if any(top is None for top, _ in markers + diagrams):
+        return {}
+
+    # Down the page, with a figure ahead of a marker at the same height. A marker level with
+    # a diagram is a caption beside it rather than above or below it, and putting the figure
+    # first there is what makes the tie readable as one layout instead of neither.
+    ordered = sorted(
+        [(top, _FIGURE, index) for top, index in diagrams]
+        + [(top, _MARKER, index) for top, index in markers]
+    )
+
+    below = _pair_in_direction(ordered, 1)
+    above = _pair_in_direction(ordered, -1)
+    if (below is None) == (above is None):
+        # Neither reading works, or both do and the page has not said which.
+        return {}
+    pairing = below if above is None else above
+    return {marker: available[figure] for figure, marker in (pairing or {}).items()}
+
+
+def _pair_in_direction(ordered: list[tuple[float, int, int]], step: int) -> dict[int, int] | None:
+    """Each figure to the marker `step` places from it, or None if that does not hold."""
+    pairs: dict[int, int] = {}
+    for place, (_, kind, index) in enumerate(ordered):
+        if kind != _FIGURE:
             continue
-        available = figures.list_figures(conn, problem.document_id, [problem.page_number])
-        alone = crowd.get((problem.document_id, problem.page_number), 0) == 1
-        named = [
-            figure
-            for figure in available
-            if isinstance(figure["label"], str) and _mentions(problem.statement, figure["label"])
-        ]
-        chosen = named or (available if alone else [])
-        _attach_figures(conn, artifact_id, part_id, problem, chosen)
+        beside = place + step
+        if not 0 <= beside < len(ordered) or ordered[beside][1] != _MARKER:
+            return None
+        pairs[index] = ordered[beside][2]
+    # Two diagrams reaching for the same question is not a list.
+    return None if len(set(pairs.values())) != len(pairs) else pairs
 
 
 def _mentions(statement: str, label: str) -> bool:
@@ -654,7 +776,15 @@ def _generate(
     # The worker is a plain thread with no event loop, and `complete` is async. Owning a
     # loop for the length of the call keeps this function synchronous.
     content = asyncio.run(
-        client.complete(config.endpoint_url, config.api_key, config.model, messages)
+        client.complete(
+            config.endpoint_url,
+            config.api_key,
+            config.model,
+            messages,
+            temperature=client.DETERMINISTIC_TEMPERATURE,
+            schema=SOLVE_SCHEMA,
+            request_timeout=client.BACKGROUND_TIMEOUT,
+        )
     )
     solved = solving.parse_solution(content)
     if not solved.steps and not solved.answer:
@@ -960,22 +1090,53 @@ def _top_level_problems(conn: sqlite3.Connection, artifact_id: int) -> list[dict
     ]
 
 
-def _locate(
-    conn: sqlite3.Connection, document_id: int, page_number: int | None, label: str | None
-) -> tuple[float, ...]:
-    """Where a problem's marker sits on its page, empty when it could not be found.
-
-    Empty rather than None on a miss, so the backfill knows this has already been looked
-    for and does not reopen the same PDF on every start.
-    """
-    if not document_id or page_number is None or not label:
-        return ()
+def _pdf_path(conn: sqlite3.Connection, document_id: int) -> Path | None:
+    """Where a document is stored, when it is a PDF and still exists as a row."""
+    if not document_id:
+        return None
     row = conn.execute(
         "select stored_path, mime from documents where id = ?", (document_id,)
     ).fetchone()
     if row is None or str(row["mime"]) != PDF_MIME:
-        return ()
-    return locate.find_label(Path(str(row["stored_path"])), page_number, label) or ()
+        return None
+    return Path(str(row["stored_path"]))
+
+
+def _locate_all(
+    conn: sqlite3.Connection, wanted: list[tuple[int, int | None, str | None]]
+) -> list[tuple[float, ...]]:
+    """Where each problem's marker sits, resolved a page at a time and in document order.
+
+    Grouped by page rather than asked one problem at a time, because that is what lets two
+    problems numbered the same take different markers: `locate.find_labels` walks a page
+    once and never goes back up it. Asking per problem gave every `1.` on a sheet the first
+    one, which drew the source pane's highlight band at the wrong place and left figures
+    with no distinct position to be paired against.
+
+    Args:
+        wanted: One `(document_id, page_number, label)` per problem, in document order.
+
+    Returns:
+        One rectangle per entry, in the same order. Empty rather than None on a miss, so
+        the backfill knows this has already been looked for and does not reopen the same
+        PDF on every start.
+    """
+    found: list[tuple[float, ...]] = [() for _ in wanted]
+    pages: dict[tuple[int, int], list[int]] = {}
+    for index, (document_id, page_number, label) in enumerate(wanted):
+        if document_id and page_number is not None and label:
+            pages.setdefault((document_id, page_number), []).append(index)
+
+    for (document_id, page_number), indexes in pages.items():
+        path = _pdf_path(conn, document_id)
+        if path is None:
+            continue
+        located = locate.find_labels(
+            path, page_number, [str(wanted[index][2]) for index in indexes]
+        )
+        for index, rect in zip(indexes, located, strict=True):
+            found[index] = rect or ()
+    return found
 
 
 def backfill_problem_locations(conn: sqlite3.Connection) -> int:
@@ -986,28 +1147,38 @@ def backfill_problem_locations(conn: sqlite3.Connection) -> int:
     the student made at the review gate. Runs at startup, does nothing on the second run,
     and never raises: this drives a click target on a page image.
     """
+    # One row per problem, in the order the sheet puts them in, which is what `_locate_all`
+    # needs to walk a page. `min(v.id)` collapses the several provenance rows a problem with
+    # several chunks carries; they all describe the same marker and all take the same box.
     rows = conn.execute(
-        "select v.id, v.document_id, v.page_number, p.label from artifact_provenance v "
-        "join artifact_parts p on p.id = v.part_id "
+        "select p.artifact_id, p.id as part_id, v.document_id, v.page_number, p.label "
+        "from artifact_provenance v join artifact_parts p on p.id = v.part_id "
         "where v.bbox is null and p.kind = ? and p.parent_part_id is null "
-        "and v.document_id is not null and v.page_number is not null",
+        "and v.document_id is not null and v.page_number is not null "
+        "group by p.id order by p.artifact_id, p.ordinal, min(v.id)",
         (artifacts.PROBLEM,),
     ).fetchall()
 
     located = 0
-    for row in rows:
-        found = _locate(
+    # One artifact at a time. Two solution sets over the same sheet hold the same problems
+    # on the same page, and walking both as one sequence would run the second set off the
+    # bottom of the page it shares with the first.
+    for _, group in groupby(rows, key=lambda row: int(row["artifact_id"])):
+        batch = list(group)
+        positions = _locate_all(
             conn,
-            int(row["document_id"]),
-            int(row["page_number"]),
-            str(row["label"] or ""),
+            [
+                (int(row["document_id"]), int(row["page_number"]), str(row["label"] or ""))
+                for row in batch
+            ],
         )
-        conn.execute(
-            "update artifact_provenance set bbox = ? where id = ?",
-            (json.dumps(list(found)), int(row["id"])),
-        )
-        if found:
-            located += 1
+        for row, found in zip(batch, positions, strict=True):
+            conn.execute(
+                "update artifact_provenance set bbox = ? where part_id = ? and bbox is null",
+                (json.dumps(list(found)), int(row["part_id"])),
+            )
+            if found:
+                located += 1
     conn.commit()
     return located
 
