@@ -142,11 +142,29 @@ thing that would make it available. It never renders as a failure of the documen
 ### The dropzone accepts images
 
 The rejected-type error names the accepted types, and there are now more of them: `PDF, TXT, MD,
-PNG, JPG, or WebP`. The idle copy is unchanged, because it already says `files or a folder` and
-does not enumerate.
+PNG, or JPG`. The idle copy is unchanged, because it already says `files or a folder` and does not
+enumerate.
+
+**WebP was in that list and has been removed**, because this PyMuPDF build refuses to decode one and
+accepting it would mean carrying a second image dependency for a format a student's scan is very
+unlikely to be in. Checked against a real `cwebp` file rather than against a format table. The rule
+this follows is the one ui-phase-1.md set for the `unsupported` popover: the interface does not
+promise a capability in order to look complete.
 
 A dropped image ingests through the normal pipeline and is a one-page document. It shows the same
 row, the same steps, and the page counter is absent, because one page is not progress.
+
+### What the backend now offers these screens
+
+Every screen in this document is still to be built. What exists is what they read and call:
+
+| Screen element | What it reads |
+| --- | --- |
+| Page counter | `stage_detail == "recognizing"`, plus `pages_done` and `pages_total` |
+| `PageFailureNotice` | `pages_failed`, only pages recognition tried and could not read |
+| `Read this document`, `Try those pages` | `POST /api/documents/{id}/recognize`, one call |
+| Whether either action is offered at all | `vision_supported` on the settings payload |
+| Whether it has already been asked for | `recognize` on the document payload |
 
 ## Screen: Document Outline
 

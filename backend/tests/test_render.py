@@ -11,7 +11,7 @@ import pymupdf
 import pytest
 
 from backend.core.errors import LyraError, NotFoundError
-from backend.rag import render
+from backend.rag import parse, render
 
 
 def _pdf(path: Path, pages: int = 3) -> Path:
@@ -146,3 +146,36 @@ def test_discarding_pages_clears_every_resolution(tmp_path: Path) -> None:
     render.discard_pages(1)
 
     assert not list(render.pages_dir(1).glob("*.png"))
+
+
+def test_an_uploaded_image_draws_as_its_only_page(tmp_path: Path) -> None:
+    """A photographed page is a one-page document, and the source pane shows it like one.
+
+    PyMuPDF opens a PNG or a JPG directly, so an image upload needs no separate path here
+    or in the parser: it is a document whose single page happens to have no text.
+    """
+    source = _pdf(tmp_path / "seed.pdf", pages=1)
+    image = tmp_path / "whiteboard.png"
+    with pymupdf.open(source) as document:
+        document[0].get_pixmap(dpi=100).save(image, output="png")
+
+    rendered = render.render_page(1, image, "image/png", 1)
+
+    assert rendered.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    with pytest.raises(NotFoundError):
+        render.render_page(1, image, "image/png", 2)
+
+
+def test_a_damaged_image_says_it_is_an_image_that_would_not_open(tmp_path: Path) -> None:
+    """Not the PDF message, which offers a password as the likely cause.
+
+    An image cannot be password protected, and sending someone to look for one they do not
+    have is worse than saying nothing.
+    """
+    broken = tmp_path / "scan.png"
+    broken.write_bytes(b"not a png")
+
+    with pytest.raises(LyraError) as caught:
+        render.render_page(1, broken, "image/png", 1)
+
+    assert caught.value.message == parse.UNREADABLE_IMAGE_MESSAGE

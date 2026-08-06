@@ -17,6 +17,8 @@ function document(id: number, filename: string, state: DocumentState = 'ready'):
     pages_total: 3,
     pages_done: 3,
     pages_skipped: 0,
+    pages_failed: 0,
+    recognize: false,
     error_message: null,
     created_at: '2026-08-04 00:00:00',
   }

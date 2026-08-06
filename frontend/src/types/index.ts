@@ -57,6 +57,13 @@ export interface DocumentRead {
   pages_total: number | null
   pages_done: number
   pages_skipped: number
+  /**
+   * Pages text recognition tried and could not read. A different fact from `pages_skipped`,
+   * which counts pages that had no text to find, and both can be true at once.
+   */
+  pages_failed: number
+  /** Whether this document has been asked to be read as images. */
+  recognize: boolean
   error_message: string | null
   created_at: string
 }
@@ -67,6 +74,8 @@ export interface DocumentStatus {
   pages_total: number | null
   pages_done: number
   pages_skipped: number
+  pages_failed: number
+  recognize: boolean
   error_message: string | null
 }
 
@@ -137,6 +146,9 @@ export interface SettingsRead {
   /** Null means nobody has asked this endpoint yet, which is not the same as a no. */
   tools_supported: boolean | null
   tools_message: string | null
+  /** Same three states, for whether the endpoint can read an image. */
+  vision_supported: boolean | null
+  vision_message: string | null
 }
 
 export interface SettingsUpdate {

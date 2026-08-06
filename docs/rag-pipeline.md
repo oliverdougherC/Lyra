@@ -11,15 +11,20 @@ Three models are involved, with strictly separate roles:
 |------|-------|---------|-------|--------------|
 | Embedding | `nomic-embed-text-v1.5` (GGUF) | llama.cpp, local | 1 | No |
 | Tutor | user's choice, then bundled | OpenAI-compatible endpoint | 1, bundled in 6 | Until Phase 6 |
-| Text recognition | bundled vision model, then `baidu/Unlimited-OCR` | llama.cpp, local | 3 | No |
+| Text recognition | the tutor model today, then `baidu/Unlimited-OCR` | endpoint now, llama.cpp later | 3 | No |
 
-Embedding and text recognition are infrastructure and always run locally. The tutor model is the
-product. See the Inference Posture section of [architecture.md](architecture.md) for the rules
-governing the transitional period before inference is bundled.
+Embedding is infrastructure and always runs locally. The tutor model is the product.
 
-**Text recognition is Phase 3 and is no longer gating.** Phase 1 and 2 accept text-based PDFs, TXT,
-and MD only. The OCR specification below is retained in full because the research behind it is
-load-bearing and was expensive to establish.
+Text recognition is the one role whose runtime is *transitional*, and the table says so rather than
+claiming the destination. It is meant to be local infrastructure, and it will be once inference is
+bundled in Phase 6. Until then there is no bundled vision model to route pages to, so recognition
+uses the endpoint the student configured, which is why it is opt-in per document and why it refuses
+an unacknowledged remote endpoint before the image is encoded. See the Inference Posture section of
+[architecture.md](architecture.md) for the rules governing this period.
+
+**Text recognition is built through the general path.** The specialist runtime specification below
+is retained in full because the research behind it is load-bearing and was expensive to establish,
+and because the specialist is the same interface with a different runtime rather than a rewrite.
 
 What changed: a vision-capable tutor model is now assumed, and it can transcribe pages itself.
 Bulk transcription therefore sits behind an interface with two implementations, and the choice
@@ -30,9 +35,10 @@ between them is a measurement rather than a prerequisite:
 | Bundled general vision model | No extra download, slower per page, weaker on dense layout and math | Homework and short scans, most of what users upload |
 | `Unlimited-OCR` specialist | Extra weights to ship and manage, far faster per page, better on multi-column text, tables, and math | Textbook-scale bulk ingestion, where throughput decides whether the feature is viable |
 
-Build the interface, wire the general model first, then time a real sample of pages and extrapolate
-to textbook scale. If bulk transcription is intolerable on modest hardware, the specialist earns its
-download. This removes the serving spike from the critical path without pretending it is settled.
+That plan was: build the interface, wire the general model first, then time a real sample and
+extrapolate. It has run. The general path reads a scanned document end to end at **13.8 seconds a
+page**, measured in Stage 2b, so the specialist is now justified by a number rather than by a
+worry, and the serving spike stayed off the critical path.
 
 **Text recognition is not only for scanned pages, and this is now the strongest argument for it.**
 PyMuPDF's text layer mangles dense mathematics. Phase 2 already paid for this once, at the
@@ -98,11 +104,20 @@ Stages 2 through 5 run in a background ingestion job. Upload returns immediately
 ### Stage 1: Upload
 
 **Currently accepted formats:**
-- PDF, text-based
+- PDF, text-based or scanned
 - Plain text (TXT, MD)
+- Images (PNG, JPG)
 
-**Phase 3 adds:** scanned PDFs and images (PNG, JPG, WebP).
 **Later:** Office documents (DOCX, PPTX).
+
+**WebP is not accepted, and that is a measurement rather than an omission.** It was listed here and
+in ui-phase-3.md alongside PNG and JPG. PyMuPDF 1.28.0 refuses to open a real `cwebp` file outright,
+so accepting one would mean carrying a second image dependency for a format a student's scan is very
+unlikely to be in. The dropzone names what actually works.
+
+An uploaded image needs no parse path of its own. PyMuPDF opens a PNG or a JPG as a one-page
+document whose page has no text, which is exactly the shape of a scanned page, so an image arrives
+at recognition the same way page 7 of a PDF does.
 
 A file whose extension is accepted but whose content cannot be read as text today is not an
 error in the usual sense. It is a document Lyra will support later, so it terminates in the
@@ -136,8 +151,15 @@ Outcome by document composition:
 | All pages scanned | `unsupported`, terminal, file retained |
 
 `unsupported` is not `failed`. It carries a distinct message telling the user the document needs
-text recognition, which is coming, and that the file has been kept so it can be processed later
-without re-uploading. Phase 3 re-ingests these documents in place.
+text recognition and that the file has been kept, and the file being kept is what makes recognition
+able to run over it in place rather than asking for the upload again.
+
+**This table is unchanged by recognition, and that is deliberate.** Recognition is opt-in per
+document, so a scanned upload still lands `unsupported` and a mixed one still lands `ready` with
+pages skipped. What changes is that both now have a way out: `POST /api/documents/{id}/recognize`.
+The reasoning is in Stage 2b, and the short version is that transcription is minutes of model time
+and, against a configured remote endpoint, page images of the student's own material leaving the
+machine. A capability arriving is not consent to use it on everything already on disk.
 
 ### Stage 2a: Structural Parsing (Phase 3)
 
@@ -263,14 +285,48 @@ count, and retrieval quality over 596 chunks has never been compared against ret
 
 ### Stage 2b: Text Recognition (Phase 3)
 
-Everything from here to the end of this stage is Phase 3 scope. It runs behind the transcription
-interface described at the top of this document, which the general vision model also implements.
+The general path is built. It runs behind the transcription interface described at the top of this
+document, and the `Unlimited-OCR` specialist below is the same interface with a different runtime.
 
 **Scanned pages and images**
 - Render to PNG at 300 DPI with PyMuPDF
-- Run Unlimited-OCR (see below)
-- Strip detection markers and regroup blocks
-- Output clean text with block structure
+- Transcribe through the configured vision model, or Unlimited-OCR (see below)
+- Splice the transcribed pages back into the parse, in page order
+- Chunk, embed, and store exactly as a text-layer page would be
+
+#### What the acceptance run measured
+
+`Fourier_Tables.pdf` is eight pages of a signals textbook appendix, scanned, with no text layer at
+all: every page extracts zero characters and Phase 1 correctly refused the whole document. Read
+through the general path against Qwen3.6 27B:
+
+| | |
+|---|---|
+| Pages recognized | 8 of 8, none failed |
+| Whole document, upload to `ready` | 110.8 s |
+| Per page | 13.8 s mean, 13.9 s median |
+| Result | `ready`, 9 chunks, `pages_skipped` 0 |
+
+**13.8 seconds a page, from a completely separate document, against the 13.4 the reference book's
+text-layer pages measured in Step 3.** Two different documents at two different densities landing
+within four percent of each other is the strongest evidence available that this rate is the model's
+and not the page's, which is what makes the extrapolation to a 608-page book worth stating: still
+about 2.3 hours, and still the argument for the specialist path.
+
+Read by eye rather than counted, which is the standard this project holds itself to on whether a
+reading is *right*. The transforms come back correct: `u(t)` maps to `1/(jw) + pi*delta(w)`,
+`t*exp(-at)u(t)` to `1/(a + jw)^2`, the DTFT of `a^n u[n]` to `1/(1 - a e^{-jW})`, Parseval in both
+domains. Running heads and page numbers 774 through 780 are transcribed in sequence, the
+"(continues on next page)" rule line survives, and a graphic on the opening page comes back as
+`[figure]` exactly as the prompt asks. Two-column tables are emitted as tables.
+
+**What it does not fix is ranking inside a dense reference table.** Each page is one chunk, and
+every page opens with the same running head, so the embeddings sit close together: asked for the
+transform of the unit step, the right page ranks 4th of 8. The document is searchable, which it was
+not before, and every page is reachable. But a page of LaTeX table markup is not prose and the
+chunker has no heading structure to cut it on. That is a chunking limit rather than a recognition
+one, it is recorded in feature-roadmap.md as its own item, and it is not what this stage set out to
+fix.
 
 #### The general path is not free, and "bundled" is Phase 6
 
@@ -302,18 +358,60 @@ that silently satisfied a recognition request would degrade transcription with n
 say so, and a page rendered at 300 DPI served to the source pane wastes several times the bytes. The
 DPI belongs in the cache path.
 
-#### Per-page state has nowhere to live yet
+#### Per-page state, which is where recognition lives
 
-Per-page progress and per-page retry are both listed as Phase 3 scope, and neither is possible
-against the current schema. `documents` carries `pages_total`, `pages_done`, and `pages_skipped`,
-and `pages_done` is written exactly once, at the end of a run: ui-phase-1.md documents this and
-deliberately shows a page count rather than a counter that would never move.
+`documents` carried `pages_total`, `pages_done`, and `pages_skipped`, and `pages_done` was written
+exactly once, at the end of a run. That was honest while every page of a document shared a single
+outcome: either the file parsed or it did not, and ui-phase-1.md deliberately showed a page count
+rather than a counter that would never move.
 
-Recognition changes that. A page is now a unit of work that can succeed, fail, or be retried on its
-own, which is a row rather than a column. This stage therefore introduces per-page rows carrying the
-page number, its state, and its error, and `pages_done` becomes a count over them rather than a
-number written at the end. A document whose page 7 failed is a document with 39 good pages and one
-retry, not a failed document.
+Recognition breaks that. A page costs seconds of model time, can fail on its own, and is worth
+retrying on its own, which makes it a row. `document_pages` carries the page number, its state, its
+error, and its transcription, and `pages_done` is now counted from it and committed after each page.
+A document whose page 7 failed is a document with 39 good pages and one retry.
+
+| Page state | Means |
+|---|---|
+| `text` | The page had an extractable text layer |
+| `scanned` | No text layer, and nothing has been asked to read it |
+| `recognized` | Read as an image, with the transcription stored on the row |
+| `failed` | Recognition was attempted and could not transcribe it |
+
+Four consequences fall straight out of the table, and they are the reason it is shaped this way.
+
+**A retry is the same operation as a first run.** Both mean "attempt every page not currently
+carrying text", which is `scanned` and `failed`, so `Read this document` and `Try those pages` are
+one endpoint and a retry never spends model time re-reading a page that worked.
+
+**Re-indexing never re-runs recognition.** The transcription lives on the row, and the bytes a
+document id points at do not change, so a re-parse splices the stored text back in. A page with a
+text layer is not stored, because re-extracting it costs well under a millisecond and a second copy
+is only somewhere for the truth to drift to.
+
+**A blank page is read, not failed.** An empty transcription is the correct reading of an empty
+page. It stays out of the chunker, because an empty chunk answers nothing and dilutes every search
+that touches it, and it stays out of the retry set, because reading it again returns the same
+nothing.
+
+**A run gives up rather than grinding through a dead endpoint.** Every page failing in sequence is
+not a document problem, it is the endpoint being down, and discovering that six hundred times costs
+the timeout on each one. After three consecutive failures the run stops; the pages it never reached
+stay `scanned`, which is the truth, and the retry picks them up.
+
+Recognition is **not** a fifth ingestion state. It runs inside `parsing` with `stage_detail` set to
+`recognizing`, which is what tells the interface its page counter may appear. ui-phase-3.md keeps
+four steps on screen for the product reason - there is text in the file or there is not, and either
+way what Lyra is doing is reading the document - and the schema agrees for a second reason: a
+two-hour transcription is then a long `parsing`, and `reconcile_interrupted` already knows what to
+do with a document caught mid-parse.
+
+Where all three outcomes of an unreadable document now land:
+
+| Situation | State | Message |
+|---|---|---|
+| Nobody has asked for it to be read | `unsupported` | The existing scanned-document line |
+| Asked, but no endpoint or an unacknowledged remote one | `unsupported` | The reason, which can be acted on |
+| Asked, ran, and every page failed | `failed` | Nothing was kept, so nothing to call ready |
 
 #### OCR runtime
 

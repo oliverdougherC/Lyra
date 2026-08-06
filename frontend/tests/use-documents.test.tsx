@@ -34,6 +34,8 @@ function documentStatus(state: DocumentState): DocumentStatus {
     pages_total: 10,
     pages_done: 10,
     pages_skipped: 0,
+    pages_failed: 0,
+    recognize: false,
     error_message: null,
   } as DocumentStatus
 }

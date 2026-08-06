@@ -30,6 +30,8 @@ function documentAt(state: DocumentState): DocumentRead {
     pages_total: 32,
     pages_done: 32,
     pages_skipped: 0,
+    pages_failed: 0,
+    recognize: false,
     error_message: null,
     created_at: '2026-08-05 09:00:00',
   }
@@ -42,6 +44,8 @@ function statusAt(state: DocumentState): DocumentStatus {
     pages_total: 32,
     pages_done: 32,
     pages_skipped: 0,
+    pages_failed: 0,
+    recognize: false,
     error_message: null,
   } as DocumentStatus
 }

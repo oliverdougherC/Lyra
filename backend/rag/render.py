@@ -19,7 +19,7 @@ import pymupdf
 
 from backend.config import settings
 from backend.core.errors import LyraError, NotFoundError
-from backend.rag.parse import PDF_MIME, UNREADABLE_PDF_MESSAGE
+from backend.rag.parse import PAGE_MIMES, unreadable_message
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,8 @@ def render_page(
     Args:
         document_id: Document the page belongs to, which names its cache directory.
         source: Path to the stored upload.
-        mime: The document's stored mime. Only PDFs rasterize.
+        mime: The document's stored mime. PDFs and uploaded images rasterize; text does
+            not.
         page_number: 1-based page number as the reader sees it.
         dpi: Resolution to rasterize at. `RENDER_DPI` for reading, `RECOGNITION_DPI` for
             transcription. Each resolution caches separately, so the two never collide.
@@ -67,10 +68,10 @@ def render_page(
         Path to the PNG on disk.
 
     Raises:
-        LyraError: The document is not a PDF, or the file could not be opened.
+        LyraError: The document has no pages to draw, or the file could not be opened.
         NotFoundError: The document has no such page.
     """
-    if mime != PDF_MIME:
+    if mime not in PAGE_MIMES:
         # TXT and MD have no pages to draw. The interface serves their extracted text
         # instead, which is the same anchor with a different surface.
         raise LyraError(NOT_RENDERABLE)
@@ -107,7 +108,7 @@ def render_page(
         # PyMuPDF raises several unrelated types and puts the absolute path in every
         # message, so the whole call is converted rather than filtered.
         logger.warning("Could not render page %s of document %s", page_number, document_id)
-        raise LyraError(UNREADABLE_PDF_MESSAGE) from exc
+        raise LyraError(unreadable_message(mime)) from exc
 
     return cached
 

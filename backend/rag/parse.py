@@ -1,13 +1,18 @@
-"""Text extraction for the formats Phase 1 accepts, with scanned-page detection.
+"""Text extraction for the formats Lyra accepts, with scanned-page detection.
 
-Phase 1 reads text-based PDFs, TXT, and MD. A page that yields almost no text is an
-image of text rather than text, and it is dropped here rather than embedded as an empty
-chunk: a scanned PDF would otherwise ingest "successfully" and then answer nothing.
-Callers distinguish "some pages were scanned" from "all of them were" by comparing
-`pages` against `pages_total`, which is the count before anything was dropped.
+Phase 1 read text-based PDFs, TXT, and MD. A page that yields almost no text is an image
+of text rather than text, and it is dropped here rather than embedded as an empty chunk: a
+scanned PDF would otherwise ingest "successfully" and then answer nothing. Callers
+distinguish "some pages were scanned" from "all of them were" by comparing `pages` against
+`pages_total`, which is the count before anything was dropped.
 
-OCR is Phase 3. When it lands it becomes an additional parse path here; nothing in this
-module assumes it exists.
+Phase 3 adds PNG and JPG uploads, which PyMuPDF opens as one-page documents, so they need
+no parse path of their own. They land here as a single page with no text at all, which is
+exactly what a scan is, and recognition picks them up from there.
+
+Recognition itself is deliberately not a parse path. It is minutes of model time rather
+than a decode, it is opt-in per document, and its results are spliced back in by
+`backend.core.recognition`. Nothing in this module knows it exists.
 """
 
 import logging
@@ -27,15 +32,37 @@ SCANNED_PAGE_MIN_CHARS = 20
 
 PDF_MIME = "application/pdf"
 TEXT_MIMES = frozenset({"text/plain", "text/markdown"})
-SUPPORTED_MIMES = frozenset({PDF_MIME, *TEXT_MIMES})
+
+# Images PyMuPDF decodes, checked against 1.28.0 rather than taken from its format list.
+#
+# WebP is deliberately absent, and this is a measured absence rather than an oversight.
+# ui-phase-3.md listed it among the accepted types; MuPDF's build here refuses a real
+# `cwebp` file outright, and the only way to accept one would be a new image dependency
+# carried for a format a student's scan is very unlikely to be in. The dropzone copy names
+# what actually works.
+IMAGE_MIMES = frozenset({"image/png", "image/jpeg"})
+
+# Every mime that rasterizes into pages, which is the same set `rag.render` will draw.
+PAGE_MIMES = frozenset({PDF_MIME, *IMAGE_MIMES})
+SUPPORTED_MIMES = frozenset({*PAGE_MIMES, *TEXT_MIMES})
 
 # Pages join with a blank line so that `full_text` reads as one document and a page break
 # never fuses the last line of one page onto the first line of the next.
 PAGE_SEPARATOR = "\n\n"
 
-UNSUPPORTED_MESSAGE = "Unsupported file type. Upload a PDF, TXT, or MD file."
+UNSUPPORTED_MESSAGE = "Unsupported file type. Upload a PDF, TXT, MD, PNG, or JPG file."
 UNREADABLE_PDF_MESSAGE = "This PDF could not be opened. It may be damaged or password protected."
+UNREADABLE_IMAGE_MESSAGE = "This image could not be opened. It may be damaged."
 UNREADABLE_FILE_MESSAGE = "This file could not be read."
+
+
+def unreadable_message(mime: str) -> str:
+    """What to tell the user when a file of this kind will not open.
+
+    A PDF that will not open may be password protected; an image cannot be, and telling
+    someone their PNG might need a password sends them looking for one.
+    """
+    return UNREADABLE_IMAGE_MESSAGE if mime in IMAGE_MIMES else UNREADABLE_PDF_MESSAGE
 
 
 @dataclass(frozen=True)
@@ -110,8 +137,8 @@ def parse_document(path: Path, mime: str) -> ParsedDocument:
             opened. The message is written for the user and never names the path.
     """
     outline: list[OutlineEntry] = []
-    if mime == PDF_MIME:
-        pages, outline = _read_pdf(path)
+    if mime in PAGE_MIMES:
+        pages, outline = _read_pages(path, mime)
     elif mime in TEXT_MIMES:
         pages = _read_text_file(path)
     else:
@@ -125,8 +152,13 @@ def is_scanned_page(text: str) -> bool:
     return len("".join(text.split())) < SCANNED_PAGE_MIN_CHARS
 
 
-def _read_pdf(path: Path) -> tuple[list[tuple[int, str]], list[OutlineEntry]]:
-    """Every PDF page as (1-based number, text), plus the document's own outline."""
+def _read_pages(path: Path, mime: str) -> tuple[list[tuple[int, str]], list[OutlineEntry]]:
+    """Every page as (1-based number, text), plus the document's own outline.
+
+    Serves images as well as PDFs, because PyMuPDF opens a PNG or a JPG as a one-page
+    document and asking it for the text of that page correctly returns nothing. An image
+    has no outline, and `get_toc` says so rather than failing.
+    """
     try:
         with pymupdf.open(path) as document:
             pages = [(number, page.get_text()) for number, page in enumerate(document, start=1)]
@@ -135,7 +167,7 @@ def _read_pdf(path: Path) -> tuple[list[tuple[int, str]], list[OutlineEntry]]:
         # PyMuPDF raises several unrelated types here (FileDataError, FileNotFoundError,
         # RuntimeError out of the C layer) and puts the absolute path in every message, so
         # the whole call is converted rather than filtered.
-        raise LyraError(UNREADABLE_PDF_MESSAGE) from exc
+        raise LyraError(unreadable_message(mime)) from exc
 
 
 def _read_text_file(path: Path) -> list[tuple[int, str]]:

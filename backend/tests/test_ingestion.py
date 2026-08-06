@@ -22,6 +22,7 @@ from backend.core.ingestion import (
     reconcile_interrupted,
     run_ingestion,
 )
+from backend.rag import parse
 from backend.rag.embed import EMBEDDING_DIM, EMBEDDING_MODEL
 from backend.rag.parse import PDF_MIME, UNREADABLE_PDF_MESSAGE
 from backend.storage.database import connect
@@ -309,7 +310,9 @@ def test_an_unsupported_mime_fails_rather_than_raising_out_of_the_worker(
 
     row = _document(db, document_id)
     assert row["state"] == "failed"
-    assert row["error_message"] == "Unsupported file type. Upload a PDF, TXT, or MD file."
+    # The parser's own message, so the answer does not depend on where the file was
+    # refused, and so this does not have to be edited every time a format is added.
+    assert row["error_message"] == parse.UNSUPPORTED_MESSAGE
 
 
 def test_a_document_deleted_before_its_turn_is_skipped(db: sqlite3.Connection) -> None:

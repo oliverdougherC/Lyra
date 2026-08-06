@@ -5,9 +5,16 @@ Everything slow happens there, and progress is visible only through `documents.s
 so each transition is committed as it happens rather than at the end.
 
 The pipeline has three outcomes. `ready` means searchable. `unsupported` means the file
-is a kind Lyra cannot read yet, in practice a scanned PDF: nothing went wrong, the
-feature is not built, and the file is kept so Phase 2 can re-ingest it in place.
+had no text to read, in practice a scanned PDF that nobody has asked Lyra to read yet:
+nothing went wrong, and the file is kept so recognition can be run over it in place.
 `failed` means something broke, and carries a message written for the user.
+
+Recognition sits inside the parsing stage rather than beside it, and that is deliberate on
+both sides. In the interface, ui-phase-3.md keeps four steps and renders recognition under
+Reading, because there is text in the file or there is not and either way what Lyra is
+doing is reading the document. In the schema, it means the state machine below is
+unchanged: a two-hour transcription is a long `parsing`, and `reconcile_interrupted`
+already knows what to do with a document caught mid-parse.
 """
 
 import logging
@@ -19,6 +26,7 @@ from pathlib import Path
 import sqlite_vec
 
 from backend.config import settings
+from backend.core import recognition
 from backend.core.consolidation import consolidate_class
 from backend.core.errors import LyraError
 from backend.core.profiles import extract_facts
@@ -130,7 +138,7 @@ def run_ingestion(document_id: int) -> None:
 def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
     """The state machine itself, committing at every transition."""
     document = conn.execute(
-        "select id, class_id, filename, stored_path, mime from documents where id = ?",
+        "select id, class_id, filename, stored_path, mime, recognize from documents where id = ?",
         (document_id,),
     ).fetchone()
     if document is None:
@@ -140,10 +148,21 @@ def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
     _set_state(conn, document_id, PARSING)
     parsed = parse_document(Path(document["stored_path"]), document["mime"])
     _record_page_counts(conn, document_id, parsed)
+    # Always, not only when recognition runs. The rows are what `pages_done` is counted from
+    # and what a later `Try those pages` reads, so a document has to have them before anyone
+    # asks for one to be read.
+    recognition.sync_pages(conn, document_id, parsed)
+
+    skipped = None
+    if document["recognize"]:
+        skipped = recognition.recognize_pages(conn, document, parsed)
+        parsed = recognition.merge_recognized(conn, document_id, parsed)
+        _record_page_counts(conn, document_id, parsed)
+
     if not parsed.pages:
-        # Every page was scanned. Terminal for now, and the file stays on disk so Phase 2
-        # can re-ingest it without asking the student to upload it again.
-        _mark_unsupported(conn, document_id)
+        # Nothing readable in the whole file. The file stays on disk either way, so the
+        # student can ask for it to be read once whatever stopped it is fixed.
+        _settle_unreadable(conn, document_id, skipped)
         return
 
     text = parsed.full_text
@@ -155,7 +174,7 @@ def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
     if not chunks:
         # Pages carried text but none of it survived chunking, so there is still nothing
         # to search. Same outcome and same message as a scan.
-        _mark_unsupported(conn, document_id)
+        _mark_unsupported(conn, document_id, SCANNED_MESSAGE)
         return
 
     _set_state(conn, document_id, EMBEDDING, doc_type)
@@ -328,11 +347,28 @@ def _record_page_counts(conn: sqlite3.Connection, document_id: int, parsed: Pars
     conn.commit()
 
 
-def _mark_unsupported(conn: sqlite3.Connection, document_id: int) -> None:
-    """Terminal, but not a failure: the file is kept for Phase 2."""
+def _settle_unreadable(conn: sqlite3.Connection, document_id: int, skipped: str | None) -> None:
+    """Land a document that yielded no text at all, saying which kind of nothing it was.
+
+    Three different situations end up here and they are not the same fact. A document
+    recognition was never asked to read is `unsupported`, which is where it has always
+    been. A document where recognition ran and every page failed is `failed`, because
+    something was tried and did not work and there is nothing to keep. A document where
+    recognition was asked for but could not start - no endpoint, or a remote one the
+    student has not acknowledged - is `unsupported` again, but carrying the reason, since
+    that reason is the one thing the student can act on.
+    """
+    if recognition.failed_page_count(conn, document_id):
+        _mark_failed(conn, document_id, PARSING, recognition.ALL_PAGES_FAILED_MESSAGE)
+        return
+    _mark_unsupported(conn, document_id, recognition.skip_message(skipped) or SCANNED_MESSAGE)
+
+
+def _mark_unsupported(conn: sqlite3.Connection, document_id: int, message: str) -> None:
+    """Terminal, but not a failure: the file is kept so it can be read later."""
     conn.execute(
         "update documents set state = ?, stage_detail = null, error_message = ? where id = ?",
-        (UNSUPPORTED, SCANNED_MESSAGE, document_id),
+        (UNSUPPORTED, message, document_id),
     )
     conn.commit()
 

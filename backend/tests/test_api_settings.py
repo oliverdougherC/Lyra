@@ -13,7 +13,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.api import routes_settings
-from backend.core.app_settings import update_settings_row
+from backend.core.app_settings import get_settings_row, update_settings_row
+from backend.llm import client as client_module
 from backend.storage import secrets
 from backend.storage.database import connect, get_db
 
@@ -195,3 +196,37 @@ def test_an_unrelated_setting_leaves_tool_support_alone(
 
     assert body["tools_supported"] is True
     assert body["tools_message"] == "It can."
+
+
+def test_the_vision_probe_is_recorded_so_recognition_need_not_ask_again(
+    client: TestClient, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stored, so a document row can offer or withhold recognition without a round trip."""
+    client.put("/api/settings", json={"endpoint_url": "http://127.0.0.1:8080/v1"})
+
+    async def probe(
+        endpoint: str, api_key: str | None, model: str | None
+    ) -> client_module.VisionSupport:
+        return client_module.VisionSupport(ok=False, message="It answered 00000.")
+
+    monkeypatch.setattr(client_module, "probe_vision_support", probe)
+    body = client.post("/api/settings/test-vision").json()
+
+    assert body == {"ok": False, "message": "It answered 00000."}
+    row = get_settings_row(db)
+    # False, not null: this endpoint was asked and cannot see, which is an ordinary
+    # configuration rather than an error, and the interface says so plainly.
+    assert (row["vision_supported"], row["vision_message"]) == (0, "It answered 00000.")
+
+
+def test_repointing_the_endpoint_forgets_what_was_measured_about_vision(
+    client: TestClient, db: sqlite3.Connection
+) -> None:
+    """The same rule as tool support: vision is a property of the server and model."""
+    client.put("/api/settings", json={"endpoint_url": "http://127.0.0.1:8080/v1"})
+    update_settings_row(db, {"vision_supported": 1, "vision_message": "It read it."})
+
+    body = client.put("/api/settings", json={"model": "some-other-model"}).json()
+
+    assert body["vision_supported"] is None
+    assert body["vision_message"] is None

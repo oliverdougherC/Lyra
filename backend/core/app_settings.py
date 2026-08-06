@@ -23,13 +23,16 @@ UPDATABLE_COLUMNS = frozenset(
         "embedding_dim",
         "tools_supported",
         "tools_message",
+        "vision_supported",
+        "vision_message",
     }
 )
 
 # Changing either of these invalidates what was measured about the endpoint. Tool support
-# is a property of the server and the model together, so a probe result from the previous
-# pair says nothing about the new one and must not be carried over.
-_TOOL_PROBE_INPUTS = ("endpoint_url", "model")
+# and vision are both properties of the server and the model together, so a probe result
+# from the previous pair says nothing about the new one and must not be carried over.
+_PROBE_INPUTS = ("endpoint_url", "model")
+_PROBE_RESULTS = ("tools_supported", "tools_message", "vision_supported", "vision_message")
 
 EXTRACTION_DISABLED = "extraction_disabled"
 NO_ENDPOINT = "no_endpoint"
@@ -74,8 +77,8 @@ def update_settings_row(conn: sqlite3.Connection, values: dict[str, object]) -> 
     if _changes_endpoint(conn, values):
         # Forgotten rather than re-probed here: probing is a network call and this is a
         # synchronous write on the settings screen. The next solve asks again.
-        values.setdefault("tools_supported", None)
-        values.setdefault("tools_message", None)
+        for column in _PROBE_RESULTS:
+            values.setdefault(column, None)
 
     # Only the column names reach the SQL text, and each has just been checked against
     # the allowlist above. Every value is bound.
@@ -90,7 +93,7 @@ def update_settings_row(conn: sqlite3.Connection, values: dict[str, object]) -> 
 def _changes_endpoint(conn: sqlite3.Connection, values: dict[str, object]) -> bool:
     """Whether this write points the tutor at a different server or model."""
     row = get_settings_row(conn)
-    return any(column in values and values[column] != row[column] for column in _TOOL_PROBE_INPUTS)
+    return any(column in values and values[column] != row[column] for column in _PROBE_INPUTS)
 
 
 def resolve_tutor_config(conn: sqlite3.Connection) -> TutorConfig:

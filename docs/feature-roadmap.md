@@ -444,7 +444,7 @@ carries 105 distinct real section titles where the regex produced dot leaders an
       matrix-heavy pages. If it wins, transcription is a quality feature for every document
 - [x] Render for recognition at 300 DPI, cached separately from the 144 DPI the source pane reads.
       One cache entry serving both would silently degrade whichever asked second
-- [ ] Route scanned pages through the same interface, and time a real sample to extrapolate to
+- [x] Route scanned pages through the same interface, and time a real sample to extrapolate to
       textbook scale. If bulk transcription through the general model is too slow on modest
       hardware, the specialist earns its download
 
@@ -461,18 +461,35 @@ scanned-document feature. What it is not is free: **13.4 seconds a page**. A sca
 is under a minute, a lab handout a few minutes, and a 608-page textbook is 2.3 hours. That is the
 case for the specialist path stated as a measurement, and it is why transcription has to be opt-in
 per document rather than something ingestion decides for the student.
-- [ ] Per-page rows carrying page number, state, and error, so `pages_done` becomes a count rather
+- [x] Per-page rows carrying page number, state, and error, so `pages_done` becomes a count rather
       than a number written once at the end. Per-page progress and per-page retry are both
       impossible without this
+- [x] Mixed documents handled per page. Only the pages without text are sent, so the pages that
+      already read perfectly well never cost model time
+- [x] Re-ingest documents previously marked `unsupported`. `POST /api/documents/{id}/recognize`
+      serves this and the per-page retry, because they are one operation: attempt every page not
+      currently carrying text
+- [x] Accept PNG and JPG uploads. **Not WebP**, which was specified here and turns out not to be
+      decodable by this PyMuPDF build, so accepting it would mean a second image dependency for a
+      format a scan is unlikely to be in. Checked rather than assumed, and the specs now say so
 - [ ] Unlimited-OCR through llama.cpp, page-batched, as the specialist path. Resolve the serving
       spike documented in rag-pipeline.md and record the outcome there
 - [ ] Pin a llama.cpp build and record the commit. `scripts/fetch_models.py` pins a release tag
       today, which is not the same thing
 - [ ] Model download and management for the OCR weights, with progress and disk-space checks
-- [ ] Accept PNG, JPG, and WebP uploads
-- [ ] Re-ingest documents previously marked `unsupported`, which the backend route already supports
-      and the interface offers no way to reach
-- [ ] Mixed documents handled per page, so a scan-and-text hybrid works
+- [ ] Chunk a dense reference table as something other than one chunk a page. The recognition
+      acceptance run made this visible: eight pages of transform tables come back correct and
+      searchable, but every page opens with the same running head and carries no headings to cut
+      on, so the right page for "the Fourier transform of a unit step" ranks 4th of 8. A chunking
+      fault rather than a recognition one, and unrelated to whether the page was scanned
+
+**What the recognition acceptance run found.** `Fourier_Tables.pdf`, eight scanned pages with no
+text layer at all, is `ready` and searchable in 110.8 seconds: **13.8 seconds a page**, against the
+13.4 the reference book's text-layer pages measured in step 3. Two unrelated documents at different
+densities landing within four percent of each other says the rate belongs to the model rather than
+to the page, which is what makes the 2.3-hour figure for a 608-page book worth quoting. The
+transforms are right where they are checkable by hand, the running heads carry page numbers 774
+through 780 in sequence, and a graphic comes back as `[figure]` as the prompt asks.
 
 **Note on ordering.** OCR was previously the gating item of its own phase, on the strength of an
 unmerged upstream dependency and multi-GB weights. It is no longer gating: it becomes a measured

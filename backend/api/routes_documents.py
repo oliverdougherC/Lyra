@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.config import settings
+from backend.core import recognition
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import ConflictError, LyraError, NotFoundError
 from backend.core.ingestion import PENDING, delete_chunks, enqueue
@@ -41,10 +42,18 @@ MAX_TEXT_CHARS = 200_000
 # The extension decides the mime, not `UploadFile.content_type`: browsers send
 # `application/octet-stream`, `text/x-markdown`, or nothing at all for `.md`, so trusting
 # the header would reject files that parse perfectly well.
+#
+# An uploaded image is a one-page scan and ingests through the ordinary pipeline: PyMuPDF
+# opens it as a one-page document with no text, which is exactly what a scanned page is.
+# WebP is not here because the PyMuPDF build refuses to decode one, which is checked rather
+# than assumed. See `rag.parse.IMAGE_MIMES`.
 MIME_BY_SUFFIX = {
     ".pdf": PDF_MIME,
     ".txt": "text/plain",
     ".md": "text/markdown",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
 }
 
 _UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
@@ -58,9 +67,19 @@ IN_USE_MESSAGE = (
     "Delete those first, or upload the file to the other class instead."
 )
 
+# Counted rather than stored, so it cannot drift from the page rows it describes. A
+# correlated subquery over a table keyed on (document_id, page_number) is an index seek per
+# document, which is what the list screen already costs.
+_PAGES_FAILED_COLUMN = (
+    # The only value reaching the SQL text is a module constant of this codebase's own.
+    f"(select count(*) from document_pages p where p.state = '{recognition.FAILED}' "  # noqa: S608
+    "and p.document_id = documents.id) as pages_failed"
+)
+
 _DOCUMENT_COLUMNS = (
     "id, class_id, filename, mime, byte_size, state, stage_detail, "
-    "pages_total, pages_done, pages_skipped, error_message, created_at"
+    "pages_total, pages_done, pages_skipped, error_message, created_at, recognize, "
+    + _PAGES_FAILED_COLUMN
 )
 
 
@@ -80,6 +99,12 @@ class DocumentRead(BaseModel):
     pages_total: int | None
     pages_done: int
     pages_skipped: int
+    # Pages recognition tried and could not read. A different fact from `pages_skipped`,
+    # which counts pages that had no text to find, and both can be true at once: the
+    # document is still `ready` and `PageFailureNotice` reports this quietly beside it.
+    pages_failed: int
+    # Whether the student has asked for this document to be read as images.
+    recognize: bool
     error_message: str | None
     created_at: str
 
@@ -112,6 +137,8 @@ class StatusRead(BaseModel):
     pages_total: int | None
     pages_done: int
     pages_skipped: int
+    pages_failed: int
+    recognize: bool
     error_message: str | None
 
 
@@ -242,6 +269,47 @@ def reingest_document(document_id: int, conn: DbConn) -> dict[str, object]:
     conn.execute(
         "update documents set state = ?, stage_detail = null, error_message = null, "
         "pages_done = 0 where id = ?",
+        (PENDING, document_id),
+    )
+    conn.commit()
+
+    enqueue(document_id)
+    return _document_row(conn, document_id)
+
+
+@router.post(
+    "/documents/{document_id}/recognize",
+    response_model=DocumentRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def recognize_document(document_id: int, conn: DbConn) -> dict[str, object]:
+    """Read this document's unreadable pages as images, and index what they say.
+
+    One endpoint serves both affordances in ui-phase-3.md, because they are one operation.
+    `Read this document` on a scanned upload and `Try those pages` on a document with three
+    failed pages both mean "attempt every page that does not currently have text", and the
+    page rows already know which those are. Pages that worked are not touched, so a retry
+    never spends model time re-reading them.
+
+    Nothing here transcribes on the student's behalf. Recognition is minutes of model time
+    per document and, against a configured remote endpoint, it sends page images of the
+    student's own material somewhere, so it happens when it is asked for and not before.
+    The flag stays set afterwards: it is a property of the document, so a later re-index
+    keeps reading it the way the student asked for.
+    """
+    document = _document_row(conn, document_id)
+    # The worker is reading this row and about to write its state, and the `pending` set
+    # below would be overwritten by whatever it lands in.
+    if document["state"] not in TERMINAL_STATES:
+        raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
+
+    delete_chunks(conn, document_id)
+    # Deliberately no `render.discard_pages` here, unlike the re-ingest below. The rendered
+    # pages are what recognition reads, they were rendered from bytes that have not changed,
+    # and throwing them away would make every retry pay to rasterize the document again.
+    conn.execute(
+        "update documents set recognize = 1, state = ?, stage_detail = null, "
+        "error_message = null, pages_done = 0 where id = ?",
         (PENDING, document_id),
     )
     conn.commit()

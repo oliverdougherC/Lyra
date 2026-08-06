@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from backend.api import routes_documents
 from backend.config import settings
 from backend.core.errors import LyraError
+from backend.rag import parse, render
 from backend.storage.database import connect, get_db
 
 
@@ -222,3 +223,103 @@ def test_move_to_an_unknown_class_is_a_404(
 
     assert response.status_code == 404
     assert db.execute("select class_id from documents").fetchone()[0] == class_id
+
+
+def test_recognize_marks_the_document_and_queues_it(
+    client: TestClient, db: sqlite3.Connection, class_id: int, no_worker: list[int]
+) -> None:
+    """The one action behind both `Read this document` and `Try those pages`."""
+    document_id = _document(db, class_id, state="unsupported")
+
+    response = client.post(f"/api/documents/{document_id}/recognize")
+
+    assert response.status_code == 202
+    assert response.json()["recognize"] is True
+    assert no_worker == [document_id]
+    row = db.execute(
+        "select state, recognize from documents where id = ?", (document_id,)
+    ).fetchone()
+    assert (row["state"], row["recognize"]) == ("pending", 1)
+
+
+def test_recognize_keeps_the_rendered_pages_it_is_about_to_read(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """Unlike a re-ingest, which discards them.
+
+    The rendered pages are recognition's own input, they came from bytes that have not
+    changed, and throwing them away would make every retry pay to rasterize the document
+    again at 300 dpi.
+    """
+    document_id = _document(db, class_id, state="ready")
+    rendered = render.page_path(document_id, 1, render.RECOGNITION_DPI)
+    rendered.parent.mkdir(parents=True, exist_ok=True)
+    rendered.write_bytes(b"\x89PNG\r\n\x1a\n rendered")
+
+    client.post(f"/api/documents/{document_id}/recognize")
+
+    assert rendered.exists()
+
+
+def test_recognize_refuses_a_document_that_is_still_processing(
+    client: TestClient, db: sqlite3.Connection, class_id: int, no_worker: list[int]
+) -> None:
+    # The worker is reading this row and about to write its state, which would overwrite
+    # the `pending` this would set.
+    document_id = _document(db, class_id, state="embedding")
+
+    response = client.post(f"/api/documents/{document_id}/recognize")
+
+    assert response.status_code == 409
+    assert no_worker == []
+    assert db.execute("select recognize from documents").fetchone()[0] == 0
+
+
+def test_pages_that_could_not_be_read_are_counted_for_the_row(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """`PageFailureNotice` needs a number, and it is a different number from `pages_skipped`.
+
+    Both can be true of the same document: pages that had no text to find, and pages
+    recognition tried and could not transcribe.
+    """
+    document_id = _document(db, class_id, state="ready")
+    db.executemany(
+        "insert into document_pages (document_id, page_number, state) values (?, ?, ?)",
+        [(document_id, 1, "text"), (document_id, 2, "failed"), (document_id, 3, "failed")],
+    )
+    db.commit()
+
+    body = client.get(f"/api/classes/{class_id}/documents").json()[0]
+
+    assert body["pages_failed"] == 2
+
+
+def test_an_image_upload_is_accepted(
+    client: TestClient, class_id: int, no_worker: list[int]
+) -> None:
+    """A scan photographed rather than scanned is still a scan."""
+    response = client.post(
+        f"/api/classes/{class_id}/documents",
+        files={"file": ("whiteboard.PNG", b"\x89PNG\r\n\x1a\n", "application/octet-stream")},
+    )
+
+    assert response.status_code == 202
+    # The extension decides the mime, not the header the browser guessed.
+    assert response.json()["mime"] == "image/png"
+    assert no_worker == [response.json()["id"]]
+
+
+def test_a_webp_upload_is_refused_naming_the_types_that_work(
+    client: TestClient, class_id: int
+) -> None:
+    """WebP is absent because this PyMuPDF build will not decode one, which is checked
+    rather than assumed. The error names what actually works."""
+    response = client.post(
+        f"/api/classes/{class_id}/documents",
+        files={"file": ("scan.webp", b"RIFF....WEBP", "image/webp")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == parse.UNSUPPORTED_MESSAGE
+    assert "PNG" in response.json()["detail"]

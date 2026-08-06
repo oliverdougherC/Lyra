@@ -48,8 +48,9 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backend.api.routes_documents import MIME_BY_SUFFIX  # noqa: E402
 from backend.config import settings  # noqa: E402
-from backend.core import ingestion  # noqa: E402
+from backend.core import ingestion, recognition  # noqa: E402
 from backend.core.app_settings import resolve_tutor_config  # noqa: E402
 from backend.llm import client  # noqa: E402
 from backend.rag import render, transcribe  # noqa: E402
@@ -377,11 +378,14 @@ def _ingest_one(conn: sqlite3.Connection, class_id: int, path: Path) -> dict[str
 def _upload(conn: sqlite3.Connection, class_id: int, path: Path) -> int:
     """Store one file the way the upload route does, and return its document id."""
     payload = path.read_bytes()
+    # The route's own map rather than a second copy of it, so an image the product accepts
+    # is an image the harness accepts, and neither can drift from the other.
+    mime = MIME_BY_SUFFIX.get(path.suffix.lower(), PDF_MIME)
     document_id = int(
         conn.execute(
             "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
             "values (?, ?, '', ?, ?, ?)",
-            (class_id, path.name, PDF_MIME, len(payload), ingestion.PENDING),
+            (class_id, path.name, mime, len(payload), ingestion.PENDING),
         ).lastrowid
         or 0
     )
@@ -699,6 +703,169 @@ def _write_comparison(workspace: Workspace, name: str, results: list[dict[str, o
     (workspace.root / "transcription.md").write_text("\n".join(lines), encoding="utf-8")
 
 
+@contextmanager
+def _timed_pages(records: list[dict[str, object]]) -> Iterator[None]:
+    """Time each page of a recognition run, from inside the run the product performs.
+
+    Wrapped at `_read_one_page` rather than at `transcribe_page` because that is the layer
+    that still knows which page it is holding: the transcription interface takes an image
+    and nothing else, deliberately, so the page number is not recoverable below it.
+    """
+    original = recognition._read_one_page  # noqa: SLF001
+
+    def call(
+        config: object,
+        remote_ack: bool,
+        document_id: int,
+        source: Path,
+        mime: str,
+        page_number: int,
+    ) -> str:
+        started = time.monotonic()
+        try:
+            text = original(config, remote_ack, document_id, source, mime, page_number)
+        except Exception as exc:
+            records.append(
+                {
+                    "page": page_number,
+                    "seconds": round(time.monotonic() - started, 1),
+                    "error": str(exc)[:200],
+                    "text": "",
+                    "shape": _text_shape(""),
+                }
+            )
+            raise
+        records.append(
+            {
+                "page": page_number,
+                "seconds": round(time.monotonic() - started, 1),
+                "error": None,
+                "text": text,
+                "shape": _text_shape(text),
+            }
+        )
+        return text
+
+    try:
+        recognition._read_one_page = call  # type: ignore[assignment]  # noqa: SLF001
+        yield
+    finally:
+        recognition._read_one_page = original  # type: ignore[assignment]  # noqa: SLF001
+
+
+def cmd_recognize(args: argparse.Namespace) -> int:
+    """Ingest a scanned document with recognition on, and time it page by page.
+
+    This is the end-to-end run rather than the interface in isolation, because what is
+    being measured is a document becoming searchable rather than a page becoming text. What
+    it answers is whether the general vision path is fast enough to be the shipped default
+    for a document a student would actually upload, and what the same rate would cost on a
+    book.
+    """
+    workspace = Workspace(Path(args.workspace).resolve())
+    conn = prepare(workspace, Path(args.source_db))
+    if args.no_extraction:
+        conn.execute("update settings set extraction_enabled = 0 where id = 1")
+        conn.commit()
+    class_id = _class_id(conn, args.class_name)
+
+    path = Path(args.document).resolve()
+    if not path.is_file():
+        raise SystemExit(f"Not a file: {path}")
+
+    config = resolve_tutor_config(conn)
+    support = asyncio.run(
+        client.probe_vision_support(config.endpoint_url, config.api_key, config.model)
+    )
+    print(f"vision probe: {'ok' if support.ok else 'unavailable'} - {support.message}\n")
+    if not support.ok:
+        raise SystemExit("The configured endpoint cannot read images, so there is nothing to time.")
+
+    document_id = _upload(conn, class_id, path)
+    # The one thing the student's explicit action does, done here explicitly for the same
+    # reason: nothing transcribes without being asked.
+    conn.execute("update documents set recognize = 1 where id = ?", (document_id,))
+    conn.commit()
+
+    pages: list[dict[str, object]] = []
+    clock = StageClock()
+    started = time.monotonic()
+    with _timed_pages(pages), _timed_stages(clock):
+        ingestion.run_ingestion(document_id)
+    elapsed = time.monotonic() - started
+
+    row = conn.execute(
+        "select state, error_message, pages_total, pages_done, pages_skipped "
+        "from documents where id = ?",
+        (document_id,),
+    ).fetchone()
+    states = {
+        str(state): int(count)
+        for state, count in conn.execute(
+            "select state, count(*) from document_pages where document_id = ? group by state",
+            (document_id,),
+        )
+    }
+    read = [entry for entry in pages if entry["error"] is None]
+    seconds = [float(entry["seconds"]) for entry in read]
+
+    record = {
+        "document_id": document_id,
+        "filename": path.name,
+        "state": row["state"],
+        "error": row["error_message"],
+        "pages_total": row["pages_total"],
+        "pages_done": row["pages_done"],
+        "pages_skipped": row["pages_skipped"],
+        "page_states": states,
+        "seconds": round(elapsed, 1),
+        "stage_seconds": clock.rounded(),
+        "seconds_per_page": round(statistics.mean(seconds), 1) if seconds else None,
+        "median_seconds_per_page": round(statistics.median(seconds), 1) if seconds else None,
+        "pages": pages,
+        **_chunk_stats(conn, document_id),
+    }
+    workspace.write("recognition", record)
+    _write_recognition(workspace, path.stem, record)
+
+    for entry in pages:
+        note = f" FAILED {entry['error']}" if entry["error"] else ""
+        shape = entry["shape"]
+        print(f"page {entry['page']}: {entry['seconds']}s, {shape['characters']} chars{note}")
+    print(
+        f"\n{path.name}: {row['state']} in {record['seconds']}s, "
+        f"{record['chunk_count']} chunks, {states}"
+    )
+    rate, median = record["seconds_per_page"], record["median_seconds_per_page"]
+    if rate is not None:
+        print(f"{rate}s a page (median {median}s)")
+    print(f"\nWhat every page was read as: {workspace.root / 'recognition.md'}")
+    conn.close()
+    return 0
+
+
+def _write_recognition(workspace: Workspace, name: str, record: dict[str, object]) -> None:
+    """Write every recognized page out to be read by a person.
+
+    Same standard as the transcription comparison: the counts are evidence and not a
+    verdict, and whether a page was read correctly is a question only reading it answers.
+    """
+    lines = [f"# {name} as recognition read it", ""]
+    for entry in record["pages"]:  # type: ignore[union-attr]
+        lines += [
+            f"## Page {entry['page']}",
+            "",
+            f"Read in {entry['seconds']}s. {entry['shape']}."
+            + (f" FAILED: {entry['error']}" if entry["error"] else ""),
+            "",
+            "```",
+            str(entry["text"]).strip() or "(nothing returned)",
+            "```",
+            "",
+        ]
+    (workspace.root / "recognition.md").write_text("\n".join(lines), encoding="utf-8")
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Print what the recorded runs say, which is the only output anyone reads twice."""
     workspace = Workspace(Path(args.workspace).resolve())
@@ -803,6 +970,16 @@ def main(argv: list[str] | None = None) -> int:
     reading.add_argument("--document", help="Which ingested document, by stem")
     reading.add_argument("--pages", nargs="+", type=int, default=list(DEFAULT_TRANSCRIBE_PAGES))
     reading.set_defaults(func=cmd_transcribe)
+
+    recognize = subparsers.add_parser(
+        "recognize", help="Ingest a scanned document with recognition on, timed page by page"
+    )
+    recognize.add_argument("document", help="Path to the scanned file")
+    recognize.add_argument("--class-name", default="Evaluation")
+    recognize.add_argument(
+        "--no-extraction", action="store_true", help="Skip the profile extraction stage"
+    )
+    recognize.set_defaults(func=cmd_recognize)
 
     report = subparsers.add_parser("report", help="Summarise the recorded runs")
     report.set_defaults(func=cmd_report)

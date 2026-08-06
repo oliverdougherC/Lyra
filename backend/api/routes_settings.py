@@ -45,6 +45,11 @@ class SettingsRead(BaseModel):
     # student different things.
     tools_supported: bool | None
     tools_message: str | None
+    # The same three states, for the same reason. Without vision, scanned documents cannot
+    # be read at all, and the interface says so plainly instead of offering an action that
+    # would fail one page at a time.
+    vision_supported: bool | None
+    vision_message: str | None
 
 
 class SettingsUpdate(BaseModel):
@@ -73,6 +78,13 @@ class ConnectionTestResult(BaseModel):
 
 class ToolSupportResult(BaseModel):
     """Whether this endpoint can run the checks Lyra verifies solutions with."""
+
+    ok: bool
+    message: str
+
+
+class VisionSupportResult(BaseModel):
+    """Whether this endpoint can read an image, which is what recognition needs."""
 
     ok: bool
     message: str
@@ -108,6 +120,8 @@ def _settings_response(row: sqlite3.Row) -> SettingsRead:
         embedding_dim=row["embedding_dim"],
         tools_supported=None if row["tools_supported"] is None else bool(row["tools_supported"]),
         tools_message=row["tools_message"],
+        vision_supported=None if row["vision_supported"] is None else bool(row["vision_supported"]),
+        vision_message=row["vision_message"],
     )
 
 
@@ -171,6 +185,26 @@ async def test_endpoint_tools(conn: DbConn) -> ToolSupportResult:
         conn, {"tools_supported": int(support.ok), "tools_message": support.message}
     )
     return ToolSupportResult(ok=support.ok, message=support.message)
+
+
+@router.post("/settings/test-vision", response_model=VisionSupportResult)
+async def test_endpoint_vision(conn: DbConn) -> VisionSupportResult:
+    """Send the endpoint one small rendered image and check it read the number on it.
+
+    A real inference call, and it has to be one that can be marked right or wrong. A server
+    with no vision path still accepts a content-part array and answers from the text half,
+    so "the request did not fail" proves nothing at all. The probe draws a five-digit number
+    and asks for it back.
+
+    Stored, so recognition can offer or withhold itself without a network round trip on
+    every document row.
+    """
+    config = resolve_tutor_config(conn)
+    support = await client.probe_vision_support(config.endpoint_url, config.api_key, config.model)
+    update_settings_row(
+        conn, {"vision_supported": int(support.ok), "vision_message": support.message}
+    )
+    return VisionSupportResult(ok=support.ok, message=support.message)
 
 
 @router.get("/settings/models", response_model=ModelList)
