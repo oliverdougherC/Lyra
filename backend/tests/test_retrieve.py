@@ -112,7 +112,10 @@ def test_equal_similarity_ranks_the_newer_document_first(
 
     assert [chunk.document_id for chunk in result.chunks] == [newer, older]
     assert result.chunks[0].similarity == pytest.approx(result.chunks[1].similarity)
-    assert result.chunks[0].score > result.chunks[1].score
+    # Under fusion the two RRF contributions of such a pair can tie exactly; the order
+    # above is then decided by the vector rank, which is where recency now acts. The
+    # served order is the contract; the fused scores may tie, but never invert it.
+    assert result.chunks[0].score >= result.chunks[1].score
 
 
 def test_recency_does_not_outrank_a_clearly_better_match(
@@ -257,7 +260,10 @@ def test_a_matched_problem_part_pulls_in_the_rest_of_the_problem(
         part_index=0,
     )
 
-    result = retrieve(db, class_id, "how do I prove the bound", 1000)
+    # The query shares no words with the sibling on purpose: under hybrid retrieval a
+    # lexical match would rank the sibling in the fused top-k on its own merits, and it
+    # would arrive as a candidate rather than by expansion, which is not what is tested.
+    result = retrieve(db, class_id, "how do I prove this", 1000)
 
     # More chunks than one KNN can return, so the extra one arrived by expansion.
     assert len(result.chunks) == retrieve_module.K + 1
@@ -614,11 +620,12 @@ def test_a_reranker_that_fails_leaves_the_search_order_intact(
     assert len(result.chunks) == retrieve_module.K
 
 
-def test_without_a_reranker_the_search_is_not_widened(
+def test_without_a_reranker_the_served_list_is_still_cut_to_k(
     db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The surplus would go straight into the budget, and the turn would be built from
-    chunks the search was never confident about. That is a different product."""
+    """Fusion always fetches wide, but only the fused top-k is served: the surplus is
+    ranked material for the fusion, not context for the turn. More than k served would
+    build the turn from chunks the search was never confident about."""
     monkeypatch.setattr(retrieve_module, "rerank_server", type("Stub", (), {"available": False})())
     monkeypatch.setattr(
         retrieve_module,

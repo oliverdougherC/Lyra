@@ -9,6 +9,13 @@ picks the `k` that are returned. See `rag/rerank.py` for why the second model ex
 short, the embedder has to summarise a passage before it has seen the question, and a
 class is full of documents that only differ once you have.
 
+The search is hybrid. Beside the vectors, an FTS5 index over the same chunks (migration
+015) ranks by BM25, and reciprocal rank fusion merges the two rankings before any
+reranking. The case that forced it: a problem set and its answer key restate every
+question verbatim, so the embedder cannot tell them apart and the key sat outside the top
+128 neighbours, beyond any reordering. The words being identical is the textbook case for
+lexical matching.
+
 Zero chunks is a valid result. A class with nothing indexed, or a question no chunk
 answers, produces an empty `RetrievalResult` and the turn is built with no context
 block. It is not an error and must not be reported as one.
@@ -22,14 +29,15 @@ from datetime import UTC, datetime
 import sqlite_vec
 
 from backend.llm.rerank_server import rerank_server
+from backend.rag.chunk import SOLUTIONS
 from backend.rag.embed import embed_query
 from backend.rag.rerank import rerank
 from backend.rag.tokens import estimate_tokens
 
 K = 8
 
-# How many neighbours the KNN returns when a reranker is going to read them. The served
-# width stays `K`; this is only how much material the cross-encoder gets to choose from.
+# How many neighbours the KNN returns. The served width stays `K`; this is how much
+# material the fusion, and the cross-encoder where one is installed, gets to choose from.
 #
 # Eight times `K`, chosen by measurement rather than by taste. On a real 36-document course
 # (scripts/eval_questions/ece203-class.json), of sixteen questions whose answer is a known
@@ -43,6 +51,23 @@ K = 8
 # a reranker can only reorder what it is given. Doubling again is where the cost stops
 # buying anything, and 1.6 seconds is small beside the model turn it feeds.
 RERANK_FETCH_K = 64
+
+# How many chunk ids the lexical pass returns, in BM25 order. The same width the reranker
+# already reads: the lexical ranking is the fusion's second input, and a narrower list
+# would decide the fused ranking before it was computed.
+LEXICAL_FETCH_K = 64
+
+# The reciprocal-rank-fusion constant. 60 is the value the original RRF paper
+# (Cormack, Clarke, Buettcher 2009) measured as robust across collections, and it has
+# been the default everywhere since: large enough that a mid-list rank still contributes,
+# small enough that the head of a list dominates its tail.
+RRF_K = 60
+
+# Provisional until the answer-key measurement in docs/integration-handoff.md §1.4 says
+# whether it survives. Half of a single list's top-rank contribution, so it breaks ties
+# between comparable fused scores without promoting a weak match: the same philosophy as
+# RECENCY_COEFFICIENT.
+SOLUTIONS_RRF_BONUS = 1.0 / (2 * (RRF_K + 1))
 
 # A query naming a part of a document: `section 4.11`, `Chapter 7`, `§5.2`, `section A.2`.
 # The number is the thing being looked up, so a reference with no number is not one.
@@ -136,6 +161,17 @@ _PROBLEM_SQL = (
     + f"where c.document_id = ? and c.problem_number = ? and {_READY_ONLY}\norder by c.id"
 )
 
+# The lexical pass. The same ready-only rule as every other path (see `_READY_ONLY`), and
+# the same class partition. Ordering and limiting are appended by the caller, because a
+# document pin slots between the filters and them.
+_LEXICAL_SQL = f"""
+select c.id
+from chunks_fts
+join chunks c on c.id = chunks_fts.rowid
+join documents d on d.id = c.document_id
+where chunks_fts match ? and c.class_id = ? and {_READY_ONLY}
+"""  # noqa: S608 - interpolates only the module's own ready-only filter
+
 
 @dataclass(frozen=True)
 class RetrievedChunk:
@@ -206,18 +242,19 @@ def retrieve(
     vector = embed_query(query)
     resolved = _resolve_sections(conn, class_id, query, vector, budget_tokens, document_id)
 
-    # Fetch wide only when something is going to read the extra. Without a reranker the
-    # surplus would go straight into `_fit_to_budget`, which is a different product: the
-    # turn would be built from thirty-two chunks the search was never confident about.
+    # The KNN always fetches wide now: under fusion the surplus is the material the fused
+    # ranking is computed over, and only the fused top-`K` is served, so none of it falls
+    # into the budget unranked. The old no-reranker narrow fetch existed to keep the
+    # surplus out of the budget, and the fused cut keeps it out instead.
     reranking = rerank_server.available
-    fetch = RERANK_FETCH_K if reranking else K
+    lexical = _lexical_ranks(conn, class_id, query, LEXICAL_FETCH_K, document_id)
     if document_id is not None:
-        candidates = _document_candidates(conn, document_id, vector, fetch)
+        vector_chunks = _document_candidates(conn, document_id, vector, RERANK_FETCH_K)
     else:
-        distances = _knn(conn, class_id, vector, fetch)
-        candidates = _load_candidates(conn, distances) if distances else []
-    if reranking:
-        candidates = _reranked(query, candidates)
+        distances = _knn(conn, class_id, vector, RERANK_FETCH_K)
+        vector_chunks = _load_candidates(conn, distances) if distances else []
+    candidates = _fuse(conn, vector_chunks, lexical, vector)
+    candidates = _reranked(query, candidates[:RERANK_FETCH_K]) if reranking else candidates[:K]
     if not candidates and not resolved:
         return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
 
@@ -371,6 +408,135 @@ def _load_candidates(conn: sqlite3.Connection, distances: dict[int, float]) -> l
     # Chunk id is the tiebreak, so an exact tie orders the same way on every run.
     chunks.sort(key=lambda chunk: (-chunk.score, chunk.chunk_id))
     return chunks
+
+
+def _fts_terms(query: str) -> list[str]:
+    """The query as quoted FTS5 terms, one per whitespace-separated word.
+
+    Quoting every word makes FTS5's operator words (`AND`, `OR`, `NEAR`) and its
+    parenthesis syntax literals, so a student who types one gets a search for the word
+    they typed rather than a syntax error or a silently different query. Double quotes
+    inside a word are stripped first, because one would close the quoting early.
+    """
+    terms = []
+    for word in query.split():
+        stripped = word.replace('"', "")
+        if stripped:
+            terms.append(f'"{stripped}"')
+    return terms
+
+
+def _lexical_ranks(
+    conn: sqlite3.Connection,
+    class_id: int,
+    query: str,
+    limit: int,
+    document_id: int | None = None,
+) -> list[int]:
+    """Chunk ids in BM25 order: the lexical ranking that fusion merges with the KNN's.
+
+    All terms must match at first; when a multi-term query has no chunk containing every
+    term, the retry joins them with OR, so one absent word does not zero the result. BM25
+    still ranks a chunk matching more terms above one matching fewer, so the retry widens
+    the candidate set without flattening its order.
+    """
+    terms = _fts_terms(query)
+    if not terms:
+        return []
+    rows = _lexical_query(conn, class_id, " ".join(terms), limit, document_id)
+    if not rows and len(terms) >= 2:
+        rows = _lexical_query(conn, class_id, " OR ".join(terms), limit, document_id)
+    return rows
+
+
+def _lexical_query(
+    conn: sqlite3.Connection,
+    class_id: int,
+    match: str,
+    limit: int,
+    document_id: int | None,
+) -> list[int]:
+    """One FTS5 match against the class partition, best (most negative) BM25 first."""
+    sql = _LEXICAL_SQL
+    parameters: list[object] = [match, class_id]
+    if document_id is not None:
+        sql += " and c.document_id = ?"
+        parameters.append(document_id)
+    sql += " order by bm25(chunks_fts) limit ?"
+    parameters.append(limit)
+    return [int(row["id"]) for row in conn.execute(sql, parameters)]
+
+
+def _fuse(
+    conn: sqlite3.Connection,
+    vector_chunks: list[RetrievedChunk],
+    lexical_ids: list[int],
+    vector: list[float],
+) -> list[RetrievedChunk]:
+    """Reciprocal rank fusion of the vector ranking with the lexical one.
+
+    Each list contributes `1 / (RRF_K + rank)` per chunk, so a chunk near the top of both
+    lists outranks a chunk at the top of only one, and neither list's score scale matters
+    because only ranks are read. The vector list arrives already ranked by `score`
+    (similarity plus recency), so recency keeps its tie-breaking effect through the
+    fusion.
+
+    Chunks the lexical pass found beyond the vector over-fetch are loaded through the
+    scored select, so every fused candidate carries the embedder's real cosine in
+    `similarity`, as the `RetrievedChunk` contract requires; the fused value lives in
+    `score`, which is only ever a ranking key. `doc_type = 'solutions'` chunks then
+    receive `SOLUTIONS_RRF_BONUS`, the nudge toward answer keys that the roadmap's
+    hybrid-retrieval item names; §1.4 of the handoff decides whether it stays.
+    """
+    chunks = {chunk.chunk_id: chunk for chunk in vector_chunks}
+    missing = [chunk_id for chunk_id in lexical_ids if chunk_id not in chunks]
+    if missing:
+        placeholders = ", ".join("?" * len(missing))
+        sql = f"{_SCORED_CHUNK_SELECT}where c.id in ({placeholders}) and {_READY_ONLY}"  # noqa: S608
+        now = datetime.now(UTC)
+        rows = conn.execute(sql, (sqlite_vec.serialize_float32(vector), *missing))
+        for row in rows:
+            similarity = 1.0 - float(row["distance"])
+            # The recency bonus is computed here for parity with the vector candidates,
+            # then discarded: every candidate's `score` is set to its fused value below.
+            chunks[int(row["chunk_id"])] = _chunk_from_row(
+                row,
+                similarity,
+                similarity + RECENCY_COEFFICIENT * _recency_factor(row["created_at"], now),
+            )
+
+    fused: dict[int, float] = {}
+    for rank, chunk in enumerate(vector_chunks, start=1):
+        fused[chunk.chunk_id] = fused.get(chunk.chunk_id, 0.0) + 1.0 / (RRF_K + rank)
+    for rank, chunk_id in enumerate(lexical_ids, start=1):
+        fused[chunk_id] = fused.get(chunk_id, 0.0) + 1.0 / (RRF_K + rank)
+
+    if fused:
+        placeholders = ", ".join("?" * len(fused))
+        rows = conn.execute(
+            f"select id from chunks where id in ({placeholders}) and doc_type = ?",  # noqa: S608
+            [*fused, SOLUTIONS],
+        )
+        for row in rows:
+            fused[int(row["id"])] += SOLUTIONS_RRF_BONUS
+
+    # Ties break by vector rank, then chunk id. The handoff specified chunk id alone; the
+    # vector rank goes first because an exact fused tie between an older and a newer chunk
+    # would otherwise discard the recency ordering the vector list carries (chunk id
+    # ascending is oldest-first, the anti-recency order). Determinism is unaffected:
+    # vector ranks are unique, and chunk id remains the final tiebreak for chunks only the
+    # lexical pass found.
+    vector_rank = {chunk.chunk_id: rank for rank, chunk in enumerate(vector_chunks, start=1)}
+    fallback = len(vector_chunks) + 1
+    ranked = sorted(
+        chunks.values(),
+        key=lambda chunk: (
+            -fused[chunk.chunk_id],
+            vector_rank.get(chunk.chunk_id, fallback),
+            chunk.chunk_id,
+        ),
+    )
+    return [RetrievedChunk(**{**vars(chunk), "score": fused[chunk.chunk_id]}) for chunk in ranked]
 
 
 def _reranked(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]:
