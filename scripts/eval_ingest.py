@@ -28,8 +28,10 @@ produced rather than redoing it.
 """
 
 import argparse
+import asyncio
 import json
 import logging
+import re
 import shutil
 import sqlite3
 import statistics
@@ -48,6 +50,9 @@ if str(ROOT) not in sys.path:
 
 from backend.config import settings  # noqa: E402
 from backend.core import ingestion  # noqa: E402
+from backend.core.app_settings import resolve_tutor_config  # noqa: E402
+from backend.llm import client  # noqa: E402
+from backend.rag import render, transcribe  # noqa: E402
 from backend.rag import retrieve as retrieval  # noqa: E402
 from backend.storage.database import connect, migrate  # noqa: E402
 
@@ -553,6 +558,147 @@ def _mapping(value: object) -> dict[str, dict[str, object]]:
     return value if isinstance(value, dict) else {}
 
 
+# Pages of the reference book chosen because the text layer is known to fail on them: each
+# carries matrices, vectors, or a determinant written out in a grid. `13` is the control,
+# a page of ordinary prose the text layer handles perfectly well, so a transcription that
+# looked better everywhere would be suspected of flattering itself.
+DEFAULT_TRANSCRIBE_PAGES = (13, 90, 111, 158, 194, 245)
+
+# A line that is nothing but a number, which is what a matrix collapses into when the text
+# layer flattens it. Counting these is the objective half of the comparison: the failure
+# has a shape, and the shape is countable.
+_LONE_NUMBER = re.compile(r"^\s*[-+−]?\s*\d+(?:\.\d+)?\s*$")
+
+# Markup that says a grid survived as a grid.
+_MATRIX_MARKUP = re.compile(r"\\begin\{(?:[bBpvV]?matrix|array)\}")
+
+
+def _text_shape(text: str) -> dict[str, object]:
+    """The countable signals of whether mathematics survived a reading of a page."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    return {
+        "characters": len(text),
+        "lines": len(lines),
+        "lone_number_lines": sum(1 for line in lines if _LONE_NUMBER.match(line)),
+        "matrix_markup": len(_MATRIX_MARKUP.findall(text)),
+        "math_delimiters": text.count("$"),
+    }
+
+
+def cmd_transcribe(args: argparse.Namespace) -> int:
+    """Read chosen pages with the vision model and compare against the text layer.
+
+    The question this answers is not "can it read a scan". It is whether a vision pass
+    beats PyMuPDF on pages that already have a perfectly good text layer, which is what
+    decides whether transcription is a scanned-document feature or a quality feature for
+    every document.
+    """
+    workspace = Workspace(Path(args.workspace).resolve())
+    conn = prepare(workspace, Path(args.source_db))
+    ingested = workspace.read("ingestion")
+    documents = _mapping(ingested.get("documents", {}))
+    if not documents:
+        raise SystemExit("Nothing ingested. Run the ingest stage first.")
+
+    name = args.document or next(iter(documents))
+    document = documents[name]
+    document_id = int(document["document_id"])
+    row = conn.execute(
+        "select stored_path, mime from documents where id = ?", (document_id,)
+    ).fetchone()
+    source = Path(str(row["stored_path"]))
+
+    config = resolve_tutor_config(conn)
+    support = asyncio.run(
+        client.probe_vision_support(config.endpoint_url, config.api_key, config.model)
+    )
+    print(f"vision probe: {'ok' if support.ok else 'unavailable'} - {support.message}\n")
+    if not support.ok:
+        raise SystemExit("The configured endpoint cannot read images, so there is nothing to time.")
+
+    with pymupdf.open(source) as book:
+        layers = {number: book[number - 1].get_text() for number in args.pages}
+
+    results: list[dict[str, object]] = []
+    for number in args.pages:
+        image = render.render_page(
+            document_id, source, str(row["mime"]), number, render.RECOGNITION_DPI
+        )
+        started = time.monotonic()
+        try:
+            read = asyncio.run(
+                transcribe.transcribe_page(
+                    config.endpoint_url,
+                    config.api_key,
+                    config.model,
+                    image.read_bytes(),
+                    remote_ack=True,
+                )
+            )
+            error = None
+        except Exception as exc:  # noqa: BLE001 - a failed page is a datum, not a crash
+            read, error = "", str(exc)[:200]
+        elapsed = round(time.monotonic() - started, 1)
+
+        layer = layers[number]
+        results.append(
+            {
+                "page": number,
+                "seconds": elapsed,
+                "error": error,
+                "text_layer": layer,
+                "transcription": read,
+                "text_layer_shape": _text_shape(layer),
+                "transcription_shape": _text_shape(read),
+            }
+        )
+        shape = results[-1]["transcription_shape"]
+        before = results[-1]["text_layer_shape"]
+        print(
+            f"page {number}: {elapsed}s, lone-number lines "
+            f"{before['lone_number_lines']} -> {shape['lone_number_lines']}, "
+            f"matrices {shape['matrix_markup']}" + (f", FAILED {error}" if error else "")
+        )
+        workspace.write("transcription", {"document": name, "pages": results})
+
+    _write_comparison(workspace, name, results)
+    print(f"\nBoth readings of every page: {workspace.root / 'transcription.md'}")
+    conn.close()
+    return 0
+
+
+def _write_comparison(workspace: Workspace, name: str, results: list[dict[str, object]]) -> None:
+    """Write both readings of every page out to be read by a person.
+
+    The counts below are evidence and not a verdict. Whether a transcription is *right* is
+    a question about mathematics that no automated signal here answers, and the standard
+    this project holds itself to on that is the one Phase 2 used: read it.
+    """
+    lines = [f"# Two readings of {name}", ""]
+    for result in results:
+        lines += [
+            f"## Page {result['page']}",
+            "",
+            f"Transcribed in {result['seconds']}s. "
+            f"Text layer: {result['text_layer_shape']}. "
+            f"Transcription: {result['transcription_shape']}.",
+            "",
+            "### PyMuPDF text layer",
+            "",
+            "```",
+            str(result["text_layer"]).strip(),
+            "```",
+            "",
+            "### Vision transcription",
+            "",
+            "```",
+            str(result["transcription"]).strip() or "(nothing returned)",
+            "```",
+            "",
+        ]
+    (workspace.root / "transcription.md").write_text("\n".join(lines), encoding="utf-8")
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Print what the recorded runs say, which is the only output anyone reads twice."""
     workspace = Workspace(Path(args.workspace).resolve())
@@ -650,6 +796,13 @@ def main(argv: list[str] | None = None) -> int:
     retrieve.add_argument("--questions", default=str(DEFAULT_QUESTIONS))
     retrieve.add_argument("--k", type=int, default=WIDE_K)
     retrieve.set_defaults(func=cmd_retrieve)
+
+    reading = subparsers.add_parser(
+        "transcribe", help="Read pages with the vision model and compare against the text layer"
+    )
+    reading.add_argument("--document", help="Which ingested document, by stem")
+    reading.add_argument("--pages", nargs="+", type=int, default=list(DEFAULT_TRANSCRIBE_PAGES))
+    reading.set_defaults(func=cmd_transcribe)
 
     report = subparsers.add_parser("report", help="Summarise the recorded runs")
     report.set_defaults(func=cmd_report)

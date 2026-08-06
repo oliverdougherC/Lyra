@@ -430,23 +430,37 @@ carries 105 distinct real section titles where the regex produced dot leaders an
 
 ### Text recognition
 
-- [ ] Transcription interface: page in, text out, feeding the chunker. Both implementations below
+- [x] Transcription interface: page in, text out, feeding the chunker. Both implementations below
       sit behind it, so the model choice is swappable and does not need settling in advance
-- [ ] **Image content parts in `llm/client.py`.** The client sends and parses text only. This is new
+- [x] **Image content parts in `llm/client.py`.** The client sends and parses text only. This is new
       code rather than a flag, exactly as tool calling was in Phase 2
-- [ ] **A vision capability probe**, mirroring `probe_tool_support`, with honest degradation in the
+- [x] **A vision capability probe**, mirroring `probe_tool_support`, with honest degradation in the
       interface when the configured endpoint cannot see. Inference is bundled in Phase 6, so until
       then a vision-capable tutor model is something the student happens to have rather than
-      something Lyra ships
-- [ ] Skip transcription against a non-local endpoint without acknowledgement, the rule
+      something Lyra ships. The backend half is done; the settings readout lands with the UI pass
+- [x] Skip transcription against a non-local endpoint without acknowledgement, the rule
       `extract_facts` already follows. A page image of the student's document is what gets sent
-- [ ] Measure vision against the text layer on pages that already have one, on the reference book's
+- [x] Measure vision against the text layer on pages that already have one, on the reference book's
       matrix-heavy pages. If it wins, transcription is a quality feature for every document
+- [x] Render for recognition at 300 DPI, cached separately from the 144 DPI the source pane reads.
+      One cache entry serving both would silently degrade whichever asked second
 - [ ] Route scanned pages through the same interface, and time a real sample to extrapolate to
       textbook scale. If bulk transcription through the general model is too slow on modest
       hardware, the specialist earns its download
-- [ ] Render for recognition at 300 DPI, cached separately from the 144 DPI the source pane reads.
-      One cache entry serving both would silently degrade whichever asked second
+
+**What the transcription measurement found.** Six pages read through Qwen3.6 27B against their own
+text layer. On the five mathematical pages every collapsed matrix is recovered: 36, 25, 35 and 20
+lone-number lines become zero, re-emitted as `\begin{bmatrix}` with the entries in the right order,
+including fractions the text layer had rendered ambiguous. Checked by hand, not by counting. The
+control page of prose comes back at 1217 characters against 1218 and reproduces the book's own typo,
+`contrinuity`, which is the clearest evidence available that this transcribes rather than
+paraphrases.
+
+So finding 4 holds and transcription is a quality feature for every document, not a
+scanned-document feature. What it is not is free: **13.4 seconds a page**. A scanned homework sheet
+is under a minute, a lab handout a few minutes, and a 608-page textbook is 2.3 hours. That is the
+case for the specialist path stated as a measurement, and it is why transcription has to be opt-in
+per document rather than something ingestion decides for the student.
 - [ ] Per-page rows carrying page number, state, and error, so `pages_done` becomes a count rather
       than a number written once at the end. Per-page progress and per-page retry are both
       impossible without this

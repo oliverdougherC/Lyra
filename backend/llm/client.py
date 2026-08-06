@@ -21,6 +21,7 @@ Every failure becomes an `UpstreamError` with a message written for the user. Th
 and any log line this module writes, never contain the endpoint URL or the API key.
 """
 
+import base64
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -28,6 +29,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import httpx
+import pymupdf
 
 from backend.core.errors import ToolsUnsupportedError, UpstreamError
 
@@ -75,6 +77,24 @@ _PROBE_REFUSED = (
 _PROBE_IGNORED = (
     "This endpoint accepted the request but answered without calling the tool, so Lyra "
     "cannot rely on it to check solutions. Solving still works."
+)
+
+# The vision probe renders this into a small image and asks the endpoint to read it back.
+# Digits rather than a word: they are the glyphs a vision model reads most reliably, and a
+# five-digit number is not something a model that cannot see could land on by guessing.
+# A word would risk both mistakes at once, being harder to read and easier to guess.
+_PROBE_CODE = "48213"
+_PROBE_IMAGE_SIZE = (260, 96)
+_PROBE_IMAGE_DPI = 110
+
+_VISION_OK = "This endpoint can read images, so Lyra can transcribe pages with it."
+_VISION_REFUSED = (
+    "This endpoint does not accept images, so Lyra cannot read scanned pages with it. "
+    "Everything else works."
+)
+_VISION_IGNORED = (
+    "This endpoint accepted an image but could not read what it said, so Lyra cannot rely "
+    "on it to transcribe pages. Everything else works."
 )
 
 
@@ -136,6 +156,21 @@ class ToolSupport:
     reported as cannot, with a message saying that is what happened. Guessing in that
     third case would either disable verification on a working endpoint or claim
     verification on one that silently never runs it.
+    """
+
+    ok: bool
+    message: str
+
+
+@dataclass(frozen=True)
+class VisionSupport:
+    """Whether this endpoint can read an image, and how we know.
+
+    Three outcomes for the same reason `ToolSupport` has three. An endpoint that rejects
+    the request cannot do it; one that reads the code back can; and one that accepts an
+    image and answers without having read it is reported as cannot, with a message saying
+    so. That third case is the common one, because an OpenAI-compatible server will
+    happily accept a content-part array it has no way to look at.
     """
 
     ok: bool
@@ -357,7 +392,7 @@ async def complete(
     endpoint: str,
     api_key: str | None,
     model: str | None,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, object]],
     *,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> str:
@@ -485,6 +520,94 @@ async def complete_with_tools(
         content=strip_reasoning(content) if isinstance(content, str) else "",
         tool_calls=_read_tool_calls(message),
     )
+
+
+def image_message(text: str, image: bytes, mime: str = "image/png") -> dict[str, object]:
+    """A user turn carrying one image beside its instruction.
+
+    The OpenAI content-part array, which is how every compatible server that can see takes
+    an image. It is built here rather than at call sites so there is one place that knows
+    the shape, and one place to change if a server needs a different one.
+
+    The image travels as a `data:` URL rather than a link. Lyra is loopback-only and the
+    endpoint may be a different machine, so a URL pointing at this process would be a URL
+    the model cannot fetch.
+
+    Args:
+        text: The instruction that goes with the image.
+        image: Encoded image bytes, normally a rendered page.
+        mime: Media type of `image`.
+
+    Returns:
+        One OpenAI-shaped `user` message.
+    """
+    encoded = base64.b64encode(image).decode("ascii")
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}},
+        ],
+    }
+
+
+def _probe_image() -> bytes:
+    """A small PNG carrying `_PROBE_CODE`, drawn rather than shipped as a blob.
+
+    Generated so the probe is readable as code: a base64 constant would say nothing about
+    what is being asked. PyMuPDF is already a dependency and its base-14 fonts need no
+    files on disk.
+    """
+    document = pymupdf.open()
+    page = document.new_page(width=_PROBE_IMAGE_SIZE[0], height=_PROBE_IMAGE_SIZE[1])
+    page.insert_text((20, 62), _PROBE_CODE, fontname="helv", fontsize=44)
+    return page.get_pixmap(dpi=_PROBE_IMAGE_DPI).tobytes("png")
+
+
+async def probe_vision_support(
+    endpoint: str,
+    api_key: str | None,
+    model: str | None,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> VisionSupport:
+    """Show the endpoint a number and ask it to read it back.
+
+    A real inference call for the same reason the tool probe is one: an OpenAI-compatible
+    server advertises nothing about vision, and a server that cannot see will still accept
+    a message whose content is an array and answer from the text half of it. Asking it to
+    report something only visible in the image is the only way to tell those apart.
+
+    Returns the outcome as data rather than raising, so a settings screen can render all
+    three states.
+    """
+    prompt = (
+        "This image contains a number. Reply with that number and nothing else. "
+        "If you cannot see an image, say NO IMAGE."
+    )
+    try:
+        answer = await complete(
+            endpoint,
+            api_key,
+            model,
+            [image_message(prompt, _probe_image())],
+            transport=transport,
+        )
+    except UpstreamError as exc:
+        # A server with no vision path commonly rejects the content-part array outright,
+        # which arrives here as a 400 and is a refusal rather than an outage.
+        return VisionSupport(ok=False, message=_VISION_REFUSED if _is_refusal(exc) else exc.message)
+
+    return (
+        VisionSupport(ok=True, message=_VISION_OK)
+        if _PROBE_CODE in answer
+        else VisionSupport(ok=False, message=_VISION_IGNORED)
+    )
+
+
+def _is_refusal(exc: UpstreamError) -> bool:
+    """Whether an upstream failure reads as "this request shape is not supported"."""
+    return exc.message in (_ERROR_UPSTREAM, _ERROR_UNREADABLE)
 
 
 async def probe_tool_support(

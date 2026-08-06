@@ -274,3 +274,64 @@ async def test_auth_header_is_sent_only_when_a_key_is_set() -> None:
     await client.list_models(_ENDPOINT, None, transport=_transport(handler))
 
     assert seen == [f"Bearer {_API_KEY}", None]
+
+
+def _reply(text: str) -> Callable[[httpx.Request], httpx.Response]:
+    """A non-streaming completion answering with fixed content."""
+    return lambda request: httpx.Response(200, json={"choices": [{"message": {"content": text}}]})
+
+
+def test_an_image_message_carries_a_data_url_beside_its_instruction() -> None:
+    """A URL pointing at this process would be one the model cannot fetch.
+
+    Lyra is loopback-only and the endpoint may be another machine entirely, so the bytes
+    travel inline.
+    """
+    message = client.image_message("read this", b"\x89PNG fake")
+
+    assert message["role"] == "user"
+    parts = message["content"]
+    assert parts[0] == {"type": "text", "text": "read this"}
+    assert parts[1]["type"] == "image_url"
+    assert parts[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+async def test_a_model_that_reads_the_code_back_can_see() -> None:
+    support = await client.probe_vision_support(
+        _ENDPOINT, None, "vision-model", transport=_transport(_reply("48213"))
+    )
+
+    assert support.ok is True
+
+
+async def test_a_model_that_answers_without_looking_cannot_see() -> None:
+    """The common case, and the reason the probe asks for something only visible.
+
+    An OpenAI-compatible server with no vision path still accepts a content-part array and
+    answers from the text half of it, so "it did not raise" proves nothing at all.
+    """
+    support = await client.probe_vision_support(
+        _ENDPOINT, None, "text-model", transport=_transport(_reply("I cannot see an image."))
+    )
+
+    assert support.ok is False
+    assert "could not read" in support.message
+
+
+async def test_a_server_that_rejects_an_image_is_reported_as_unable_not_broken() -> None:
+    transport = _transport(lambda request: httpx.Response(500, json={"error": "no vision"}))
+
+    support = await client.probe_vision_support(_ENDPOINT, None, "text-model", transport=transport)
+
+    assert support.ok is False
+    assert "does not accept images" in support.message
+
+
+async def test_a_vision_probe_never_raises() -> None:
+    """The settings screen renders the outcome, so an unreachable host is data too."""
+    transport = _transport(lambda request: (_ for _ in ()).throw(httpx.ConnectError("down")))
+
+    support = await client.probe_vision_support(_ENDPOINT, None, None, transport=transport)
+
+    assert support.ok is False
+    assert support.message

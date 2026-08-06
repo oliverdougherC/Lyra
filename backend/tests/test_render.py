@@ -118,3 +118,31 @@ def test_a_write_that_dies_partway_leaves_nothing_the_cache_will_serve(
     assert list(render.pages_dir(1).glob("*.partial")) == []
     redone = render.render_page(1, source, "application/pdf", 1)
     assert redone.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_reading_and_recognition_resolutions_cache_separately(tmp_path: Path) -> None:
+    """Two different artifacts that must never satisfy each other's request.
+
+    A page rendered for the source pane quietly answering a transcription request would
+    degrade recognition with nothing on screen to say so, and a 300 dpi page served to the
+    pane would cost several times the bytes for a picture nobody looks at that closely.
+    """
+    source = _pdf(tmp_path / "book.pdf")
+
+    reading = render.render_page(1, source, "application/pdf", 1, render.RENDER_DPI)
+    recognition = render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI)
+
+    assert reading != recognition
+    assert reading.exists() and recognition.exists()
+    # The higher resolution is the bigger file, which is the whole reason for asking for it.
+    assert recognition.stat().st_size > reading.stat().st_size
+
+
+def test_discarding_pages_clears_every_resolution(tmp_path: Path) -> None:
+    source = _pdf(tmp_path / "book.pdf")
+    render.render_page(1, source, "application/pdf", 1, render.RENDER_DPI)
+    render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI)
+
+    render.discard_pages(1)
+
+    assert not list(render.pages_dir(1).glob("*.png"))

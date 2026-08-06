@@ -50,6 +50,43 @@ material it is a **quality** feature for every document, and the phase treats it
 vision against the text layer on pages that already have one comes before bulk transcription of
 pages that do not. See the build order in [feature-roadmap.md](feature-roadmap.md).
 
+**Measured, and it holds.** Six pages of the reference book read through Qwen3.6 27B against the
+same pages' text layer, timed by `scripts/eval_ingest.py transcribe`. Five were chosen because the
+text layer is known to fail on them; page 13 is a page of ordinary prose, included as a control so
+a transcription that flattered itself everywhere would be visible.
+
+| Page | Text layer | Transcription | Matrices recovered | Seconds |
+|------|-----------|---------------|--------------------|---------|
+| 13 (control) | 1 lone-number line | 1 | 0 | 6.1 |
+| 90 | 36 | 0 | 8 | 12.3 |
+| 111 | 25 | 0 | 6 | 11.2 |
+| 158 | 1 | 0 | 2 | 20.2 |
+| 194 | 35 | 0 | 9 | 16.8 |
+| 245 | 20 | 0 | 9 | 13.7 |
+
+A lone-number line is what a matrix collapses into when the text layer flattens it, so the count is
+the failure's own shape. Every one of them is recovered as `\begin{bmatrix}`.
+
+Checked by hand rather than by counting, which is the standard Phase 2 set. On page 90 the text
+layer gives `1 0 1 1 −1 1 1 1 −1` down nine lines and the transcription gives the same nine entries
+as a 3x3 matrix in the right order. The inverse on the same page is worse in the text layer and the
+transcription still recovers it: `0 1 2 1 2 1 −1 0 1 −1 2 −1 2` is thirteen tokens for nine entries,
+because each half of a fraction lands on its own line, and the transcription reads it back as a
+matrix carrying `\frac{1}{2}` in the right three places. That ambiguity is the point. Nothing
+downstream could have recovered it, because `1` then `2` is either two entries or one fraction and
+the text layer does not say which.
+
+The control is the strongest evidence that this is transcription rather than generation: 1217
+characters against 1218, and it **reproduces the book's own typo**, `contrinuity`. A model
+paraphrasing would have corrected it. No page came back shorter than its text layer, and the densest
+page ends on the same half-finished sentence the page itself ends on.
+
+**13.4 seconds a page is the number that decides the specialist path.** A scanned homework sheet is
+under a minute and a lab handout a few minutes, which is the size students actually scan. A 608-page
+textbook is 2.3 hours, which is not a thing to do by default. That is the case for `Unlimited-OCR`
+stated as a measurement rather than an assumption, and it is also why transcription is opt-in per
+document rather than something ingestion decides on the student's behalf.
+
 ## Pipeline Stages
 
 ```

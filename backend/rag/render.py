@@ -27,6 +27,15 @@ logger = logging.getLogger(__name__)
 # pane gives it, and a page lands in the low hundreds of kilobytes rather than megabytes.
 RENDER_DPI = 144
 
+# What text recognition reads at, per Stage 2b of docs/rag-pipeline.md.
+#
+# These are two different artifacts and they must not share a cache entry. A page rendered
+# for reading that quietly satisfied a recognition request would degrade transcription with
+# nothing on screen to say so, and a 300 dpi page served to the source pane would cost
+# several times the bytes for a picture nobody looks at that closely. So the dpi is part of
+# the filename.
+RECOGNITION_DPI = 300
+
 NOT_A_PAGE = "That page does not exist in this document."
 NOT_RENDERABLE = "This document has no pages to show."
 
@@ -36,12 +45,14 @@ def pages_dir(document_id: int) -> Path:
     return settings.pages_dir / str(document_id)
 
 
-def page_path(document_id: int, page_number: int) -> Path:
-    """The cache path for one rendered page."""
-    return pages_dir(document_id) / f"{page_number}.png"
+def page_path(document_id: int, page_number: int, dpi: int = RENDER_DPI) -> Path:
+    """The cache path for one rendered page at one resolution."""
+    return pages_dir(document_id) / f"{page_number}@{dpi}.png"
 
 
-def render_page(document_id: int, source: Path, mime: str, page_number: int) -> Path:
+def render_page(
+    document_id: int, source: Path, mime: str, page_number: int, dpi: int = RENDER_DPI
+) -> Path:
     """Render one page to PNG, returning the cached file.
 
     Args:
@@ -49,6 +60,8 @@ def render_page(document_id: int, source: Path, mime: str, page_number: int) -> 
         source: Path to the stored upload.
         mime: The document's stored mime. Only PDFs rasterize.
         page_number: 1-based page number as the reader sees it.
+        dpi: Resolution to rasterize at. `RENDER_DPI` for reading, `RECOGNITION_DPI` for
+            transcription. Each resolution caches separately, so the two never collide.
 
     Returns:
         Path to the PNG on disk.
@@ -64,7 +77,7 @@ def render_page(document_id: int, source: Path, mime: str, page_number: int) -> 
     if page_number < 1:
         raise NotFoundError(NOT_A_PAGE)
 
-    cached = page_path(document_id, page_number)
+    cached = page_path(document_id, page_number, dpi)
     if cached.exists():
         return cached
 
@@ -72,7 +85,7 @@ def render_page(document_id: int, source: Path, mime: str, page_number: int) -> 
         with pymupdf.open(source) as document:
             if page_number > document.page_count:
                 raise NotFoundError(NOT_A_PAGE)
-            pixmap = document[page_number - 1].get_pixmap(dpi=RENDER_DPI)
+            pixmap = document[page_number - 1].get_pixmap(dpi=dpi)
             cached.parent.mkdir(parents=True, exist_ok=True)
             # Written beside the target and moved into place, because the cache is trusted
             # on the strength of the file existing. A process killed partway through a
