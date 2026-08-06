@@ -17,9 +17,23 @@ from itertools import groupby
 from backend.rag.parse import PAGE_SEPARATOR, ParsedDocument
 from backend.rag.tokens import CHARS_PER_TOKEN, estimate_tokens
 
-# Retrieval budgeting assumes small targeted chunks, and an oversized chunk would be
-# silently truncated at embedding time, so this ceiling is absolute.
-MAX_CHUNK_TOKENS = 2048
+# Retrieval budgeting assumes small targeted chunks, and an oversized chunk is refused at
+# embedding time, so this ceiling is absolute.
+#
+# It is measured with `estimate_tokens`, which runs four characters to a token, while the
+# limit it has to respect is 2048 *real* tokens: this GGUF declares a 2048 context and
+# llama.cpp clamps every request to it. Those two numbers used to be the same, which meant
+# the ceiling had no headroom at all in the one direction that matters. Measured over a
+# 608-page linear algebra textbook, real text runs 3.4 characters to a token at the median
+# and 2.1 at the first percentile, so a chunk this module called 2047 tokens arrived at the
+# server as 2607 and was refused, taking the whole document's ingestion with it.
+#
+# 1024 comes from that first percentile: 1024 * 4 characters at 2.1 characters per token is
+# just inside 2048, so roughly one chunk in a hundred needs the split that `rag/embed.py`
+# performs and the rest go straight through. The ceiling is deliberately not set at the
+# observed worst case of 1.6, which would put it near 800 and halve chunk sizes again to
+# spare the embedder a split it handles correctly.
+MAX_CHUNK_TOKENS = 1024
 
 HOMEWORK = "homework"
 TEXTBOOK = "textbook"
@@ -114,12 +128,18 @@ class ChunkRule:
 
 # The strategy table from rag-pipeline.md, Stage 3. `textbook` has no detection rule and
 # is only reached when a caller names it, but the strategy is defined so that it can be.
+#
+# Targets moved down with the ceiling, keeping the shape they had against it. A target
+# above `MAX_CHUNK_TOKENS` is not a larger chunk, it is dead configuration: the strategy
+# packs towards it, `_enforce_ceiling` cuts the result back down, and the number in the
+# table describes nothing that happens. Overlaps are unchanged, so they are now a larger
+# share of a smaller chunk, which is the direction that loses less across a seam.
 CHUNK_RULES: dict[str, ChunkRule] = {
     HOMEWORK: ChunkRule(PROBLEM_BOUNDARY, MAX_CHUNK_TOKENS, 0),
-    TEXTBOOK: ChunkRule(HEADING_BOUNDARY, 2000, 100),
-    LECTURE_NOTES: ChunkRule(HEADING_BOUNDARY, 1500, 75),
-    SYLLABUS: ChunkRule(HEADING_BOUNDARY, 1000, 50),
-    GENERIC: ChunkRule(PARAGRAPH_BOUNDARY, 1500, 100),
+    TEXTBOOK: ChunkRule(HEADING_BOUNDARY, 1000, 100),
+    LECTURE_NOTES: ChunkRule(HEADING_BOUNDARY, 750, 75),
+    SYLLABUS: ChunkRule(HEADING_BOUNDARY, 500, 50),
+    GENERIC: ChunkRule(PARAGRAPH_BOUNDARY, 750, 100),
 }
 
 

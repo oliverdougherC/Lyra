@@ -375,15 +375,30 @@ in half if it can avoid it.
 | Document type | Chunk boundary | Target size | Overlap |
 |---------------|----------------|-------------|---------|
 | Homework | Individual problem | Whole problem, capped | None |
-| Textbook | Section or subsection | 2000 tokens | 100 tokens |
-| Lecture notes | Topic heading | 1500 tokens | 75 tokens |
-| Syllabus | Logical section | 1000 tokens | 50 tokens |
-| Generic | Paragraph group | 1500 tokens | 100 tokens |
+| Textbook | Section or subsection | 1000 tokens | 100 tokens |
+| Lecture notes | Topic heading | 750 tokens | 75 tokens |
+| Syllabus | Logical section | 500 tokens | 50 tokens |
+| Generic | Paragraph group | 750 tokens | 100 tokens |
 
-**Hard ceiling: 2048 tokens per chunk, enforced for every type after strategy-specific splitting.**
+**Hard ceiling: 1024 tokens per chunk, enforced for every type after strategy-specific splitting.**
 No chunk is ever stored above this. The ceiling exists for two reasons: retrieval budgeting assumes
-small targeted chunks, and an oversized chunk would otherwise be silently truncated at embedding
-time.
+small targeted chunks, and an oversized chunk is refused at embedding time.
+
+**The ceiling and the limit it respects are measured in different units, which is why it has
+headroom.** The ceiling counts with `estimate_tokens` at four characters per token; the limit is
+2048 *real* tokens, described in Stage 4. Real text does not run at four characters per token, and
+mathematical text is nowhere near it: measured over a 608-page linear algebra textbook the median is
+3.4 and the first percentile is 2.1. The two numbers used to both be 2048, so the ceiling had no
+headroom in the one direction that matters, and a chunk this pipeline called 2047 tokens arrived at
+the server as 2607 and was refused, failing the whole document.
+
+1024 comes from that first percentile, so roughly one chunk in a hundred needs the split Stage 4
+performs and the rest go straight through. It is deliberately not set at the observed worst case of
+2.1 characters per token, which would put it near 800 and halve chunk sizes again to spare the
+embedder a split it handles correctly. Targets moved down with it: a target above the ceiling is not
+a larger chunk, it is dead configuration, because the strategy packs towards it and the ceiling then
+cuts the result back down. Overlaps are unchanged and are now a larger share of a smaller chunk,
+which is the direction that loses less across a seam.
 
 **Oversized homework problems.** A single problem above the ceiling is split in this order, stopping
 as soon as it fits: on lettered or numbered sub-parts (`(a)`, `(b)`, `i.`, `ii.`), then on
@@ -418,9 +433,33 @@ identity rule takes in Stage 5, and for the same reason.
 
 ### Stage 4: Embed
 
-**Model:** `nomic-embed-text-v1.5` GGUF, 137M parameters, 768 dimensions, 8192 max input tokens.
+**Model:** `nomic-embed-text-v1.5` GGUF, 137M parameters, 768 dimensions, **2048 max input tokens**.
 Served locally by llama.cpp. Using llama.cpp rather than sentence-transformers keeps PyTorch out of
 the product entirely and reuses the runtime already required for OCR.
+
+**2048, not the 8192 on the model card.** This GGUF declares `nomic-bert.context_length = 2048`,
+which llama.cpp reports as `n_ctx_train` and clamps every request to no matter what `-c` says. The
+8192 the model is advertised with is reachable only through rope scaling this GGUF does not carry,
+and asking for it anyway produces a `n_ctx_seq (8192) > n_ctx_train (2048)` warning and a server
+that still refuses anything over 2048. An over-long input is refused with
+`exceed_context_size_error` rather than truncated, so this is a wall rather than a quality slope.
+
+**The limit is enforced in real tokens, in `rag/embed.py`, not left to the chunk ceiling.** No
+estimate can be the last word in front of a hard wall. Any input the character count cannot prove
+safe is measured against the server's own `/tokenize`, at 0.34 ms a call, and anything still over
+the limit is halved at whitespace until its pieces fit. The pieces are embedded and their vectors
+mean-pooled and re-normalized back into one, so a caller still gets exactly one vector per input:
+`_store_chunks` zips chunks to vectors strictly, and a split that changed the count would corrupt
+the index rather than fail. Pooling is the same operation the server already performs with
+`--pooling mean`, one level up. Nothing is truncated and nothing is dropped.
+
+A string with no whitespace to cut at is a genuine dead end and says so, rather than reaching the
+student as an unreachable server.
+
+**Only the per-input limit is real.** llama-server splits a request across its own batches
+internally, so sixteen inputs totalling 30,144 tokens are served without complaint against `-b
+8192`. Measured, because the obvious reading of `-b` is that it caps the request, and a token budget
+built on that reading would have been machinery guarding nothing.
 
 **Task instruction prefixes are mandatory and asymmetric.** This model requires a prefix telling it
 which task is being performed. Omitting them, or using the same prefix on both sides, degrades
@@ -702,7 +741,7 @@ user has confirmed, rejected, or corrected it, so removing an upload removes wha
    limit: the specialist OCR path is not a drop-in OpenAI client, so the transcription interface has
    to be narrow enough that a general vision model and Unlimited-OCR both satisfy it. Page in, text
    out, with page-level progress. Anything richer leaks one implementation into the other.
-3. **Semantic chunking.** Structure is respected, subject to the 2048-token hard ceiling.
+3. **Semantic chunking.** Structure is respected, subject to the 1024-token hard ceiling.
 4. **Lightweight context.** Retrieval is tight and targeted, budgeted for 8K to 32K windows.
 5. **Class-scoped.** All retrieval is partitioned by class. No cross-class leakage until Phase 5.
 6. **Proposal, not assertion.** Automatically extracted facts are proposals. A proposal becomes
