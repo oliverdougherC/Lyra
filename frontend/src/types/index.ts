@@ -193,11 +193,29 @@ export interface RegenerateRequest {
   document_id: number | null
 }
 
-/** Where a solution set's run has got to. `awaiting_review` is waiting on the student. */
-export type SolutionState =
-  'pending' | 'segmenting' | 'awaiting_review' | 'solving' | 'ready' | 'failed' | 'cancelled'
+/**
+ * Where any artifact's run has got to. A solution set moves through `segmenting` and
+ * `solving`; decks, quizzes, and drafts share the one `generating` stage instead, because
+ * their runs are a single model pass with no review gate.
+ */
+export type ArtifactState =
+  | 'pending'
+  | 'segmenting'
+  | 'awaiting_review'
+  | 'solving'
+  | 'generating'
+  | 'ready'
+  | 'failed'
+  | 'cancelled'
 
-export type PartKind = 'problem' | 'step' | 'answer' | 'figure'
+/** Where a solution set's run has got to. `awaiting_review` is waiting on the student. */
+export type SolutionState = Exclude<ArtifactState, 'generating'>
+
+/** Every kind the artifact substrate carries. Solutions are one; study tools are two more. */
+export type ArtifactKind = 'solution_set' | 'flashcard_deck' | 'quiz' | 'draft'
+
+export type PartKind =
+  'problem' | 'step' | 'answer' | 'figure' | 'card' | 'quiz_question' | 'draft_body'
 
 export type PartStatus = 'pending' | 'solving' | 'verifying' | 'complete' | 'failed'
 
@@ -216,7 +234,7 @@ export type SolveParts = 'together' | 'separately'
  */
 export type Verdict = 'unchecked' | 'verified' | 'refuted' | 'uncheckable'
 
-export type SourceRole = 'problem_set' | 'reference_solutions'
+export type SourceRole = 'problem_set' | 'reference_solutions' | 'study_source'
 
 export interface SolutionSource {
   document_id: number
@@ -268,7 +286,7 @@ export interface SolutionPart {
   ordinal: number
   label: string | null
   content: string
-  content_type: 'markdown' | 'image'
+  content_type: 'markdown' | 'image' | 'json'
   status: PartStatus
   origin: PartOrigin
   verdict: Verdict
@@ -396,4 +414,184 @@ export interface DocumentOutline {
   sections: OutlineSection[]
   chunk_count: number
   sectioned_count: number
+}
+
+/** The four ratings a flashcard review accepts. */
+export type Rating = 'again' | 'hard' | 'good' | 'easy'
+
+/** A card's place in the scheduler: `review` is the long-term state. */
+export type CardSchedulingState = 'new' | 'learning' | 'relearning' | 'review'
+
+/** The deck panel's grouping of a card: fresh, still being learned, or mastered. */
+export type CardBucket = 'new' | 'learning' | 'mastered'
+
+/** One card's scheduling state as the API reads it, storage timestamps and all. */
+export interface CardStateRead {
+  due_at: string
+  stability: number
+  difficulty: number
+  reps: number
+  lapses: number
+  state: CardSchedulingState
+  last_review_at: string | null
+  bucket: CardBucket
+}
+
+/** The artifact fields every deck and quiz carry. A study run never segments or solves. */
+export interface StudyArtifactRead {
+  id: number
+  class_id: number
+  kind: 'flashcard_deck' | 'quiz'
+  title: string
+  state: ArtifactState
+  stage_detail: string | null
+  /** Null until generation has counted, so "not counted" differs from "none found". */
+  problems_total: number | null
+  problems_done: number
+  error_message: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** A deck in the study list, with the scheduling counts the panel shows. */
+export interface DeckSummary extends StudyArtifactRead {
+  kind: 'flashcard_deck'
+  cards_total: number
+  due_count: number
+  buckets: Record<CardBucket, number>
+}
+
+/** Everything the class study panel lists. */
+export interface StudyListRead {
+  decks: DeckSummary[]
+  quizzes: StudyArtifactRead[]
+}
+
+/** What one flashcard says. */
+export interface CardContent {
+  front: string
+  back: string
+  topic: string
+}
+
+/** One card in a deck. `card_state` is null until the scheduler has a row for it. */
+export interface DeckCard {
+  part_id: number
+  ordinal: number
+  label: string | null
+  card: CardContent
+  card_state: CardStateRead | null
+}
+
+export interface DeckDetail extends StudyArtifactRead {
+  kind: 'flashcard_deck'
+  cards: DeckCard[]
+}
+
+/** One card in a study session, in the order the scheduler chose. */
+export interface SessionCard {
+  part_id: number
+  label: string | null
+  card: CardContent
+  due: boolean
+  card_state: CardStateRead
+}
+
+export interface DeckSession {
+  cards: SessionCard[]
+}
+
+export type QuizDifficulty = 'basic' | 'intermediate' | 'exam'
+
+export type QuizQuestionType = 'mcq' | 'true_false' | 'fill_blank'
+
+/**
+ * What one quiz question asks, answer included. Lyra is local and trusts the user; the
+ * interface, not the API, controls when the answer is revealed.
+ */
+export interface QuizQuestion {
+  type: QuizQuestionType
+  question: string
+  options: string[]
+  correct_index: number
+  explanation: string
+  topic: string
+  difficulty: QuizDifficulty
+}
+
+export interface QuizQuestionRead {
+  part_id: number
+  ordinal: number
+  label: string | null
+  question: QuizQuestion
+}
+
+export interface QuizDetail extends StudyArtifactRead {
+  kind: 'quiz'
+  questions: QuizQuestionRead[]
+}
+
+/** The polled generation state of one deck or quiz. Skinny on purpose: the panel polls it. */
+export interface StudyStatus {
+  state: ArtifactState
+  stage_detail: string | null
+  problems_total: number | null
+  problems_done: number
+  error_message: string | null
+}
+
+export interface DeckCreate {
+  title: string
+  /** Null means every ready document in the class. */
+  document_ids?: number[] | null
+  cards_per_topic?: number
+}
+
+export interface QuizCreate {
+  title: string
+  /** Null means every ready document in the class. */
+  document_ids?: number[] | null
+  count?: number
+  difficulty?: QuizDifficulty
+  /** Null means every question type. */
+  types?: QuizQuestionType[] | null
+}
+
+/** Body of `PATCH /api/cards/{partId}`: both faces and the topic, every time. */
+export interface CardUpdate {
+  front: string
+  back: string
+  topic: string
+}
+
+export interface CardUpdateRead {
+  part_id: number
+  card: CardContent
+}
+
+/**
+ * Body of `POST /api/attempts/{attemptId}/answers`. For a fill_blank question the runner
+ * compares the typed answer against `options[0]` itself and sends 0 on a match, -1 on a miss.
+ */
+export interface AnswerCreate {
+  part_id: number
+  selected_index: number
+}
+
+export interface AttemptRead {
+  attempt_id: number
+  question_part_ids: number[]
+}
+
+export interface AnswerRead {
+  correct: boolean
+  correct_index: number
+  explanation: string
+}
+
+/** A finished attempt's score, per topic: the weakness surface. */
+export interface AttemptResult {
+  score: number
+  total: number
+  by_topic: { topic: string; correct: number; total: number }[]
 }
