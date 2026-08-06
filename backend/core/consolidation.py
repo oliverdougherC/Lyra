@@ -29,7 +29,7 @@ from collections.abc import Mapping, Sequence
 
 from backend.core.app_settings import extraction_allowed, resolve_tutor_config
 from backend.llm import client, replies
-from backend.llm.prompts import build_consolidation_prompt
+from backend.llm.prompts import CONSOLIDATION_SCHEMA, build_consolidation_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +195,15 @@ def consolidate_class(conn: sqlite3.Connection, class_id: int) -> None:
     # Sync for the same reason `extract_facts` is: the ingestion worker is a plain thread
     # with no event loop, and owning one for the call keeps it free of async plumbing.
     content = asyncio.run(
-        client.complete(config.endpoint_url, config.api_key, config.model, messages)
+        client.complete(
+            config.endpoint_url,
+            config.api_key,
+            config.model,
+            messages,
+            temperature=client.DETERMINISTIC_TEMPERATURE,
+            schema=CONSOLIDATION_SCHEMA,
+            request_timeout=client.BACKGROUND_TIMEOUT,
+        )
     )
 
     payload = replies.loads_object(content)

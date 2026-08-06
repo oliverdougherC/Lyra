@@ -1,8 +1,28 @@
-"""Prompt construction for the tutor model.
+"""Prompt construction for the tutor model, and the schemas the replies are held to.
 
-Three prompts live here: the chat system prompt, the profile-extraction prompt, and the
-retrieved-context block that sits between them and the conversation history, per the prompt
-structure in `docs/rag-pipeline.md`.
+Every prompt an LLM sees lives here except the two that travel with an image
+(`rag/transcribe.py`) and the eval grader in `scripts/eval_solver.py`.
+
+**These are written for a small local model.** That is the constraint that shapes all of
+them, and it is worth stating because it is not the usual one. A frontier model reads a
+paragraph of reasoning and follows the argument; a 7B model reads the same paragraph and
+pattern-matches its nouns, which means a rule phrased as "do not record the course code"
+is, to that reader, a prompt containing the words "course code". So the prompts here are
+built rather than written: the fields a document type may not fill are *absent from the
+schema*, not forbidden in prose, and the rules that remain are numbered, short, and
+followed by a worked example. Anything a deterministic check can settle is settled in
+Python instead - which is what `quote` is for, below.
+
+Four things are therefore true of every structured prompt in this module:
+
+1. It asks for exactly the fields the caller can use, assembled per document type.
+2. It ships a `JsonSchema` that `llm/client.py` sends as `response_format`, so a server
+   that supports constrained decoding cannot leave the shape at all.
+3. It shows one worked example built from the same field list, never a hand-written one
+   that can drift from the schema beside it.
+4. It states what an empty answer looks like, because "omit what you had to reach for"
+   is an instruction models obey only when they have been shown that nothing is a
+   permitted reply.
 
 Fact filtering is the caller's contract. `build_system_prompt` receives rows that
 `backend.core.profiles.select_active_facts` has already filtered, which is the one SQL helper
@@ -11,11 +31,37 @@ fact does not either. This module deliberately does not import that helper and d
 again: a second copy of the rule is a second place for it to drift.
 """
 
+import json
 import sqlite3
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Literal
 
+from backend.llm.client import JsonSchema
+from backend.rag.chunk import (
+    EXAM,
+    GENERIC,
+    HOMEWORK,
+    LAB,
+    LECTURE_NOTES,
+    SOLUTIONS,
+    SYLLABUS,
+    TEXTBOOK,
+)
+
 ChatMode = Literal["guide", "show"]
+
+# Said once, in one wording, in every prompt that parses its reply. It used to be written
+# out four times in four places, so a fix to one was a fix to one.
+_JSON_ONLY = "Reply with JSON only. No prose, no explanation, and no code fence."
+
+# Likewise for the LaTeX rules, which were stated four times in four different wordings.
+_LATEX_RULES = (
+    "Write mathematics in LaTeX. Use $...$ for a quantity inside a line of text and "
+    "$$...$$ on its own line for a displayed equation. Every LaTeX command belongs inside "
+    "those delimiters: a bare \\frac outside them reaches the student as the characters "
+    "you typed rather than as a fraction."
+)
 
 # Kind order is presentation order. A kind absent from the rows renders no heading at all.
 _KIND_HEADINGS: dict[str, str] = {
@@ -32,30 +78,29 @@ _KIND_HEADINGS: dict[str, str] = {
 # a course with ninety extracted topics would otherwise spend all of it listing them.
 MAX_FACTS_PER_KIND = 15
 
-_BASE_PROMPT = """\
+# Roughly half the length it was. The three paragraphs it used to spend on one verbal tic
+# were well argued and correct, and they were also most of the prompt: a small model given
+# five paragraphs weights them about equally, so the rules that actually matter - do not
+# invent a deadline, put mathematics in delimiters - were competing with a style note.
+_BASE_PROMPT = (
+    """\
 You are Lyra, a study tutor for one student. The retrieved context below comes from
 documents that student uploaded for this class. It is there for you to use, not to talk
 about.
 
-Answer in your own voice and start with the answer. Do not open a reply by narrating where
-your information came from. Phrases like "according to the course materials", "based on the
-provided context", or "the documents say" tell the student nothing they do not already know,
-and using them every turn makes a tutor sound like a search result. The student knows what
-they uploaded.
-
-Cite a source when the citation is itself part of the answer: the section a worked problem
-comes from, where a definition or theorem is stated, the document a deadline appears in, or
-when the question is about the course rather than the subject, such as what the class covers
-or what is due. "This is problem 4 in section 8.2" is useful. "According to your course
-materials, the derivative of x squared is 2x" is not.
-
-When the context does not cover the question, say so plainly rather than inventing course
-material, deadlines, or problem statements. You may then answer from general knowledge, as
-long as you say that is what you are doing.
-
-Write mathematics in LaTeX. Put equations in $$...$$ on their own line for display math; \
-reserve $...$ for short inline quantities.
-"""
+1. Start with the answer, in your own voice. Never open by narrating where your
+   information came from: the student knows what they uploaded, so "according to the
+   course materials" and "based on the provided context" tell them nothing.
+2. Name a source only when the citation is part of the answer - which section a problem
+   is from, where a theorem is stated, which document gives a deadline. "This is problem 4
+   in section 8.2" is useful; "according to your course materials, the derivative of x
+   squared is 2x" is not.
+3. When the context does not cover the question, say so plainly. Never invent course
+   material, a deadline, or a problem statement. You may then answer from general
+   knowledge as long as you say that is what you are doing.
+4. """
+    + _LATEX_RULES
+)
 _GUIDE_PROMPT = """\
 Mode: Guide.
 
@@ -73,89 +118,358 @@ leads to it in order, naming the rule or definition each step relies on. Close w
 summary of the idea worth carrying forward. Do not withhold the answer and do not turn the
 reply into a quiz."""
 
-# The single copy of the extraction prompt. `docs/rag-pipeline.md` describes what it is for
-# and what each kind is defined to exclude; read that before changing this.
+# --------------------------------------------------------------------------------------
+# Profile extraction.
 #
-# The exclusions carry more of the weight than the inclusions. A model reading one homework
-# sheet has no idea it is the ninth of sixteen, so left to itself it reports the course code,
-# the term, and the sheet's own title as findings, every single time. Sixteen uploads then
-# bury the profile under sixteen copies of what the student typed when they made the class.
-_EXTRACTION_PROMPT = """\
-You are reading one document from a student's course, and recording what it says about the
-course itself. You are building a profile of the class, not a summary of this file.
+# `docs/rag-pipeline.md` describes what this is for; read that before changing it.
+#
+# The old version of this prompt asked every document for all six kinds and then spent a
+# paragraph listing what not to report. Both halves were wrong for a small model. Asking a
+# homework sheet for `professor_info` is an instruction to go and find one, and a field
+# list is a far stronger signal than a sentence of prose asking for restraint; and the
+# paragraph of exclusions is, to a pattern-matcher, a list of the exact nouns to emit.
+#
+# So the field list is now assembled per document type and the exclusions are mostly gone,
+# because a field that is absent from the schema cannot be filled. What is left of the
+# prose is the part no schema can express: that a document may not be from this course at
+# all.
 
-Return JSON with these fields. Every one is optional: omit a field rather than filling it
-with something you had to reach for.
+_TOPICS = "topics"
+_NOTES = "notes"
+_DEADLINES = "deadlines"
+_GRADING = "grading"
+_PROFESSOR_INFO = "professor_info"
+_PREREQUISITES = "prerequisites"
 
-- "topics": a list of {"name", "confidence"} objects. The subject matter this document
-  teaches or exercises, each named the way a textbook index would name it: "Convolution",
-  "Fourier series", "Region of convergence". One idea per entry, in its plainest form. Not
-  the course title, not a problem restated, not a sentence.
-- "deadlines": a list of {"label", "value", "confidence"} objects, where the label names
-  the obligation and the value carries its date. Something with no date is not a deadline.
-- "grading": a list of {"label", "value", "confidence"} objects. What determines the grade:
-  weights, the letter scale, the late policy.
-- "professor_info": a list of {"label", "value", "confidence"} objects. Name, contact,
-  office hours.
-- "prerequisites": a list of {"name", "confidence"} objects. Knowledge or software the
-  course assumes the student already has.
-- "notes": a list of {"label", "value", "confidence"} objects. Conventions this course
-  holds that a tutor would otherwise get wrong: the sign or factor convention it uses for a
-  transform, the notation it uses for a standard quantity, a method it requires or forbids,
-  a standing rule about how work is to be presented. A convention that holds beyond this one
-  document, and nothing that does not.
+# Kinds whose entry is a bare name, against kinds whose entry is a label and a value. The
+# split matches `_NAMED_KINDS` in `core/profiles.py`, which reads these replies.
+_NAMED_FIELDS = frozenset({_TOPICS, _PREREQUISITES})
 
-Leave out anything that describes the document rather than the course. Its title, its type,
-its assignment number, its term, its course code, how many problems or pages it has, and any
-instruction that applies only to this one assignment. Those are already known, and repeating
-them once per file is what makes a profile useless.
-
-Only record what the document states. Do not infer and do not guess."""
-
-_EXTRACTION_SUFFIX = """\
-Give every entry a "confidence" of either "high" or "low", and use "low" for anything you are
-not certain the document states outright.
-Reply with JSON only. No prose, no explanation, and no code fence."""
-
-# What each document type is worth reading for. A homework sheet is not a syllabus, and a
-# model told which one it holds stops looking for grading policy in a problem set.
-_EXTRACTION_DOC_TYPES = {
-    "homework": (
-        "This document is a homework assignment. Its topics are what its problems exercise. "
-        "Beyond those, the only class-level facts it usually carries are its due date and any "
-        "convention it states for the whole course."
+# What each field means, written as one line because it sits in a numbered list.
+_FIELD_SPECS: dict[str, str] = {
+    _TOPICS: (
+        "the subject matter this document teaches or exercises, each named the way a "
+        'textbook index would name it: "Convolution", "Fourier series", "Region of '
+        'convergence". One idea per entry, in its plainest form. Never a whole sentence, '
+        "never a problem restated, never the course title"
     ),
-    "syllabus": (
-        "This document is a syllabus. This is where grading, deadlines, prerequisites, and "
-        "the instructor's details actually live, so read it for all of them."
+    _NOTES: (
+        "a convention this course holds that a tutor would otherwise get wrong: the sign "
+        "or factor convention it uses for a transform, the notation it uses for a standard "
+        "quantity, a method it requires or forbids, a standing rule about how work is to "
+        "be presented. Only a convention that holds beyond this one document"
     ),
-    "lecture_notes": (
-        "This document is a set of lecture notes. Its topics are what it teaches, and its "
-        "notation and conventions are the course's own."
+    _DEADLINES: (
+        "something this course requires by a date, with the date in the value. An entry "
+        "with no date in it is not a deadline and does not belong here"
+    ),
+    _GRADING: (
+        "what determines the grade: the weight of each component, the letter scale, the late policy"
+    ),
+    _PROFESSOR_INFO: "the instructor's name, contact address, or office hours",
+    _PREREQUISITES: (
+        "knowledge or software the course assumes the student already has before it starts"
     ),
 }
 
-_CONSOLIDATION_PROMPT = """\
-You are tidying the profile of one course. The entries below were pulled out of the student's
-documents one file at a time, so the same thing often appears more than once in different
-words, and some of them turned out to describe a file rather than the course.
+# The example is generated from the same field list the prompt asks for, so it can never
+# show a field the schema forbids or miss one the schema requires. `notes` is deliberately
+# left empty in every example: a model that has been shown an empty list is enormously more
+# willing to return one, and "nothing here" is the correct answer far more often than a
+# model reaching to fill six fields will ever produce on its own.
+_FIELD_EXAMPLES: dict[str, list[dict[str, str]]] = {
+    _TOPICS: [
+        {
+            "name": "Convolution",
+            "quote": "Compute the convolution y(t) = x(t) * h(t) for the signals below.",
+        }
+    ],
+    _NOTES: [],
+    _DEADLINES: [
+        {
+            "label": "Problem Set 3",
+            "value": "Friday 14 March, 5pm",
+            "quote": "Problem Set 3 is due Friday 14 March at 5pm.",
+        }
+    ],
+    _GRADING: [
+        {
+            "label": "Final exam",
+            "value": "40% of the final grade",
+            "quote": "The final exam is worth 40% of the course grade.",
+        }
+    ],
+    _PROFESSOR_INFO: [
+        {
+            "label": "Office hours",
+            "value": "Tuesdays 2-4pm, Room 3.14",
+            "quote": "Office hours: Tuesdays 2-4pm, Room 3.14.",
+        }
+    ],
+    _PREREQUISITES: [
+        {
+            "name": "Linear algebra",
+            "quote": "Students are expected to have completed a course in linear algebra.",
+        }
+    ],
+}
 
-Return JSON with two fields:
 
-- "duplicates": a list of groups, each group a list of the numbers that name the same thing,
-  best-worded first. The first number in a group is kept and the rest are folded into it.
-  Group two entries only when a student would call them one entry written twice. Related is
-  not the same: "Fourier transform" and "inverse Fourier transform" stay separate, and so do
-  "convolution" and "circular convolution".
-- "not_about_the_course": a list of the numbers that describe a file rather than the course.
-  An assignment's number, a document's title or type, how many problems it contains, the
-  course code or term, an instruction that applies to one worksheet only. Nothing is deleted;
-  these are set aside for the student to look at.
+@dataclass(frozen=True)
+class ExtractionProfile:
+    """What one kind of document may be asked about, and how much of it.
 
-Leave a number out of both lists when you are not sure. Every number you return must be one
-from the list below. Do not invent entries and do not rename anything.
+    Attributes:
+        description: What the document is, and what its topics mean. Two of these carry a
+            reuse warning as well, which is the one exclusion no schema can express.
+        fields: The payload keys to request, in the order the prompt lists them. A key
+            absent here is absent from the prompt, from the example, and from the schema.
+        max_topics: Ceiling on the topic list. Without one a model reading a textbook
+            returns ninety, and `MAX_FACTS_PER_KIND` then truncates at render time, after
+            all ninety have been stored and shown to the student in the profile screen.
+    """
 
-Reply with JSON only. No prose, no explanation, and no code fence."""
+    description: str
+    fields: tuple[str, ...]
+    max_topics: int = 8
+
+
+# Documents that are routinely photocopied forward from one term to the next. This is the
+# case the student named and the one nothing in Lyra used to handle: a practice midterm
+# with another professor's name on it, an answer key from a course with a different code.
+# Both types are restricted to topics and notes by their field list; this says why, because
+# a model that understands the reason stops volunteering the same facts in the topic list.
+_REUSE_WARNING = (
+    "Documents of this kind are reused between terms and between courses, and the copy "
+    "the student has may not have been written for their class at all. Any name, date, "
+    "term, course code, or room number printed on it is evidence about some other "
+    "offering. Record none of them, anywhere, in any field."
+)
+
+EXTRACTION_PROFILES: dict[str, ExtractionProfile] = {
+    SYLLABUS: ExtractionProfile(
+        description=(
+            "This document is the course syllabus. It is the one document that speaks for "
+            "the course itself, so its deadlines, its grading policy, its prerequisites, "
+            "and its instructor's details are all genuinely this class's. Read it for all "
+            "of them."
+        ),
+        fields=(_TOPICS, _NOTES, _DEADLINES, _GRADING, _PROFESSOR_INFO, _PREREQUISITES),
+        max_topics=12,
+    ),
+    HOMEWORK: ExtractionProfile(
+        description=(
+            "This document is a homework assignment the student was set. Its topics are "
+            "the subjects its problems exercise, and its due date, if it prints one, is "
+            "this course's."
+        ),
+        fields=(_TOPICS, _NOTES, _DEADLINES),
+    ),
+    LAB: ExtractionProfile(
+        description=(
+            "This document is a lab handout. Its topics are what the lab exercises, and "
+            "its due date, if it prints one, is this course's."
+        ),
+        fields=(_TOPICS, _NOTES, _DEADLINES),
+    ),
+    SOLUTIONS: ExtractionProfile(
+        description=(
+            "This document is a worked solution set or answer key. Its topics are the "
+            f"subjects the problems it answers exercise.\n\n{_REUSE_WARNING}"
+        ),
+        fields=(_TOPICS, _NOTES),
+    ),
+    EXAM: ExtractionProfile(
+        description=(
+            "This document is an exam or a practice exam. Its topics are the subjects its "
+            f"questions test.\n\n{_REUSE_WARNING}"
+        ),
+        fields=(_TOPICS, _NOTES),
+    ),
+    LECTURE_NOTES: ExtractionProfile(
+        description=(
+            "This document is a set of lecture notes. Its topics are what it teaches, and "
+            "the notation and conventions it uses are the course's own."
+        ),
+        fields=(_TOPICS, _NOTES),
+    ),
+    TEXTBOOK: ExtractionProfile(
+        description=(
+            "This document is a textbook or a long reference work. Its topics are the "
+            "subjects it covers. A textbook is not a course: it was written for many of "
+            "them, so its author, its edition, and any schedule, deadline, or policy it "
+            "prints belong to the book and not to this class."
+        ),
+        fields=(_TOPICS, _NOTES),
+        max_topics=12,
+    ),
+    GENERIC: ExtractionProfile(
+        description=(
+            "What kind of document this is could not be determined. Be conservative: "
+            "record the subjects it covers and any notation convention it states outright, "
+            "and nothing else. A document you cannot identify is not evidence about who "
+            "teaches this course or when its work is due."
+        ),
+        fields=(_TOPICS, _NOTES),
+    ),
+}
+
+# The profile for a document whose type is missing or unrecognised. `generic` is the
+# conservative one, which is what an unknown should get.
+_DEFAULT_PROFILE = EXTRACTION_PROFILES[GENERIC]
+
+_EXTRACTION_HEADER = """\
+You are reading ONE document from a student's course and recording what it says about the
+COURSE. You are not summarising the document."""
+
+_EXTRACTION_RULES = """\
+Rules. All of them apply to every entry you write.
+
+1. Record only what this document states in words. Do not infer, do not deduce, and do not
+   fill a field from what a document of this kind usually contains.
+2. Every entry carries a "quote": the sentence or phrase from the document that states it,
+   copied exactly, character for character. If you cannot find the words, there is no entry
+   to write. The quote is checked against the document afterwards.
+3. An empty list is a correct and expected answer. Most documents have nothing to say for
+   most of these fields. Returning [] is right; reaching for something to put there is not.
+4. Write about the course, never about the document. Its title, its assignment number, its
+   page count, and how many problems it has are not facts about the course.
+5. One idea per entry, in the plainest words that name it."""
+
+
+def _entry_shape(field: str) -> str:
+    """The object shape one field's entries take, as the prompt states it."""
+    return '{"name", "quote"}' if field in _NAMED_FIELDS else '{"label", "value", "quote"}'
+
+
+def _extraction_fields_block(profile: ExtractionProfile) -> str:
+    """The requested fields, with the topic cap attached to the topic line.
+
+    The specs are stored uncapitalised so they read as one clause; only the first letter is
+    raised here. `str.capitalize` would lowercase everything after it, which turns the
+    `"Convolution"` in the topic spec into `"convolution"` and quietly makes the example of
+    a well-named topic an example of a badly-named one.
+    """
+    lines = ["Return JSON with exactly these fields, and no others:", ""]
+    for field in profile.fields:
+        spec = _FIELD_SPECS[field]
+        if field == _TOPICS:
+            spec = f"{spec}. At most {profile.max_topics}, the ones this document is about"
+        sentence = f"{spec[:1].upper()}{spec[1:]}."
+        lines.append(f'- "{field}": a list of {_entry_shape(field)} objects. {sentence}')
+    return "\n".join(lines)
+
+
+def _extraction_example(profile: ExtractionProfile) -> str:
+    """A complete worked reply, built from the same field list the prompt just asked for."""
+    payload = {field: _FIELD_EXAMPLES[field] for field in profile.fields}
+    return "An example of a well-formed reply:\n\n" + json.dumps(payload, indent=2)
+
+
+def extraction_schema(doc_type: str | None) -> JsonSchema:
+    """The JSON Schema for one document type's reply, for constrained decoding.
+
+    Strict-mode shaped: every property is required and no additional ones are allowed, so
+    a server that compiles this to a grammar cannot emit a field this document type is not
+    permitted to fill. That is the same rule the prompt states, enforced where a model
+    cannot decline to follow it.
+    """
+    profile = extraction_profile(doc_type)
+    properties: dict[str, object] = {}
+    for field in profile.fields:
+        keys = ["name"] if field in _NAMED_FIELDS else ["label", "value"]
+        keys.append("quote")
+        properties[field] = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {key: {"type": "string"} for key in keys},
+                "required": keys,
+                "additionalProperties": False,
+            },
+        }
+    return JsonSchema(
+        name="course_profile_facts",
+        schema={
+            "type": "object",
+            "properties": properties,
+            "required": list(profile.fields),
+            "additionalProperties": False,
+        },
+    )
+
+
+def extraction_profile(doc_type: str | None) -> ExtractionProfile:
+    """What this document type may be asked about. An unknown type gets the careful one."""
+    return EXTRACTION_PROFILES.get(doc_type or "", _DEFAULT_PROFILE)
+
+
+_CONSOLIDATION_PROMPT = f"""\
+You are tidying the profile of one course. The numbered entries below were pulled out of the
+student's documents one file at a time, so the same thing often appears more than once in
+different words, and some of them turned out to describe a file rather than the course.
+
+Return JSON with exactly two fields:
+
+- "duplicates": a list of groups. Each group is a list of the numbers that name the same
+  thing, best-worded first. The first number in a group is kept and the rest are folded
+  into it.
+- "not_about_the_course": a list of the numbers that describe a file rather than the
+  course. Nothing is deleted; these are set aside for the student to look at.
+
+Rules. All of them apply to every number you return.
+
+1. Group two entries only when a student would call them one entry written twice.
+2. Related is not the same. "Fourier transform" and "inverse Fourier transform" stay
+   separate. So do "convolution" and "circular convolution", and so do any two entries
+   where one is a special case of the other.
+3. An entry belongs in "not_about_the_course" when it names an assignment number, a
+   document's title or type, how many problems a file contains, a course code or term, or
+   an instruction that applies to one worksheet only.
+4. When you are not sure, leave the number out of both lists. Doing nothing is always a
+   permitted answer, and both lists may be empty.
+5. Every number you return must be one from the list below.
+   Do not invent entries, do not rename anything, and do not return a number twice.
+
+Given these entries:
+
+  1. [topic] Time Shift
+  2. [topic] Time-Shift Property
+  3. [topic] Fourier transform
+  4. [topic] Inverse Fourier transform
+  5. [note] This is Problem Set 4 of 8
+  6. [topic] Convolution
+
+a well-formed reply is:
+
+{{
+  "duplicates": [[1, 2]],
+  "not_about_the_course": [5]
+}}
+
+1 and 2 are one property written twice. 3 and 4 are two different transforms and are left
+alone. 6 is grouped with nothing. 5 describes a file.
+
+{_JSON_ONLY}"""
+
+# Every number the reply may contain is checked against the list that was sent, in
+# `core/consolidation.py`, so the schema constrains the shape rather than the range: a
+# grammar cannot express "an integer that was one of the ones I gave you".
+CONSOLIDATION_SCHEMA = JsonSchema(
+    name="profile_consolidation",
+    schema={
+        "type": "object",
+        "properties": {
+            "duplicates": {
+                "type": "array",
+                "items": {"type": "array", "items": {"type": "integer"}},
+            },
+            "not_about_the_course": {"type": "array", "items": {"type": "integer"}},
+        },
+        "required": ["duplicates", "not_about_the_course"],
+        "additionalProperties": False,
+    },
+)
 
 _CONTEXT_HEADING = "Retrieved context from the student's uploaded material:"
 
@@ -175,7 +489,7 @@ problem has:
 - "page": the page it starts on, as a whole number, or null if you cannot tell.
 - "parts": a list of its lettered or numbered sub-parts, each with "label" and
   "statement". An empty list when the problem has none.
-- "parts_relation": how those sub-parts relate to each other. Omit it when there are none.
+- "parts_relation": how those sub-parts relate to each other. "none" when there are none.
   - "separate" when each part is its own question with its own final answer, and
     answering one does not need the answer to another. A stem that hands the same
     question to a list of cases -- "For each system below, determine whether it is
@@ -204,8 +518,58 @@ rather than attaching them to the first one.
 
 Reply with JSON only. No prose, no explanation, and no code fence."""
 
+# `parts_relation` carries a third value the prompt does not offer, because strict-mode
+# schemas have no optional properties: a problem with no sub-parts has to answer something,
+# and `none` is that answer. `core/segmentation.py` treats anything outside its own two
+# values as unstated and falls back to reading the stem, which is exactly right here.
+_PART_SCHEMA = {
+    "type": "object",
+    "properties": {"label": {"type": "string"}, "statement": {"type": "string"}},
+    "required": ["label", "statement"],
+    "additionalProperties": False,
+}
 
-_SOLVE_PROMPT = """\
+SEGMENTATION_SCHEMA = JsonSchema(
+    name="homework_problems",
+    schema={
+        "type": "object",
+        "properties": {
+            "problems": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "number": {"type": "string"},
+                        "statement": {"type": "string"},
+                        "page": {"type": ["integer", "null"]},
+                        "parts": {"type": "array", "items": _PART_SCHEMA},
+                        "parts_relation": {
+                            "type": "string",
+                            "enum": ["separate", "one_solution", "none"],
+                        },
+                    },
+                    "required": [
+                        "label",
+                        "number",
+                        "statement",
+                        "page",
+                        "parts",
+                        "parts_relation",
+                    ],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["problems"],
+        "additionalProperties": False,
+    },
+)
+
+
+# Assembled by concatenation rather than by `format` or an f-string, and it has to be: the
+# body contains `e^{-t}u(t)`, and both of those read a LaTeX brace group as a placeholder.
+_SOLVE_BODY = """\
 You are solving one homework problem for the student whose course material is quoted
 below. Solve it completely and correctly.
 
@@ -226,23 +590,53 @@ Return JSON with two fields:
   display math.
 - "answer": the final result, stated plainly. Include units where the problem has them.
 
-Cite in "sources" every numbered entry a step actually used, and only those. The reference
-solutions below are numbered in the same sequence as the retrieved context and are cited
-the same way. A step that follows a worked example, a formula, or a method from either one
-cites the entry it came from; a step you derived yourself cites nothing. Both halves
-matter: an invented citation tells the student a step is grounded when it is not, and a
-missing one tells them their own material went unused when it did not.
+Citation rules:
 
-The numbers belong in "sources" and nowhere else. Writing "as shown in [15]" into a step's
-text puts a marker on screen that refers to a list the student cannot see; name the source
-in words, or say nothing and let the citation carry it.
+1. Cite in "sources" every numbered entry a step actually used, and only those. A step you
+   derived yourself cites nothing, and an empty list is the right answer for it.
+2. The numbers go in "sources" and nowhere else. Writing "as shown in [15]" into a step's
+   text puts a marker on screen pointing at a list the student cannot see. Name the source
+   in words, or say nothing and let the citation carry it.
+3. Reference solutions share one numbering sequence with the retrieved context and are
+   cited exactly the same way.
 
-Write mathematics in LaTeX, in "answer" as well as in every step. Put equations in $$...$$
-on their own line for display math and $...$ for short inline quantities. Every LaTeX
-command belongs inside those delimiters: a bare \\frac outside them reaches the student as
-the characters you typed rather than as a fraction.
+Both halves of rule 1 matter: an invented citation tells the student a step is grounded
+when it is not, and a missing one tells them their own material went unused when it did.
+"""
 
-Reply with JSON only. No prose, no explanation, and no code fence."""
+_SOLVE_PROMPT = "\n".join(
+    [
+        _SOLVE_BODY,
+        f'{_LATEX_RULES} This applies to "answer" as well as to every step.',
+        "",
+        _JSON_ONLY,
+    ]
+)
+
+SOLVE_SCHEMA = JsonSchema(
+    name="worked_solution",
+    schema={
+        "type": "object",
+        "properties": {
+            "steps": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "content": {"type": "string"},
+                        "sources": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    "required": ["title", "content", "sources"],
+                    "additionalProperties": False,
+                },
+            },
+            "answer": {"type": "string"},
+        },
+        "required": ["steps", "answer"],
+        "additionalProperties": False,
+    },
+)
 
 _REFERENCE_HEADING = """\
 Worked solutions the student already has. Follow their notation, layout, and method: this
@@ -267,14 +661,35 @@ A problem with several lettered parts is several checks, and requesting them tog
 what lets you finish checking all of them.
 
 When you have finished checking, reply with JSON and nothing else:
-- "verdict": "agrees" if every check you ran matched the solution, "disagrees" if a check
-  contradicted it, or "nothing_to_check" if the solution contains no claim a tool could
-  settle, which is the honest outcome for a proof or a conceptual answer.
+- "verdict": one of "agrees", "disagrees", or "nothing_to_check".
 - "detail": one or two sentences. For "disagrees", name the step, what the solution says,
   and what your check returned. Write about the solution, never about the student.
 
+Which verdict:
+- "agrees" only when every check you ran matched the solution.
+- "disagrees" when any check contradicted it. One contradicted step is a disagreement even
+  if the final answer happens to come out right.
+- "nothing_to_check" only when the solution contains no equation, no numeric result, and
+  no quantity with units - which is the honest outcome for a proof or a conceptual answer,
+  and for nothing else. If the solution contains mathematics, you must run at least one
+  tool before answering. Not having run a check is not a reason to use this verdict; it is
+  the reason not to.
+
 A check you did not run is not agreement. If you could not settle something, say so in
 "detail" rather than letting it pass."""
+
+VERIFICATION_SCHEMA = JsonSchema(
+    name="solution_check",
+    schema={
+        "type": "object",
+        "properties": {
+            "verdict": {"type": "string", "enum": ["agrees", "disagrees", "nothing_to_check"]},
+            "detail": {"type": "string"},
+        },
+        "required": ["verdict", "detail"],
+        "additionalProperties": False,
+    },
+)
 
 _STEP_CONTEXT_HEADING = "The student is asking about one step of a solution Lyra wrote:"
 
@@ -287,12 +702,14 @@ _STEP_CONTEXT_HEADING = "The student is asking about one step of a solution Lyra
 # conversation is over when that step makes sense. Offering the walkthrough unprompted
 # takes a thirty-second question and turns it into an assignment.
 _ANCHORED_SCOPE = """\
+Scope. This overrides the mode instructions above wherever the two disagree.
+
 This conversation is about that step and nothing else. Answer what the student actually
-asked, then stop. In Guide, at most one leading question to get them there: once they have
-it, confirm it, give them the answer to what they asked, and end the turn. Do not move on
-to the next step, do not recap the steps before it, and never offer to work through the
-rest of the problem. If the student wants that, they will ask, and then it is theirs to
-ask for rather than yours to start."""
+asked, then stop. In Guide, that means at most one leading question rather than one per
+step: once they have it, confirm it, answer what they asked, and end the turn.
+Do not move on to the next step, do not recap the steps before it, and
+never offer to work through the rest of the problem. If the student wants that, they will
+ask, and then it is theirs to ask for rather than yours to start."""
 
 
 def build_segmentation_prompt(text: str, filename: str) -> list[dict[str, str]]:
@@ -548,25 +965,33 @@ def build_extraction_prompt(
 ) -> list[dict[str, str]]:
     """Build the profile-extraction messages for one document.
 
+    The whole prompt is assembled from the document type's `ExtractionProfile`: what the
+    document is, which fields may be asked for, the example, and the schema all come from
+    the same place, so they cannot disagree with each other.
+
     Args:
         text: Document text, already truncated to the extraction budget by the caller.
-        doc_type: What `detect_doc_type` decided, which tells the model what this document
-            is worth reading for. An unrecognised or missing type adds nothing.
+        doc_type: What `detect_doc_type` decided. This chooses the profile, and an
+            unrecognised or missing type gets the conservative one rather than the
+            permissive one it used to get.
         course: The class row, for its `name`, `code`, and `semester`. Naming them is what
             stops every upload proposing them again as if they were discoveries.
 
     Returns:
-        OpenAI-shaped messages. The parser downstream is defensive regardless, but asking
-        for bare JSON keeps the common case clean.
+        OpenAI-shaped messages. Pair with `extraction_schema(doc_type)` at the call site.
     """
-    parts = [_EXTRACTION_PROMPT]
-    guidance = _EXTRACTION_DOC_TYPES.get(doc_type or "")
-    if guidance:
-        parts.append(guidance)
+    profile = extraction_profile(doc_type)
+    parts = [
+        _EXTRACTION_HEADER,
+        profile.description,
+        _EXTRACTION_RULES,
+        _extraction_fields_block(profile),
+        _extraction_example(profile),
+    ]
     identity = _course_identity(course)
     if identity:
         parts.append(identity)
-    parts.append(_EXTRACTION_SUFFIX)
+    parts.append(_JSON_ONLY)
     return [
         {"role": "system", "content": "\n\n".join(parts)},
         {"role": "user", "content": text},

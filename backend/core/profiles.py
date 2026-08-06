@@ -8,9 +8,15 @@ what differs by formatting: wording differences are judgment, and they wait for
 `backend.core.consolidation`. See `docs/rag-pipeline.md` for the full rule.
 
 An extracted fact is a proposal, not an assertion. `select_active_facts` is the single place
-the promotion rule is written as SQL: not rejected, and either confirmed by the user, marked
-`high` by the model, or attested by two documents independently. `backend.llm.prompts`
+the promotion rule is written as SQL: not rejected, and either confirmed by the user, carrying
+`high` confidence, or attested by two documents independently. `backend.llm.prompts`
 deliberately does not filter again.
+
+`high` is not the model's own opinion of itself. Every extracted entry arrives with a
+`quote` - the words the document uses to state it - and `confidence_for` decides the
+marking by looking for those words in the text the model was actually shown. A fact nobody
+can point to in the document stays `low`, which is to say visible in the class profile and
+absent from every prompt until the student confirms it.
 
 Extraction is the one path that can send document text to a remote endpoint, so
 `extract_facts` asks `extraction_allowed` before it does anything else at all.
@@ -21,6 +27,7 @@ import logging
 import sqlite3
 import unicodedata
 from collections.abc import Mapping
+from dataclasses import dataclass
 
 from backend.core.app_settings import (
     EXTRACTION_DISABLED,
@@ -31,7 +38,7 @@ from backend.core.app_settings import (
 )
 from backend.core.errors import NotFoundError
 from backend.llm import client, replies
-from backend.llm.prompts import build_extraction_prompt
+from backend.llm.prompts import build_extraction_prompt, extraction_schema
 from backend.rag.tokens import CHARS_PER_TOKEN
 
 logger = logging.getLogger(__name__)
@@ -89,8 +96,15 @@ _DEFAULT_LABELS: dict[str, str] = {
 
 _LABEL_KEYS = ("label", "name", "title")
 _VALUE_KEYS = ("value", "date", "description")
-_CONFIDENCE_KEY = "confidence"
-_CONFIDENCE_VALUES = frozenset({"high", "low"})
+_QUOTE_KEY = "quote"
+
+# Keys that describe an entry rather than being part of it. `_read_object` falls back to
+# reading an object's own keys as labels when it finds no recognised value key, and without
+# this these two would land in the profile as facts named "quote" and "confidence".
+#
+# `confidence` is still listed although the prompt no longer asks for one: a model that
+# volunteers the field anyway must not have it filed as a course fact.
+_METADATA_KEYS = frozenset({_QUOTE_KEY, "confidence"})
 
 # Kinds whose whole fact is a name. A topic is "Convolution", not "Convolution: <gloss>",
 # so its entry has one field rather than a label and a value, and the value column carries
@@ -105,14 +119,45 @@ CORROBORATION_THRESHOLD = 2
 # An unmarked fact is not a trusted fact. Defaulting to `low` keeps it out of prompts
 # until a person has looked at it.
 _DEFAULT_CONFIDENCE = "low"
+_HIGH_CONFIDENCE = "high"
+
+# Confidence used to be the model's own word for how sure it was, and it was load-bearing:
+# `select_active_facts` promotes a `high` fact straight into every chat prompt with nobody
+# having looked at it. Asking a small model to rate its own certainty and then trusting the
+# answer is the weakest link a design can have, and a small model marks everything high.
+#
+# So the prompt now asks for a `quote` instead - the words in the document that state the
+# fact - and confidence is decided here, by looking for them. A fact whose quote is really
+# in the document is `high`; anything else is `low`, which means stored, shown in the class
+# profile, and kept out of every prompt until the student confirms it. A hallucinated fact
+# cannot produce a quote that survives this, so it cannot reach the tutor on its own.
+#
+# Short quotes are refused because they are not evidence: `x` occurs in every document ever
+# written, and a model that answers a required field with one character would otherwise
+# have every fact it invented promoted. Twelve characters is about one short clause.
+MIN_QUOTE_CHARS = 12
+
+# Characters a PDF prints and a model retypes differently. Left un-normalized, a perfectly
+# honest quote of a sentence containing a typographic dash or a curly apostrophe fails to
+# match the document it was copied from, and a real fact is demoted for a punctuation mark.
+_QUOTE_EQUIVALENTS = str.maketrans(
+    {
+        "‘": "'", "’": "'", "‚": "'", "‛": "'",
+        "“": '"', "”": '"', "„": '"',
+        "‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-",
+        "―": "-", "−": "-",
+        " ": " ", " ": " ", " ": " ",
+        "…": "...",
+    }
+)  # fmt: skip
 
 # One statement serves both scopes. SQLite's `is` compares like `=` for a non-null
 # parameter and like `is null` for a null one, so the filter itself is written once.
 #
 # The third clause of the `having` is corroboration: a fact two documents state independently
-# has been vouched for by the material itself, which is evidence in the same way the model's
-# own `high` marking is. Ordering is by that same evidence, because `_render_facts` caps each
-# kind and the cap should fall on what one document mentioned once.
+# has been vouched for by the material itself, which is evidence in the same way a verified
+# quote is. Ordering is by that same evidence, because `_render_facts` caps each kind and the
+# cap should fall on what one document mentioned once.
 _SELECT_ACTIVE_FACTS = """
 select f.*, count(s.document_id) as source_count
 from profile_facts f
@@ -212,16 +257,29 @@ def _first_text(source: Mapping[str, object], keys: tuple[str, ...]) -> str:
     return ""
 
 
-def _confidence_of(source: Mapping[str, object]) -> str:
-    """The model's own confidence marking, normalised. Unmarked or unrecognised is `low`."""
-    raw = source.get(_CONFIDENCE_KEY)
-    if isinstance(raw, str) and raw.strip().lower() in _CONFIDENCE_VALUES:
-        return raw.strip().lower()
-    return _DEFAULT_CONFIDENCE
+@dataclass(frozen=True)
+class Observation:
+    """One fact as the model reported it, before the quote has been checked.
+
+    Attributes:
+        label: What names the fact. For a named kind this is the section's own word.
+        value: What the fact says. For a named kind this carries the name itself.
+        quote: The words the model says state this fact in the document. Empty when it
+            gave none, which is itself a reason to distrust the entry.
+    """
+
+    label: str
+    value: str
+    quote: str
 
 
-def _read_object(item: Mapping[str, object], fallback_label: str) -> list[tuple[str, str, str]]:
-    """Read one JSON object as `(label, value, confidence)` triples.
+def _quote_of(source: Mapping[str, object]) -> str:
+    """The evidence an entry offers for itself, or an empty string when it offers none."""
+    return _as_text(source.get(_QUOTE_KEY))
+
+
+def _read_object(item: Mapping[str, object], fallback_label: str) -> list[Observation]:
+    """Read one JSON object as observations.
 
     An object is read as a single labelled item when it carries one of the recognised
     value keys, and otherwise as a mapping whose own keys are the labels. That is what
@@ -233,30 +291,30 @@ def _read_object(item: Mapping[str, object], fallback_label: str) -> list[tuple[
     blank is an item with nothing in it, so it is dropped rather than re-read as a
     mapping of its own label key.
 
-    `confidence` is metadata in both readings, so it never becomes a fact of its own.
+    `quote` is metadata in both readings, so it never becomes a fact of its own.
     """
-    confidence = _confidence_of(item)
+    quote = _quote_of(item)
 
     if any(key in item for key in _VALUE_KEYS):
         value = _first_text(item, _VALUE_KEYS)
         if not value:
             return []
-        return [(_first_text(item, _LABEL_KEYS) or fallback_label, value, confidence)]
+        return [Observation(_first_text(item, _LABEL_KEYS) or fallback_label, value, quote)]
 
-    facts: list[tuple[str, str, str]] = []
+    facts: list[Observation] = []
     for key, raw in item.items():
-        if key == _CONFIDENCE_KEY:
+        if key in _METADATA_KEYS:
             continue
         if isinstance(raw, Mapping):
             facts.extend(_read_object(raw, str(key)))
             continue
         text = _as_text(raw)
         if text:
-            facts.append((str(key), text, confidence))
+            facts.append(Observation(str(key), text, quote))
     return facts
 
 
-def _read_named(item: object, kind: str) -> list[tuple[str, str, str]]:
+def _read_named(item: object, kind: str) -> list[Observation]:
     """Read one entry of a kind whose whole fact is a name.
 
     `{"name": "Fourier series"}` read as a general object would come back labelled `name`,
@@ -266,42 +324,42 @@ def _read_named(item: object, kind: str) -> list[tuple[str, str, str]]:
     """
     fallback_label = _DEFAULT_LABELS[kind]
     if isinstance(item, Mapping):
+        quote = _quote_of(item)
         if name := _first_text(item, _NAME_KEYS):
-            return [(fallback_label, name, _confidence_of(item))]
+            return [Observation(fallback_label, name, quote)]
         # No name key at all, so this is a mapping *of* names rather than one of them:
         # `{"1": "Convolution", "2": "Fourier series"}`. Reading only the first would
         # silently drop the rest.
-        confidence = _confidence_of(item)
         return [
-            (fallback_label, text, confidence)
+            Observation(fallback_label, text, quote)
             for key, raw in item.items()
-            if key != _CONFIDENCE_KEY and (text := _as_text(raw))
+            if key not in _METADATA_KEYS and (text := _as_text(raw))
         ]
-    # A bare string carries no marking of its own, so it is low by default.
+    # A bare string offers no evidence for itself, so it has no quote and stays `low`.
     text = _as_text(item)
-    return [(fallback_label, text, _DEFAULT_CONFIDENCE)] if text else []
+    return [Observation(fallback_label, text, "")] if text else []
 
 
-def _read_section(section: object, kind: str) -> list[tuple[str, str, str]]:
-    """Read one payload key into `(label, value, confidence)` triples.
+def _read_section(section: object, kind: str) -> list[Observation]:
+    """Read one payload key into observations.
 
-    Every shape a model has been seen to answer with is accepted for every key, because
-    the prompt's `deadlines[]` and `grading{}` notation is a request, not a guarantee: a
-    list of strings, a list of objects, a single object, or a bare string.
+    Every shape a model has been seen to answer with is accepted for every key. That
+    tolerance matters less than it did - `extraction_schema` now constrains the reply on
+    any endpoint that implements `response_format` - but it is what still catches the
+    endpoints that do not, so it stays as the backstop it was always meant to be.
     """
     named = kind in _NAMED_KINDS
     fallback_label = _DEFAULT_LABELS[kind]
 
     if isinstance(section, list):
-        facts: list[tuple[str, str, str]] = []
+        facts: list[Observation] = []
         for item in section:
             if named:
                 facts.extend(_read_named(item, kind))
             elif isinstance(item, Mapping):
                 facts.extend(_read_object(item, fallback_label))
             elif text := _as_text(item):
-                # A bare string carries no marking of its own, so it is low by default.
-                facts.append((fallback_label, text, _DEFAULT_CONFIDENCE))
+                facts.append(Observation(fallback_label, text, ""))
         return facts
 
     if isinstance(section, Mapping):
@@ -310,7 +368,39 @@ def _read_section(section: object, kind: str) -> list[tuple[str, str, str]]:
         return _read_named(section, kind) if named else _read_object(section, fallback_label)
 
     text = _as_text(section)
-    return [(fallback_label, text, _DEFAULT_CONFIDENCE)] if text else []
+    return [Observation(fallback_label, text, "")] if text else []
+
+
+def _comparable(text: str) -> str:
+    """The form a quote and a document are compared in: punctuation and spacing settled.
+
+    Everything here is a difference between what a PDF prints and what a model types back,
+    never a difference in what was said. Case, run-length of whitespace, and the shape of a
+    dash or an apostrophe all vary between the two for reasons that have nothing to do with
+    whether the sentence is really in the document.
+    """
+    folded = unicodedata.normalize("NFKC", text).translate(_QUOTE_EQUIVALENTS)
+    return " ".join(folded.casefold().split())
+
+
+def confidence_for(quote: str, document: str) -> str:
+    """`high` when the document really contains this quote, `low` otherwise.
+
+    This is the whole of the trust decision for an extracted fact, and it is deliberately a
+    string match rather than a judgment. See `MIN_QUOTE_CHARS` for why it replaced asking
+    the model how sure it was.
+
+    Args:
+        quote: The words the model offered as evidence.
+        document: The text the model was reading, already in comparable form.
+
+    Returns:
+        `high` or `low`. Never raises: an unusable quote is a `low` fact, not an error.
+    """
+    cleaned = _comparable(quote)
+    if len(cleaned) < MIN_QUOTE_CHARS:
+        return _DEFAULT_CONFIDENCE
+    return _HIGH_CONFIDENCE if cleaned in document else _DEFAULT_CONFIDENCE
 
 
 def _parse_payload(content: str) -> dict[str, object] | None:
@@ -456,15 +546,25 @@ def _absorb(
 
 
 def _store_facts(
-    conn: sqlite3.Connection, document: sqlite3.Row, payload: Mapping[str, object]
+    conn: sqlite3.Connection, document: sqlite3.Row, payload: Mapping[str, object], text: str
 ) -> None:
     """Merge the payload's facts into the class profile and record this document as evidence.
 
     The merge is class-scoped, which is the whole point: a fact this document restates from
     another one gains a source rather than a row. Rejected facts take part, and that is what
     stops a rejected fact coming back the next time any document proposes it.
+
+    Args:
+        conn: Open database connection. Committed here.
+        document: The `documents` row the facts were proposed from.
+        payload: The model's parsed reply.
+        text: The document text the model was shown. Every entry's quote is checked
+            against this, and that check is what sets confidence.
     """
     class_id = document["class_id"]
+    # Converted once rather than per entry: a syllabus can propose thirty facts, and
+    # normalizing the whole document thirty times is thirty passes over the same string.
+    haystack = _comparable(text)
     known: dict[tuple[str, str], dict[str, object]] = {}
     for row in conn.execute(_SELECT_CLASS_FACTS, (class_id,)):
         # The earliest row wins a collision. Rows that predate this rule can already share an
@@ -472,7 +572,9 @@ def _store_facts(
         known.setdefault(_identity(row["kind"], row["label"], row["value"]), dict(row))
 
     for key, kind in _PAYLOAD_KINDS.items():
-        for label, value, confidence in _read_section(payload.get(key), kind):
+        for observation in _read_section(payload.get(key), kind):
+            label, value = observation.label, observation.value
+            confidence = confidence_for(observation.quote, haystack)
             identity = _identity(kind, label, value)
             if not identity[1]:
                 # Nothing identifying survived normalization, so there is no fact here.
@@ -546,22 +648,35 @@ def extract_facts(
     # this cannot raise ConfigurationError. `context_window` comes off the settings row.
     config = resolve_tutor_config(conn)
     budget = extraction_budget_chars(config.context_window)
+    # The truncated text is what the model is shown, so it is also what a quote has to be
+    # found in. Checking against the whole document instead would accept a quote from a
+    # page the model never saw, which is a fact it cannot have read and must not be
+    # trusted for.
+    shown = text[:budget]
     messages = build_extraction_prompt(
-        text[:budget], doc_type, _get_course(conn, int(document["class_id"]))
+        shown, doc_type, _get_course(conn, int(document["class_id"]))
     )
 
     # `client.complete` is async, and the ingestion worker is a plain thread with no
     # event loop. Owning one for the length of the call keeps `extract_facts` synchronous
     # and the worker free of async plumbing it has no other use for.
     content = asyncio.run(
-        client.complete(config.endpoint_url, config.api_key, config.model, messages)
+        client.complete(
+            config.endpoint_url,
+            config.api_key,
+            config.model,
+            messages,
+            temperature=client.DETERMINISTIC_TEMPERATURE,
+            schema=extraction_schema(doc_type),
+            request_timeout=client.BACKGROUND_TIMEOUT,
+        )
     )
 
     payload = _parse_payload(content)
     if payload is None:
         return UNPARSEABLE_RESPONSE
 
-    _store_facts(conn, document, payload)
+    _store_facts(conn, document, payload, shown)
     return None
 
 

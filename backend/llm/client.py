@@ -47,6 +47,60 @@ PROBE_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 # bound a run, so this is set to match it rather than to cut in front of it.
 TOOL_TIMEOUT = httpx.Timeout(600.0, connect=10.0)
 
+# The same argument, for the same reason, for every other pass that runs in a worker rather
+# than under someone's cursor: extraction, consolidation, segmentation, solving, and page
+# transcription. All five were on `CHAT_TIMEOUT`, which is a number chosen for a person
+# watching an answer appear.
+#
+# What that costs shows up the moment a **reasoning** model is configured, and reasoning
+# models are now the norm for local deployment. Measured against Gemma4-12B on a labelled
+# corpus: one answer key of three problems produced 21,661 characters of reasoning before
+# its first character of JSON, taking 94 seconds; two other documents of the same size had
+# not finished at 240. Nothing was wrong with any of them. They were thinking, and the
+# client hung up. A document that times out yields no facts at all and, because ingestion
+# takes one document at a time, holds every later upload behind it - which is the failure
+# `EXTRACTION_MAX_TOKENS` was already written to avoid, arriving by a different road.
+BACKGROUND_TIMEOUT = httpx.Timeout(600.0, connect=10.0)
+
+# Sampling for the passes whose reply is parsed rather than read.
+#
+# Every structured pass in Lyra - extraction, consolidation, segmentation, solving,
+# transcription - asks for one exact shape and then parses it. A server's own default is
+# routinely 0.8, which is a setting for prose, and it is the difference between a small
+# model that emits the schema it was given and one that improvises around it. Chat is
+# deliberately left on the model's default: that reply is read by a person, not a parser.
+DETERMINISTIC_TEMPERATURE = 0.0
+
+# How a server is asked to constrain a reply to JSON, strongest first.
+#
+# `json_schema` is the one worth having: llama.cpp compiles it to a GBNF grammar and vLLM
+# to a logit mask, so the reply *cannot* leave the shape, and the six-shapes-per-key
+# tolerance in `core/profiles.py` stops being what holds extraction together. `json_object`
+# guarantees only that the reply parses. `unconstrained` is a sentence in the prompt and
+# nothing else, which is where this module was before.
+#
+# There is no header advertising which of these a server implements, the same problem
+# `probe_tool_support` has, so support is discovered by being refused. A 400 carrying a
+# `response_format` demotes the endpoint one rung for the life of the process.
+JSON_SCHEMA = "json_schema"
+JSON_OBJECT = "json_object"
+JSON_UNCONSTRAINED = "unconstrained"
+_JSON_LADDER = (JSON_SCHEMA, JSON_OBJECT, JSON_UNCONSTRAINED)
+
+# The lowest rung an endpoint is known to need, keyed by endpoint and model. Only
+# demotions are recorded: a success says nothing about whether a *stronger* form would
+# also have worked, and caching it as a ceiling would cap a schema request at
+# `json_object` because some earlier schemaless call happened to succeed.
+_json_floor: dict[tuple[str, str | None], str] = {}
+
+# Statuses that may mean "I do not implement that `response_format`". A 400 says so as
+# clearly as anything does. A 500 is included because llama.cpp - the runtime this is
+# most likely to be pointed at - answers 500 rather than 400 when it cannot compile a
+# schema into a grammar, and failing the whole pass there would make constrained decoding
+# a liability on the one endpoint it matters most for.
+_REFUSED = 400
+_REFUSAL_STATUSES = frozenset({_REFUSED, 500})
+
 _ERROR_UNREACHABLE = "The tutor endpoint is not reachable. Check that the server is running."
 _ERROR_TIMEOUT = "The tutor endpoint did not respond in time."
 _ERROR_UNAUTHORIZED = "The tutor endpoint rejected the API key."
@@ -109,6 +163,22 @@ _THINK_CLOSE = ("</think>", "</thinking>")
 _LONGEST_TAG = max(len(tag) for tag in _THINK_OPEN + _THINK_CLOSE)
 
 Channel = Literal["answer", "reasoning"]
+
+
+@dataclass(frozen=True)
+class JsonSchema:
+    """A named JSON Schema a reply must conform to.
+
+    Attributes:
+        name: Identifier the API requires alongside the schema. Never shown to anyone.
+        schema: The schema itself. Written for `strict` mode, which means every property
+            appears in `required` and `additionalProperties` is false, so a field the
+            caller treats as optional is expressed as an empty array or a null rather
+            than as an absent key.
+    """
+
+    name: str
+    schema: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -291,6 +361,8 @@ def _chat_body(
     stream: bool,
     tools: list[dict[str, object]] | None = None,
     max_tokens: int | None = None,
+    temperature: float | None = None,
+    response_format: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Assemble a chat-completions body, omitting `model` when the user has not picked one.
 
@@ -302,6 +374,10 @@ def _chat_body(
     caller that has one. Only text recognition does, where a dense page can send the model
     into a repetition loop and the ceiling is what turns that into a failed page rather than
     a request that never ends.
+
+    `temperature` and `response_format` follow the same rule: a caller that has no opinion
+    sends nothing and gets the server's own behaviour. `temperature` is written out even
+    when it is 0, which is why the test is against None rather than falsiness.
     """
     body: dict[str, object] = {"messages": messages, "stream": stream}
     if model is not None:
@@ -310,7 +386,56 @@ def _chat_body(
         body["tools"] = tools
     if max_tokens is not None:
         body["max_tokens"] = max_tokens
+    if temperature is not None:
+        body["temperature"] = temperature
+    if response_format is not None:
+        body["response_format"] = response_format
     return body
+
+
+def reset_json_support() -> None:
+    """Forget what every endpoint was found to support. For tests, and for a settings change."""
+    _json_floor.clear()
+
+
+def _json_levels(endpoint: str, model: str | None, schema: JsonSchema | None) -> list[str]:
+    """The constraint forms to try for one call, strongest first.
+
+    A caller with no schema constrains nothing. It would be easy to reach for `json_object`
+    on the grounds that it is weaker and therefore safe, and it is not: `complete` also
+    carries the vision probe and any caller that wants prose, and forcing those to answer
+    in JSON would break them against an endpoint that honoured it.
+
+    The endpoint's known floor applies on top: one that has already refused a schema is
+    never asked for one again.
+    """
+    if schema is None:
+        return [JSON_UNCONSTRAINED]
+    ladder = list(_JSON_LADDER)
+    floor = _json_floor.get((endpoint, model))
+    start = ladder.index(floor) if floor is not None else 0
+    return ladder[start:]
+
+
+def _demote_json(endpoint: str, model: str | None, level: str) -> None:
+    """Record that this endpoint refused `level`, so nothing asks for it again."""
+    _json_floor[(endpoint, model)] = _JSON_LADDER[_JSON_LADDER.index(level) + 1]
+    logger.info("Tutor endpoint refused %s replies; using the next weaker form", level)
+
+
+def _response_format(level: str, schema: JsonSchema | None) -> dict[str, object] | None:
+    """The `response_format` field for one rung of the ladder, or None for the last one."""
+    if level == JSON_SCHEMA and schema is not None:
+        return {
+            "type": "json_schema",
+            # `strict` is what turns the schema into a grammar rather than a suggestion.
+            # It is why every schema in `llm/prompts.py` lists all of its properties as
+            # required and closes itself to additional ones.
+            "json_schema": {"name": schema.name, "strict": True, "schema": schema.schema},
+        }
+    if level == JSON_OBJECT:
+        return {"type": "json_object"}
+    return None
 
 
 def _delta_fields(payload: str) -> tuple[str, str]:
@@ -404,6 +529,9 @@ async def complete(
     *,
     transport: httpx.AsyncBaseTransport | None = None,
     max_tokens: int | None = None,
+    temperature: float | None = None,
+    schema: JsonSchema | None = None,
+    request_timeout: httpx.Timeout | None = None,
 ) -> str:
     """Run a single non-streaming completion and return the assistant message content.
 
@@ -411,20 +539,31 @@ async def complete(
     `<think>` block is stripped before the content is returned, because a reasoning model
     left unparsed by its server prefixes its JSON with paragraphs of deliberation.
 
+    Args:
+        endpoint: Endpoint base URL including its version suffix.
+        api_key: Bearer token, or None when the endpoint needs no auth.
+        model: Model identifier, omitted from the request when None.
+        messages: OpenAI-shaped messages.
+        transport: Test seam. Leave unset in production code.
+        max_tokens: Ceiling on the reply, omitted when the caller has none.
+        temperature: Sampling temperature. `DETERMINISTIC_TEMPERATURE` for any pass whose
+            reply is parsed rather than read.
+        schema: The shape the reply must take. Sent as `response_format` where the
+            endpoint accepts one, and silently dropped where it does not: a schema is an
+            enforcement of what the prompt already asks for, never the only place it is
+            asked, so a server that cannot take one still gets a usable instruction.
+        request_timeout: The httpx timeouts for this call, which separate connect from
+            read. Defaults to `CHAT_TIMEOUT`, the right number only when someone is
+            watching a reply arrive; every worker-side caller passes `BACKGROUND_TIMEOUT`.
+
     Raises:
         UpstreamError: The endpoint failed, or its reply had no readable message content.
     """
     url = f"{_base_url(endpoint)}/chat/completions"
-    body = _chat_body(model, messages, stream=False, max_tokens=max_tokens)
-    async with _client(CHAT_TIMEOUT, api_key, transport) as client:
-        try:
-            response = await client.post(url, json=body)
-            response.raise_for_status()
-            payload = response.json()
-        except httpx.HTTPError as exc:
-            raise _mapped_error(exc) from exc
-        except ValueError as exc:
-            raise UpstreamError(_ERROR_UNREADABLE) from exc
+    async with _client(request_timeout or CHAT_TIMEOUT, api_key, transport) as client:
+        payload = await _post_constrained(
+            client, url, endpoint, model, messages, max_tokens, temperature, schema
+        )
 
     choices = payload.get("choices") if isinstance(payload, dict) else None
     if not choices:
@@ -433,6 +572,65 @@ async def complete(
     if not isinstance(content, str):
         raise UpstreamError(_ERROR_UNREADABLE)
     return strip_reasoning(content)
+
+
+async def _post_constrained(
+    client: httpx.AsyncClient,
+    url: str,
+    endpoint: str,
+    model: str | None,
+    messages: list[dict[str, object]],
+    max_tokens: int | None,
+    temperature: float | None,
+    schema: JsonSchema | None,
+) -> dict[str, object]:
+    """Post one completion, stepping down the constraint ladder if the endpoint refuses.
+
+    A 400 is read as "this server does not implement that `response_format`", the same
+    reading `complete_with_tools` gives a 400 carrying tool definitions, and for the same
+    reason: an OpenAI-compatible server advertises nothing, so the only way to learn what
+    it takes is to be refused. The cost of reading it wrong is bounded and one-directional
+    - the request is retried in a weaker form, and the weakest form is what this module
+    sent before any of this existed.
+
+    Returns:
+        The decoded response body.
+
+    Raises:
+        UpstreamError: Every form was refused, or the failure was not a refusal.
+    """
+    levels = _json_levels(endpoint, model, schema)
+    for level in levels:
+        body = _chat_body(
+            model,
+            messages,
+            stream=False,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            response_format=_response_format(level, schema),
+        )
+        try:
+            response = await client.post(url, json=body)
+            if response.status_code in _REFUSAL_STATUSES and level != JSON_UNCONSTRAINED:
+                # Remembered only for a 400. A 500 is retried in the weaker form but not
+                # recorded, because the two things that produce one are not distinguishable
+                # from here: llama.cpp answers 500 when it cannot compile a schema into a
+                # grammar, and it also answers 500 when the model simply failed to load.
+                # Retrying costs two extra requests in the second case and rescues the
+                # first; caching it would let one bad model load quietly downgrade every
+                # request for the rest of the process.
+                if response.status_code == _REFUSED:
+                    _demote_json(endpoint, model, level)
+                continue
+            response.raise_for_status()
+            decoded = response.json()
+        except httpx.HTTPError as exc:
+            raise _mapped_error(exc) from exc
+        except ValueError as exc:
+            raise UpstreamError(_ERROR_UNREADABLE) from exc
+        return decoded if isinstance(decoded, dict) else {}
+    # Only reachable if the ladder were empty, which `_json_levels` never returns.
+    raise UpstreamError(_ERROR_UPSTREAM)
 
 
 def _read_tool_calls(message: dict[str, object]) -> tuple[ToolCall, ...]:
@@ -474,6 +672,7 @@ async def complete_with_tools(
     tools: list[dict[str, object]],
     *,
     transport: httpx.AsyncBaseTransport | None = None,
+    temperature: float | None = None,
 ) -> AssistantMessage:
     """Run one non-streaming turn with tool definitions attached.
 
@@ -502,7 +701,7 @@ async def complete_with_tools(
         UpstreamError: Any other transport or status failure.
     """
     url = f"{_base_url(endpoint)}/chat/completions"
-    body = _chat_body(model, messages, stream=False, tools=tools)
+    body = _chat_body(model, messages, stream=False, tools=tools, temperature=temperature)
     async with _client(TOOL_TIMEOUT, api_key, transport) as client:
         try:
             response = await client.post(url, json=body)

@@ -10,11 +10,14 @@ import pytest
 
 from backend.rag.chunk import (
     CHUNK_RULES,
+    EXAM,
     GENERIC,
     HOMEWORK,
+    LAB,
     LECTURE_NOTES,
     MAX_CHUNK_TOKENS,
     PROBLEM_MARKER,
+    SOLUTIONS,
     SYLLABUS,
     TEXTBOOK,
     Chunk,
@@ -370,3 +373,198 @@ def test_a_document_with_no_outline_carries_no_path() -> None:
 
     assert all(chunk.section_path is None for chunk in chunks)
     assert all(chunk.section_number is None for chunk in chunks)
+
+
+def _rows(count: int, subject: str) -> str:
+    """A reference table transcribed one entry to a line, with no blank line anywhere."""
+    return "\n".join(f"| {subject} {index} | value {index} |" for index in range(count))
+
+
+def test_a_page_of_two_tables_is_not_one_chunk() -> None:
+    """The recognition acceptance fault, in the shape that caused it.
+
+    The scanned Fourier appendix has pages carrying two tables of 241 and 220 tokens with a
+    blank line between them. Packed towards a 750-token target they became one chunk, so one
+    embedding stood for both continuous-time and discrete-time transform pairs, and asking
+    for the transform of the unit step ranked the right page third of nine.
+    """
+    page = f"{_rows(30, 'transform pair')}\n\n{_rows(30, 'series pair')}"
+
+    chunks = chunk_document(_parsed(page), GENERIC)
+
+    _assert_well_formed(chunks)
+    assert len(chunks) == 2
+    assert "transform pair" in chunks[0].content and "series pair" not in chunks[0].content
+    assert "series pair" in chunks[1].content and "transform pair" not in chunks[1].content
+
+
+def test_no_overlap_is_carried_across_two_substantial_blocks() -> None:
+    """The seam between two things is a division, not a place a sentence was cut.
+
+    Repeating the tail of the first table into the second would put back exactly what
+    separating them was for.
+    """
+    page = f"{_rows(30, 'alpha')}\n\n{_rows(30, 'beta')}"
+
+    chunks = chunk_document(_parsed(page), GENERIC)
+
+    assert "alpha" not in chunks[1].content
+    assert "beta" not in chunks[0].content
+
+
+def test_short_blocks_are_still_packed_together() -> None:
+    """Packing is right when the blocks are fragments, and most blocks are.
+
+    The same appendix has a page of ten blocks between 9 and 87 tokens that are one subject
+    between them. A rule that split at every blank line would cut that page into ten chunks.
+    """
+    page = "\n\n".join(_filler(40, seed=index) for index in range(8))
+
+    chunks = chunk_document(_parsed(page), GENERIC)
+
+    _assert_well_formed(chunks)
+    assert len(chunks) == 1
+
+
+def test_a_block_bigger_than_the_target_is_cut_at_its_own_lines() -> None:
+    """Without this the paragraph strategy has no way to divide a block at all.
+
+    An oversized one used to survive every size rule the strategy has and reach the ceiling,
+    where it was cut at 1024 tokens and wherever the character count landed - through the
+    middle of a table row rather than between two of them.
+    """
+    target = CHUNK_RULES[GENERIC].target_tokens
+    page = _rows(300, "row")
+    assert estimate_tokens(page) > target
+
+    chunks = chunk_document(_parsed(page), GENERIC)
+
+    _assert_well_formed(chunks)
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert chunk.token_count <= target
+        # Cut between rows, never through one.
+        for line in chunk.content.splitlines():
+            assert line.startswith("| row ") and line.endswith(" |")
+
+
+def test_the_heading_strategies_are_left_alone_by_all_of_this() -> None:
+    """The standalone rule is the paragraph strategy's, and only its.
+
+    A textbook's sections are packed towards its target on purpose, and the reference book's
+    17-of-17 retrieval depends on chunks that hold a section rather than a paragraph.
+    """
+    page = f"{_filler(300, seed=1)}\n\n{_filler(300, seed=2)}"
+
+    chunks = chunk_document(_parsed(page), TEXTBOOK)
+
+    assert len(chunks) == 1
+
+
+# --------------------------------------------------------------------------------------
+# The document types added so extraction can refuse a document the fields it cannot fill.
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("homework_4_solutions.pdf", SOLUTIONS),
+        ("Homework4_Solutions.PDF", SOLUTIONS),
+        ("hw3-key.pdf", SOLUTIONS),
+        ("ps2 soln.pdf", SOLUTIONS),
+        ("Practice Midterm 1.pdf", EXAM),
+        ("final-exam-2019.pdf", EXAM),
+        ("quiz3.pdf", EXAM),
+        ("Lab3.pdf", LAB),
+        ("lab-manual.pdf", LAB),
+        ("assignment-2.pdf", HOMEWORK),
+        ("pset5.pdf", HOMEWORK),
+        ("week-2-slides.pdf", LECTURE_NOTES),
+    ],
+)
+def test_the_new_document_types_are_read_off_the_filename(filename: str, expected: str) -> None:
+    assert detect_doc_type(filename, "some plain prose about the course") == expected
+
+
+def test_an_answer_key_is_solutions_before_it_is_homework() -> None:
+    """Precedence, not pattern strength: the name carries both words and one has to win.
+
+    It matters which. A key filed as homework is asked for its due date, and the date on a
+    key is whichever term the key was written for.
+    """
+    assert detect_doc_type("homework-4-solutions.pdf", "prose") == SOLUTIONS
+
+
+@pytest.mark.parametrize(
+    ("filename", "trap"),
+    [
+        ("syllabus.pdf", "syllabus contains 'lab'"),
+        ("collaboration-policy.pdf", "collaboration contains 'lab'"),
+        ("latest-draft.pdf", "latest contains 'test'"),
+        ("keywords.pdf", "keywords contains 'key'"),
+        ("finalize.pdf", "finalize contains 'final'"),
+    ],
+)
+def test_a_pattern_matches_a_word_and_not_a_word_it_is_buried_inside(
+    filename: str, trap: str
+) -> None:
+    """Why the match is on words. Every one of these was a misfile under substring matching."""
+    detected = detect_doc_type(filename, "some plain prose about the course")
+
+    assert detected in (SYLLABUS, GENERIC), trap
+
+
+def test_an_unnamed_answer_key_is_still_recognised_by_answering_its_problems() -> None:
+    """Ahead of the problem-marker count, which a key trips as hard as the sheet does."""
+    key = "\n".join(
+        f"Problem {number}.\nCompute the integral.\nSolution: the integral is {number}."
+        for number in range(1, 5)
+    )
+
+    assert detect_doc_type("scan-01.pdf", key) == SOLUTIONS
+    # The same sheet without its answers is the homework it was before.
+    assert detect_doc_type("scan-01.pdf", key.replace("Solution:", "Hint:")) == HOMEWORK
+
+
+def test_a_problem_shaped_type_is_cut_on_its_problems_rather_than_on_blank_lines() -> None:
+    """An answer key used to classify as `generic` and be chunked on paragraphs, so one
+    chunk held the end of one solution and the start of the next."""
+    text = "\n\n".join(
+        f"Problem {number}. Compute it.\n\n{_filler(300, seed=number)}" for number in range(1, 6)
+    )
+
+    chunks = chunk_document(_parsed(text), SOLUTIONS)
+
+    _assert_well_formed(chunks)
+    assert [chunk.problem_number for chunk in chunks] == ["1", "2", "3", "4", "5"]
+
+
+def test_an_appendix_section_is_a_heading() -> None:
+    """`C.1 Basic Discrete-Time Fourier Series Pairs` is how an appendix numbers itself,
+    and it used to match none of the heading forms, so a nine-section appendix chunked as
+    anonymous pages. `retrieve.SECTION_REFERENCE` already understood `section A.2` on the
+    query side; this is the other end of it."""
+    parsed = _parsed(
+        f"C.1 Basic Discrete-Time Fourier Series Pairs\n\n{_filler(700, seed=1)}",
+        f"C.2 Basic Fourier Series Pairs\n\n{_filler(700, seed=2)}",
+    )
+
+    chunks = chunk_document(parsed, TEXTBOOK)
+
+    _assert_well_formed(chunks)
+    assert [chunk.section_title for chunk in chunks] == [
+        "C.1 Basic Discrete-Time Fourier Series Pairs",
+        "C.2 Basic Fourier Series Pairs",
+    ]
+
+
+def test_a_lettered_step_in_a_procedure_is_not_a_heading() -> None:
+    """The reason the letter has to be followed by a dot and a digit. Lab handouts letter
+    their steps, and reading each one as a section of its own would cut a procedure into
+    single lines."""
+    parsed = _parsed(f"## Experimental Procedure\n\nA. Build the RC filter\n\n{_filler(700)}")
+
+    chunks = chunk_document(parsed, LECTURE_NOTES)
+
+    _assert_well_formed(chunks)
+    assert all(chunk.section_title == "Experimental Procedure" for chunk in chunks)

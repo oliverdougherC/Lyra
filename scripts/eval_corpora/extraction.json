@@ -1,0 +1,74 @@
+{
+  "about": [
+    "Labelled documents for scripts/eval_extract.py.",
+    "",
+    "Every case is built around one way extraction goes wrong, and `forbid` is where that",
+    "trap is written down. Most of them are the same trap: a document states something",
+    "true about SOME course, and the model has no way to know it is not this one. A model",
+    "reading the ninth problem set of a term has never seen the other eight, so the course",
+    "header at the top of the page looks exactly like a discovery.",
+    "",
+    "The text is written rather than scraped, deliberately. A corpus of the student's own",
+    "documents cannot be committed, and a corpus of one course's real files would tune the",
+    "prompts to that course's formatting. Add real documents locally with a `path` key on",
+    "a case; the harness reads it relative to this file."
+  ],
+  "cases": [
+    {
+      "name": "syllabus-is-the-one-document-that-speaks-for-the-course",
+      "filename": "ECE301-Syllabus-Spring2026.pdf",
+      "expect_doc_type": "syllabus",
+      "expect": ["fourier", "convolution", "midterm", "linear algebra"],
+      "forbid": ["how many problems", "page count"],
+      "text": "ECE 301: Signals and Systems\nSpring 2026 Course Syllabus\n\nInstructor: Dr. Amara Osei\nEmail: aosei@example.edu\nOffice hours: Tuesdays and Thursdays, 2-4pm, Engineering Building room 3.14\n\nPrerequisites\nStudents are expected to have completed a course in linear algebra and to be comfortable with complex arithmetic. Familiarity with MATLAB is assumed.\n\nCourse Description\nThis course covers continuous and discrete time signals, linear time-invariant systems, convolution, Fourier series, the Fourier transform, and the Laplace transform. The final third of the term treats sampling and the z-transform.\n\nGrading\nProblem sets are worth 30% of the final grade. The midterm exam is worth 25%. The final exam is worth 40%. Participation accounts for the remaining 5%. Late work loses 10% per day, and no work is accepted more than three days after the deadline.\n\nSchedule\nMidterm 1 will be held on 2026-03-04 in the main hall.\nThe final exam is scheduled for 2026-05-12.\nProblem sets are due each Friday at 5pm.\n\nConventions\nThis course uses the engineering sign convention for the Fourier transform, with the forward transform carrying the factor e^{-jwt} and no leading 1/sqrt(2*pi). All work must show intermediate steps; an answer alone earns no credit.\n"
+    },
+    {
+      "name": "homework-header-names-a-professor-and-a-course-code",
+      "filename": "ECE301-hw4.pdf",
+      "expect_doc_type": "homework",
+      "expect": ["convolution"],
+      "forbid": ["osei", "ECE\\s*301", "signals and systems", "spring 2026", "assignment 4", "4 of 8"],
+      "text": "ECE 301: Signals and Systems - Spring 2026\nInstructor: Dr. Amara Osei\nProblem Set 4 of 8\nDue: Friday 6 March at 5pm\n\nShow all work. Answers without justification receive no credit.\n\nProblem 1. Compute the convolution y(t) = x(t) * h(t) where x(t) = u(t) - u(t-2) and h(t) = e^{-3t}u(t).\n\nProblem 2. A discrete-time system is described by y[n] = x[n] - 2x[n-1]. Determine whether it is linear, time-invariant, causal, and stable.\n\nProblem 3. Find the impulse response of the system whose step response is s(t) = (1 - e^{-2t})u(t).\n\nProblem 4. Sketch the magnitude of the frequency response of the system in Problem 2 over one period.\n"
+    },
+    {
+      "name": "practice-exam-carries-another-terms-professor-and-dates",
+      "filename": "Practice-Midterm-2019.pdf",
+      "expect_doc_type": "exam",
+      "expect": ["laplace", "region of convergence"],
+      "forbid": ["kowalski", "2019", "ECE\\s*205", "october", "90 minutes", "closed book"],
+      "text": "ECE 205: Linear Systems\nFall 2019 Midterm Examination\nProfessor J. Kowalski\n\nDate: 17 October 2019\nTime allowed: 90 minutes. Closed book. One double-sided formula sheet permitted.\n\nQuestion 1 (25 marks). Find the Laplace transform of x(t) = t*e^{-2t}u(t) and state its region of convergence.\n\nQuestion 2 (25 marks). A system has transfer function H(s) = (s+1)/((s+2)(s-3)). Give every possible region of convergence and state which one corresponds to a stable system.\n\nQuestion 3 (25 marks). Use the initial value theorem to find y(0+) for Y(s) = (2s+1)/(s^2+4s+3).\n\nQuestion 4 (25 marks). Determine the inverse Laplace transform of X(s) = 1/(s^2+2s+5) by completing the square.\n"
+    },
+    {
+      "name": "answer-key-from-a-different-course-offering",
+      "filename": "homework-3-solutions.pdf",
+      "expect_doc_type": "solutions",
+      "expect": ["fourier series"],
+      "forbid": ["kowalski", "2019", "ECE\\s*205", "grader", "due", "office hours", "20 marks"],
+      "text": "ECE 205: Linear Systems - Fall 2019\nHomework 3 Solutions\nPrepared by the grading team under Professor J. Kowalski\nGraders: return these to students only after the late deadline of 24 October 2019.\n\nProblem 1. (20 marks)\nSolution: The signal x(t) is periodic with period T = 2, so its Fourier series coefficients are a_k = (1/T) * integral over one period of x(t) e^{-jkw0t} dt. Evaluating gives a_0 = 1/2 and a_k = (1 - (-1)^k)/(j*2*pi*k) for k nonzero.\n\nProblem 2. (20 marks)\nSolution: By the time-shift property, shifting x(t) by t0 multiplies each coefficient by e^{-jkw0t0}. The magnitude spectrum is therefore unchanged and only the phase is affected.\n\nProblem 3. (20 marks)\nSolution: Parseval's relation gives the average power as the sum of |a_k|^2 over all k. Summing the series above yields an average power of 1/3.\n"
+    },
+    {
+      "name": "lecture-notes-state-a-convention-worth-keeping",
+      "filename": "week-6-lecture-notes.pdf",
+      "expect_doc_type": "lecture_notes",
+      "expect": ["z-transform", "region of convergence"],
+      "forbid": ["week 6", "next lecture", "reading assignment", "chapter 10"],
+      "text": "Week 6 Lecture Notes: The z-Transform\n\nReading assignment for next lecture: chapter 10, sections 1 through 4.\n\nDefinition\nThe z-transform of a discrete-time signal x[n] is X(z) = sum over n of x[n] z^{-n}. In this course we always use the bilateral z-transform unless a problem says otherwise, and we always state the region of convergence alongside the transform. A z-transform written without its region of convergence is considered incomplete and will not receive full credit.\n\nRegion of convergence\nThe region of convergence is an annulus in the complex plane. For a right-sided signal it is the exterior of a circle through the outermost pole; for a left-sided signal it is the interior of a circle through the innermost pole.\n\nNotation\nWe write the unit step as u[n] and the unit impulse as delta[n]. Note that some textbooks write the impulse as d[n]; we do not.\n"
+    },
+    {
+      "name": "textbook-belongs-to-many-courses-and-not-to-this-one",
+      "filename": "Oppenheim-SignalsAndSystems-2ed.pdf",
+      "expect_doc_type": "generic",
+      "expect": ["sampling"],
+      "forbid": ["oppenheim", "second edition", "prentice", "1996", "exercise", "problems at the end"],
+      "text": "Signals and Systems, Second Edition\nA. V. Oppenheim and A. S. Willsky\nPrentice Hall, 1996\n\nChapter 7: Sampling\n\n7.1 Representation of a Continuous-Time Signal by Its Samples\n\nUnder certain conditions a continuous-time signal is completely represented by its samples taken at uniform intervals. The sampling theorem states that a band-limited signal with no frequency components above w_M is uniquely determined by samples taken at a rate greater than 2*w_M, a rate known as the Nyquist rate.\n\n7.2 Reconstruction\n\nReconstruction from samples is performed by an ideal lowpass filter, which in the time domain corresponds to interpolation with a sinc function. In practice a zero-order hold followed by a compensating filter is used.\n\n7.3 Aliasing\n\nWhen the sampling rate falls below the Nyquist rate, frequency components above half the sampling rate are folded down and become indistinguishable from lower-frequency components. This phenomenon is called aliasing.\n\nProblems at the end of this chapter should be attempted after reading section 7.3.\n"
+    },
+    {
+      "name": "an-unidentifiable-scan-is-not-evidence-about-anyone",
+      "filename": "scan-0043.pdf",
+      "expect_doc_type": "generic",
+      "expect": [],
+      "forbid": ["hendricks", "2021", "room 204", "monday", "MATH\\s*118"],
+      "text": "MATH 118 - handout\nR. Hendricks, room 204, Mondays\nrevised 2021\n\nA matrix A is diagonalizable when there exists an invertible P such that P^{-1}AP is diagonal. This happens exactly when A has a full set of linearly independent eigenvectors.\n\nThe characteristic polynomial is det(A - lambda*I). Its roots are the eigenvalues. An eigenvalue whose algebraic multiplicity exceeds its geometric multiplicity is called defective, and a matrix with a defective eigenvalue is not diagonalizable.\n"
+    }
+  ]
+}

@@ -22,6 +22,7 @@ from backend.api import routes_profile
 from backend.core import profiles
 from backend.core.app_settings import update_settings_row
 from backend.core.errors import LyraError, NotFoundError
+from backend.llm.client import JsonSchema
 from backend.llm.prompts import build_system_prompt
 from backend.storage import secrets
 from backend.storage.database import MIGRATIONS_DIR, connect, get_db, migrate
@@ -34,8 +35,24 @@ RESOLUTIONS = {
     "tutor.example.com": ["203.0.113.10"],
 }
 
+# The document every extraction test is read against. A quote is checked against this, so
+# a reply claiming something it does not say is a reply that lands `low`.
+SYLLABUS_TEXT = (
+    "MATH 201 course syllabus.\n"
+    "Midterm 1 will be held on 2026-03-04 in the main hall.\n"
+    "Attendance at the weekly lab is required.\n"
+)
+
 MIDTERM_REPLY = json.dumps(
-    {"deadlines": [{"label": "Midterm 1", "date": "2026-03-04", "confidence": "high"}]}
+    {
+        "deadlines": [
+            {
+                "label": "Midterm 1",
+                "date": "2026-03-04",
+                "quote": "Midterm 1 will be held on 2026-03-04 in the main hall.",
+            }
+        ]
+    }
 )
 
 
@@ -280,7 +297,7 @@ def test_extraction_skips_before_anything_is_sent(
     update_settings_row(db, configuration)
 
     # `refuse_completions` is still in place, so a request here fails the test outright.
-    assert profiles.extract_facts(db, document_id, "Syllabus text") == expected
+    assert profiles.extract_facts(db, document_id, SYLLABUS_TEXT) == expected
     assert _fact_count(db) == 0
 
 
@@ -292,7 +309,7 @@ def test_acknowledged_remote_endpoint_is_allowed(
     )
     _reply(monkeypatch, MIDTERM_REPLY)
 
-    assert profiles.extract_facts(db, document_id, "Syllabus text") is None
+    assert profiles.extract_facts(db, document_id, SYLLABUS_TEXT) is None
     assert _fact_count(db) == 1
 
 
@@ -310,7 +327,7 @@ def test_a_fenced_reply_parses(
 ) -> None:
     _reply(monkeypatch, wrapper.format(body=MIDTERM_REPLY))
 
-    assert profiles.extract_facts(db, document_id, "Syllabus text") is None
+    assert profiles.extract_facts(db, document_id, SYLLABUS_TEXT) is None
 
     facts = _facts(db, class_id)
     assert _identities(facts) == {("deadline", "Midterm 1", "2026-03-04")}
@@ -335,7 +352,7 @@ def test_an_unusable_reply_is_reported_and_stores_nothing(
 ) -> None:
     _reply(monkeypatch, content)
 
-    assert profiles.extract_facts(db, document_id, "Syllabus text") == "unparseable_response"
+    assert profiles.extract_facts(db, document_id, SYLLABUS_TEXT) == "unparseable_response"
     assert _fact_count(db) == 0
 
 
@@ -357,7 +374,7 @@ def test_an_unmarked_item_lands_low_and_stays_out_of_prompts(
         ),
     )
 
-    assert profiles.extract_facts(db, document_id, "Syllabus text") is None
+    assert profiles.extract_facts(db, document_id, SYLLABUS_TEXT) is None
 
     assert {fact["label"]: fact["confidence"] for fact in _facts(db, class_id)} == {
         "Lab": "low",
@@ -383,14 +400,14 @@ def test_every_key_maps_onto_its_kind_across_shapes(
                 "grading": {"Midterm": "30%", "Final": "40%"},
                 "professor_info": {"name": "Dr Chen", "email": "chen@example.edu"},
                 "prerequisites": [
-                    {"title": "Calculus I", "value": "MATH 101", "confidence": "HIGH"}
+                    {"title": "Calculus I", "value": "MATH 101", "quote": "not in the document"}
                 ],
                 "notes": "Attendance is required",
             }
         ),
     )
 
-    assert profiles.extract_facts(db, document_id, "Syllabus text") is None
+    assert profiles.extract_facts(db, document_id, SYLLABUS_TEXT) is None
 
     facts = _facts(db, class_id)
     assert _identities(facts) == {
@@ -407,8 +424,9 @@ def test_every_key_maps_onto_its_kind_across_shapes(
         ("prerequisite", "Prerequisite", "Calculus I"),
         ("note", "Note", "Attendance is required"),
     }
-    # A marking in the model's own casing still normalises.
-    assert {fact["confidence"] for fact in facts if fact["kind"] == "prerequisite"} == {"high"}
+    # Not one of these entries quotes anything this document says, so none is promoted:
+    # the shape tolerance above decides what a reply *means*, never whether to believe it.
+    assert {str(fact["confidence"]) for fact in facts} == {"low"}
 
 
 def test_items_without_a_value_are_skipped(
@@ -429,7 +447,7 @@ def test_items_without_a_value_are_skipped(
         ),
     )
 
-    assert profiles.extract_facts(db, document_id, "Syllabus text") is None
+    assert profiles.extract_facts(db, document_id, SYLLABUS_TEXT) is None
     assert _identities(_facts(db, class_id)) == {("topic", "Topic", "Series convergence")}
 
 
@@ -441,11 +459,11 @@ def test_a_rejected_fact_is_not_proposed_again(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _reply(monkeypatch, MIDTERM_REPLY)
-    profiles.extract_facts(db, document_id, "Syllabus text")
+    profiles.extract_facts(db, document_id, SYLLABUS_TEXT)
     fact_id = int(db.execute("select id from profile_facts").fetchone()["id"])
     profiles.reject_fact(db, fact_id)
 
-    profiles.extract_facts(db, document_id, "Syllabus text")
+    profiles.extract_facts(db, document_id, SYLLABUS_TEXT)
 
     rows = db.execute("select id, rejected from profile_facts").fetchall()
     assert [(row["id"], row["rejected"]) for row in rows] == [(fact_id, 1)]
@@ -472,8 +490,8 @@ def test_reingesting_does_not_double_the_profile(
         ),
     )
 
-    profiles.extract_facts(db, document_id, "Syllabus text")
-    profiles.extract_facts(db, document_id, "Syllabus text")
+    profiles.extract_facts(db, document_id, SYLLABUS_TEXT)
+    profiles.extract_facts(db, document_id, SYLLABUS_TEXT)
 
     assert _fact_count(db) == 1
 
@@ -765,7 +783,7 @@ def test_extracted_facts_carry_the_document_class_and_source(
 ) -> None:
     _reply(monkeypatch, MIDTERM_REPLY)
 
-    profiles.extract_facts(db, document_id, "Syllabus text")
+    profiles.extract_facts(db, document_id, SYLLABUS_TEXT)
 
     fact = _facts(db, class_id)[0]
     assert fact["class_id"] == class_id
@@ -813,7 +831,7 @@ def test_a_failed_extraction_records_its_reason_for_the_profile_to_explain(
 ) -> None:
     _reply(monkeypatch, "not json")
 
-    reason = profiles.extract_facts(db, document_id, "Syllabus text")
+    reason = profiles.extract_facts(db, document_id, SYLLABUS_TEXT)
     # Standing in for the ingestion step, which is what writes the reason down.
     db.execute("update documents set stage_detail = ? where id = ?", (reason, document_id))
     db.commit()
@@ -955,3 +973,147 @@ def test_user_profile_routes_only_reach_facts_with_no_class(
     assert [fact["id"] for fact in listed["facts"]] == [user_fact]
     assert corrected.json()["facts"][0]["value"] == "Prefers hints"
     assert refused.status_code == 404
+
+
+# --------------------------------------------------------------------------------------
+# Quote verification: the check that replaced asking the model how sure it was.
+
+
+def _quoted(quote: str, label: str = "Midterm 1") -> str:
+    """An extraction reply proposing one deadline backed by `quote`."""
+    return json.dumps({"deadlines": [{"label": label, "value": "2026-03-04", "quote": quote}]})
+
+
+@pytest.mark.parametrize(
+    ("quote", "expected", "reason"),
+    [
+        (
+            "Midterm 1 will be held on 2026-03-04 in the main hall.",
+            "high",
+            "the document says exactly this",
+        ),
+        (
+            "midterm 1 WILL be held on 2026-03-04",
+            "high",
+            "case is not a difference in what was said",
+        ),
+        (
+            "Midterm 1 will be held   on 2026-03-04",
+            "high",
+            "a PDF's spacing is not a difference either",
+        ),
+        (
+            "Midterm 1 will be held on 2026‑03‑04",
+            "high",
+            "a typographic dash retyped as a hyphen is the same sentence",
+        ),
+        (
+            "The midterm is on the fourth of March.",
+            "low",
+            "a true paraphrase is still not something the document says",
+        ),
+        ("Midterm 1 is cancelled.", "low", "an invented sentence cannot be found"),
+        ("", "low", "no evidence offered at all"),
+        ("Midterm", "low", "too short to be evidence of anything"),
+    ],
+)
+def test_a_fact_is_believed_only_when_its_quote_is_really_in_the_document(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+    quote: str,
+    expected: str,
+    reason: str,
+) -> None:
+    _reply(monkeypatch, _quoted(quote))
+
+    assert profiles.extract_facts(db, document_id, SYLLABUS_TEXT) is None
+
+    facts = _facts(db, class_id)
+    assert [str(fact["confidence"]) for fact in facts] == [expected], reason
+
+
+def test_an_unverified_fact_is_kept_and_shown_but_never_reaches_a_prompt(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Demotion, not deletion. The row is what the student rules on."""
+    _reply(monkeypatch, _quoted("The midterm was moved to April, per the announcement."))
+
+    profiles.extract_facts(db, document_id, SYLLABUS_TEXT)
+
+    assert len(_facts(db, class_id)) == 1
+    assert profiles.select_active_facts(db, class_id) == []
+
+
+def test_a_quote_is_checked_against_what_the_model_was_shown_not_the_whole_file(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model cannot have read past the truncation, so a quote from there is not evidence.
+
+    Without this the budget cut would be the one place a hallucination could be laundered
+    into a trusted fact: the model guesses a sentence, the sentence happens to occur on a
+    page nobody sent it, and the guess is promoted straight into every chat prompt.
+    """
+    tail = "Final project proposals are due on 2026-04-20."
+    monkeypatch.setattr(profiles, "extraction_budget_chars", lambda window: len(SYLLABUS_TEXT))
+    _reply(monkeypatch, _quoted(tail, label="Final project"))
+
+    profiles.extract_facts(db, document_id, SYLLABUS_TEXT + tail)
+
+    assert [str(fact["confidence"]) for fact in _facts(db, class_id)] == ["low"]
+
+
+def test_the_quote_key_never_becomes_a_fact_of_its_own(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`_read_object` reads an unrecognised object's own keys as labels, so it must skip it."""
+    _reply(
+        monkeypatch,
+        json.dumps(
+            {
+                "professor_info": [
+                    {"name": "Dr Chen", "quote": "Instructor: Dr Chen", "confidence": "high"}
+                ]
+            }
+        ),
+    )
+
+    profiles.extract_facts(db, document_id, SYLLABUS_TEXT)
+
+    assert {str(fact["label"]) for fact in _facts(db, class_id)} == {"name"}
+
+
+def test_extraction_asks_for_the_schema_and_temperature_its_document_type_earns(
+    db: sqlite3.Connection,
+    document_id: int,
+    local_extraction: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wiring test: a prompt that constrains nothing is a prompt a small model ignores."""
+    seen: dict[str, object] = {}
+
+    async def _complete(*args: object, **kwargs: object) -> str:
+        seen.update(kwargs)
+        return "{}"
+
+    monkeypatch.setattr(profiles.client, "complete", _complete)
+
+    profiles.extract_facts(db, document_id, SYLLABUS_TEXT, "homework")
+
+    assert seen["temperature"] == 0.0
+    schema = cast(JsonSchema, seen["schema"])
+    assert set(schema.schema["properties"]) == {"topics", "notes", "deadlines"}

@@ -32,7 +32,12 @@ import httpx
 
 from backend.core.errors import ToolsUnsupportedError
 from backend.llm import replies
-from backend.llm.client import AssistantMessage, ToolCall, complete_with_tools
+from backend.llm.client import (
+    DETERMINISTIC_TEMPERATURE,
+    AssistantMessage,
+    ToolCall,
+    complete_with_tools,
+)
 from backend.tools import cas, units
 from backend.tools.result import ToolResult, failure
 
@@ -456,7 +461,13 @@ async def _drive(
     for _ in range(max_depth):
         try:
             answer = await complete_with_tools(
-                endpoint, api_key, model, conversation, tools, transport=transport
+                endpoint,
+                api_key,
+                model,
+                conversation,
+                tools,
+                transport=transport,
+                temperature=DETERMINISTIC_TEMPERATURE,
             )
         except ToolsUnsupportedError as exc:
             return ToolLoopResult(

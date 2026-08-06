@@ -1,5 +1,6 @@
 """Contract tests for the tutor client, driven entirely through a stubbed transport."""
 
+import json
 from collections.abc import Callable
 
 import httpx
@@ -335,3 +336,188 @@ async def test_a_vision_probe_never_raises() -> None:
 
     assert support.ok is False
     assert support.message
+
+
+# --------------------------------------------------------------------------------------
+# Constrained decoding: temperature, and the response_format ladder.
+
+
+_SCHEMA = client.JsonSchema(
+    name="answer",
+    schema={
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"],
+        "additionalProperties": False,
+    },
+)
+
+_OK = {"choices": [{"message": {"content": '{"answer": "yes"}'}}]}
+
+
+@pytest.fixture(autouse=True)
+def forget_endpoint_support() -> None:
+    """The support cache lives for the process, so a test must not inherit another's."""
+    client.reset_json_support()
+
+
+def _recorder(
+    statuses: dict[str, int],
+) -> tuple[httpx.MockTransport, list[dict[str, object]]]:
+    """A transport that refuses the `response_format` types named in `statuses`.
+
+    Returns the transport and the list every request body is recorded into, which is what
+    lets a test assert on what was *sent* rather than only on what came back.
+    """
+    sent: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        declared = body.get("response_format") or {}
+        status = statuses.get(str(declared.get("type", "none")), 200)
+        return httpx.Response(status, json=_OK if status == 200 else {"error": "nope"})
+
+    return _transport(handler), sent
+
+
+async def _complete(transport: httpx.MockTransport, **kwargs: object) -> str:
+    return await client.complete(
+        _ENDPOINT,
+        None,
+        "local-model",
+        [{"role": "user", "content": "hi"}],
+        transport=transport,
+        **kwargs,
+    )
+
+
+async def test_a_caller_with_no_opinion_sends_neither_temperature_nor_a_format() -> None:
+    """Chat must reach an endpoint exactly as it always did."""
+    transport, sent = _recorder({})
+
+    await _complete(transport)
+
+    assert "temperature" not in sent[0]
+    assert "response_format" not in sent[0]
+
+
+async def test_temperature_zero_is_sent_rather_than_dropped_as_falsy() -> None:
+    transport, sent = _recorder({})
+
+    await _complete(transport, temperature=client.DETERMINISTIC_TEMPERATURE)
+
+    assert sent[0]["temperature"] == 0.0
+
+
+async def test_a_schema_is_sent_as_a_strict_json_schema_response_format() -> None:
+    transport, sent = _recorder({})
+
+    await _complete(transport, schema=_SCHEMA)
+
+    declared = sent[0]["response_format"]
+    assert declared["type"] == "json_schema"
+    assert declared["json_schema"]["strict"] is True
+    assert declared["json_schema"]["schema"] == _SCHEMA.schema
+
+
+async def test_an_endpoint_refusing_a_schema_falls_back_to_json_object() -> None:
+    transport, sent = _recorder({"json_schema": 400})
+
+    answer = await _complete(transport, schema=_SCHEMA)
+
+    assert answer == '{"answer": "yes"}'
+    assert [body["response_format"]["type"] for body in sent] == ["json_schema", "json_object"]
+
+
+async def test_an_endpoint_refusing_every_format_still_answers_unconstrained() -> None:
+    """The last rung is what this module sent before any of this existed."""
+    transport, sent = _recorder({"json_schema": 400, "json_object": 400})
+
+    answer = await _complete(transport, schema=_SCHEMA)
+
+    assert answer == '{"answer": "yes"}'
+    assert "response_format" not in sent[-1]
+    assert len(sent) == 3
+
+
+async def test_a_refusal_is_remembered_so_the_next_call_does_not_pay_for_it_again() -> None:
+    transport, sent = _recorder({"json_schema": 400})
+
+    await _complete(transport, schema=_SCHEMA)
+    await _complete(transport, schema=_SCHEMA)
+
+    # Three requests, not four: the second call starts at the rung the first one landed on.
+    assert [body["response_format"]["type"] for body in sent] == [
+        "json_schema",
+        "json_object",
+        "json_object",
+    ]
+
+
+async def test_a_400_with_no_format_left_to_drop_is_reported_rather_than_retried() -> None:
+    """A 400 on the last rung is a real failure, not a capability signal."""
+    transport, sent = _recorder({"json_schema": 400, "json_object": 400, "none": 400})
+
+    with pytest.raises(UpstreamError):
+        await _complete(transport, schema=_SCHEMA)
+
+    assert [str(body.get("response_format", {}).get("type", "none")) for body in sent] == [
+        "json_schema",
+        "json_object",
+        "none",
+    ]
+
+
+async def test_a_500_carrying_a_format_is_retried_weaker_but_not_remembered() -> None:
+    """llama.cpp answers 500, not 400, when it cannot compile a schema into a grammar.
+
+    It also answers 500 when the model failed to load, and the two are indistinguishable
+    from here. So the weaker form is tried, and nothing is cached: one bad model load must
+    not quietly downgrade every request for the rest of the process.
+    """
+    transport, sent = _recorder({"json_schema": 500})
+
+    answer = await _complete(transport, schema=_SCHEMA)
+    await _complete(transport, schema=_SCHEMA)
+
+    assert answer == '{"answer": "yes"}'
+    assert [body["response_format"]["type"] for body in sent] == [
+        "json_schema",
+        "json_object",
+        # The second call starts at the top again, because a 500 was not evidence.
+        "json_schema",
+        "json_object",
+    ]
+
+
+async def test_an_endpoint_that_is_simply_down_still_reports_an_error() -> None:
+    """The retry must not turn an outage into a hang or a silent empty answer."""
+    transport, sent = _recorder({"json_schema": 500, "json_object": 500, "none": 500})
+
+    with pytest.raises(UpstreamError):
+        await _complete(transport, schema=_SCHEMA)
+
+    assert len(sent) == 3
+
+
+async def test_a_background_caller_gets_a_longer_deadline_than_a_chat_turn() -> None:
+    """Extraction, segmentation, solving and transcription run in workers, not under a cursor.
+
+    All four were on `CHAT_TIMEOUT`. Measured against a reasoning model, that number is
+    simply wrong for them: one answer key spent 94 seconds thinking before its first
+    character of JSON and two documents of the same size had not finished at 240, so the
+    client hung up on work that was going to succeed.
+    """
+    assert client.BACKGROUND_TIMEOUT.read > client.CHAT_TIMEOUT.read
+
+    seen: list[float | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.extensions.get("timeout", {}).get("read"))
+        return httpx.Response(200, json=_OK)
+
+    await _complete(_transport(handler), request_timeout=client.BACKGROUND_TIMEOUT)
+    await _complete(_transport(handler))
+
+    assert seen == [client.BACKGROUND_TIMEOUT.read, client.CHAT_TIMEOUT.read]

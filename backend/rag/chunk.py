@@ -36,7 +36,21 @@ from backend.rag.tokens import CHARS_PER_TOKEN, estimate_tokens
 # spare the embedder a split it handles correctly.
 MAX_CHUNK_TOKENS = 1024
 
+# What a document is. This drives two separate things and it is worth naming both, because
+# the second is newer and now carries more weight than the first: how the file is cut up,
+# and what `llm/prompts.py` is willing to believe it says about the course.
+#
+# `solutions`, `exam`, and `lab` exist for the second reason. They chunk much like the
+# types they were previously folded into, but they are read very differently: an answer key
+# and a practice midterm are the two documents a student is most likely to be holding a
+# *reused* copy of, printed with another term's dates and another instructor's name on it,
+# and a profile that files those as facts about this class is worse than one that read
+# nothing at all. Splitting them out is what lets the extraction prompt refuse them the
+# fields they cannot honestly fill.
 HOMEWORK = "homework"
+SOLUTIONS = "solutions"
+EXAM = "exam"
+LAB = "lab"
 TEXTBOOK = "textbook"
 LECTURE_NOTES = "lecture_notes"
 SYLLABUS = "syllabus"
@@ -76,13 +90,22 @@ SUBPART_MARKER = re.compile(
 # A heading is a whole line: a Markdown ATX heading, a numbered section, a shouted
 # all-caps line, or a label line ending in a colon. Anything with prose after it is body
 # text, not a boundary.
+#
+# The letter-prefixed form is what an appendix numbers itself with, and it was missing:
+# `C.1 Basic Discrete-Time Fourier Series Pairs` matched none of the other three branches,
+# so a nine-section appendix chunked as anonymous pages. The letter has to be followed
+# immediately by a dot and a digit, which is what keeps `A. Build the circuit` - a lettered
+# step in a lab procedure, and body text - from reading as a section of its own.
+# `retrieve.SECTION_REFERENCE` already understood `section A.2` on the query side, so this
+# is the two ends of the same feature agreeing.
 SECTION_HEADING = re.compile(
     r"""
     ^[ \t]*(?:
-        \#{1,6}[ \t]+\S[^\n]*             # ## Continuity
-      | \d+(?:\.\d+)*[.)]?[ \t]+\S[^\n]*  # 2.3 Continuity
-      | [A-Z][A-Z0-9][A-Z0-9 ,&'()/-]*    # GRADING POLICY
-      | [A-Z][^\n:]{2,60}:                # Office Hours:
+        \#{1,6}[ \t]+\S[^\n]*                    # ## Continuity
+      | \d+(?:\.\d+)*[.)]?[ \t]+\S[^\n]*         # 2.3 Continuity
+      | [A-Z]\.\d+(?:\.\d+)*[.)]?[ \t]+\S[^\n]*  # C.1 Basic Fourier Series Pairs
+      | [A-Z][A-Z0-9][A-Z0-9 ,&'()/-]*           # GRADING POLICY
+      | [A-Z][^\n:]{2,60}:                       # Office Hours:
     )[ \t]*$
     """,
     re.MULTILINE | re.VERBOSE,
@@ -95,16 +118,40 @@ _WHITESPACE = re.compile(r"\s")
 
 PARAGRAPH_JOIN = "\n\n"
 
-# Filename beats content, and is matched case-insensitively as a substring: a file called
-# `hw3.pdf` is homework even when its problems are numbered in a way nothing detects.
+# Filename beats content: a file called `hw3.pdf` is homework even when its problems are
+# numbered in a way nothing detects.
+#
+# Matched against the name's *words* rather than as a substring, which the earlier rule
+# did. Substring matching cannot be extended safely, and the demonstration is `lab`:
+# `syllabus` contains it, so a syllabus would have been read as a lab handout, and so would
+# `collaboration-policy.pdf`. `test` is unusable for the same reason - `latest.pdf` -
+# and is deliberately absent below. Words also make the patterns say what they mean:
+# `key` matches `homework-3-key.pdf` and not `keywords.pdf`.
+_WORD_SPLIT = re.compile(r"[^a-z0-9]+|(?<=[a-z])(?=[0-9])|(?<=[0-9])(?=[a-z])")
+_CAMEL_SPLIT = re.compile(r"(?<=[a-z])(?=[A-Z])")
+
+# Order is precedence, and the first three lines are the whole point of the ordering. An
+# answer key is a solutions document before it is homework, however it is named, so
+# `homework-4-solutions.pdf` must not reach the homework row. A syllabus outranks the lab
+# and exam rows because a syllabus describes every one of those without being one.
 FILENAME_PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("hw", "homework", "problem"), HOMEWORK),
-    (("syllabus",), SYLLABUS),
-    (("notes", "lecture"), LECTURE_NOTES),
+    (("solution", "solutions", "soln", "solns", "sol", "sols", "key", "answers"), SOLUTIONS),
+    (("syllabus", "outline"), SYLLABUS),
+    (("exam", "midterm", "final", "quiz", "practice"), EXAM),
+    (("lab", "labs", "laboratory"), LAB),
+    (("hw", "homework", "problem", "pset", "assignment"), HOMEWORK),
+    (("notes", "lecture", "slides"), LECTURE_NOTES),
 )
 
 MIN_PROBLEM_MARKERS = 3
 MIN_MARKDOWN_HEADINGS = 2
+
+# A line that announces an answer rather than asking a question. A file the student did not
+# name usefully is still recognisable by this: an answer key repeats the marker once per
+# problem, which is what separates it from a homework sheet that happens to say `Solution`
+# once in its instructions.
+SOLUTION_MARKER = re.compile(r"^[ \t]*(?:Solution|Answer)\b[ \t]*[:.)]?", re.MULTILINE | re.I)
+MIN_SOLUTION_MARKERS = 3
 
 # What makes a document a textbook. Structure rather than a filename, because a student
 # saves a book under whatever the publisher called it and the reference book's name says
@@ -129,6 +176,21 @@ TEXTBOOK_MIN_PAGES = 50
 # Problems do not overlap each other, but the paragraph fallback inside one oversized
 # problem does, so a step split across two parts is readable in both.
 HOMEWORK_PART_OVERLAP_TOKENS = 100
+
+# The smallest block of text that is a thing on its own rather than part of the next one.
+#
+# The paragraph strategy packs blocks towards its target, and packing is right when the
+# blocks are fragments: a heading, a caption, the line that introduces a list. It is wrong
+# when both blocks are already substantial, because the result is one embedding standing for
+# two unrelated subjects, and the closer those subjects are to each other the worse it gets.
+#
+# From the recognition acceptance document rather than from taste. Its page of Fourier
+# transform pairs holds two tables of 241 and 220 tokens, glued into one chunk that answered
+# neither question about them well; its page of definitions holds ten blocks of 9 to 87
+# tokens that belong together and are still packed. Every real boundary in it is above this
+# number and every real fragment below it, and the gap between 87 and 220 is what lets this
+# be a constant rather than a judgement.
+MIN_STANDALONE_TOKENS = 100
 
 
 @dataclass(frozen=True)
@@ -157,6 +219,13 @@ class ChunkRule:
 # share of a smaller chunk, which is the direction that loses less across a seam.
 CHUNK_RULES: dict[str, ChunkRule] = {
     HOMEWORK: ChunkRule(PROBLEM_BOUNDARY, MAX_CHUNK_TOKENS, 0),
+    # The three problem-shaped types share homework's rule, which is the reading that was
+    # already right for them and the reading they were not getting: an answer key
+    # classified as `generic` was cut on blank lines, so one chunk held the end of one
+    # solution and the start of the next, and retrieval for problem 4 returned half of 3.
+    SOLUTIONS: ChunkRule(PROBLEM_BOUNDARY, MAX_CHUNK_TOKENS, 0),
+    EXAM: ChunkRule(PROBLEM_BOUNDARY, MAX_CHUNK_TOKENS, 0),
+    LAB: ChunkRule(HEADING_BOUNDARY, 750, 75),
     TEXTBOOK: ChunkRule(HEADING_BOUNDARY, 1000, 100),
     LECTURE_NOTES: ChunkRule(HEADING_BOUNDARY, 750, 75),
     SYLLABUS: ChunkRule(HEADING_BOUNDARY, 500, 50),
@@ -238,20 +307,40 @@ def detect_doc_type(filename: str, text: str, parsed: ParsedDocument | None = No
             than anything in the text.
 
     Returns:
-        One of `homework`, `textbook`, `syllabus`, `lecture_notes`, or `generic`.
+        One of the module's document type constants.
     """
-    lowered = filename.lower()
+    words = filename_words(filename)
     for patterns, doc_type in FILENAME_PATTERNS:
-        if any(pattern in lowered for pattern in patterns):
+        if words.intersection(patterns):
             return doc_type
 
     if parsed is not None and _looks_like_a_textbook(parsed):
         return TEXTBOOK
+    # Ahead of the problem-marker count, and it has to be: an answer key carries every
+    # marker a problem set does, plus the answers, so the homework rule would always win a
+    # document whose whole distinguishing feature is that it also announces solutions.
+    if _looks_like_solutions(text):
+        return SOLUTIONS
     if len(PROBLEM_MARKER.findall(text)) >= MIN_PROBLEM_MARKERS:
         return HOMEWORK
     if len(MARKDOWN_HEADING.findall(text)) >= MIN_MARKDOWN_HEADINGS:
         return LECTURE_NOTES
     return GENERIC
+
+
+def filename_words(filename: str) -> frozenset[str]:
+    """The lowercase words in a filename, split on punctuation, case, and letter/digit runs.
+
+    `Homework4_Solutions.PDF` is `homework`, `4`, `solutions`, `pdf`, so a pattern can be a
+    word rather than a substring that happens to occur inside longer ones.
+    """
+    spaced = _CAMEL_SPLIT.sub(" ", filename)
+    return frozenset(word for word in _WORD_SPLIT.split(spaced.lower()) if word)
+
+
+def _looks_like_solutions(text: str) -> bool:
+    """Whether the text answers its problems rather than only posing them."""
+    return len(SOLUTION_MARKER.findall(text)) >= MIN_SOLUTION_MARKERS
 
 
 def _looks_like_a_textbook(parsed: ParsedDocument) -> bool:
@@ -468,13 +557,70 @@ def _chunk_sections(flat: _Flat, rule: ChunkRule) -> list[_Draft]:
 
 
 def _chunk_paragraphs(flat: _Flat, rule: ChunkRule) -> list[_Draft]:
-    """Group paragraphs towards the target, repeating the overlap across the seam."""
+    """Group paragraphs towards the target, repeating the overlap across the seam.
+
+    A page is already a hard boundary here, so what this decides is only what happens
+    *within* one page, and both things it does are about a page that is denser than prose.
+    A block bigger than the target is cut at its own line boundaries rather than carried
+    whole, which it used to be all the way up to the ceiling; and two blocks that are each
+    substantial are left as two chunks rather than packed into one.
+
+    Both were found by the same document: an eight-page appendix of Fourier tables, where
+    every page came back as a single chunk holding a dozen unrelated identities and the page
+    answering a question about the unit step ranked third of nine.
+    """
+    blocks: list[tuple[int, str]] = []
+    for offset, text in _paragraphs(flat.text, 0):
+        if estimate_tokens(text) > rule.target_tokens:
+            blocks.extend(_split_lines(text, offset, rule.target_tokens))
+        else:
+            blocks.append((offset, text))
+
     return [
         _Draft(content=text, page_number=flat.page_at(offset))
         for offset, text in _pack_with_overlap(
-            _paragraphs(flat.text, 0), rule.target_tokens, rule.overlap_tokens, flat
+            blocks, rule.target_tokens, rule.overlap_tokens, flat, MIN_STANDALONE_TOKENS
         )
     ]
+
+
+def _split_lines(text: str, offset: int, target_tokens: int) -> list[tuple[int, str]]:
+    """Cut a block with no paragraph breaks in it into target-sized runs of whole lines.
+
+    The paragraph strategy has no other way to divide a block, so without this an oversized
+    one survived every size rule the strategy has and was only ever cut by the ceiling, at
+    1024 tokens and wherever the character count happened to land. A table transcribed one
+    row to a line is exactly that shape, and so is a page of prose an extractor gave no blank
+    lines to.
+
+    No overlap across the seam, which is the same choice `_hard_split` makes. The lines being
+    separated here are a list's items rather than a sentence's clauses, and repeating one
+    would duplicate a fact rather than rescue a thought.
+
+    Measured in characters rather than by adding up each line's estimate. `estimate_tokens`
+    floors, so a sum over a hundred short lines loses most of a token on each of them and
+    the piece comes out over the target it was cut to.
+    """
+    width = target_tokens * CHARS_PER_TOKEN
+    pieces: list[tuple[int, str]] = []
+    current: list[str] = []
+    current_offset = offset
+    length = 0
+    position = 0
+
+    for line in text.splitlines(keepends=True):
+        if current and length + len(line) > width:
+            pieces.append((current_offset, "".join(current)))
+            current, length = [], 0
+        if not current:
+            current_offset = offset + position
+        current.append(line)
+        length += len(line)
+        position += len(line)
+
+    if current:
+        pieces.append((current_offset, "".join(current)))
+    return [(start, piece) for start, piece in pieces if piece.strip()]
 
 
 def _sections(text: str) -> list[tuple[int, str | None, str]]:
@@ -523,6 +669,7 @@ def _pack_with_overlap(
     target_tokens: int,
     overlap_tokens: int,
     flat: _Flat | None = None,
+    standalone_tokens: int = 0,
 ) -> list[tuple[int, str]]:
     """Group items into pieces near the target, each repeating the previous one's tail.
 
@@ -533,6 +680,12 @@ def _pack_with_overlap(
     When `flat` is given, a page break is a hard boundary with no overlap across it: a
     chunk names exactly one page, so it may not hold another page's text, including the
     repeated tail.
+
+    When `standalone_tokens` is given, two items that are each that size are a hard boundary
+    too, for the same reason and with the same consequence for the overlap: the seam between
+    two substantial blocks is a real division of the document, not an accident of where the
+    packer filled up, and carrying the tail of one into the other would put back exactly what
+    keeping them apart was for.
     """
     pieces: list[tuple[int, str]] = []
     current: list[str] = []
@@ -545,10 +698,17 @@ def _pack_with_overlap(
         crosses_page = (
             flat is not None and has_new and flat.page_at(offset) != flat.page_at(current_offset)
         )
-        if has_new and (crosses_page or current_tokens + tokens > target_tokens):
+        both_substantial = (
+            standalone_tokens > 0
+            and has_new
+            and current_tokens >= standalone_tokens
+            and tokens >= standalone_tokens
+        )
+        overruns = current_tokens + tokens > target_tokens
+        if has_new and (crosses_page or both_substantial or overruns):
             body = PARAGRAPH_JOIN.join(current)
             pieces.append((current_offset, body))
-            carry = "" if crosses_page else _tail(body, overlap_tokens)
+            carry = "" if crosses_page or both_substantial else _tail(body, overlap_tokens)
             current = [carry] if carry else []
             current_tokens = estimate_tokens(carry) if carry else 0
             has_new = False

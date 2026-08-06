@@ -1,15 +1,20 @@
 """Contract tests for prompt construction."""
 
+import json
 import re
 import sqlite3
 
+import pytest
+
 from backend.llm.prompts import (
+    EXTRACTION_PROFILES,
     MAX_FACTS_PER_KIND,
     build_consolidation_prompt,
     build_extraction_prompt,
     build_segmentation_prompt,
     build_solve_prompt,
     build_system_prompt,
+    extraction_schema,
     format_context_block,
 )
 
@@ -53,17 +58,17 @@ def test_guide_withholds_the_answer_and_show_does_not() -> None:
     assert guide != show
     assert "do not give the final answer immediately" in _normalized(guide)
     assert "do not withhold the answer" in _normalized(show)
-    assert "$$...$$ on their own line for display math" in _normalized(guide)
-    assert "reserve $...$ for short inline quantities" in _normalized(guide)
+    assert "$$...$$ on its own line for a displayed equation" in _normalized(guide)
+    assert "$...$ for a quantity inside a line of text" in _normalized(guide)
 
 
 def test_the_prompt_forbids_opening_every_reply_by_citing_the_material() -> None:
     prompt = _normalized(build_system_prompt("guide", [], []))
 
     assert "according to the course materials" in prompt
-    assert "do not open a reply by narrating where your information came from" in prompt
+    assert "never open by narrating where your information came from" in prompt
     # Citing a source is still wanted where the citation carries information.
-    assert "cite a source when the citation is itself part of the answer" in prompt
+    assert "name a source only when the citation is part of the answer" in prompt
 
 
 def test_facts_render_one_heading_per_kind(db: sqlite3.Connection, class_id: int) -> None:
@@ -109,26 +114,89 @@ def test_no_facts_renders_no_fact_section() -> None:
     assert "Deadlines:" not in prompt
 
 
-def test_extraction_prompt_asks_for_every_kind_and_for_bare_json() -> None:
-    messages = build_extraction_prompt("Syllabus text")
+def test_a_syllabus_is_asked_for_every_kind_and_for_bare_json() -> None:
+    messages = build_extraction_prompt("Syllabus text", "syllabus")
 
     system = messages[0]["content"]
     assert messages[0]["role"] == "system"
     for field in ("deadlines", "topics", "professor_info", "grading", "prerequisites", "notes"):
         assert f'"{field}"' in system
-    assert '"confidence"' in system
+    assert '"quote"' in system
     assert "no code fence" in system
     assert messages[1] == {"role": "user", "content": "Syllabus text"}
 
 
-def test_extraction_prompt_rules_out_what_every_document_repeats() -> None:
-    """The exclusions are the point: sixteen uploads must not propose the course code
-    sixteen times."""
-    system = build_extraction_prompt("Syllabus text")[0]["content"]
+@pytest.mark.parametrize(
+    ("doc_type", "forbidden"),
+    [
+        ("homework", ("grading", "professor_info", "prerequisites")),
+        ("solutions", ("deadlines", "grading", "professor_info", "prerequisites")),
+        ("exam", ("deadlines", "grading", "professor_info", "prerequisites")),
+        ("textbook", ("deadlines", "grading", "professor_info", "prerequisites")),
+        ("generic", ("deadlines", "grading", "professor_info", "prerequisites")),
+    ],
+)
+def test_a_field_a_document_cannot_honestly_fill_is_never_asked_for(
+    doc_type: str, forbidden: tuple[str, ...]
+) -> None:
+    """The fix for instructor names on problem sets, and it is a subtraction.
 
-    assert "Leave out anything that describes the document rather than the course" in system
-    for excluded in ("its assignment number", "its course code", "how many problems"):
-        assert excluded in system
+    The old prompt asked every document for all six kinds and then spent a paragraph
+    asking for restraint. A field list is a much stronger signal to a small model than a
+    paragraph is, so asking a homework sheet for `professor_info` was an instruction to go
+    and find one. The word now appears nowhere in the prompt at all.
+    """
+    system = build_extraction_prompt("text", doc_type)[0]["content"]
+
+    for field in forbidden:
+        assert field not in system, f"{doc_type} must not be asked for {field}"
+    assert '"topics"' in system
+
+
+def test_a_reused_document_is_told_its_dates_and_names_belong_to_another_course() -> None:
+    """Practice exams and answer keys are the documents most likely to be someone else's."""
+    for doc_type in ("solutions", "exam"):
+        system = build_extraction_prompt("text", doc_type)[0]["content"]
+        assert "reused between terms and between courses" in system
+        assert "Record none of them" in system
+
+
+def test_an_unknown_document_type_gets_the_careful_profile_not_the_permissive_one() -> None:
+    """Textbook and generic used to fall through to a prompt with no guidance at all."""
+    unknown = build_extraction_prompt("text", "something-nobody-has-heard-of")[0]["content"]
+
+    assert unknown == build_extraction_prompt("text", "generic")[0]["content"]
+    assert "could not be determined" in unknown
+
+
+@pytest.mark.parametrize("doc_type", list(EXTRACTION_PROFILES))
+def test_every_example_is_valid_json_shaped_exactly_like_the_schema(doc_type: str) -> None:
+    """The example is generated from the field list, so it cannot drift from the schema.
+
+    A hand-written example that shows a field the schema forbids is worse than no example:
+    under constrained decoding the model is shown one shape and permitted another.
+    """
+    system = build_extraction_prompt("text", doc_type)[0]["content"]
+    example = json.loads(system.split("An example of a well-formed reply:", 1)[1].split("\n\n")[1])
+    schema = extraction_schema(doc_type).schema
+
+    assert set(example) == set(schema["properties"]) == set(schema["required"])
+    assert schema["additionalProperties"] is False
+    for field, entries in example.items():
+        item = schema["properties"][field]["items"]
+        assert item["additionalProperties"] is False
+        assert "quote" in item["required"]
+        for entry in entries:
+            assert set(entry) == set(item["required"])
+
+
+@pytest.mark.parametrize("doc_type", list(EXTRACTION_PROFILES))
+def test_every_document_type_is_told_an_empty_list_is_a_real_answer(doc_type: str) -> None:
+    """Models fill fields. Being shown [] is what makes returning it thinkable."""
+    system = build_extraction_prompt("text", doc_type)[0]["content"]
+
+    assert "An empty list is a correct and expected answer" in system
+    assert '"notes": []' in system
 
 
 def test_extraction_prompt_names_the_class_and_the_document_type() -> None:
@@ -153,7 +221,7 @@ def test_consolidation_prompt_numbers_the_entries_and_forbids_renaming() -> None
     system = messages[0]["content"]
     assert '"duplicates"' in system
     assert '"not_about_the_course"' in system
-    assert "Do not invent entries and do not rename anything." in system
+    assert "Do not invent entries, do not rename anything" in system
     assert messages[1]["content"] == "1. [topic] Time Shift\n2. [topic] Time-Shift Property"
 
 
