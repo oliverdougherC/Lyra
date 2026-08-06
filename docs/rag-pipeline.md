@@ -291,8 +291,8 @@ already mean something else by.
 
 This is decided when a solution set is written, not when the figure is extracted, and only by rules
 that are exact. A figure is attached to a problem when **the problem's statement names it** ("the
-system in Figure 3"), or when **the problem is the only one on its page**. Otherwise nothing is
-attached.
+system in Figure 3"), when **the problem is the only one on its page**, or when **the page's
+diagrams and problem markers alternate**. Otherwise nothing is attached.
 
 That is deliberately less than the roadmap asked for, and the reason is a measurement. Attaching
 every figure on a page to every problem on it was the first implementation, and on the acceptance
@@ -306,17 +306,46 @@ Geometry does not rescue it. On that page the numbered list markers sit *below* 
 | Nearest preceding marker | Off by one on every figure |
 | Nearest marker by distance | Figure 2 wrong, by three thousandths of a page |
 | First marker below the figure | Correct - and wrong on the opposite, equally common layout |
-| Pair an alternating run of figures and markers | Exact, but needs distinct problem positions |
+| Pair an alternating run of figures and markers | **Exact. Now the third rule** |
 
-The last one is the interesting failure. It would be a structural check rather than a guess, and it
-is blocked by something else: `_locate` finds a label's *first* occurrence on a page, so on a sheet
-whose second section also numbers from 1, both sections' "1." resolve to the same marker. That is a
-pre-existing Phase 2 limitation, it is visible in the stored bboxes, and it is what a future
-attempt has to fix first.
+The last one is the one that survived, and it took fixing `locate` first. It reads no gap and no
+threshold: every figure must have a problem marker immediately beside it, all of them on the same
+side, and no two may want the same marker. *Immediately beside* is what makes it structural rather
+than a distance guess - the question is whether anything sits between a diagram and a marker, not
+how far apart they are. *All on the same side* is what settles the layout: if both readings work
+the page has not said which it is and gets neither, which is how the two opposite conventions are
+told apart without hard-coding either. A page must carry **at least two figures** for the rule to
+apply at all, because one diagram among several questions has a marker on both sides of it - on a
+page of questions everything has a marker beside it - and only a repetition is evidence of a
+layout. Markers left over once the figures run out are expected and are what the real page looks
+like.
 
-So on a crowded uncaptioned page the figures are extracted, served, rendered, and printed, and the
-source pane shows them on the page beside the solution - but Lyra does not claim to know which
-question each one answers.
+On the acceptance homework that gives **three attachments and no wrong ones**: the three block
+diagrams at the top of page 1 pair with the first three of its seven questions, and the four below
+them get nothing. Verified through the real solver against the real endpoint, not against a
+fixture.
+
+What still gets nothing is a crowded uncaptioned page that does not alternate - two diagrams in a
+row, or a count that breaks the run. There the figures are extracted, served, rendered, and
+printed, and the source pane shows them on the page beside the solution, but Lyra does not claim to
+know which question each one answers.
+
+#### Finding a problem on its page
+
+`rag/locate.py` searches a page for **all of its problem labels at once**, in document order, each
+taking the first occurrence of its marker that sits after the last label placed. Resolving them one
+at a time cannot work and the failure is not exotic: a sheet whose second section numbers from 1
+again writes `1.` twice, so both sections' first problem took the first `1.` on the page. On the
+acceptance homework that collapsed twelve problems onto nine positions; resolved a page at a time
+they are twelve.
+
+Two things depended on it. The solver's source pane drew its highlight band at the wrong marker,
+which was a Phase 2 fault present since the band existed. And the alternation rule above needs each
+problem to have a position of its own, which is why it could not be built until this was.
+
+A label whose marker appears only above the cursor falls back to the topmost hit and leaves the
+cursor where it was, so a page this cannot walk in order is never worse off than the rule it
+replaced.
 
 #### Scale, measured
 
@@ -382,6 +411,44 @@ not before, and every page is reachable. But a page of LaTeX table markup is not
 chunker has no heading structure to cut it on. That is a chunking limit rather than a recognition
 one, it is recorded in feature-roadmap.md as its own item, and it is not what this stage set out to
 fix.
+
+#### The transcription has to commit to a notation
+
+Reading the acceptance run's own output back with the notation counter (`_text_shape` in
+`scripts/eval_ingest.py`) says something the by-eye reading missed. The eight pages of one document
+wrote their tables **three different ways** — bare pipes with no header rule, a full Markdown table
+with `| :--- |`, and a raw LaTeX `tabular` — and **three of the eight marked up no table at all**,
+emitting the two columns as consecutive plain lines. Headings varied the same way: three were
+returned in bold instead of marked up, and one was split across two lines mid-phrase
+(`C.1 Basic Discrete-` / `Time Fourier Series Pairs`).
+
+Each page is individually plausible. Together they are four documents, and nothing downstream can
+read them: `chunk.SECTION_HEADING` sees an ATX heading, so a nine-section appendix chunked as eight
+anonymous pages with not one of `C.1` … `C.9` recorded as a section title. **The retrieval failure at
+the bottom of the previous section was created at transcription time**, not at chunking time.
+
+So `TRANSCRIBE_PROMPT` now pins the notation rather than asking only for a faithful reading:
+
+- every heading on **one** line, starting with `#`, keeping its number — never bold, never split
+- every table as a Markdown table, **always** with a header row and a `| --- |` rule, using an empty
+  header where the page prints none — never LaTeX, never plain lines
+
+Stated as rules rather than examples, and stated even for the case where the page has no header to
+copy: a header row that is sometimes present and sometimes not is a second notation wearing the
+first one's clothes.
+
+One thing the prompt cannot fix, fixed beside it: `C.1 Basic Discrete-Time Fourier Series Pairs`
+matched none of `SECTION_HEADING`'s four forms even written perfectly on one line, because the
+numbered branch required a leading digit. `retrieve.SECTION_REFERENCE` already understood
+`section A.2` on the query side, so this was the two ends of one feature disagreeing. The letter must
+be followed immediately by a dot and a digit, which keeps a lab's `A. Build the circuit` from reading
+as a section of its own.
+
+**The re-run is pending.** The measurement is one command — `eval_ingest.py recognize` prints the
+notation count for the document, and `recognition.md` now opens with it — and the tutor endpoint used
+for every recognition number in this document has been answering
+`model name=Qwen3.6-27b failed to load` since this was written. Until it runs, the prompt change is
+defended by unit tests and by the baseline above, and it is not yet defended by a measurement.
 
 #### The general path is not free, and "bundled" is Phase 6
 
@@ -627,10 +694,25 @@ in half if it can avoid it.
 | Document type | Chunk boundary | Target size | Overlap |
 |---------------|----------------|-------------|---------|
 | Homework | Individual problem | Whole problem, capped | None |
+| Solutions | Individual problem | Whole problem, capped | None |
+| Exam | Individual problem | Whole problem, capped | None |
 | Textbook | Section or subsection | 1000 tokens | 100 tokens |
 | Lecture notes | Topic heading | 750 tokens | 75 tokens |
+| Lab | Topic heading | 750 tokens | 75 tokens |
 | Syllabus | Logical section | 500 tokens | 50 tokens |
 | Generic | Paragraph group | 750 tokens | 100 tokens |
+
+`solutions` and `exam` share homework's rule because they are the same shape. They are separate
+types because extraction reads them completely differently - see Class Profile Construction. An
+answer key used to classify as `generic` and be cut on blank lines, so one chunk held the end of one
+solution and the start of the next.
+
+**Document types are detected from the filename's *words*, not from substrings of it.** `syllabus`
+contains `lab`, `latest` contains `test`, and `keywords` contains `key`, so a substring rule cannot
+be extended past the three patterns it started with without misfiling ordinary documents. The
+filename is split on punctuation, case changes, and letter/digit runs, and matched against whole
+words. Precedence matters as much as the patterns: `solutions` outranks `homework`, so
+`homework-4-solutions.pdf` is an answer key rather than an assignment with a due date on it.
 
 **Hard ceiling: 1024 tokens per chunk, enforced for every type after strategy-specific splitting.**
 No chunk is ever stored above this. The ceiling exists for two reasons: retrieval budgeting assumes
@@ -656,6 +738,61 @@ which is the direction that loses less across a seam.
 as soon as it fits: on lettered or numbered sub-parts (`(a)`, `(b)`, `i.`, `ii.`), then on
 paragraphs with 100-token overlap. Every resulting chunk keeps the same `problem_number` and gains a
 `part_index`, so retrieval can reassemble the full problem when any part matches.
+
+**A page is a hard boundary, so the generic strategy only decides what happens inside one.** Two
+rules do, and both were found by the same document - the eight-page scanned appendix of Fourier
+tables, where every page came back as one chunk holding a dozen unrelated identities.
+
+- **A block bigger than the target is cut at its own line boundaries.** Without this the paragraph
+  strategy has no way to divide a block at all: an oversized one survived every size rule the
+  strategy has and reached the ceiling, where it was cut at 1024 tokens and wherever the character
+  count landed - through the middle of a table row rather than between two of them. A table
+  transcribed one row to a line is exactly that shape, and so is a page of prose an extractor gave
+  no blank lines to. No overlap across the seam, the same choice `_hard_split` makes: these are a
+  list's items rather than a sentence's clauses, and repeating one duplicates a fact.
+- **Two blocks that are each substantial are not packed into one.** Packing is right when the
+  blocks are fragments - a heading, a caption, the line that introduces a list - and wrong when both
+  are already a chunk's worth, because the result is one embedding standing for two subjects. The
+  floor is 100 tokens, from the corpus rather than from taste: the appendix's page of transform
+  pairs holds two tables of 241 and 220 tokens that were glued together, and its page of definitions
+  holds ten blocks of 9 to 87 tokens that belong together and are still packed. The gap between 87
+  and 220 is what lets this be a constant. No overlap across that seam either: it is a division of
+  the document, not a place a sentence was cut.
+
+Both apply to the paragraph strategy only. The heading strategies pack towards their target on
+purpose, and the reference book's retrieval depends on a chunk holding a section rather than a
+paragraph; re-chunking the 608-page book after this change produces the same 596 chunks it did
+before, and the same 17-of-17.
+
+**What that bought, and what it did not.** Measured over the scanned appendix with a set of eleven
+questions whose answers are checked by eye against the transcription, in
+`scripts/eval_questions/fourier-tables.json`:
+
+| | Chunks | Rank 1 | Top 4 | Mean rank |
+|---|---|---|---|---|
+| Before | 9 | 2 of 11 | 7 of 11 | 3.64 |
+| After | 11 | 3 of 11 | 8 of 11 | 3.64 |
+
+The question the handoff named - the transform of the unit step - moves from **third to first**, and
+that is the honest size of the win. The aggregate barely moves, and two things that were expected to
+move it did not:
+
+- **Chunking finer is not the answer.** The generic target was swept from 750 down to 200. Rank-1
+  hits wander between 2 and 5 with no trend and the top-4 rate gets *worse* below 300. The target is
+  therefore left where the strategy table puts it: there is no number in that range this document
+  prefers, and changing a shipped default on eleven questions over one document would be tuning to
+  noise.
+- **The running head is not the cause.** The handoff's stated mechanism was that every page opening
+  with the same running head pulls their embeddings together. Stripping the line that repeats at the
+  top of most pages - detected by normalising away the page number and requiring it on half the
+  pages - changes rank-1 not at all and the mean not at all. A constant prefix shifts every chunk
+  alike, so it barely moves their order. It is not implemented.
+
+What is left is not a chunking fault. The questions that still rank badly are cross-representation
+confusions: the discrete-time properties table ranks below the continuous-time one for a question
+that names discrete time, because the two pages are near-identical mathematics and the embedder
+cannot tell "discrete" from "continuous" in them. That is a limit of a 137M embedding model on
+tables of transform pairs, and the lever for it is the model or a reranker, not the chunker.
 
 **Detection order:**
 1. Detect document type from filename patterns and content heuristics
@@ -771,10 +908,11 @@ Chunk text is retained precisely so a re-index never requires re-running OCR.
 ### Stage 6: Retrieve
 
 1. Embed the query with the **`search_query: `** prefix
-2. Exact KNN over the class partition, `k = 8`
-3. Apply recency weighting
-4. Trim to the retrieval budget
-5. Expand any matched homework part back to its sibling parts where the budget allows
+2. Exact KNN over the class partition, `k = 8`, or `k = 64` where a reranker is installed
+3. Rerank with the cross-encoder and cut back to 8, where one is installed
+4. Apply recency weighting
+5. Trim to the retrieval budget
+6. Expand any matched homework part back to its sibling parts where the budget allows
 
 **Recency weighting.** Cosine distance is adjusted by a bounded recency bonus so that newer material
 wins ties without displacing a clearly better match:
@@ -816,10 +954,77 @@ The trim notice is computed over the similarity ranking alone. A chunk that did 
 section the student asked for by name was not omitted for lack of room in the sense that flag means,
 and counting it would raise the notice on every turn that cites a section.
 
-**`k = 8` is a Phase 1 constant and is unmeasured.** It was chosen for chat turns over syllabi, and
-the Phase 2 handoff already records it as a known weakness in solving. Textbook-scale retrieval is
-the first thing that can measure it honestly, so Phase 3 measures it rather than adjusting it by
-feel. Nothing else in this document assumes the number stays at 8.
+**`k = 8` is a Phase 1 constant.** It was chosen for chat turns over syllabi, and the Phase 2 handoff
+records it as a known weakness in solving. It is now measured rather than adjusted by feel, and it
+survives: on a real 36-document course every answer that retrieval finds at all is inside the eight.
+Nothing else in this document assumes the number stays at 8.
+
+**Retrieval is measured against a class, and was not before.** Every retrieval number this project
+quoted through Phase 3 — 17/17 at `k = 8`, 16/17 at first place — was measured in a workspace holding
+**one document**. `retrieve` is class-scoped, so those runs asked a question of a haystack with no
+competition in it. A real class has thirty-six documents.
+
+Re-measured over the real course, in a workspace holding all of it (1124 chunks, 36 documents), the
+difference is the whole story:
+
+- The **textbook** set is unchanged: 16/17 first, 17/17 at `k = 4`, exactly its single-document
+  numbers. It is a linear algebra book in a signals course and nothing competes with it
+- A set written **about the course itself** scores 9/16 first and 14/16 in the served eight, and only
+  54 of the 128 chunks the product would serve come from the document the answer is in
+- The two it never finds are the same shape: a student asking how a homework problem is *worked* gets
+  the problem statement and eleven near-identical problems from another week, and the answer key
+  never appears in the top 128
+
+A control is also a weaker instrument at class scale, and the harness now says so: "not in this book"
+does not mean "not in this class", and the textbook set's Fourier control scores *above* the median
+real question once a course's Fourier material is in the same class.
+
+`scripts/eval_ingest.py` grew what this needs: a question set names the document each answer is in
+(`expect_document`), a chunk from the right pages of the wrong document is scored as a miss, and the
+report names which documents did the crowding.
+
+**Reranking, added after Phase 3.** The KNN is a bi-encoder search: the embedder turns a passage into
+768 numbers before it has seen the question, which is what lets it search a whole class and is also
+what it cannot do — tell two passages apart on a distinction the question makes and the passage does
+not announce. A course is full of those. A problem set and its answer key restate every question
+verbatim; a low-pass lab and a high-pass lab are one handout with a word changed; a practice midterm
+and its solution share an instructions paragraph character for character.
+
+So where the weights are installed, retrieval fetches 64 neighbours instead of 8 and a cross-encoder
+reads the question and each passage *together* before choosing the 8 that are served. Measured on the
+real course (`scripts/eval_questions/ece203-class.json`, sixteen questions whose answer is a known
+page of a known document):
+
+| | first place | in the served 8 | per question |
+|---|---|---|---|
+| fetch 8, no reranker | 9/16 | 14/16 | 0.02 s |
+| fetch 32, reranked | 12/16 | 14/16 | 0.84 s |
+| **fetch 64, reranked** | **12/16** | **15/16** | **1.58 s** |
+
+Thirty-two was not enough because one real answer sat at rank 35 in the embedding order, and a
+reranker can only reorder what it is given.
+
+Four things this is not:
+
+- **Not a replacement for the embedder.** A cross-encoder cannot search: scoring a thousand chunks
+  means a thousand forward passes. It goes second, over a shortlist small enough to afford
+- **Not free, and not free in a place that hides.** 1.6 seconds is added to every turn that retrieves,
+  on the largest classes measured up to 3.4. It is small beside the model turn it feeds and it is not
+  nothing
+- **Not required.** The weights are 640 MB and `rag/rerank.py` returns None on every failure — absent,
+  refused to start, timed out, malformed reply — and retrieval keeps the embedding order. A student
+  without them gets slightly worse search, not a broken class
+- **Not always better.** On the linear algebra textbook, whose topics nothing else in the class
+  shares, reranking costs one question its first place and changes nothing at `k = 4`. It earns its
+  place on documents that compete, which is what a course is
+
+The over-fetch is cut to `k` before budgeting rather than left to the budget. Everything past `k` is
+material the search was not confident about and the reranker did not rescue, and letting the budget
+decide would quietly change how many chunks a turn is built from.
+
+`score` is the ranking key and nothing else. Where reranking ran it holds the cross-encoder's logit,
+which is unbounded, routinely negative, and comparable only against other scores from the same query.
+`similarity` is always the embedder's cosine, which is what the interface shows.
 
 **Output:** Ranked chunks with content and metadata
 
@@ -895,10 +1100,46 @@ Runs after chunking, so a failure here never blocks the document from becoming s
 
 1. Send document text, truncated to the extraction budget, to the tutor model, together with the
    class's own name, code, and term, and the document type `detect_doc_type` decided
-2. The model returns structured JSON
-3. Each item is **merged into the class profile** by the identity rule below, rather than inserted
+2. The model returns structured JSON, constrained by the schema for that document type where the
+   endpoint supports `response_format`, at temperature 0
+3. **Each entry's `quote` is checked against the text the model was shown.** Found means `high`;
+   missing, too short, or paraphrased means `low`
+4. Each item is **merged into the class profile** by the identity rule below, rather than inserted
    as a new row per document
-4. The document is recorded in `profile_fact_sources` as evidence for each fact it attested
+5. The document is recorded in `profile_fact_sources` as evidence for each fact it attested
+
+**The document type decides which fields are asked for.** This is the single most important thing
+about the prompt and it is a subtraction, not an addition. A homework sheet's prompt does not contain
+the string `professor_info` anywhere; a practice exam's contains neither that nor `deadlines`. Asking
+a document for a field it cannot honestly fill is an instruction to go and find one, and a field list
+outweighs any amount of prose asking for restraint. `EXTRACTION_PROFILES` in `llm/prompts.py` is the
+table, and the schema, the worked example, and the field list are all generated from it, so they
+cannot disagree.
+
+| Document type | May be asked for |
+|---------------|------------------|
+| `syllabus` | topics, notes, deadlines, grading, professor, prerequisites |
+| `homework`, `lab` | topics, notes, deadlines |
+| `solutions`, `exam` | topics, notes |
+| `lecture_notes`, `textbook`, `generic` | topics, notes |
+
+`solutions` and `exam` are the two types that exist for this reason alone. They chunk like homework,
+and they are read completely differently: an answer key and a practice midterm are the documents a
+student is most likely to be holding a **reused** copy of, printed with another term's dates and
+another instructor's name. Their prompts say so outright, and their schemas make it moot.
+
+An unrecognised or missing document type gets the `generic` profile, which is the conservative one.
+It used to get the permissive one: `textbook` and `generic` had no guidance at all and were asked for
+all six kinds.
+
+**Confidence is not the model's opinion of itself.** It used to be - the prompt asked for `high` or
+`low` and the answer was believed - and that was the weakest link in the design, because `high` puts
+a fact into every chat prompt with nobody having looked at it, and a small model marks everything
+`high`. Every entry now carries a `quote`, the words in the document that state it, and
+`confidence_for` decides the marking with a string match after normalising case, whitespace, and the
+punctuation a PDF prints differently from how a model retypes it. A quote shorter than 12 characters
+is not evidence and is refused. The check runs against the **truncated** text the model was actually
+sent, never the whole file, so a sentence from a page nobody showed it cannot promote a guess.
 
 **The extraction budget is `min(context_window * 0.6, 6000)` tokens.** The share alone tied every
 upload's cost to a number chosen for chat: at a 262144-token window the stage sent 629,144 characters
@@ -911,9 +1152,10 @@ looking for is stated near the front of a syllabus rather than spread evenly thr
 one-time acknowledgement described in architecture.md.** It is never performed silently against a
 remote endpoint. The same gate covers Phase 2, which sends fact labels to the same endpoint.
 
-**What is a class fact.** The six kinds are defined by what a tutor would need to know, and the
-prompt names what to leave out as explicitly as what to collect. The exclusions matter more than the
-inclusions, because they are what a per-document extractor gets wrong by default:
+**What is a class fact.** The six kinds are defined by what a tutor would need to know. The `Is not`
+column is now mostly enforced by the field list above rather than stated in prose, which is the
+change that matters: what a per-document extractor gets wrong by default is not something it can be
+talked out of.
 
 | Kind | Is | Is not |
 |------|----|--------|
@@ -981,12 +1223,13 @@ is the guarantee that makes the model call optional rather than load-bearing.
 `select_active_facts` is the single filter. A fact is active when it is not rejected **and** one of:
 
 1. the user confirmed it,
-2. the model marked it `high`, or
+2. its quote was found in the document it came from, or
 3. **two or more distinct documents attested it.**
 
-The third rule is new and follows from evidence being tracked at all. A fact that two documents
-state independently has been corroborated, and corroboration is evidence in the same way a model's
-own `high` marking is. The student can still reject it, which is what keeps rule 3 safe.
+All three are forms of evidence, which is the point: none of them is the model vouching for itself.
+A fact two documents state independently has been corroborated by the material; a fact whose quote
+checks out has been corroborated by the page. The student can still reject any of them, which is
+what keeps rule 3 safe.
 
 Ordering is by evidence: within a kind, most-attested first. `_render_facts` then caps each kind, so
 a class with ninety topics spends a bounded share of the system-prompt budget on the profile and
@@ -1017,8 +1260,9 @@ user has confirmed, rejected, or corrected it, so removing an upload removes wha
 4. **Lightweight context.** Retrieval is tight and targeted, budgeted for 8K to 32K windows.
 5. **Class-scoped.** All retrieval is partitioned by class. No cross-class leakage until Phase 5.
 6. **Proposal, not assertion.** Automatically extracted facts are proposals. A proposal becomes
-   active on the user's confirmation, on the model's own `high` marking, or on corroboration by a
-   second document, and never on anything else.
+   active on the user's confirmation, on a quote that was found in the source document, or on
+   corroboration by a second document, and never on anything else. In particular, never on the
+   model's own say-so: a claim it cannot point to in the text stays out of every prompt.
 7. **A profile describes the course.** Documents are evidence for it, not sections of it. Anything
    true of one file and not of the class does not belong in the profile at all.
 

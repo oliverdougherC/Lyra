@@ -1,0 +1,142 @@
+{
+  "about": [
+    "Hand-written ground truth for retrieval over a whole class rather than one document.",
+    "Thirty-six documents of a real signals-and-systems course - eight problem sets, their",
+    "eight answer keys, four slide decks, five labs, two exams with solutions, a scanned",
+    "appendix, and a linear algebra textbook the course leans on - all in one class, which",
+    "is the search space the product actually has.",
+    "",
+    "Every question names the document its answer is in with expect_document, and a chunk",
+    "from the right pages of the wrong document is scored as a miss. That is the whole point",
+    "of the set. A single-document workspace cannot tell a good answer from the only answer",
+    "available, and this course is full of documents that say nearly the same words: a",
+    "problem set and its answer key restate each question verbatim, the low-pass lab and the",
+    "high-pass lab are the same handout with one word changed, and the practice midterm and",
+    "its solution share an instructions paragraph character for character.",
+    "",
+    "Pages were read before the questions were written. Where a fact appears on a run of",
+    "pages the range covers the run; where it appears once the range is that one page twice.",
+    "",
+    "Two questions - mixed-signal-representations and dtft-to-dtfs - are asked of a slide",
+    "deck whose text layer extracts as scattered characters with the equations broken apart.",
+    "They are here deliberately. A course contains documents like that, and retrieval either",
+    "reaches them or it does not.",
+    "",
+    "The controls name subjects no document in this class covers. Note that a control is a",
+    "weaker instrument here than in a one-book workspace: a class of thirty-six documents",
+    "can plausibly answer far more than one book can, so a control only rules out what the",
+    "whole course is silent about."
+  ],
+  "questions": [
+    {
+      "id": "hw5-two-sided-exponential-answer",
+      "question": "What is the Fourier transform of e^{-4|t|}, worked out step by step?",
+      "expect_document": "ECE203_homework5_solution",
+      "expect_pages": [1, 1],
+      "note": "homework_5 poses this exact signal in the same notation and has no answer in it."
+    },
+    {
+      "id": "hw5-what-is-asked",
+      "question": "Which signals does Homework Assignment 5 ask me to compute X(jw) for?",
+      "expect_document": "homework_5",
+      "expect_pages": [1, 1],
+      "note": "The mirror of the question above. The answer key restates every one of them."
+    },
+    {
+      "id": "delta-sifting",
+      "question": "What is the sifting property of the Dirac delta function?",
+      "expect_document": "ECE_203_set_1",
+      "expect_pages": [27, 32]
+    },
+    {
+      "id": "delta-scaling",
+      "question": "What happens to the delta function when its argument is scaled, as in delta(at)?",
+      "expect_document": "ECE_203_set_1",
+      "expect_pages": [30, 30]
+    },
+    {
+      "id": "lti-eigenfunctions",
+      "question": "Why is a complex exponential an eigenfunction of an LTI system?",
+      "expect_document": "ECE_203_set_2",
+      "expect_pages": [4, 4]
+    },
+    {
+      "id": "gaussian-spectrum",
+      "question": "What signal has the Gaussian spectrum X(jw) = e^{-w^2}?",
+      "expect_document": "ECE_203_set_2",
+      "expect_pages": [82, 82]
+    },
+    {
+      "id": "impulse-train-direct-method",
+      "question": "How are the Fourier series coefficients of a periodic impulse train found by the direct method?",
+      "expect_document": "ECE_203_set_2",
+      "expect_pages": [28, 34],
+      "note": "The derivation runs across seven slides, so the range is the run rather than the one slide that carries the substitution. The scanned appendix states the same pair as a single table entry, which is the trap."
+    },
+    {
+      "id": "lowpass-lab-components",
+      "question": "Which resistor and capacitor do I build the low-pass filter with?",
+      "expect_document": "ECE203_Lab1",
+      "expect_pages": [1, 5],
+      "note": "Lab 2 is the same handout for a high-pass filter and lists a 10 nF capacitor too."
+    },
+    {
+      "id": "highpass-lab-pairs",
+      "question": "Which two component pairs do I compute the cutoff frequency for in the high-pass filter lab?",
+      "expect_document": "ECE203_Lab2",
+      "expect_pages": [2, 2]
+    },
+    {
+      "id": "am-carrier-frequency",
+      "question": "What carrier frequency should the LC tank be tuned to in the AM modulator lab?",
+      "expect_document": "ECE203_Lab3",
+      "expect_pages": [1, 3]
+    },
+    {
+      "id": "kit-diodes",
+      "question": "Which diodes come in the lab kit, and how many of each?",
+      "expect_document": "ECE_203_Lab_Kit_Overview",
+      "expect_pages": [1, 1]
+    },
+    {
+      "id": "bode-variable-names",
+      "question": "What variable names should I use for the corner frequencies in the MATLAB Bode plot script?",
+      "expect_document": "Bode_Plot_MATLAB_Code",
+      "expect_pages": [1, 2]
+    },
+    {
+      "id": "final-exam-length",
+      "question": "How many minutes do I get for the final exam?",
+      "expect_document": "practice_final_203",
+      "expect_pages": [1, 1],
+      "note": "The midterm and its solution both state 80 minutes in the same sentence shape."
+    },
+    {
+      "id": "midterm-problem-1-impulse-response",
+      "question": "How do I find the impulse response of the system y(t) = integral to t-2 of x(tau) e^{-2(t-tau)} dtau?",
+      "expect_document": "ECE203_practice_solution",
+      "expect_pages": [1, 1],
+      "note": "The practice midterm poses this system verbatim and works none of it out."
+    },
+    {
+      "id": "mixed-signal-representations",
+      "question": "What are the four Fourier representations for continuous and discrete, periodic and non-periodic signals?",
+      "expect_document": "351-notes-6-fa2023",
+      "expect_pages": [1, 1]
+    },
+    {
+      "id": "dtft-to-dtfs",
+      "question": "How is the DTFT of a periodic sequence related to its DTFS coefficients?",
+      "expect_document": "351-notes-6-fa2023",
+      "expect_pages": [7, 9]
+    },
+    {
+      "id": "control-thermodynamics",
+      "question": "What does the second law of thermodynamics say about entropy?"
+    },
+    {
+      "id": "control-git-rebase",
+      "question": "How do I rebase a branch onto main and resolve the conflicts?"
+    }
+  ]
+}

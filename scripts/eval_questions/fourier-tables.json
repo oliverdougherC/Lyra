@@ -1,0 +1,75 @@
+{
+  "document": "Fourier_Tables",
+  "notes": [
+    "The scanned appendix from the reference course, eight pages with zero extractable",
+    "characters, read by recognition. It has no outline to name a section of, so every",
+    "question says where its answer is by page, checked by eye against the transcription in",
+    "data/eval-recognize/recognition.md.",
+    "",
+    "The set is built to be hard in the one way this document is hard: the same identity",
+    "appears in four representations across four pages, so a question that does not",
+    "distinguish continuous from discrete time can be answered correctly by the wrong page.",
+    "That is why the unit step is asked twice."
+  ],
+  "questions": [
+    {
+      "id": "unit-step-ft",
+      "question": "What is the Fourier transform of the continuous-time unit step u(t)?",
+      "expect_pages": [3, 3]
+    },
+    {
+      "id": "unit-step-dtft",
+      "question": "What is the discrete-time Fourier transform of the unit step sequence u[n]?",
+      "expect_pages": [2, 2]
+    },
+    {
+      "id": "gaussian-pulse",
+      "question": "What is the Fourier transform of a Gaussian pulse?",
+      "expect_pages": [3, 3]
+    },
+    {
+      "id": "impulse-train-fs",
+      "question": "What are the Fourier series coefficients of a periodic impulse train?",
+      "expect_pages": [2, 2]
+    },
+    {
+      "id": "dtfs-rectangular",
+      "question": "What is the discrete-time Fourier series of a periodic rectangular pulse train?",
+      "expect_pages": [1, 1]
+    },
+    {
+      "id": "cosine-ft",
+      "question": "What is the Fourier transform of cos(omega_0 t) for a periodic signal?",
+      "expect_pages": [3, 3]
+    },
+    {
+      "id": "dtft-periodic-cosine",
+      "question": "What is the discrete-time Fourier transform of a periodic cosine cos(Omega_1 n)?",
+      "expect_pages": [4, 4]
+    },
+    {
+      "id": "time-shift-property",
+      "question": "How does shifting a signal in time change its Fourier transform and its Fourier series coefficients?",
+      "expect_pages": [5, 5]
+    },
+    {
+      "id": "dtft-scaling-property",
+      "question": "What is the scaling property for the discrete-time Fourier transform and the discrete-time Fourier series?",
+      "expect_pages": [6, 6]
+    },
+    {
+      "id": "relating-representations",
+      "question": "How is the Fourier transform of a continuous-time periodic signal related to its Fourier series coefficients?",
+      "expect_pages": [7, 7]
+    },
+    {
+      "id": "sampling-a-discrete-signal",
+      "question": "What happens to the DTFT when a discrete-time signal is subsampled by a factor of q?",
+      "expect_pages": [8, 8]
+    },
+    {
+      "id": "control-laplace",
+      "question": "What is the region of convergence of the Laplace transform of a right-sided exponential?"
+    }
+  ]
+}

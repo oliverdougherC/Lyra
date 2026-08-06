@@ -301,7 +301,16 @@ In addition to every item in ui-phase-1.md and ui-phase-2.md's definitions of do
       none does. Read live off the chunk, so re-indexing improves old citations rather than
       leaving them quoting a reading that has been replaced
 - [x] Figures render in the workspace and in print, and a missing figure costs a caption rather than
-      the solution. What is not done is deciding which problem an uncaptioned figure belongs to on a
-      crowded page, so `FigureBlock` appears less often than this document assumed. See the figures
-      section of feature-roadmap.md for the measurement behind that
-- [ ] Correct at 1280, 768, and 375, in both themes
+      the solution. An uncaptioned figure on a crowded page is now filed under its own problem where
+      the page's diagrams and markers alternate, which is the acceptance homework's layout: its
+      three block diagrams reach the first three of its seven questions and the rest get none. The
+      rule and the two it replaced are in rag-pipeline.md
+- [x] Correct at 1280, 768, and 375, in both themes. Driven in the browser against a copy of a real
+      class - 37 documents, a 608-page book with a four-level outline, a scan waiting to be read, a
+      document with three pages recognition could not transcribe, and a solution set carrying real
+      crops. One defect found and fixed: `FigureBlock`'s image was being **blown up** at 1280,
+      because the figure is a flex column and a stretched item takes the column's full width
+      whatever its own is. The acceptance homework's diagrams are 771px and were rendering at 1215,
+      which is a blurred picture of hairlines. `self-start` makes the scaling one-directional.
+      Nothing else overflowed its box or the viewport at any of the three widths in either theme,
+      and `scripts/check_contrast.py` passes with no failures

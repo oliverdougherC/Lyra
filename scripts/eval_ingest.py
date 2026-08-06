@@ -16,9 +16,15 @@ with its own database, set before anything opens a connection. The settings row 
 from the real database so the embedding model and context window match what the app would
 use.
 
+A question set is asked against a *class*, because that is what the product searches. Run
+one against a workspace holding a single document and the answer has nothing to compete
+with, which is why a set names the document each answer is in: a chunk from the right pages
+of the wrong document is a miss, and the report says which documents did the crowding.
+
 Usage:
 
     python scripts/eval_ingest.py ingest --fresh /path/to/textbook.pdf
+    python scripts/eval_ingest.py --workspace data/eval-class ingest --fresh course/*.pdf
     python scripts/eval_ingest.py retrieve
     python scripts/eval_ingest.py retrieve --questions scripts/eval_questions/another-book.json
     python scripts/eval_ingest.py report
@@ -53,6 +59,7 @@ from backend.config import settings  # noqa: E402
 from backend.core import ingestion, recognition  # noqa: E402
 from backend.core.app_settings import resolve_tutor_config  # noqa: E402
 from backend.llm import client  # noqa: E402
+from backend.rag import chunk as chunking  # noqa: E402
 from backend.rag import render, transcribe  # noqa: E402
 from backend.rag import retrieve as retrieval  # noqa: E402
 from backend.storage.database import connect, migrate  # noqa: E402
@@ -82,7 +89,20 @@ UNLIMITED_BUDGET = 10_000_000
 # How many neighbours to keep in the record for reading by eye afterwards.
 _KEPT_NEIGHBOURS = 5
 
+# The `k` the product actually serves. Cross-document crowding is reported at this width
+# rather than at `WIDE_K`, because what a student loses is the chunk that did not make the
+# eight, not the one that did not make the thirty-two.
+PRODUCT_K = 8
+
 _PATH_SEPARATOR = " / "
+
+
+@dataclass(frozen=True)
+class _RerankSwitch:
+    """The rerank server with `available` answered by the harness rather than by the disk."""
+
+    inner: object
+    available: bool
 
 
 @dataclass(frozen=True)
@@ -452,55 +472,262 @@ def _chunk_stats(conn: sqlite3.Connection, document_id: int) -> dict[str, object
 
 
 @contextmanager
-def _widened_k(k: int) -> Iterator[None]:
+def _widened_k(k: int, *, reranking: bool) -> Iterator[None]:
     """Run retrieval with a larger neighbour count than the product uses.
 
-    Both the constant and the SQL are replaced, because sqlite-vec reads the KNN limit out
-    of the query text rather than from a bound parameter, which is why `_KNN_SQL` inlines
-    it in the first place.
+    Both widths are set, because the product has two: `K` is what it serves and
+    `RERANK_FETCH_K` is what it fetches for a reranker to choose from. Measuring rank needs
+    the whole ranking, so both become `k`.
+
+    Reranking is forced rather than left as configured. Whether the weights happen to be on
+    the machine running the harness is not a property of the product, and a run whose
+    numbers silently depended on that would not be comparable with the run before it.
+    Setting it explicitly in both directions is what makes a pair of runs a measurement.
     """
-    original_k, original_sql = retrieval.K, retrieval._KNN_SQL
-    retrieval.K = k
-    retrieval._KNN_SQL = original_sql.replace(f"k = {original_k}", f"k = {k}")
+    original_k = (retrieval.K, retrieval.RERANK_FETCH_K)
+    original_server = retrieval.rerank_server
+    retrieval.K = retrieval.RERANK_FETCH_K = k
+    # `available` is a read-only property of the shared instance, so the object is stood in
+    # for rather than mutated. Only `retrieve` reads it; `rag/rerank.py` keeps its own
+    # reference and so still talks to the real server, which is what a `--rerank` run wants.
+    retrieval.rerank_server = _RerankSwitch(original_server, available=reranking)
     try:
         yield
     finally:
-        retrieval.K, retrieval._KNN_SQL = original_k, original_sql
+        retrieval.K, retrieval.RERANK_FETCH_K = original_k
+        retrieval.rerank_server = original_server
+
+
+def _find_document(
+    workspace: Workspace, conn: sqlite3.Connection, stem: str
+) -> tuple[int, int, Path]:
+    """The document a question set is about, as `(class_id, document_id, stored_path)`.
+
+    The ingestion report is preferred, because that is what the ingest stage wrote and it
+    names the run being asked about. The workspace database is the fallback, and it is what
+    makes a question set answerable about a document that arrived by another route: the
+    scanned handout is read by the `recognize` stage, which costs minutes of model time and
+    writes no ingestion report, and re-uploading it to get one would spend those minutes
+    again for nothing.
+    """
+    documents = _mapping(workspace.existing("ingestion").get("documents", {}))
+    if stem in documents:
+        record = documents[stem]
+        document_id = int(record["document_id"])
+    else:
+        rows = conn.execute(
+            "select id, filename from documents where filename like ? order by id",
+            (f"%{stem}%",),
+        ).fetchall()
+        if not rows:
+            raise SystemExit(
+                f"{stem} is not in this workspace. Run the ingest or recognize stage on it first."
+            )
+        # A fragment that matches two documents is a question set that cannot say where its
+        # answer is, and at class scale that is a live hazard rather than a theoretical one:
+        # `homework_1` and `homework_1_solution` are both in the same class.
+        if len(rows) > 1:
+            names = ", ".join(str(row["filename"]) for row in rows)
+            raise SystemExit(f"{stem} matches {len(rows)} documents in this workspace: {names}")
+        document_id = int(rows[0]["id"])
+
+    found = conn.execute(
+        "select class_id, stored_path from documents where id = ?", (document_id,)
+    ).fetchone()
+    if found is None:
+        raise SystemExit(f"Document {document_id} is recorded but not in the database.")
+    return int(found["class_id"]), document_id, Path(str(found["stored_path"]))
+
+
+@dataclass(frozen=True)
+class Target:
+    """The document a question's answer is in, and how that document names places in itself.
+
+    Attributes:
+        document_id: The row the answer has to come from for a hit to count.
+        ranges: Outline paths to page spans, empty for a document that names no sections.
+    """
+
+    document_id: int
+    ranges: dict[str, tuple[int, int]]
+
+
+# A control names no document because it has no answer to find. Its document id matches
+# nothing, which is exactly the reading a control wants: whatever came back is the wrong
+# document, because every document is.
+NO_TARGET = Target(document_id=0, ranges={})
+
+
+def _resolve_targets(
+    workspace: Workspace, conn: sqlite3.Connection, question_set: dict[str, object]
+) -> tuple[int, dict[str, Target]]:
+    """Every document the question set refers to, resolved once each.
+
+    A set names one document at the top level and a question may override it with
+    `expect_document`. That is what lets a set be asked against a class rather than against
+    a document: the class is the search space either way, and naming the document per
+    question is what makes a hit in the *wrong* document countable as a miss.
+
+    Raises:
+        SystemExit: If the named documents are not all in one class. Retrieval is
+            class-scoped, so a set spanning two classes could never be answered in one run.
+    """
+    default = question_set.get("document")
+    questions = [one for one in question_set["questions"] if isinstance(one, dict)]
+
+    wanted: dict[str, bool] = {}
+    for question in questions:
+        if not _states_a_location(question):
+            continue
+        stem = question.get("expect_document") or default
+        if stem is None:
+            raise SystemExit(
+                f"{question['id']} names no document, and the set has no default. "
+                "Give the set a `document`, or the question an `expect_document`."
+            )
+        # A document needs its outline read only if some question addresses it by section.
+        # Every scan has no outline, and reading one it does not have would fail the run
+        # before a question was asked.
+        wanted[str(stem)] = wanted.get(str(stem), False) or (
+            question.get("expect_section") is not None
+        )
+
+    classes: set[int] = set()
+    targets: dict[str, Target] = {}
+    for stem, wants_sections in wanted.items():
+        class_id, document_id, stored = _find_document(workspace, conn, stem)
+        classes.add(class_id)
+        ranges = section_ranges(read_outline(stored)) if wants_sections else {}
+        targets[stem] = Target(document_id=document_id, ranges=ranges)
+
+    if len(classes) > 1:
+        raise SystemExit(
+            f"The question set spans {len(classes)} classes. Retrieval never crosses a class, "
+            "so no single run can answer it."
+        )
+    if not classes:
+        raise SystemExit(
+            "No question in this set says where its answer is, so nothing is measured."
+        )
+    return classes.pop(), targets
+
+
+def _states_a_location(question: dict[str, object]) -> bool:
+    """Whether a question has an answer to find, however it says where.
+
+    False for a control, which is the point of a control: there is no document to name
+    because there is nothing in the class to find.
+    """
+    return question.get("expect_section") is not None or question.get("expect_pages") is not None
 
 
 def cmd_retrieve(args: argparse.Namespace) -> int:
     """Ask the question set and record where the right chunk landed in the ranking."""
     workspace = Workspace(Path(args.workspace).resolve())
     conn = prepare(workspace, Path(args.source_db))
-    ingested = workspace.read("ingestion")
-    documents = _mapping(ingested.get("documents", {}))
 
     question_set = json.loads(Path(args.questions).read_text(encoding="utf-8"))
-    stem = str(question_set["document"])
-    if stem not in documents:
-        raise SystemExit(f"{stem} has not been ingested. Run the ingest stage on it first.")
-
-    document = documents[stem]
-    document_id = int(document["document_id"])
-    stored = conn.execute(
-        "select stored_path from documents where id = ?", (document_id,)
+    default = question_set.get("document")
+    class_id, targets = _resolve_targets(workspace, conn, question_set)
+    scale = conn.execute(
+        "select (select count(*) from chunks where class_id = ?) as chunks, "
+        "(select count(*) from documents where class_id = ?) as documents",
+        (class_id, class_id),
     ).fetchone()
-    ranges = section_ranges(read_outline(Path(str(stored["stored_path"]))))
+
+    if args.rerank and not settings.rerank_installed:
+        raise SystemExit(
+            "--rerank was asked for and the weights are not on this machine. "
+            "Run `python scripts/fetch_models.py`."
+        )
 
     results: list[dict[str, object]] = []
-    with _widened_k(args.k):
+    started = time.monotonic()
+    with _widened_k(args.k, reranking=args.rerank):
         for question in question_set["questions"]:
-            record = _ask(conn, int(ingested["class_id"]), document_id, question, ranges, args.k)
+            stem = (
+                str(question.get("expect_document") or default)
+                if _states_a_location(question)
+                else None
+            )
+            target = targets[stem] if stem is not None else NO_TARGET
+            record = _ask(conn, class_id, stem, target, question, args.k)
             results.append(record)
             print(
                 f"{record['id']}: rank {record['rank'] if record['rank'] else '-'}, "
                 f"top similarity {record['top_similarity']}"
             )
 
+    elapsed = time.monotonic() - started
+    # Named after the question set rather than fixed, because a class is asked more than one
+    # set and a single `retrieval.json` would mean each run destroyed the one before it.
+    # The reranked run is named apart from the plain one for the same reason: the pair is
+    # the measurement, so neither may overwrite the other.
+    suffix = "-reranked" if args.rerank else ""
     workspace.write(
-        "retrieval",
-        {"document": stem, "k": args.k, "questions": results},
+        f"retrieval-{Path(args.questions).stem}{suffix}",
+        {
+            "document": default or "several",
+            "questions_file": Path(args.questions).name,
+            "reranked": bool(args.rerank),
+            # Per question, and the whole turn's retrieval rather than the rerank call
+            # alone, because what a student waits for is the whole turn.
+            "seconds_per_question": round(elapsed / max(1, len(results)), 2),
+            "k": args.k,
+            # The size of the haystack, recorded because a rank means nothing without it.
+            # One document's rank 1 and a class's rank 1 are not the same measurement.
+            "class_chunks": int(scale["chunks"]),
+            "class_documents": int(scale["documents"]),
+            "questions": results,
+        },
     )
+    conn.close()
+    return 0
+
+
+def cmd_reindex(args: argparse.Namespace) -> int:
+    """Chunk and embed a document already in the workspace again, and report what changed.
+
+    What the app's Reindex action does, in process, which is what makes a change to the
+    chunker measurable against a document that was expensive to read. A transcription lives
+    on its page row and outlives a re-parse, so a scanned document re-indexes without
+    spending the vision model again - and this is also the check that it really does.
+    """
+    workspace = Workspace(Path(args.workspace).resolve())
+    conn = prepare(workspace, Path(args.source_db))
+    if args.no_extraction:
+        conn.execute("update settings set extraction_enabled = 0 where id = 1")
+        conn.commit()
+
+    _, document_id, _ = _find_document(workspace, conn, args.document)
+    if args.recognize:
+        # The student's explicit action, done explicitly here for the same reason: nothing
+        # transcribes without being asked. This is what turns a scan already sitting in a
+        # class from `unsupported` into something retrieval can reach, and doing it here
+        # rather than through `recognize` is what keeps it one document rather than two.
+        conn.execute("update documents set recognize = 1 where id = ?", (document_id,))
+        conn.commit()
+    before = _chunk_stats(conn, document_id)
+
+    clock = StageClock()
+    started = time.monotonic()
+    with _timed_stages(clock):
+        ingestion.run_ingestion(document_id)
+    elapsed = round(time.monotonic() - started, 1)
+
+    after = _chunk_stats(conn, document_id)
+    row = conn.execute(
+        "select state, error_message from documents where id = ?", (document_id,)
+    ).fetchone()
+    print(f"{args.document}: {row['state']} in {elapsed}s, {clock.rounded()}")
+    for name, stats in (("before", before), ("after", after)):
+        tokens = _mapping(stats.get("tokens"))
+        print(
+            f"  {name}: {stats['chunk_count']} chunks, mean {tokens.get('mean', 0)} tokens, "
+            f"max {tokens.get('max', 0)}, {stats['chunks_with_section']} with a section title"
+        )
+    if row["error_message"]:
+        print(f"  error: {row['error_message']}")
     conn.close()
     return 0
 
@@ -508,21 +735,35 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
 def _ask(
     conn: sqlite3.Connection,
     class_id: int,
-    document_id: int,
+    stem: str | None,
+    target: Target,
     question: dict[str, object],
-    ranges: dict[str, tuple[int, int]],
     k: int,
 ) -> dict[str, object]:
-    """Run one question and locate the expected section in the ranking."""
+    """Run one question and locate the expected pages in the ranking.
+
+    A question says where its answer is either by naming a section of the book's outline,
+    which is the ground truth a book carries about itself, or by giving the pages outright.
+    The second is not a lesser form of the first: a scanned handout has no outline to name,
+    and the pages of an eight-page appendix are as checkable by eye as an outline entry.
+
+    Either way the search covers the whole class, and a chunk from the wrong document is
+    counted as a miss however well it scored. That is the point of running this against a
+    class: the same page ranks first among eleven chunks and eleventh among a thousand, and
+    only the second number describes what a student experiences.
+    """
     expected = question.get("expect_section")
+    stated = question.get("expect_pages")
     pages: tuple[int, int] | None = None
     if expected is not None:
-        pages = ranges.get(str(expected))
+        pages = target.ranges.get(str(expected))
         if pages is None:
             raise SystemExit(
                 f"{question['id']}: no outline entry at path {expected!r}. "
                 "The question set and the book disagree."
             )
+    elif isinstance(stated, list) and len(stated) == 2:
+        pages = (int(stated[0]), int(stated[1]))
 
     result = retrieval.retrieve(conn, class_id, str(question["question"]), UNLIMITED_BUDGET)
     chunks = result.chunks[:k]
@@ -531,22 +772,37 @@ def _ask(
     if pages is not None:
         for position, chunk in enumerate(chunks, start=1):
             page = chunk.page_number
-            if chunk.document_id != document_id or page is None:
+            if chunk.document_id != target.document_id or page is None:
                 continue
             if pages[0] <= page <= pages[1]:
                 rank = position
                 break
 
+    # What outranked the answer, by document. Everything above the hit when there was one,
+    # and the whole of the product's `k` when there was not, because a question that missed
+    # was crowded out by all of it.
+    ahead = chunks[: rank - 1] if rank else chunks[:PRODUCT_K]
     return {
         "id": question["id"],
         "question": question["question"],
+        "expect_document": stem,
         "expect_section": expected,
         "expect_pages": list(pages) if pages else None,
+        # A question is targeted when it has an answer to find, however it says where.
+        "targeted": pages is not None,
         "rank": rank,
         "returned": len(chunks),
         "top_similarity": round(chunks[0].similarity, 4) if chunks else None,
+        # Of the k the product would actually serve, how many came from the right document.
+        "from_expected": sum(
+            1 for chunk in chunks[:PRODUCT_K] if chunk.document_id == target.document_id
+        ),
+        "ahead": sorted(
+            {chunk.filename for chunk in ahead if chunk.document_id != target.document_id}
+        ),
         "neighbours": [
             {
+                "document": chunk.filename,
                 "page": chunk.page_number,
                 "similarity": round(chunk.similarity, 4),
                 "section_title": chunk.section_title,
@@ -578,7 +834,14 @@ _MATRIX_MARKUP = re.compile(r"\\begin\{(?:[bBpvV]?matrix|array)\}")
 
 
 def _text_shape(text: str) -> dict[str, object]:
-    """The countable signals of whether mathematics survived a reading of a page."""
+    """The countable signals of whether a page's mathematics and structure survived.
+
+    `notations` is the one to read across a whole document rather than per page. A model
+    asked only to transcribe picks its table notation afresh on every page - the reference
+    appendix came back in four of them - and a document whose tables are written four ways
+    is one nothing downstream can read as tables at all. One notation is the target; the
+    count is what says whether asking for it worked.
+    """
     lines = [line for line in text.splitlines() if line.strip()]
     return {
         "characters": len(text),
@@ -586,7 +849,39 @@ def _text_shape(text: str) -> dict[str, object]:
         "lone_number_lines": sum(1 for line in lines if _LONE_NUMBER.match(line)),
         "matrix_markup": len(_MATRIX_MARKUP.findall(text)),
         "math_delimiters": text.count("$"),
+        "notations": sorted(_notations(text)),
+        # Headings the chunker can actually see, which is what decides whether a section
+        # gets a name. A page of a numbered appendix that reports zero here has headings
+        # the reader can see and the product cannot.
+        "headings": len(chunking.SECTION_HEADING.findall(text)),
+        "bold_headings": len(_BOLD_HEADING.findall(text)),
     }
+
+
+# How a page wrote its tables. Named rather than counted, because the useful report is
+# which notations a document used, not how many rows each one had.
+_NOTATION_PATTERNS = (
+    ("markdown-table", re.compile(r"^\s*\|.*\|\s*$\n\s*\|[\s:|-]+\|\s*$", re.MULTILINE)),
+    ("bare-pipes", re.compile(r"^\s*[^|\n]+\|[^|\n]+$", re.MULTILINE)),
+    ("latex-tabular", re.compile(r"\\begin\{tabular\}")),
+)
+
+# A heading the model emphasised instead of marking up: `**C.6 Discrete-Time Fourier**`.
+# The chunker does not see one, and the reference appendix returned several.
+_BOLD_HEADING = re.compile(r"^\s*\*\*[^*\n]+\*\*\s*$", re.MULTILINE)
+
+
+def _notations(text: str) -> set[str]:
+    """Which table notations appear on a page.
+
+    `bare-pipes` is only reported where no Markdown table was found, because every
+    Markdown table row also matches it. Reporting both would make the pinned notation look
+    like two notations and the measurement would say the opposite of the truth.
+    """
+    found = {name for name, pattern in _NOTATION_PATTERNS if pattern.search(text)}
+    if "markdown-table" in found:
+        found.discard("bare-pipes")
+    return found
 
 
 def cmd_transcribe(args: argparse.Namespace) -> int:
@@ -850,8 +1145,9 @@ def _write_recognition(workspace: Workspace, name: str, record: dict[str, object
     Same standard as the transcription comparison: the counts are evidence and not a
     verdict, and whether a page was read correctly is a question only reading it answers.
     """
-    lines = [f"# {name} as recognition read it", ""]
-    for entry in record["pages"]:  # type: ignore[union-attr]
+    pages = list(record["pages"])  # type: ignore[call-overload]
+    lines = [f"# {name} as recognition read it", "", _consistency(pages), ""]
+    for entry in pages:
         lines += [
             f"## Page {entry['page']}",
             "",
@@ -866,16 +1162,49 @@ def _write_recognition(workspace: Workspace, name: str, record: dict[str, object
     (workspace.root / "recognition.md").write_text("\n".join(lines), encoding="utf-8")
 
 
+def _consistency(pages: list[dict[str, object]]) -> str:
+    """One sentence about whether the document was written one way or several.
+
+    Across the document rather than per page, because that is the failure: every page is
+    individually plausible and the eight of them together are four documents. It is a
+    sentence rather than a verdict for the same reason the rest of this file is - whether
+    a page was read correctly is a question only reading it answers.
+    """
+    notations: set[str] = set()
+    headings = bold = unmarked = 0
+    for entry in pages:
+        shape = entry.get("shape")
+        if not isinstance(shape, dict):
+            continue
+        found = {str(one) for one in shape.get("notations", [])}
+        notations.update(found)
+        unmarked += not found
+        headings += int(shape.get("headings") or 0)
+        bold += int(shape.get("bold_headings") or 0)
+
+    written = ", ".join(sorted(notations)) or "none"
+    return (
+        f"Table notations used: {written}. "
+        # Counted separately because on a document of tables it is not the absence of a
+        # table, it is a table written as plain alternating lines - which is a notation
+        # too, and the one nothing downstream can recognise.
+        f"{unmarked} of {len(pages)} page(s) marked up no table at all. "
+        f"{headings} heading(s) the chunker can see, {bold} written in bold instead."
+    )
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Print what the recorded runs say, which is the only output anyone reads twice."""
     workspace = Workspace(Path(args.workspace).resolve())
     ingested = _mapping(workspace.existing("ingestion").get("documents", {}))
-    retrieved = workspace.existing("retrieval")
+    # Every question set asked of this workspace, not one of them. A class is asked several,
+    # and the interesting comparison is usually between two of them rather than inside one.
+    retrieved = sorted(workspace.root.glob("retrieval*.json"))
 
     if ingested:
         _report_ingestion(ingested)
-    if retrieved:
-        _report_retrieval(retrieved)
+    for path in retrieved:
+        _report_retrieval(json.loads(path.read_text(encoding="utf-8")))
     if not ingested and not retrieved:
         print("Nothing recorded yet. Run the ingest stage first.")
     return 0
@@ -910,12 +1239,23 @@ def _report_ingestion(documents: dict[str, dict[str, object]]) -> None:
 
 def _report_retrieval(retrieved: dict[str, object]) -> None:
     questions = [one for one in retrieved.get("questions", []) if isinstance(one, dict)]
-    targeted = [one for one in questions if one["expect_section"] is not None]
-    controls = [one for one in questions if one["expect_section"] is None]
+    targeted = [one for one in questions if one.get("targeted", one["expect_section"] is not None)]
+    controls = [one for one in questions if one not in targeted]
     if not questions:
         return
 
-    print(f"\nRetrieval over {retrieved.get('document')}, k = {retrieved.get('k')}")
+    scale = (
+        f"{retrieved['class_documents']} documents, {retrieved['class_chunks']} chunks"
+        if retrieved.get("class_chunks")
+        else "scale not recorded"
+    )
+    how = "reranked" if retrieved.get("reranked") else "embedding order"
+    rate = retrieved.get("seconds_per_question")
+    cost = f", {rate}s a question" if rate else ""
+    print(
+        f"\nRetrieval over {retrieved.get('document')} ({scale}), "
+        f"k = {retrieved.get('k')}, {how}{cost}"
+    )
     ranks = [one["rank"] for one in targeted if one["rank"]]
     for k in REPORTED_K:
         if k > int(retrieved.get("k") or 0):
@@ -929,6 +1269,8 @@ def _report_retrieval(retrieved: dict[str, object]) -> None:
     if missed:
         print(f"  never found: {', '.join(missed)}")
 
+    _report_crowding(targeted)
+
     if controls:
         best = [one["top_similarity"] for one in targeted if one["top_similarity"] is not None]
         print("\n  Controls, which should look worse than the questions above")
@@ -939,8 +1281,43 @@ def _report_retrieval(retrieved: dict[str, object]) -> None:
 
     print("\n  Per question")
     for one in questions:
-        target = one["expect_section"] or "not in this book"
+        pages = one.get("expect_pages")
+        target = one["expect_section"] or (f"pages {pages[0]}-{pages[1]}" if pages else "not here")
         print(f"    {one['id']}: rank {one['rank'] or '-'} of {one['returned']}, {target}")
+
+
+def _report_crowding(targeted: list[dict[str, object]]) -> None:
+    """What the class costs a question: how much of `k` the wrong documents took.
+
+    A single-document workspace cannot produce this number at all, which is the reason it
+    flatters retrieval. Here every one of a class's documents is competing for the same
+    eight places, and a question can be answered by the right passage of the wrong term's
+    answer key without any of these counts noticing - so this says how crowded the result
+    was, not whether the answer was good.
+    """
+    measured = [one for one in targeted if "from_expected" in one]
+    if not measured:
+        return
+
+    served = [int(one["from_expected"]) for one in measured]
+    print(
+        f"\n  Of the {PRODUCT_K} chunks the product would serve, "
+        f"{sum(served)}/{PRODUCT_K * len(measured)} came from the expected document "
+        f"(median {statistics.median(served)} per question)"
+    )
+
+    blocking: dict[str, int] = {}
+    for one in measured:
+        for name in one.get("ahead", []):  # type: ignore[union-attr]
+            blocking[str(name)] = blocking.get(str(name), 0) + 1
+    if not blocking:
+        print("    nothing from another document outranked an answer")
+        return
+
+    ranked = sorted(blocking.items(), key=lambda pair: (-pair[1], pair[0]))
+    print("    documents that outranked an answer, by how many questions they did it to:")
+    for name, count in ranked[:_KEPT_NEIGHBOURS]:
+        print(f"      {name}: {count}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -962,6 +1339,9 @@ def main(argv: list[str] | None = None) -> int:
     retrieve = subparsers.add_parser("retrieve", help="Ask the question set and rank the answers")
     retrieve.add_argument("--questions", default=str(DEFAULT_QUESTIONS))
     retrieve.add_argument("--k", type=int, default=WIDE_K)
+    retrieve.add_argument(
+        "--rerank", action="store_true", help="Reorder the neighbours with the cross-encoder"
+    )
     retrieve.set_defaults(func=cmd_retrieve)
 
     reading = subparsers.add_parser(
@@ -980,6 +1360,18 @@ def main(argv: list[str] | None = None) -> int:
         "--no-extraction", action="store_true", help="Skip the profile extraction stage"
     )
     recognize.set_defaults(func=cmd_recognize)
+
+    reindex = subparsers.add_parser(
+        "reindex", help="Chunk and embed a document already in the workspace again"
+    )
+    reindex.add_argument("document", help="Which document, by a fragment of its filename")
+    reindex.add_argument(
+        "--no-extraction", action="store_true", help="Skip the profile extraction stage"
+    )
+    reindex.add_argument(
+        "--recognize", action="store_true", help="Read it with the vision model first"
+    )
+    reindex.set_defaults(func=cmd_reindex)
 
     report = subparsers.add_parser("report", help="Summarise the recorded runs")
     report.set_defaults(func=cmd_report)

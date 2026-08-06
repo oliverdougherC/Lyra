@@ -448,22 +448,30 @@ carries 105 distinct real section titles where the regex produced dot leaders an
 - [x] Figures survive export. Kept whole with their caption and capped in height, so a diagram
       cannot claim a page and push the working it belongs to onto the next
 
-**What the figure acceptance case found, and did not deliver.** The three block diagrams on
-`homework_3` extract correctly, crop cleanly at 220 dpi, serve, render, and print. What does not
-happen is attaching them to those three problems. The first implementation attached every figure on
-a page to every problem on it and produced twenty-one attachments of which twelve were wrong: four
-Fourier-series problems each received three diagrams belonging to other questions. Every geometric
+**What the figure acceptance case found, and then delivered.** The three block diagrams on
+`homework_3` extract correctly, crop cleanly at 220 dpi, serve, render, and print. Attaching them to
+the right three problems took two attempts. The first implementation attached every figure on a page
+to every problem on it and produced twenty-one attachments of which twelve were wrong: four
+Fourier-series problems each received three diagrams belonging to other questions. Every *geometric*
 rule tried is wrong on one of the two common layouts, because on that sheet the list markers sit
-below their diagrams. The one exact rule - pairing an alternating run of figures and markers -
-needs each problem to have a distinct page position, and `_locate` cannot give one here: it matches
-a label's first occurrence, so the second section's "1." resolves to the first section's marker.
-That is a pre-existing Phase 2 limitation and it is the thing to fix before trying again.
+below their diagrams.
 
-Showing a student a diagram that answers a different question is worse than showing none, because
-the source pane already shows the page. So the rule refuses, and this item is honestly half-done.
-- [ ] Distinguish two problems that carry the same label on one page, in `rag/locate.py`. Blocks
-      figure-to-problem pairing above, and already makes the source pane's highlight band point at
-      the wrong marker for any sheet whose sections both number from one
+The exact rule - pairing an alternating run of figures and markers - needed each problem to have a
+distinct page position, which `locate` now gives it. Stated as it actually has to be stated: every
+figure must have a problem marker immediately beside it, all of them on the same side, no two
+wanting the same marker, and the page must carry at least two figures. The "equal in number"
+condition this document and the handoff both assumed does *not* hold on the acceptance page, which
+has three diagrams and seven questions; adjacency plus a consistent direction is what works, and
+the four questions with no diagram left over are what the page means.
+
+Measured through the real solver against the real endpoint: **three attachments, none wrong.**
+Showing a student a diagram that answers a different question is still worse than showing none, so
+a page that does not read as a list gets nothing.
+- [x] Distinguish two problems that carry the same label on one page, in `rag/locate.py`.
+      `find_labels` searches a page for all of its labels at once, in document order, each taking
+      the first occurrence after the last one placed. `homework_3` goes from nine distinct positions
+      for twelve problems to twelve. This also fixes the source pane's highlight band, which pointed
+      at the wrong marker for any sheet whose sections both number from one
 
 ### Text recognition
 
@@ -539,11 +547,12 @@ pages. R-SWA is still a draft upstream, so the decoder runs full multi-head atte
 llama.cpp has no `no_repeat_ngram_size` for the loops - both point at the same merge. The
 integration is kept, tested, and disconnected, and the measurement is recorded so the next attempt
 starts from a number rather than from the assumption that a specialist must be faster.
-- [ ] Chunk a dense reference table as something other than one chunk a page. The recognition
-      acceptance run made this visible: eight pages of transform tables come back correct and
-      searchable, but every page opens with the same running head and carries no headings to cut
-      on, so the right page for "the Fourier transform of a unit step" ranks 4th of 8. A chunking
-      fault rather than a recognition one, and unrelated to whether the page was scanned
+- [x] Chunk a dense reference table as something other than one chunk a page. Two real faults in
+      the paragraph strategy, both fixed: a block bigger than the target was never divided at all
+      and survived to the 1024 ceiling, where it was cut through the middle of a table row; and two
+      substantial blocks were packed into one chunk, so one embedding stood for two subjects. The
+      unit-step question goes from rank 3 to **rank 1**. The rest of the item did not survive
+      measurement - see below
 
 **What the recognition acceptance run found.** `Fourier_Tables.pdf`, eight scanned pages with no
 text layer at all, is `ready` and searchable in 110.8 seconds: **13.8 seconds a page**, against the
@@ -552,6 +561,61 @@ densities landing within four percent of each other says the rate belongs to the
 to the page, which is what makes the 2.3-hour figure for a 608-page book worth quoting. The
 transforms are right where they are checkable by hand, the running heads carry page numbers 774
 through 780 in sequence, and a graphic comes back as `[figure]` as the prompt asks.
+
+**And what closing the chunking item found out about it.** Two of the causes this item names are
+measured and are not causes. Sweeping the generic chunk target from 750 down to 200 moves rank-1
+hits between 2 and 5 of 11 with no trend, and makes the top-4 rate *worse* below 300, so the shipped
+target is unchanged. Stripping the repeated running head - detected by normalising away the page
+number and requiring the line on half the pages - changes rank-1 and mean rank by nothing at all: a
+constant prefix shifts every chunk alike, so it barely moves their order. Neither is implemented and
+both are recorded in rag-pipeline.md, because the next reader will have the same two ideas.
+
+What is left is not a chunking fault. The questions that still rank badly are cross-representation
+confusions - the discrete-time properties table losing to the continuous-time one for a question
+that names discrete time - because the two pages are near-identical mathematics and a 137M embedding
+model cannot tell them apart. The lever is the embedding model or a reranker, and that is a Phase 5
+question rather than a Phase 3 one.
+
+**Three of those were then taken, and this is what they cost and bought.**
+
+- [x] **Measure retrieval against a class rather than a document.** Every retrieval number quoted
+      above was measured in a workspace holding *one* document, and `retrieve` is class-scoped, so
+      those runs asked a question of a haystack with nothing in it to compete. Re-measured over the
+      real 36-document course: the textbook set is unchanged (nothing in a signals class competes
+      with a linear algebra book), and a set written about the course itself scores **9/16 first,
+      14/16 in the served eight**, with only 54 of 128 served chunks coming from the right document.
+      `eval_ingest.py` now takes `expect_document` per question and scores a hit in the wrong
+      document as a miss; `scripts/eval_questions/ece203-class.json` is the set
+- [x] **A cross-encoder reranker over a wider over-fetch.** Taken before a bigger embedding model
+      because it needs no re-embedding and no `embedding_model` identity change. Fetch 64, rerank,
+      serve 8: **12/16 first and 15/16 in the served eight, at 1.6 seconds a question**. Optional,
+      640 MB, and every failure falls back to the embedding order. It is *not* uniformly better -
+      on the textbook, where nothing competes, it costs one first place and changes nothing at
+      `k = 4`
+- [x] **Pin the transcription's notation.** Reading the acceptance run's own output back with a
+      notation counter says what the by-eye reading missed: the eight pages of one document wrote
+      their tables three different ways and three of them marked up no table at all, three headings
+      came back bold instead of marked up, and one was split across two lines mid-phrase. That is
+      why the appendix chunked with none of `C.1` … `C.9` named - **a retrieval failure created at
+      transcription time.** `TRANSCRIBE_PROMPT` now pins one heading form and one table form, and
+      `SECTION_HEADING` learned the appendix-lettered form it never matched. The re-run that would
+      measure it is blocked: the tutor endpoint has been answering
+      `model name=Qwen3.6-27b failed to load` since the change was written
+
+Two questions the reranker does **not** answer, and they are the same shape: a student asking how a
+homework problem is *worked* gets the problem statement and eleven near-identical problems from
+another week, and the answer key never appears in the top 128. The first stage never surfaces it, so
+no amount of reordering reaches it. That is the case a better embedding model would have to earn its
+re-index on, and it is now a specific, reproducible case rather than a hunch.
+
+- [ ] **A text layer can be junk without being empty, and nothing notices.** Found while building
+      the class-scale workspace, and it is a robustness hole rather than a ranking one. `laplace.pdf`
+      is a photographed page emailed to the student: it ingests `ready` with one chunk reading
+      `3/12/26, 2:14 PM IMG_8887.jpg https://mail.google.com/...` and none of the mathematics. Two
+      lecture decks extract their equations as scattered loose characters and contribute 35 chunks
+      of noise. Phase 1's rule is "zero characters means offer recognition", which these pass. The
+      fix is a legibility check at parse time that can offer recognition to a document that has text
+      and cannot be read
 
 **Note on ordering.** OCR was previously the gating item of its own phase, on the strength of an
 unmerged upstream dependency and multi-GB weights. It is no longer gating: it becomes a measured

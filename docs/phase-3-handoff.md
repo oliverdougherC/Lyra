@@ -12,9 +12,17 @@ What this holds is the part that does not belong in a specification: what the pi
 met a real textbook, which assumptions that killed, what is still weak, and the traps that cost
 real time and will cost them again.
 
-**Read the four open items and the traps before touching anything.** Two of the four did not exist
-when the phase was planned; they were found by building it. Three of the traps are things that
-fail silently, and one of them wrote to a database it was not supposed to.
+**Read the traps before touching anything.** Three of them fail silently, and one of them wrote to
+a database it was not supposed to.
+
+**Three of the four open items below are now closed, and the verification gap with them.** What
+they were, what fixing them cost, and what the third one turned out *not* to be, is under
+[What the open items became](#what-the-open-items-became). The one that remains is item 4, which
+was deferred on purpose and still is.
+
+**Then the numbers in this document were re-measured against a class, and one of them did not
+survive.** Every retrieval figure below was taken in a workspace holding *one document*, while
+`retrieve` searches a *class*. See [What class scale did to these numbers](#what-class-scale-did-to-these-numbers).
 
 ## What shipped
 
@@ -33,7 +41,7 @@ Step 5 was not planned. It was added after step 4 because steps 2 through 4 had 
 capabilities the interface had no way to reach, and the `unsupported` popover was still telling
 students that scans would be readable "in a future update" and would "process automatically then".
 
-604 backend tests, 357 frontend.
+713 backend tests, 358 frontend.
 
 ## What it was measured against
 
@@ -78,64 +86,127 @@ which is why it was measured before bulk transcription rather than after.
 | Transcription, reference book | 13.4 s a page |
 | Transcription, scanned handout, end to end | 13.8 s a page, 8 of 8 pages, `ready` in 110.8 s |
 | Specialist OCR, same eight pages | 18.5 s a page, repetition loops on 5 of 8 |
+| Problem positions on the acceptance sheet | 9 distinct of 12 before, **12 of 12** after |
+| Figures filed under a problem, same sheet | 0 before, **3 with none wrong** after |
+| Retrieval over the scanned appendix, 11 questions | rank 1 on 2 before, 3 after; the unit step **3rd → 1st** |
+| The same appendix at chunk targets 750 → 200 | No trend. Rank-1 wanders 2 to 5, top-4 worsens below 300 |
+| The same appendix with the running head stripped | No change to rank-1 or mean rank |
 
 Two independent documents at different densities landing within 4% of each other (13.4 and 13.8) is
 what makes the rate the model's rather than the page's, and what makes "2.3 hours for a 608-page
 book" worth quoting.
 
-## The four open items
+## What class scale did to these numbers
 
-### 1. `rag/locate.py` cannot tell apart two problems with the same label
+Every retrieval row in the table above was measured in a workspace holding **one document**.
+`retrieve` is class-scoped: it searches a class, and a class of one document has nothing in it to
+compete. The measurement was flattering itself and nobody noticed, including the person who wrote
+the table.
 
-**Start here.** It is the only one that fixes an existing fault as well as unblocking new work.
+Re-measured in `data/eval-class`, which holds the whole course — 36 documents, 1124 chunks:
 
-`locate.find_label` takes a label's *first* occurrence on a page. A sheet whose second section also
-numbers from 1 therefore resolves both sections' "1." to the first section's marker. Visible right
-now in `homework_3`: its twelve problems produce only four distinct bounding boxes.
+| What | Result |
+| ---- | ------ |
+| The textbook set, at class scale | **Unchanged.** 16/17 rank 1, 17/17 at k=8 |
+| A set about the course itself, at class scale | **9/16 rank 1, 14/16 at k=8**, 2 never found in 32 |
+| Share of the served 8 from the right document | **54 of 128** |
+| The same set, fetch 64 and reranked | **12/16 rank 1, 15/16 at k=8**, 1.6 s a question |
+| The textbook set, fetch 64 and reranked | 15/17 rank 1, 17/17 at k=8 — one place *worse* |
 
-Two consequences. The solver's source pane draws its highlight band at the wrong marker, which is a
-Phase 2 fault that has always been there. And it blocks item 2 below.
+Three things a reader should take from that.
 
-Reproduce by segmenting `homework_3.pdf` and reading `artifact_provenance.bbox` per problem.
+**The textbook was never the hard case.** It is a linear algebra book in a signals course. Nothing
+else in the class talks about Gram-Schmidt, so its 17/17 was never in danger and never told anyone
+anything about a real class. The set that hurts is the one written about the course, where a problem
+set and its answer key restate every question verbatim.
 
-### 2. Figure-to-problem pairing on a crowded page
+**A control is a weaker instrument at class scale, and the old ones stopped being controls.** "Not in
+this book" is not "not in this class": once the course's Fourier material is in the same class, the
+textbook set's `control-fourier` scores *above* the median real question. The harness now records
+the class size beside every run for this reason — a rank means nothing without the size of the
+haystack.
 
-Figures extract, crop, serve, render, and print. What does not happen is filing an uncaptioned
-figure under a problem when several problems share its page. `core/solver.py::_write_figures`
-attaches only on an exact rule: the problem names the figure, or the problem is alone on its page.
+**Two questions are beyond reranking, and they name the next real problem.** A student asking how a
+homework problem is *worked* gets the problem statement plus eleven near-identical problems from
+another week; the answer key is not in the top 128, so no reordering can reach it. That is the case a
+different embedding model would have to earn its full re-index on, and it is now a reproducible case
+rather than a hunch.
 
-The reasoning is recorded in rag-pipeline.md under "Which problem a figure belongs to", and the
-short version is that every geometric rule tried is wrong on one of the two common layouts. On
-`homework_3` the list markers sit *below* their diagrams. Attaching by page was tried first and
-produced 21 attachments of which 12 were wrong.
+## What the open items became
 
-**The rule that would work** is pairing an alternating run of figures and markers, which is a
-structural check rather than a distance guess: if a page's figures and problem markers strictly
-alternate and are equal in number, the pairing is forced by whichever comes first. It needs each
-problem to have a distinct position, which is item 1.
+### 1. `rag/locate.py` could not tell apart two problems with the same label — **closed**
 
-### 3. A dense reference table chunks as one chunk a page
+`find_label` took a label's *first* occurrence on a page, so a sheet whose second section also
+numbers from 1 gave both sections' "1." the same marker. On `homework_3` its twelve problems
+produced nine distinct boxes.
 
-Found by the recognition acceptance run. The eight-page Fourier appendix comes back correct and
-searchable, but every page opens with the same running head and carries no headings to cut on, so
-each page is one chunk and their embeddings sit close together. Asked for the transform of the unit
-step, the right page ranks **4th of 8**.
+`locate.find_labels` now searches a page for **all of its labels at once**, in document order, each
+taking the first occurrence after the last one placed. Twelve problems, twelve positions, and each
+one where the sheet actually writes it. A label that cannot be placed in order falls back to the
+topmost hit, so a page this cannot walk is never worse off than before.
 
-A chunking fault, unrelated to whether the page was scanned. `rag/chunk.py` is where it lives.
+The solver resolves a page in one call rather than a problem at a time, which also means one PDF
+open per page instead of one per problem. `backfill_problem_locations` does the same, one artifact
+at a time — two solution sets over the same sheet must not be walked as one sequence, or the second
+runs off the bottom of the page it shares with the first.
 
-### 4. Font and weight heading detection
+### 2. Figure-to-problem pairing on a crowded page — **closed**
+
+The alternating-run rule is in, and it needed item 1 first, exactly as this document predicted.
+Stated precisely: every figure must have a problem marker immediately beside it, all on the same
+side, and no two may want the same marker; and the page must carry at least two figures, because
+one diagram among several questions has a marker on both sides of it and only a repetition is
+evidence of a layout. The full reasoning is in rag-pipeline.md.
+
+What this document got wrong is the shape of the rule. "Strictly alternate **and be equal in
+number**" does not fire on the acceptance page: it has three diagrams and seven questions. The
+diagrams pair with the first three markers and the remaining four questions get nothing, which is
+what the page means. Adjacency plus a consistent direction is the rule; equal counts was a
+description of a simpler page than the one in the corpus.
+
+Measured through the real solver against the real endpoint, on the real sheet: **three attachments,
+none wrong**, against nought before and 21-of-which-12-wrong for the first attempt.
+
+### 3. A dense reference table chunked as one chunk a page — **closed, and smaller than it looked**
+
+Two real faults, both in the paragraph strategy and both fixed: a block bigger than the target was
+never divided at all and survived to the ceiling, and two substantial blocks were packed into one
+chunk. The eight-page appendix goes from 9 chunks to 11, and the unit-step question from **rank 3
+to rank 1**.
+
+The rest of the item did not survive contact. Two things this document implies were the cause are
+measured and are not:
+
+- Chunking finer does not help. The generic target was swept 750 → 200 and rank-1 hits wander
+  between 2 and 5 with no trend; below 300 the top-4 rate gets worse. The shipped target is
+  unchanged.
+- The running head is not the cause. Detecting and stripping the line that repeats at the top of
+  most pages changes rank-1 not at all and the mean rank not at all. A constant prefix shifts every
+  chunk alike. It is not implemented, and the measurement is in rag-pipeline.md so nobody spends a
+  day on it twice.
+
+What remains is not a chunking problem. The questions that still rank badly are the discrete-time
+tables losing to the continuous-time ones and vice versa — near-identical mathematics that a 137M
+embedding model cannot tell apart. The lever is the embedding model or a reranker.
+
+The question set is `scripts/eval_questions/fourier-tables.json`, eleven questions plus a control,
+with the answers checked by eye against `data/eval-recognize/recognition.md`.
+
+### 4. Font and weight heading detection — **still open, still deferred**
 
 Deliberately deferred, not forgotten. Nothing measured needs it: a document with no outline is a
 syllabus or a sheet, where the existing regex is doing an easier job well enough. It earns its
 place when a book with no outline turns up.
 
-### And one verification gap, which is not on the roadmap
+### The verification gap — **closed, and it was hiding something**
 
-ui-phase-3.md's definition of done requires the new screens be correct at **1280, 768, and 375, in
-both themes**. They were verified at 1280 in dark only. `PageFailureNotice`'s caption row, the
-outline list's indent-by-depth, and `FigureBlock`'s image sizing are all layout that could break at
-375, and none of them has been looked at in light theme. This is short and should be done first,
-because it is the only place where something may be visibly broken right now.
+The new screens are now correct at 1280, 768, and 375 in both themes, driven in the browser against
+a copy of a real class. One real defect, and it was in the third of the three things this document
+guessed at: **`FigureBlock` was blowing its image up**, not breaking at 375. The figure is a flex
+column, so a stretched image takes the column's full width whatever its own is; at 1280 the
+acceptance homework's 771px diagrams were rendering at 1215, a blurred picture of something drawn
+in hairlines. `self-start` fixes it. `PageFailureNotice`'s caption row and the outline list's
+indent-by-depth are both fine at 375, in both themes.
 
 ## Traps
 
@@ -172,6 +243,10 @@ The OCR weights, 2.8 GB, in `data/models/`: `unlimited-ocr-Q4_K_M.gguf` and
 `mmproj-unlimited-ocr-bf16.gguf`. Nothing in the product reads them, because the specialist path is
 disconnected. Delete both to reclaim the space; `fetch_models.py --ocr` puts them back.
 
+The reranker weights, 640 MB, `bge-reranker-v2-m3-Q8_0.gguf`, are a different case: the product
+*does* read them, and deleting them changes retrieval rather than only reclaiming disk. Retrieval
+falls back to the embedding order, which still works — see the table above for what it costs.
+
 ## Re-running every measurement
 
 The harness works in its own workspace with its own database and never touches the student's data.
@@ -191,6 +266,49 @@ python scripts/eval_ingest.py --workspace data/eval-recognize recognize \
   data/eval/uploads/1/23-Fourier_Tables.pdf --no-extraction
 ```
 
+Retrieval over that handout once it has been read, which is how a chunking change is measured
+against it. `reindex` re-chunks and re-embeds a document already in a workspace, exactly as the
+app's Reindex action does, so this costs half a second rather than the 110 s the vision model spent
+reading it — a transcription lives on its page row and outlives a re-parse, and this is also the
+check that it really does:
+
+```bash
+python scripts/eval_ingest.py --workspace data/eval-recognize reindex Fourier_Tables --no-extraction
+python scripts/eval_ingest.py --workspace data/eval-recognize retrieve \
+  --questions scripts/eval_questions/fourier-tables.json
+python scripts/eval_ingest.py --workspace data/eval-recognize report
+```
+
+A question set says where its answer is either by naming an outline section, as the textbook set
+does, or by giving `expect_pages` outright. The second is not a lesser form of the first: a scan
+has no outline to name, and the pages of an eight-page appendix are as checkable by eye as an
+outline entry.
+
+**Retrieval at class scale, which is the run that matters and the one that was missing.** Build a
+workspace holding the whole course and ask a set that names the document each answer is in:
+
+```bash
+python scripts/eval_ingest.py --workspace data/eval-class ingest --fresh --no-extraction \
+  /path/to/course/*.pdf
+python scripts/eval_ingest.py --workspace data/eval-class reindex Fourier_Tables --recognize
+python scripts/eval_ingest.py --workspace data/eval-class retrieve \
+  --questions scripts/eval_questions/ece203-class.json
+python scripts/eval_ingest.py --workspace data/eval-class retrieve \
+  --questions scripts/eval_questions/ece203-class.json --rerank
+python scripts/eval_ingest.py --workspace data/eval-class report
+```
+
+The pair of runs is the measurement, so each writes its own report and neither overwrites the other.
+`--rerank` is set explicitly in both directions rather than left to whether the weights happen to be
+on the machine: that is a fact about the machine, not about the product.
+
+`reindex --recognize` reads a scan that is already sitting in a class, which is what keeps it one
+document rather than two — uploading it again through `recognize` would spend the vision model's
+minutes a second time and put a duplicate in the class being measured.
+
+Strip the corpus filenames of any `NN-` prefix before ingesting. `detect_doc_type` reads the
+filename first, and the workspace's own `uploads/` names carry a document-id prefix.
+
 The OCR serving spike, which needs `fetch_models.py --ocr` first:
 
 ```bash
@@ -199,6 +317,22 @@ python scripts/ocr_spike.py
 
 Both `recognize` and `transcribe` call the configured tutor endpoint, so they need one that can
 see images. `POST /api/settings/test-vision` says whether it can.
+
+**One measurement is outstanding for exactly this reason.** `TRANSCRIBE_PROMPT` was changed to pin
+one heading form and one table form, after the recorded acceptance transcription was read back with
+the notation counter and found to have written its tables three ways across eight pages, with three
+more pages marking up no table at all. The re-run that would measure the change has not happened:
+the development endpoint has been answering `model name=Qwen3.6-27b failed to load` to every
+request, text or image, since the change was written. When it is back:
+
+```bash
+python scripts/eval_ingest.py --workspace data/eval-recognize recognize \
+  data/eval-class/uploads/1/24-Fourier_Tables.pdf --no-extraction
+```
+
+`recognition.md` now opens with the line that answers it. The baseline to beat, from the recorded
+run, is: three notations, three of eight pages with no table markup at all, ten headings the chunker
+can see, three written in bold instead.
 
 ## What a reader should know before changing any of it
 
@@ -210,6 +344,18 @@ automatic, you have changed the product's posture, not just its defaults.
 **A transcription is stored on its page row and outlives a re-parse.** Re-indexing must never
 re-run recognition. `recognition.sync_pages` is where that is enforced.
 
+**A retrieval number measured on one document is not a retrieval number.** `retrieve` searches a
+class. Any run whose workspace holds a single document has measured a search with nothing to
+compete, and this document shipped four such numbers before anyone checked. Every question set now
+names the document its answer is in, and the report records how many documents and chunks were in the
+class, so a rank always comes with the size of the haystack it was drawn from.
+
+**The reranker is optional and every failure is silent by design.** Absent weights, a server that
+will not start, a timeout, a malformed reply — all of them return None from `rag/rerank.py` and
+retrieval keeps the embedding order. That is correct: reranking improves an ordering that already
+works. It also means a broken reranker looks exactly like no reranker, so if a measurement stops
+reproducing, check `rerank_server.available` and the warning log before suspecting the model.
+
 **Recognition is not a fifth ingestion state.** It runs inside `parsing` with
 `stage_detail = 'recognizing'`. That is what the page counter reads, and it is why
 `reconcile_interrupted` already handles a document caught mid-transcription.
@@ -217,3 +363,16 @@ re-run recognition. `recognition.sync_pages` is where that is enforced.
 **The evaluation harness is the standard of evidence here.** Every number in this document came
 from the real code path in process, not from a reimplementation. Phase 2 set that rule and Phase 3
 found four faults with it that no test suite would have caught. Keep it.
+
+**A negative measurement is worth as much as a positive one, and is easier to lose.** Two of the
+things closing item 3 was expected to need — a smaller chunk target, and stripping the repeated
+running head — were built, measured, found to do nothing, and thrown away. Both are recorded in
+rag-pipeline.md with their numbers, because the next reader will have the same two ideas and
+should not spend the day finding out again.
+
+**The interface was verified against a copy of a real class, not against the student's own.** A
+scratch database and a scratch data directory, with `LYRA_DATA_DIR` *and* `LYRA_DB_PATH` both set —
+see the first trap — states edited into the copy for the rows a real class does not happen to have,
+and the segmentation that produced the figure attachments run against the real endpoint in that
+copy. Nothing was written to `data/lyra.db`. Do it that way again: the states worth checking are
+exactly the ones a healthy class never has.
