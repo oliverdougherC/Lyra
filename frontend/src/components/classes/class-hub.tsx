@@ -19,6 +19,7 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 
 import { ClassChatsPanel } from '@/components/classes/class-chats-panel'
+import { ClassDraftsPanel } from '@/components/classes/class-drafts-panel'
 import { ClassFormDialog } from '@/components/classes/class-form-dialog'
 import { ClassSolutionsPanel } from '@/components/classes/class-solutions-panel'
 import { ClassStudyPanel } from '@/components/classes/class-study-panel'
@@ -41,12 +42,21 @@ import { formatCount, formatRelativeTime, formatSessionFallbackTitle } from '@/l
 import { useSessions } from '@/lib/hooks/use-chat'
 import { useClass, useUpdateClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
+import { useDrafts } from '@/lib/hooks/use-drafts'
 import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useSolutions } from '@/lib/hooks/use-solutions'
 import { useStudyList } from '@/lib/hooks/use-study'
 import { cn } from '@/lib/utils'
 
-export const HUB_TABS = ['overview', 'chats', 'solutions', 'study', 'documents', 'profile'] as const
+export const HUB_TABS = [
+  'overview',
+  'chats',
+  'solutions',
+  'study',
+  'drafts',
+  'documents',
+  'profile',
+] as const
 
 export type HubTab = (typeof HUB_TABS)[number]
 
@@ -96,6 +106,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
   const { data: sessions } = useSessions(classId)
   const { data: solutions } = useSolutions(classId)
   const { data: study } = useStudyList(classId)
+  const { data: drafts } = useDrafts(classId)
   const { data: documents } = useDocuments(classId)
   const { data: profile } = useClassProfile(classId)
   const updateClass = useUpdateClass()
@@ -107,6 +118,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
   const chatCount = sessions?.length ?? null
   const solutionCount = solutions?.length ?? null
   const studyCount = study ? study.decks.length + study.quizzes.length : null
+  const draftCount = drafts?.length ?? null
   const documentCount = documents?.length ?? klass?.document_count ?? null
   const factCount = profile?.facts.length ?? null
 
@@ -215,7 +227,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
       </header>
 
       <Tabs value={tab} onValueChange={selectTab} className="min-h-0 flex-1 gap-6">
-        {/* Scrolls rather than wraps: five tabs with counts do not fit 375px, and a tab bar
+        {/* Scrolls rather than wraps: seven tabs with counts do not fit 375px, and a tab bar
             on two lines stops reading as one control. */}
         <TabsList
           variant="line"
@@ -234,6 +246,10 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
           <TabsTrigger value="study">
             Study
             <TabCount value={studyCount} />
+          </TabsTrigger>
+          <TabsTrigger value="drafts">
+            Drafts
+            <TabCount value={draftCount} />
           </TabsTrigger>
           <TabsTrigger value="documents">
             Documents
@@ -266,6 +282,10 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
 
         <TabsContent value="study">
           <ClassStudyPanel classId={classId} />
+        </TabsContent>
+
+        <TabsContent value="drafts">
+          <ClassDraftsPanel classId={classId} />
         </TabsContent>
 
         {/* The one tab that takes the height it is given rather than asking for a height of
