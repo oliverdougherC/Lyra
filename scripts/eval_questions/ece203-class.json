@@ -43,6 +43,13 @@
       "note": "The mirror of the question above. The answer key restates every one of them."
     },
     {
+      "id": "hw3-cascade-impulse-response-answer",
+      "question": "How is the equivalent impulse response of the cascade of h1, h2 and h3 worked out when x(t) = e^{-t}u(t)?",
+      "expect_document": "ECE203_homework3_solution",
+      "expect_pages": [1, 1],
+      "note": "homework_3 poses the same cascade in the same notation and works none of it. A second instance of the hw5 case, added with the hybrid-retrieval measurement so the answer-key failure is watched twice."
+    },
+    {
       "id": "delta-sifting",
       "question": "What is the sifting property of the Dirac delta function?",
       "expect_document": "ECE_203_set_1",
