@@ -39,12 +39,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '@/lib/api'
 import { formatRelativeTime } from '@/lib/format'
-import {
-  useCreateDraft,
-  useDeleteDraft,
-  useDrafts,
-  useRenameDraft,
-} from '@/lib/hooks/use-drafts'
+import { useCreateDraft, useDeleteDraft, useDrafts, useRenameDraft } from '@/lib/hooks/use-drafts'
 import type { ArtifactState, DraftRead } from '@/types'
 
 /** Where a suggestion run has got to, in words rather than internal state names. */
@@ -158,11 +153,7 @@ export function ClassDraftsPanel({ classId }: { classId: number }) {
         </ul>
       )}
 
-      <CreateDraftDialog
-        classId={classId}
-        open={creating}
-        onOpenChange={setCreating}
-      />
+      <CreateDraftDialog classId={classId} open={creating} onOpenChange={setCreating} />
 
       <RenameDialog
         target={renaming ? { id: renaming.id, name: renaming.title } : null}
@@ -186,8 +177,7 @@ export function ClassDraftsPanel({ classId }: { classId: number }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {deleting?.title}?</AlertDialogTitle>
             <AlertDialogDescription>
-              The draft and its history go. The documents it drew on stay. This cannot be
-              undone.
+              The draft and its history go. The documents it drew on stay. This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -322,8 +312,8 @@ function CreateDraftDialog({
         <DialogHeader>
           <DialogTitle>New draft</DialogTitle>
           <DialogDescription>
-            A blank page in this class. Lyra can draft passages into it and suggest
-            revisions once there is something on it.
+            A blank page in this class. Lyra can draft passages into it and suggest revisions once
+            there is something on it.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-2">

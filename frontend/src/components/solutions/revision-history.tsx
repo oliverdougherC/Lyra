@@ -38,7 +38,12 @@ type RevisionHistoryProps = {
  * Restoring writes a new revision rather than rewinding the list, so what was there in
  * between stays readable and restoring is itself undoable.
  */
-export function RevisionHistory({ artifactId, part, onClose, noun = 'solution set' }: RevisionHistoryProps) {
+export function RevisionHistory({
+  artifactId,
+  part,
+  onClose,
+  noun = 'solution set',
+}: RevisionHistoryProps) {
   const revisions = usePartRevisions(artifactId, part?.id ?? null)
   const restore = useRestoreRevision(artifactId)
 

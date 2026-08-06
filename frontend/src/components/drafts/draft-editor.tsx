@@ -10,8 +10,9 @@ import { placeholder } from '@milkdown/crepe/feature/placeholder'
 import { table } from '@milkdown/crepe/feature/table'
 import { toolbar } from '@milkdown/crepe/feature/toolbar'
 import { editorViewCtx } from '@milkdown/kit/core'
+import type { Slice } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
-import { getMarkdown, replaceAll } from '@milkdown/kit/utils'
+import { getMarkdown, markdownToSlice, replaceAll } from '@milkdown/kit/utils'
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 
 import { writeSuggestionPlugin } from '@/components/drafts/write-suggestion'
@@ -27,6 +28,8 @@ export interface DraftEditorHandle {
   reset(markdown: string): void
   /** The live ProseMirror view, which is what the `/write` widget anchors to. */
   view(): EditorView | null
+  /** Parse markdown into a slice with the live parser; null before the editor exists. */
+  toSlice(markdown: string): Slice | null
 }
 
 type DraftEditorProps = {
@@ -115,6 +118,8 @@ export const DraftEditor = forwardRef<DraftEditorHandle, DraftEditorProps>(funct
         crepeRef.current?.editor.action(replaceAll(markdown))
       },
       view: () => crepeRef.current?.editor.action((ctx) => ctx.get(editorViewCtx)) ?? null,
+      toSlice: (markdown: string) =>
+        crepeRef.current?.editor.action(markdownToSlice(markdown)) ?? null,
     }),
     [],
   )

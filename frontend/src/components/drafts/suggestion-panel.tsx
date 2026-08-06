@@ -46,26 +46,34 @@ export function SuggestionPanel({ draftId, edit, currentBody, onApplied }: Sugge
     queryClient.invalidateQueries({ queryKey: draftKeys.detail(draftId) })
   }
 
+  // The mutation callbacks hand the panel's contract exactly one argument each: the
+  // result, or the error. React Query would otherwise leak variables and context through.
   function acceptHunk(hunk: Hunk) {
     accept.mutate(
       { editId: edit.id, hunk: { index: hunk.index, hash: hunk.hash } },
-      { onSuccess: onApplied, onError: onConflict },
+      { onSuccess: (result) => onApplied(result), onError: onConflict },
     )
   }
 
   function rejectHunk(hunk: Hunk) {
     reject.mutate(
       { editId: edit.id, hunk: { index: hunk.index, hash: hunk.hash } },
-      { onSuccess: onApplied, onError: onConflict },
+      { onSuccess: (result) => onApplied(result), onError: onConflict },
     )
   }
 
   function acceptAll(force = false) {
-    accept.mutate({ editId: edit.id, force }, { onSuccess: onApplied, onError: onConflict })
+    accept.mutate(
+      { editId: edit.id, force },
+      { onSuccess: (result) => onApplied(result), onError: onConflict },
+    )
   }
 
   function rejectAll() {
-    reject.mutate({ editId: edit.id }, { onSuccess: onApplied, onError: onConflict })
+    reject.mutate(
+      { editId: edit.id },
+      { onSuccess: (result) => onApplied(result), onError: onConflict },
+    )
   }
 
   if (edit.stale) {
@@ -78,8 +86,8 @@ export function SuggestionPanel({ draftId, edit, currentBody, onApplied }: Sugge
         />
         <p className="text-text-secondary text-sm">
           The draft changed after Lyra wrote this, so the pieces no longer line up with the
-          document. Read the two versions side by side: keep the document as it is, or
-          replace it with the proposal.
+          document. Read the two versions side by side: keep the document as it is, or replace it
+          with the proposal.
         </p>
         <div className="flex flex-col gap-3">
           <section aria-label="Current document">

@@ -260,12 +260,7 @@ export default function DraftWorkspacePage() {
         <AlertTitle>Could not load this draft</AlertTitle>
         <AlertDescription>
           <p>{draft.error instanceof ApiError ? draft.error.message : 'Something went wrong.'}</p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-3"
-            onClick={() => void draft.refetch()}
-          >
+          <Button variant="outline" size="sm" className="mt-3" onClick={() => void draft.refetch()}>
             Retry
           </Button>
         </AlertDescription>
@@ -412,8 +407,8 @@ export default function DraftWorkspacePage() {
             <TabsContent value="history" className="min-h-0 flex-1 overflow-y-auto p-4">
               <div className="flex flex-col gap-3">
                 <p className="text-text-secondary text-sm">
-                  Snapshots and accepted suggestions, newest first. Restoring one writes a
-                  new version, so nothing is ever lost.
+                  Snapshots and accepted suggestions, newest first. Restoring one writes a new
+                  version, so nothing is ever lost.
                 </p>
                 <Button
                   variant="outline"
@@ -427,7 +422,11 @@ export default function DraftWorkspacePage() {
             </TabsContent>
 
             {/* forceMount: a conversation survives a look at the history tab. */}
-            <TabsContent value="chat" forceMount className="min-h-0 flex-1 data-[state=inactive]:hidden">
+            <TabsContent
+              value="chat"
+              forceMount
+              className="min-h-0 flex-1 data-[state=inactive]:hidden"
+            >
               <div ref={chatScrollRef} className="h-full overflow-y-auto p-4">
                 {bodyPart ? (
                   <StepThread
@@ -613,8 +612,8 @@ function SuggestDialog({
         <DialogHeader>
           <DialogTitle>Suggest changes</DialogTitle>
           <DialogDescription>
-            Lyra reads the whole draft and proposes a revision, which you then review piece
-            by piece.
+            Lyra reads the whole draft and proposes a revision, which you then review piece by
+            piece.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-2">

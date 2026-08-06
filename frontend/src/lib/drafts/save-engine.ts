@@ -42,27 +42,36 @@ export function createSaveEngine(opts: {
 }): SaveEngine {
   let timer: TimerHandle | undefined
   let lastSaved = ''
+  // The state is a stream of transitions, not of keystrokes: the fortieth dirty in a row
+  // says nothing the first did not.
+  let reported: SaveStateName = 'saved'
+
+  function report(state: SaveStateName, detail?: string): void {
+    if (state === reported) return
+    reported = state
+    opts.onState(state, detail)
+  }
 
   async function doSave(content: string): Promise<void> {
     timer = undefined
     if (content === lastSaved) {
-      opts.onState('saved')
+      report('saved')
       return
     }
-    opts.onState('saving')
+    report('saving')
     try {
       await opts.write(content)
       lastSaved = content
-      opts.onState('saved')
+      report('saved')
     } catch (error) {
-      opts.onState('error', (error as Error).message)
+      report('error', (error as Error).message)
     }
   }
 
   return {
     schedule(content: string): void {
       if (content === lastSaved) return
-      opts.onState('dirty')
+      report('dirty')
       clearTimeout(timer)
       timer = window.setTimeout(() => void doSave(content), opts.debounceMs ?? SAVE_DEBOUNCE_MS)
     },

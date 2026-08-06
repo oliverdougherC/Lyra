@@ -667,9 +667,7 @@ export interface WriteRequest {
 
 /** The three SSE frames `POST /api/drafts/{id}/write` emits. */
 export type WriteEvent =
-  | { type: 'token'; text: string }
-  | { type: 'done' }
-  | { type: 'error'; message: string }
+  { type: 'token'; text: string } | { type: 'done' } | { type: 'error'; message: string }
 
 /** Body of `PATCH /api/drafts/{id}/body`. Without `snapshot` no revision is written. */
 export interface DraftBodyUpdate {
