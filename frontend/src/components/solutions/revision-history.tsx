@@ -28,6 +28,8 @@ type RevisionHistoryProps = {
   artifactId: number
   part: SolutionPart | null
   onClose: () => void
+  /** What the part belongs to, in the sheet's description. A draft passes 'draft'. */
+  noun?: string
 }
 
 /**
@@ -36,7 +38,7 @@ type RevisionHistoryProps = {
  * Restoring writes a new revision rather than rewinding the list, so what was there in
  * between stays readable and restoring is itself undoable.
  */
-export function RevisionHistory({ artifactId, part, onClose }: RevisionHistoryProps) {
+export function RevisionHistory({ artifactId, part, onClose, noun = 'solution set' }: RevisionHistoryProps) {
   const revisions = usePartRevisions(artifactId, part?.id ?? null)
   const restore = useRestoreRevision(artifactId)
 
@@ -63,7 +65,7 @@ export function RevisionHistory({ artifactId, part, onClose }: RevisionHistoryPr
         <SheetHeader className="border-border border-b">
           <SheetTitle>History</SheetTitle>
           <SheetDescription>
-            {part?.label ?? 'This part'} of your solution set, newest version first.
+            {part?.label ?? 'This part'} of your {noun}, newest version first.
           </SheetDescription>
         </SheetHeader>
 
