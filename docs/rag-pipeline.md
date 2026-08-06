@@ -247,21 +247,76 @@ never the primary source for a book that has one.
 
 #### Figures
 
-- Embedded images via `get_images()`, or a rendered page region for figures that are drawn rather
-  than embedded
-- Caption-to-figure association by matching a caption pattern (`Figure 5.21`) against the nearest
-  image block. This is a heuristic and will fail on some layouts, so it needs an honest fallback
-  rather than a silently wrong association
-- An extracted figure carries provenance back to its source page, so pulling it into a solution
-  document cites correctly
-
-Figures are the first pipeline output that is not text. The artifact model in architecture.md holds
-mixed content from the start for this reason, and `artifact_parts` already accepts `kind = 'figure'`
-with `content_type = 'image'`, so this lands without a migration.
+Embedded images via `get_images()`, filtered, cropped out of the composed page, and stored in
+`document_figures`. Figures are the first pipeline output that is not text; `artifact_parts` has
+accepted `kind = 'figure'` with `content_type = 'image'` since Phase 2 with nothing producing one.
 
 Geometry follows the convention `rag/locate.py` and `artifact_provenance.bbox` already established:
 fractions of the page box rather than points, because pages render as images at whatever width the
 pane has.
+
+**Drawn page regions are not extracted, and that is measured rather than deferred by preference.**
+The plan was to clip a region for figures drawn as vector paths instead of embedded as a bitmap,
+which PyMuPDF's `cluster_drawings()` exists for. Over the reference course it does not work. On the
+112-page lecture deck it reduces 2522 paths to 112 clusters and **every one of those clusters is the
+whole page**, because each page carries a full-bleed background rectangle that swallows the rest
+into one region. The same is true of the lecture notes and the lab handouts, at three different page
+sizes. Shipping it would file one junk figure per page of every deck a student owns. The door is
+open; what is closed is a heuristic that was wrong on everything it was tested against.
+
+**The filters come from the corpus.** 69 embedded image placements across the reference course:
+
+| | |
+|---|---|
+| Smallest real figure | 252 x 21 pt, a block diagram, 1.1% of its page |
+| Largest real figure | 53% of its page |
+| Scanned pages | 100.2% of the page, every one |
+| Decorative images | none at all |
+
+So a figure is anything over 2000 pt² with no side under 12 pt, and under 90% of the page. A
+minimum *height* would have been the obvious filter and it discards the acceptance case: the three
+diagrams on the reference homework are 21 points tall. The gap between 53% and 100.2% is what lets
+the page-coverage cut be a constant rather than a judgment.
+
+**Captions are the rare case, not the primary mechanism.** The specification had caption-to-figure
+association as the way figures get named. Across 69 figures the corpus contains **five** captions,
+all in one document. All five are found: each starts within a point of the image it names and
+overlaps it horizontally, so the rule is a caption pattern plus a 24-point gap below.
+
+A figure with no caption is named for where it was found - `Page 1, figure 2` - and given no owner.
+Calling it `Figure 2` would invent a number the document does not use and that its own text may
+already mean something else by.
+
+#### Which problem a figure belongs to
+
+This is decided when a solution set is written, not when the figure is extracted, and only by rules
+that are exact. A figure is attached to a problem when **the problem's statement names it** ("the
+system in Figure 3"), or when **the problem is the only one on its page**. Otherwise nothing is
+attached.
+
+That is deliberately less than the roadmap asked for, and the reason is a measurement. Attaching
+every figure on a page to every problem on it was the first implementation, and on the acceptance
+homework it produced twenty-one attachments of which **twelve were wrong**: four Fourier-series
+problems each received three block diagrams belonging to other questions.
+
+Geometry does not rescue it. On that page the numbered list markers sit *below* their diagrams, so:
+
+| Rule | Result on the acceptance page |
+|---|---|
+| Nearest preceding marker | Off by one on every figure |
+| Nearest marker by distance | Figure 2 wrong, by three thousandths of a page |
+| First marker below the figure | Correct - and wrong on the opposite, equally common layout |
+| Pair an alternating run of figures and markers | Exact, but needs distinct problem positions |
+
+The last one is the interesting failure. It would be a structural check rather than a guess, and it
+is blocked by something else: `_locate` finds a label's *first* occurrence on a page, so on a sheet
+whose second section also numbers from 1, both sections' "1." resolve to the same marker. That is a
+pre-existing Phase 2 limitation, it is visible in the stored bboxes, and it is what a future
+attempt has to fix first.
+
+So on a crowded uncaptioned page the figures are extracted, served, rendered, and printed, and the
+source pane shows them on the page beside the solution - but Lyra does not claim to know which
+question each one answers.
 
 #### Scale, measured
 

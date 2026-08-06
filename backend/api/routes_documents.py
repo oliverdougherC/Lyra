@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.config import settings
-from backend.core import recognition
+from backend.core import figures, recognition
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import ConflictError, LyraError, NotFoundError
 from backend.core.ingestion import PENDING, delete_chunks, enqueue
@@ -138,6 +138,24 @@ class OutlineSection(BaseModel):
     first_page: int | None
     last_page: int | None
     chunk_count: int
+
+
+class FigureRead(BaseModel):
+    """One figure found in a document.
+
+    `name` is what to call it on screen: its caption's label where it has one, otherwise
+    the page and position it was found at. Most figures have no caption, and inventing a
+    number the document does not use would be worse than saying where it came from.
+    """
+
+    id: int
+    document_id: int
+    page_number: int
+    figure_index: int
+    bbox: list[float]
+    label: str | None
+    caption: str | None
+    name: str
 
 
 class DocumentOutline(BaseModel):
@@ -299,6 +317,46 @@ def reingest_document(document_id: int, conn: DbConn) -> dict[str, object]:
 
     enqueue(document_id)
     return _document_row(conn, document_id)
+
+
+@router.get("/documents/{document_id}/figures", response_model=list[FigureRead])
+def list_document_figures(document_id: int, conn: DbConn) -> list[dict[str, object]]:
+    """Every figure Lyra found in this document, in page then reading order."""
+    _document_row(conn, document_id)
+    return figures.list_figures(conn, document_id)
+
+
+@router.get("/figures/{figure_id}")
+def read_figure(figure_id: int, conn: DbConn) -> FileResponse:
+    """One figure, cropped out of its page and cached.
+
+    Addressed by its own id rather than under its document, so that a solution can render a
+    figure knowing only what its `artifact_part` stores. The alternative was to thread the
+    source document id through every figure part and every component that draws one, to
+    re-derive something the figure row already knows.
+
+    Cached aggressively on the client for the same reason a rendered page is: a crop of a
+    stored file never changes, and re-ingesting or deleting the document clears the cache
+    behind it.
+    """
+    figure = figures.get_figure(conn, figure_id)
+    if figure is None:
+        raise NotFoundError("That figure does not exist.")
+
+    bbox = figure["bbox"]
+    path = render.render_figure(
+        int(figure["document_id"]),  # type: ignore[arg-type]
+        Path(str(figure["stored_path"])),
+        str(figure["mime"]),
+        int(figure["page_number"]),  # type: ignore[arg-type]
+        figure_id,
+        (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])),  # type: ignore[index]
+    )
+    return FileResponse(
+        path,
+        media_type="image/png",
+        headers={"cache-control": "private, max-age=86400"},
+    )
 
 
 @router.get("/documents/{document_id}/outline", response_model=DocumentOutline)

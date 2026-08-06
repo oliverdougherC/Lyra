@@ -359,6 +359,24 @@ export interface VisionSupportResult {
   message: string
 }
 
+/** One figure Lyra found in a document. */
+export interface FigureRead {
+  id: number
+  document_id: number
+  page_number: number
+  figure_index: number
+  /** `[x0, y0, x1, y1]` as fractions of the page box. */
+  bbox: number[]
+  label: string | null
+  caption: string | null
+  /**
+   * What to call it: its caption's label where it has one, otherwise the page and position
+   * it was found at. Most figures have no caption, and inventing a number the document does
+   * not use would be worse than saying where it came from.
+   */
+  name: string
+}
+
 /** One addressable section of a document, as its indexed chunks record it. */
 export interface OutlineSection {
   path: string

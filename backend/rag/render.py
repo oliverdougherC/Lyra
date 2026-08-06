@@ -36,6 +36,14 @@ RENDER_DPI = 144
 # the filename.
 RECOGNITION_DPI = 300
 
+# What a cropped figure is rasterized at.
+#
+# Between the two above, and for a reason neither of them has: a figure occupies a fraction
+# of a page and is then shown at the full width of the reading column, so its pixels are
+# stretched over several times the area a page image's are. 220 keeps a block diagram's
+# labels legible at that magnification without the file size of a full recognition render.
+FIGURE_DPI = 220
+
 NOT_A_PAGE = "That page does not exist in this document."
 NOT_RENDERABLE = "This document has no pages to show."
 
@@ -108,6 +116,82 @@ def render_page(
         # PyMuPDF raises several unrelated types and puts the absolute path in every
         # message, so the whole call is converted rather than filtered.
         logger.warning("Could not render page %s of document %s", page_number, document_id)
+        raise LyraError(unreadable_message(mime)) from exc
+
+    return cached
+
+
+def figure_path(document_id: int, figure_id: int) -> Path:
+    """The cache path for one cropped figure."""
+    return pages_dir(document_id) / f"figure-{figure_id}.png"
+
+
+def render_figure(
+    document_id: int,
+    source: Path,
+    mime: str,
+    page_number: int,
+    figure_id: int,
+    bbox: tuple[float, float, float, float],
+) -> Path:
+    """Crop one figure out of its page and cache it as a PNG.
+
+    Rendered from the page rather than pulled out with `extract_image`, deliberately. The
+    stored image is the figure's own pixels at its own resolution, which sounds better and
+    is worse: a diagram embedded as a 2638x219 bitmap and placed 252 points wide arrives
+    enormous, a figure drawn as several stacked images arrives in pieces, and a figure with
+    a transparent background arrives unreadable on a dark surface. Cropping the composed
+    page gives what the page shows.
+
+    Args:
+        document_id: Document the figure belongs to, which names its cache directory.
+        source: Path to the stored upload.
+        mime: The document's stored mime.
+        page_number: 1-based page the figure sits on.
+        figure_id: Row id, which names the cache entry.
+        bbox: `(x0, y0, x1, y1)` as fractions of the page box.
+
+    Returns:
+        Path to the PNG on disk.
+
+    Raises:
+        LyraError: The document has no pages to draw, or the file could not be opened.
+        NotFoundError: The document has no such page.
+    """
+    if mime not in PAGE_MIMES:
+        raise LyraError(NOT_RENDERABLE)
+
+    cached = figure_path(document_id, figure_id)
+    if cached.exists():
+        return cached
+
+    try:
+        with pymupdf.open(source) as document:
+            if page_number < 1 or page_number > document.page_count:
+                raise NotFoundError(NOT_A_PAGE)
+            page = document[page_number - 1]
+            box = page.rect
+            clip = pymupdf.Rect(
+                box.x0 + bbox[0] * box.width,
+                box.y0 + bbox[1] * box.height,
+                box.x0 + bbox[2] * box.width,
+                box.y0 + bbox[3] * box.height,
+            )
+            # Higher than the page pane reads at, because a figure is shown at the width of
+            # the reading column while occupying a fraction of a page: the same pixels
+            # stretched over several times the area.
+            pixmap = page.get_pixmap(dpi=FIGURE_DPI, clip=clip)
+            cached.parent.mkdir(parents=True, exist_ok=True)
+            partial = cached.with_name(f"{cached.name}.{os.getpid()}.partial")
+            try:
+                pixmap.save(partial, output="png")
+                partial.replace(cached)
+            finally:
+                partial.unlink(missing_ok=True)
+    except (LyraError, NotFoundError):
+        raise
+    except Exception as exc:
+        logger.warning("Could not render figure %s of document %s", figure_id, document_id)
         raise LyraError(unreadable_message(mime)) from exc
 
     return cached

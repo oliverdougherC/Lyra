@@ -836,6 +836,28 @@ li[data-stream-word] {
     break-inside: avoid;
   }
 
+  /* Figures print. The stylesheet had never carried an image, and export dropping the
+     diagram a solution refers to leaves a student holding a page of prose about a picture
+     that is not there.
+
+     Kept whole and kept with its caption, because a block diagram split across a page
+     break is not a smaller diagram, it is two halves of one. Height is capped so a tall
+     figure cannot claim a page to itself and push the working it belongs to onto the
+     next. */
+  .figure-block {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .figure-block img {
+    max-width: 100%;
+    max-height: 9cm;
+    /* Browsers drop background colours when printing to save ink, which would take a
+       figure's own surface with it. This is a picture rather than decoration. */
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
   a[href]::after {
     content: '';
   }

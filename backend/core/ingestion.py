@@ -29,10 +29,12 @@ from backend.config import settings
 from backend.core import recognition
 from backend.core.consolidation import consolidate_class
 from backend.core.errors import LyraError
+from backend.core.figures import store_figures
 from backend.core.profiles import extract_facts
 from backend.rag.chunk import Chunk, chunk_document, detect_doc_type
 from backend.rag.embed import BATCH_SIZE as EMBED_BATCH_SIZE
 from backend.rag.embed import EMBEDDING_DIM, EMBEDDING_MODEL, embed_documents
+from backend.rag.figures import extract_figures
 from backend.rag.parse import ParsedDocument, parse_document
 from backend.storage.database import connect
 
@@ -168,6 +170,8 @@ def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
     text = parsed.full_text
     _write_extracted_text(document_id, text)
 
+    _record_figures(conn, document_id, Path(document["stored_path"]), document["mime"])
+
     _set_state(conn, document_id, CHUNKING)
     doc_type = detect_doc_type(document["filename"], text, parsed)
     chunks = chunk_document(parsed, doc_type)
@@ -186,6 +190,21 @@ def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
         _consolidate_profile(conn, int(document["class_id"]))
 
     _mark_ready(conn, document_id, parsed, detail)
+
+
+def _record_figures(conn: sqlite3.Connection, document_id: int, source: Path, mime: str) -> None:
+    """Find and store the document's figures, never letting that decide its fate.
+
+    Guarded for the same reason profile extraction is: the document is searchable either
+    way, and a diagram Lyra failed to notice is not worth failing an upload over. It runs
+    before chunking so that a document is never briefly `ready` with its text indexed and
+    its figures missing.
+    """
+    try:
+        store_figures(conn, document_id, extract_figures(source, mime))
+        conn.commit()
+    except Exception:
+        logger.exception("Figure extraction failed for document %s", document_id)
 
 
 def _extract_profile_facts(

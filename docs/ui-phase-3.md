@@ -300,6 +300,8 @@ In addition to every item in ui-phase-1.md and ui-phase-2.md's definitions of do
 - [x] Provenance renders a section path where one exists and degrades to filename and page where
       none does. Read live off the chunk, so re-indexing improves old citations rather than
       leaving them quoting a reading that has been replaced
-- [ ] Figures render in the workspace and in print, and a missing figure costs a caption rather than
-      the solution
+- [x] Figures render in the workspace and in print, and a missing figure costs a caption rather than
+      the solution. What is not done is deciding which problem an uncaptioned figure belongs to on a
+      crowded page, so `FigureBlock` appears less often than this document assumed. See the figures
+      section of feature-roadmap.md for the measurement behind that
 - [ ] Correct at 1280, 768, and 375, in both themes

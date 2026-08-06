@@ -643,6 +643,9 @@ export function buildTree(parts: SolutionPart[]): ProblemTree[] {
       }),
       steps: children.filter((part) => part.kind === 'step'),
       answer: children.find((part) => part.kind === 'answer') ?? null,
+      // Attached to the problem rather than to a step: a diagram is part of the question,
+      // and it is there before the first step is written.
+      figures: children.filter((part) => part.kind === 'figure'),
     }
   })
 }

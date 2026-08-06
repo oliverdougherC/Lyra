@@ -428,14 +428,37 @@ carries 105 distinct real section titles where the regex produced dot leaders an
 
 ### Figures
 
-- [ ] Extract embedded images and rendered page regions with PyMuPDF
-- [ ] Caption-to-figure association (`Figure 5.21` and nearest image block), with an honest fallback
-      when the heuristic fails
-- [ ] Pull a referenced figure into a solution document, with provenance back to its source page.
-      This is the first artifact content that is not text. `artifact_parts` already accepts
-      `kind = 'figure'` with `content_type = 'image'`, so this lands without a migration, but
-      nothing produces one today and nothing in the frontend renders one
-- [ ] Figures survive export. The print stylesheet has never seen an image
+- [x] Extract embedded images with PyMuPDF, cropped out of the composed page. **Not rendered page
+      regions**, and that is measured: `cluster_drawings()` turns 2522 vector paths into 112
+      clusters on the reference lecture deck and every cluster is the whole page, because each page
+      has a full-bleed background rectangle. Three document kinds, three page sizes, same result.
+      Shipping it would file one junk figure per page of every deck a student owns
+- [x] Caption-to-figure association, with an honest fallback when there is no caption. The fallback
+      is the common path rather than the exception: the corpus holds five captions across
+      sixty-nine figures. All five are found; the other sixty-four are named for where they were
+      found and given no owner
+- [x] Pull a referenced figure into a solution document, with provenance back to its source page.
+      **Only when the reference is exact**: the problem names the figure, or the problem is alone on
+      its page. See below for what that does not cover
+- [x] Figures survive export. Kept whole with their caption and capped in height, so a diagram
+      cannot claim a page and push the working it belongs to onto the next
+
+**What the figure acceptance case found, and did not deliver.** The three block diagrams on
+`homework_3` extract correctly, crop cleanly at 220 dpi, serve, render, and print. What does not
+happen is attaching them to those three problems. The first implementation attached every figure on
+a page to every problem on it and produced twenty-one attachments of which twelve were wrong: four
+Fourier-series problems each received three diagrams belonging to other questions. Every geometric
+rule tried is wrong on one of the two common layouts, because on that sheet the list markers sit
+below their diagrams. The one exact rule - pairing an alternating run of figures and markers -
+needs each problem to have a distinct page position, and `_locate` cannot give one here: it matches
+a label's first occurrence, so the second section's "1." resolves to the first section's marker.
+That is a pre-existing Phase 2 limitation and it is the thing to fix before trying again.
+
+Showing a student a diagram that answers a different question is worse than showing none, because
+the source pane already shows the page. So the rule refuses, and this item is honestly half-done.
+- [ ] Distinguish two problems that carry the same label on one page, in `rag/locate.py`. Blocks
+      figure-to-problem pairing above, and already makes the source pane's highlight band point at
+      the wrong marker for any sheet whose sections both number from one
 
 ### Text recognition
 

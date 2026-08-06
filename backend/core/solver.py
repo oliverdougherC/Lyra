@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from backend.config import settings
-from backend.core import artifacts, solving, verification
+from backend.core import artifacts, figures, solving, verification
 from backend.core.app_settings import (
     NO_ENDPOINT,
     REMOTE_UNACKNOWLEDGED,
@@ -294,7 +294,107 @@ def write_problems(
                 origin=problem.origin,
             )
         written.append(part_id)
+
+    _write_figures(conn, artifact_id, problems, written)
     return written
+
+
+def _write_figures(
+    conn: sqlite3.Connection,
+    artifact_id: int,
+    problems: list[SegmentedProblem],
+    part_ids: list[int],
+) -> None:
+    """Pull the figures a problem refers to into the solution.
+
+    Two rules, and both are exact. A figure is attached when the problem's statement names
+    it - "the system in Figure 3" - or when the problem is the only one on its page, where
+    "the figures on this page" is not a guess at all. Anything else gets nothing.
+
+    That is deliberately less than it could be, and the reason is worth stating because it
+    was tried. Attaching every figure on a page to every problem on it was the first
+    version, and on the acceptance homework it gave twenty-one attachments of which twelve
+    were wrong: four Fourier-series problems each received three block diagrams belonging
+    to other questions. Geometry cannot fix it either. The list markers on that page sit
+    *below* their diagrams, so "nearest preceding marker" is off by one; "nearest marker by
+    distance" gets figure two wrong by three thousandths of a page; and pairing an
+    alternating run of figures and markers, which would be exact, needs each problem to
+    have a distinct position, which `_locate` cannot give here - it finds a label's first
+    occurrence, so the second section's "1." resolves to the first section's marker.
+
+    So the figures of a multi-problem page with no captions are extracted, served, and
+    shown on the page image beside the solution, but they are not filed under a problem.
+    A student sees the diagram; Lyra does not claim to know which question it answers.
+
+    The part carries the figure's id as its content. Nothing here copies the image: the
+    figure belongs to the document, and a solution referring to it should follow the source
+    rather than freeze a crop taken on the day it was solved.
+    """
+    # How many problems sit on each page, which is what decides whether "the figures on
+    # this page" identifies anything.
+    crowd: dict[tuple[int, int], int] = {}
+    for problem in problems:
+        if problem.document_id and problem.page_number is not None:
+            key = (problem.document_id, problem.page_number)
+            crowd[key] = crowd.get(key, 0) + 1
+
+    for problem, part_id in zip(problems, part_ids, strict=True):
+        if not problem.document_id or problem.page_number is None:
+            continue
+        available = figures.list_figures(conn, problem.document_id, [problem.page_number])
+        alone = crowd.get((problem.document_id, problem.page_number), 0) == 1
+        named = [
+            figure
+            for figure in available
+            if isinstance(figure["label"], str) and _mentions(problem.statement, figure["label"])
+        ]
+        chosen = named or (available if alone else [])
+        _attach_figures(conn, artifact_id, part_id, problem, chosen)
+
+
+def _mentions(statement: str, label: str) -> bool:
+    """Whether a problem's text refers to a figure by its caption's label.
+
+    Whitespace-insensitive, because `Figure 3` in a caption and `figure 3` in a sentence
+    are the same reference, and a PDF's text layer is not reliable about either.
+    """
+    flat = " ".join(statement.split()).casefold()
+    return " ".join(label.split()).casefold() in flat
+
+
+def _attach_figures(
+    conn: sqlite3.Connection,
+    artifact_id: int,
+    part_id: int,
+    problem: SegmentedProblem,
+    chosen: list[dict[str, object]],
+) -> None:
+    """Write one figure part per chosen figure, each citing the page it came from."""
+    for index, figure in enumerate(chosen):
+        figure_id = artifacts.create_part(
+            conn,
+            artifact_id,
+            artifacts.FIGURE,
+            index,
+            label=str(figure["name"]),
+            content=str(figure["id"]),
+            content_type=artifacts.IMAGE,
+            parent_part_id=part_id,
+            status=artifacts.PART_COMPLETE,
+            origin=problem.origin,
+        )
+        artifacts.set_provenance(
+            conn,
+            figure_id,
+            [
+                ProvenanceEntry(
+                    document_id=problem.document_id,
+                    page_number=int(figure["page_number"]),  # type: ignore[arg-type]
+                    label=str(figure["name"]),
+                    bbox=tuple(float(value) for value in figure["bbox"]),  # type: ignore[union-attr]
+                )
+            ],
+        )
 
 
 @dataclass(frozen=True)

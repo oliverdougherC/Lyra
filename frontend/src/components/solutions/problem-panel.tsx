@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Spinner } from '@/components/ui/spinner'
+import { FigureBlock } from '@/components/solutions/figure-block'
 import { formatCount } from '@/lib/format'
 import { statementLeadIn } from '@/lib/statement'
 import { cn } from '@/lib/utils'
@@ -40,6 +41,8 @@ export type ProblemTree = {
   separate: boolean
   steps: SolutionPart[]
   answer: SolutionPart | null
+  /** Diagrams from the source page, which belong to the question rather than the answer. */
+  figures: SolutionPart[]
 }
 
 type ProblemPanelProps = {
@@ -75,7 +78,7 @@ export function ProblemPanel({
   thread = null,
   index = 0,
 }: ProblemPanelProps) {
-  const { problem, subParts, separate, steps, answer } = node
+  const { problem, subParts, separate, steps, answer, figures } = node
   const section = sectionVerdict(subParts)
   const label = problem.label ?? 'Problem'
   const solving = problem.status === 'solving' || problem.status === 'verifying'
@@ -185,6 +188,12 @@ export function ProblemPanel({
             ))}
           </ul>
         ) : null}
+
+        {/* Between the question and the work: a block diagram is what the question is
+            about, so it reads before the first step rather than as an appendix. */}
+        {figures.map((figure) => (
+          <FigureBlock key={figure.id} figure={figure} />
+        ))}
 
         {separate ? (
           subParts.map((part) => (

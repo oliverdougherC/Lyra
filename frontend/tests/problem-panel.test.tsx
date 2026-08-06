@@ -60,6 +60,7 @@ function node(overrides: Partial<ProblemTree> = {}): ProblemTree {
     problem: PROBLEM,
     subParts: [],
     separate: false,
+    figures: [],
     steps: [
       part({
         id: 2,
@@ -300,6 +301,7 @@ describe('a section whose parts are questions of their own', () => {
       separate: true,
       steps: [],
       answer: null,
+      figures: [],
       subParts: overrides.map((extra, index) => ({
         problem: part({
           id: 10 + index,

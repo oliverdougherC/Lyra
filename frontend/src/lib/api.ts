@@ -15,6 +15,7 @@ import type {
   DocumentRead,
   DocumentStatus,
   DocumentText,
+  FigureRead,
   MessageRead,
   RegenerateRequest,
   SegmentationUpdate,
@@ -40,6 +41,16 @@ export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://127.0.0.1:80
  */
 export function documentPageUrl(documentId: number, pageNumber: number): string {
   return `${API_BASE}/api/documents/${documentId}/pages/${pageNumber}`
+}
+
+/**
+ * The URL of one figure, cropped out of its page.
+ *
+ * Addressed by its own id rather than under its document, so a solution can draw a figure
+ * knowing only what its `artifact_part` stores.
+ */
+export function figureUrl(figureId: number): string {
+  return `${API_BASE}/api/figures/${figureId}`
 }
 
 /** A backend response that was not 2xx. `status === 0` means the request never landed. */
@@ -153,6 +164,9 @@ export const api = {
    */
   recognizeDocument: (documentId: number) =>
     requestJson<DocumentRead>(`/api/documents/${documentId}/recognize`, { method: 'POST' }),
+
+  listDocumentFigures: (documentId: number, signal?: AbortSignal) =>
+    requestJson<FigureRead[]>(`/api/documents/${documentId}/figures`, { signal }),
 
   getDocumentOutline: (documentId: number, signal?: AbortSignal) =>
     requestJson<DocumentOutline>(`/api/documents/${documentId}/outline`, { signal }),
