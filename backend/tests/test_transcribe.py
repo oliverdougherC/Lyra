@@ -98,3 +98,28 @@ async def test_a_blank_page_transcribes_to_nothing_rather_than_failing() -> None
         await transcribe.transcribe_page(_LOCAL, None, "vision", _PAGE, transport=_replying(""))
         == ""
     )
+
+
+def test_the_prompt_pins_one_notation_for_tables() -> None:
+    """Asked only to "transcribe", a model picks a notation per page: measured over one
+    eight-page appendix, the same document's tables came back as bare alternating lines, as
+    bare pipes, as a full Markdown table, and as a LaTeX `tabular`. Nothing downstream can
+    tell a table from a paragraph unless the transcription says which it is."""
+    prompt = transcribe.TRANSCRIBE_PROMPT
+
+    assert "Markdown table" in prompt
+    assert "| --- |" in prompt
+    # Including where the page prints no header, because a header row that is sometimes
+    # there and sometimes not is a second notation wearing the first one's clothes.
+    assert "no printed header" in prompt
+    assert "Never use a LaTeX table" in prompt
+
+
+def test_the_prompt_pins_one_notation_for_headings() -> None:
+    """`chunk.SECTION_HEADING` sees an ATX heading. It does not see a heading split across
+    two lines mid-phrase, or one written in bold, and a scanned appendix arrived as both."""
+    prompt = transcribe.TRANSCRIBE_PROMPT
+
+    assert "on ONE line, starting with `#`" in prompt
+    assert "Never split a heading across" in prompt
+    assert "never write one in bold" in prompt

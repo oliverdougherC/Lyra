@@ -29,6 +29,23 @@ logger = logging.getLogger(__name__)
 # What the model is asked for. Written to get a faithful reading rather than a helpful one:
 # a vision model left to itself summarises a page, and a summary of a page of mathematics
 # is not a transcription of it.
+#
+# The markup is pinned, and that is the half of this prompt that was learned rather than
+# guessed. Asked only to "transcribe", a model picks a notation per page: measured over one
+# eight-page scanned appendix, the same document's tables came back as bare alternating
+# lines, as bare pipes with no header rule, as a full Markdown table, and as a raw LaTeX
+# `tabular` - four notations for one table. Headings varied the same way, arriving bold-
+# wrapped, or split across two lines mid-phrase, or plain.
+#
+# It matters because everything downstream reads text and nothing downstream can tell a
+# table from a paragraph unless the transcription says so. `chunk.SECTION_HEADING` sees an
+# ATX heading and does not see `C.1 Basic Discrete-Time Fourier Series Pairs` split over
+# two lines, so that appendix chunked as eight anonymous pages with none of its nine
+# sections named - which is a retrieval failure created entirely at transcription time.
+#
+# One notation per thing, therefore, stated as a rule rather than an example, and stated
+# even where the page has no header to put in the header row: a table whose header row is
+# sometimes present and sometimes not is a second notation wearing the first one's clothes.
 TRANSCRIBE_PROMPT = """\
 Transcribe this page exactly as it appears. Reply with the transcription and nothing else.
 
@@ -37,7 +54,12 @@ Rules:
 - Write mathematics as LaTeX: `$...$` inline and `$$...$$` on its own line. A matrix is a
   matrix, not a list of numbers, so use \\begin{bmatrix} rather than writing its entries
   out in a column.
-- Keep headings, numbering, and labels exactly as printed, including section numbers.
+- Write every heading as a Markdown heading on ONE line, starting with `#`, keeping its
+  number: `# C.1 Basic Discrete-Time Fourier Series Pairs`. Never split a heading across
+  two lines, and never write one in bold instead.
+- Write every table as a Markdown table, always with a header row and always with the
+  `| --- |` rule under it. Where the page's table has no printed header, use the empty
+  header `|  |  |`. Never use a LaTeX table, and never write the cells as plain lines.
 - Where a figure or diagram appears, write `[figure]` on its own line and carry on. Do not
   describe it.
 - If the page is blank, reply with nothing at all."""
@@ -109,6 +131,8 @@ async def transcribe_page_locally(image: bytes, *, transport: object | None = No
         [message],  # type: ignore[arg-type]
         transport=transport,
         max_tokens=MAX_OUTPUT_TOKENS,
+        temperature=client.DETERMINISTIC_TEMPERATURE,
+        request_timeout=client.BACKGROUND_TIMEOUT,
     )
     return _strip_special(text)
 
@@ -146,7 +170,15 @@ async def transcribe_page(
         raise UpstreamError(REMOTE_MESSAGE)
 
     message = client.image_message(TRANSCRIBE_PROMPT, image)
-    text = await client.complete(endpoint, api_key, model, [message], transport=transport)  # type: ignore[arg-type]
+    text = await client.complete(
+        endpoint,
+        api_key,
+        model,
+        [message],  # type: ignore[arg-type]
+        transport=transport,
+        temperature=client.DETERMINISTIC_TEMPERATURE,
+        request_timeout=client.BACKGROUND_TIMEOUT,
+    )
     return _cleaned(text)
 
 
