@@ -11,6 +11,7 @@ import type {
   ClassRead,
   ClassUpdate,
   ConnectionTestResult,
+  DocumentOutline,
   DocumentRead,
   DocumentStatus,
   DocumentText,
@@ -28,6 +29,7 @@ import type {
   SolutionStatus,
   ToolSupportResult,
   UserProfile,
+  VisionSupportResult,
 } from '@/types'
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://127.0.0.1:8000'
@@ -143,6 +145,18 @@ export const api = {
   reingestDocument: (documentId: number) =>
     requestJson<DocumentRead>(`/api/documents/${documentId}/reingest`, { method: 'POST' }),
 
+  /**
+   * Reads every page of a document that has no text of its own.
+   *
+   * One call behind both `Read this document` and `Try those pages`: they mean the same
+   * thing, because the pages that already worked are the ones this does not touch.
+   */
+  recognizeDocument: (documentId: number) =>
+    requestJson<DocumentRead>(`/api/documents/${documentId}/recognize`, { method: 'POST' }),
+
+  getDocumentOutline: (documentId: number, signal?: AbortSignal) =>
+    requestJson<DocumentOutline>(`/api/documents/${documentId}/outline`, { signal }),
+
   moveDocument: (documentId: number, classId: number) =>
     requestJson<DocumentRead>(`/api/documents/${documentId}/move`, {
       method: 'POST',
@@ -207,6 +221,9 @@ export const api = {
     requestJson<ConnectionTestResult>('/api/settings/test-connection', { method: 'POST' }),
 
   testTools: () => requestJson<ToolSupportResult>('/api/settings/test-tools', { method: 'POST' }),
+
+  testVision: () =>
+    requestJson<VisionSupportResult>('/api/settings/test-vision', { method: 'POST' }),
 
   listModels: (signal?: AbortSignal) =>
     requestJson<{ models: string[] }>('/api/settings/models', { signal }),

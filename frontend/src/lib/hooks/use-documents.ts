@@ -9,6 +9,7 @@ import type { DocumentRead, DocumentState } from '@/types'
 export const documentKeys = {
   list: (classId: number) => ['documents', classId] as const,
   status: (documentId: number) => ['status', documentId] as const,
+  outline: (documentId: number) => ['outline', documentId] as const,
 }
 
 const TERMINAL_STATES: readonly DocumentState[] = ['ready', 'failed', 'unsupported']
@@ -99,6 +100,38 @@ export function useReingestDocument(classId: number) {
       queryClient.invalidateQueries({ queryKey: documentKeys.list(classId) })
       queryClient.invalidateQueries({ queryKey: documentKeys.status(document.id) })
     },
+  })
+}
+
+/**
+ * Asks for a document's unreadable pages to be read as images.
+ *
+ * The same mutation behind `Read this document` on a scanned upload and `Try those pages`
+ * on one with failures, because the backend treats them as one operation: attempt every
+ * page not currently carrying text. The status query is invalidated as well as the list,
+ * so the row starts polling again rather than sitting on the terminal state it was in.
+ */
+export function useRecognizeDocument(classId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (documentId: number) => api.recognizeDocument(documentId),
+    onSuccess: (document) => {
+      queryClient.invalidateQueries({ queryKey: documentKeys.list(classId) })
+      queryClient.invalidateQueries({ queryKey: documentKeys.status(document.id) })
+      queryClient.invalidateQueries({ queryKey: documentKeys.outline(document.id) })
+    },
+  })
+}
+
+/**
+ * The structure Lyra indexed a document under. Fetched only when the disclosure is open,
+ * because a closed one is the default and this is a group-by over every chunk of a book.
+ */
+export function useDocumentOutline(documentId: number, enabled: boolean) {
+  return useQuery({
+    queryKey: documentKeys.outline(documentId),
+    queryFn: ({ signal }) => api.getDocumentOutline(documentId, signal),
+    enabled: enabled && Number.isFinite(documentId),
   })
 }
 

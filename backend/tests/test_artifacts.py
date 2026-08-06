@@ -403,3 +403,57 @@ def test_missing_rows_raise_not_found(db: sqlite3.Connection) -> None:
         artifacts.get_part(db, 9999)
     with pytest.raises(NotFoundError):
         artifacts.delete_artifact(db, 9999)
+
+
+def test_provenance_reads_its_section_live_from_the_chunk(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """Not copied onto the provenance row when the part was written.
+
+    A section path is a property of the source, the same as a filename is. Re-indexing a
+    document under a better reading of its structure should improve every citation into it
+    rather than leaving old solutions quoting the reading that has been replaced.
+    """
+    artifact_id = _artifact(db, class_id)
+    document_id = _document(db, class_id, "kuttler.pdf")
+    chunk_id = _chunk(db, class_id, document_id)
+    db.execute(
+        "update chunks set section_path = 'Vector Spaces / Subspaces' where id = ?", (chunk_id,)
+    )
+    db.commit()
+    part_id = artifacts.create_part(db, artifact_id, artifacts.STEP, 0, content="x = 2")
+    artifacts.set_provenance(
+        db, part_id, [ProvenanceEntry(chunk_id=chunk_id, document_id=document_id, page_number=92)]
+    )
+
+    assert artifacts.list_provenance(db, part_id)[0]["section_path"] == "Vector Spaces / Subspaces"
+
+    db.execute(
+        "update chunks set section_path = 'Vector Spaces / Spanning Sets' where id = ?", (chunk_id,)
+    )
+    db.commit()
+
+    assert (
+        artifacts.list_provenance(db, part_id)[0]["section_path"] == "Vector Spaces / Spanning Sets"
+    )
+
+
+def test_provenance_without_a_section_degrades_rather_than_breaking(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """Every document indexed before sections existed, and every one that has no structure.
+
+    The chip falls back to filename and page, which is what it always showed, so an old
+    solution is not a broken one.
+    """
+    artifact_id = _artifact(db, class_id)
+    document_id = _document(db, class_id, "notes.pdf")
+    chunk_id = _chunk(db, class_id, document_id)
+    part_id = artifacts.create_part(db, artifact_id, artifacts.STEP, 0, content="x = 2")
+    artifacts.set_provenance(
+        db, part_id, [ProvenanceEntry(chunk_id=chunk_id, document_id=document_id, page_number=4)]
+    )
+
+    entry = artifacts.list_provenance(db, part_id)[0]
+    assert entry["section_path"] is None
+    assert (entry["filename"], entry["page_number"]) == ("notes.pdf", 4)

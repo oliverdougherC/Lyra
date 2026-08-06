@@ -842,14 +842,22 @@ def list_provenance(conn: sqlite3.Connection, part_id: int) -> list[dict[str, ob
     is kept rather than cascaded away, because the page number is still true and still
     worth showing.
 
+    `section_path` is read live off the chunk rather than copied onto the provenance row
+    when the part was written, for the same reason `filename` is: it is a property of the
+    source, and re-indexing a document under a better reading of its structure should
+    improve every citation into it rather than leaving old solutions quoting the old one.
+    It is null for a chunk that has since gone, and for every document indexed before
+    sections existed.
+
     Raises:
         NotFoundError: when no part carries that id.
     """
     get_part(conn, part_id)
     rows = conn.execute(
         "select p.id, p.part_id, p.chunk_id, p.document_id, p.page_number, p.label, "
-        "p.bbox, d.filename from artifact_provenance p "
+        "p.bbox, d.filename, c.section_path from artifact_provenance p "
         "left join documents d on d.id = p.document_id "
+        "left join chunks c on c.id = p.chunk_id "
         "where p.part_id = ? order by p.id",
         (part_id,),
     )

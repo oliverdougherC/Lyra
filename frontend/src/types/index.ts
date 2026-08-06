@@ -233,6 +233,11 @@ export interface Provenance {
   label: string | null
   filename: string | null
   /**
+   * The section this came from, titles joined. Null for a document with no structure and
+   * for one indexed before sections existed, so the chip falls back to filename and page.
+   */
+  section_path: string | null
+  /**
    * Where on the page this starts, as `[x0, y0, x1, y1]` fractions of the page box.
    * Null when the marker was never looked for or could not be found.
    */
@@ -346,4 +351,31 @@ export interface DocumentText {
 export interface ToolSupportResult {
   ok: boolean
   message: string
+}
+
+/** Whether the endpoint can read an image, which is what text recognition needs. */
+export interface VisionSupportResult {
+  ok: boolean
+  message: string
+}
+
+/** One addressable section of a document, as its indexed chunks record it. */
+export interface OutlineSection {
+  path: string
+  number: string | null
+  /** How many titles the path is made of. 1 is a chapter. */
+  depth: number
+  first_page: number | null
+  last_page: number | null
+  chunk_count: number
+}
+
+/**
+ * What structure Lyra found in a document. `sectioned_count` against `chunk_count` is the
+ * honest part: a book read as one flat blob has sections for none of its chunks.
+ */
+export interface DocumentOutline {
+  sections: OutlineSection[]
+  chunk_count: number
+  sectioned_count: number
 }

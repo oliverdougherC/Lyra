@@ -64,6 +64,7 @@ const TWO_PROBLEMS = [
         document_id: 8,
         page_number: 1,
         label: null,
+        section_path: null,
         filename: 'homework_4.pdf',
         bbox: null,
       },

@@ -181,6 +181,10 @@ class ProvenanceRead(BaseModel):
     page_number: int | None
     label: str | None
     filename: str | None
+    # The section this came from, titles joined, read live off the chunk. Null for a
+    # document with no structure and for one indexed before sections existed, so the chip
+    # degrades to filename and page rather than to an empty line.
+    section_path: str | None = None
     # Where on the page this starts, as `[x0, y0, x1, y1]` fractions of the page box.
     # Null when nothing looked, or when the marker was not found.
     bbox: list[float] | None = None

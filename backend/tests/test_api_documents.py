@@ -323,3 +323,72 @@ def test_a_webp_upload_is_refused_naming_the_types_that_work(
     assert response.status_code == 400
     assert response.json()["detail"] == parse.UNSUPPORTED_MESSAGE
     assert "PNG" in response.json()["detail"]
+
+
+def _sectioned_chunk(
+    db: sqlite3.Connection,
+    document_id: int,
+    class_id: int,
+    path: str | None,
+    number: str | None = None,
+    page: int | None = None,
+) -> None:
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "section_path, section_number, doc_type, embedding_model, embedding_dim) "
+        "values (?, ?, 'text', 2, ?, ?, ?, 'textbook', 'm', 768)",
+        (document_id, class_id, page, path, number),
+    )
+    db.commit()
+
+
+def test_the_outline_reports_the_structure_the_chunks_were_indexed_under(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """Read from the chunks, not from the PDF's own table of contents.
+
+    The outline in the file is what the publisher wrote. This is what actually partitions
+    retrieval, and the two differ exactly when something went wrong.
+    """
+    document_id = _document(db, class_id)
+    _sectioned_chunk(db, document_id, class_id, "Vector Spaces", "4", page=90)
+    _sectioned_chunk(db, document_id, class_id, "Vector Spaces / Subspaces", "4.1", page=92)
+    _sectioned_chunk(db, document_id, class_id, "Vector Spaces / Subspaces", "4.1", page=95)
+
+    body = client.get(f"/api/documents/{document_id}/outline").json()
+
+    assert [(s["path"], s["depth"]) for s in body["sections"]] == [
+        ("Vector Spaces", 1),
+        ("Vector Spaces / Subspaces", 2),
+    ]
+    subsection = body["sections"][1]
+    assert (subsection["number"], subsection["first_page"], subsection["last_page"]) == (
+        "4.1",
+        92,
+        95,
+    )
+    assert subsection["chunk_count"] == 2
+    assert (body["chunk_count"], body["sectioned_count"]) == (3, 3)
+
+
+def test_a_document_read_as_one_flat_blob_says_so_rather_than_returning_nothing(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """The whole point of the disclosure, per pillar 3.
+
+    An empty section list next to a chunk count is the difference between "this document
+    has no structure" and "this screen has not loaded", and a student whose book was
+    flattened has no other way to discover it except by noticing the answers got worse.
+    """
+    document_id = _document(db, class_id)
+    _sectioned_chunk(db, document_id, class_id, None)
+    _sectioned_chunk(db, document_id, class_id, None)
+
+    body = client.get(f"/api/documents/{document_id}/outline").json()
+
+    assert body["sections"] == []
+    assert (body["chunk_count"], body["sectioned_count"]) == (2, 0)
+
+
+def test_the_outline_of_an_unknown_document_is_a_404(client: TestClient) -> None:
+    assert client.get("/api/documents/9999/outline").status_code == 404

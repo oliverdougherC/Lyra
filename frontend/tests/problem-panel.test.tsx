@@ -72,6 +72,7 @@ function node(overrides: Partial<ProblemTree> = {}): ProblemTree {
             document_id: 3,
             page_number: 12,
             label: null,
+            section_path: null,
             filename: 'lecture3.pdf',
             bbox: null,
           },

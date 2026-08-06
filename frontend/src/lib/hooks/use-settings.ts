@@ -40,3 +40,16 @@ export function useTestTools() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: settingsKeys.all }),
   })
 }
+
+/**
+ * Probes whether the endpoint can read an image. Stored the same way tool support is, and
+ * for the same reason: a document row decides whether to offer text recognition from the
+ * stored answer rather than by asking the endpoint every time it renders.
+ */
+export function useTestVision() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.testVision(),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: settingsKeys.all }),
+  })
+}

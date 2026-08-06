@@ -37,6 +37,7 @@ import {
   documentKeys,
   useDeleteDocument,
   useDocuments,
+  useRecognizeDocument,
   useReingestDocument,
   useUploadDocument,
 } from '@/lib/hooks/use-documents'
@@ -110,6 +111,7 @@ export function DocumentsPane({
   const { data, isPending, isError, error, refetch } = useDocuments(classId)
   const uploadDocument = useUploadDocument(classId)
   const reingestDocument = useReingestDocument(classId)
+  const recognizeDocument = useRecognizeDocument(classId)
   const deleteDocument = useDeleteDocument(classId)
   const queryClient = useQueryClient()
   const reduceMotion = useReducedMotion()
@@ -208,6 +210,18 @@ export function DocumentsPane({
       })
     },
     [reingestDocument],
+  )
+
+  const onRecognize = useCallback(
+    (documentId: number) => {
+      recognizeDocument.mutate(documentId, {
+        onError: (caught) =>
+          toast.error(
+            caught instanceof ApiError ? caught.message : 'Could not start reading that document.',
+          ),
+      })
+    },
+    [recognizeDocument],
   )
 
   const onDelete = useCallback(
@@ -445,6 +459,7 @@ export function DocumentsPane({
                     }
                     onSelect={onRowSelect}
                     onRetry={onRetry}
+                    onRecognize={onRecognize}
                     onDelete={onDelete}
                     onStatus={onStatus}
                     onMove={managing ? (picked) => setMoving([picked]) : undefined}

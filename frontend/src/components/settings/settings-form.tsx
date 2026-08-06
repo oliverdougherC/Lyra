@@ -25,6 +25,7 @@ import {
   useSettings,
   useTestConnection,
   useTestTools,
+  useTestVision,
   useUpdateSettings,
 } from '@/lib/hooks/use-settings'
 import { useTheme, type Theme } from '@/lib/theme'
@@ -99,6 +100,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
   const updateSettings = useUpdateSettings()
   const testConnection = useTestConnection()
   const testTools = useTestTools()
+  const testVision = useTestVision()
   const { theme, setTheme } = useTheme()
 
   const [endpoint, setEndpoint] = useState(settings.endpoint_url ?? '')
@@ -259,6 +261,26 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               Lyra checks each solution against a computer algebra system, which needs an endpoint
               that supports tool calls. Without one, solving still works and every solution is
               marked <span className="whitespace-nowrap">Not checked</span>.
+            </FieldDescription>
+          </Field>
+
+          <Field>
+            <FieldLabel>Reading scanned pages</FieldLabel>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={() => testVision.mutate()}
+                disabled={testVision.isPending || !hasEndpoint}
+              >
+                {testVision.isPending ? <Spinner /> : null}
+                Test image support
+              </Button>
+              <VisionSupportOutcome settings={settings} pending={testVision.isPending} />
+            </div>
+            <FieldDescription>
+              A scanned page has no text to extract, so Lyra reads it by sending a picture of the
+              page to this endpoint. Without a model that can see images, scanned documents stay
+              unreadable and Lyra says so on the document rather than offering to read them.
             </FieldDescription>
           </Field>
 
@@ -539,6 +561,38 @@ function ToolSupportOutcome({ settings, pending }: { settings: SettingsRead; pen
   return (
     <span className="text-info-text text-sm">
       {settings.tools_message ?? 'This endpoint cannot run tool calls. Solving still works.'}
+    </span>
+  )
+}
+
+/**
+ * The same three states as tool support, and the same reason for three rather than two.
+ * What differs is the cost of a no: a scanned document simply cannot be read, so the
+ * document row withholds the offer instead of letting it fail one page at a time.
+ */
+function VisionSupportOutcome({ settings, pending }: { settings: SettingsRead; pending: boolean }) {
+  if (pending) return <span className="text-muted-foreground text-sm">Asking the endpoint...</span>
+
+  if (settings.vision_supported === null) {
+    return (
+      <span className="text-muted-foreground text-sm">
+        Not checked yet. Lyra will offer to read scans and report if it cannot.
+      </span>
+    )
+  }
+
+  if (settings.vision_supported) {
+    return (
+      <span className="text-success-text flex items-center gap-1.5 text-sm">
+        <Check className="size-4" />
+        {settings.vision_message ?? 'This endpoint can read images.'}
+      </span>
+    )
+  }
+
+  return (
+    <span className="text-info-text text-sm">
+      {settings.vision_message ?? 'This endpoint cannot read images, so scans stay unreadable.'}
     </span>
   )
 }

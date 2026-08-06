@@ -73,9 +73,13 @@ per-page progress is real. Parsing a text-based PDF takes under a second for 608
 there would flash and mean nothing. The Phase 1 rule is unchanged and is being honored rather than
 relaxed: a number that moves is shown, a number that would not move is not.
 
-`Reading page 41 of 608` also carries an elapsed counter once the wait passes ten seconds, matching
-the solver's threshold rather than the three-second one, because recognition of a long document is
-expected to be slow and a timer appearing immediately reads as alarm.
+`Reading page 41 of 608` also carries an elapsed counter once the wait passes ten seconds, which is
+longer than anywhere else in the app rather than the same as the solver: this document said it
+matched the solver's threshold, and the solver's is three seconds, as is the chat loader's. Ten is
+deliberate. Those two report a wait that is unexpected; this one reports a wait that is expected to
+run into minutes, and a timer that starts ticking immediately reads as alarm rather than as
+reassurance. Past an hour it reads `2 hours 15 min`, because a recognition run on a book is hours
+and `135 minutes` is a number the reader has to convert before it means anything.
 
 ### A large document does not get a different screen
 
@@ -277,18 +281,25 @@ The Phase 1 and Phase 2 guidelines hold in full. Two additions:
 
 In addition to every item in ui-phase-1.md and ui-phase-2.md's definitions of done:
 
-- [ ] The page counter appears only while recognition is running, and every number on it comes from
-      polled backend state
-- [ ] A document with some failed pages is `ready`, says so quietly, and retries only those pages
-- [ ] An `unsupported` document can be read from the interface, and nothing is transcribed without
-      the student asking
-- [ ] With a non-vision endpoint configured, every recognition affordance is absent and explained,
-      and none of them fails on use
-- [ ] Images upload, ingest, and appear as one-page documents
-- [ ] The outline disclosure is correct for a book with an outline, a document without one, and a
-      document indexed before Phase 3
-- [ ] Provenance renders a section path where one exists and degrades to filename and page where
-      none does
+- [x] The page counter appears only while recognition is running, and every number on it comes from
+      polled backend state. Watched on the real thing: `Reading page 8 of 8 · 1 minute` under
+      **Reading**, four steps, no fifth
+- [x] A document with some failed pages is `ready`, says so quietly, and retries only those pages.
+      The retry is the same call as the first run, so "only those pages" is a property of the
+      backend rather than of this screen
+- [x] An `unsupported` document can be read from the interface, and nothing is transcribed without
+      the student asking. Driven end to end in the browser against the real endpoint: the scanned
+      Fourier tables went from `no text` to `Ready` from the popover
+- [x] With a non-vision endpoint configured, every recognition affordance is absent and explained,
+      and none of them fails on use. Covered by test rather than by a second endpoint
+- [x] Images upload, ingest, and appear as one-page documents. A PNG of a scanned page uploaded,
+      landed `unsupported` with one page, and recognized to `ready`
+- [x] The outline disclosure is correct for a book with an outline, a document without one, and a
+      document indexed before Phase 3. All three seen: 107 sections over the reference textbook,
+      "no sections found" on a problem set, and the same on every document predating migration 012
+- [x] Provenance renders a section path where one exists and degrades to filename and page where
+      none does. Read live off the chunk, so re-indexing improves old citations rather than
+      leaving them quoting a reading that has been replaced
 - [ ] Figures render in the workspace and in print, and a missing figure costs a caption rather than
       the solution
 - [ ] Correct at 1280, 768, and 375, in both themes

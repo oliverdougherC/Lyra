@@ -22,7 +22,7 @@ from backend.core.classes import get_class, touch_class
 from backend.core.errors import ConflictError, LyraError, NotFoundError
 from backend.core.ingestion import PENDING, delete_chunks, enqueue
 from backend.core.profiles import forget_document_evidence
-from backend.rag import render
+from backend.rag import render, structure
 from backend.rag.parse import PDF_MIME, UNSUPPORTED_MESSAGE
 from backend.storage.database import get_db
 
@@ -127,6 +127,30 @@ class DocumentText(BaseModel):
     filename: str
     text: str
     truncated: bool
+
+
+class OutlineSection(BaseModel):
+    """One addressable section of a document, as its indexed chunks record it."""
+
+    path: str
+    number: str | None
+    depth: int
+    first_page: int | None
+    last_page: int | None
+    chunk_count: int
+
+
+class DocumentOutline(BaseModel):
+    """What structure Lyra found in a document, and how much of it is covered.
+
+    `chunk_count` against `sectioned_count` is the honest part. A book read as one flat
+    blob has sections for none of its chunks, and the difference is exactly what a student
+    would otherwise have no way to discover except by noticing the answers got worse.
+    """
+
+    sections: list[OutlineSection]
+    chunk_count: int
+    sectioned_count: int
 
 
 class StatusRead(BaseModel):
@@ -275,6 +299,50 @@ def reingest_document(document_id: int, conn: DbConn) -> dict[str, object]:
 
     enqueue(document_id)
     return _document_row(conn, document_id)
+
+
+@router.get("/documents/{document_id}/outline", response_model=DocumentOutline)
+def read_document_outline(document_id: int, conn: DbConn) -> dict[str, object]:
+    """The section hierarchy Lyra indexed this document under.
+
+    Read from the chunks rather than from the PDF's own table of contents, deliberately.
+    The outline in the file is what the publisher wrote; what this reports is what actually
+    partitions retrieval, and those differ exactly when something went wrong. A student
+    whose 600-page book was read as one flat blob has no other way to find that out.
+
+    Ordered by the first chunk of each section, which is document order: chunks are
+    inserted in the order they were cut.
+    """
+    _document_row(conn, document_id)
+    rows = conn.execute(
+        "select section_path, section_number, min(page_number) as first_page, "
+        "max(page_number) as last_page, count(*) as chunk_count from chunks "
+        "where document_id = ? and section_path is not null "
+        "group by section_path, section_number order by min(id)",
+        (document_id,),
+    ).fetchall()
+    totals = conn.execute(
+        "select count(*), count(section_path) from chunks where document_id = ?",
+        (document_id,),
+    ).fetchone()
+
+    return {
+        "sections": [
+            {
+                "path": str(row["section_path"]),
+                "number": row["section_number"],
+                # Derived here so the separator stays a single constant. A path is titles
+                # joined, and how deep it sits is how many of them there are.
+                "depth": str(row["section_path"]).count(structure.PATH_SEPARATOR) + 1,
+                "first_page": row["first_page"],
+                "last_page": row["last_page"],
+                "chunk_count": int(row["chunk_count"]),
+            }
+            for row in rows
+        ],
+        "chunk_count": int(totals[0]),
+        "sectioned_count": int(totals[1]),
+    }
 
 
 @router.post(

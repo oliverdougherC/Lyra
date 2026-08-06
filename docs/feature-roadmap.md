@@ -330,7 +330,15 @@ Sequenced because the tracks have different risk, not because the checklists are
 | 2 | Structural parsing | No external dependency, and finding 2 makes it the largest single win |
 | 3 | Vision against the text layer | Finding 4, and it sizes the whole recognition track |
 | 4 | Text recognition for scanned pages | Depends on step 3's interface |
-| 5 | Figures | Depends on step 2's structure, and unblocks a known Phase 2 fault |
+| 5 | The document-list interface | Steps 2 to 4 shipped capabilities with no way to reach them |
+| 6 | Figures | Depends on step 2's structure, and unblocks a known Phase 2 fault |
+
+Step 5 was added after step 4 rather than planned. The trigger was concrete: the `unsupported`
+popover still told a student that scans would be readable "in a future update" and would "process
+automatically then", and both halves had become false, the second in a way that would make someone
+wait forever. Recognition, image upload, and the vision readout had all shipped with no affordance
+at all. Its screens are the document list; figures land in the solution workspace, so doing this
+one first costs no second pass over the same components.
 
 ### Measurement
 
@@ -393,8 +401,9 @@ chunks at an identical score and the ranking was gone. Neither could have been f
       to nothing
 - [x] Documents ingested before this lands keep a null `section_path` and are offered a re-index
       rather than having one run for them. A path is derived from the source file's outline, so
-      there is nothing in the database to backfill from. The backend half is done; the affordance
-      that offers it is in ui-phase-3.md and lands with the rest of that pass
+      there is nothing in the database to backfill from. The `Reindex` action the document row
+      already carried is that affordance, and the outline disclosure beside it is how a student
+      finds out it is worth using
 - [ ] Font and weight heading detection as the fallback for a document with no outline. Deferred
       rather than dropped: nothing measured needs it, because a document with no outline is a
       syllabus or a sheet where the existing regex is doing an easier job well enough. It earns its

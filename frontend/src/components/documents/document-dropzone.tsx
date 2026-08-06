@@ -6,7 +6,17 @@ import { FolderOpen, Upload } from 'lucide-react'
 import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
 
-export const ACCEPTED_EXTENSIONS = ['.pdf', '.txt', '.md'] as const
+/**
+ * What the backend will actually take, and no more.
+ *
+ * WebP is deliberately absent. It was specified alongside PNG and JPG, and the PDF library
+ * that opens uploaded images refuses to decode one, so accepting it here would move the
+ * refusal from a clear message in the browser to a failed ingestion a minute later.
+ */
+export const ACCEPTED_EXTENSIONS = ['.pdf', '.txt', '.md', '.png', '.jpg', '.jpeg'] as const
+
+/** How the accepted types are named to a student, which is not the same as the list above. */
+export const ACCEPTED_LABEL = 'PDF, TXT, MD, PNG, and JPG'
 
 export function hasAcceptedExtension(name: string): boolean {
   return ACCEPTED_EXTENSIONS.some((extension) => name.toLowerCase().endsWith(extension))
@@ -215,7 +225,7 @@ export function DocumentDropzone({
           <button
             type="button"
             onClick={() => folderInputRef?.current?.click()}
-            title="Every PDF, TXT, and MD inside it, at any depth"
+            title={`Every ${ACCEPTED_LABEL} inside it, at any depth`}
             className="text-text-tertiary hover:text-text-secondary focus-visible:ring-ring rounded-sm text-[11px] underline underline-offset-2 transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             <FolderOpen aria-hidden className="mr-1 inline size-3 align-[-1px]" />
@@ -237,7 +247,7 @@ export function DocumentDropzone({
             {rejectedFiles.length === 1
               ? `${rejectedFiles[0]} is not`
               : `${rejectedFiles.length} files are not`}{' '}
-            a supported type. Lyra reads PDF, TXT, and MD.
+            a supported type. Lyra reads {ACCEPTED_LABEL}.
           </p>
         ) : null}
       </div>
