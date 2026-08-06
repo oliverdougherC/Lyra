@@ -144,17 +144,27 @@ def write_settings(payload: SettingsUpdate, conn: DbConn) -> SettingsRead:
         elif api_key is not None:
             secrets.set_api_key(api_key)
 
+    endpoint_changed = False
     if "endpoint_url" in values:
         endpoint_url = _normalize_endpoint(values["endpoint_url"])
         values["endpoint_url"] = endpoint_url
-        changed = endpoint_url != _normalize_endpoint(current["endpoint_url"])
-        if changed and "remote_ack" not in values:
+        endpoint_changed = endpoint_url != _normalize_endpoint(current["endpoint_url"])
+        if endpoint_changed and "remote_ack" not in values:
             # The acknowledgement is consent to send document text to one specific
             # host, so repointing the endpoint withdraws it rather than letting it
             # carry over silently to a new destination. A `remote_ack` sent in this
             # same request is a deliberate acknowledgement of the incoming host and
             # is honoured instead.
             values["remote_ack"] = 0
+
+    model_changed = "model" in values and values["model"] != current["model"]
+    if endpoint_changed or model_changed:
+        # The client remembers, per (endpoint, model), which `response_format` an
+        # endpoint refused, and only ever demotes. A settings change is the one moment
+        # the user is telling us the configuration is different - commonly the same URL
+        # in front of a restarted or upgraded server - so the record is wiped rather
+        # than left to cap constrained decoding against whatever answers now.
+        client.reset_json_support()
 
     update_settings_row(conn, values)
     return _settings_response(get_settings_row(conn))

@@ -81,6 +81,16 @@ NO_VISION_MESSAGE = (
     "Check the connection in Settings."
 )
 
+# Hard ceiling on one page's transcription, on both implementations. The number mirrors
+# the specialist's `MAX_OUTPUT_TOKENS` because it encodes the same fact about the same
+# input: no single page transcribes to more than this, so output still running at the
+# ceiling is a repetition loop, not a long page. docs/rag-pipeline.md's OCR runtime
+# section mandates the ceiling for exactly that failure mode. It travels with
+# `fail_on_truncation=True` everywhere it is sent - a ceiling alone would *store* the
+# cut-off text as if it were the page, which converts the loud failure this constant
+# exists to create back into a quiet wrong answer.
+MAX_TRANSCRIPTION_TOKENS = MAX_OUTPUT_TOKENS
+
 
 def _strip_special(text: str) -> str:
     """Remove the control tokens the specialist emits and the layout markers it wraps.
@@ -120,7 +130,9 @@ async def transcribe_page_locally(image: bytes, *, transport: object | None = No
 
     Raises:
         ConfigurationError: The weights or the runtime are missing.
-        UpstreamError: The local server answered with something unusable.
+        UpstreamError: The local server answered with something unusable, or the reply
+            hit the output ceiling - a repetition loop's partial text must fail the page
+            rather than be filed as its transcription.
     """
     ocr_server.ensure_running()
     message = client.image_message(OCR_PROMPT, image)
@@ -130,9 +142,10 @@ async def transcribe_page_locally(image: bytes, *, transport: object | None = No
         None,
         [message],  # type: ignore[arg-type]
         transport=transport,
-        max_tokens=MAX_OUTPUT_TOKENS,
+        max_tokens=MAX_TRANSCRIPTION_TOKENS,
         temperature=client.DETERMINISTIC_TEMPERATURE,
         request_timeout=client.BACKGROUND_TIMEOUT,
+        fail_on_truncation=True,
     )
     return _strip_special(text)
 
@@ -161,8 +174,10 @@ async def transcribe_page(
         be treated as a failure.
 
     Raises:
-        UpstreamError: The endpoint is not local and has not been acknowledged, or the
-            request failed.
+        UpstreamError: The endpoint is not local and has not been acknowledged, the
+            request failed, or the reply hit the output ceiling. A truncated reply fails
+            the page on purpose: storing it would put half a page into retrieval wearing
+            a whole page's name, and nothing downstream could ever tell.
     """
     if not is_local_endpoint(endpoint) and not remote_ack:
         # The same rule `extract_facts` follows, and it matters more here: what gets sent
@@ -176,8 +191,10 @@ async def transcribe_page(
         model,
         [message],  # type: ignore[arg-type]
         transport=transport,
+        max_tokens=MAX_TRANSCRIPTION_TOKENS,
         temperature=client.DETERMINISTIC_TEMPERATURE,
         request_timeout=client.BACKGROUND_TIMEOUT,
+        fail_on_truncation=True,
     )
     return _cleaned(text)
 

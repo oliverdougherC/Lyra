@@ -1,6 +1,7 @@
 """Contract tests for the tutor client, driven entirely through a stubbed transport."""
 
 import json
+import logging
 from collections.abc import Callable
 
 import httpx
@@ -204,6 +205,51 @@ async def test_stream_chat_maps_status_failures_too() -> None:
     assert caught.value.message == "The tutor endpoint returned an error."
 
 
+async def test_an_in_band_error_frame_fails_the_stream_with_the_servers_words() -> None:
+    """llama.cpp cannot change the HTTP status once streaming has begun.
+
+    A mid-generation failure arrives as a `data: {"error": ...}` frame inside a 200, and
+    reading it as keep-alive noise ended those streams looking like short but successful
+    replies. The server's message is kept because it is the only diagnosis there is.
+    """
+    body = _body(
+        '{"choices":[{"delta":{"content":"partial "}}]}',
+        '{"error":{"message":"CUDA error: out of memory","code":500}}',
+    )
+
+    with pytest.raises(UpstreamError) as caught:
+        await _collect(body)
+
+    assert "out of memory" in caught.value.message
+
+
+async def test_a_json_frame_in_the_wrong_shape_is_an_unreadable_reply_not_a_crash() -> None:
+    """The module's contract is that every failure becomes an `UpstreamError`.
+
+    A frame whose `choices[0]` is not an object used to escape as a raw AttributeError,
+    which no caller catches and no user can read.
+    """
+    with pytest.raises(UpstreamError) as caught:
+        await _collect(_body('{"choices":["not an object"]}'))
+
+    assert caught.value.message == "The tutor endpoint returned a response that could not be read."
+
+
+async def test_a_stream_ending_without_done_is_logged_as_possibly_incomplete(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A connection that closes cleanly without `[DONE]` looks exactly like a short reply.
+
+    The text is still delivered - yanking back words already read would cost a plausibly
+    complete answer - but the one place that can tell the difference has to say so.
+    """
+    with caplog.at_level(logging.WARNING, logger="backend.llm.client"):
+        deltas = await _collect('data: {"choices":[{"delta":{"content":"cut"}}]}\n')
+
+    assert _text(deltas, "answer") == "cut"
+    assert any("[DONE]" in record.getMessage() for record in caplog.records)
+
+
 async def test_complete_returns_the_message_content() -> None:
     payload = {"choices": [{"message": {"role": "assistant", "content": '{"topics": []}'}}]}
     transport = _transport(lambda request: httpx.Response(200, json=payload))
@@ -213,6 +259,41 @@ async def test_complete_returns_the_message_content() -> None:
     )
 
     assert result == '{"topics": []}'
+
+
+_TRUNCATED = {"choices": [{"message": {"content": "78 Matri"}, "finish_reason": "length"}]}
+
+
+async def test_a_truncated_reply_raises_when_the_caller_made_truncation_fatal() -> None:
+    """`finish_reason: "length"` is the server saying "this is not the whole reply".
+
+    A caller that stores what it gets back - transcription - must hear that, or half a
+    page is filed under a whole page's name and nothing downstream can ever tell.
+    """
+    transport = _transport(lambda request: httpx.Response(200, json=_TRUNCATED))
+
+    with pytest.raises(UpstreamError) as caught:
+        await client.complete(
+            _ENDPOINT,
+            None,
+            "local-model",
+            [{"role": "user", "content": "hi"}],
+            transport=transport,
+            fail_on_truncation=True,
+        )
+
+    assert "output-token ceiling" in caught.value.message
+
+
+async def test_a_truncated_reply_still_reaches_callers_that_did_not_opt_in() -> None:
+    """Chat and the probes read a partial reply for exactly what it is."""
+    transport = _transport(lambda request: httpx.Response(200, json=_TRUNCATED))
+
+    result = await client.complete(
+        _ENDPOINT, None, "local-model", [{"role": "user", "content": "hi"}], transport=transport
+    )
+
+    assert result == "78 Matri"
 
 
 async def test_connection_reports_the_model_count_when_healthy() -> None:
@@ -320,12 +401,30 @@ async def test_a_model_that_answers_without_looking_cannot_see() -> None:
 
 
 async def test_a_server_that_rejects_an_image_is_reported_as_unable_not_broken() -> None:
-    transport = _transport(lambda request: httpx.Response(500, json={"error": "no vision"}))
+    """A 400 is the server processing the request and refusing its shape - a capability."""
+    transport = _transport(lambda request: httpx.Response(400, json={"error": "no vision"}))
 
     support = await client.probe_vision_support(_ENDPOINT, None, "text-model", transport=transport)
 
     assert support.ok is False
     assert "does not accept images" in support.message
+
+
+async def test_a_server_that_errors_on_the_image_probe_is_reported_as_broken_not_blind() -> None:
+    """A 5xx says the endpoint failed, and says nothing about what it can see.
+
+    This used to read as "does not accept images", which told a user with a crashing
+    server that their vision model was blind - a diagnosis they could only disprove by
+    distrusting the settings screen. An unreadable reply is the same: an outage wearing
+    a capability verdict.
+    """
+    transport = _transport(lambda request: httpx.Response(500, json={"error": "model crashed"}))
+
+    support = await client.probe_vision_support(_ENDPOINT, None, "text-model", transport=transport)
+
+    assert support.ok is False
+    assert support.message == "The tutor endpoint returned an error."
+    assert "does not accept images" not in support.message
 
 
 async def test_a_vision_probe_never_raises() -> None:
@@ -336,6 +435,32 @@ async def test_a_vision_probe_never_raises() -> None:
 
     assert support.ok is False
     assert support.message
+
+
+async def test_both_capability_probes_are_bounded_in_time_and_tokens() -> None:
+    """The probes run under someone's cursor on the settings screen.
+
+    They used to inherit `CHAT_TIMEOUT` and `TOOL_TIMEOUT` - minutes of patience budgeted
+    for work nobody is watching - so a hung endpoint held the screen for exactly that
+    long, against the module's own note that probe timeouts are short. Their answers are
+    a tool call and a five-digit number, so a token ceiling travels with the deadline.
+    """
+    seen: list[tuple[float | None, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append((request.extensions.get("timeout", {}).get("read"), body.get("max_tokens")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "48213"}}]})
+
+    await client.probe_vision_support(_ENDPOINT, None, "m", transport=_transport(handler))
+    await client.probe_tool_support(_ENDPOINT, None, "m", transport=_transport(handler))
+
+    assert client.CAPABILITY_PROBE_TIMEOUT.read < client.CHAT_TIMEOUT.read
+    assert client.CAPABILITY_PROBE_TIMEOUT.read < client.TOOL_TIMEOUT.read
+    assert len(seen) == 2
+    for timeout_read, max_tokens in seen:
+        assert timeout_read == client.CAPABILITY_PROBE_TIMEOUT.read
+        assert max_tokens == client._PROBE_MAX_TOKENS
 
 
 # --------------------------------------------------------------------------------------
@@ -376,7 +501,10 @@ def _recorder(
         sent.append(body)
         declared = body.get("response_format") or {}
         status = statuses.get(str(declared.get("type", "none")), 200)
-        return httpx.Response(status, json=_OK if status == 200 else {"error": "nope"})
+        # A refusing server names the thing it refused, and the ladder only trusts a 400
+        # that does: an anonymous 400 is a request problem, not a capability signal.
+        refusal = {"error": {"message": "response_format is not supported"}}
+        return httpx.Response(status, json=_OK if status == 200 else refusal)
 
     return _transport(handler), sent
 
@@ -453,6 +581,34 @@ async def test_a_refusal_is_remembered_so_the_next_call_does_not_pay_for_it_agai
         "json_object",
         "json_object",
     ]
+
+
+async def test_a_400_that_does_not_blame_the_format_is_an_error_not_a_demotion() -> None:
+    """A 400 also means "the prompt does not fit the context window".
+
+    That one is about this request, not this endpoint: retrying it weaker resends the
+    same oversized prompt, and recording a demotion would permanently switch constrained
+    decoding off because one document was long. Only a body that names the format - the
+    way every refusing server does - is a capability signal.
+    """
+    sent: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            400, json={"error": {"message": "the request exceeds the context window"}}
+        )
+
+    transport = _transport(handler)
+
+    with pytest.raises(UpstreamError):
+        await _complete(transport, schema=_SCHEMA)
+    with pytest.raises(UpstreamError):
+        await _complete(transport, schema=_SCHEMA)
+
+    # One request per call, both at the top rung: the ladder was neither walked nor
+    # remembered, so a shorter document afterwards still gets the strict schema.
+    assert [body["response_format"]["type"] for body in sent] == ["json_schema", "json_schema"]
 
 
 async def test_a_400_with_no_format_left_to_drop_is_reported_rather_than_retried() -> None:

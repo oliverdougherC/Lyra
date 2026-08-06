@@ -24,6 +24,7 @@ and any log line this module writes, never contain the endpoint URL or the API k
 import base64
 import json
 import logging
+import threading
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Literal
@@ -39,6 +40,20 @@ logger = logging.getLogger(__name__)
 # are not. The probe timeouts are short so a dead host cannot hold the settings screen.
 CHAT_TIMEOUT = httpx.Timeout(300.0, connect=10.0)
 PROBE_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+
+# The capability probes are real inference calls, so they cannot share `PROBE_TIMEOUT`
+# with the models-list request - a small local model can legitimately spend that long on
+# one reply. But they run under someone's cursor on the settings screen, which is why they
+# must not inherit `CHAT_TIMEOUT` or `TOOL_TIMEOUT` either: both are minutes long, and a
+# hung endpoint held the screen for exactly that long. Bounded in seconds, alongside a
+# token ceiling below, because a probe's answer is a tool call or a five-digit number.
+CAPABILITY_PROBE_TIMEOUT = httpx.Timeout(60.0, connect=5.0)
+
+# Room for a short reasoning preamble plus the tiny answer either probe asks for. A
+# reasoning model that thinks past this ceiling reports as "accepted but did not answer",
+# which is the honest reading: an endpoint that cannot produce a five-digit answer within
+# 256 tokens is not one recognition or verification can lean on.
+_PROBE_MAX_TOKENS = 256
 
 # A tool turn is patient where a chat turn cannot be. Nobody is waiting on a verification
 # pass, and its later turns carry the whole tool transcript, so generation gets slower as
@@ -80,8 +95,9 @@ DETERMINISTIC_TEMPERATURE = 0.0
 # nothing else, which is where this module was before.
 #
 # There is no header advertising which of these a server implements, the same problem
-# `probe_tool_support` has, so support is discovered by being refused. A 400 carrying a
-# `response_format` demotes the endpoint one rung for the life of the process.
+# `probe_tool_support` has, so support is discovered by being refused. A 400 whose body
+# blames the `response_format` demotes the endpoint one rung for the life of the process,
+# or until the settings route calls `reset_json_support` on a configuration change.
 JSON_SCHEMA = "json_schema"
 JSON_OBJECT = "json_object"
 JSON_UNCONSTRAINED = "unconstrained"
@@ -91,7 +107,21 @@ _JSON_LADDER = (JSON_SCHEMA, JSON_OBJECT, JSON_UNCONSTRAINED)
 # demotions are recorded: a success says nothing about whether a *stronger* form would
 # also have worked, and caching it as a ceiling would cap a schema request at
 # `json_object` because some earlier schemaless call happened to succeed.
+#
+# Guarded by a lock because it is written from wherever a completion happens to run:
+# ingestion and recognition workers each own a thread with its own event loop, while chat
+# and the probes run on the server's. Dict access is atomic enough today, but "atomic
+# enough on this interpreter" is not a contract, and the lock makes read-floor and
+# record-demotion visibly consistent instead of accidentally so.
 _json_floor: dict[tuple[str, str | None], str] = {}
+_json_floor_lock = threading.Lock()
+
+# A 400 carrying a `response_format` is only a capability signal when the server says the
+# format is what it refused. The same status also means "prompt exceeds the context
+# window", and demoting on that would let one oversized document permanently switch off
+# constrained decoding for the rest of the process. Servers name the thing they refused:
+# llama.cpp complains about the grammar, others echo `response_format` or `schema` back.
+_FORMAT_COMPLAINTS = ("response_format", "json_schema", "schema", "grammar")
 
 # Statuses that may mean "I do not implement that `response_format`". A 400 says so as
 # clearly as anything does. A 500 is included because llama.cpp - the runtime this is
@@ -108,6 +138,9 @@ _ERROR_NOT_FOUND = "The tutor endpoint path looks wrong. The URL should end in /
 _ERROR_UPSTREAM = "The tutor endpoint returned an error."
 _ERROR_UNREADABLE = "The tutor endpoint returned a response that could not be read."
 _ERROR_NO_TOOLS = "The tutor endpoint does not accept tool calls."
+_ERROR_TRUNCATED = (
+    "The tutor endpoint's reply hit the output-token ceiling and was cut off before it finished."
+)
 
 # The smallest tool that cannot be answered from prose. Addition is chosen so a model
 # that ignores the tool and answers anyway is still obviously not calling it.
@@ -339,6 +372,11 @@ def _mapped_error(exc: Exception) -> UpstreamError:
 
     The endpoint URL and the API key are deliberately absent from every branch: these
     messages reach the browser, and `httpx` puts the full request URL in its own strings.
+
+    A status failure keeps its status on the error as `upstream_status`. The message is
+    written for the user and deliberately does not say the number, but `_is_refusal` needs
+    it: a 400 rejecting a request's shape and a 500 from a server mid-collapse both arrive
+    as `_ERROR_UPSTREAM`, and only one of them says anything about capability.
     """
     if isinstance(exc, httpx.TimeoutException):
         return UpstreamError(_ERROR_TIMEOUT)
@@ -347,11 +385,14 @@ def _mapped_error(exc: Exception) -> UpstreamError:
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status in (401, 403):
-            return UpstreamError(_ERROR_UNAUTHORIZED)
-        if status == 404:
-            return UpstreamError(_ERROR_NOT_FOUND)
-        logger.warning("Tutor endpoint returned status %s", status)
-        return UpstreamError(_ERROR_UPSTREAM)
+            error = UpstreamError(_ERROR_UNAUTHORIZED)
+        elif status == 404:
+            error = UpstreamError(_ERROR_NOT_FOUND)
+        else:
+            logger.warning("Tutor endpoint returned status %s", status)
+            error = UpstreamError(_ERROR_UPSTREAM)
+        error.upstream_status = status  # type: ignore[attr-defined]
+        return error
     return UpstreamError(_ERROR_UNREACHABLE)
 
 
@@ -371,9 +412,10 @@ def _chat_body(
     what keeps the Phase 1 conversation working against endpoints that would reject it.
 
     `max_tokens` is omitted the same way, and for a related reason: a ceiling belongs to the
-    caller that has one. Only text recognition does, where a dense page can send the model
-    into a repetition loop and the ceiling is what turns that into a failed page rather than
-    a request that never ends.
+    caller that has one. Text recognition does, where a dense page can send the model into a
+    repetition loop and the ceiling is what turns that into a failed page rather than a
+    request that never ends; the capability probes do too, because their answers are tiny
+    and someone is watching the settings screen while they run.
 
     `temperature` and `response_format` follow the same rule: a caller that has no opinion
     sends nothing and gets the server's own behaviour. `temperature` is written out even
@@ -394,8 +436,15 @@ def _chat_body(
 
 
 def reset_json_support() -> None:
-    """Forget what every endpoint was found to support. For tests, and for a settings change."""
-    _json_floor.clear()
+    """Forget what every endpoint was found to support.
+
+    Called from tests, and by the settings route when the endpoint or model changes: the
+    floor was learned against whatever served the old configuration, and a URL says
+    nothing about what is behind it now. Keeping the record would let one stale refusal
+    quietly cap constrained decoding on a server that supports it.
+    """
+    with _json_floor_lock:
+        _json_floor.clear()
 
 
 def _json_levels(endpoint: str, model: str | None, schema: JsonSchema | None) -> list[str]:
@@ -412,15 +461,28 @@ def _json_levels(endpoint: str, model: str | None, schema: JsonSchema | None) ->
     if schema is None:
         return [JSON_UNCONSTRAINED]
     ladder = list(_JSON_LADDER)
-    floor = _json_floor.get((endpoint, model))
+    with _json_floor_lock:
+        floor = _json_floor.get((endpoint, model))
     start = ladder.index(floor) if floor is not None else 0
     return ladder[start:]
 
 
 def _demote_json(endpoint: str, model: str | None, level: str) -> None:
     """Record that this endpoint refused `level`, so nothing asks for it again."""
-    _json_floor[(endpoint, model)] = _JSON_LADDER[_JSON_LADDER.index(level) + 1]
+    with _json_floor_lock:
+        _json_floor[(endpoint, model)] = _JSON_LADDER[_JSON_LADDER.index(level) + 1]
     logger.info("Tutor endpoint refused %s replies; using the next weaker form", level)
+
+
+def _names_a_format(body: str) -> bool:
+    """Whether a 400 body blames the `response_format` rather than something else.
+
+    Substring rather than structure, because error bodies have none worth trusting: what
+    is stable is that a server refusing a format says which thing it refused, in whatever
+    envelope it wraps its errors in.
+    """
+    lowered = body.lower()
+    return any(marker in lowered for marker in _FORMAT_COMPLAINTS)
 
 
 def _response_format(level: str, schema: JsonSchema | None) -> dict[str, object] | None:
@@ -438,11 +500,34 @@ def _response_format(level: str, schema: JsonSchema | None) -> dict[str, object]
     return None
 
 
+def _stream_error(error: object) -> UpstreamError:
+    """The in-band failure frame, turned into the error it should always have been.
+
+    llama.cpp cannot change the HTTP status once streaming has begun, so a mid-generation
+    failure - the model crashing, the prompt overflowing the context window during
+    processing - arrives as a `data: {"error": ...}` frame inside a 200 response. The
+    server's own message is kept because it is the only diagnosis that exists: "the
+    endpoint returned an error" would send the user to check a connection that is fine.
+    """
+    detail = error.get("message") if isinstance(error, dict) else error
+    text = str(detail).strip() if isinstance(detail, (str, int, float)) else ""
+    if not text:
+        return UpstreamError(_ERROR_UPSTREAM)
+    return UpstreamError(f"The tutor endpoint failed mid-reply: {text}")
+
+
 def _delta_fields(payload: str) -> tuple[str, str]:
     """Pull one SSE data payload apart into its `(content, reasoning)` text.
 
     Either half is an empty string when the frame does not carry it, which is the common
     case: a frame holds one or the other, not both.
+
+    Raises:
+        UpstreamError: The frame is an in-band error, or parses as JSON but not as a
+            chat-completions frame. Only unparseable text is tolerated silently - that is
+            keep-alive noise - because a frame that is valid JSON in the wrong shape is a
+            server speaking a different protocol, and reading it as noise would end the
+            stream looking like a short but successful reply.
     """
     try:
         frame = json.loads(payload)
@@ -451,12 +536,17 @@ def _delta_fields(payload: str) -> tuple[str, str]:
         return "", ""
     if not isinstance(frame, dict):
         return "", ""
+    if "error" in frame:
+        raise _stream_error(frame["error"])
     choices = frame.get("choices") or []
     if not choices:
         return "", ""
-    delta = choices[0].get("delta") or {}
+    first = choices[0]
+    if not isinstance(first, dict):
+        raise UpstreamError(_ERROR_UNREADABLE)
+    delta = first.get("delta") or {}
     if not isinstance(delta, dict):
-        return "", ""
+        raise UpstreamError(_ERROR_UNREADABLE)
 
     content = delta.get("content")
     reasoning = next(
@@ -492,11 +582,14 @@ async def stream_chat(
         `reasoning`, ending at the upstream `[DONE]` frame.
 
     Raises:
-        UpstreamError: The endpoint was unreachable, slow, or returned a non-2xx status.
+        UpstreamError: The endpoint was unreachable, slow, returned a non-2xx status, or
+            reported a failure in-band as a `data: {"error": ...}` frame - which is how
+            llama.cpp says anything once a 200 and half a reply are already on the wire.
     """
     url = f"{_base_url(endpoint)}/chat/completions"
     body = _chat_body(model, messages, stream=True)
     splitter = _ReasoningTagSplitter()
+    finished = False
     async with _client(CHAT_TIMEOUT, api_key, transport) as client:
         try:
             async with client.stream("POST", url, json=body) as response:
@@ -509,12 +602,23 @@ async def stream_chat(
                         continue
                     payload = line[len("data:") :].strip()
                     if payload == "[DONE]":
+                        finished = True
                         break
                     content, reasoning = _delta_fields(payload)
                     if reasoning:
                         yield StreamDelta("reasoning", reasoning)
                     for delta in splitter.feed(content) if content else ():
                         yield delta
+                if not finished:
+                    # A connection that closes cleanly without `[DONE]` looks exactly like
+                    # a short but complete reply, so the one place that can tell them
+                    # apart says so. Logged rather than raised: the text already reached
+                    # the reader, and yanking it back with an error would cost a plausibly
+                    # complete answer to punish a missing terminator.
+                    logger.warning(
+                        "Tutor endpoint stream ended without a [DONE] frame; "
+                        "the reply may be incomplete"
+                    )
                 for delta in splitter.flush():
                     yield delta
         except httpx.HTTPError as exc:
@@ -532,6 +636,7 @@ async def complete(
     temperature: float | None = None,
     schema: JsonSchema | None = None,
     request_timeout: httpx.Timeout | None = None,
+    fail_on_truncation: bool = False,
 ) -> str:
     """Run a single non-streaming completion and return the assistant message content.
 
@@ -555,9 +660,15 @@ async def complete(
         request_timeout: The httpx timeouts for this call, which separate connect from
             read. Defaults to `CHAT_TIMEOUT`, the right number only when someone is
             watching a reply arrive; every worker-side caller passes `BACKGROUND_TIMEOUT`.
+        fail_on_truncation: Raise when the server reports it cut the reply off at the
+            token ceiling (`finish_reason: "length"`). Off by default because chat and
+            the probes read a partial reply for what it is; a caller that *stores* the
+            reply - transcription above all - must set it, or a half-read page is filed
+            as if it were the whole page.
 
     Raises:
-        UpstreamError: The endpoint failed, or its reply had no readable message content.
+        UpstreamError: The endpoint failed, its reply had no readable message content,
+            or the reply was truncated and the caller asked for that to be fatal.
     """
     url = f"{_base_url(endpoint)}/chat/completions"
     async with _client(request_timeout or CHAT_TIMEOUT, api_key, transport) as client:
@@ -571,6 +682,12 @@ async def complete(
     content = (choices[0].get("message") or {}).get("content")
     if not isinstance(content, str):
         raise UpstreamError(_ERROR_UNREADABLE)
+    if choices[0].get("finish_reason") == "length":
+        # The server said, in the one field that says it, that this is not the whole
+        # reply. Callers that only read the text would otherwise never know.
+        if fail_on_truncation:
+            raise UpstreamError(_ERROR_TRUNCATED)
+        logger.warning("Tutor endpoint reply hit the output-token ceiling and was cut off")
     return strip_reasoning(content)
 
 
@@ -586,12 +703,17 @@ async def _post_constrained(
 ) -> dict[str, object]:
     """Post one completion, stepping down the constraint ladder if the endpoint refuses.
 
-    A 400 is read as "this server does not implement that `response_format`", the same
-    reading `complete_with_tools` gives a 400 carrying tool definitions, and for the same
-    reason: an OpenAI-compatible server advertises nothing, so the only way to learn what
-    it takes is to be refused. The cost of reading it wrong is bounded and one-directional
-    - the request is retried in a weaker form, and the weakest form is what this module
-    sent before any of this existed.
+    A 400 whose body names the format is read as "this server does not implement that
+    `response_format`", the same reading `complete_with_tools` gives a 400 carrying tool
+    definitions, and for the same reason: an OpenAI-compatible server advertises nothing,
+    so the only way to learn what it takes is to be refused. The cost of reading it wrong
+    is bounded and one-directional - the request is retried in a weaker form, and the
+    weakest form is what this module sent before any of this existed.
+
+    The body check is what keeps the demotion honest. A 400 also means "the prompt does
+    not fit the context window", and that one is about *this request*, not about the
+    endpoint: retrying it weaker sends the same oversized prompt twice more, and recording
+    it would permanently switch constrained decoding off because one document was long.
 
     Returns:
         The decoded response body.
@@ -611,7 +733,11 @@ async def _post_constrained(
         )
         try:
             response = await client.post(url, json=body)
-            if response.status_code in _REFUSAL_STATUSES and level != JSON_UNCONSTRAINED:
+            if (
+                response.status_code in _REFUSAL_STATUSES
+                and level != JSON_UNCONSTRAINED
+                and (response.status_code != _REFUSED or _names_a_format(response.text))
+            ):
                 # Remembered only for a 400. A 500 is retried in the weaker form but not
                 # recorded, because the two things that produce one are not distinguishable
                 # from here: llama.cpp answers 500 when it cannot compile a schema into a
@@ -673,6 +799,8 @@ async def complete_with_tools(
     *,
     transport: httpx.AsyncBaseTransport | None = None,
     temperature: float | None = None,
+    max_tokens: int | None = None,
+    request_timeout: httpx.Timeout | None = None,
 ) -> AssistantMessage:
     """Run one non-streaming turn with tool definitions attached.
 
@@ -687,6 +815,10 @@ async def complete_with_tools(
         messages: OpenAI-shaped messages, including any prior `assistant` turns carrying
             `tool_calls` and the `tool` messages answering them.
         tools: OpenAI-shaped tool definitions.
+        max_tokens: Ceiling on the reply, omitted when the caller has none.
+        request_timeout: The httpx timeouts for this call. Defaults to `TOOL_TIMEOUT`,
+            which is right for the verification loop and minutes too patient for the
+            capability probe, which passes its own.
 
     Returns:
         The assistant's content and the tool calls it asked for, either of which may be
@@ -697,12 +829,18 @@ async def complete_with_tools(
             is the strongest available signal that it does not implement tool calling.
             It can also mean something else was wrong with the request, and the cost of
             reading it the wrong way is bounded: verification degrades and reports itself
-            as not run, while solving is unaffected.
+            as not run, while solving is unaffected. This function cannot see the loop,
+            so a caller that has already completed tool rounds on this endpoint must
+            reclassify - `tools._drive` does - because a 400 ten rounds in is a
+            transcript outgrowing the context window, not an endpoint that suddenly
+            forgot how to call tools.
         UpstreamError: Any other transport or status failure.
     """
     url = f"{_base_url(endpoint)}/chat/completions"
-    body = _chat_body(model, messages, stream=False, tools=tools, temperature=temperature)
-    async with _client(TOOL_TIMEOUT, api_key, transport) as client:
+    body = _chat_body(
+        model, messages, stream=False, tools=tools, max_tokens=max_tokens, temperature=temperature
+    )
+    async with _client(request_timeout or TOOL_TIMEOUT, api_key, transport) as client:
         try:
             response = await client.post(url, json=body)
             if response.status_code == 400:
@@ -787,7 +925,9 @@ async def probe_vision_support(
     report something only visible in the image is the only way to tell those apart.
 
     Returns the outcome as data rather than raising, so a settings screen can render all
-    three states.
+    three states. Runs under `CAPABILITY_PROBE_TIMEOUT` with a small token ceiling: the
+    settings screen is open in front of someone, and an endpoint that needs minutes to
+    read back five digits has answered the question the slow way.
     """
     prompt = (
         "This image contains a number. Reply with that number and nothing else. "
@@ -800,6 +940,8 @@ async def probe_vision_support(
             model,
             [image_message(prompt, _probe_image())],
             transport=transport,
+            max_tokens=_PROBE_MAX_TOKENS,
+            request_timeout=CAPABILITY_PROBE_TIMEOUT,
         )
     except UpstreamError as exc:
         # A server with no vision path commonly rejects the content-part array outright,
@@ -814,8 +956,14 @@ async def probe_vision_support(
 
 
 def _is_refusal(exc: UpstreamError) -> bool:
-    """Whether an upstream failure reads as "this request shape is not supported"."""
-    return exc.message in (_ERROR_UPSTREAM, _ERROR_UNREADABLE)
+    """Whether an upstream failure reads as "this request shape is not supported".
+
+    Only a 400 does: the server processed the request and rejected its shape. A 5xx, a
+    timeout, or an unreadable body says the *endpoint* failed, and reporting those as "no
+    vision" told a user with a crashing server that their vision model could not see -
+    a false diagnosis they could only disprove by ignoring the settings screen.
+    """
+    return getattr(exc, "upstream_status", None) == _REFUSED
 
 
 async def probe_tool_support(
@@ -833,7 +981,9 @@ async def probe_tool_support(
     see whether one comes back.
 
     Returns the outcome as data rather than raising, so the settings screen can render
-    all three states.
+    all three states. Runs under `CAPABILITY_PROBE_TIMEOUT` rather than `TOOL_TIMEOUT`:
+    the latter is ten minutes of patience budgeted for a verification loop nobody is
+    watching, and this call has the settings screen open in front of someone.
     """
     messages: list[dict[str, object]] = [
         {
@@ -843,7 +993,14 @@ async def probe_tool_support(
     ]
     try:
         answer = await complete_with_tools(
-            endpoint, api_key, model, messages, [_PROBE_TOOL], transport=transport
+            endpoint,
+            api_key,
+            model,
+            messages,
+            [_PROBE_TOOL],
+            transport=transport,
+            max_tokens=_PROBE_MAX_TOKENS,
+            request_timeout=CAPABILITY_PROBE_TIMEOUT,
         )
     except ToolsUnsupportedError:
         return ToolSupport(ok=False, message=_PROBE_REFUSED)

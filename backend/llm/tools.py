@@ -78,6 +78,10 @@ _MISSING_ARGUMENT = "Missing required argument: {name}."
 _TIMEOUT_DETAIL = "Checking took too long and was stopped."
 _DEPTH_DETAIL = "Checking stopped after {rounds} rounds of tool calls."
 _UPSTREAM_DETAIL = "The tutor endpoint could not be reached."
+_MID_LOOP_DETAIL = (
+    "The tutor endpoint rejected a request partway through checking, most likely because "
+    "the tool transcript outgrew the model's context window."
+)
 
 
 @dataclass(frozen=True)
@@ -458,7 +462,7 @@ async def _drive(
 ) -> ToolLoopResult:
     """The loop itself. Appends to `calls` as it goes, so a caller can read them on a cut."""
     tools = tool_schemas()
-    for _ in range(max_depth):
+    for round_index in range(max_depth):
         try:
             answer = await complete_with_tools(
                 endpoint,
@@ -470,12 +474,30 @@ async def _drive(
                 temperature=DETERMINISTIC_TEMPERATURE,
             )
         except ToolsUnsupportedError as exc:
+            if round_index:
+                # The client reads every 400 on a tools-carrying request as "no tool
+                # support", and on the first request that is the best available reading.
+                # It cannot be the right one here: this endpoint has already answered
+                # tool rounds in this very loop, so a 400 now is the request going bad -
+                # a transcript grown past the context window is the common way - and
+                # calling it "does not accept tool calls" would have the settings screen
+                # and the verdict contradict each other over a capability that was just
+                # demonstrated.
+                return ToolLoopResult(
+                    content="",
+                    calls=tuple(calls),
+                    stopped=UPSTREAM_FAILED,
+                    detail=_MID_LOOP_DETAIL,
+                )
             return ToolLoopResult(
                 content="", calls=tuple(calls), stopped=NO_TOOL_SUPPORT, detail=exc.message
             )
         except Exception as exc:
             # CancelledError is a BaseException, so the timeout above still passes through.
-            logger.warning("Tool loop could not reach the tutor endpoint: %s", type(exc).__name__)
+            # `exception` rather than `warning`: this branch catches real bugs alongside
+            # network weather, and a class name with no traceback made the two
+            # indistinguishable in the log.
+            logger.exception("Tool loop could not reach the tutor endpoint")
             return ToolLoopResult(
                 content="",
                 calls=tuple(calls),
@@ -489,7 +511,14 @@ async def _drive(
 
         conversation.append(_assistant_turn(answer))
         for call in answer.tool_calls:
-            # Handlers block on a subprocess, so they run off the event loop.
+            # Handlers block on a subprocess, so they run off the event loop. Known cost:
+            # `to_thread` cannot be cancelled once the handler is running, so when the
+            # wall clock above cuts the loop mid-dispatch, a hung sympy call keeps its
+            # worker thread until it finishes on its own. Tolerated because the handlers
+            # bound themselves (cas runs under its own subprocess timeout), verification
+            # is rare enough that a leak per timeout does not accumulate, and the
+            # alternative - a kill-able subprocess per call - buys a daemon thread's
+            # worth of safety at a process-management price this loop does not yet earn.
             recorded = await asyncio.to_thread(_dispatch, call)
             calls.append(recorded)
             conversation.append(_tool_turn(call, recorded))

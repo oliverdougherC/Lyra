@@ -100,6 +100,52 @@ async def test_a_blank_page_transcribes_to_nothing_rather_than_failing() -> None
     )
 
 
+async def test_a_truncated_reply_fails_the_page_rather_than_being_stored() -> None:
+    """`finish_reason: "length"` on a transcription is half a page, not a page.
+
+    Stored, it would enter retrieval wearing a whole page's name and nothing downstream
+    could ever tell. The rag-pipeline document mandates the ceiling for exactly this: a
+    reply still running at the token limit is a repetition loop, and the loop's partial
+    output must fail this one page loudly.
+    """
+    truncated = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": "# C.1 Basic Discrete"}, "finish_reason": "length"}
+                ]
+            },
+        )
+    )
+
+    with pytest.raises(UpstreamError) as caught:
+        await transcribe.transcribe_page(_LOCAL, None, "vision", _PAGE, transport=truncated)
+
+    assert "output-token ceiling" in caught.value.message
+
+
+async def test_every_page_request_carries_the_output_ceiling() -> None:
+    """Without `max_tokens`, a repetition loop is a request that never ends.
+
+    The number mirrors the specialist runtime's own ceiling because it encodes the same
+    fact about the same input: no single page transcribes to more than this.
+    """
+    import json
+
+    sent: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "78 Matrices"}}]})
+
+    await transcribe.transcribe_page(
+        _LOCAL, None, "vision", _PAGE, transport=httpx.MockTransport(handler)
+    )
+
+    assert sent[0]["max_tokens"] == transcribe.MAX_TRANSCRIPTION_TOKENS
+
+
 def test_the_prompt_pins_one_notation_for_tables() -> None:
     """Asked only to "transcribe", a model picks a notation per page: measured over one
     eight-page appendix, the same document's tables came back as bare alternating lines, as
