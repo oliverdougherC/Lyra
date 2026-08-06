@@ -1,0 +1,127 @@
+{
+  "document": "Kuttler-LinearAlgebra-AFirstCourse-2017A",
+  "source": "Kuttler, Linear Algebra: A First Course (2017A), 608 pages, CC BY",
+  "about": [
+    "Hand-written ground truth for retrieval over one real textbook. Every expected section",
+    "was read before its question was written, and every negative control was checked to be",
+    "absent from the book rather than assumed to be.",
+    "",
+    "expect_section is a path of outline titles, parent first, in the shape section_path takes.",
+    "It is a path rather than a title because three of this book's section titles are not",
+    "unique: Linear Transformations, Isomorphisms, and The Kernel And Image Of A Linear Map",
+    "each appear under two different chapters. A flat section_title cannot tell those apart,",
+    "which is most of the argument for the change.",
+    "",
+    "expect_section null means the answer is not in this book at all. Those are controls: KNN",
+    "always returns k neighbours, so the measurement there is not whether something came back",
+    "but how similar the best thing that came back was."
+  ],
+  "questions": [
+    {
+      "id": "gaussian-elimination",
+      "question": "What are the elementary row operations used in Gaussian elimination?",
+      "expect_section": "Systems of Equations / Systems Of Equations, Algebraic Procedures"
+    },
+    {
+      "id": "lu-factorization",
+      "question": "What is an LU factorization of a matrix?",
+      "expect_section": "Matrices / LU Factorization",
+      "note": "The outline points at page 110 and the heading is on 111, so this also exercises the one-page offset in PDF outline destinations."
+    },
+    {
+      "id": "determinant-cofactor",
+      "question": "How is the determinant of a matrix computed by cofactor expansion?",
+      "expect_section": "Determinants / Basic Techniques and Properties"
+    },
+    {
+      "id": "cross-product",
+      "question": "How do you compute the cross product of two vectors in R3?",
+      "expect_section": "Rn / The Cross Product"
+    },
+    {
+      "id": "right-hand-system",
+      "question": "What does it mean for three vectors to form a right hand system?",
+      "expect_section": "Rn / The Cross Product",
+      "note": "Definition 4.47, one page into the section. A narrower target than the topic questions."
+    },
+    {
+      "id": "gram-schmidt",
+      "question": "What is the Gram-Schmidt process and what does it produce?",
+      "expect_section": "Rn / Orthogonality and the Gram Schmidt Process"
+    },
+    {
+      "id": "eigenvalues",
+      "question": "How do you find the eigenvalues of a matrix?",
+      "expect_section": "Spectral Theory / Eigenvalues and Eigenvectors of a Matrix"
+    },
+    {
+      "id": "diagonalization",
+      "question": "What does it mean for a matrix to be diagonalizable?",
+      "expect_section": "Spectral Theory / Diagonalization"
+    },
+    {
+      "id": "polar-form",
+      "question": "What is the polar form of a complex number?",
+      "expect_section": "Complex Numbers / Polar Form"
+    },
+    {
+      "id": "spherical-coordinates",
+      "question": "How are spherical coordinates related to rectangular coordinates?",
+      "expect_section": "Some Curvilinear Coordinate Systems / Spherical and Cylindrical Coordinates"
+    },
+    {
+      "id": "well-ordering",
+      "question": "What is the well ordering principle?",
+      "expect_section": "Some Prerequisite Topics / Well Ordering and Induction",
+      "note": "In an appendix numbered A.2 rather than with a digit, which is why a section number cannot be inferred from a chapter's position in the outline."
+    },
+    {
+      "id": "kernel-in-rn",
+      "question": "What is the kernel of a linear transformation from Rn to Rm?",
+      "expect_section": "Linear Transformations / The Kernel And Image Of A Linear Map",
+      "note": "Disambiguation pair with kernel-in-vector-spaces. Both sections carry the same title under different chapters."
+    },
+    {
+      "id": "kernel-in-vector-spaces",
+      "question": "What is the kernel of a linear map between abstract vector spaces?",
+      "expect_section": "Vector Spaces / The Kernel And Image Of A Linear Map",
+      "note": "Disambiguation pair with kernel-in-rn."
+    },
+    {
+      "id": "explicit-section-reference",
+      "question": "Use the method from section 4.11 to turn a linearly independent set into an orthonormal one.",
+      "expect_section": "Rn / Orthogonality and the Gram Schmidt Process",
+      "note": "Written to isolate the structural lookup and does not: it also says 'linearly independent set into an orthonormal one', which is enough for the KNN to rank it first without reading the number at all. Kept as measured, with bare-section-reference and bare-chapter-reference added to test what this one was meant to."
+    },
+    {
+      "id": "bare-section-reference",
+      "question": "What does section 2.2 cover?",
+      "expect_section": "Matrices / LU Factorization",
+      "note": "Almost no domain vocabulary, so a similarity search has nothing to work with and the number is the only route to the answer. Section 2.2 is written on the page as a running header; the outline entry carries no number at all."
+    },
+    {
+      "id": "bare-chapter-reference",
+      "question": "Summarize what section 4.9 is about.",
+      "expect_section": "Rn / The Cross Product",
+      "note": "Pair with bare-section-reference."
+    },
+    {
+      "id": "explicit-chapter-reference",
+      "question": "Solve this using the results of chapter 7 on spectral theory.",
+      "expect_section": "Spectral Theory",
+      "note": "A whole chapter rather than a section, so the target range is wide and the interesting number is the rank rather than the hit."
+    },
+    {
+      "id": "control-laplace",
+      "question": "What is the Laplace transform of a unit step function?",
+      "expect_section": null,
+      "note": "Zero occurrences of 'laplace transform' in the book."
+    },
+    {
+      "id": "control-fourier",
+      "question": "How do you compute the Fourier series coefficients of a periodic signal?",
+      "expect_section": null,
+      "note": "Zero occurrences of 'fourier series' in the book."
+    }
+  ]
+}
