@@ -45,6 +45,21 @@ class Settings(BaseSettings):
     def embedding_model_path(self) -> Path:
         return self.models_dir / "nomic-embed-text-v1.5.Q8_0.gguf"
 
+    @property
+    def ocr_model_path(self) -> Path:
+        """The Unlimited-OCR language model. Absent unless the student asked for it."""
+        return self.models_dir / "unlimited-ocr-Q4_K_M.gguf"
+
+    @property
+    def ocr_mmproj_path(self) -> Path:
+        """Its multimodal projector. llama.cpp needs both files to load the model at all."""
+        return self.models_dir / "mmproj-unlimited-ocr-bf16.gguf"
+
+    @property
+    def ocr_installed(self) -> bool:
+        """Whether the specialist OCR path is available on this machine."""
+        return self.ocr_model_path.exists() and self.ocr_mmproj_path.exists()
+
     def ensure_directories(self) -> None:
         """Create the data directories. Called once on startup."""
         for directory in (

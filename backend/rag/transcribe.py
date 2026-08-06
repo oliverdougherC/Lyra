@@ -17,10 +17,12 @@ page that can fail on its own needs.
 """
 
 import logging
+import re
 
 from backend.core.errors import UpstreamError
 from backend.llm import client
 from backend.llm.locality import is_local_endpoint
+from backend.llm.ocr_server import MAX_OUTPUT_TOKENS, OCR_PROMPT, ocr_server
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +46,71 @@ REMOTE_MESSAGE = (
     "Reading pages sends an image of your document to your model endpoint, which is not on "
     "this machine. Acknowledge the endpoint in Settings first."
 )
+# What the specialist emits around its output when asked for special tokens.
+#
+# `<|det|>label [x0, y0, x1, y1]<|/det|>` prefixes each detected region, and the model's
+# end-of-sequence token arrives with the rest. Both bar shapes are matched because this
+# model family uses the full-width form.
+_DETECTION_MARKER = re.compile(r"<[|｜]det[|｜]>.*?<[|｜]/det[|｜]>", re.DOTALL)
+_CONTROL_TOKEN = re.compile(r"<[|｜][^<>]*?[|｜]>")
+
 NO_VISION_MESSAGE = (
     "The configured model cannot read images, so this page cannot be transcribed. "
     "Check the connection in Settings."
 )
+
+
+def _strip_special(text: str) -> str:
+    """Remove the control tokens the specialist emits and the layout markers it wraps.
+
+    `llama-server` is run with `--special` because this model carries its layout in special
+    tokens: without it the `<|det|>` markers vanish and, since the table cell tags are
+    special tokens too, a table arrives with its cells fused. The cost of asking for them
+    is that the end-of-sequence token arrives too, and the detection markers are geometry
+    rather than text.
+
+    The coordinates are dropped rather than kept because nothing downstream reads them yet.
+    Chunking, embedding, and citation all work on text, and a chunk carrying
+    `<|det|>table [266, 178, 751, 436]<|/det|>` would embed those numbers as if they were
+    words. They are recoverable by re-running the page if a later phase wants them.
+    """
+    # Markers before control tokens, and the order is load-bearing. The other way round,
+    # the generic rule eats the `<|det|>` delimiters first and leaves their contents behind
+    # as bare text, so every region arrives as `page_number [115, 106, 150, 119]774`.
+    without_markers = _DETECTION_MARKER.sub("", text)
+    return _CONTROL_TOKEN.sub("", without_markers).strip()
+
+
+async def transcribe_page_locally(image: bytes, *, transport: object | None = None) -> str:
+    """Read one page with the specialist model on this machine.
+
+    The same signature idea as `transcribe_page` minus the endpoint, because there is no
+    endpoint: the model runs here. That difference is the point. Nothing leaves the
+    machine, so there is no locality rule to apply and no acknowledgement to ask for, and
+    the page image of a student's document stays where the student's document is.
+
+    Args:
+        image: PNG bytes of one page, rendered at `render.RECOGNITION_DPI`.
+        transport: Test seam.
+
+    Returns:
+        The page's text, with the model's control and layout tokens removed.
+
+    Raises:
+        ConfigurationError: The weights or the runtime are missing.
+        UpstreamError: The local server answered with something unusable.
+    """
+    ocr_server.ensure_running()
+    message = client.image_message(OCR_PROMPT, image)
+    text = await client.complete(
+        f"{ocr_server.base_url}/v1",
+        None,
+        None,
+        [message],  # type: ignore[arg-type]
+        transport=transport,
+        max_tokens=MAX_OUTPUT_TOKENS,
+    )
+    return _strip_special(text)
 
 
 async def transcribe_page(

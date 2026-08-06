@@ -504,11 +504,36 @@ per document rather than something ingestion decides for the student.
 - [x] Accept PNG and JPG uploads. **Not WebP**, which was specified here and turns out not to be
       decodable by this PyMuPDF build, so accepting it would mean a second image dependency for a
       format a scan is unlikely to be in. Checked rather than assumed, and the specs now say so
-- [ ] Unlimited-OCR through llama.cpp, page-batched, as the specialist path. Resolve the serving
-      spike documented in rag-pipeline.md and record the outcome there
-- [ ] Pin a llama.cpp build and record the commit. `scripts/fetch_models.py` pins a release tag
-      today, which is not the same thing
-- [ ] Model download and management for the OCR weights, with progress and disk-space checks
+- [x] Pin a llama.cpp build and record the commit. Now **b10287**, which is exactly commit
+      `b06aa77`, the merge of the `max_tiles` fix. The fetcher asks an installed binary what it is
+      rather than trusting the directory name, and removes the build it replaces: every consumer
+      takes the first `llama-server` it finds, so `llama-b10235` sorted ahead of `llama-b10287` and
+      downloading the new one changed nothing until that was fixed
+- [x] Model download and management for the OCR weights, with progress and disk-space checks.
+      Opt-in behind `fetch_models.py --ocr`, because it is 2.8 GB for a path that is optional. The
+      disk check runs before anything is written: a download that fills the disk leaves a partial
+      file and a filesystem error rather than a refusal anyone can act on
+- [x] Resolve the serving spike documented in rag-pipeline.md and record the outcome there.
+      `scripts/ocr_spike.py` reads one page both ways and compares
+- [ ] Unlimited-OCR through llama.cpp, page-batched, as the specialist path. **Built and not
+      enabled**, on the strength of the measurement below
+
+**What the OCR spike found.** Two answers, and the second one settles the item.
+
+`llama-server` does serve this model with its chat template applied on the pinned build, so the
+upstream tokenization hazard is gone and the one-shot-per-page fallback is not needed. `--special`
+turns out to be mandatory and its absence is silent: llama-server suppresses special tokens by
+default and this model carries its layout in them, so without the flag a table arrives with its
+cells fused, 1943 characters against 2457 on the same page. With it, the server and the CLI agree
+to 0.9768 similarity, which meets the acceptance criterion.
+
+Then the specialist loses the comparison it exists to win. Over all eight pages of the scanned
+reference document: **18.5 seconds a page against the general path's 13.8**, with repetition loops
+on **five of eight** pages, the worst repeating one line 217 times. It is slower and it garbles most
+pages. R-SWA is still a draft upstream, so the decoder runs full multi-head attention, and
+llama.cpp has no `no_repeat_ngram_size` for the loops - both point at the same merge. The
+integration is kept, tested, and disconnected, and the measurement is recorded so the next attempt
+starts from a number rather than from the assumption that a specialist must be faster.
 - [ ] Chunk a dense reference table as something other than one chunk a page. The recognition
       acceptance run made this visible: eight pages of transform tables come back correct and
       searchable, but every page opens with the same running head and carries no headings to cut

@@ -290,18 +290,26 @@ def _chat_body(
     messages: list[dict[str, object]],
     stream: bool,
     tools: list[dict[str, object]] | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, object]:
     """Assemble a chat-completions body, omitting `model` when the user has not picked one.
 
     `tools` is omitted entirely when absent rather than sent empty. A server that does not
     implement tool calling should never see the field on an ordinary chat turn, which is
     what keeps the Phase 1 conversation working against endpoints that would reject it.
+
+    `max_tokens` is omitted the same way, and for a related reason: a ceiling belongs to the
+    caller that has one. Only text recognition does, where a dense page can send the model
+    into a repetition loop and the ceiling is what turns that into a failed page rather than
+    a request that never ends.
     """
     body: dict[str, object] = {"messages": messages, "stream": stream}
     if model is not None:
         body["model"] = model
     if tools:
         body["tools"] = tools
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
     return body
 
 
@@ -395,6 +403,7 @@ async def complete(
     messages: list[dict[str, object]],
     *,
     transport: httpx.AsyncBaseTransport | None = None,
+    max_tokens: int | None = None,
 ) -> str:
     """Run a single non-streaming completion and return the assistant message content.
 
@@ -406,7 +415,7 @@ async def complete(
         UpstreamError: The endpoint failed, or its reply had no readable message content.
     """
     url = f"{_base_url(endpoint)}/chat/completions"
-    body = _chat_body(model, messages, stream=False)
+    body = _chat_body(model, messages, stream=False, max_tokens=max_tokens)
     async with _client(CHAT_TIMEOUT, api_key, transport) as client:
         try:
             response = await client.post(url, json=body)

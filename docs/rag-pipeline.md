@@ -517,8 +517,17 @@ Support arrived through a stacked series of pull requests. Only the first is mer
 | Change | PR | State | Consequence if absent |
 |--------|----|-------|-----------------------|
 | Converter plus full-MHA decoder | [#24969](https://github.com/ggml-org/llama.cpp/pull/24969) | Merged 2026-06-24 | none, this is what makes the model load at all |
-| R-SWA in the decoder | [#24975](https://github.com/ggml-org/llama.cpp/pull/24975) | Open | Decoder runs full multi-head attention. The near-constant memory that makes 40-plus-page single-pass parsing viable is lost, so long contexts grow memory and slow down sharply. |
-| `max_tiles` fix | [#25614](https://github.com/ggml-org/llama.cpp/pull/25614) | Open | The projector's `preproc_max_tiles = 32` is ignored and llama.cpp falls back to DeepSeek-OCR v1's cap of 9. Tall or dense pages are split into a coarser tile grid than the reference, reducing accuracy. |
+| R-SWA in the decoder | [#24975](https://github.com/ggml-org/llama.cpp/pull/24975) | **Draft** | Decoder runs full multi-head attention. The near-constant memory that makes 40-plus-page single-pass parsing viable is lost, so long contexts grow memory and slow down sharply. |
+| `max_tiles` fix | [#25614](https://github.com/ggml-org/llama.cpp/pull/25614) | **Merged 2026-08-05** | The projector's `preproc_max_tiles = 32` was ignored in favour of DeepSeek-OCR v1's cap of 9. Now read from GGUF metadata. |
+
+The pin moved for that second row. `scripts/fetch_models.py` now pins **b10287**, which is
+exactly commit `b06aa77`, the merge of #25614 - and records the commit beside the tag,
+because a tag names a build rather than a state of the source. The fetcher asks an existing
+binary what it is with `--version` and replaces it when it is not the pin, and removes the
+old extraction rather than leaving it: every consumer takes the first `llama-server` it
+finds while walking the directory, so `llama-b10235` sorted ahead of `llama-b10287` and
+downloading the new build changed nothing until that was fixed. The embedding server was
+re-checked on the new build and produces the same vectors.
 
 **Decision: page-batched OCR, one page per request.** Phase 3 does not use one-shot long-horizon
 multi-page parsing, because that feature depends on R-SWA, which is not upstream. Page-at-a-time
@@ -541,13 +550,59 @@ the chat template made it run but degraded OCR quality.
 
 **Spike acceptance criteria:** on the pinned build, OCR a known scanned page through persistent
 `llama-server` and through one-shot `llama-mtmd-cli`, and confirm byte-identical or
-quality-equivalent text with the chat template applied. If llama-server cannot serve this model
-correctly, fall back to a single long-lived `llama-mtmd-cli` invocation per document batch and accept
-the reload cost. Record the outcome in this document.
+quality-equivalent text with the chat template applied.
 
-This spike now gates **only the specialist path**, not the phase. Transcription through the bundled
-vision model needs none of it, so Phase 3 can deliver scanned-document support and be measured
-before anyone touches a pinned llama.cpp build.
+#### Spike outcome: llama-server serves it, and the model still loses
+
+Run by `scripts/ocr_spike.py` on b10287 against page 2 of the scanned Fourier tables.
+
+**llama-server serves this model with `--chat-template deepseek-ocr` applied.** No `400`, no
+`number of bitmaps (1) does not match number of markers (0)`. The hazard from
+[#21022](https://github.com/ggml-org/llama.cpp/issues/21022) is gone on this build, so the
+fallback to one-shot `llama-mtmd-cli` per page is not needed.
+
+**`--special` is mandatory, and its absence is silent.** llama-server suppresses special
+tokens by default, and this model carries its layout in them. Without the flag the `<|det|>`
+markers vanish and, because the table cell tags are special tokens too, a table arrives with
+its cells fused: `Time Domain` and `Frequency Domain` come back as `Time DomainFrequency
+Domain`. Measured on one page: **1943 characters without it, 2457 with**. It is a
+server-only flag; `llama-mtmd-cli` rejects it and prints special tokens anyway. Asking for
+them means the caller strips the end-of-sequence token and the detection markers itself,
+which `rag/transcribe.py` does.
+
+With the flag on, the two paths agree to **0.9768** similarity. The remainder is
+sub-pixel drift in the detection coordinates and a handful of `i` versus `j` and `p` versus
+`k` token choices, where neither path is uniformly right. Quality-equivalent, as required.
+
+**And then the specialist loses the comparison that matters.** All eight pages of the same
+scanned document, against the general path's numbers from Stage 2b:
+
+| | General (configured vision model) | Specialist (Unlimited-OCR, b10287) |
+|---|---|---|
+| Seconds a page | **13.8** | **18.5** |
+| Pages with a repetition loop | 0 of 8 | **5 of 8** |
+| Worst loop | none | one line repeated 217 times |
+
+Page 4 is the clearest failure: 1111 characters of which a single line accounts for 217
+repeats. Pages 1, 3, 7 and 8 loop too. The output token ceiling is what ends them, exactly
+as this document said it would have to, but a page that ends by hitting a ceiling is a page
+that was not read.
+
+So the specialist is **built, downloadable, tested, and not enabled**. `rag/transcribe.py`
+carries `transcribe_page_locally` and `llm/ocr_server.py` manages the process, but
+`core/recognition.py` does not call them: routing recognition to a path that is 34% slower
+and garbles most pages would be shipping worse.
+
+**What would change the answer.** R-SWA (#24975) is still a draft, so the decoder runs full
+multi-head attention, which is what this document already predicted would make long contexts
+slow down sharply - and a page whose output loops is a long context. The repetition loops are
+the other half of the same problem: llama.cpp has no `no_repeat_ngram_size`, the DRY sampler
+is a weak substitute, and this document is explicit that tightening it garbles tables
+instead. Both point at the same merge. Re-run `scripts/ocr_spike.py` and the eight-page
+comparison when it lands.
+
+None of this reaches the student. Transcription through the configured vision model needed
+none of it, which is why the phase was sequenced to deliver that first.
 
 #### Post-processing
 

@@ -8,6 +8,12 @@ not. Recognition breaks that. A page costs seconds of model time, can fail on it
 is worth retrying on its own, which makes its state a row. `document_pages` is that row,
 and the counts on `documents` become a tally over it while a run is in flight.
 
+Pages go to the configured vision model, and the locality rule below governs. The
+specialist runtime in `llm/ocr_server.py` is deliberately **not** wired in here: it is
+built, downloadable, and measured, and the measurement says it loses. 18.5 seconds a page
+against the general path's 13.8, with repetition loops on five of the same eight pages.
+docs/rag-pipeline.md records the numbers and what has to change upstream first.
+
 **Recognition is opt-in per document and never happens on upload.** Two reasons, and the
 second is the one that matters. It is 13.4 seconds a page measured against the reference
 book, which is minutes for a problem set and hours for a textbook. And against a configured
