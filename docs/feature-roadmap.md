@@ -615,7 +615,9 @@ re-index on, and it is now a specific, reproducible case rather than a hunch.
       toward keys and solutions, which is the hybrid retrieval already on rag-pipeline.md's
       future-extensions list. A new embedding model costs a full re-index and an
       `embedding_model` identity change, and it should not be reached for until the lexical path
-      has been measured against this case and found wanting
+      has been measured against this case and found wanting. Fully specified — FTS5 schema,
+      rank fusion, the boost, and the acceptance numbers — as Workstream 1 of
+      [integration-handoff.md](integration-handoff.md)
 
 - [ ] **A text layer can be junk without being empty, and nothing notices.** Found while building
       the class-scale workspace, and it is a robustness hole rather than a ranking one. `laplace.pdf`
@@ -659,7 +661,11 @@ them from. That makes it considerably smaller than it looks.
 - [ ] Look up an unfamiliar method a textbook specifies, and offer it as a profile fact through the
       existing propose-and-confirm flow rather than writing it silently
 - [ ] Read and reason about code for a class or lab
-- [ ] Write and edit code, with changes shown before they are applied
+- [ ] Write and edit code, with changes shown before they are applied. The review mechanics —
+      pending edits, derived hunks, per-hunk accept and reject, staleness rebasing — are built
+      by the Phase 5 draft workspace ([integration-handoff.md](integration-handoff.md),
+      Workstream 3) against database-only content; this item reuses them across the filesystem
+      boundary once the security posture below exists
 - [ ] **Security posture, specified before any tool touches the filesystem.** Uploaded documents are
       untrusted input by design, and once the model holds tools, document content becomes an
       injection vector. Today the backend is loopback-only and writes only to `data/`, which is a
@@ -673,13 +679,41 @@ wording has to distinguish "never reports on you" from "never touches the networ
 
 ## Phase 5: Knowledge Building
 
-**Goal:** Help students retain what they learn, not just finish the work in front of them.
+**Goal:** Help students retain what they learn, not just finish the work in front of them — and
+give them a place to produce their own writing, not only consume Lyra's.
+
+Two external projects were evaluated for this phase in August 2026 — NitroAI, an AGPL study app
+whose flashcard and quiz designs are worth having, and kuhn, the owner's own AI writing tool
+whose suggestion-review machinery is worth having. What survives that evaluation, and exactly how
+it lands on the artifact substrate, is specified decision-complete in
+[integration-handoff.md](integration-handoff.md); what was deliberately left behind, and why, is
+recorded there too. The three specified items are ready to build now and do not wait for Phase 4:
+none of them touches the filesystem, so none of them crosses the security boundary that phase has
+to specify first.
+
+Specified and ready to build (integration-handoff.md is the source of truth for how):
+
+- [ ] Flashcard generation with spaced repetition. Decks as artifacts, cards grounded through
+      retrieval with provenance, a pure-function scheduler, review sessions with honest
+      progress buckets. Workstream 2 of the handoff
+- [ ] Quiz mode with score tracking and weakness identification. Same substrate; per-type
+      validation the model is not trusted to follow; weakness surfaced per topic from real
+      attempt data rather than a score nobody can audit. Workstream 2 of the handoff
+- [ ] **Draft workspace: AI-assisted writing.** A Milkdown editor over a new `draft` artifact
+      kind; inline streamed passages that stay outside the document until accepted; whole-draft
+      revisions reviewed and applied hunk by hunk through a server-authoritative pending-edit
+      flow that lands every accept in revision history. Grounded in the class's own material.
+      This is the "changes shown before they are applied" pattern Phase 4 also needs, proven
+      first on database-only content. Workstream 3 of the handoff
+
+Not yet specified:
 
 - [ ] Practice problem generation from uploaded material, with configurable difficulty and topic
-      focus, attempts, and feedback
-- [ ] Flashcard generation with spaced repetition
-- [ ] Quiz mode with score tracking and weakness identification
-- [ ] Study guide generation from a test date and topic list
+      focus, attempts, and feedback. Distinct from quiz mode on purpose: quizzes are closed-form
+      and auto-graded; practice problems are open-ended, attempted in the workspace, with
+      feedback through Guide-mode chat
+- [ ] Study guide generation from a test date and topic list. The draft workspace is its natural
+      home: a study guide is a generated draft the student then owns and edits
 - [ ] Full class profile editor with a deadline calendar view
 - [ ] User profile refinement across classes
 - [ ] Cross-class connections, referencing concepts from prerequisite courses
