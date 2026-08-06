@@ -9,6 +9,7 @@ answers, produces an empty `RetrievalResult` and the turn is built with no conte
 block. It is not an error and must not be reported as one.
 """
 
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,6 +20,19 @@ from backend.rag.embed import embed_query
 from backend.rag.tokens import estimate_tokens
 
 K = 8
+
+# A query naming a part of a document: `section 4.11`, `Chapter 7`, `§5.2`, `section A.2`.
+# The number is the thing being looked up, so a reference with no number is not one.
+SECTION_REFERENCE = re.compile(
+    r"\b(?:section|chapter|part|§)\s*\.?\s*([A-Za-z]?\.?\d+(?:\.\d+)*)\b",
+    re.IGNORECASE,
+)
+
+# How much of the retrieval budget one resolved section may take. A section reference says
+# where to look, not what is wanted from it, so the KNN keeps at least half the room to
+# answer the second question. Without the cap a forty-chunk chapter would fill the context
+# on its own and the student's actual question would arrive with nothing else beside it.
+STRUCTURAL_BUDGET_SHARE = 0.5
 
 # The bonus is deliberately smaller than any meaningful similarity gap: it breaks ties
 # between comparable matches, it does not promote a weak match over a strong one.
@@ -37,10 +51,20 @@ where embedding match ? and k = {K} and class_id = ?
 
 _CHUNK_SELECT = """
 select c.id as chunk_id, c.document_id, c.content, c.token_count, c.page_number,
-       c.section_title, c.problem_number, c.part_index, d.filename, d.created_at
+       c.section_title, c.section_path, c.section_number, c.problem_number, c.part_index,
+       d.filename, d.created_at
 from chunks c
 join documents d on d.id = c.document_id
 """
+
+# Chunks of one numbered section, and of everything nested under it, so asking for section
+# 2.2 also reaches 2.2.1. Scored against the query rather than taken in document order:
+# a section reference says where to look, and within a long section the part that answers
+# the question should still outrank the part that does not.
+_SECTION_SQL = (
+    _CHUNK_SELECT + "join chunk_embeddings e on e.chunk_id = c.id\n"
+    "where c.class_id = ? and (c.section_number = ? or c.section_number like ?)\n"
+)
 
 # Ordered by id, which is document order, because that is what makes one problem's parts
 # contiguous and so lets `_sibling_run` tell two problems carrying the same number apart.
@@ -63,6 +87,8 @@ class RetrievedChunk:
     token_count: int
     page_number: int | None
     section_title: str | None
+    section_path: str | None
+    section_number: str | None
     problem_number: str | None
     part_index: int | None
     filename: str
@@ -107,22 +133,111 @@ def retrieve(
         The ranked chunks that fit, and the trim reporting for the ones that did not.
         An empty result is normal, not an error.
     """
-    distances = _knn(conn, class_id, embed_query(query))
-    if not distances:
+    vector = embed_query(query)
+    resolved = _resolve_sections(conn, class_id, query, vector, budget_tokens, document_id)
+
+    distances = _knn(conn, class_id, vector)
+    candidates = _load_candidates(conn, distances, document_id) if distances else []
+    if not candidates and not resolved:
         return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
 
-    candidates = _load_candidates(conn, distances, document_id)
-    if not candidates:
-        return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+    # A section that was asked for by name goes in front of the similarity ranking rather
+    # than competing with it, because naming a section is a fact about where the answer is
+    # and cosine distance is a guess at it. What the KNN found still fills the rest.
+    already = {chunk.chunk_id for chunk in resolved}
+    remaining = budget_tokens - sum(estimate_tokens(chunk.content) for chunk in resolved)
+    kept, dropped = _fit_to_budget(
+        [chunk for chunk in candidates if chunk.chunk_id not in already], remaining
+    )
 
-    kept, dropped = _fit_to_budget(candidates, budget_tokens)
     return RetrievalResult(
-        chunks=_expand_problem_parts(conn, kept, budget_tokens),
-        # More than half gone means the answer is missing enough material that the user
-        # deserves to be told, per Stage 7 of docs/rag-pipeline.md.
-        trimmed=len(dropped) * 2 > len(candidates),
+        chunks=resolved + _expand_problem_parts(conn, kept, remaining),
+        # Reported over the similarity ranking alone. A chunk that did not fit beside a
+        # section the student asked for by name was not omitted for lack of room in the
+        # sense this flag means, and counting it would raise the notice on every turn that
+        # cites a section. More than half gone means the answer is missing enough material
+        # that the user deserves to be told, per Stage 7 of docs/rag-pipeline.md.
+        trimmed=bool(candidates) and len(dropped) * 2 > len(candidates),
         omitted_document_count=len({chunk.document_id for chunk in dropped}),
     )
+
+
+def _resolve_sections(
+    conn: sqlite3.Connection,
+    class_id: int,
+    query: str,
+    vector: list[float],
+    budget_tokens: int,
+    document_id: int | None,
+) -> list[RetrievedChunk]:
+    """Chunks of any section the query names outright, in reading order.
+
+    A question that says "use the result from section 4.11" is not a similarity problem,
+    and treating it as one is what the measurement said it costs: asked bare, `What does
+    section 2.2 cover?` came back at rank 12 and `Summarize what section 4.9 is about` at
+    rank 23, both scoring below questions about material the book does not contain at all.
+    A section number is a fact printed on the page, so it is looked up.
+
+    Silent on a miss, deliberately. A student may cite a section of a book they never
+    uploaded, or a course may number its weeks, and the similarity search is a perfectly
+    good answer to both. A reference that resolves to nothing costs one query.
+
+    Returns:
+        The best of the named section within its share of the budget, ordered by page so
+        the section still reads forwards. Empty when the query names nothing, when nothing
+        matches, or when no chunk has been indexed with a section number.
+    """
+    numbers = {match.group(1) for match in SECTION_REFERENCE.finditer(query)}
+    if not numbers:
+        return []
+
+    share = int(budget_tokens * STRUCTURAL_BUDGET_SHARE)
+    if share <= 0:
+        return []
+
+    now = datetime.now(UTC)
+    found: dict[int, RetrievedChunk] = {}
+    for number in sorted(numbers):
+        sql = _SECTION_SQL
+        parameters: list[object] = [class_id, number, f"{number}.%"]
+        if document_id is not None:
+            sql += " and c.document_id = ?"
+            parameters.append(document_id)
+        # Ordered by distance so the part of a long section that answers the question
+        # survives the budget, then put back into reading order below.
+        sql += " order by vec_distance_cosine(e.embedding, ?), c.id"
+        parameters.append(sqlite_vec.serialize_float32(vector))
+
+        for row in conn.execute(sql, parameters):
+            chunk_id = int(row["chunk_id"])
+            if chunk_id in found:
+                continue
+            similarity = _similarity_to(conn, chunk_id, vector)
+            found[chunk_id] = _chunk_from_row(
+                row,
+                similarity,
+                similarity + RECENCY_COEFFICIENT * _recency_factor(row["created_at"], now),
+            )
+
+    ranked = sorted(found.values(), key=lambda chunk: (-chunk.score, chunk.chunk_id))
+    kept, _ = _fit_to_budget(ranked, share)
+    # Reading order for the prompt: a section quoted out of order is harder to follow than
+    # one quoted short.
+    return sorted(kept, key=lambda chunk: (chunk.page_number or 0, chunk.chunk_id))
+
+
+def _similarity_to(conn: sqlite3.Connection, chunk_id: int, vector: list[float]) -> float:
+    """Cosine similarity between one stored chunk and the query.
+
+    Read back rather than carried out of the ordering query, because sqlite-vec exposes
+    the distance to `order by` but not as a column of the row it returns.
+    """
+    row = conn.execute(
+        "select vec_distance_cosine(embedding, ?) as distance "
+        "from chunk_embeddings where chunk_id = ?",
+        (sqlite_vec.serialize_float32(vector), chunk_id),
+    ).fetchone()
+    return 1.0 - float(row["distance"]) if row is not None else 0.0
 
 
 def _knn(conn: sqlite3.Connection, class_id: int, vector: list[float]) -> dict[int, float]:
@@ -166,6 +281,8 @@ def _chunk_from_row(row: sqlite3.Row, similarity: float, score: float) -> Retrie
         token_count=int(row["token_count"]),
         page_number=row["page_number"],
         section_title=row["section_title"],
+        section_path=row["section_path"],
+        section_number=row["section_number"],
         problem_number=row["problem_number"],
         part_index=row["part_index"],
         filename=str(row["filename"]),

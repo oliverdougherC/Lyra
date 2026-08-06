@@ -588,7 +588,11 @@ def _provenance_for(
                         chunk_id=chunk.chunk_id,
                         document_id=chunk.document_id,
                         page_number=chunk.page_number,
-                        label=chunk.section_title,
+                        # The path where the document has an outline. A citation reading
+                        # `Rn / The Cross Product` says where in the book a step came
+                        # from; `The Cross Product` alone does not say which book section,
+                        # and three of the reference book's titles are not unique.
+                        label=chunk.section_path or chunk.section_title,
                     )
                 )
                 continue

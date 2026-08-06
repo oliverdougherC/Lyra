@@ -378,22 +378,44 @@ chunks at an identical score and the ranking was gone. Neither could have been f
 
 ### Structural parsing
 
-- [ ] **A textbook detection rule in `detect_doc_type`.** Structural signals, principally a PDF
+- [x] **A textbook detection rule in `detect_doc_type`.** Structural signals, principally a PDF
       outline with real depth over a long document, checked ahead of the homework marker heuristic.
       Highest value per line in the phase, and finding 2 above is why
-- [ ] Chapter and section hierarchy from the PDF outline (`get_toc()`), which most commercial
-      textbooks carry, with font and weight heading detection as the fallback
-- [ ] Hierarchical `section_path` on chunks, replacing the flat `section_title`. This is the change
+- [x] Chapter and section hierarchy from the PDF outline (`get_toc()`), which most commercial
+      textbooks carry
+- [x] Hierarchical `section_path` on chunks, replacing the flat `section_title`. This is the change
       that turns "the diagram in section 5.2.1" into a direct lookup instead of a semantic search,
       which is the difference between reliable and lucky. Built from outline titles, with section
       numbers recovered from page text where they exist: the reference book's outline carries no
       numbers, so a numeric path would be null on exactly the books this exists for
-- [ ] Structure-aware retrieval that can resolve an explicit section reference in a problem, placed
+- [x] Structure-aware retrieval that can resolve an explicit section reference in a problem, placed
       ahead of the KNN rather than competing with it, and falling through silently when it resolves
       to nothing
-- [ ] Documents ingested before this lands keep a null `section_path` and are offered a re-index
+- [x] Documents ingested before this lands keep a null `section_path` and are offered a re-index
       rather than having one run for them. A path is derived from the source file's outline, so
-      there is nothing in the database to backfill from
+      there is nothing in the database to backfill from. The backend half is done; the affordance
+      that offers it is in ui-phase-3.md and lands with the rest of that pass
+- [ ] Font and weight heading detection as the fallback for a document with no outline. Deferred
+      rather than dropped: nothing measured needs it, because a document with no outline is a
+      syllabus or a sheet where the existing regex is doing an easier job well enough. It earns its
+      place when a book without an outline turns up
+
+**What it changed, on the same seventeen questions.** Retrieval goes from 14 of 17 inside `k = 8` to
+**17 of 17**, and from 11 to 16 at rank 1. The three that failed all pass:
+
+| Question | Before | After |
+| --- | --- | --- |
+| `bare-section-reference` | 12 | 1 |
+| `bare-chapter-reference` | 23 | 1 |
+| `well-ordering` | never found | 1 |
+
+The two bare references are the lookup doing the work rather than the embedding: they land on pages
+111 to 113 and 194 to 196 at cosine similarities of 0.48 and 0.53, well below the controls, which is
+exactly the case similarity search cannot reach. `well-ordering` is the chunking, not the lookup,
+since its question names no section.
+
+The book now chunks as 596 sections rather than 1312 fragments, mean 358 tokens rather than 161, and
+carries 105 distinct real section titles where the regex produced dot leaders and `Sn`.
 
 ### Figures
 

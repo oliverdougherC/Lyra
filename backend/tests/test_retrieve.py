@@ -261,3 +261,134 @@ def test_numbering_that_restarts_does_not_merge_two_problems(
     assert first_b in returned, "the matched problem's own other part still arrives"
     assert second_a not in returned
     assert second_b not in returned
+
+
+def _insert_section_chunk(
+    db: sqlite3.Connection,
+    class_id: int,
+    document_id: int,
+    content: str,
+    angle: float,
+    section_number: str,
+    page_number: int,
+) -> int:
+    """A chunk of a numbered section, at a chosen angle from the query."""
+    cursor = db.execute(
+        "insert into chunks "
+        "(document_id, class_id, content, token_count, page_number, section_title, "
+        "section_path, section_number, doc_type, embedding_model, embedding_dim) "
+        "values (?, ?, ?, ?, ?, 'A Section', 'Chapter / A Section', ?, 'textbook', "
+        "'nomic-embed-text-v1.5.Q8_0', ?)",
+        (
+            document_id,
+            class_id,
+            content,
+            estimate_tokens(content),
+            page_number,
+            section_number,
+            DIMENSIONS,
+        ),
+    )
+    chunk_id = int(cursor.lastrowid or 0)
+    db.execute(
+        "insert into chunk_embeddings (chunk_id, class_id, embedding) values (?, ?, ?)",
+        (chunk_id, class_id, sqlite_vec.serialize_float32(_vector(angle))),
+    )
+    db.commit()
+    return chunk_id
+
+
+def test_a_named_section_is_looked_up_rather_than_searched_for(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """The measured failure this exists to fix.
+
+    Asked bare, `What does section 2.2 cover?` came back at rank 12 and
+    `Summarize what section 4.9 is about` at rank 23, both scoring below questions about
+    material the book does not contain at all. A section number is a fact printed on the
+    page, not a similarity, so no embedding improvement was ever going to reach them.
+    """
+    book = _insert_document(db, class_id, "textbook.pdf", _days_ago(1))
+    # Deliberately the worst match in the class: only the lookup can surface it.
+    wanted = _insert_section_chunk(db, class_id, book, "An LU factorization is...", 1.5, "2.2", 110)
+    for index in range(8):
+        _insert_chunk(db, class_id, book, f"Unrelated but closer material {index}.", 0.1 * index)
+
+    result = retrieve(db, class_id, "What does section 2.2 cover?", 1000)
+
+    assert result.chunks[0].chunk_id == wanted, "the named section leads the ranking"
+
+
+def test_a_section_lookup_reaches_everything_nested_under_it(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """Asking for section 2.2 asks for 2.2.1 as well, because that is inside it."""
+    book = _insert_document(db, class_id, "textbook.pdf", _days_ago(1))
+    parent = _insert_section_chunk(db, class_id, book, "LU factorization.", 1.4, "2.2", 110)
+    child = _insert_section_chunk(
+        db, class_id, book, "Finding one by inspection.", 1.5, "2.2.1", 111
+    )
+    # A neighbouring section that must not come along: 2.20 is not underneath 2.2.
+    other = _insert_section_chunk(db, class_id, book, "Something else entirely.", 1.45, "2.20", 130)
+    # Closer chunks fill k, so anything from a section arrives by lookup rather than by
+    # having been one of the neighbours anyway.
+    for index in range(8):
+        _insert_chunk(db, class_id, book, f"Unrelated but closer material {index}.", 0.1 * index)
+
+    result = retrieve(db, class_id, "use the result from section 2.2", 1000)
+
+    returned = [chunk.chunk_id for chunk in result.chunks]
+    assert parent in returned
+    assert child in returned
+    assert other not in returned
+
+
+def test_a_reference_that_resolves_to_nothing_falls_through_quietly(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """A student may cite a section of a book they never uploaded, or number their weeks.
+
+    The similarity search is a perfectly good answer to both, so a miss costs one query
+    and nothing else. Failing here would be a regression on every course that says `week 3`.
+    """
+    notes = _insert_document(db, class_id, "lecture.pdf", _days_ago(1))
+    match = _insert_chunk(db, class_id, notes, "Convolution, as covered in week three.", 0.0)
+
+    result = retrieve(db, class_id, "what did we do in section 9.4", 1000)
+
+    assert [chunk.chunk_id for chunk in result.chunks] == [match]
+
+
+def test_a_looked_up_section_leaves_room_for_the_question(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """A section reference says where to look, not what is wanted from it.
+
+    Without the cap a long chapter fills the context on its own and the student's actual
+    question arrives with nothing beside it.
+    """
+    book = _insert_document(db, class_id, "textbook.pdf", _days_ago(1))
+    body = "A long passage about factorization that fills the budget. " * 4
+    for index in range(6):
+        _insert_section_chunk(db, class_id, book, f"{body} {index}", 1.5, "2.2", 110 + index)
+    nearest = _insert_chunk(db, class_id, book, "The closest match in the class.", 0.0)
+
+    result = retrieve(db, class_id, "section 2.2 and the method it uses", estimate_tokens(body) * 4)
+
+    returned = [chunk.chunk_id for chunk in result.chunks]
+    assert nearest in returned, "the similarity search still gets room"
+    assert any(chunk.section_number == "2.2" for chunk in result.chunks)
+
+
+def test_a_looked_up_section_is_quoted_in_reading_order(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """A section quoted out of order is harder to follow than one quoted short."""
+    book = _insert_document(db, class_id, "textbook.pdf", _days_ago(1))
+    # Inserted with the later page as the better match, so document order is not score order.
+    second = _insert_section_chunk(db, class_id, book, "Then this follows.", 0.2, "2.2", 112)
+    first = _insert_section_chunk(db, class_id, book, "First, define the terms.", 0.9, "2.2", 111)
+
+    result = retrieve(db, class_id, "explain section 2.2", 1000)
+
+    assert [chunk.chunk_id for chunk in result.chunks] == [first, second]

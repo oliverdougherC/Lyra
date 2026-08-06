@@ -169,6 +169,13 @@ in the page text. So the path is built from outline titles, and a section number
 the page text under that outline entry supplies one. Designing around numbers that are frequently
 absent would have produced a field that is null on exactly the books this stage exists for.
 
+**What placement actually does, which is the modest version on purpose.** A chunk is addressed by
+the deepest section covering its page, and chunk *boundaries* are unchanged: they still come from
+the heading regex and the packing rule. The measured failure was that a book's sections were
+unaddressable, not that its chunks were cut in the wrong places, and rewriting the boundaries at the
+same time would have made the measurement unreadable. A page holding the end of one section and the
+start of the next is credited to the later one, because that is the section its heading announces.
+
 **The current heading regex cannot be promoted to do this.** `SECTION_HEADING` in `rag/chunk.py`
 matches whole lines out of already-flattened text, which is all it can do, and forced over the
 reference book it returns a `section_title` on 595 of 596 chunks. That coverage is worthless: among
@@ -412,9 +419,16 @@ paragraphs with 100-token overlap. Every resulting chunk keeps the same `problem
 4. Textbook or notes: split on heading markers (`#`, `##`, numbered sections)
 5. No structure detected: paragraph grouping with overlap
 
-Step 2 does not exist yet, and its absence is why the reference textbook in Stage 2a is chunked as
-homework. It is placed above homework deliberately: the two are separated by structure rather than
-by markers, and a book of exercises will always out-vote a marker count.
+Step 2 is placed above homework deliberately: the two are separated by structure rather than by
+markers, and a book of exercises will always out-vote a marker count. Its absence was why the
+reference textbook was chunked as homework, into 1312 fragments; with it the same book chunks as
+596 sections.
+
+The test is an outline of at least 20 entries nested at least two deep, over at least 50 pages, and
+all three are required. Calibrated on one book and then checked against a second corpus: the two
+longest documents of a signals course are 112 and 128 pages of lecture notes carrying flat outlines
+of 10 and 4 entries, and the depth and entry-count requirements are what keep them out. A filename
+the student chose still beats the test, so `homework-4.pdf` is homework whatever its structure.
 
 **Each chunk stores:** `chunk_id`, `document_id`, `class_id`, `content`, `token_count`, and metadata
 (document type, page number, section title, `problem_number`, `part_index`).
@@ -535,14 +549,27 @@ placed ahead of the KNN result rather than left to compete with it on cosine dis
 runs and still fills the remaining budget, because a section reference tells you where to look and
 not what the student needs from it.
 
-Three rules keep this from becoming a worse retrieval than the one it improves:
+Four rules keep this from becoming a worse retrieval than the one it improves:
 
 - A reference that resolves to nothing falls through to the KNN silently. A student may cite a
-  section of a book they never uploaded, and a hard failure there would be a regression
-- A resolved section larger than the budget is trimmed by KNN score within the section, so the part
-  of section 5.2 that answers the question outranks the part that does not
+  section of a book they never uploaded, or a course may number its weeks, and a hard failure there
+  would be a regression on every course that says "week 3"
+- A resolved section larger than the budget is trimmed by cosine distance within the section, so the
+  part of section 5.2 that answers the question outranks the part that does not. What survives is
+  then put back into reading order, because a section quoted out of order is harder to follow than
+  one quoted short
+- **A lookup may take at most half the retrieval budget.** A reference says where to look and not
+  what is wanted from it, so the KNN keeps room to answer the second question. Without the cap a
+  forty-chunk chapter fills the context on its own
 - Structural chunks are still labelled with their source in the context block, so a step grounded in
   a looked-up section carries the same provenance as one grounded in a retrieved one
+
+A lookup matches the section and everything nested under it, so asking for section 2.2 also reaches
+2.2.1. It does not reach 2.20, which is a different section rather than a deeper one.
+
+The trim notice is computed over the similarity ranking alone. A chunk that did not fit beside a
+section the student asked for by name was not omitted for lack of room in the sense that flag means,
+and counting it would raise the notice on every turn that cites a section.
 
 **`k = 8` is a Phase 1 constant and is unmeasured.** It was chosen for chat turns over syllabi, and
 the Phase 2 handoff already records it as a known weakness in solving. Textbook-scale retrieval is

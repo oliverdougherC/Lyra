@@ -58,8 +58,9 @@ _DEFAULT_FAILURE_MESSAGE = "Something went wrong while processing this document.
 _INSERT_CHUNK_SQL = """
 insert into chunks (
   document_id, class_id, content, token_count, page_number, section_title,
-  problem_number, part_index, doc_type, embedding_model, embedding_dim
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  section_path, section_number, problem_number, part_index, doc_type,
+  embedding_model, embedding_dim
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _queue: queue.Queue[int] = queue.Queue()
@@ -149,7 +150,7 @@ def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
     _write_extracted_text(document_id, text)
 
     _set_state(conn, document_id, CHUNKING)
-    doc_type = detect_doc_type(document["filename"], text)
+    doc_type = detect_doc_type(document["filename"], text, parsed)
     chunks = chunk_document(parsed, doc_type)
     if not chunks:
         # Pages carried text but none of it survived chunking, so there is still nothing
@@ -225,6 +226,8 @@ def _store_chunks(
                     chunk.token_count,
                     chunk.page_number,
                     chunk.section_title,
+                    chunk.section_path,
+                    chunk.section_number,
                     chunk.problem_number,
                     chunk.part_index,
                     doc_type,

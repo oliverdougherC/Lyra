@@ -610,9 +610,15 @@ def format_context_block(chunks: list[dict[str, object]]) -> str:
         page = chunk.get("page_number")
         if page is not None:
             label.append(f"page {page}")
-        section = chunk.get("section_title")
+        # The path where a document has an outline, the flat title where it does not. A
+        # path tells the model which of a book's two sections called `Isomorphisms` this
+        # is, which the title on its own cannot.
+        section = chunk.get("section_path") or chunk.get("section_title")
         if section:
             label.append(str(section))
+        number = chunk.get("section_number")
+        if number:
+            label.append(f"section {number}")
         problem = chunk.get("problem_number")
         if problem:
             label.append(f"problem {problem}")

@@ -21,7 +21,7 @@ from backend.rag.chunk import (
     chunk_document,
     detect_doc_type,
 )
-from backend.rag.parse import ParsedDocument, ParsedPage
+from backend.rag.parse import OutlineEntry, ParsedDocument, ParsedPage
 from backend.rag.tokens import CHARS_PER_TOKEN, estimate_tokens
 
 
@@ -31,6 +31,20 @@ def _parsed(*pages: str) -> ParsedDocument:
         pages=[ParsedPage(page_number=number, text=text) for number, text in enumerate(pages, 1)],
         pages_total=len(pages),
         pages_skipped=0,
+    )
+
+
+def _book(pages: int = 200, entries: int = 40, depth: int = 3) -> ParsedDocument:
+    """A document shaped like a textbook: long, with a deep outline over many entries."""
+    outline = [
+        OutlineEntry(depth=(index % depth) + 1, title=f"Section {index}", page_number=index + 1)
+        for index in range(entries)
+    ]
+    return ParsedDocument(
+        pages=[ParsedPage(page_number=number, text=f"page {number}") for number in range(1, 4)],
+        pages_total=pages,
+        pages_skipped=0,
+        outline=outline,
     )
 
 
@@ -288,3 +302,71 @@ def test_textbook_packs_to_a_larger_target_than_lecture_notes() -> None:
     assert max(chunk.token_count for chunk in notes) <= 1500
     # The same document yields fewer, larger chunks under the textbook rule.
     assert len(textbook) < len(notes)
+
+
+def test_a_long_structured_document_is_a_textbook_not_homework() -> None:
+    """The fault a 608-page linear algebra textbook found.
+
+    `detect_doc_type` had no textbook rule at all, so a book of numbered exercises fell
+    through to the problem-marker heuristic, tripped it thousands of times, and was cut at
+    every numbered line in it: 1312 fragments averaging 162 tokens with no structure
+    recorded. The structural test therefore runs ahead of the marker count, which a book
+    of exercises will always win.
+    """
+    exercises = "\n".join(f"Exercise {number}. Compute the determinant." for number in range(40))
+
+    assert detect_doc_type("Kuttler-LinearAlgebra-2017A.pdf", exercises, _book()) == TEXTBOOK
+    # The same text without the structure is still homework, which is the point of the test.
+    assert detect_doc_type("Kuttler-LinearAlgebra-2017A.pdf", exercises) == HOMEWORK
+
+
+@pytest.mark.parametrize(
+    ("document", "reason"),
+    [
+        (_book(pages=20), "a short document is not a book however it is organized"),
+        (_book(entries=5), "a handful of bookmarks is not a table of contents"),
+        (_book(depth=1), "a flat outline is a list of slides, not a structure"),
+    ],
+)
+def test_ordinary_material_is_not_read_as_a_textbook(document: ParsedDocument, reason: str) -> None:
+    assert detect_doc_type("week-3.pdf", "some prose about the course", document) != TEXTBOOK, (
+        reason
+    )
+
+
+def test_a_filename_still_beats_the_textbook_test() -> None:
+    """A name the student chose is better evidence than any heuristic over the file."""
+    assert detect_doc_type("homework-4.pdf", "prose", _book()) == HOMEWORK
+
+
+def test_an_outline_replaces_the_heading_regex_it_beats() -> None:
+    """The regex guesses at structure the document states outright, and guesses badly.
+
+    Forced over the reference book it labelled 595 of 596 chunks with things like `Sn` and
+    table-of-contents lines complete with their dot leaders. Where there is an outline, it
+    wins.
+    """
+    parsed = ParsedDocument(
+        pages=[
+            ParsedPage(1, "GRADING POLICY\nSome prose about matrices that the regex would label."),
+            ParsedPage(2, "4.9 The Cross Product\nRecall that the dot product is one of two."),
+        ],
+        pages_total=2,
+        pages_skipped=0,
+        outline=[OutlineEntry(1, "Rn", 1), OutlineEntry(2, "The Cross Product", 2)],
+    )
+
+    chunks = chunk_document(parsed, TEXTBOOK)
+
+    second = next(chunk for chunk in chunks if chunk.page_number == 2)
+    assert second.section_title == "The Cross Product"
+    assert second.section_path == "Rn / The Cross Product"
+    assert second.section_number == "4.9"
+
+
+def test_a_document_with_no_outline_carries_no_path() -> None:
+    """Null is the honest answer, and it is what tells retrieval a document predates this."""
+    chunks = chunk_document(_parsed("## Office Hours\nTuesdays at two."), SYLLABUS)
+
+    assert all(chunk.section_path is None for chunk in chunks)
+    assert all(chunk.section_number is None for chunk in chunks)

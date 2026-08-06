@@ -346,6 +346,8 @@ def _context_entry(chunk: RetrievedChunk) -> dict[str, object]:
         "filename": chunk.filename,
         "page_number": chunk.page_number,
         "section_title": chunk.section_title,
+        "section_path": chunk.section_path,
+        "section_number": chunk.section_number,
         "problem_number": chunk.problem_number,
     }
 

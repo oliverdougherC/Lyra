@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, replace
 from itertools import groupby
 
 from backend.rag.parse import PAGE_SEPARATOR, ParsedDocument
+from backend.rag.structure import Section, build_sections, section_for_page
 from backend.rag.tokens import CHARS_PER_TOKEN, estimate_tokens
 
 # Retrieval budgeting assumes small targeted chunks, and an oversized chunk is refused at
@@ -105,6 +106,26 @@ FILENAME_PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
 MIN_PROBLEM_MARKERS = 3
 MIN_MARKDOWN_HEADINGS = 2
 
+# What makes a document a textbook. Structure rather than a filename, because a student
+# saves a book under whatever the publisher called it and the reference book's name says
+# nothing at all.
+#
+# All three are required together, and the third is what keeps ordinary material out: a
+# lecture deck built from LaTeX carries an outline too, and a term of notes is not a book.
+# Checked ahead of the problem-marker heuristic, because a textbook full of numbered
+# exercises trips that heuristic thousands of times and will always out-vote it: the
+# reference book was read as homework and cut at every numbered line in it, into 1312
+# fragments averaging 162 tokens with no structure recorded at all.
+#
+# Calibrated against one book, which is worth saying plainly. It has 131 outline entries
+# nested four deep over 608 pages, so it clears all three by a wide margin, and the
+# thresholds are set where a false positive costs little: a long structured document read
+# as a textbook is chunked by its own headings, which is a reasonable reading of anything
+# shaped like that.
+TEXTBOOK_MIN_OUTLINE_DEPTH = 2
+TEXTBOOK_MIN_OUTLINE_ENTRIES = 20
+TEXTBOOK_MIN_PAGES = 50
+
 # Problems do not overlap each other, but the paragraph fallback inside one oversized
 # problem does, so a step split across two parts is readable in both.
 HOMEWORK_PART_OVERLAP_TOKENS = 100
@@ -151,7 +172,12 @@ class Chunk:
         content: The chunk text, stripped, without any embedding task prefix.
         token_count: `estimate_tokens(content)`, never above `MAX_CHUNK_TOKENS`.
         page_number: Page the chunk's own content starts on, when pages are known.
-        section_title: Heading the chunk sits under, when the split was heading-driven.
+        section_title: Heading the chunk sits under. From the document's outline where it
+            has one, and from the heading regex where it does not.
+        section_path: Ancestor titles from the outermost inwards, joined with ` / `. Null
+            for a document with no outline, and for anything ingested before Phase 3.
+        section_number: The number the book prints for that section, `4.9` or `A.2`. Null
+            where the book prints none, which front matter and appendices genuinely do.
         problem_number: Homework problem this chunk belongs to.
         part_index: 0-based position among the parts of a split problem, or None when
             the problem fits in a single chunk.
@@ -161,6 +187,8 @@ class Chunk:
     token_count: int
     page_number: int | None = None
     section_title: str | None = None
+    section_path: str | None = None
+    section_number: str | None = None
     problem_number: str | None = None
     part_index: int | None = None
 
@@ -172,6 +200,8 @@ class _Draft:
     content: str
     page_number: int | None = None
     section_title: str | None = None
+    section_path: str | None = None
+    section_number: str | None = None
     problem_number: str | None = None
     part_index: int | None = None
 
@@ -192,30 +222,46 @@ class _Flat:
         return self.numbers[max(index, 0)]
 
 
-def detect_doc_type(filename: str, text: str) -> str:
+def detect_doc_type(filename: str, text: str, parsed: ParsedDocument | None = None) -> str:
     """Classify a document so it can be chunked the way its structure wants.
 
     Filename patterns are checked first and are decisive, because a name the student
-    chose is better evidence than a heuristic over text an extractor produced. Content
-    heuristics only run when the name says nothing.
+    chose is better evidence than a heuristic over text an extractor produced. The
+    textbook test comes next, ahead of the content heuristics, because a book of numbered
+    exercises trips the problem-marker count thousands of times and would always win it.
 
     Args:
         filename: Original upload filename, matched case-insensitively.
         text: Full extracted document text.
+        parsed: The parsed document, when the caller has it. Without it the textbook test
+            cannot run, because its evidence is the outline and the page count rather
+            than anything in the text.
 
     Returns:
-        One of `homework`, `syllabus`, `lecture_notes`, or `generic`.
+        One of `homework`, `textbook`, `syllabus`, `lecture_notes`, or `generic`.
     """
     lowered = filename.lower()
     for patterns, doc_type in FILENAME_PATTERNS:
         if any(pattern in lowered for pattern in patterns):
             return doc_type
 
+    if parsed is not None and _looks_like_a_textbook(parsed):
+        return TEXTBOOK
     if len(PROBLEM_MARKER.findall(text)) >= MIN_PROBLEM_MARKERS:
         return HOMEWORK
     if len(MARKDOWN_HEADING.findall(text)) >= MIN_MARKDOWN_HEADINGS:
         return LECTURE_NOTES
     return GENERIC
+
+
+def _looks_like_a_textbook(parsed: ParsedDocument) -> bool:
+    """Whether a document is long and structured enough to be read as a book."""
+    outline = parsed.outline
+    if len(outline) < TEXTBOOK_MIN_OUTLINE_ENTRIES:
+        return False
+    if max((entry.depth for entry in outline), default=0) < TEXTBOOK_MIN_OUTLINE_DEPTH:
+        return False
+    return parsed.pages_total >= TEXTBOOK_MIN_PAGES
 
 
 def chunk_document(parsed: ParsedDocument, doc_type: str) -> list[Chunk]:
@@ -239,7 +285,34 @@ def chunk_document(parsed: ParsedDocument, doc_type: str) -> list[Chunk]:
     else:
         drafts = _chunk_paragraphs(flat, rule)
 
+    _place_in_sections(drafts, build_sections(parsed))
     return _finalize(drafts)
+
+
+def _place_in_sections(drafts: list[_Draft], sections: list[Section]) -> None:
+    """Address each chunk by the document's own structure, where it has one.
+
+    Placement is by page rather than by where the boundaries were drawn, which is the
+    modest version of this on purpose. Chunk boundaries still come from the heading regex,
+    and this only decides what a chunk is *called*; the measured failure was that a book's
+    sections were unaddressable, not that its chunks were cut in the wrong places. A page
+    holding the end of one section and the start of the next is credited to the later one,
+    because that is the section the page's heading announces.
+
+    The outline also overwrites `section_title` where there is one. The regex is guessing
+    at structure the document states outright, and on the reference book it guessed things
+    like `Sn` and a table-of-contents line complete with its dot leaders.
+    """
+    if not sections:
+        return
+
+    for draft in drafts:
+        section = section_for_page(sections, draft.page_number)
+        if section is None:
+            continue
+        draft.section_title = section.title
+        draft.section_path = section.path
+        draft.section_number = section.number
 
 
 def _flatten(parsed: ParsedDocument) -> _Flat:
@@ -537,6 +610,8 @@ def _finalize(drafts: list[_Draft]) -> list[Chunk]:
             token_count=estimate_tokens(draft.content),
             page_number=draft.page_number,
             section_title=draft.section_title,
+            section_path=draft.section_path,
+            section_number=draft.section_number,
             problem_number=draft.problem_number,
             part_index=draft.part_index,
         )

@@ -154,6 +154,8 @@ def retrieved(db: sqlite3.Connection, class_id: int) -> RetrievedChunk:
         token_count=10,
         page_number=12,
         section_title="Transforms",
+        section_path=None,
+        section_number=None,
         problem_number=None,
         part_index=None,
         filename="lecture3.pdf",
