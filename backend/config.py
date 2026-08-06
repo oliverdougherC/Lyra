@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,10 +15,20 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="LYRA_", extra="ignore")
 
     data_dir: Path = Path("data")
-    db_path: Path = Path("data/lyra.db")
+    # None means "derive from data_dir". Setting LYRA_DATA_DIR alone used to relocate
+    # uploads, pages, text, and models while the database stayed at data/lyra.db - a split
+    # that once wrote 596 chunks into the real database during a verification run. The
+    # database now follows data_dir unless LYRA_DB_PATH points it somewhere explicitly.
+    db_path: Path | None = None
     llama_port: int = 8081
     host: str = "127.0.0.1"
     port: int = 8000
+
+    @model_validator(mode="after")
+    def _derive_db_path(self) -> "Settings":
+        if self.db_path is None:
+            self.db_path = self.data_dir / "lyra.db"
+        return self
 
     @property
     def uploads_dir(self) -> Path:
