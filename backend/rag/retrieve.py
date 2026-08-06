@@ -42,10 +42,10 @@ from chunks c
 join documents d on d.id = c.document_id
 """
 
-_PROBLEM_SQL = (
-    _CHUNK_SELECT + "where c.document_id = ? and c.problem_number = ?\n"
-    "order by coalesce(c.part_index, 0), c.id"
-)
+# Ordered by id, which is document order, because that is what makes one problem's parts
+# contiguous and so lets `_sibling_run` tell two problems carrying the same number apart.
+# The run is put back into part order before it is emitted.
+_PROBLEM_SQL = _CHUNK_SELECT + "where c.document_id = ? and c.problem_number = ?\norder by c.id"
 
 
 @dataclass(frozen=True)
@@ -220,8 +220,22 @@ def _expand_problem_parts(
     on part (b) alone answers half a question. The remaining parts are pulled in where
     the budget still has room, and the problem is emitted in part order. A sibling
     inherits the matched part's score: it arrives by reassembly, not by the KNN.
+
+    Two things bound what counts as a sibling, and neither used to.
+
+    A chunk whose `part_index` is null is a whole problem. `_number_parts` in `rag/chunk.py`
+    leaves the index null exactly when a problem fit in one chunk, so there is nothing to
+    reassemble and no query worth running.
+
+    A problem number is not unique within a document. The chunker has grouped parts by
+    consecutive run since Phase 2, precisely because a sheet that restarts numbering under
+    each section heading has several problem 1s, and this did not: it took every chunk in
+    the document carrying the same number. On a 608-page textbook read as homework, which
+    is what `detect_doc_type` does with one today, `problem_number = '2'` covers 120 chunks
+    spread over the whole book, and one KNN hit on any of them emitted all 120 ahead of the
+    second-ranked result, every one carrying the first one's score. The ranking was gone.
     """
-    if not any(chunk.problem_number for chunk in kept):
+    if not any(chunk.part_index is not None for chunk in kept):
         return kept
 
     used = sum(estimate_tokens(chunk.content) for chunk in kept)
@@ -232,12 +246,13 @@ def _expand_problem_parts(
     for chunk in kept:
         if chunk.chunk_id in emitted:
             continue
-        if not chunk.problem_number:
+        if chunk.part_index is None:
             expanded.append(chunk)
             emitted.add(chunk.chunk_id)
             continue
 
-        for row in conn.execute(_PROBLEM_SQL, (chunk.document_id, chunk.problem_number)):
+        rows = conn.execute(_PROBLEM_SQL, (chunk.document_id, chunk.problem_number)).fetchall()
+        for row in _sibling_run(rows, chunk.chunk_id):
             part_id = int(row["chunk_id"])
             if part_id in emitted:
                 continue
@@ -252,3 +267,34 @@ def _expand_problem_parts(
             emitted.add(part_id)
 
     return expanded
+
+
+def _sibling_run(rows: list[sqlite3.Row], chunk_id: int) -> list[sqlite3.Row]:
+    """The one run of parts the matched chunk belongs to.
+
+    `_number_parts` numbers every run from zero, so a repeated `part_index` is where one
+    problem's parts end and the next problem carrying the same number begins. That is the
+    only reliable split: the rows are ordered by part index rather than by id, and a run's
+    ids are contiguous in a real ingest but not in a fixture that inserts them out of order.
+
+    Returns:
+        The run containing `chunk_id`, in part order, or an empty list when no row carries
+        that id.
+    """
+    runs: list[list[sqlite3.Row]] = []
+    current: list[sqlite3.Row] = []
+    seen: set[int] = set()
+    for row in rows:
+        index = int(row["part_index"] or 0)
+        if index in seen:
+            runs.append(current)
+            current, seen = [], set()
+        current.append(row)
+        seen.add(index)
+    if current:
+        runs.append(current)
+
+    run = next((run for run in runs if any(int(r["chunk_id"]) == chunk_id for r in run)), [])
+    # Back into part order, so a problem still reads (a), (b), (c) however its rows were
+    # written. The rows arrived in document order because that is what separates the runs.
+    return sorted(run, key=lambda row: (int(row["part_index"] or 0), int(row["chunk_id"])))

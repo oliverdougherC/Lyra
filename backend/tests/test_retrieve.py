@@ -197,3 +197,67 @@ def test_a_matched_problem_part_pulls_in_the_rest_of_the_problem(
     assert [chunk.chunk_id for chunk in result.chunks[:2]] == [sibling, matched]
     # The sibling inherits the match's score rather than posing as a match of its own.
     assert result.chunks[0].score == result.chunks[1].score
+
+
+def test_a_whole_problem_pulls_in_nothing(db: sqlite3.Connection, class_id: int) -> None:
+    """A problem that fit in one chunk has no parts, so it has no siblings.
+
+    `_number_parts` leaves `part_index` null exactly when a problem was not split, and
+    expansion used to key on `problem_number` alone. Two unrelated whole problems that
+    happen to share a number are not one problem.
+    """
+    homework = _insert_document(db, class_id, "homework-4.pdf", _days_ago(1))
+    noise = _insert_document(db, class_id, "lecture.pdf", _days_ago(1))
+    _insert_chunk(
+        db, class_id, homework, "2. Differentiate the following.", 0.0, problem_number="2"
+    )
+    # Seven closer chunks fill the rest of k, so the other problem 2 can only arrive by
+    # expansion. It must not.
+    for index in range(7):
+        _insert_chunk(db, class_id, noise, f"Related lecture material {index}.", 0.1 * (index + 1))
+    unrelated = _insert_chunk(
+        db, class_id, homework, "2. An unrelated second question.", 1.3, problem_number="2"
+    )
+
+    result = retrieve(db, class_id, "how do I differentiate", 1000)
+
+    assert len(result.chunks) == retrieve_module.K
+    assert unrelated not in [chunk.chunk_id for chunk in result.chunks]
+
+
+def test_numbering_that_restarts_does_not_merge_two_problems(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """The fault a 608-page textbook found, in miniature.
+
+    A sheet that restarts numbering under each section heading has several problem 1s, and
+    the chunker has grouped parts by consecutive run since Phase 2 for exactly that reason.
+    Retrieval did not: it took every chunk in the document carrying the same number. Read
+    as homework, the textbook had 120 chunks numbered `2` spread across the whole book, and
+    one hit emitted all 120 ahead of the second-ranked result at the first one's score.
+    """
+    homework = _insert_document(db, class_id, "homework-4.pdf", _days_ago(1))
+    noise = _insert_document(db, class_id, "lecture.pdf", _days_ago(1))
+    _insert_chunk(
+        db, class_id, homework, "1(a) State the theorem.", 0.0, problem_number="1", part_index=0
+    )
+    # Seven closer chunks fill the rest of k, so everything below arrives only by expansion.
+    for index in range(7):
+        _insert_chunk(db, class_id, noise, f"Related lecture material {index}.", 0.1 * (index + 1))
+    first_b = _insert_chunk(
+        db, class_id, homework, "1(b) Prove it.", 1.4, problem_number="1", part_index=1
+    )
+    # A second section, numbered from one again. Same number, different problem.
+    second_a = _insert_chunk(
+        db, class_id, homework, "1(a) An unrelated question.", 1.5, problem_number="1", part_index=0
+    )
+    second_b = _insert_chunk(
+        db, class_id, homework, "1(b) Also unrelated.", 1.6, problem_number="1", part_index=1
+    )
+
+    result = retrieve(db, class_id, "state the theorem", 1000)
+
+    returned = [chunk.chunk_id for chunk in result.chunks]
+    assert first_b in returned, "the matched problem's own other part still arrives"
+    assert second_a not in returned
+    assert second_b not in returned
