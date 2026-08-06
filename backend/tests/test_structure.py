@@ -136,6 +136,58 @@ def test_the_deepest_section_covering_a_page_wins() -> None:
     assert section_for_page(sections, 6).path == "Matrices / Matrix Arithmetic"
 
 
+def test_a_boundary_page_belongs_to_the_section_whose_heading_it_announces() -> None:
+    """The end of a deep subsection shares a page with the start of a new chapter.
+
+    An outline destination lands where the heading sits, so the page where 4.9.3 runs out
+    and chapter 5 begins is covered by both. Depth alone got this backwards: the outgoing
+    depth-3 subsection beat the incoming chapter, the opposite of the documented rule
+    that a boundary page credits the section the page announces. A page still inside the
+    subsection must meanwhile keep resolving to it, which is what the second assertion
+    holds in place.
+    """
+    parsed = _document(
+        dict.fromkeys(range(1, 16), "text"),
+        [
+            OutlineEntry(1, "Vectors", 1),
+            OutlineEntry(2, "The Cross Product", 2),
+            OutlineEntry(3, "The Box Product", 3),
+            OutlineEntry(1, "Determinants", 10),
+        ],
+    )
+    sections = build_sections(parsed)
+
+    # Page 10: The Box Product (depth 3) ends here, Determinants (depth 1) starts here.
+    assert section_for_page(sections, 10).title == "Determinants"
+    # Page 5 sits mid-subsection, so the deepest covering section still wins.
+    assert section_for_page(sections, 5).title == "The Box Product"
+
+
+def test_two_sections_starting_on_one_page_resolve_to_the_deeper_one() -> None:
+    """A chapter and its first section often open on the same page; the page announces
+    both, and the more specific label is the useful one."""
+    parsed = _document(
+        dict.fromkeys(range(1, 11), "text"),
+        [OutlineEntry(1, "Matrices", 4), OutlineEntry(2, "Matrix Arithmetic", 4)],
+    )
+
+    assert section_for_page(build_sections(parsed), 4).title == "Matrix Arithmetic"
+
+
+def test_a_transcribed_heading_still_yields_its_number() -> None:
+    """Recognition writes headings as Markdown ATX, `# C.1 Basic Fourier Series Pairs`.
+
+    The heading regex used to refuse the `#` prefix, so a recognized page in an outlined
+    document never yielded a section number and the section became unaddressable.
+    """
+    parsed = _document(
+        {30: "# C.1 Basic Discrete-Time Fourier Series Pairs\n\n| pair | value |"},
+        [OutlineEntry(1, "Basic Discrete-Time Fourier Series Pairs", 30)],
+    )
+
+    assert build_sections(parsed)[0].number == "C.1"
+
+
 def test_a_page_before_the_first_entry_belongs_to_no_section() -> None:
     """Front matter precedes the outline, and saying so beats guessing."""
     parsed = _document(dict.fromkeys(range(1, 11), "text"), [OutlineEntry(1, "Matrices", 5)])

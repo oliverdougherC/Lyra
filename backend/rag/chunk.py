@@ -82,8 +82,15 @@ PROBLEM_MARKER = re.compile(
 
 # Sub-parts of one problem: `(a)`, `a.`, `a)`, `(ii)`, `iii.`. Deliberately lowercase
 # only. `A.` and `I.` would match the first word of far too many ordinary sentences.
+#
+# The marker's text may open on the same line or on the next one. Typeset sheets commonly
+# put the marker on a line of its own (`(a)` above `Find...`), and requiring inline text
+# made every such marker invisible: an oversized problem then skipped sub-part splitting
+# entirely and fell to the paragraph packer. A marker at end-of-line only counts when the
+# very next line carries content, so a stray letter above a blank line still is not one.
 SUBPART_MARKER = re.compile(
-    r"^[ \t]*(?:\((?:[a-z]|[ivx]{1,4})\)|(?:[a-z]|[ivx]{1,4})[.)])[ \t]+(?=\S)",
+    r"^[ \t]*(?:\((?:[a-z]|[ivx]{1,4})\)|(?:[a-z]|[ivx]{1,4})[.)])"
+    r"(?:[ \t]+(?=\S)|[ \t]*(?=\n[ \t]*\S))",
     re.MULTILINE,
 )
 
@@ -264,7 +271,15 @@ class Chunk:
 
 @dataclass
 class _Draft:
-    """A chunk under construction, before stripping, capping, and part numbering."""
+    """A chunk under construction, before stripping, capping, and part numbering.
+
+    `problem_key` identifies which problem *instance* a draft came from - the character
+    offset of the problem's marker, which is unique within a document - where
+    `problem_number` is only the label the sheet printed. The two differ exactly when a
+    sheet restarts its numbering: two adjacent problems can share a number without being
+    one problem, and `_number_parts` must group by the instance, not the label. The key
+    never leaves this module; the emitted `Chunk` carries only the number.
+    """
 
     content: str
     page_number: int | None = None
@@ -273,6 +288,7 @@ class _Draft:
     section_number: str | None = None
     problem_number: str | None = None
     part_index: int | None = None
+    problem_key: int | None = None
 
 
 @dataclass(frozen=True)
@@ -463,7 +479,14 @@ def _chunk_problems(flat: _Flat) -> list[_Draft]:
 def _split_problem(flat: _Flat, start: int, body: str, number: str) -> list[_Draft]:
     """One problem as chunks: whole if it fits, then sub-parts, then paragraphs."""
     if estimate_tokens(body) <= MAX_CHUNK_TOKENS:
-        return [_Draft(content=body, page_number=flat.page_at(start), problem_number=number)]
+        return [
+            _Draft(
+                content=body,
+                page_number=flat.page_at(start),
+                problem_number=number,
+                problem_key=start,
+            )
+        ]
 
     parts = _split_subparts(body, start)
     if not parts or any(estimate_tokens(text) > MAX_CHUNK_TOKENS for _, text in parts):
@@ -477,6 +500,7 @@ def _split_problem(flat: _Flat, start: int, body: str, number: str) -> list[_Dra
             page_number=flat.page_at(offset),
             problem_number=number,
             part_index=index,
+            problem_key=start,
         )
         for index, (offset, text) in enumerate(parts)
     ]
@@ -808,10 +832,15 @@ def _hard_split(text: str) -> list[str]:
 def _number_parts(drafts: list[_Draft]) -> None:
     """Index the parts of each split problem; a problem that fits keeps no index.
 
-    Grouping is over consecutive runs rather than the whole document, so a second list
-    that restarts at `1.` is never mistaken for more parts of the first problem.
+    Grouping is by problem *instance* - the marker offset `_split_problem` stamped on
+    every draft it made - rather than by the printed number. Consecutive runs of one
+    number are not enough: a sheet that restarts numbering under each section heading can
+    put the last problem of one section directly beside the first of the next, both
+    labelled `1`, and a run-based grouping fused them into fake parts of one problem. The
+    key tells a genuine split (several drafts, one marker) from a coincidence of labels
+    (one draft each, two markers), which no inspection of the numbers alone can.
     """
-    for _, group in groupby(drafts, key=lambda draft: draft.problem_number):
+    for _, group in groupby(drafts, key=lambda draft: draft.problem_key):
         parts = list(group)
         if parts[0].problem_number is None:
             continue

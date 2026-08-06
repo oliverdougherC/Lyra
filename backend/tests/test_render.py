@@ -5,6 +5,7 @@ PyMuPDF produces a readable image and the cache does not lie about which file it
 from. A fake would test neither.
 """
 
+import threading
 from pathlib import Path
 
 import pymupdf
@@ -118,6 +119,45 @@ def test_a_write_that_dies_partway_leaves_nothing_the_cache_will_serve(
     assert list(render.pages_dir(1).glob("*.partial")) == []
     redone = render.render_page(1, source, "application/pdf", 1)
     assert redone.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_two_threads_rendering_the_same_page_do_not_collide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FastAPI serves requests from a threadpool, so two renders of one page share a pid.
+
+    The partial file was named by pid alone, so both writers used one name: the first
+    request's cleanup deleted the file out from under the second's `replace`, and one
+    viewer got a spurious "could not be opened" for a page that renders fine. The barrier
+    holds both threads at the end of their writes, so both are provably mid-render at
+    once and the collision is deterministic rather than a race the test might miss.
+    """
+    source = _pdf(tmp_path / "hw4.pdf")
+    whole = pymupdf.Pixmap.save
+    barrier = threading.Barrier(2, timeout=10)
+
+    def synchronized_save(self: pymupdf.Pixmap, filename: object, **kwargs: object) -> None:
+        whole(self, filename, **kwargs)
+        barrier.wait()
+
+    monkeypatch.setattr(pymupdf.Pixmap, "save", synchronized_save)
+    results: list[object] = []
+
+    def render_one() -> None:
+        try:
+            results.append(render.render_page(1, source, "application/pdf", 1))
+        except Exception as exc:  # noqa: BLE001 - the failure mode under test is an exception
+            results.append(exc)
+
+    threads = [threading.Thread(target=render_one) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert results == [render.page_path(1, 1), render.page_path(1, 1)]
+    assert render.page_path(1, 1).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+    assert list(render.pages_dir(1).glob("*.partial")) == []
 
 
 def test_reading_and_recognition_resolutions_cache_separately(tmp_path: Path) -> None:

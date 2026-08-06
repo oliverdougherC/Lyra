@@ -18,6 +18,7 @@ from backend.rag.chunk import (
     MAX_CHUNK_TOKENS,
     PROBLEM_MARKER,
     SOLUTIONS,
+    SUBPART_MARKER,
     SYLLABUS,
     TEXTBOOK,
     Chunk,
@@ -112,6 +113,55 @@ def test_oversized_problem_without_subparts_falls_back_to_overlapping_paragraphs
     # two parts is still readable in both.
     overlap = _overlap_chars(chunks[0].content, chunks[1].content)
     assert 80 * CHARS_PER_TOKEN <= overlap <= 100 * CHARS_PER_TOKEN
+
+
+def test_subpart_markers_alone_on_their_line_still_split_an_oversized_problem() -> None:
+    """Typeset sheets commonly put `(a)` on a line of its own with the text below it.
+
+    The marker regex used to require inline text after the marker, so these markers were
+    invisible and an oversized problem skipped sub-part splitting entirely, falling to
+    the paragraph packer and cutting mid-thought instead of at the parts.
+    """
+    subparts = "".join(
+        f"({letter})\n{_filler(950, seed=index)}\n\n" for index, letter in enumerate("abcdef")
+    )
+    problem = f"Problem 3. Consider the following system.\n\n{subparts}"
+    assert estimate_tokens(problem) > 5500
+
+    chunks = chunk_document(_parsed(problem), HOMEWORK)
+
+    _assert_well_formed(chunks)
+    assert {chunk.problem_number for chunk in chunks} == {"3"}
+    # Split on the markers rather than packed by paragraphs: each part opens with one.
+    openers = [chunk.content[:3] for chunk in chunks]
+    assert openers[1:] == ["(a)", "(b)", "(c)", "(d)", "(e)", "(f)"]
+
+
+def test_a_marker_above_a_blank_line_is_not_a_subpart() -> None:
+    """End-of-line markers only count when the very next line carries their content."""
+    assert SUBPART_MARKER.search("(a)\n\nUnrelated paragraph.") is None
+    assert SUBPART_MARKER.search("(a)\nFind the derivative.") is not None
+
+
+def test_two_adjacent_problems_sharing_a_number_are_not_fused_into_parts() -> None:
+    """A sheet that restarts numbering can put two problem 1s side by side.
+
+    Each fits in one chunk, so each is a whole problem with no part index. Grouping parts
+    by consecutive runs of the printed number fused them into fake parts 0 and 1 of one
+    problem, which retrieval's part expansion then reassembles as a unit: ask about one
+    and the unrelated other arrives with it.
+    """
+    homework = (
+        "Problem 1\nState the divergence theorem for this section.\n\n"
+        "Problem 1\nAn unrelated question that opens the next section's numbering.\n"
+    )
+
+    chunks = chunk_document(_parsed(homework), HOMEWORK)
+
+    _assert_well_formed(chunks)
+    assert [chunk.problem_number for chunk in chunks] == ["1", "1"]
+    # Two whole problems, not two parts of one.
+    assert [chunk.part_index for chunk in chunks] == [None, None]
 
 
 def test_a_problem_that_fits_is_one_chunk_with_no_part_index() -> None:

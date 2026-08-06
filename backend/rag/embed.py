@@ -12,6 +12,7 @@ count that matters is asked of the tokenizer that will actually be used.
 """
 
 import logging
+import re
 
 import httpx
 
@@ -54,6 +55,10 @@ _UNSPLITTABLE_MESSAGE = (
     "This document contains an unbroken run of text longer than the local embedding "
     "model can read, and there is no word boundary to split it at."
 )
+
+# `\s` under Python's `re` covers Unicode whitespace, so a newline, a tab, and an
+# ideographic space are all boundaries `_halve` may cut at.
+_WHITESPACE = re.compile(r"\s")
 
 
 def embed_documents(texts: list[str]) -> list[list[float]]:
@@ -131,11 +136,23 @@ def _split_to_fit(prefix: str, text: str) -> list[str]:
 
 
 def _halve(text: str) -> tuple[str, str]:
-    """Split `text` at whichever whitespace sits nearest its midpoint."""
+    """Split `text` at whichever whitespace sits nearest its midpoint.
+
+    Any whitespace is a boundary, not only the ASCII space. A table transcribed one row
+    to a line can run thousands of characters on newlines alone, and CJK prose breaks at
+    line ends and ideographic spaces with no ASCII space anywhere. Cutting only at `' '`
+    declared both of those unsplittable, and one such chunk failed its whole document
+    with a "no word boundary" message that was false: the boundaries were there, this
+    just refused to look at them.
+    """
     middle = len(text) // 2
+    last_before = -1
+    for match in _WHITESPACE.finditer(text, 0, middle):
+        last_before = match.start()
+    first_after = _WHITESPACE.search(text, middle)
     candidates = [
         position
-        for position in (text.rfind(" ", 0, middle), text.find(" ", middle))
+        for position in (last_before, first_after.start() if first_after else -1)
         if position > 0
     ]
     if not candidates:
@@ -248,6 +265,7 @@ def _parse_vectors(payload: object, expected_count: int) -> list[list[float]]:
         raise UpstreamError(_BAD_RESPONSE_MESSAGE)
 
     indexed: list[tuple[int, list[float]]] = []
+    seen: set[int] = set()
     for position, item in enumerate(data):
         if not isinstance(item, dict):
             raise UpstreamError(_BAD_RESPONSE_MESSAGE)
@@ -255,6 +273,13 @@ def _parse_vectors(payload: object, expected_count: int) -> list[list[float]]:
         embedding = item.get("embedding")
         if not isinstance(index, int) or not isinstance(embedding, list):
             raise UpstreamError(_BAD_RESPONSE_MESSAGE)
+        # A reply must account for exactly every input once (the same rule `_scores` in
+        # `rag/rerank.py` enforces). Without it a repeated or out-of-range index passes
+        # the count check and the sort silently hands one chunk another chunk's vector,
+        # which retrieval then serves forever with no symptom anywhere.
+        if not 0 <= index < expected_count or index in seen:
+            raise UpstreamError(_BAD_RESPONSE_MESSAGE)
+        seen.add(index)
         if len(embedding) != EMBEDDING_DIM:
             # `chunk_embeddings` fixes the width at 768 when the vec0 table is created, so
             # a mismatch here has to fail now rather than at insert time.

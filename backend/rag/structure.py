@@ -26,7 +26,14 @@ PATH_SEPARATOR = " / "
 
 # A printed heading: `4.9 The Cross Product`, `3.1.1. Cofactors`, `A.2 Well Ordering`.
 # The trailing delimiter is optional because books differ on it within one volume.
-_HEADING = re.compile(r"^[ \t]*([A-Z]?\.?\d+(?:\.\d+)*)\.?[ \t]+(\S[^\n]*)$", re.MULTILINE)
+#
+# The optional ATX prefix is for transcribed pages. Recognition writes its headings as
+# Markdown (`# C.1 Basic Fourier Series Pairs`), and without the prefix a recognized page
+# in an outlined document could never yield a section number: the entry matched the title
+# and this regex refused the line it was printed on.
+_HEADING = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]+)?([A-Z]?\.?\d+(?:\.\d+)*)\.?[ \t]+(\S[^\n]*)$", re.MULTILINE
+)
 
 # How much of a title has to agree before a printed heading is taken to be that entry.
 # A prefix rather than the whole thing, because a page can wrap or hyphenate a long title.
@@ -113,9 +120,14 @@ def build_sections(parsed: ParsedDocument) -> list[Section]:
 def section_for_page(sections: list[Section], page_number: int | None) -> Section | None:
     """The most specific section covering a page.
 
-    Deepest wins, because a page inside section 4.9 is also inside chapter 4 and the
-    specific answer is the useful one. Ties break towards the later section, which is the
-    one that starts on a shared boundary page.
+    Two rules, applied in order, and the order is the point. A section that *starts* on
+    the page wins first, because a boundary page is credited to the section whose heading
+    the page announces (the rule `_place_in_sections` in `rag/chunk.py` documents). Only
+    then does deepest win, because a page inside section 4.9 is also inside chapter 4 and
+    the specific answer is the useful one. Comparing depth alone got the boundary case
+    backwards: on a page where subsection 4.9.3 ends and chapter 5 begins, the outgoing
+    depth-3 section beat the incoming chapter. Within either rule, ties break towards the
+    later section.
 
     Args:
         sections: What `build_sections` returned.
@@ -128,11 +140,16 @@ def section_for_page(sections: list[Section], page_number: int | None) -> Sectio
     if page_number is None:
         return None
 
+    covering = [
+        section for section in sections if section.first_page <= page_number <= section.last_page
+    ]
+    # A page mid-section has no starter and falls through to deepest-covering, which is
+    # what keeps a page inside 4.9.3 resolving to 4.9.3 rather than to its chapter.
+    starting = [section for section in covering if section.first_page == page_number]
+
     best: Section | None = None
-    for section in sections:
-        if section.first_page <= page_number <= section.last_page and (
-            best is None or section.depth >= best.depth
-        ):
+    for section in starting or covering:
+        if best is None or section.depth >= best.depth:
             best = section
     return best
 

@@ -16,6 +16,7 @@ than a decode, it is opt-in per document, and its results are spliced back in by
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -29,6 +30,28 @@ logger = logging.getLogger(__name__)
 # clear it by two orders of magnitude, and a scanned page usually extracts nothing at all,
 # so the exact value only has to separate "a stray page number" from "a paragraph".
 SCANNED_PAGE_MIN_CHARS = 20
+
+# The junk-text-layer gate, for a photographed page whose "text" is garbage rather than
+# absent. The roadmap's case: a phone screenshot of a page ingested `ready` because its
+# text layer extracted as a Gmail URL, which cleared the character count above while
+# saying nothing the page says. Both halves of the gate are required together, and that
+# conjunction is the whole design: a sparse title page carries little text but no
+# page-filling image, and a matrix-heavy page of lone digits carries little *alphabetic*
+# text but no page-filling image either, so each stays readable. Only a page that is
+# mostly one raster image *and* has almost no real words joins the scanned flow, where
+# recognition can read it properly.
+#
+# Alphabetic characters, counted after URLs are stripped, because a URL is exactly the
+# junk this gate exists for and is stuffed with letters. Fifteen is under half of the
+# shortest real caption line, and far above what a stray watermark leaves behind.
+_JUNK_TEXT_MAX_ALPHA = 15
+_URL = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+
+# How much of the page one raster image has to cover before the page counts as being that
+# image. A photographed page is the image edge to edge, or nearly; a text page with a
+# large figure rarely gives one image more than half the page, and its caption alone
+# clears the alphabetic floor anyway.
+_PHOTO_MIN_IMAGE_SHARE = 0.8
 
 PDF_MIME = "application/pdf"
 TEXT_MIMES = frozenset({"text/plain", "text/markdown"})
@@ -152,16 +175,59 @@ def is_scanned_page(text: str) -> bool:
     return len("".join(text.split())) < SCANNED_PAGE_MIN_CHARS
 
 
-def _read_pages(path: Path, mime: str) -> tuple[list[tuple[int, str]], list[OutlineEntry]]:
-    """Every page as (1-based number, text), plus the document's own outline.
+def _is_photographed_page(page: "pymupdf.Page", text: str) -> bool:
+    """Whether a page is a photograph wearing a junk text layer.
+
+    The cheap textual half runs first, so the display list is only ever consulted for
+    pages that are nearly wordless - which on a real book is almost none of them.
+    """
+    stripped = _URL.sub("", text)
+    if sum(character.isalpha() for character in stripped) >= _JUNK_TEXT_MAX_ALPHA:
+        return False
+    return _largest_image_share(page) >= _PHOTO_MIN_IMAGE_SHARE
+
+
+def _largest_image_share(page: "pymupdf.Page") -> float:
+    """The fraction of the page its biggest raster image covers, 0.0 when unknowable.
+
+    The largest single image rather than a union of all of them, deliberately: the gate
+    is after a photograph placed as one image, and summing many small decorations could
+    only create false positives.
+    """
+    try:
+        infos = page.get_image_info()
+    except Exception:
+        # Failing to inspect a page's images must never fail its parse; without the
+        # measurement the gate simply does not fire and the page stays readable.
+        return 0.0
+
+    page_area = page.rect.width * page.rect.height
+    if page_area <= 0:
+        return 0.0
+
+    share = 0.0
+    for info in infos:
+        x0, y0, x1, y1 = info.get("bbox", (0.0, 0.0, 0.0, 0.0))
+        share = max(share, max(x1 - x0, 0.0) * max(y1 - y0, 0.0) / page_area)
+    return share
+
+
+def _read_pages(path: Path, mime: str) -> tuple[list[tuple[int, str, bool]], list[OutlineEntry]]:
+    """Every page as (1-based number, text, photographed), plus the document's outline.
 
     Serves images as well as PDFs, because PyMuPDF opens a PNG or a JPG as a one-page
     document and asking it for the text of that page correctly returns nothing. An image
     has no outline, and `get_toc` says so rather than failing.
+
+    The photographed flag is measured here rather than in `_drop_scanned_pages` because
+    it needs the open page object, and only page-based formats have one.
     """
     try:
         with pymupdf.open(path) as document:
-            pages = [(number, page.get_text()) for number, page in enumerate(document, start=1)]
+            pages: list[tuple[int, str, bool]] = []
+            for number, page in enumerate(document, start=1):
+                text = page.get_text()
+                pages.append((number, text, _is_photographed_page(page, text)))
             return pages, _read_outline(document)
     except Exception as exc:
         # PyMuPDF raises several unrelated types here (FileDataError, FileNotFoundError,
@@ -170,17 +236,18 @@ def _read_pages(path: Path, mime: str) -> tuple[list[tuple[int, str]], list[Outl
         raise LyraError(unreadable_message(mime)) from exc
 
 
-def _read_text_file(path: Path) -> list[tuple[int, str]]:
+def _read_text_file(path: Path) -> list[tuple[int, str, bool]]:
     """A plain-text or Markdown file as a single page numbered 1.
 
     Undecodable bytes are replaced rather than raising: one stray byte in an otherwise
-    readable file is not a reason to refuse the document.
+    readable file is not a reason to refuse the document. A text file cannot carry a
+    raster image, so it can never be a photographed page.
     """
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         raise LyraError(UNREADABLE_FILE_MESSAGE) from exc
-    return [(1, text)]
+    return [(1, text, False)]
 
 
 def _read_outline(document: "pymupdf.Document") -> list[OutlineEntry]:
@@ -208,13 +275,19 @@ def _read_outline(document: "pymupdf.Document") -> list[OutlineEntry]:
 
 
 def _drop_scanned_pages(
-    pages: list[tuple[int, str]], outline: list[OutlineEntry]
+    pages: list[tuple[int, str, bool]], outline: list[OutlineEntry]
 ) -> ParsedDocument:
-    """Keep the pages that carry text, and count the ones that do not."""
+    """Keep the pages that carry real text, and count the ones that do not.
+
+    A photographed page with a junk text layer is dropped the same way a blank scan is:
+    both are pictures of text, and both belong to the recognition flow rather than to the
+    index. Keeping the junk would be worse than keeping nothing - it embeds and retrieves
+    text the page does not say.
+    """
     kept = [
         ParsedPage(page_number=number, text=text)
-        for number, text in pages
-        if not is_scanned_page(text)
+        for number, text, photographed in pages
+        if not (is_scanned_page(text) or photographed)
     ]
     return ParsedDocument(
         pages=kept,

@@ -13,6 +13,7 @@ viewer a second, and nothing else reads it.
 
 import logging
 import os
+import threading
 from pathlib import Path
 
 import pymupdf
@@ -46,6 +47,19 @@ FIGURE_DPI = 220
 
 NOT_A_PAGE = "That page does not exist in this document."
 NOT_RENDERABLE = "This document has no pages to show."
+
+
+def _partial_path(cached: Path) -> Path:
+    """A writer-private name for the bytes on their way to `cached`.
+
+    The pid alone is not private enough: FastAPI serves requests from a threadpool, so
+    two concurrent renders of the same page share a pid, wrote the same partial name, and
+    one request's cleanup deleted the file out from under the other's `replace`, which
+    surfaced as a spurious "could not be opened". The thread id is what actually
+    distinguishes two writers in this process, and the pid still keeps two processes
+    (a dev server and a test run, say) out of each other's way.
+    """
+    return cached.with_name(f"{cached.name}.{os.getpid()}.{threading.get_ident()}.partial")
 
 
 def pages_dir(document_id: int) -> Path:
@@ -102,7 +116,7 @@ def render_page(
             # for good, and nothing short of re-ingesting the document would clear it.
             # `replace` is atomic within a directory, so the name only ever appears once
             # the bytes are all there.
-            partial = cached.with_name(f"{cached.name}.{os.getpid()}.partial")
+            partial = _partial_path(cached)
             try:
                 # `output` is named rather than left to the extension: PyMuPDF picks the
                 # format from the filename, and the temporary name does not end in `.png`.
@@ -182,7 +196,7 @@ def render_figure(
             # stretched over several times the area.
             pixmap = page.get_pixmap(dpi=FIGURE_DPI, clip=clip)
             cached.parent.mkdir(parents=True, exist_ok=True)
-            partial = cached.with_name(f"{cached.name}.{os.getpid()}.partial")
+            partial = _partial_path(cached)
             try:
                 pixmap.save(partial, output="png")
                 partial.replace(cached)

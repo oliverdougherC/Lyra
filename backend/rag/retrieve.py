@@ -76,27 +76,65 @@ where embedding match ? and k = {int(limit)} and class_id = ?
 """  # noqa: S608
 
 
-_CHUNK_SELECT = """
-select c.id as chunk_id, c.document_id, c.content, c.token_count, c.page_number,
+_CHUNK_COLUMNS = """c.id as chunk_id, c.document_id, c.content, c.token_count, c.page_number,
        c.section_title, c.section_path, c.section_number, c.problem_number, c.part_index,
-       d.filename, d.created_at
+       d.filename, d.created_at"""
+
+_CHUNK_SELECT = f"""
+select {_CHUNK_COLUMNS}
 from chunks c
 join documents d on d.id = c.document_id
-"""
+"""  # noqa: S608 - interpolates only the module's own column list
+
+# Every retrieval path filters on `d.state = 'ready'`, and none may drop it. Ingestion
+# commits chunk batches as it goes, so a failure partway through embedding leaves a
+# document whose chunks are real rows but whose text is only half indexed. Its state says
+# so - `ready` is the one terminal state that means "searchable" (see the state machine in
+# `backend/core/ingestion.py`) - and serving anything else answers a question from half a
+# document with no symptom anywhere. Ingestion also cleans those chunks up on failure;
+# this filter is the belt to that suspender, and both are intended.
+_READY_ONLY = "d.state = 'ready'"
+
+# The same join with the query's cosine distance selected as a column, for the paths that
+# score rows with SQL rather than through the vec0 KNN. The first placeholder is always
+# the serialized query vector. Selecting the distance here is what lets those paths read
+# each row's similarity off the row instead of re-asking per chunk, which used to be an
+# N+1 against the embeddings table.
+_SCORED_CHUNK_SELECT = f"""
+select {_CHUNK_COLUMNS},
+       vec_distance_cosine(e.embedding, ?) as distance
+from chunks c
+join documents d on d.id = c.document_id
+join chunk_embeddings e on e.chunk_id = c.id
+"""  # noqa: S608 - interpolates only the module's own column list
 
 # Chunks of one numbered section, and of everything nested under it, so asking for section
 # 2.2 also reaches 2.2.1. Scored against the query rather than taken in document order:
 # a section reference says where to look, and within a long section the part that answers
 # the question should still outrank the part that does not.
 _SECTION_SQL = (
-    _CHUNK_SELECT + "join chunk_embeddings e on e.chunk_id = c.id\n"
-    "where c.class_id = ? and (c.section_number = ? or c.section_number like ?)\n"
+    _SCORED_CHUNK_SELECT + f"where c.class_id = ? and {_READY_ONLY}\n"
+    "  and (c.section_number = ? or c.section_number like ?)\n"
+)
+
+# Document-scoped retrieval: the vector search runs over the pinned document's own chunks,
+# so its own top-K comes back. This used to be a post-filter on the class-wide KNN of
+# K = 8, which made the scope decorative: in a 36-document class the eight nearest
+# neighbours were routinely all from other documents, and "chat about this document"
+# frequently returned nothing from the document at all. Brute force over one document is
+# smaller than the class-wide KNN, so scoping costs nothing.
+_DOCUMENT_KNN_SQL = (
+    _SCORED_CHUNK_SELECT + f"where c.document_id = ? and {_READY_ONLY}\n"
+    "order by distance, c.id\nlimit ?"
 )
 
 # Ordered by id, which is document order, because that is what makes one problem's parts
 # contiguous and so lets `_sibling_run` tell two problems carrying the same number apart.
 # The run is put back into part order before it is emitted.
-_PROBLEM_SQL = _CHUNK_SELECT + "where c.document_id = ? and c.problem_number = ?\norder by c.id"
+_PROBLEM_SQL = (
+    _CHUNK_SELECT
+    + f"where c.document_id = ? and c.problem_number = ? and {_READY_ONLY}\norder by c.id"
+)
 
 
 @dataclass(frozen=True)
@@ -157,8 +195,9 @@ def retrieve(
         query: The student's question, embedded here with the query task prefix.
         budget_tokens: Retrieval share of the context window, measured with
             `estimate_tokens`.
-        document_id: Restrict the result to one document. Applied after the KNN, so the
-            neighbours are still chosen from the whole class.
+        document_id: Restrict the result to one document. The vector search then runs
+            over that document's own chunks, so the document's best answers come back
+            rather than whatever slice of it survived a class-wide search.
 
     Returns:
         The ranked chunks that fit, and the trim reporting for the ones that did not.
@@ -171,8 +210,12 @@ def retrieve(
     # surplus would go straight into `_fit_to_budget`, which is a different product: the
     # turn would be built from thirty-two chunks the search was never confident about.
     reranking = rerank_server.available
-    distances = _knn(conn, class_id, vector, RERANK_FETCH_K if reranking else K)
-    candidates = _load_candidates(conn, distances, document_id) if distances else []
+    fetch = RERANK_FETCH_K if reranking else K
+    if document_id is not None:
+        candidates = _document_candidates(conn, document_id, vector, fetch)
+    else:
+        distances = _knn(conn, class_id, vector, fetch)
+        candidates = _load_candidates(conn, distances) if distances else []
     if reranking:
         candidates = _reranked(query, candidates)
     if not candidates and not resolved:
@@ -224,7 +267,14 @@ def _resolve_sections(
         the section still reads forwards. Empty when the query names nothing, when nothing
         matches, or when no chunk has been indexed with a section number.
     """
-    numbers = {match.group(1) for match in SECTION_REFERENCE.finditer(query)}
+    # Uppercased before the SQL, because the two sides of the lookup disagree about case
+    # and split the result down the middle: stored section numbers are always uppercase
+    # (the heading regexes only accept `[A-Z]`), `SECTION_REFERENCE` matches
+    # case-insensitively, and SQLite's `=` is case-sensitive where its `like` is not. A
+    # student who typed `section a.2` therefore got A.2's subsections (via the `like`)
+    # and not the section's own chunks (via the `=`), which is a stranger failure than
+    # either everything or nothing.
+    numbers = {match.group(1).upper() for match in SECTION_REFERENCE.finditer(query)}
     if not numbers:
         return []
 
@@ -234,22 +284,25 @@ def _resolve_sections(
 
     now = datetime.now(UTC)
     found: dict[int, RetrievedChunk] = {}
+    serialized = sqlite_vec.serialize_float32(vector)
     for number in sorted(numbers):
         sql = _SECTION_SQL
-        parameters: list[object] = [class_id, number, f"{number}.%"]
+        parameters: list[object] = [serialized, class_id, number, f"{number}.%"]
         if document_id is not None:
             sql += " and c.document_id = ?"
             parameters.append(document_id)
         # Ordered by distance so the part of a long section that answers the question
         # survives the budget, then put back into reading order below.
-        sql += " order by vec_distance_cosine(e.embedding, ?), c.id"
-        parameters.append(sqlite_vec.serialize_float32(vector))
+        sql += " order by distance, c.id"
 
         for row in conn.execute(sql, parameters):
             chunk_id = int(row["chunk_id"])
             if chunk_id in found:
                 continue
-            similarity = _similarity_to(conn, chunk_id, vector)
+            # The distance came back as a column of this very row, so the similarity is
+            # read off it rather than re-asked of the embeddings table one chunk at a
+            # time, which is what this loop used to do.
+            similarity = 1.0 - float(row["distance"])
             found[chunk_id] = _chunk_from_row(
                 row,
                 similarity,
@@ -263,20 +316,6 @@ def _resolve_sections(
     return sorted(kept, key=lambda chunk: (chunk.page_number or 0, chunk.chunk_id))
 
 
-def _similarity_to(conn: sqlite3.Connection, chunk_id: int, vector: list[float]) -> float:
-    """Cosine similarity between one stored chunk and the query.
-
-    Read back rather than carried out of the ordering query, because sqlite-vec exposes
-    the distance to `order by` but not as a column of the row it returns.
-    """
-    row = conn.execute(
-        "select vec_distance_cosine(embedding, ?) as distance "
-        "from chunk_embeddings where chunk_id = ?",
-        (sqlite_vec.serialize_float32(vector), chunk_id),
-    ).fetchone()
-    return 1.0 - float(row["distance"]) if row is not None else 0.0
-
-
 def _knn(
     conn: sqlite3.Connection, class_id: int, vector: list[float], limit: int
 ) -> dict[int, float]:
@@ -287,16 +326,37 @@ def _knn(
     return {int(row["chunk_id"]): float(row["distance"]) for row in rows}
 
 
-def _load_candidates(
-    conn: sqlite3.Connection, distances: dict[int, float], document_id: int | None
+def _document_candidates(
+    conn: sqlite3.Connection, document_id: int, vector: list[float], limit: int
 ) -> list[RetrievedChunk]:
+    """The pinned document's own nearest chunks, scored the way `_load_candidates` scores.
+
+    A manual `vec_distance_cosine` scan rather than the vec0 KNN, because the KNN
+    partitions by class and cannot be told about a document; scanning one document's
+    chunks is far smaller work than the class-wide search anyway. The distance arrives as
+    a column, so similarity is read straight off each row.
+    """
+    now = datetime.now(UTC)
+    chunks: list[RetrievedChunk] = []
+    rows = conn.execute(
+        _DOCUMENT_KNN_SQL, (sqlite_vec.serialize_float32(vector), document_id, limit)
+    )
+    for row in rows:
+        similarity = 1.0 - float(row["distance"])
+        score = similarity + RECENCY_COEFFICIENT * _recency_factor(row["created_at"], now)
+        chunks.append(_chunk_from_row(row, similarity, score))
+
+    # The SQL ordered by distance to apply `limit`; the served order still includes the
+    # recency bonus, exactly as the class-wide path ranks its candidates.
+    chunks.sort(key=lambda chunk: (-chunk.score, chunk.chunk_id))
+    return chunks
+
+
+def _load_candidates(conn: sqlite3.Connection, distances: dict[int, float]) -> list[RetrievedChunk]:
     """Join the neighbours to their content and document metadata, then rank them."""
     placeholders = ", ".join("?" * len(distances))
-    sql = f"{_CHUNK_SELECT}where c.id in ({placeholders})"  # noqa: S608
+    sql = f"{_CHUNK_SELECT}where c.id in ({placeholders}) and {_READY_ONLY}"  # noqa: S608
     parameters: list[object] = list(distances)
-    if document_id is not None:
-        sql += " and c.document_id = ?"
-        parameters.append(document_id)
 
     now = datetime.now(UTC)
     chunks: list[RetrievedChunk] = []
