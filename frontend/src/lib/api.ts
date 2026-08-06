@@ -4,6 +4,13 @@
  */
 
 import type {
+  AnswerCreate,
+  AnswerRead,
+  AttemptRead,
+  AttemptResult,
+  CardStateRead,
+  CardUpdate,
+  CardUpdateRead,
   ChatEvent,
   ChatRequest,
   ClassCreate,
@@ -11,12 +18,18 @@ import type {
   ClassRead,
   ClassUpdate,
   ConnectionTestResult,
+  DeckCreate,
+  DeckDetail,
+  DeckSession,
   DocumentOutline,
   DocumentRead,
   DocumentStatus,
   DocumentText,
   FigureRead,
   MessageRead,
+  QuizCreate,
+  QuizDetail,
+  Rating,
   RegenerateRequest,
   SegmentationUpdate,
   SessionRead,
@@ -28,6 +41,9 @@ import type {
   SolutionRead,
   SolutionRevision,
   SolutionStatus,
+  StudyArtifactRead,
+  StudyListRead,
+  StudyStatus,
   ToolSupportResult,
   UserProfile,
   VisionSupportResult,
@@ -297,6 +313,63 @@ export const api = {
 
   deleteSolution: async (artifactId: number) => {
     await send(`/api/solutions/${artifactId}`, { method: 'DELETE' })
+  },
+
+  listStudy: (classId: number, signal?: AbortSignal) =>
+    requestJson<StudyListRead>(`/api/classes/${classId}/study`, { signal }),
+
+  createDeck: (classId: number, body: DeckCreate) =>
+    requestJson<StudyArtifactRead>(`/api/classes/${classId}/decks`, { method: 'POST', body }),
+
+  createQuiz: (classId: number, body: QuizCreate) =>
+    requestJson<StudyArtifactRead>(`/api/classes/${classId}/quizzes`, { method: 'POST', body }),
+
+  getDeck: (deckId: number, signal?: AbortSignal) =>
+    requestJson<DeckDetail>(`/api/decks/${deckId}`, { signal }),
+
+  getQuiz: (quizId: number, signal?: AbortSignal) =>
+    requestJson<QuizDetail>(`/api/quizzes/${quizId}`, { signal }),
+
+  getDeckStatus: (deckId: number, signal?: AbortSignal) =>
+    requestJson<StudyStatus>(`/api/decks/${deckId}/status`, { signal }),
+
+  getQuizStatus: (quizId: number, signal?: AbortSignal) =>
+    requestJson<StudyStatus>(`/api/quizzes/${quizId}/status`, { signal }),
+
+  getDeckSession: (deckId: number, limit = 20, signal?: AbortSignal) =>
+    requestJson<DeckSession>(`/api/decks/${deckId}/session?limit=${limit}`, { signal }),
+
+  reviewCard: (partId: number, rating: Rating) =>
+    requestJson<CardStateRead>(`/api/cards/${partId}/review`, { method: 'POST', body: { rating } }),
+
+  updateCard: (partId: number, body: CardUpdate) =>
+    requestJson<CardUpdateRead>(`/api/cards/${partId}`, { method: 'PATCH', body }),
+
+  deleteCard: async (partId: number) => {
+    await send(`/api/cards/${partId}`, { method: 'DELETE' })
+  },
+
+  startAttempt: (quizId: number) =>
+    requestJson<AttemptRead>(`/api/quizzes/${quizId}/attempts`, { method: 'POST' }),
+
+  submitAnswer: (attemptId: number, body: AnswerCreate) =>
+    requestJson<AnswerRead>(`/api/attempts/${attemptId}/answers`, { method: 'POST', body }),
+
+  finishAttempt: (attemptId: number) =>
+    requestJson<AttemptResult>(`/api/attempts/${attemptId}/finish`, { method: 'POST' }),
+
+  renameDeck: (deckId: number, title: string) =>
+    requestJson<StudyArtifactRead>(`/api/decks/${deckId}`, { method: 'PATCH', body: { title } }),
+
+  renameQuiz: (quizId: number, title: string) =>
+    requestJson<StudyArtifactRead>(`/api/quizzes/${quizId}`, { method: 'PATCH', body: { title } }),
+
+  deleteDeck: async (deckId: number) => {
+    await send(`/api/decks/${deckId}`, { method: 'DELETE' })
+  },
+
+  deleteQuiz: async (quizId: number) => {
+    await send(`/api/quizzes/${quizId}`, { method: 'DELETE' })
   },
 }
 
