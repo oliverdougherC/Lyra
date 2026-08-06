@@ -595,3 +595,92 @@ export interface AttemptResult {
   total: number
   by_topic: { topic: string; correct: number; total: number }[]
 }
+
+/**
+ * The artifact fields a draft carries. A draft is born `ready` - there is no ingestion
+ * run - and goes back to `generating` only while a suggestion pass is working.
+ */
+export interface DraftRead {
+  id: number
+  class_id: number
+  kind: 'draft'
+  title: string
+  state: ArtifactState
+  stage_detail: string | null
+  problems_total: number | null
+  problems_done: number
+  error_message: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** A draft with its one body part unfolded into it, which is how the workspace reads it. */
+export interface DraftDetail extends DraftRead {
+  part_id: number
+  body: string
+  /** Whether a suggestion is waiting to be reviewed, so the rail can open on it. */
+  pending: boolean
+}
+
+/** The polled state of one draft's suggestion run. Skinny on purpose: the workspace polls it. */
+export interface DraftStatus {
+  state: ArtifactState
+  stage_detail: string | null
+  error_message: string | null
+}
+
+/**
+ * One review unit of a base/proposed diff. The coordinates are 0-based line offsets the
+ * server computes; the interface renders `lines` and echoes `{index, hash}` back, and the
+ * hash is what catches the hunk set moving under it.
+ */
+export interface Hunk {
+  index: number
+  old_start: number
+  old_lines: number
+  new_start: number
+  new_lines: number
+  /** Unified-diff style: ' ' context, '-' removed, '+' added, line endings stripped. */
+  lines: string[]
+  hash: string
+}
+
+/** A suggestion waiting for review, as `GET /api/drafts/{id}/pending` reads it. */
+export interface PendingEdit {
+  id: number
+  stale: boolean
+  /** The instruction the student gave, which is the panel's title. */
+  note: string | null
+  hunks: Hunk[]
+  proposed_content: string
+  /** Carried only when the edit is stale, for the side-by-side view. */
+  base_content?: string
+}
+
+/** Body of `POST /api/drafts/{id}/write`: the instruction plus what the editor gathered. */
+export interface WriteRequest {
+  instruction: string
+  heading?: string | null
+  selection?: string | null
+  nearby?: string | null
+}
+
+/** The three SSE frames `POST /api/drafts/{id}/write` emits. */
+export type WriteEvent =
+  | { type: 'token'; text: string }
+  | { type: 'done' }
+  | { type: 'error'; message: string }
+
+/** Body of `PATCH /api/drafts/{id}/body`. Without `snapshot` no revision is written. */
+export interface DraftBodyUpdate {
+  content: string
+  snapshot?: boolean
+  note?: string
+}
+
+/** What accepting or rejecting a pending edit answers: how many hunks are left of it. */
+export interface AcceptRejectResult {
+  remaining: number
+  /** The edit as it now stands, present whenever anything is left of it. */
+  edit?: PendingEdit
+}

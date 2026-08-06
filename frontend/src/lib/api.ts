@@ -4,6 +4,7 @@
  */
 
 import type {
+  AcceptRejectResult,
   AnswerCreate,
   AnswerRead,
   AttemptRead,
@@ -25,8 +26,13 @@ import type {
   DocumentRead,
   DocumentStatus,
   DocumentText,
+  DraftBodyUpdate,
+  DraftDetail,
+  DraftRead,
+  DraftStatus,
   FigureRead,
   MessageRead,
+  PendingEdit,
   QuizCreate,
   QuizDetail,
   Rating,
@@ -47,6 +53,8 @@ import type {
   ToolSupportResult,
   UserProfile,
   VisionSupportResult,
+  WriteEvent,
+  WriteRequest,
 } from '@/types'
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://127.0.0.1:8000'
@@ -371,6 +379,59 @@ export const api = {
   deleteQuiz: async (quizId: number) => {
     await send(`/api/quizzes/${quizId}`, { method: 'DELETE' })
   },
+
+  listDrafts: (classId: number, signal?: AbortSignal) =>
+    requestJson<DraftRead[]>(`/api/classes/${classId}/drafts`, { signal }),
+
+  createDraft: (classId: number, title: string) =>
+    requestJson<DraftRead>(`/api/classes/${classId}/drafts`, { method: 'POST', body: { title } }),
+
+  getDraft: (draftId: number, signal?: AbortSignal) =>
+    requestJson<DraftDetail>(`/api/drafts/${draftId}`, { signal }),
+
+  renameDraft: (draftId: number, title: string) =>
+    requestJson<DraftRead>(`/api/drafts/${draftId}`, { method: 'PATCH', body: { title } }),
+
+  deleteDraft: async (draftId: number) => {
+    await send(`/api/drafts/${draftId}`, { method: 'DELETE' })
+  },
+
+  /**
+   * The autosave path. `snapshot: false` (the default) writes no revision, so a save every
+   * second and a half does not bury the ones the student took on purpose.
+   */
+  updateDraftBody: (draftId: number, body: DraftBodyUpdate) =>
+    requestJson<{ part_id: number; saved: true }>(`/api/drafts/${draftId}/body`, {
+      method: 'PATCH',
+      body,
+    }),
+
+  suggestDraft: (draftId: number, instruction: string) =>
+    requestJson<DraftRead>(`/api/drafts/${draftId}/suggest`, {
+      method: 'POST',
+      body: { instruction },
+    }),
+
+  getDraftStatus: (draftId: number, signal?: AbortSignal) =>
+    requestJson<DraftStatus>(`/api/drafts/${draftId}/status`, { signal }),
+
+  getPendingEdit: (draftId: number, signal?: AbortSignal) =>
+    requestJson<PendingEdit | null>(`/api/drafts/${draftId}/pending`, { signal }),
+
+  acceptPendingEdit: (
+    editId: number,
+    body: { hunk?: { index: number; hash: string }; force?: boolean } = {},
+  ) =>
+    requestJson<AcceptRejectResult>(`/api/pending-edits/${editId}/accept`, {
+      method: 'POST',
+      body,
+    }),
+
+  rejectPendingEdit: (editId: number, hunk?: { index: number; hash: string }) =>
+    requestJson<AcceptRejectResult>(`/api/pending-edits/${editId}/reject`, {
+      method: 'POST',
+      body: { hunk },
+    }),
 }
 
 /**
@@ -401,10 +462,24 @@ export function streamRegenerate(
   return streamTurn(`/api/sessions/${sessionId}/regenerate`, body, onEvent, signal)
 }
 
-async function streamTurn(
+/**
+ * Streams one drafted passage for the editor's `/write` block. Stateless: nothing about
+ * the document changes until the student accepts what streamed in, so the frames are
+ * tokens and a done, and nothing else.
+ */
+export function streamWrite(
+  draftId: number,
+  body: WriteRequest,
+  onEvent: (event: WriteEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamTurn(`/api/drafts/${draftId}/write`, body, onEvent, signal)
+}
+
+async function streamTurn<StreamEvent>(
   path: string,
-  body: ChatRequest | RegenerateRequest,
-  onEvent: (event: ChatEvent) => void,
+  body: ChatRequest | RegenerateRequest | WriteRequest,
+  onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const response = await send(path, { method: 'POST', body, signal })
@@ -427,7 +502,7 @@ async function streamTurn(
       newline = buffer.indexOf('\n')
       if (!line.startsWith('data:')) continue
       try {
-        onEvent(JSON.parse(line.slice(5).trim()) as ChatEvent)
+        onEvent(JSON.parse(line.slice(5).trim()) as StreamEvent)
       } catch {
         // A frame we cannot parse is dropped rather than killing the stream.
       }
