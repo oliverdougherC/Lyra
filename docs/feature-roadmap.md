@@ -608,16 +608,18 @@ another week, and the answer key never appears in the top 128. The first stage n
 no amount of reordering reaches it. That is the case a better embedding model would have to earn its
 re-index on, and it is now a specific, reproducible case rather than a hunch.
 
-- [ ] **Lexical retrieval before a new embedding model, measured on the answer-key case.** A
+- [x] **Lexical retrieval before a new embedding model, measured on the answer-key case.** A
       problem set restating its questions verbatim in the answer key is the textbook case for
       lexical matching: the words are identical and the embedder is what cannot tell the documents
-      apart. So the cheaper lever comes first — BM25 beside the vectors, with a document-type boost
-      toward keys and solutions, which is the hybrid retrieval already on rag-pipeline.md's
-      future-extensions list. A new embedding model costs a full re-index and an
-      `embedding_model` identity change, and it should not be reached for until the lexical path
-      has been measured against this case and found wanting. Fully specified — FTS5 schema,
-      rank fusion, the boost, and the acceptance numbers — as Workstream 1 of
-      [integration-handoff.md](integration-handoff.md)
+      apart. Built as Workstream 1 of [integration-handoff.md](integration-handoff.md) — an FTS5
+      index beside the vectors, reciprocal rank fusion of the two rankings, and a solutions bonus
+      of half a top-rank contribution. Measured on the 36-document course, before against after,
+      with `hw3-cascade-impulse-response-answer` added so the case is watched twice:
+      `hw5-two-sided-exponential-answer` goes from absent in the top 128 to **rank 4 reranked**
+      (28 on the fused order alone), the class set improves to **17/17 in the served eight** at
+      an unchanged 13/17 first, and the textbook set holds 17/17 plain and reranked. Zeroing the
+      bonus removes the key from the candidate sixty-four again and moves nothing else, so it
+      stays. The case no longer earns a new embedding model its re-index
 
 - [ ] **A text layer can be junk without being empty, and nothing notices.** Found while building
       the class-scale workspace, and it is a robustness hole rather than a ranking one. `laplace.pdf`

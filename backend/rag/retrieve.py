@@ -14,7 +14,8 @@ The search is hybrid. Beside the vectors, an FTS5 index over the same chunks (mi
 reranking. The case that forced it: a problem set and its answer key restate every
 question verbatim, so the embedder cannot tell them apart and the key sat outside the top
 128 neighbours, beyond any reordering. The words being identical is the textbook case for
-lexical matching.
+lexical matching. Measured, the key's question goes from absent in the top 128 to rank 4
+reranked; docs/rag-pipeline.md, stage 6 records the run.
 
 Zero chunks is a valid result. A class with nothing indexed, or a question no chunk
 answers, produces an empty `RetrievalResult` and the turn is built with no context
@@ -63,10 +64,12 @@ LEXICAL_FETCH_K = 64
 # small enough that the head of a list dominates its tail.
 RRF_K = 60
 
-# Provisional until the answer-key measurement in docs/integration-handoff.md §1.4 says
-# whether it survives. Half of a single list's top-rank contribution, so it breaks ties
-# between comparable fused scores without promoting a weak match: the same philosophy as
-# RECENCY_COEFFICIENT.
+# Half of a single list's top-rank contribution, so it breaks ties between comparable fused
+# scores without promoting a weak match: the same philosophy as RECENCY_COEFFICIENT. It was
+# provisional until measured on the answer-key case, and the measurement kept it: with the
+# bonus zeroed, `hw5-two-sided-exponential-answer` falls out of the candidate sixty-four and
+# no other rank moves, so the bonus is exactly what carries an answer key past its problem
+# set. Recorded in docs/rag-pipeline.md, stage 6.
 SOLUTIONS_RRF_BONUS = 1.0 / (2 * (RRF_K + 1))
 
 # A query naming a part of a document: `section 4.11`, `Chapter 7`, `§5.2`, `section A.2`.

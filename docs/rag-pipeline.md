@@ -925,11 +925,14 @@ Chunk text is retained precisely so a re-index never requires re-running OCR.
 ### Stage 6: Retrieve
 
 1. Embed the query with the **`search_query: `** prefix
-2. Exact KNN over the class partition, `k = 8`, or `k = 64` where a reranker is installed
-3. Rerank with the cross-encoder and cut back to 8, where one is installed
-4. Apply recency weighting
-5. Trim to the retrieval budget
-6. Expand any matched homework part back to its sibling parts where the budget allows
+2. Exact KNN over the class partition, `k = 64`
+3. BM25 over the same partition's FTS5 index, top 64
+4. Reciprocal rank fusion of the two rankings — recency acting through the vector ranking, a
+   small bonus toward answer keys — cut to the fused top 64
+5. Rerank with the cross-encoder and cut back to 8, where one is installed; without one, serve
+   the fused top 8
+6. Trim to the retrieval budget
+7. Expand any matched homework part back to its sibling parts where the budget allows
 
 **Recency weighting.** Cosine distance is adjusted by a bounded recency bonus so that newer material
 wins ties without displacing a clearly better match:
@@ -1048,6 +1051,30 @@ decide would quietly change how many chunks a turn is built from.
 `score` is the ranking key and nothing else. Where reranking ran it holds the cross-encoder's logit,
 which is unbounded, routinely negative, and comparable only against other scores from the same query.
 `similarity` is always the embedder's cosine, which is what the interface shows.
+
+**Hybrid retrieval, added in Phase 5.** The one case the reranker could not reach was an embedding
+failure before it was a ranking one: a problem set and its answer key restate every question
+verbatim, the embedder cannot tell them apart, and the key sat outside the top 128 neighbours,
+beyond any reordering. The words being identical is the textbook case for lexical matching, so
+retrieval now runs BM25 over an FTS5 index of the same chunks beside the KNN and fuses the two
+rankings by reciprocal rank fusion (`RRF_K = 60`) before any reranking. A chunk near the top of
+both lists outranks a chunk at the top of only one, and neither list's score scale matters because
+only ranks are read. `doc_type = 'solutions'` chunks receive a bonus of half a top-rank
+contribution — the document-type boost toward answer keys the roadmap item named.
+
+Measured on the 36-document course, before against after, with a second answer-key question
+(`hw3-cascade-impulse-response-answer`) added so the failure is watched twice:
+
+- The unreachable question, `hw5-two-sided-exponential-answer`, goes from absent in the top 128 to
+  **rank 4 reranked** — rank 28 on the fused order alone. The class set improves to **17/17 in the
+  served eight** at an unchanged 13/17 first
+- The textbook set is untouched: 16/17 first and 17/17 in the served eight, plain and reranked, at
+  one document and at class scale. Nothing in a signals course competes with a linear algebra
+  book, and lexical votes do not create one
+- The bonus is what carries the answer key into the candidate sixty-four: measured with it zeroed,
+  the question is absent again and no other rank moves. In the fused order alone the bonus costs
+  up to four first places — problem statements ceding the head to their keys — and every one stays
+  in the served eight; the reranker restores all four. The bonus stays
 
 **Output:** Ranked chunks with content and metadata
 
@@ -1294,7 +1321,6 @@ user has confirmed, rejected, or corrected it, so removing an upload removes wha
 - Structure-aware retrieval resolving an explicit section reference in a problem (Phase 3)
 - Long-horizon multi-page OCR once R-SWA (#24975) lands upstream (Phase 6)
 - Cross-class retrieval for prerequisite connections (Phase 5)
-- Hybrid retrieval: vector search combined with keyword BM25
 - Conversational RAG: use history to rewrite the retrieval query
 - Citation links from a claim in a response back to the source page
 - User-configurable embedding model, gated on the re-index flow above
