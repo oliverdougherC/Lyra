@@ -392,3 +392,106 @@ def test_a_looked_up_section_is_quoted_in_reading_order(
     result = retrieve(db, class_id, "explain section 2.2", 1000)
 
     assert [chunk.chunk_id for chunk in result.chunks] == [first, second]
+
+
+@pytest.fixture
+def reranker(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Stand in for the cross-encoder: it exactly reverses whatever it is given.
+
+    Reversal rather than a fixed order, because it inverts the embedding ranking without
+    depending on it. A test can then tell "the reranker decided this" from "the KNN did",
+    which is the only thing worth asserting about a model whose weights are not here.
+
+    Returns:
+        The passage lists it was asked to score, so a test can check what it received.
+    """
+    asked: list[list[str]] = []
+
+    def reversed_scores(query: str, passages: list[str]) -> list[float]:
+        asked.append(list(passages))
+        return [float(index) for index in range(len(passages))]
+
+    monkeypatch.setattr(retrieve_module, "rerank", reversed_scores)
+    monkeypatch.setattr(retrieve_module, "rerank_server", type("Stub", (), {"available": True})())
+    return asked
+
+
+def test_reranking_decides_the_order_the_similarity_search_proposed(
+    db: sqlite3.Connection, class_id: int, reranker: list[list[str]]
+) -> None:
+    """The whole point of the second model: it is allowed to disagree with the first."""
+    notes = _insert_document(db, class_id, "lecture.pdf", _days_ago(1))
+    nearest = _insert_chunk(db, class_id, notes, "The closest match by cosine.", 0.0)
+    furthest = _insert_chunk(db, class_id, notes, "A worse match by cosine.", 1.0)
+
+    result = retrieve(db, class_id, "anything", 1000)
+
+    assert [chunk.chunk_id for chunk in result.chunks] == [furthest, nearest]
+
+
+def test_reranking_reports_the_similarity_the_embedder_measured(
+    db: sqlite3.Connection, class_id: int, reranker: list[list[str]]
+) -> None:
+    """`score` is the ranking key and may be a logit; `similarity` is a cosine and is what
+    the interface shows. Overwriting the second with the first would put an unbounded,
+    routinely negative number in front of a student."""
+    notes = _insert_document(db, class_id, "lecture.pdf", _days_ago(1))
+    _insert_chunk(db, class_id, notes, "The closest match by cosine.", 0.0)
+
+    result = retrieve(db, class_id, "anything", 1000)
+
+    assert result.chunks[0].similarity == pytest.approx(1.0)
+
+
+def test_reranking_serves_k_however_many_it_was_given(
+    db: sqlite3.Connection, class_id: int, reranker: list[list[str]]
+) -> None:
+    """The over-fetch is a shortlist, not more context. Everything past `k` is material the
+    search was not confident about and the reranker did not rescue, and letting it through
+    would quietly change how many chunks a turn is built from."""
+    notes = _insert_document(db, class_id, "lecture.pdf", _days_ago(1))
+    for index in range(retrieve_module.K + 6):
+        _insert_chunk(db, class_id, notes, f"Material {index}.", 0.01 * index)
+
+    result = retrieve(db, class_id, "anything", 100_000)
+
+    assert len(reranker[0]) == retrieve_module.K + 6, "it reads more than it serves"
+    assert len(result.chunks) == retrieve_module.K
+
+
+def test_a_reranker_that_fails_leaves_the_search_order_intact(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reranking improves an ordering that already works, so its failure must cost the
+    improvement and nothing else - including not serving the whole over-fetch."""
+    monkeypatch.setattr(retrieve_module, "rerank", lambda query, passages: None)
+    monkeypatch.setattr(retrieve_module, "rerank_server", type("Stub", (), {"available": True})())
+    notes = _insert_document(db, class_id, "lecture.pdf", _days_ago(1))
+    nearest = _insert_chunk(db, class_id, notes, "The closest match by cosine.", 0.0)
+    for index in range(retrieve_module.K + 4):
+        _insert_chunk(db, class_id, notes, f"Worse material {index}.", 0.1 + 0.01 * index)
+
+    result = retrieve(db, class_id, "anything", 100_000)
+
+    assert result.chunks[0].chunk_id == nearest
+    assert len(result.chunks) == retrieve_module.K
+
+
+def test_without_a_reranker_the_search_is_not_widened(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The surplus would go straight into the budget, and the turn would be built from
+    chunks the search was never confident about. That is a different product."""
+    monkeypatch.setattr(retrieve_module, "rerank_server", type("Stub", (), {"available": False})())
+    monkeypatch.setattr(
+        retrieve_module,
+        "rerank",
+        lambda query, passages: pytest.fail("reranking ran without a reranker"),
+    )
+    notes = _insert_document(db, class_id, "lecture.pdf", _days_ago(1))
+    for index in range(retrieve_module.RERANK_FETCH_K):
+        _insert_chunk(db, class_id, notes, f"Material {index}.", 0.01 * index)
+
+    result = retrieve(db, class_id, "anything", 100_000)
+
+    assert len(result.chunks) == retrieve_module.K

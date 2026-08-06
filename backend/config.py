@@ -46,6 +46,16 @@ class Settings(BaseSettings):
         return self.models_dir / "nomic-embed-text-v1.5.Q8_0.gguf"
 
     @property
+    def rerank_model_path(self) -> Path:
+        """The cross-encoder that reorders retrieval's over-fetch, if it was downloaded."""
+        return self.models_dir / "bge-reranker-v2-m3-Q8_0.gguf"
+
+    @property
+    def rerank_installed(self) -> bool:
+        """Whether reranking is available on this machine."""
+        return self.rerank_model_path.exists()
+
+    @property
     def ocr_model_path(self) -> Path:
         """The Unlimited-OCR language model. Absent unless the student asked for it."""
         return self.models_dir / "unlimited-ocr-Q4_K_M.gguf"

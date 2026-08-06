@@ -59,6 +59,17 @@ ASSET_SUFFIXES: dict[tuple[str, str], str] = {
 EMBEDDING_REPO_ID = "nomic-ai/nomic-embed-text-v1.5-GGUF"
 EMBEDDING_FILENAME = "nomic-embed-text-v1.5.Q8_0.gguf"
 
+# The reranker. A cross-encoder rather than a second embedder: it reads the question and a
+# passage together and scores the pair, which is the one thing a bi-encoder cannot do,
+# because a bi-encoder has to compress the passage before it has seen the question.
+#
+# `Q8_0` for the same reason the embedder is Q8_0. This model's whole job is to draw fine
+# distinctions between passages that a coarser model already found equally plausible, and
+# quantisation noise lands exactly there. 640 MB rather than 390 MB is a cheap way not to
+# spend the measurement on the quantisation.
+RERANK_REPO_ID = "gpustack/bge-reranker-v2-m3-GGUF"
+RERANK_FILENAME = "bge-reranker-v2-m3-Q8_0.gguf"
+
 # The specialist OCR path. Two files, because llama.cpp loads a multimodal model through
 # MTMD and needs the language model and its projector separately.
 #
@@ -186,6 +197,23 @@ def fetch_embedding_weights() -> Path:
     return Path(str(downloaded))
 
 
+def fetch_rerank_weights() -> Path:
+    """Download the reranker GGUF, unless it is already present."""
+    target = settings.rerank_model_path
+    if target.exists():
+        print("Reranker weights already present, skipping download.")
+        return target
+
+    settings.models_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading {RERANK_FILENAME} ...")
+    downloaded = hf_hub_download(
+        repo_id=RERANK_REPO_ID,
+        filename=RERANK_FILENAME,
+        local_dir=settings.models_dir,
+    )
+    return Path(str(downloaded))
+
+
 def fetch_ocr_weights() -> list[Path]:
     """Download the Unlimited-OCR pair, unless it is already present.
 
@@ -301,11 +329,13 @@ def main(argv: list[str] | None = None) -> None:
     settings.ensure_directories()
     server_path = fetch_llama_server()
     weights_path = fetch_embedding_weights()
+    rerank_path = fetch_rerank_weights()
     if args.ocr:
         fetch_ocr_weights()
     print()
     print(f"llama-server:      {server_path.resolve()}  ({installed_build(server_path)})")
     print(f"embedding weights: {weights_path.resolve()}")
+    print(f"reranker weights:  {rerank_path.resolve()}")
     # Reported from the disk rather than from the flag: a run without `--ocr` on a machine
     # that already has the weights was telling the student they were missing.
     if settings.ocr_installed:

@@ -1,8 +1,13 @@
-"""Retrieval: exact KNN over one class partition, recency weighting, and budgeting.
+"""Retrieval: exact KNN over one class partition, reranking, recency weighting, budgeting.
 
 Stage 6 of docs/rag-pipeline.md. The search is exact brute-force over the class
 partition rather than approximate, because sqlite-vec has no ANN index and at a few
 thousand chunks per class it does not need one.
+
+Where a reranker is installed the KNN is run wider than the served `k` and a cross-encoder
+picks the `k` that are returned. See `rag/rerank.py` for why the second model exists; in
+short, the embedder has to summarise a passage before it has seen the question, and a
+class is full of documents that only differ once you have.
 
 Zero chunks is a valid result. A class with nothing indexed, or a question no chunk
 answers, produces an empty `RetrievalResult` and the turn is built with no context
@@ -16,10 +21,28 @@ from datetime import UTC, datetime
 
 import sqlite_vec
 
+from backend.llm.rerank_server import rerank_server
 from backend.rag.embed import embed_query
+from backend.rag.rerank import rerank
 from backend.rag.tokens import estimate_tokens
 
 K = 8
+
+# How many neighbours the KNN returns when a reranker is going to read them. The served
+# width stays `K`; this is only how much material the cross-encoder gets to choose from.
+#
+# Eight times `K`, chosen by measurement rather than by taste. On a real 36-document course
+# (scripts/eval_questions/ece203-class.json), of sixteen questions whose answer is a known
+# page of a known document:
+#
+#   fetch 8, no reranker    9/16 first, 14/16 in the served eight, 0.02s a question
+#   fetch 32, reranked     12/16 first, 14/16 in the served eight, 0.84s
+#   fetch 64, reranked     12/16 first, 15/16 in the served eight, 1.58s
+#
+# Thirty-two was not enough because a real answer sat at rank 35 in the embedding order:
+# a reranker can only reorder what it is given. Doubling again is where the cost stops
+# buying anything, and 1.6 seconds is small beside the model turn it feeds.
+RERANK_FETCH_K = 64
 
 # A query naming a part of a document: `section 4.11`, `Chapter 7`, `§5.2`, `section A.2`.
 # The number is the thing being looked up, so a reference with no number is not one.
@@ -41,13 +64,17 @@ RECENCY_HORIZON_DAYS = 120
 
 _SECONDS_PER_DAY = 86400.0
 
-# `k` is inlined from the module constant rather than bound, because sqlite-vec reads the
-# KNN limit out of the query text.
-_KNN_SQL = f"""
+
+# `k` is inlined rather than bound, because sqlite-vec reads the KNN limit out of the query
+# text. Built per call rather than once, because the limit is `K` or `RERANK_FETCH_K`
+# depending on whether a reranker is going to read the result.
+def _knn_sql(limit: int) -> str:
+    return f"""
 select chunk_id, distance
 from chunk_embeddings
-where embedding match ? and k = {K} and class_id = ?
+where embedding match ? and k = {int(limit)} and class_id = ?
 """  # noqa: S608
+
 
 _CHUNK_SELECT = """
 select c.id as chunk_id, c.document_id, c.content, c.token_count, c.page_number,
@@ -77,8 +104,12 @@ class RetrievedChunk:
     """One chunk the KNN returned, joined to its document and scored.
 
     Attributes:
-        similarity: Cosine similarity to the query, in [0, 1].
-        score: `similarity` plus the recency bonus. This is the ranking key.
+        similarity: Cosine similarity to the query, in [0, 1]. Always the embedder's
+            measurement, whether or not a reranker ran.
+        score: The ranking key, and only that. `similarity` plus the recency bonus
+            ordinarily; the cross-encoder's logit where reranking ran, which is unbounded,
+            routinely negative, and comparable only against other scores from the same
+            query. Never show it, and never compare it against `similarity`.
     """
 
     chunk_id: int
@@ -136,8 +167,14 @@ def retrieve(
     vector = embed_query(query)
     resolved = _resolve_sections(conn, class_id, query, vector, budget_tokens, document_id)
 
-    distances = _knn(conn, class_id, vector)
+    # Fetch wide only when something is going to read the extra. Without a reranker the
+    # surplus would go straight into `_fit_to_budget`, which is a different product: the
+    # turn would be built from thirty-two chunks the search was never confident about.
+    reranking = rerank_server.available
+    distances = _knn(conn, class_id, vector, RERANK_FETCH_K if reranking else K)
     candidates = _load_candidates(conn, distances, document_id) if distances else []
+    if reranking:
+        candidates = _reranked(query, candidates)
     if not candidates and not resolved:
         return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
 
@@ -240,9 +277,13 @@ def _similarity_to(conn: sqlite3.Connection, chunk_id: int, vector: list[float])
     return 1.0 - float(row["distance"]) if row is not None else 0.0
 
 
-def _knn(conn: sqlite3.Connection, class_id: int, vector: list[float]) -> dict[int, float]:
+def _knn(
+    conn: sqlite3.Connection, class_id: int, vector: list[float], limit: int
+) -> dict[int, float]:
     """Run the partitioned KNN and return distance by chunk id."""
-    rows = conn.execute(_KNN_SQL, (sqlite_vec.serialize_float32(vector), class_id)).fetchall()
+    rows = conn.execute(
+        _knn_sql(limit), (sqlite_vec.serialize_float32(vector), class_id)
+    ).fetchall()
     return {int(row["chunk_id"]): float(row["distance"]) for row in rows}
 
 
@@ -270,6 +311,32 @@ def _load_candidates(
     # Chunk id is the tiebreak, so an exact tie orders the same way on every run.
     chunks.sort(key=lambda chunk: (-chunk.score, chunk.chunk_id))
     return chunks
+
+
+def _reranked(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """Reorder the over-fetch by cross-encoder score and cut it back to `K`.
+
+    `similarity` is left exactly as the embedder measured it, because that is what it
+    means and what the interface reports. Only `score` - the ranking key - is replaced,
+    and the recency bonus is not carried over: it exists to break ties between matches the
+    embedder could not separate, and a model that has read both passages has separated
+    them. Adding it back would let a document uploaded this week outrank a better answer
+    the reranker was confident about.
+
+    Cutting to `K` here rather than leaving it to the budget is deliberate. The over-fetch
+    is a shortlist, not more context: everything past `K` is material the search was not
+    confident about and the reranker did not rescue.
+    """
+    scores = rerank(query, [chunk.content for chunk in candidates])
+    if scores is None:
+        return candidates[:K]
+
+    rescored = [
+        RetrievedChunk(**{**vars(chunk), "score": score})
+        for chunk, score in zip(candidates, scores, strict=True)
+    ]
+    rescored.sort(key=lambda chunk: (-chunk.score, chunk.chunk_id))
+    return rescored[:K]
 
 
 def _chunk_from_row(row: sqlite3.Row, similarity: float, score: float) -> RetrievedChunk:
