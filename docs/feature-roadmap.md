@@ -295,6 +295,11 @@ Specified in [rag-pipeline.md](rag-pipeline.md) stages 2a, 2b, 3, and 6 for the 
 [ui-phase-3.md](ui-phase-3.md) screen by screen. The checklist below is the scope; those documents
 are the source of truth for how.
 
+[phase-3-handoff.md](phase-3-handoff.md) records what the phase measured, the four items still
+open, and the traps that cost real time while building it. Read it before picking any of them up:
+two of the four did not exist when this checklist was written, and three of the traps fail
+silently.
+
 ### What measuring the reference book found, before anything was planned
 
 Phase 2 was specified against a real course rather than its own fixtures, and four faults surfaced
