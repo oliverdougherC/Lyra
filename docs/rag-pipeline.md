@@ -212,7 +212,10 @@ whose numbered markers are spread evenly through it rather than concentrated on 
 #### Section hierarchy
 
 - Primary source is the PDF outline via PyMuPDF `get_toc()`, which most commercial textbooks carry
-- Fallback is heading detection from span-level font size and weight, which PyMuPDF also exposes
+- Fallback is the line-level heading regex over the flattened text, the same `SECTION_HEADING` the
+  chunker has always used. A detector reading span-level font size and weight — which PyMuPDF
+  exposes and nothing here reads — is the deliberately deferred open item, recorded in
+  feature-roadmap.md; it earns its place when a book with no outline turns up
 - Result is a hierarchical `section_path` on each chunk, replacing the current flat `section_title`
 
 `section_path` is the change that matters. A homework problem reading "use the diagram from section
@@ -926,11 +929,17 @@ The 0.05 coefficient is deliberately smaller than meaningful similarity gaps; it
 not reorder strong matches.
 
 **Structural lookup, added in Phase 3.** A query that names a section is not a similarity problem
-and must not be answered with one. When a query carries an explicit reference (`section 5.2.1`,
-`Chapter 4`, `Theorem 2.63`), the matching `section_path` is resolved directly and those chunks are
-placed ahead of the KNN result rather than left to compete with it on cosine distance. The KNN still
-runs and still fills the remaining budget, because a section reference tells you where to look and
-not what the student needs from it.
+and must not be answered with one. When a query carries an explicit section reference
+(`section 5.2.1`, `Chapter 4`, `§A.2`), the matching `section_path` is resolved directly and those
+chunks are placed ahead of the KNN result rather than left to compete with it on cosine distance.
+The KNN still runs and still fills the remaining budget, because a section reference tells you where
+to look and not what the student needs from it.
+
+What counts as a reference is exactly what `SECTION_REFERENCE` in `rag/retrieve.py` matches:
+`section`, `chapter`, `part`, or `§`, followed by a number. `Theorem 2.63` is not one — a numbered
+result names a statement rather than a place in the outline, and an outline has no entry for it —
+so a query citing a theorem falls to the KNN like any other query. An earlier version of this
+document listed it among the resolved forms, which was a claim ahead of the code.
 
 Four rules keep this from becoming a worse retrieval than the one it improves:
 

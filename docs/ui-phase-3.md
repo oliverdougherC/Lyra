@@ -160,7 +160,8 @@ row, the same steps, and the page counter is absent, because one page is not pro
 
 ### What the backend now offers these screens
 
-Every screen in this document is still to be built. What exists is what they read and call:
+Every screen in this document is built and verified — the Definition of Done at the end records
+how. What they read and call:
 
 | Screen element | What it reads |
 | --- | --- |

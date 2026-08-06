@@ -608,6 +608,15 @@ another week, and the answer key never appears in the top 128. The first stage n
 no amount of reordering reaches it. That is the case a better embedding model would have to earn its
 re-index on, and it is now a specific, reproducible case rather than a hunch.
 
+- [ ] **Lexical retrieval before a new embedding model, measured on the answer-key case.** A
+      problem set restating its questions verbatim in the answer key is the textbook case for
+      lexical matching: the words are identical and the embedder is what cannot tell the documents
+      apart. So the cheaper lever comes first — BM25 beside the vectors, with a document-type boost
+      toward keys and solutions, which is the hybrid retrieval already on rag-pipeline.md's
+      future-extensions list. A new embedding model costs a full re-index and an
+      `embedding_model` identity change, and it should not be reached for until the lexical path
+      has been measured against this case and found wanting
+
 - [ ] **A text layer can be junk without being empty, and nothing notices.** Found while building
       the class-scale workspace, and it is a robustness hole rather than a ranking one. `laplace.pdf`
       is a photographed page emailed to the student: it ingests `ready` with one chunk reading
@@ -616,6 +625,14 @@ re-index on, and it is now a specific, reproducible case rather than a hunch.
       of noise. Phase 1's rule is "zero characters means offer recognition", which these pass. The
       fix is a legibility check at parse time that can offer recognition to a document that has text
       and cannot be read
+- [ ] **The full page-selective vision quality gate, of which the junk-page check above is the
+      first step.** Finding 4's pages are the case a legibility check does not reach: a
+      matrix-heavy page whose text layer extracts cleanly and is still lossy. The full gate decides
+      per page whether what extracted is what the page says, and routes the pages that fail through
+      the vision pass that already exists — which is what would make transcription the quality
+      feature for every document that the measurement said it is, rather than only a way out of
+      `unsupported`. It remains open, and it is the architectural successor to the junk-page gate
+      rather than a separate idea
 
 **Note on ordering.** OCR was previously the gating item of its own phase, on the strength of an
 unmerged upstream dependency and multi-GB weights. It is no longer gating: it becomes a measured

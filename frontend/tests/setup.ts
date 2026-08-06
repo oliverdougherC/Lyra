@@ -36,6 +36,18 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {}
 }
 
+// `API_BASE` defaults to `http://127.0.0.1:8000` and jsdom will really fetch it, so a test
+// that forgets to stub the API passes or fails depending on whether a backend happens to be
+// listening. This guard turns that silent dependency into an immediate failure naming the
+// URL. Assigned rather than stubbed for the same reason as ResizeObserver above; a test that
+// needs fetch stubs it with `vi.stubGlobal('fetch', ...)`, and `unstubGlobals` restores the
+// guard afterwards.
+globalThis.fetch = ((input: RequestInfo | URL) => {
+  const url =
+    typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  throw new Error('unstubbed fetch in test: ' + url)
+}) as typeof fetch
+
 afterEach(() => {
   cleanup()
 })

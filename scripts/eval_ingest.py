@@ -59,6 +59,7 @@ from backend.config import settings  # noqa: E402
 from backend.core import ingestion, recognition  # noqa: E402
 from backend.core.app_settings import resolve_tutor_config  # noqa: E402
 from backend.llm import client  # noqa: E402
+from backend.llm.locality import is_local_endpoint  # noqa: E402
 from backend.rag import chunk as chunking  # noqa: E402
 from backend.rag import render, transcribe  # noqa: E402
 from backend.rag import retrieve as retrieval  # noqa: E402
@@ -79,8 +80,13 @@ TIMED_STAGES = ("parse", "chunk", "embed", "extract", "consolidate")
 # Retrieval is run wider than the product's `k` so that the rank of the right chunk can be
 # read off directly. Hit rate at any smaller k is then arithmetic rather than another run,
 # which is what makes this able to say whether k = 8 is the right number.
-WIDE_K = 32
-REPORTED_K = (1, 4, 8, 16, 32)
+#
+# The default width is the product's own rerank fetch width, `RERANK_FETCH_K` in
+# `backend/rag/retrieve.py`, deliberately by reference rather than by a copy of the number:
+# the recorded class-scale measurements were taken at that width, so a run that passes no
+# `--k` reproduces them instead of silently measuring a narrower fetch.
+WIDE_K = retrieval.RERANK_FETCH_K
+REPORTED_K = (1, 4, 8, 16, 32, 64)
 
 # Large enough that `_fit_to_budget` never drops anything. Rank is the measurement here,
 # and a budget trim would silently truncate the ranking being measured.
@@ -341,6 +347,16 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     for path in [Path(one).resolve() for one in args.documents]:
         if not path.is_file():
             raise SystemExit(f"Not a file: {path}")
+        duplicate = _already_ingested(conn, class_id, path)
+        if duplicate is not None:
+            # `_upload` inserts a new row every time it is called, so ingesting the same
+            # file into an existing workspace would put two copies of it in the class and
+            # every later retrieval run would be measured against the inflated haystack.
+            print(
+                f"{path.name}: already in this workspace as document {duplicate}; skipped. "
+                "Use --fresh to rebuild the workspace, or `reindex` to re-chunk it."
+            )
+            continue
         record = _ingest_one(conn, class_id, path)
         documents[path.stem] = record
         # Written after every document, so an interrupted run keeps what finished.
@@ -393,6 +409,21 @@ def _ingest_one(conn: sqlite3.Connection, class_id: int, path: Path) -> dict[str
         },
         **_chunk_stats(conn, document_id),
     }
+
+
+def _already_ingested(conn: sqlite3.Connection, class_id: int, path: Path) -> int | None:
+    """The id of a document in the class with this file's stem, or None.
+
+    Matched by stem rather than by full filename because the stem is how everything else
+    here names a document: the ingestion report keys on it and `_find_document` searches
+    by it, so two files that would collide there are duplicates here.
+    """
+    for row in conn.execute(
+        "select id, filename from documents where class_id = ? order by id", (class_id,)
+    ):
+        if Path(str(row["filename"])).stem == path.stem:
+            return int(row["id"])
+    return None
 
 
 def _upload(conn: sqlite3.Connection, class_id: int, path: Path) -> int:
@@ -914,6 +945,13 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
     print(f"vision probe: {'ok' if support.ok else 'unavailable'} - {support.message}\n")
     if not support.ok:
         raise SystemExit("The configured endpoint cannot read images, so there is nothing to time.")
+    if not is_local_endpoint(config.endpoint_url):
+        # The product asks before a page image leaves the machine; this stage answers yes
+        # on the operator's behalf, and the operator should know it did.
+        print(
+            f"note: overriding the remote acknowledgement - page images will be sent "
+            f"to {config.endpoint_url}\n"
+        )
 
     with pymupdf.open(source) as book:
         layers = {number: book[number - 1].get_text() for number in args.pages}
@@ -1239,7 +1277,11 @@ def _report_ingestion(documents: dict[str, dict[str, object]]) -> None:
 
 def _report_retrieval(retrieved: dict[str, object]) -> None:
     questions = [one for one in retrieved.get("questions", []) if isinstance(one, dict)]
-    targeted = [one for one in questions if one.get("targeted", one["expect_section"] is not None)]
+    # `.get` throughout, because a workspace may hold reports written before Phase 3 added
+    # `targeted` and `expect_section`, and `report` reads every retrieval file it finds.
+    targeted = [
+        one for one in questions if one.get("targeted", one.get("expect_section") is not None)
+    ]
     controls = [one for one in questions if one not in targeted]
     if not questions:
         return
@@ -1282,7 +1324,9 @@ def _report_retrieval(retrieved: dict[str, object]) -> None:
     print("\n  Per question")
     for one in questions:
         pages = one.get("expect_pages")
-        target = one["expect_section"] or (f"pages {pages[0]}-{pages[1]}" if pages else "not here")
+        target = one.get("expect_section") or (
+            f"pages {pages[0]}-{pages[1]}" if pages else "not here"
+        )
         print(f"    {one['id']}: rank {one['rank'] or '-'} of {one['returned']}, {target}")
 
 

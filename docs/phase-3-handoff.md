@@ -36,6 +36,7 @@ survive.** Every retrieval figure below was taken in a workspace holding *one do
 | 5 | The document-list interface | `DocumentRow`, `IngestionProgress`, `DocumentDropzone`, settings |
 | 6 | Figures | `014_document_figures.sql`, `rag/figures.py`, `core/figures.py`, `FigureBlock` |
 | 7 | OCR specialist | `llm/ocr_server.py`, `scripts/ocr_spike.py`, `fetch_models.py --ocr` |
+| 8 | The cross-encoder reranker | `rag/rerank.py`, `llm/rerank_server.py`, `scripts/fetch_models.py` |
 
 Step 5 was not planned. It was added after step 4 because steps 2 through 4 had shipped
 capabilities the interface had no way to reach, and the `unsupported` popover was still telling
@@ -132,6 +133,19 @@ another week; the answer key is not in the top 128, so no reordering can reach i
 different embedding model would have to earn its full re-index on, and it is now a reproducible case
 rather than a hunch.
 
+### What these numbers can and cannot say
+
+The question sets are sixteen and eleven to seventeen questions, and that size decides what they
+are evidence for. The rerank gain, 9/16 to 12/16 at first place, is three questions; the
+chunk-target sweep's "no trend" is a flat line drawn through eleven. Neither has the statistical
+power to settle a rate comparison to within a question or two, and a future run that lands one
+question higher or lower has not necessarily changed anything. What the sets are strong at is
+finding cases: the answer key at rank 35 and the discrete-time table losing to the continuous-time
+one are real, reproducible failures, and a rate this coarse still surfaces them reliably. So the
+decisions recorded here — `RERANK_FETCH_K = 64` among them — are engineering bets made on the best
+evidence available and recorded beside it, not optima these sets could prove. The way to overturn
+one is another measurement, not a bigger question set taken on faith.
+
 ## What the open items became
 
 ### 1. `rag/locate.py` could not tell apart two problems with the same label — **closed**
@@ -208,20 +222,56 @@ acceptance homework's 771px diagrams were rendering at 1215, a blurred picture o
 in hairlines. `self-start` fixes it. `PageFailureNotice`'s caption row and the outline list's
 indent-by-depth are both fine at 375, in both themes.
 
+## The close-out pass
+
+Before the phase closed, a review pass went over everything above with instructions to hold
+nothing back, and it found a defect pattern the phase had been building without noticing:
+**ambiguous failure converted into false success.** A truncated transcription stored as the page's
+text. A half-embedded document marked `failed` whose committed chunks kept serving. A solve run
+against a dead endpoint grinding through every unit's timeout and landing `ready` over zero
+solutions, its progress counter reading "12 of 12". A mixed document whose requested recognition
+was silently skipped, landing `ready` as if it had run. A mid-stream server death read back to the
+student as a finished answer. An unrelated 400 cached forever as "this endpoint cannot do
+constrained decoding". All of these are now loud: retrieval serves only `ready` documents and
+failure paths take their chunks with them, the solver has recognition's consecutive-failure
+breaker and an honest terminal state, truncation fails the page, skip reasons land on the row, and
+the client distinguishes an endpoint that refused from an endpoint that broke.
+
+The same pass closed the structural debts this document had been documenting instead of fixing:
+`db_path` now derives from `data_dir` (first trap), the three llama-server modules share one
+lifecycle in `llm/llama_server.py` and are all stopped at shutdown rather than orphaned, adoption
+of an already-running server verifies what model it holds before trusting it, and boundary pages
+are credited to the section whose heading they announce rather than the one that happens to be
+nested deeper. A conservative parse-time gate now catches the photographed page whose text layer
+is a URL, so it reads as scanned instead of indexing as noise.
+
+Three things the pass deliberately did not do. The `TRANSCRIBE_PROMPT` re-measurement still waits
+on a working endpoint — that debt stands exactly as recorded below. Lexical retrieval for the
+verbatim answer-key case is recorded in the roadmap as the experiment to run *before* buying a new
+embedding model, not attempted here. And the full page-selective vision gate — routing only the
+pages whose text layer collapsed through the vision model, instead of the whole document or
+nothing — is named in the roadmap as the architectural successor to the junk-page check; it wants
+its own measured phase, not a close-out afternoon.
+
 ## Traps
 
-These cost real time. Three of them fail silently.
+These cost real time. The first two are now removed at the source rather than only written down
+here; their entries stay because the close-out pass that removed them is younger than the habits
+this document built, and a reader of an older checkout needs to know which side of the fix they
+are on.
 
-**`LYRA_DATA_DIR` does not move the database.** `settings.db_path` is an independent field
-defaulting to `data/lyra.db`, not derived from `data_dir`. Setting `LYRA_DATA_DIR` relocates
-uploads, pages, text, and models and leaves the database exactly where it was. A verification run
-that believed otherwise wrote 596 chunks and 28 profile facts into the real database. Set
-**both** `LYRA_DATA_DIR` and `LYRA_DB_PATH`, and check `/api/classes` before trusting it.
+**`LYRA_DATA_DIR` used to leave the database behind — fixed.** `settings.db_path` now derives
+from `data_dir` unless `LYRA_DB_PATH` points it somewhere explicitly, so setting `LYRA_DATA_DIR`
+alone moves everything, database included. The trap that motivated the fix: the two fields were
+independent, and a verification run that believed otherwise wrote 596 chunks and 28 profile facts
+into the real database. `LYRA_DB_PATH` still wins when set, so a run that sets both behaves
+exactly as it always did.
 
-**Frontend tests can reach a live backend.** `API_BASE` defaults to `http://127.0.0.1:8000`, and
-jsdom will really fetch it. Seeding a React Query cache is not enough, because the query still
-refetches on mount and the live answer replaces the seed. The vision tests passed only while
-nothing was listening on port 8000. Stub at `api`, not at the cache.
+**Frontend tests could reach a live backend — fenced.** `API_BASE` defaults to
+`http://127.0.0.1:8000`, and jsdom will really fetch it; the vision tests passed only while
+nothing was listening on port 8000. `frontend/tests/setup.ts` now installs a throwing `fetch`, so
+a test that forgets to stub at `api` fails loudly instead of rotting silently the day a dev server
+is up. Seeding a React Query cache is still not stubbing: the query refetches on mount.
 
 **A stale llama.cpp shadows a new one.** Everything finds the binary with
 `sorted(llama_dir.rglob("llama-server"))` and takes the first hit, so `llama-b10235` sorts ahead of
@@ -251,10 +301,17 @@ falls back to the embedding order, which still works — see the table above for
 
 The harness works in its own workspace with its own database and never touches the student's data.
 
+Every `retrieve` below states its fetch width outright. The numbers in this document were taken at
+`--k 64`, the width the product reranks over (`RERANK_FETCH_K` in `rag/retrieve.py`), and the
+harness defaults to that same constant — but a run that is going to be compared against a recorded
+table should say its width rather than lean on a default to match it. An earlier version of this
+document leaned, while the default was 32, and following it re-measured something narrower than the
+table it sat beside.
+
 ```bash
 python scripts/eval_ingest.py --workspace data/eval-ingest ingest \
   /path/to/Kuttler-LinearAlgebra-AFirstCourse-2017A.pdf --fresh
-python scripts/eval_ingest.py --workspace data/eval-ingest retrieve
+python scripts/eval_ingest.py --workspace data/eval-ingest retrieve --k 64
 python scripts/eval_ingest.py --workspace data/eval-ingest transcribe
 python scripts/eval_ingest.py --workspace data/eval-ingest report
 ```
@@ -275,7 +332,7 @@ check that it really does:
 ```bash
 python scripts/eval_ingest.py --workspace data/eval-recognize reindex Fourier_Tables --no-extraction
 python scripts/eval_ingest.py --workspace data/eval-recognize retrieve \
-  --questions scripts/eval_questions/fourier-tables.json
+  --questions scripts/eval_questions/fourier-tables.json --k 64
 python scripts/eval_ingest.py --workspace data/eval-recognize report
 ```
 
@@ -292,9 +349,9 @@ python scripts/eval_ingest.py --workspace data/eval-class ingest --fresh --no-ex
   /path/to/course/*.pdf
 python scripts/eval_ingest.py --workspace data/eval-class reindex Fourier_Tables --recognize
 python scripts/eval_ingest.py --workspace data/eval-class retrieve \
-  --questions scripts/eval_questions/ece203-class.json
+  --questions scripts/eval_questions/ece203-class.json --k 64
 python scripts/eval_ingest.py --workspace data/eval-class retrieve \
-  --questions scripts/eval_questions/ece203-class.json --rerank
+  --questions scripts/eval_questions/ece203-class.json --k 64 --rerank
 python scripts/eval_ingest.py --workspace data/eval-class report
 ```
 
@@ -354,7 +411,11 @@ class, so a rank always comes with the size of the haystack it was drawn from.
 will not start, a timeout, a malformed reply — all of them return None from `rag/rerank.py` and
 retrieval keeps the embedding order. That is correct: reranking improves an ordering that already
 works. It also means a broken reranker looks exactly like no reranker, so if a measurement stops
-reproducing, check `rerank_server.available` and the warning log before suspecting the model.
+reproducing, check `rerank_server.available` and the warning log before suspecting the model. The
+close-out pass tightened the lifecycle around that silence without changing it: the server is
+warmed at startup so the first chat turn does not pay the model load, stopped at shutdown so it no
+longer outlives the app, refused when the port is answered by a server holding some other model,
+and a failed start is remembered for five minutes instead of being re-paid on every retrieval.
 
 **Recognition is not a fifth ingestion state.** It runs inside `parsing` with
 `stage_detail = 'recognizing'`. That is what the page counter reads, and it is why

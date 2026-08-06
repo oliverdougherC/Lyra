@@ -1,0 +1,369 @@
+"""The ingestion and retrieval eval harness, scored against known inputs.
+
+An evaluation harness that scores wrongly is worse than none - the rule test_eval_extract.py
+states holds here with more force, because this harness is the standard of evidence for every
+retrieval number the Phase 3 documents quote. So the scoring arithmetic is tested the way the
+product is: the retrieval call replaced with a stub, the ranks asserted, and the report's
+hit-rate fractions checked against denominators counted by hand.
+
+Nothing here reaches an endpoint, opens a PDF, or touches the student's own database.
+"""
+
+import sqlite3
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend.rag import retrieve as retrieval  # noqa: E402
+from scripts.eval_ingest import (  # noqa: E402
+    NO_TARGET,
+    PRODUCT_K,
+    WIDE_K,
+    Target,
+    _already_ingested,
+    _ask,
+    _report_retrieval,
+    _widened_k,
+    section_ranges,
+)
+
+# ---------------------------------------------------------------------------- section_ranges
+
+
+def _outline(entries: list[list[object]], page_count: int) -> dict[str, object]:
+    return {"entries": entries, "entry_count": len(entries), "page_count": page_count}
+
+
+def test_section_ranges_are_inclusive_at_both_ends() -> None:
+    """A boundary page belongs to the section ending on it and the one starting on it."""
+    ranges = section_ranges(_outline([[1, "First", 1], [1, "Second", 10]], page_count=20))
+
+    assert ranges["First"] == (1, 10)
+    assert ranges["Second"] == (10, 20)
+
+
+def test_a_section_ends_at_the_next_entry_of_equal_or_shallower_depth() -> None:
+    ranges = section_ranges(
+        _outline(
+            [[1, "A", 1], [2, "B", 3], [3, "C", 4], [2, "D", 8], [1, "E", 15]],
+            page_count=20,
+        )
+    )
+
+    # C is closed by D, which is shallower than C, not by an entry at C's own depth.
+    assert ranges["A / B / C"] == (4, 8)
+    # B is closed by its sibling D, not by C, which is nested inside it.
+    assert ranges["A / B"] == (3, 8)
+    # A is closed by E and spans everything nested under it.
+    assert ranges["A"] == (1, 15)
+
+
+def test_the_last_section_at_each_depth_runs_to_the_end_of_the_book() -> None:
+    ranges = section_ranges(_outline([[1, "A", 1], [2, "B", 5]], page_count=30))
+
+    assert ranges["A"] == (1, 30)
+    assert ranges["A / B"] == (5, 30)
+
+
+def test_paths_are_ancestry_joined_and_reset_when_depth_falls() -> None:
+    ranges = section_ranges(
+        _outline([[1, "One", 1], [2, "Sub", 2], [1, "Two", 5], [2, "Sub", 6]], page_count=9)
+    )
+
+    # The second `Sub` belongs to `Two`, not to `One`: ancestry was cut back at depth 1.
+    assert set(ranges) == {"One", "One / Sub", "Two", "Two / Sub"}
+
+
+def test_an_outline_with_no_entries_names_no_sections() -> None:
+    assert section_ranges(_outline([], page_count=100)) == {}
+
+
+# ------------------------------------------------------------------------------- rank in _ask
+
+
+@dataclass(frozen=True)
+class _Chunk:
+    document_id: int
+    page_number: int | None
+    filename: str = "other.pdf"
+    similarity: float = 0.5
+    section_title: str | None = None
+    content: str = "some content"
+
+
+@dataclass(frozen=True)
+class _Result:
+    chunks: list[_Chunk]
+
+
+def _stub_retrieve(monkeypatch: pytest.MonkeyPatch, chunks: list[_Chunk]) -> None:
+    def fake(conn: object, class_id: int, query: str, budget: int) -> _Result:
+        return _Result(chunks=chunks)
+
+    monkeypatch.setattr(retrieval, "retrieve", fake)
+
+
+def _question(**overrides: object) -> dict[str, object]:
+    fields: dict[str, object] = {"id": "q1", "question": "where is it"}
+    fields.update(overrides)
+    return fields
+
+
+def test_rank_is_the_position_of_the_first_chunk_from_the_right_pages_of_the_right_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_retrieve(
+        monkeypatch,
+        [
+            # Right pages, wrong document: a miss however well it scored.
+            _Chunk(document_id=2, page_number=5),
+            # Right document, wrong page.
+            _Chunk(document_id=1, page_number=4, filename="book.pdf"),
+            # A chunk with no page can never be the hit.
+            _Chunk(document_id=1, page_number=None, filename="book.pdf"),
+            _Chunk(document_id=1, page_number=5, filename="book.pdf"),
+        ],
+    )
+    target = Target(document_id=1, ranges={})
+
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
+
+    assert record["rank"] == 4
+    assert record["targeted"] is True
+    # Only the wrong-document chunk above the hit is crowding; the right document is not.
+    assert record["ahead"] == ["other.pdf"]
+    assert record["from_expected"] == 3
+
+
+def test_a_never_found_answer_has_no_rank_and_the_whole_served_k_ahead_of_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_retrieve(
+        monkeypatch,
+        [_Chunk(document_id=2, page_number=n, filename=f"doc{n}.pdf") for n in range(1, 13)],
+    )
+    target = Target(document_id=1, ranges={})
+
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=12)
+
+    assert record["rank"] is None
+    assert record["targeted"] is True
+    assert record["returned"] == 12
+    # Everything the product would serve outranked the missing answer.
+    assert record["ahead"] == sorted(f"doc{n}.pdf" for n in range(1, PRODUCT_K + 1))
+
+
+def test_an_expected_section_resolves_through_the_outline_ranges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_retrieve(
+        monkeypatch,
+        [
+            _Chunk(document_id=1, page_number=2, filename="book.pdf"),
+            _Chunk(document_id=1, page_number=11, filename="book.pdf"),
+        ],
+    )
+    target = Target(document_id=1, ranges={"Ch / Sec": (10, 12)})
+
+    record = _ask(None, 1, "book", target, _question(expect_section="Ch / Sec"), k=8)
+
+    assert record["rank"] == 2
+    assert record["expect_pages"] == [10, 12]
+
+
+def test_a_section_the_outline_does_not_carry_is_a_configuration_error_not_a_miss() -> None:
+    target = Target(document_id=1, ranges={"Ch / Sec": (10, 12)})
+
+    with pytest.raises(SystemExit, match="no outline entry"):
+        _ask(None, 1, "book", target, _question(expect_section="Ch / Nowhere"), k=8)
+
+
+def test_a_control_is_never_ranked_and_never_credits_a_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_retrieve(monkeypatch, [_Chunk(document_id=3, page_number=1)])
+
+    record = _ask(None, 1, None, NO_TARGET, _question(id="control"), k=8)
+
+    assert record["targeted"] is False
+    assert record["rank"] is None
+    assert record["from_expected"] == 0
+
+
+def test_the_ranking_is_cut_to_k_before_anything_is_scored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hit past `k` is a miss: the harness must not see deeper than the run's width."""
+    _stub_retrieve(
+        monkeypatch,
+        [_Chunk(document_id=2, page_number=1)] * 4
+        + [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
+    )
+    target = Target(document_id=1, ranges={})
+
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=4)
+
+    assert record["rank"] is None
+    assert record["returned"] == 4
+
+
+# --------------------------------------------------------------------------- the report path
+
+
+def _reported(**overrides: object) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "id": "q",
+        "question": "where",
+        "expect_section": None,
+        "expect_pages": [1, 2],
+        "targeted": True,
+        "rank": 1,
+        "returned": 32,
+        "top_similarity": 0.8,
+        "from_expected": 4,
+        "ahead": [],
+    }
+    fields.update(overrides)
+    return fields
+
+
+def test_hit_rates_exclude_controls_and_count_a_never_found_in_every_denominator(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _report_retrieval(
+        {
+            "document": "book",
+            "reranked": False,
+            "seconds_per_question": 0.5,
+            "k": 32,
+            "class_documents": 3,
+            "class_chunks": 100,
+            "questions": [
+                _reported(id="first", rank=1),
+                _reported(id="fifth", rank=5, ahead=["crowd.pdf"]),
+                _reported(id="lost", rank=None, ahead=["crowd.pdf"]),
+                _reported(
+                    id="control",
+                    targeted=False,
+                    expect_pages=None,
+                    rank=None,
+                    top_similarity=0.3,
+                ),
+            ],
+        }
+    )
+
+    out = capsys.readouterr().out
+    # Three targeted questions, never four: the control is not a denominator.
+    assert "hit rate at k= 1: 1/3" in out
+    assert "hit rate at k= 4: 1/3" in out
+    # The rank-5 hit arrives at k=8; the never-found stays in the denominator forever.
+    assert "hit rate at k= 8: 2/3" in out
+    assert "hit rate at k=32: 2/3" in out
+    # The report never claims a width the run did not have.
+    assert "k=64" not in out
+    assert "never found: lost" in out
+    assert "control: top similarity 0.3" in out
+
+
+def test_crowding_is_counted_over_the_product_k_not_the_run_k(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _report_retrieval(
+        {
+            "document": "book",
+            "k": 32,
+            "class_chunks": 100,
+            "class_documents": 2,
+            "questions": [
+                _reported(id="a", from_expected=8),
+                _reported(id="b", from_expected=2, ahead=["crowd.pdf"]),
+            ],
+        }
+    )
+
+    out = capsys.readouterr().out
+    assert f"10/{PRODUCT_K * 2} came from the expected document" in out
+    assert "crowd.pdf: 1" in out
+
+
+def test_a_report_written_before_phase_3_still_reports_rather_than_crashing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Old retrieval files carry neither `targeted` nor `expect_section`, and `report`
+    reads every retrieval file in a workspace, so one old run must not kill the command."""
+    _report_retrieval(
+        {
+            "document": "book",
+            "k": 8,
+            "questions": [
+                {"id": "old", "question": "where", "rank": 2, "returned": 8, "top_similarity": 0.7}
+            ],
+        }
+    )
+
+    out = capsys.readouterr().out
+    assert "Retrieval over book" in out
+    assert "old: rank 2 of 8" in out
+
+
+# -------------------------------------------------------------------------------- _widened_k
+
+
+def test_widened_k_sets_both_widths_and_restores_both_afterwards() -> None:
+    before = (retrieval.K, retrieval.RERANK_FETCH_K, retrieval.rerank_server)
+
+    with _widened_k(50, reranking=True):
+        assert retrieval.K == 50
+        assert retrieval.RERANK_FETCH_K == 50
+        # The switch answers for availability; the real server is still underneath.
+        assert retrieval.rerank_server.available is True
+        assert retrieval.rerank_server.inner is before[2]
+
+    assert (retrieval.K, retrieval.RERANK_FETCH_K, retrieval.rerank_server) == before
+
+
+def test_widened_k_can_force_reranking_off_whatever_the_machine_has() -> None:
+    with _widened_k(50, reranking=False):
+        assert retrieval.rerank_server.available is False
+
+
+def test_widened_k_restores_the_module_even_when_the_run_dies() -> None:
+    before = (retrieval.K, retrieval.RERANK_FETCH_K, retrieval.rerank_server)
+
+    with pytest.raises(RuntimeError, match="mid-run"), _widened_k(50, reranking=True):
+        raise RuntimeError("mid-run")
+
+    assert (retrieval.K, retrieval.RERANK_FETCH_K, retrieval.rerank_server) == before
+
+
+def test_the_default_width_is_the_products_rerank_fetch_width() -> None:
+    """The documented repro commands rely on a bare run measuring what the product fetches."""
+    assert WIDE_K == retrieval.RERANK_FETCH_K
+
+
+# ------------------------------------------------------------------------- duplicate ingests
+
+
+def test_a_file_already_in_the_workspace_is_found_by_its_stem(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = int(
+        db.execute(
+            "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
+            "values (?, 'Fourier_Tables.pdf', '', 'application/pdf', 1, 'ready')",
+            (class_id,),
+        ).lastrowid
+        or 0
+    )
+
+    assert _already_ingested(db, class_id, Path("/elsewhere/Fourier_Tables.pdf")) == document_id
+    assert _already_ingested(db, class_id, Path("/elsewhere/Other_Tables.pdf")) is None
+    # A document in another class is not a duplicate: retrieval never crosses a class.
+    assert _already_ingested(db, class_id + 1, Path("/elsewhere/Fourier_Tables.pdf")) is None
