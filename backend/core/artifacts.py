@@ -26,12 +26,23 @@ from dataclasses import dataclass
 from backend.core.errors import NotFoundError
 
 KIND_SOLUTION_SET = "solution_set"
-ARTIFACT_KINDS: tuple[str, ...] = (KIND_SOLUTION_SET,)
+KIND_FLASHCARD_DECK = "flashcard_deck"
+KIND_QUIZ = "quiz"
+KIND_DRAFT = "draft"
+ARTIFACT_KINDS: tuple[str, ...] = (
+    KIND_SOLUTION_SET,
+    KIND_FLASHCARD_DECK,
+    KIND_QUIZ,
+    KIND_DRAFT,
+)
 
 PENDING = "pending"
 SEGMENTING = "segmenting"
 AWAITING_REVIEW = "awaiting_review"
 SOLVING = "solving"
+# One state for every generation worker that is not the solver: study decks, quizzes, and
+# draft suggestion runs all move pending -> generating -> ready.
+GENERATING = "generating"
 READY = "ready"
 FAILED = "failed"
 CANCELLED = "cancelled"
@@ -41,6 +52,7 @@ ARTIFACT_STATES: tuple[str, ...] = (
     SEGMENTING,
     AWAITING_REVIEW,
     SOLVING,
+    GENERATING,
     READY,
     FAILED,
     CANCELLED,
@@ -54,11 +66,15 @@ PROBLEM = "problem"
 STEP = "step"
 ANSWER = "answer"
 FIGURE = "figure"
-PART_KINDS: tuple[str, ...] = (PROBLEM, STEP, ANSWER, FIGURE)
+CARD = "card"
+QUIZ_QUESTION = "quiz_question"
+DRAFT_BODY = "draft_body"
+PART_KINDS: tuple[str, ...] = (PROBLEM, STEP, ANSWER, FIGURE, CARD, QUIZ_QUESTION, DRAFT_BODY)
 
 MARKDOWN = "markdown"
 IMAGE = "image"
-CONTENT_TYPES: tuple[str, ...] = (MARKDOWN, IMAGE)
+JSON = "json"
+CONTENT_TYPES: tuple[str, ...] = (MARKDOWN, IMAGE, JSON)
 
 PART_PENDING = "pending"
 PART_SOLVING = "solving"
@@ -94,7 +110,17 @@ SOLVE_PARTS: tuple[str, ...] = (TOGETHER, SEPARATELY)
 
 PROBLEM_SET = "problem_set"
 REFERENCE_SOLUTIONS = "reference_solutions"
-SOURCE_ROLES: tuple[str, ...] = (PROBLEM_SET, REFERENCE_SOLUTIONS)
+STUDY_SOURCE = "study_source"
+SOURCE_ROLES: tuple[str, ...] = (PROBLEM_SET, REFERENCE_SOLUTIONS, STUDY_SOURCE)
+
+# The one source role each artifact kind requires at least one of. A solution set with
+# only reference material has nothing to work on; a deck or quiz with no study material
+# has nothing to teach from.
+_REQUIRED_ROLE: dict[str, str] = {
+    KIND_SOLUTION_SET: PROBLEM_SET,
+    KIND_FLASHCARD_DECK: STUDY_SOURCE,
+    KIND_QUIZ: STUDY_SOURCE,
+}
 
 _ARTIFACT_COLUMNS = (
     "id, class_id, kind, title, state, stage_detail, problems_total, problems_done, "
@@ -249,9 +275,10 @@ def create_artifact(
         conn: Open database connection.
         class_id: Class the artifact belongs to.
         title: User-facing name. Trimmed, and may not be blank.
-        sources: Documents to produce from, in the order they should be read. At least
-            one must carry role `problem_set`: an artifact with only reference material
-            has nothing to work on.
+        sources: Documents to produce from, in the order they should be read. Kinds that
+            work from documents require at least one source in their working role
+            (`problem_set` for solution sets, `study_source` for decks and quizzes): an
+            artifact with only reference material has nothing to work on.
         kind: Artifact kind.
 
     Returns:
@@ -268,11 +295,14 @@ def create_artifact(
     cleaned = title.strip()
     if not cleaned:
         raise ValueError("Artifact title cannot be blank.")
-    # Every role is checked before the problem-set test, so a bad role on a later source
+    # Every role is checked before the required-role test, so a bad role on a later source
     # is still reported rather than short-circuited past by an earlier good one.
     roles = [_require(spec.role, SOURCE_ROLES, "source role") for spec in sources]
-    if PROBLEM_SET not in roles:
-        raise ValueError("An artifact needs at least one problem-set document.")
+    required = _REQUIRED_ROLE.get(kind)
+    if required is not None and required not in roles:
+        kind_name = kind.replace("_", " ")
+        role_name = required.replace("_", "-")
+        raise ValueError(f"A {kind_name} needs at least one {role_name} document.")
 
     seen: set[int] = set()
     for spec in sources:

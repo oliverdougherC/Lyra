@@ -1049,3 +1049,151 @@ def format_context_block(chunks: list[dict[str, object]]) -> str:
             label.append(f"problem {problem}")
         entries.append(f"[{index}] {', '.join(label)}\n{chunk.get('content') or ''}")
     return f"{_CONTEXT_HEADING}\n\n" + "\n\n".join(entries)
+
+
+_TOPICS_PROMPT = """\
+You are mapping course material so a student can study it. Read the material and name
+the 4 to 8 topics that together cover what it teaches. A topic is a short noun phrase of
+two to four words, specific enough to study ("eigenvalue decomposition", not "math").
+Prefer the course's own terminology. Return JSON only."""
+
+TOPICS_SCHEMA = JsonSchema(
+    name="study_topics",
+    schema={
+        "type": "object",
+        "properties": {"topics": {"type": "array", "items": {"type": "string"}}},
+        "required": ["topics"],
+        "additionalProperties": False,
+    },
+)
+
+# Built per call rather than as one constant: the topic and the card count are the two
+# things the model must not be left to guess, so they sit inside the instruction itself.
+_FLASHCARDS_PROMPT = """\
+You are writing flashcards for the topic "{topic}", grounded in the course material
+below. Each card tests one atomic fact or skill: the front is a question or prompt that
+forces recall (never yes/no), the back is a complete, self-contained answer a student
+could check themselves against. Use the notation the course material uses; write math in
+KaTeX ($...$ inline, $$...$$ display). Write {count} cards. Base every card on the
+material provided; if the material does not support that many distinct cards, write
+fewer rather than inventing content."""
+
+FLASHCARDS_SCHEMA = JsonSchema(
+    name="flashcards",
+    schema={
+        "type": "object",
+        "properties": {
+            "cards": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "front": {"type": "string"},
+                        "back": {"type": "string"},
+                        "topic": {"type": "string"},
+                    },
+                    "required": ["front", "back", "topic"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["cards"],
+        "additionalProperties": False,
+    },
+)
+
+_QUIZ_PROMPT = """\
+You are writing a {count}-question quiz at {difficulty} difficulty from the course
+material below, using only these question types: {types}. Rules by type - mcq: exactly
+four plausible options with one correct; the wrong options must be believable mistakes,
+not filler. true_false: the options are exactly ["True", "False"]. fill_blank: the
+question contains a ___ blank, the options array holds exactly the one correct answer,
+and correct_index is 0. Every question carries a one-or-two-sentence explanation of why
+the answer is correct, and a topic label. Use the course's notation; math in KaTeX.
+Base every question on the material provided."""
+
+QUIZ_QUESTION_TYPES: tuple[str, ...] = ("mcq", "true_false", "fill_blank")
+
+QUIZ_SCHEMA = JsonSchema(
+    name="quiz_questions",
+    schema={
+        "type": "object",
+        "properties": {
+            "questions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {"type": "string", "enum": list(QUIZ_QUESTION_TYPES)},
+                        "question": {"type": "string"},
+                        "options": {"type": "array", "items": {"type": "string"}},
+                        "correct_index": {"type": "integer"},
+                        "explanation": {"type": "string"},
+                        "topic": {"type": "string"},
+                        "difficulty": {
+                            "type": "string",
+                            "enum": ["basic", "intermediate", "exam"],
+                        },
+                    },
+                    "required": [
+                        "type",
+                        "question",
+                        "options",
+                        "correct_index",
+                        "explanation",
+                        "topic",
+                        "difficulty",
+                    ],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["questions"],
+        "additionalProperties": False,
+    },
+)
+
+
+def build_topics_prompt(source_text: str) -> list[dict[str, str]]:
+    """Build the messages that map a set of source documents to 4-8 study topics."""
+    return [
+        {"role": "system", "content": _TOPICS_PROMPT},
+        {"role": "user", "content": source_text},
+    ]
+
+
+def build_flashcards_prompt(
+    topic: str, context_block: str, cards_per_topic: int
+) -> list[dict[str, str]]:
+    """Build the messages that write one topic's cards against retrieved course material.
+
+    The context block is `format_context_block` output, so every card the model writes
+    can be traced to a labelled chunk of the student's own documents.
+    """
+    return [
+        {
+            "role": "system",
+            "content": _FLASHCARDS_PROMPT.format(topic=topic, count=cards_per_topic),
+        },
+        {"role": "user", "content": context_block},
+    ]
+
+
+def build_quiz_prompt(
+    source_text: str, count: int, difficulty: str, types: list[str]
+) -> list[dict[str, str]]:
+    """Build the messages that write one quiz against the gathered source text.
+
+    The per-type rules live in the prompt, but the same rules are enforced again in code
+    when the reply is parsed (`core/study.py`): the model's output is a proposal, never
+    trusted by construction.
+    """
+    return [
+        {
+            "role": "system",
+            "content": _QUIZ_PROMPT.format(
+                count=count, difficulty=difficulty, types=", ".join(types)
+            ),
+        },
+        {"role": "user", "content": source_text},
+    ]

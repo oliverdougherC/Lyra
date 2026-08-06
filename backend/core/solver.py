@@ -1152,9 +1152,14 @@ def reconcile_interrupted(conn: sqlite3.Connection) -> int:
     An artifact in `awaiting_review` is deliberately left alone. It was not working, it
     was waiting, and a restart does not change what it is waiting for.
     """
+    # Scoped to solution sets: study decks, quizzes, and drafts have their own reconciles
+    # with their own rules, and a shared sweep would requeue a deck into the solver.
     pending = [
         int(row[0])
-        for row in conn.execute("select id from artifacts where state = ?", (artifacts.PENDING,))
+        for row in conn.execute(
+            "select id from artifacts where state = ? and kind = ?",
+            (artifacts.PENDING, artifacts.KIND_SOLUTION_SET),
+        )
     ]
     queued = [artifact_id for artifact_id in pending if not _top_level_problems(conn, artifact_id)]
     gated = [artifact_id for artifact_id in pending if artifact_id not in queued]
@@ -1166,16 +1171,18 @@ def reconcile_interrupted(conn: sqlite3.Connection) -> int:
     stalled = [
         int(row[0])
         for row in conn.execute(
-            f"select id from artifacts where state in ({placeholders})",  # noqa: S608
-            mid_flight,
+            f"select id from artifacts where state in ({placeholders}) "  # noqa: S608
+            "and kind = ?",
+            (*mid_flight, artifacts.KIND_SOLUTION_SET),
         )
     ]
     conn.execute(
         # The placeholders are generated from a module constant and every value is bound.
         # `stage_detail` reads the pre-update row, so it keeps the lost stage.
         f"update artifacts set stage_detail = state, state = '{artifacts.FAILED}', "  # noqa: S608
-        f"error_message = ?, updated_at = datetime('now') where state in ({placeholders})",
-        (INTERRUPTED_MESSAGE, *mid_flight),
+        f"error_message = ?, updated_at = datetime('now') where state in ({placeholders}) "
+        "and kind = ?",
+        (INTERRUPTED_MESSAGE, *mid_flight, artifacts.KIND_SOLUTION_SET),
     )
 
     retried = [*stalled, *pending]

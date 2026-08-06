@@ -20,9 +20,10 @@ from backend.api import (
     routes_profile,
     routes_settings,
     routes_solutions,
+    routes_study,
 )
 from backend.config import settings
-from backend.core import sessions, solver
+from backend.core import sessions, solver, study
 from backend.core.errors import LyraError
 from backend.core.ingestion import reconcile_interrupted, start_worker
 from backend.llm.embed_server import embedding_server
@@ -51,6 +52,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stalled = solver.reconcile_interrupted(conn)
         if stalled:
             logger.warning("Marked %d interrupted solve job(s) as failed", stalled)
+        # Study jobs fail rather than requeue: their options lived only in memory.
+        interrupted_study = study.reconcile_interrupted(conn)
+        if interrupted_study:
+            logger.warning("Marked %d interrupted study generation(s) as failed", interrupted_study)
         discarded = sessions.discard_empty_sessions(conn)
         if discarded:
             logger.info("Discarded %d conversation(s) that were never used", discarded)
@@ -63,6 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         conn.close()
     start_worker()
     solver.start_worker()
+    study.start_worker()
     _warm_start_reranker()
     try:
         yield
@@ -127,6 +133,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_profile.router)
     app.include_router(routes_settings.router)
     app.include_router(routes_solutions.router)
+    app.include_router(routes_study.router)
 
     return app
 
