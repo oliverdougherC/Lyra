@@ -42,7 +42,8 @@ Step 5 was not planned. It was added after step 4 because steps 2 through 4 had 
 capabilities the interface had no way to reach, and the `unsupported` popover was still telling
 students that scans would be readable "in a future update" and would "process automatically then".
 
-713 backend tests, 358 frontend.
+713 backend tests, 358 frontend when the phase proper closed; 794 and 360 after the close-out pass,
+which is where they still stand.
 
 ## What it was measured against
 
@@ -114,6 +115,14 @@ Re-measured in `data/eval-class`, which holds the whole course — 36 documents,
 | The same set, fetch 64 and reranked | **12/16 rank 1, 15/16 at k=8**, 1.6 s a question |
 | The textbook set, fetch 64 and reranked | 15/17 rank 1, 17/17 at k=8 — one place *worse* |
 
+Every row above was re-measured on 6 August 2026 against the close-out's code, both workspaces
+rebuilt with `--fresh`, and **every rank in all four runs came back identical, question by
+question** — not merely the same rates. The class is one document smaller in the sense that matters
+(`laplace.pdf` now reads as photographed rather than indexing its Gmail header as text, so 1123
+chunks rather than 1124), and reranking now costs 2.1 s a question rather than 1.6 on the same
+hardware. The share of the served 8 from the right document under reranking, which was not recorded
+before, is **57 of 128** against the embedding order's 54.
+
 Three things a reader should take from that.
 
 **The textbook was never the hard case.** It is a linear algebra book in a signals course. Nothing
@@ -127,11 +136,19 @@ textbook set's `control-fourier` scores *above* the median real question. The ha
 the class size beside every run for this reason — a rank means nothing without the size of the
 haystack.
 
-**Two questions are beyond reranking, and they name the next real problem.** A student asking how a
+**One question is beyond reranking, and it names the next real problem.** A student asking how a
 homework problem is *worked* gets the problem statement plus eleven near-identical problems from
 another week; the answer key is not in the top 128, so no reordering can reach it. That is the case a
 different embedding model would have to earn its full re-index on, and it is now a reproducible case
 rather than a hunch.
+
+An earlier version of this paragraph said *two*, and the recorded runs beside it already disagreed.
+`midterm-problem-1-impulse-response` sits at rank 35 in the embedding order and the cross-encoder
+lifts it to **rank 2** — it is not out of reach, it is the single clearest thing reranking buys, and
+counting it as unreachable understated the reranker while overstating the case for a new embedder.
+The one genuinely unreachable question is `hw5-two-sided-exponential-answer`, which is absent from
+128 neighbours in every run, reranked or not. Re-measured 6 August 2026; the recorded JSON from the
+original run says the same.
 
 ### What these numbers can and cannot say
 
@@ -253,6 +270,53 @@ pages whose text layer collapsed through the vision model, instead of the whole 
 nothing — is named in the roadmap as the architectural successor to the junk-page check; it wants
 its own measured phase, not a close-out afternoon.
 
+## The verification pass
+
+6 August 2026. Everything the close-out changed was then driven for real — the measurements re-run
+in process, the servers started and killed, the screens driven in a browser, the failure paths
+walked end to end against endpoints chosen to fail. 794 backend tests and 360 frontend tests still
+pass; ruff check and format are clean; the working tree stayed clean and `data/lyra.db` was never
+opened, verified by its unchanged mtime and checksum.
+
+**What held.** Every retrieval figure reproduced question for question (above). The close-out's
+recognition breaker stops a run at exactly three consecutive page failures out of eight and blames
+the endpoint, and a retry once the endpoint is removed replaces that message with the no-endpoint
+one rather than leaving the stale blame in place. The solver's terminal state is honest in both of
+its shapes: four problems against a dead endpoint trip the breaker at three and leave the fourth
+unattempted, two problems fall through to "none of the problems could be solved", and both land
+`failed` reading **0 of n**, never `ready` with a full bar. Deleting a document mid-recognition
+abandons the run with one log line — `Ingestion of document 97 abandoned: deleted or replaced
+mid-run` — and leaves no row, page, chunk, figure, or file behind; the same file re-uploaded
+straight after ingests clean. On the screens, the ready-with-skip-reason row shows the backend's
+reason and a `Try again`, the endpoint-blamed failure reads as an endpoint problem, and `FigureBlock`
+renders its 771 px diagrams at 771 px in the 1215 px column that used to blow them up — all checked
+at 1280 and 375, in both themes, with no console errors.
+
+**The boundary fix is visible and cost nothing.** Re-ingesting the textbook moves 13 chunks to the
+section their page's heading announces (105 distinct sections becomes 107) — page 110, for one, goes
+from `Matrices / Matrix Arithmetic / More on Matrix Inverses` to `Matrices / LU Factorization`. Not
+one of the 17 questions moved a rank. It only takes effect on re-ingest, because section metadata is
+stamped onto chunk rows at chunk time.
+
+**Two findings, both recorded rather than fixed.**
+
+*An adopted llama-server is never reclaimed.* `LlamaServer.stop()` terminates `self._process`, which
+is `None` for a server this process adopted rather than spawned, so the shutdown hook that reclaims
+a spawned server is a no-op for an adopted one. Driven: a clean stop leaves **zero** survivors, a
+`SIGKILL` orphans the rerank server, the next start adopts it without duplicating — and every clean
+shutdown from then on leaves it running, indefinitely, holding its weights. This session opened with
+field evidence of exactly that: an embedding server running since the previous day on a llama.cpp
+build no longer on disk. Not fixed here because making adoption confer ownership means discovering
+the holder of a port cross-platform, which is a design decision and not a verification-sized one.
+
+*A refused reranker writes a report that says it reranked.* Staging a foreign llama-server on the
+rerank port works exactly as designed — retrieval logs `Reranking is configured but did not start;
+keeping the search order` once per question and returns ranks identical to the embedding order. But
+the harness then writes `retrieval-…-reranked.json` with `"reranked": true` over embedding-order
+numbers, and the only tells are the log and a per-question time of 0.08 s against the usual 2.1. The
+silence is the product's contract and correct; recording an unverified claim is the harness's
+problem, and `rag/rerank.py` already knows the answer to record.
+
 ## Traps
 
 These cost real time. The first two are now removed at the source rather than only written down
@@ -272,6 +336,14 @@ exactly as it always did.
 nothing was listening on port 8000. `frontend/tests/setup.ts` now installs a throwing `fetch`, so
 a test that forgets to stub at `api` fails loudly instead of rotting silently the day a dev server
 is up. Seeding a React Query cache is still not stubbing: the query refetches on mount.
+
+**A llama-server the backend adopted survives every clean shutdown after it.** The shutdown hook in
+`main.py` reclaims what the process spawned; `stop()` is a no-op on a server it adopted, because
+adoption never gave it a `Popen` to terminate. So one `SIGKILL` — or one evaluation run, since the
+harness spawns servers and never stops them — leaves a server that no later clean stop will clear.
+Verified 6 August 2026, and the same day turned up an embedding server thirteen hours old running a
+llama.cpp build that had already been deleted. If `ps aux | grep llama-server` disagrees with what
+you think you started, this is why; `pkill -f llama-server` before a lifecycle measurement.
 
 **A stale llama.cpp shadows a new one.** Everything finds the binary with
 `sorted(llama_dir.rglob("llama-server"))` and takes the first hit, so `llama-b10235` sorts ahead of
@@ -359,6 +431,14 @@ The pair of runs is the measurement, so each writes its own report and neither o
 `--rerank` is set explicitly in both directions rather than left to whether the weights happen to be
 on the machine: that is a fact about the machine, not about the product.
 
+**`--rerank` asks for reranking; it does not prove reranking happened.** The reranker degrades
+silently by design, so a run whose server would not start writes `"reranked": true` over
+embedding-order numbers and looks like a measurement. Read the per-question time before believing
+the ranks: reranking costs seconds a question (2.1 s over this class on the machine these numbers
+were taken on) and the embedding order costs hundredths. A reranked report that came back in 0.08 s
+a question reranked nothing, and `Reranking is configured but did not start` will be in the log
+above it.
+
 `reindex --recognize` reads a scan that is already sitting in a class, which is what keeps it one
 document rather than two — uploading it again through `recognize` would spend the vision model's
 minutes a second time and put a duplicate in the class being measured.
@@ -390,6 +470,18 @@ python scripts/eval_ingest.py --workspace data/eval-recognize recognize \
 `recognition.md` now opens with the line that answers it. The baseline to beat, from the recorded
 run, is: three notations, three of eight pages with no table markup at all, ten headings the chunker
 can see, three written in bold instead.
+
+**The gate is narrower than "the endpoint is down", and knowing which narrows what to wait for.**
+Checked 6 August 2026: the endpoint is up and serving — `test-connection` answers
+`Connected. 9 models available.` What will not load is the *configured model*. `Qwen3.6-27b` and
+`Qwen3.6-27B-Heretic` both still answer `failed to load` to a one-token request, so `test-vision`
+fails; `Gemma4-12B` is loaded, vision-capable, and passes `test-vision` outright. So a vision model
+is available and this measurement still did not run, deliberately: the baseline above was taken on
+Qwen, and re-running the new prompt on Gemma would vary the prompt and the model at once and answer
+neither question. What it needs is Qwen back, or a fresh two-run baseline on one model — old prompt
+and new — which is a different and larger piece of work than the one this line has been waiting for.
+The class-scale `reindex Fourier_Tables --recognize` is gated the same way, and the class numbers
+above were measured without the handout's transcription, exactly as the recorded run was.
 
 ## What a reader should know before changing any of it
 

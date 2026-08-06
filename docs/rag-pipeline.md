@@ -154,6 +154,20 @@ Outcome by document composition:
 text recognition and that the file has been kept, and the file being kept is what makes recognition
 able to run over it in place rather than asking for the upload again.
 
+**A character count is not enough on its own.** A page photographed with a phone and printed to PDF
+from a mail client arrives carrying a text layer — a timestamp, the image's filename, the URL of the
+message it was attached to — which clears twenty characters comfortably while containing nothing
+about the page. `_is_photographed_page` is the second gate: a page whose text has fewer than fifteen
+alphabetic characters once URLs are stripped, and whose images cover nearly the whole page, is
+dropped exactly as a blank scan is. Junk that indexes is worse than nothing, because it embeds and
+then competes.
+
+Measured on the real course on 6 August 2026: `laplace.pdf` is two Gmail-printed photographs whose
+entire text layer is `3/12/26, 2:14 PM / IMG_8887.jpg / https://mail.google.com/... / 1/1`. Before
+the gate it ingested `ready` and contributed two chunks of that to the class; after it, the document
+lands `unsupported` and can be read by recognition like any other scan. One true positive, no false
+ones over the other 35 documents in the class.
+
 **This table is unchanged by recognition, and that is deliberate.** Recognition is opt-in per
 document, so a scanned upload still lands `unsupported` and a mixed one still lands `ready` with
 pages skipped. What changes is that both now have a way out: `POST /api/documents/{id}/recognize`.
