@@ -632,6 +632,7 @@ def set_part_content(
     content: str,
     origin: str,
     note: str | None = None,
+    record_revision: bool = True,
 ) -> int:
     """Replace a part's content, recording the revision it produced.
 
@@ -646,9 +647,14 @@ def set_part_content(
         origin: `generated`, `regenerated`, or `user_corrected`.
         note: Why this revision exists. The student's correction on a re-solve, or the
             verifier's refutation. Kept so a reader of the history knows what prompted it.
+        record_revision: False only for the draft workspace's debounced autosave, which
+            writes every 1.5 seconds and would otherwise bury the meaningful revisions;
+            its explicit snapshots and AI accepts still record. Everything else must
+            keep the default, because the rule above is what the history is for.
 
     Returns:
-        The new revision number, counting from 1.
+        The new revision number, counting from 1, or the current revision count when no
+        revision was recorded.
 
     Raises:
         NotFoundError: when no part carries that id.
@@ -656,7 +662,16 @@ def set_part_content(
     """
     part = get_part(conn, part_id)
     _require(origin, ORIGINS, "part origin")
-    revision = _insert_revision(conn, part_id, content, origin, note)
+    revision = (
+        _insert_revision(conn, part_id, content, origin, note)
+        if record_revision
+        else int(
+            conn.execute(
+                "select coalesce(max(revision), 0) from artifact_part_revisions where part_id = ?",
+                (part_id,),
+            ).fetchone()[0]
+        )
+    )
     conn.execute(
         "update artifact_parts set content = ?, origin = ?, updated_at = datetime('now') "
         "where id = ?",

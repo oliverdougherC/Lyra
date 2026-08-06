@@ -1197,3 +1197,100 @@ def build_quiz_prompt(
         },
         {"role": "user", "content": source_text},
     ]
+
+
+# The craft bar every drafting prompt holds the model to. Distilled from the owner's
+# scientific-writing style guide and adapted to student essays.
+_WRITING_CRAFT = """\
+Write so the reader never has to re-read. Every claim carries exactly the confidence
+its evidence earns: "shows" only when it shows, "suggests" when it suggests; never
+inflate with "very", "clearly", "obviously", or verdict words like "interesting" or
+"important" that do the reader's judging for them. Lead each paragraph with its point;
+one idea per paragraph; open sentences with what the reader already knows and close
+them with what is new. Cut surplusage: "it is worth noting that X" is "X"; prefer the
+plain word (use, not utilize; before, not prior to). Active voice unless the actor
+genuinely does not matter. Spell out an abbreviation at first use. Keep the student's
+own voice and vocabulary level - polish, do not transplant."""
+
+_WRITE_BODY = """\
+You are drafting one passage to insert at the cursor of a document the student is
+writing. Ground the passage in the provided course material where it is relevant, and
+otherwise write from the instruction alone.
+
+Return only the markdown passage: no preamble, no explanation, and no code fence. The
+reply is parsed as document text where it lands, so anything that is not the passage
+becomes part of the student's document."""
+
+# Assembled by concatenation rather than `format`: the craft text and the user's draft
+# both carry braces and dollars that a format call would read as placeholders.
+_WRITE_PROMPT = "\n\n".join([_WRITE_BODY, _WRITING_CRAFT])
+
+_SUGGEST_BODY = """\
+You are revising a student's draft per their instruction.
+
+Return the complete revised document as markdown: the entire document, not a fragment,
+no preamble, and no code fence. Leave untouched everything the instruction does not
+reach - the diff the student reviews is computed from what you return, so an
+unnecessary rewrite of an untouched paragraph is noise they must reject. Preserve the
+document's heading structure unless asked to change it."""
+
+_SUGGEST_PROMPT = "\n\n".join([_SUGGEST_BODY, _WRITING_CRAFT])
+
+
+def format_facts_block(facts: list[sqlite3.Row]) -> str:
+    """Confirmed class facts for the drafting prompts, or an empty string."""
+    return _render_facts(facts, "What you know about this class:")
+
+
+def build_write_prompt(
+    instruction: str,
+    heading: str | None,
+    selection: str | None,
+    nearby: str | None,
+    context_block: str,
+    facts_block: str,
+) -> list[dict[str, str]]:
+    """Build the messages for the `/write` inline generation.
+
+    The user message is the instruction first, then whatever the editor gathered around
+    the caret (current heading, selected text, surrounding text - whichever exist), then
+    the retrieval context and confirmed class facts.
+    """
+    sections = [f"Instruction: {instruction}"]
+    surroundings: list[str] = []
+    if heading:
+        surroundings.append(f"Current section: {heading}")
+    if selection:
+        surroundings.append(f"Selected text:\n{selection}")
+    if nearby:
+        surroundings.append(f"Surrounding text:\n{nearby}")
+    if surroundings:
+        sections.append("\n\n".join(surroundings))
+    if context_block:
+        sections.append(context_block)
+    if facts_block:
+        sections.append(facts_block)
+    return [
+        {"role": "system", "content": _WRITE_PROMPT},
+        {"role": "user", "content": "\n\n".join(sections)},
+    ]
+
+
+def build_suggest_prompt(
+    draft: str, instruction: str, context_block: str, facts_block: str
+) -> list[dict[str, str]]:
+    """Build the messages that revise a whole draft per the student's instruction.
+
+    The reply becomes the proposed side of the pending edit the student reviews hunk by
+    hunk, which is why the prompt forbids a fragment: a partial reply would read as a
+    deletion of everything it left out.
+    """
+    sections = [f"The draft:\n\n{draft}", f"Instruction: {instruction}"]
+    if context_block:
+        sections.append(context_block)
+    if facts_block:
+        sections.append(facts_block)
+    return [
+        {"role": "system", "content": _SUGGEST_PROMPT},
+        {"role": "user", "content": "\n\n".join(sections)},
+    ]

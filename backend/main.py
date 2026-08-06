@@ -17,13 +17,14 @@ from backend.api import (
     routes_chat,
     routes_classes,
     routes_documents,
+    routes_drafts,
     routes_profile,
     routes_settings,
     routes_solutions,
     routes_study,
 )
 from backend.config import settings
-from backend.core import sessions, solver, study
+from backend.core import drafting, sessions, solver, study
 from backend.core.errors import LyraError
 from backend.core.ingestion import reconcile_interrupted, start_worker
 from backend.llm.embed_server import embedding_server
@@ -56,6 +57,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         interrupted_study = study.reconcile_interrupted(conn)
         if interrupted_study:
             logger.warning("Marked %d interrupted study generation(s) as failed", interrupted_study)
+        # Drafts caught mid-suggestion go back to ready: the draft was never touched.
+        resumed_drafts = drafting.reconcile_interrupted(conn)
+        if resumed_drafts:
+            logger.info("Returned %d interrupted suggestion run(s) to ready", resumed_drafts)
         discarded = sessions.discard_empty_sessions(conn)
         if discarded:
             logger.info("Discarded %d conversation(s) that were never used", discarded)
@@ -69,6 +74,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     start_worker()
     solver.start_worker()
     study.start_worker()
+    drafting.start_worker()
     _warm_start_reranker()
     try:
         yield
@@ -134,6 +140,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_settings.router)
     app.include_router(routes_solutions.router)
     app.include_router(routes_study.router)
+    app.include_router(routes_drafts.router)
 
     return app
 
