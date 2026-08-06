@@ -709,6 +709,374 @@ li[data-stream-word] {
   animation: lyra-stream-word-reveal 180ms var(--ease-gentle) var(--stream-word-delay, 0ms) both;
 }
 
+/* ---- Draft workspace (Milkdown Crepe) --------------------------------------
+
+   Crepe's feature CSS (toolbar, block-edit menu, link tooltip, table, latex) reads these
+   `--crepe-*` variables. They are mapped onto Lyra's tokens rather than importing a Crepe
+   colour theme, so no Nord or classic remnants show through. Editor content typography
+   stays under the higher-specificity `.draft-editor .milkdown .ProseMirror` rules. */
+.milkdown {
+  --crepe-color-background: var(--bg-primary);
+  --crepe-color-on-background: var(--text-primary);
+  --crepe-color-surface: var(--bg-secondary);
+  --crepe-color-surface-low: var(--bg-tertiary);
+  --crepe-color-on-surface: var(--text-primary);
+  --crepe-color-on-surface-variant: var(--text-secondary);
+  --crepe-color-outline: var(--border-strong);
+  --crepe-color-primary: var(--accent-primary);
+  --crepe-color-secondary: var(--accent-surface);
+  --crepe-color-on-secondary: var(--accent-surface-foreground);
+  --crepe-color-inverse: var(--text-primary);
+  --crepe-color-on-inverse: var(--bg-primary);
+  --crepe-color-inline-code: var(--danger-text);
+  --crepe-color-error: var(--danger-text);
+  --crepe-color-hover: var(--bg-tertiary);
+  --crepe-color-selected: var(--accent-surface);
+  --crepe-color-inline-area: var(--bg-tertiary);
+
+  --crepe-font-title: var(--font-fraunces), ui-serif, Georgia, serif;
+  --crepe-font-default: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  --crepe-font-code: var(--font-jetbrains-mono), ui-monospace, monospace;
+
+  /* Crepe uses shadow-1 for every floating popover (slash menu, toolbar, link tooltip);
+     give those the same elevation the rest of the interface floats at. */
+  --crepe-shadow-1: var(--elevation-md);
+  --crepe-shadow-2: var(--elevation-md);
+}
+
+.draft-editor .milkdown {
+  outline: none;
+  background: transparent;
+}
+
+/* A draft reads like Lyra's answers do: the document serif for prose, the display face
+   for headings. The canvas takes no focus ring - the whole surface is the editor. */
+.draft-editor .milkdown .ProseMirror {
+  font-family: var(--font-source-serif), ui-serif, Georgia, serif;
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  color: var(--text-primary);
+}
+
+.draft-editor .milkdown .ProseMirror:focus,
+.draft-editor .milkdown .ProseMirror:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.draft-editor .milkdown .ProseMirror > * {
+  margin-inline: 0;
+}
+
+.draft-editor .milkdown .ProseMirror p {
+  margin-block: 0 1rem;
+}
+
+.draft-editor .milkdown .ProseMirror h1,
+.draft-editor .milkdown .ProseMirror h2,
+.draft-editor .milkdown .ProseMirror h3 {
+  font-family: var(--font-fraunces), ui-serif, Georgia, serif;
+  font-weight: 500;
+  letter-spacing: -0.025em;
+  color: var(--text-primary);
+}
+
+.draft-editor .milkdown .ProseMirror h1 {
+  margin-block: 0 0.875rem;
+}
+
+.draft-editor .milkdown .ProseMirror h2 {
+  margin-block: 2.25rem 0.875rem;
+}
+
+.draft-editor .milkdown .ProseMirror h3 {
+  margin-block: 1.625rem 0.625rem;
+}
+
+.draft-editor .milkdown .ProseMirror blockquote {
+  border-inline-start: 2px solid var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-surface) 50%, transparent);
+  padding-block: 0.5rem;
+  padding-inline: 0.75rem;
+  color: var(--text-secondary);
+  margin-block: 0 1rem;
+}
+
+.draft-editor .milkdown .ProseMirror a {
+  color: var(--accent-primary);
+}
+
+.draft-editor .milkdown .ProseMirror ul,
+.draft-editor .milkdown .ProseMirror ol {
+  padding-inline-start: 1.625rem;
+  margin-block: 0 1rem;
+}
+
+.draft-editor .milkdown .ProseMirror code {
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  padding-inline: 0.25rem;
+  font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+.draft-editor .milkdown .ProseMirror table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-block: 0 1.125rem;
+  font-family: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.875rem;
+}
+
+.draft-editor .milkdown .ProseMirror th,
+.draft-editor .milkdown .ProseMirror td {
+  border: 1px solid var(--border);
+  padding: 0.4375rem 0.625rem;
+  text-align: left;
+}
+
+.draft-editor .milkdown .ProseMirror th {
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+
+.draft-editor .milkdown .ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin-block: 1.75rem;
+}
+
+/* Math inherits the document ink in both themes. */
+.draft-editor .milkdown .ProseMirror .katex {
+  color: var(--text-primary);
+}
+
+/* ---- /write suggestion block -----------------------------------------------
+
+   Rendered as a ProseMirror widget decoration in-flow. It lives outside the document
+   until accepted, so it never touches autosave or undo. The accent marks it as Lyra's
+   voice, the same role the accent rail plays under a chat answer. */
+.write-suggestion {
+  border-inline-start: 2px solid var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-surface) 45%, transparent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 0.75rem 1rem;
+  margin-block: 0.5rem 1.125rem;
+  font-family: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  user-select: none;
+  animation: lyra-reveal-enter 250ms var(--ease-gentle) both;
+}
+
+.ws-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-primary);
+}
+
+.ws-eyebrow .ws-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  animation: lyra-mark-breathe 2.4s var(--ease-gentle) infinite;
+}
+
+.ws-eyebrow-text {
+  flex: 1;
+}
+
+.ws-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.ws-close:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.ws-close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* Prompt phase: the inline instruction input. */
+.ws-prompt {
+  margin-top: 0.625rem;
+}
+
+.ws-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.6875rem;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+}
+
+.ws-input:focus {
+  outline: none;
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+
+/* Streaming / done: the drafted text in the document serif voice. */
+.ws-text {
+  margin-top: 0.5rem;
+  font-family: var(--font-source-serif), ui-serif, Georgia, serif;
+  font-size: 1rem;
+  line-height: 1.65;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.ws-text:empty {
+  margin-top: 0;
+}
+
+.ws-caret {
+  display: none;
+  width: 7px;
+  height: 16px;
+  margin-inline-start: 1px;
+  background: var(--accent-primary);
+  transform: translateY(3px);
+  animation: lyra-mark-breathe 1.2s step-end infinite;
+}
+
+/* Action row (done) and error row share the button look: quiet pills on the surface. */
+.ws-actions,
+.ws-error {
+  display: none;
+  align-items: center;
+  gap: 0.625rem;
+  margin-top: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.ws-actions button,
+.ws-error button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border-radius: var(--radius-sm);
+  padding: 0.375rem 0.8125rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.ws-actions button:focus-visible,
+.ws-error button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.ws-accept {
+  background: var(--accent-primary);
+  color: var(--accent-foreground);
+}
+
+.ws-accept:hover {
+  background: var(--accent-primary-hover);
+}
+
+.ws-reject,
+.ws-retry,
+.ws-dismiss {
+  background: transparent;
+  border-color: var(--border) !important;
+  color: var(--text-secondary);
+}
+
+.ws-reject:hover,
+.ws-retry:hover,
+.ws-dismiss:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.ws-note {
+  font-size: 0.75rem;
+  color: var(--text-tertiary);
+  margin-inline-start: 0.125rem;
+}
+
+.ws-error-msg {
+  flex: 1;
+  min-width: 10rem;
+  font-size: 0.8125rem;
+  color: var(--danger-text);
+}
+
+/* Phase visibility. */
+.write-suggestion[data-phase='prompt'] .ws-text,
+.write-suggestion[data-phase='prompt'] .ws-actions,
+.write-suggestion[data-phase='prompt'] .ws-error {
+  display: none;
+}
+
+.write-suggestion[data-phase='streaming'] .ws-prompt,
+.write-suggestion[data-phase='streaming'] .ws-actions,
+.write-suggestion[data-phase='streaming'] .ws-error {
+  display: none;
+}
+
+.write-suggestion[data-phase='streaming'] .ws-caret {
+  display: inline-block;
+}
+
+.write-suggestion[data-phase='done'] .ws-prompt,
+.write-suggestion[data-phase='done'] .ws-error {
+  display: none;
+}
+
+.write-suggestion[data-phase='done'] .ws-actions {
+  display: flex;
+}
+
+.write-suggestion[data-phase='error'] .ws-prompt,
+.write-suggestion[data-phase='error'] .ws-actions,
+.write-suggestion[data-phase='error'] .ws-text {
+  display: none;
+}
+
+.write-suggestion[data-phase='error'] .ws-error {
+  display: flex;
+}
+
+.write-suggestion[data-phase='error'] .ws-eyebrow {
+  color: var(--danger-text);
+}
+
+.write-suggestion[data-phase='error'] .ws-eyebrow .ws-dot {
+  animation: none;
+  background: var(--danger-text);
+}
+
+/* Accept entrance on the inserted block. */
+.ws-inserted {
+  animation: lyra-reveal-enter 250ms var(--ease-gentle) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -814,6 +1182,21 @@ li[data-stream-word] {
     height: auto !important;
     max-height: none !important;
     overflow: visible !important;
+  }
+
+  /* The draft workspace prints the document, not the desk: the editor's own chrome and
+     clipping go, and the suggestion block - never document content - does not print. The
+     rail and header actions carry Tailwind's print:hidden, matching the step thread. */
+  .draft-editor,
+  .draft-editor .milkdown,
+  .draft-editor .ProseMirror {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  .write-suggestion {
+    display: none !important;
   }
 
   /* Every problem prints, whatever the accordion was showing on screen. Radix keeps
