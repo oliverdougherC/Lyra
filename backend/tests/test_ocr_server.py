@@ -12,6 +12,7 @@ import pytest
 
 from backend.config import settings
 from backend.core.errors import ConfigurationError
+from backend.llm import llama_server
 from backend.llm import ocr_server as module
 from backend.llm.ocr_server import OcrServer
 
@@ -89,7 +90,8 @@ def test_the_spawned_command_is_the_publisher_s_reference_invocation(
         return _Fake()
 
     monkeypatch.setattr(OcrServer, "_find_binary", lambda self: Path("llama-server"))
-    monkeypatch.setattr(module.subprocess, "Popen", fake_popen)
+    # The spawn now happens in the shared lifecycle, so it is patched there.
+    monkeypatch.setattr(llama_server.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(OcrServer, "_await_health", lambda self, process: None)
 
     server.ensure_running()

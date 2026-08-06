@@ -1,10 +1,10 @@
 """Lifecycle management for the local reranking server.
 
-The third `llama-server` this project owns, and the same shape as the other two. Modelled
-on `embed_server.py` for the same reason `ocr_server.py` is: two processes with one model
-each are easier to reason about than one process swapping models, and the embedding
-server's hard-won behaviour - adopt whatever already answers, own the process group,
-escalate on shutdown - is worth repeating rather than generalising prematurely.
+The third `llama-server` this project owns. The first two copies of the lifecycle each
+argued the duplication was worth repeating rather than generalising prematurely; this
+one is why it now lives once, in `llama_server.py`, shared with the embedding and OCR
+servers. What remains here is the reranking facts: which model, which flags, and why a
+second model exists at all.
 
 **Why a second model at all.** The embedder is a bi-encoder: it turns the passage into a
 vector before it has seen the question, so everything it could have noticed about the pair
@@ -23,24 +23,13 @@ It is optional. The weights are 640 MB, `rag/rerank.py` degrades to the embeddin
 when they are absent, and that is a supported configuration rather than a broken one.
 """
 
-import logging
-import subprocess
-import threading
-import time
 from pathlib import Path
-
-import httpx
 
 from backend.config import settings
 from backend.core.errors import ConfigurationError
-from backend.llm.embed_server import _terminate
+from backend.llm.llama_server import LlamaServer
 
-logger = logging.getLogger(__name__)
-
-_BINARY_NAMES = ("llama-server", "llama-server.exe")
 _HEALTH_TIMEOUT_SECONDS = 120.0
-_HEALTH_POLL_SECONDS = 1.0
-_HEALTH_REQUEST_TIMEOUT_SECONDS = 5.0
 
 # Two above the embedding server, because one above it is the OCR server's.
 RERANK_PORT_OFFSET = 2
@@ -52,8 +41,13 @@ RERANK_PORT_OFFSET = 2
 # ranking that looks fine and is wrong.
 CONTEXT_TOKENS = 4096
 
-# The whole over-fetch is sent in one request, so the batch has to hold all of it at once.
-BATCH_TOKENS = 32768
+# `-b` and `-ub` both match `-c`, and that is the whole requirement. Reranking is
+# non-causal, so one query-and-passage pair must fit inside a single physical batch: the
+# default `-ub 512` would refuse most pairs outright. The over-fetch as a whole does NOT
+# need to fit at once - llama-server splits a multi-document request across its own
+# batches internally, exactly as `rag/embed.py` measured for embeddings. Asking for more
+# would also be a lie: llama.cpp clamps `n_batch` to `n_ctx`, so the 32768 this once
+# requested "to hold the whole over-fetch" was silently 4096 all along.
 
 MISSING_WEIGHTS_MESSAGE = (
     "The reranking model is not installed. Run `python scripts/fetch_models.py` to "
@@ -66,65 +60,32 @@ MISSING_BINARY_MESSAGE = (
 START_FAILED_MESSAGE = "The local reranking model failed to start."
 
 
-class RerankServer:
+class RerankServer(LlamaServer):
     """Owns the `llama-server` subprocess that answers `/v1/rerank` on loopback."""
 
     def __init__(self) -> None:
-        self._process: subprocess.Popen[bytes] | None = None
-        self._binary: Path | None = None
-        self._lock = threading.Lock()
-
-    @property
-    def port(self) -> int:
-        return settings.llama_port + RERANK_PORT_OFFSET
-
-    @property
-    def base_url(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+        super().__init__(
+            display_name="reranking",
+            port_offset=RERANK_PORT_OFFSET,
+            health_timeout_seconds=_HEALTH_TIMEOUT_SECONDS,
+            missing_binary_message=MISSING_BINARY_MESSAGE,
+            start_failed_message=START_FAILED_MESSAGE,
+        )
 
     @property
     def available(self) -> bool:
         """Whether the weights are on disk. Absent is a configuration, not a fault."""
         return settings.rerank_installed
 
-    def ensure_running(self) -> None:
-        """Start the server unless something is already answering on the port.
+    def _model_path(self) -> Path:
+        return settings.rerank_model_path
 
-        Raises:
-            ConfigurationError: The weights or the binary are missing, or the server did
-                not become healthy in time.
-        """
-        with self._lock:
-            if self._process is not None and self._process.poll() is None:
-                return
-            if self._healthy():
-                return
-            self._start()
-
-    def stop(self) -> None:
-        """Terminate the server. Safe to call when nothing is running."""
-        with self._lock:
-            process = self._process
-            self._process = None
-        if process is not None:
-            _terminate(process)
-
-    def _healthy(self) -> bool:
-        try:
-            with httpx.Client(timeout=_HEALTH_REQUEST_TIMEOUT_SECONDS) as client:
-                return client.get(f"{self.base_url}/health").status_code == 200
-        except httpx.HTTPError:
-            return False
-
-    def _start(self) -> None:
-        """Spawn `llama-server` in reranking mode and block until it reports healthy."""
+    def _check_installed(self) -> None:
         if not self.available:
             raise ConfigurationError(MISSING_WEIGHTS_MESSAGE)
-        binary = self._find_binary()
-        if binary is None:
-            raise ConfigurationError(MISSING_BINARY_MESSAGE)
 
-        argv = [
+    def _argv(self, binary: Path) -> list[str]:
+        return [
             str(binary),
             "-m",
             str(settings.rerank_model_path),
@@ -134,57 +95,15 @@ class RerankServer:
             "-c",
             str(CONTEXT_TOKENS),
             "-b",
-            str(BATCH_TOKENS),
+            str(CONTEXT_TOKENS),
             "-ub",
-            str(BATCH_TOKENS),
+            str(CONTEXT_TOKENS),
             "--host",
             "127.0.0.1",
             "--port",
             str(self.port),
             "--no-warmup",
         ]
-        # S603: argv is built from settings and a binary this project downloaded, never
-        # from user input, and it is a list, so no shell is involved.
-        try:
-            process = subprocess.Popen(  # noqa: S603
-                argv,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except OSError as exc:
-            raise ConfigurationError(START_FAILED_MESSAGE) from exc
-        self._process = process
-        self._await_health(process)
-
-    def _find_binary(self) -> Path | None:
-        if self._binary is not None and self._binary.exists():
-            return self._binary
-        for name in _BINARY_NAMES:
-            for candidate in sorted(settings.llama_dir.rglob(name)):
-                if candidate.is_file():
-                    self._binary = candidate
-                    return candidate
-        return None
-
-    def _await_health(self, process: "subprocess.Popen[bytes]") -> None:
-        """Poll /health until it answers, or kill the process and raise."""
-        deadline = time.monotonic() + _HEALTH_TIMEOUT_SECONDS
-        with httpx.Client(timeout=_HEALTH_REQUEST_TIMEOUT_SECONDS) as client:
-            while time.monotonic() < deadline:
-                if process.poll() is not None:
-                    self._process = None
-                    raise ConfigurationError(START_FAILED_MESSAGE)
-                try:
-                    ready = client.get(f"{self.base_url}/health").status_code == 200
-                except httpx.HTTPError:
-                    ready = False
-                if ready:
-                    return
-                time.sleep(_HEALTH_POLL_SECONDS)
-        _terminate(process)
-        self._process = None
-        raise ConfigurationError(START_FAILED_MESSAGE)
 
 
 rerank_server = RerankServer()

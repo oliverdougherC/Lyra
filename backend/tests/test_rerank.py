@@ -6,12 +6,14 @@ malformed reply is discarded whole rather than half-believed, and that a reply i
 back into the caller's order rather than read off in the order the server chose.
 """
 
+import io
+
 import httpx
 import pytest
 
 from backend.config import settings
 from backend.core.errors import ConfigurationError
-from backend.llm import rerank_server as server_module
+from backend.llm import llama_server
 from backend.llm.rerank_server import RerankServer
 from backend.rag import rerank as rerank_module
 from backend.rag.rerank import rerank
@@ -119,10 +121,204 @@ def test_reranking_mode_is_asked_for_explicitly(
 
         return Process()
 
-    monkeypatch.setattr(server_module.subprocess, "Popen", record)
+    # The spawn now happens in the shared lifecycle, so it is patched there.
+    monkeypatch.setattr(llama_server.subprocess, "Popen", record)
     server.ensure_running()
 
     assert "--reranking" in spawned[0]
+
+
+def _install_weights() -> None:
+    """Put a believable file where the weights go. Its contents are never read here."""
+    settings.models_dir.mkdir(parents=True, exist_ok=True)
+    settings.rerank_model_path.write_bytes(b"GGUF not really")
+
+
+class _DeadProcess:
+    """A spawned child that lost the port or crashed on load: exits at once.
+
+    Carries its stderr as a real stream so the shared lifecycle's drain thread reads it
+    the way it reads a real pipe.
+    """
+
+    def __init__(self, stderr: bytes = b"") -> None:
+        self.stderr = io.BytesIO(stderr)
+
+    def poll(self) -> int:
+        return 1
+
+
+def test_adoption_refuses_a_server_holding_the_wrong_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """/health answers 200 for any llama-server, so on its own it would adopt a stale
+    text-only server as this one - which would then rank with the wrong model and look
+    perfectly healthy doing it. The identity check is what refuses that."""
+    instance = RerankServer()
+    monkeypatch.setattr(instance, "_healthy", lambda: True)
+    monkeypatch.setattr(
+        instance, "_served_model", lambda: "/models/nomic-embed-text-v1.5.Q8_0.gguf"
+    )
+
+    with pytest.raises(ConfigurationError) as caught:
+        instance.ensure_running()
+
+    # Both models by name, so whoever reads it knows what is squatting and what was
+    # wanted, rather than a bare "port in use".
+    message = caught.value.message
+    assert "nomic-embed-text-v1.5.Q8_0.gguf" in message
+    assert settings.rerank_model_path.name in message
+
+
+def test_adoption_refuses_a_port_that_will_not_say_what_it_serves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every llama-server identifies its model; something that answers /health but not
+    /props or /v1/models is not a llama-server and must not be adopted as one."""
+    instance = RerankServer()
+    monkeypatch.setattr(instance, "_healthy", lambda: True)
+    monkeypatch.setattr(instance, "_served_model", lambda: None)
+
+    with pytest.raises(ConfigurationError) as caught:
+        instance.ensure_running()
+
+    assert str(instance.port) in caught.value.message
+
+
+def test_adoption_accepts_a_server_holding_the_right_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The restart case adoption exists for: the subprocess outlived the backend, and
+    starting over it would fail the bind and tell the student to download a model they
+    already have."""
+    instance = RerankServer()
+    monkeypatch.setattr(instance, "_healthy", lambda: True)
+    monkeypatch.setattr(
+        instance, "_served_model", lambda: f"/anywhere/{settings.rerank_model_path.name}"
+    )
+    monkeypatch.setattr(
+        instance,
+        "_start_locked",
+        lambda: pytest.fail("A second server was spawned over an adoptable one"),
+    )
+
+    instance.ensure_running()
+
+
+def test_a_failed_start_quotes_the_child_s_last_words(
+    server: RerankServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """stderr used to go to DEVNULL, so "failed to start" carried zero information about
+    a corrupt GGUF or a rejected flag. The tail of the child's stderr is the diagnosis,
+    and it belongs in the error."""
+    _install_weights()
+    monkeypatch.setattr(server, "_find_binary", lambda: settings.models_dir / "llama-server")
+    monkeypatch.setattr(
+        llama_server.subprocess,
+        "Popen",
+        lambda argv, **_: _DeadProcess(b"llama_model_load: error loading model\ninvalid magic\n"),
+    )
+
+    with pytest.raises(ConfigurationError) as caught:
+        server.ensure_running()
+
+    assert "invalid magic" in caught.value.message
+
+
+def test_a_failed_start_is_remembered_rather_than_respawned(
+    server: RerankServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ensure_running` is called on every retrieval, so without a cooldown a corrupt
+    model file costs a spawn-load-crash cycle per question, forever."""
+    _install_weights()
+    monkeypatch.setattr(server, "_find_binary", lambda: settings.models_dir / "llama-server")
+    spawns: list[list[str]] = []
+
+    def dying(argv: list[str], **_: object) -> _DeadProcess:
+        spawns.append(argv)
+        return _DeadProcess(b"boom\n")
+
+    monkeypatch.setattr(llama_server.subprocess, "Popen", dying)
+
+    with pytest.raises(ConfigurationError) as first:
+        server.ensure_running()
+    with pytest.raises(ConfigurationError) as second:
+        server.ensure_running()
+
+    assert len(spawns) == 1, "the second failure should be remembered, not re-earned"
+    assert second.value.message == first.value.message
+
+    # And the memory expires: rewind the clock past the cooldown and the next call is
+    # allowed to try again, because the student may have re-downloaded the weights.
+    server._failed_at -= llama_server._START_FAILURE_COOLDOWN_SECONDS + 1
+    with pytest.raises(ConfigurationError):
+        server.ensure_running()
+    assert len(spawns) == 2
+
+
+def test_losing_the_start_race_to_the_right_server_is_a_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two concurrent starts race for one bind and the loser's child exits. If the winner
+    is healthy and holds the right model, that exit is not a failure and must not be
+    reported as one."""
+    _install_weights()
+    instance = RerankServer()
+    # Nothing on the port when this start begins; the rival wins the bind in between.
+    answers = iter([False])
+    monkeypatch.setattr(instance, "_healthy", lambda: next(answers, True))
+    monkeypatch.setattr(instance, "_served_model", lambda: settings.rerank_model_path.name)
+    monkeypatch.setattr(instance, "_find_binary", lambda: settings.models_dir / "llama-server")
+    monkeypatch.setattr(llama_server.subprocess, "Popen", lambda argv, **_: _DeadProcess())
+
+    instance.ensure_running()
+
+
+async def test_shutdown_stops_every_llama_server(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The servers are spawned in their own sessions so a restart can adopt them, which
+    means only the lifespan ever reclaims them. Stopping one of three left the other two
+    holding hundreds of megabytes, forever."""
+    from backend import main as main_module
+
+    stopped: list[str] = []
+    monkeypatch.setattr(main_module.embedding_server, "stop", lambda: stopped.append("embedding"))
+    monkeypatch.setattr(main_module.ocr_server, "stop", lambda: stopped.append("ocr"))
+    monkeypatch.setattr(main_module.rerank_server, "stop", lambda: stopped.append("rerank"))
+    # The workers are real threads and other tests' concern.
+    monkeypatch.setattr(main_module, "start_worker", lambda: None)
+    monkeypatch.setattr(main_module.solver, "start_worker", lambda: None)
+
+    async with main_module.lifespan(None):  # type: ignore[arg-type]
+        pass
+
+    assert sorted(stopped) == ["embedding", "ocr", "rerank"]
+
+
+def test_startup_warms_the_reranker_without_blocking_on_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first question of the day should not pay the model-load stall inside its own
+    retrieval, and a warm-start failure must stay a log line, because lazily retrying is
+    the already-supported path."""
+    import time
+
+    from backend import main as main_module
+
+    _install_weights()  # makes settings.rerank_installed true in this test's data dir
+    calls: list[bool] = []
+
+    def record() -> None:
+        calls.append(True)
+        raise ConfigurationError("broken on purpose")
+
+    monkeypatch.setattr(main_module.rerank_server, "ensure_running", record)
+
+    main_module._warm_start_reranker()
+
+    deadline = time.monotonic() + 5.0
+    while not calls and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert calls == [True]
 
 
 def test_no_passages_is_not_a_request(installed: None, monkeypatch: pytest.MonkeyPatch) -> None:

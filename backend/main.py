@@ -5,6 +5,7 @@ boundary and must never become `0.0.0.0`.
 """
 
 import logging
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -25,6 +26,8 @@ from backend.core import sessions, solver
 from backend.core.errors import LyraError
 from backend.core.ingestion import reconcile_interrupted, start_worker
 from backend.llm.embed_server import embedding_server
+from backend.llm.ocr_server import ocr_server
+from backend.llm.rerank_server import rerank_server
 from backend.storage.database import connect, migrate
 
 logger = logging.getLogger("lyra")
@@ -60,10 +63,42 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         conn.close()
     start_worker()
     solver.start_worker()
+    _warm_start_reranker()
     try:
         yield
     finally:
+        # All three, not just the embedder. The servers are spawned in their own
+        # sessions so a backend restart can adopt them, which also means nothing but
+        # this line ever reclaims them: a forgotten one outlives the app indefinitely,
+        # holding hundreds of megabytes of weights. Each stop is a no-op when that
+        # server never ran.
         embedding_server.stop()
+        ocr_server.stop()
+        rerank_server.stop()
+
+
+def _warm_start_reranker() -> None:
+    """Load the reranking model in the background, if it is installed.
+
+    `rag/rerank.py` starts it lazily, but lazily means the first question of the day
+    pays the whole model-load stall inside its own retrieval. A daemon thread pays it
+    here instead, off the event loop. Best-effort by design: reranking is optional, so
+    a failure is logged and the first search falls back to the embedding order exactly
+    as it would have anyway.
+    """
+    if not settings.rerank_installed:
+        return
+
+    def warm() -> None:
+        try:
+            rerank_server.ensure_running()
+        except Exception:
+            logger.warning(
+                "The reranking server did not warm-start; search will retry lazily",
+                exc_info=True,
+            )
+
+    threading.Thread(target=warm, name="rerank-warm-start", daemon=True).start()
 
 
 def create_app() -> FastAPI:

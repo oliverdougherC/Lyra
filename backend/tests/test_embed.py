@@ -25,6 +25,7 @@ class StubEmbeddingApi:
         monkeypatch: pytest.MonkeyPatch,
         *,
         shuffled: bool = False,
+        duplicate_indices: bool = False,
         dim: int = EMBEDDING_DIM,
         chars_per_token: int = 1,
         status: int = 200,
@@ -33,6 +34,7 @@ class StubEmbeddingApi:
         self.urls: list[str] = []
         self.tokenized: list[str] = []
         self._shuffled = shuffled
+        self._duplicate_indices = duplicate_indices
         self._dim = dim
         # One token per character by default, which is the worst ratio observed on real
         # documents and the one that makes an over-long input deterministic in a test.
@@ -60,6 +62,11 @@ class StubEmbeddingApi:
             {"object": "embedding", "index": position, "embedding": [float(position)] * self._dim}
             for position in range(len(inputs))
         ]
+        if self._duplicate_indices:
+            # A malformed reply that still has the right count: every item claims to be
+            # the first input's vector.
+            for item in data:
+                item["index"] = 0
         if self._shuffled:
             data.reverse()
         return httpx.Response(200, json={"object": "list", "data": data})
@@ -129,9 +136,12 @@ def test_a_healthy_embedding_port_is_not_started_over(monkeypatch: pytest.Monkey
     already had.
     """
     monkeypatch.setattr(EmbeddingServer, "_healthy", lambda _self: True)
+    # Adoption now also asks the occupant which model it loaded; that identity check
+    # has its own tests, and here it is assumed to pass so the no-spawn claim is isolated.
+    monkeypatch.setattr(EmbeddingServer, "_verify_adoption", lambda _self: None)
     monkeypatch.setattr(
         EmbeddingServer,
-        "start",
+        "_start_locked",
         lambda _self: pytest.fail("A second server was spawned onto a held port"),
     )
 
@@ -141,7 +151,7 @@ def test_a_healthy_embedding_port_is_not_started_over(monkeypatch: pytest.Monkey
 def test_a_silent_embedding_port_is_started(monkeypatch: pytest.MonkeyPatch) -> None:
     started: list[bool] = []
     monkeypatch.setattr(EmbeddingServer, "_healthy", lambda _self: False)
-    monkeypatch.setattr(EmbeddingServer, "start", lambda _self: started.append(True))
+    monkeypatch.setattr(EmbeddingServer, "_start_locked", lambda _self: started.append(True))
 
     EmbeddingServer().ensure_running()
 
@@ -201,6 +211,41 @@ def test_splitting_keeps_one_vector_per_input(monkeypatch: pytest.MonkeyPatch) -
     vectors = embed_documents(["alpha", _long_text(5000), "beta"])
 
     assert len(vectors) == 3
+
+
+def test_an_oversized_text_with_only_newlines_still_splits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A table transcribed one row to a line has thousands of characters and no space.
+
+    `_halve` used to cut only at the ASCII space despite its docstring saying "whichever
+    whitespace", so a space-free but newline-separated text failed the whole document
+    with a false "no word boundary" report. Any whitespace is a boundary.
+    """
+    stub = StubEmbeddingApi(monkeypatch)
+    rows = "\n".join(f"|row{number}|value{number}|" for number in range(400))
+    assert " " not in rows
+
+    vectors = embed_documents([rows])
+
+    assert len(vectors) == 1
+    embedded = [piece for batch in stub.batches for piece in batch]
+    assert len(embedded) > 1, "the newline-separated input should have been split"
+    assert all(len(piece) <= embed.EMBEDDING_CONTEXT_TOKENS for piece in embedded)
+
+
+def test_a_reply_that_reuses_an_index_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A reply must account for exactly every input once, like `rag/rerank.py` demands.
+
+    Count alone is not enough: a reply of the right length whose items repeat an index
+    would silently hand one chunk another chunk's vector, and retrieval would serve the
+    misassignment forever with no symptom. Discarding the reply loudly is the only safe
+    reading of it.
+    """
+    StubEmbeddingApi(monkeypatch, duplicate_indices=True)
+
+    with pytest.raises(UpstreamError):
+        embed_documents(["alpha", "beta"])
 
 
 def test_text_with_nowhere_to_split_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
