@@ -334,17 +334,47 @@ Sequenced because the tracks have different risk, not because the checklists are
 
 ### Measurement
 
-- [ ] `scripts/eval_ingest.py`, the sibling of `eval_solver.py`: staged, resumable, with its own
+- [x] `scripts/eval_ingest.py`, the sibling of `eval_solver.py`: staged, resumable, with its own
       workspace database, ingest and retrieve and report. The Phase 2 harness is the model, and the
       reason is the same: a result from the real code path is evidence about the product rather
       than about the harness
-- [ ] A retrieval question set with known section answers, written by hand from the reference book,
-      so structure-aware retrieval can be shown to work rather than asserted to
-- [ ] Record what `extract_facts` costs on a 608-page document. It is one model call per document
+- [x] A retrieval question set with known section answers, written by hand from the reference book,
+      so structure-aware retrieval can be shown to work rather than asserted to. Seventeen
+      questions in `scripts/eval_questions/`, both controls verified absent from the book
+- [x] Record what `extract_facts` costs on a 608-page document. It is one model call per document
       and the one ingestion stage that does not scale with chunk count
-- [ ] Measure `k = 8`. It is a Phase 1 constant chosen for chat turns over syllabi, the Phase 2
+- [x] Measure `k = 8`. It is a Phase 1 constant chosen for chat turns over syllabi, the Phase 2
       handoff already lists it as a known weakness in solving, and textbook-scale retrieval is the
       first thing that can judge it honestly
+
+**What it recorded.** The whole book ingests in 52.8 s: parse 0.85 s, chunk 0.01 s, embed 18.3 s,
+extract 20.7 s, consolidate 12.7 s. The profile pass is 63 percent of that, more than the pipeline
+it runs after, and it is the only stage whose cost does not scale with chunk count. Nothing about
+ingestion at this scale needs performance work; if anything here is ever worth attention it is the
+profile pass, and only because a book teaches a class almost nothing that a syllabus does not.
+
+Retrieval, before any Phase 3 work, finds the right section for 14 of 17 questions inside `k = 8`
+and 11 of 17 at rank 1. Widening to 32 gains two, both of which are the bare section references
+below, so **`k = 8` is not what is limiting this** and there is no case for raising it. The failures
+are chunks that do not rank, not neighbours that were not asked for.
+
+Three questions miss, and they are the targets for the structural work rather than a verdict on it:
+
+| Question | Rank | What it says |
+| --- | --- | --- |
+| `bare-section-reference` | 12 | "What does section 2.2 cover?" has no vocabulary to match on |
+| `bare-chapter-reference` | 23 | The same, worse |
+| `well-ordering` | never found | Real content, in an appendix, scoring below both controls |
+
+Both bare references score **below the controls**, which are questions about material the book does
+not contain at all. A section number is a fact on the page rather than a similarity, so no embedding
+improvement reaches them and structure-aware retrieval is the only thing that will.
+
+**Two faults surfaced on the first run**, in the pattern Phase 2 established, and both are fixed. A
+chunk ceiling of 2048 measured in estimated tokens against a real limit of 2048 real tokens, which
+gave it no headroom and failed the whole document on five chunks out of 1312. And a sibling
+expansion that read `problem_number` as unique within a document, so one hit emitted 120 unrelated
+chunks at an identical score and the ranking was gone. Neither could have been found by a fixture.
 
 ### Structural parsing
 
