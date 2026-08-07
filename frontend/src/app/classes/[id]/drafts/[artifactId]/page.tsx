@@ -354,8 +354,9 @@ export default function DraftWorkspacePage() {
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        {/* The document column: centred to a reading measure, scrolling on its own. */}
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* The document column: centred to a reading measure, scrolling on its own. In
+            print it becomes its full height - a printed page cannot be scrolled. */}
+        <div className="min-h-0 flex-1 overflow-y-auto print:overflow-visible">
           <div className="mx-auto w-full max-w-[760px] px-6 py-8 md:px-10">
             <DraftEditor
               key={artifact.id}
