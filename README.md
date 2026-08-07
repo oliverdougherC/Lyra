@@ -1,5 +1,9 @@
 # Lyra
 
+> **Not ready for use.** This project is under rapid development and has a lot of bugs.
+> You are free to test it, but expect rough edges, breaking changes, and missing features.
+> Do not rely on it for anything important yet.
+
 Local-first AI study companion for students. Upload your course materials, get intelligent help that
 understands your specific class context.
 
