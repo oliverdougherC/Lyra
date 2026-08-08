@@ -1,8 +1,7 @@
 'use client'
 
 import { useQueryClient } from '@tanstack/react-query'
-import { FileText, FolderInput, PanelRightClose, Trash2 } from 'lucide-react'
-import { motion, useReducedMotion } from 'motion/react'
+import { FileText, FolderInput, PanelRightClose, Search, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from 'react'
 import { toast } from 'sonner'
 
@@ -27,6 +26,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
+import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
@@ -114,7 +114,9 @@ export function DocumentsPane({
   const recognizeDocument = useRecognizeDocument(classId)
   const deleteDocument = useDeleteDocument(classId)
   const queryClient = useQueryClient()
-  const reduceMotion = useReducedMotion()
+  // A 36-document class is the real class: a filter turns a scroll hunt into a glance
+  // (ui-overhaul 2.6). Filters by filename, case-insensitive.
+  const [filter, setFilter] = useState('')
 
   // Uploads run one at a time so the progress readout names a single file, and so a large
   // multi-file drop does not open a dozen request bodies at once. The queue lives in a ref
@@ -283,12 +285,19 @@ export function DocumentsPane({
     [classId, queryClient],
   )
 
-  const documents = data
+  const allDocuments = data
     ? [...data].sort(
         (a, b) => parseTimestamp(b.created_at).getTime() - parseTimestamp(a.created_at).getTime(),
       )
     : []
+  const query = filter.trim().toLowerCase()
+  const documents = query
+    ? allDocuments.filter((document) => document.filename.toLowerCase().includes(query))
+    : allDocuments
   const checked = documents.filter((document) => checkedIds.includes(document.id))
+  // The filter is worth offering once a list is long enough to hunt through, and only where
+  // the list is the whole surface (manage), not the narrow chat column.
+  const showFilter = managing && allDocuments.length > 8
 
   async function onDeleteChecked() {
     const results = await Promise.allSettled(
@@ -401,6 +410,23 @@ export function DocumentsPane({
         </div>
       ) : null}
 
+      {showFilter ? (
+        <div className="relative shrink-0 border-b px-3 py-2">
+          <Search
+            aria-hidden
+            className="text-text-tertiary pointer-events-none absolute top-1/2 left-6 size-4 -translate-y-1/2"
+          />
+          <Input
+            type="search"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder={`Filter ${formatCount(allDocuments.length, 'document')}`}
+            aria-label="Filter documents by name"
+            className="h-9 pl-9"
+          />
+        </div>
+      ) : null}
+
       <ScrollArea id="documents-pane-body" className="min-h-0 flex-1 overflow-hidden">
         <div className="p-3">
           {isPending ? (
@@ -435,20 +461,19 @@ export function DocumentsPane({
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
+          ) : documents.length === 0 ? (
+            // The list is non-empty but the filter matched nothing: say so plainly rather
+            // than showing the same blank the truly-empty class shows.
+            <p className="text-text-tertiary px-1 py-6 text-center text-sm">
+              No documents match &ldquo;{filter.trim()}&rdquo;.
+            </p>
           ) : (
+            // Plain list items: the row's own arrival is enough, and a re-animated entrance on
+            // every poll (a busy class polls several times a second) would flicker the list.
+            // This is also what retires the motion/react dependency from this pane.
             <ul className="space-y-2">
-              {documents.map((document, index) => (
-                <motion.li
-                  key={document.id}
-                  layout
-                  initial={reduceMotion ? { opacity: 0 } : { opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{
-                    duration: 0.25,
-                    delay: Math.min(index, 5) * 0.05,
-                    ease: [0.25, 0.1, 0.3, 1],
-                  }}
-                >
+              {documents.map((document) => (
+                <li key={document.id}>
                   <DocumentRow
                     document={document}
                     mode={variant}
@@ -464,7 +489,7 @@ export function DocumentsPane({
                     onStatus={onStatus}
                     onMove={managing ? (picked) => setMoving([picked]) : undefined}
                   />
-                </motion.li>
+                </li>
               ))}
             </ul>
           )}

@@ -434,7 +434,7 @@ function DocumentOutline({ documentId }: { documentId: number }) {
           className={cn('size-3 transition-transform', open && 'rotate-90')}
           aria-hidden
         />
-        Structure Lyra found
+        Outline
       </CollapsibleTrigger>
       <CollapsibleContent className="pt-1.5">
         {isPending ? (
