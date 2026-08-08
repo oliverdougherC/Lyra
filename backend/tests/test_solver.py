@@ -70,6 +70,33 @@ def fake_model(monkeypatch: pytest.MonkeyPatch, reply: object) -> None:
     monkeypatch.setattr(segmentation.client, "complete", complete)
 
 
+def fake_model_by_schema(monkeypatch: pytest.MonkeyPatch, replies: dict[str, object]) -> None:
+    """Answer each pass by the schema it asks for, keyed by schema name.
+
+    Segmentation and the LaTeX-restoration pass both reach the model through the same seam,
+    so a test that exercises the two together dispatches on the schema each one sends: a
+    reply is picked by `replies[schema.name]`, and a pass with no entry gets an empty one.
+    """
+    from backend.core.app_settings import TutorConfig
+
+    monkeypatch.setattr(
+        segmentation,
+        "resolve_tutor_config",
+        lambda conn: TutorConfig("http://127.0.0.1:8080/v1", None, "m", 8192),
+    )
+    monkeypatch.setattr(segmentation, "document_text_allowed", lambda conn: None)
+
+    async def complete(*args: object, **kwargs: object) -> str:
+        schema = kwargs.get("schema")
+        name = getattr(schema, "name", "")
+        reply = replies.get(name, {})
+        if isinstance(reply, Exception):
+            raise reply
+        return reply if isinstance(reply, str) else json.dumps(reply)
+
+    monkeypatch.setattr(segmentation.client, "complete", complete)
+
+
 def _document(
     db: sqlite3.Connection,
     class_id: int,
@@ -532,6 +559,150 @@ def test_a_failed_model_pass_falls_back_to_the_chunker(
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.AWAITING_REVIEW
     assert artifact["problems_total"] == 1
+
+
+# The two problem-4-and-5 statements this file's restoration tests use, as PDF extraction
+# flattened them: the exponents and the fraction are on the line, and there is no LaTeX in
+# either. Both arrive from the chunker in the same shape, which is the point -- what makes
+# one typeset and the other not is entirely the model pass, not the text.
+_FLAT_P5 = (
+    "Problem 5 (Time Multiplication + Time Shift)\nStarting pair:\ne-2tu(t) <-> 1 2 + jw\n"
+    "Find the Fourier Transform of\nx(t) = (t -3)e-2(t-3)u(t -3)"
+)
+_LATEX_P5 = (
+    r"Problem 5 (Time Multiplication + Time Shift) Starting pair: "
+    r"$e^{-2t}u(t) \longleftrightarrow \frac{1}{2 + j\omega}$ "
+    r"Find the Fourier Transform of $x(t) = (t-3)e^{-2(t-3)}u(t-3)$"
+)
+
+
+def test_restore_latex_typesets_a_statement_the_model_left_flattened(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The visible bug: a problem the segmentation pass dropped keeps its flattened text.
+
+    Problem 4 came back from the model in LaTeX; problem 5, identical in shape, was left
+    out of the reply, so reconcile kept the chunker's flattened extraction. The restoration
+    pass exists to catch exactly that.
+    """
+    problems = [SegmentedProblem("Problem 5", "5", _FLAT_P5, 7)]
+
+    async def complete(*args: object, **kwargs: object) -> str:
+        return json.dumps({"statements": [{"id": "p0", "statement": _LATEX_P5}]})
+
+    monkeypatch.setattr(segmentation.client, "complete", complete)
+    restored = segmentation.restore_latex(problems, "http://127.0.0.1:8080/v1", None, "m")
+
+    assert "$" in restored[0].statement
+    assert restored[0].statement == _LATEX_P5
+
+
+def test_restore_latex_reaches_into_sub_parts(monkeypatch: pytest.MonkeyPatch) -> None:
+    problems = [
+        SegmentedProblem(
+            "Problem 2",
+            "2",
+            "Compute the following.",
+            7,
+            parts=(SegmentedPart("(a)", "Sketch e-2t u(t)."),),
+        )
+    ]
+
+    async def complete(*args: object, **kwargs: object) -> str:
+        return json.dumps(
+            {"statements": [{"id": "p0q0", "statement": r"Sketch $e^{-2t} u(t)$."}]}
+        )
+
+    monkeypatch.setattr(segmentation.client, "complete", complete)
+    restored = segmentation.restore_latex(problems, "http://127.0.0.1:8080/v1", None, "m")
+
+    assert restored[0].parts[0].statement == r"Sketch $e^{-2t} u(t)$."
+
+
+def test_restore_latex_keeps_the_sheets_words_over_a_paraphrase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reply that dropped the words loses to the flattened text, as in `_statement_for`."""
+    problems = [SegmentedProblem("Problem 5", "5", _FLAT_P5, 7)]
+
+    async def complete(*args: object, **kwargs: object) -> str:
+        return json.dumps({"statements": [{"id": "p0", "statement": "$x = y$, a transform."}]})
+
+    monkeypatch.setattr(segmentation.client, "complete", complete)
+    restored = segmentation.restore_latex(problems, "http://127.0.0.1:8080/v1", None, "m")
+
+    assert restored[0].statement == _FLAT_P5
+
+
+def test_restore_latex_leaves_prose_alone_without_a_model_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A worksheet with no mathematics has nothing to restore and costs no endpoint call."""
+    problems = [SegmentedProblem("Problem 1", "1", "Discuss the poem in a paragraph.", 7)]
+    calls = {"n": 0}
+
+    async def complete(*args: object, **kwargs: object) -> str:
+        calls["n"] += 1
+        return "{}"
+
+    monkeypatch.setattr(segmentation.client, "complete", complete)
+    restored = segmentation.restore_latex(problems, "http://127.0.0.1:8080/v1", None, "m")
+
+    assert calls["n"] == 0
+    assert restored == problems
+
+
+def test_restore_latex_survives_a_failed_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Best-effort like segmentation: a pass that falls over leaves the flattened text."""
+    problems = [SegmentedProblem("Problem 5", "5", _FLAT_P5, 7)]
+
+    async def complete(*args: object, **kwargs: object) -> str:
+        raise RuntimeError("the endpoint fell over")
+
+    monkeypatch.setattr(segmentation.client, "complete", complete)
+    restored = segmentation.restore_latex(problems, "http://127.0.0.1:8080/v1", None, "m")
+
+    assert restored[0].statement == _FLAT_P5
+
+
+def test_a_problem_the_model_dropped_is_still_typeset(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End to end: the model lists problem 4 and drops 5, and 5 is typeset anyway.
+
+    This is the reported failure rebuilt from the two chunks it happened on. The model
+    returns only problem 4; the chunker still has both, so problem 5 reaches the gate, and
+    the restoration pass is what puts its mathematics back rather than leaving the student
+    the flattened extraction beside problem 4's typeset one.
+    """
+    document_id = _document(db, class_id, filename="homework_7.pdf")
+    _chunk(db, class_id, document_id, "Problem 4 (Convolution)\ny(t) = e-tu(t) *e-(t-2)u(t-2)", "4")
+    _chunk(db, class_id, document_id, _FLAT_P5, "5")
+    artifact_id = _artifact(db, class_id, document_id)
+    fake_model_by_schema(
+        monkeypatch,
+        {
+            "homework_problems": {
+                "problems": [
+                    {
+                        "label": "Problem 4 (Convolution)",
+                        "number": "4",
+                        "statement": r"Find $y(t) = e^{-t}u(t) * e^{-(t-2)}u(t-2)$.",
+                    }
+                ]
+            },
+            "restored_statements": {"statements": [{"id": "p1", "statement": _LATEX_P5}]},
+        },
+    )
+
+    solver.run_segmentation(artifact_id)
+
+    problems = _problems(db, artifact_id)
+    statements = {str(part["label"]): str(part["content"]) for part in problems}
+    # Both problems reached the gate, and neither is still flattened.
+    assert "$" in statements["Problem 4 (Convolution)"]
+    assert "$" in statements["Problem 5"]
+    assert statements["Problem 5"] == _LATEX_P5
 
 
 def test_a_document_with_no_problems_is_a_real_outcome(
