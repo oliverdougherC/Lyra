@@ -39,8 +39,6 @@ type SourcePaneProps = {
   onFitWidth?: (width: number) => void
   /** The control that sizes the column to the page, rendered in this pane's header. */
   fitToggle?: React.ReactNode
-  /** The control that gives this pane the whole window, rendered in its header. */
-  focusToggle?: React.ReactNode
 }
 
 /** The padding around the page inside the scrolling area, per side. Matches `p-5`. */
@@ -87,7 +85,6 @@ export function SourcePane({
   onSelectProblem,
   onFitWidth,
   fitToggle = null,
-  focusToggle = null,
 }: SourcePaneProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null)
   // The shape of the page on screen, learned when it decoded. Held here rather than inside
@@ -173,10 +170,26 @@ export function SourcePane({
    * Measured rather than read once, so a window that changes height asks for the width that
    * new height wants. A shorter window needs a narrower column to hold a whole page, and a
    * column that stayed put would leave the reader scrolling a sheet that used to stand whole.
+   *
+   * The first fit lands in the same beat the page decodes, so the column is already the
+   * right width before there is anything in it to see. Later ones are coalesced: a height
+   * that changes over a run of frames -- the window dragged, or the header folding away in
+   * immersive mode -- would otherwise ask for a new width on every one of them, and each
+   * answer re-renders the workbench and re-lays the split, which is a whole animation of
+   * choppiness for a column that only needed to settle once the height stopped moving. So
+   * the settled height is the one that gets a fit, and the frames on the way to it do not.
    */
+  const hasFitRef = useRef(false)
   useEffect(() => {
     if (!onFitWidth || !pageAspect || available === null || available <= 0) return
-    onFitWidth(available * pageAspect + PAGE_GUTTER_PX * 2)
+    const width = available * pageAspect + PAGE_GUTTER_PX * 2
+    if (!hasFitRef.current) {
+      hasFitRef.current = true
+      onFitWidth(width)
+      return
+    }
+    const settle = window.setTimeout(() => onFitWidth(width), 150)
+    return () => window.clearTimeout(settle)
   }, [available, onFitWidth, pageAspect])
 
   if (documentId === null) {
@@ -216,7 +229,6 @@ export function SourcePane({
             </select>
           ) : null}
           {fitToggle}
-          {focusToggle}
         </span>
       </header>
 

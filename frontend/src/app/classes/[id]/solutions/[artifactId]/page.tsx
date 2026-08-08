@@ -1,11 +1,17 @@
 'use client'
 
 import { useQueryClient } from '@tanstack/react-query'
+import { Maximize2, Minimize2 } from 'lucide-react'
 import { useParams, useRouter } from 'next/navigation'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 
-import { HeaderActions, HeaderCrumb, useFullBleed } from '@/components/layout/page-chrome'
+import {
+  HeaderActions,
+  HeaderCrumb,
+  useFullBleed,
+  useImmersiveChrome,
+} from '@/components/layout/page-chrome'
 import { SegmentationReview } from '@/components/solutions/segmentation-review'
 import { SolutionWorkspace } from '@/components/solutions/solution-workspace'
 import { SolveProgress } from '@/components/solutions/solve-progress'
@@ -27,6 +33,7 @@ import { ApiError } from '@/lib/api'
 import { formatCount } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useClasses } from '@/lib/hooks/use-classes'
+import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
 import {
   solutionKeys,
   useCancelSolution,
@@ -94,6 +101,17 @@ export default function SolutionWorkspacePage() {
   const isWorkspace =
     loaded !== undefined && (currentState === 'ready' || currentState === 'cancelled' || solved > 0)
   useFullBleed(isWorkspace)
+  // Whether the sidebar and header are folded away to give the workbench the whole window.
+  // Kept per browser rather than per set: a reader who wants the room wants it on every
+  // solution, and being asked again on the next one is the whole complaint. Gated on the
+  // workbench being up so a stored `true` never strands a skeleton or the review gate with
+  // no navigation on screen.
+  const [immersive, setImmersive] = useLocalStorageState(
+    'lyra-solution-immersive',
+    false,
+    parseImmersive,
+  )
+  useImmersiveChrome(immersive && isWorkspace)
 
   if (classId === null || artifactId === null) {
     return (
@@ -295,9 +313,50 @@ export default function SolutionWorkspacePage() {
       ) : null}
 
       {workspace ? (
-        <SolutionWorkspace solution={artifact} classId={classId} className={className} />
+        // The immersive toggle rides in the workbench rather than the app header: immersive
+        // mode folds that header away, and a control that hides itself the moment it is used
+        // is one the reader cannot use to come back. The pane header stays on screen in both
+        // states, so the way out is always where the way in was.
+        <SolutionWorkspace
+          solution={artifact}
+          classId={classId}
+          className={className}
+          immersiveToggle={
+            <ImmersiveToggle immersive={immersive} onToggle={() => setImmersive(!immersive)} />
+          }
+        />
       ) : null}
     </div>
+  )
+}
+
+function parseImmersive(raw: string): boolean | null {
+  return raw === 'true' ? true : raw === 'false' ? false : null
+}
+
+/**
+ * Give the window to the work, or hand the application back.
+ *
+ * The sidebar and the header are two borders and a row of somewhere else to be, and a set
+ * of solutions is read beside the sheet it came from - a page to look at rather than a
+ * screen to navigate. This slides both away and keeps the two panes, which is what the
+ * writing desk's own button does. It stays on screen in both states, so the mode is never
+ * something a reader has to guess their way out of.
+ */
+function ImmersiveToggle({ immersive, onToggle }: { immersive: boolean; onToggle: () => void }) {
+  const label = immersive ? 'Show the sidebar and header' : 'Hide the sidebar and header'
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="text-text-tertiary hover:text-text-primary size-8 print:hidden"
+      onClick={onToggle}
+      aria-pressed={immersive}
+      aria-label={label}
+      title={label}
+    >
+      {immersive ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+    </Button>
   )
 }
 

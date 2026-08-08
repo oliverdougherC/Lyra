@@ -567,6 +567,58 @@ SEGMENTATION_SCHEMA = JsonSchema(
 )
 
 
+# The segmentation pass restores LaTeX while it lists the problems, but only for the
+# problems it lists. A problem it dropped, mis-numbered, read at a coarser grain, or whose
+# reading was rejected as a summary keeps the chunker's text, and that text is what PDF
+# extraction left: `e^{-2t}u(t-3)` flattened to `e-2tu(t -3)`. This pass exists to catch
+# exactly those, one narrow job on text that is already the right problem's own words, so
+# it cannot lose or reorder a problem the way a whole-sheet re-reading can. It is handed a
+# list of statements with an id apiece and asked to hand each back with its mathematics put
+# back, and nothing else changed.
+_LATEX_RESTORE_PROMPT = f"""\
+Each entry below is a homework problem's text that came out of a PDF, and extraction
+flattened its mathematics onto the line: exponents, subscripts, fractions, integrals, and
+operators all lost their layout. Put the mathematics back into LaTeX and change nothing
+else.
+
+Return JSON with one field, "statements", holding a list with one object per entry you were
+given:
+- "id": the id that entry was given, copied exactly.
+- "statement": that entry's text with its mathematics written in LaTeX, using $...$ for a
+  quantity inside a line of text and $$...$$ on its own line for a displayed equation.
+
+This is a transcription, not a rewrite. Keep every word, every number, and the order they
+came in. "x(t) = e-2tu(t -3)" is "$x(t) = e^{{-2t}}u(t-3)$", and a starting pair written
+"e-2tu(t) <-> 1 2 + jw" is "$e^{{-2t}}u(t) \\longleftrightarrow \\frac{{1}}{{2 + j\\omega}}$".
+A run of loose numbers that was a fraction is a fraction; a stack that was an integral is an
+integral. Do not solve anything, do not explain, and do not add or drop a single word.
+
+{_JSON_ONLY}"""
+
+LATEX_RESTORE_SCHEMA = JsonSchema(
+    name="restored_statements",
+    schema={
+        "type": "object",
+        "properties": {
+            "statements": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "statement": {"type": "string"},
+                    },
+                    "required": ["id", "statement"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["statements"],
+        "additionalProperties": False,
+    },
+)
+
+
 # Assembled by concatenation rather than by `format` or an f-string, and it has to be: the
 # body contains `e^{-t}u(t)`, and both of those read a LaTeX brace group as a placeholder.
 _SOLVE_BODY = """\
@@ -730,6 +782,24 @@ def build_segmentation_prompt(text: str, filename: str) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": _SEGMENTATION_PROMPT},
         {"role": "user", "content": f"File: {filename}\n\n{text}"},
+    ]
+
+
+def build_latex_restore_prompt(items: list[tuple[str, str]]) -> list[dict[str, str]]:
+    """Build the messages that ask the model to restore LaTeX in flattened statements.
+
+    Args:
+        items: `(id, statement)` pairs. The id is echoed back so a reply that drops or
+            reorders entries still maps to the right statement rather than the wrong one.
+
+    Returns:
+        OpenAI-shaped messages. Best-effort like segmentation itself: a statement the reply
+        does not cover keeps the flattened text it had, which is no worse than today.
+    """
+    body = "\n\n".join(f"id: {item_id}\n{statement}" for item_id, statement in items)
+    return [
+        {"role": "system", "content": _LATEX_RESTORE_PROMPT},
+        {"role": "user", "content": body},
     ]
 
 
