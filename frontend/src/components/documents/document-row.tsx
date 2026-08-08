@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { StatusWord } from '@/components/ex-libris'
 import { IngestionProgress } from '@/components/documents/ingestion-progress'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -299,36 +300,37 @@ export function DocumentRow({
 }
 
 function StateIndicator({ state }: { state: DocumentState }) {
+  // Status is a word, never a bare icon (design system section 10). Ready is the nominal
+  // state, so it prints quietly rather than in a color; only the exceptions take one.
   if (state === 'ready') {
     return (
-      <span className="text-success-text flex items-center gap-1 text-xs">
-        <Check className="size-4" aria-hidden />
-        <span className="sr-only">Ready</span>
-      </span>
+      <StatusWord tone="nominal" icon={<Check />}>
+        Ready
+      </StatusWord>
     )
   }
   if (state === 'unsupported') {
     return (
-      <span className="text-info-text flex items-center gap-1 text-xs">
-        <FileWarning className="size-4" aria-hidden />
+      <StatusWord tone="info" icon={<FileWarning />}>
         no text
-      </span>
+      </StatusWord>
     )
   }
   if (state === 'failed') {
     return (
-      <span className="text-danger-text flex items-center gap-1 text-xs">
-        <AlertCircle className="size-4" aria-hidden />
+      <StatusWord tone="warn" icon={<AlertCircle />}>
         failed
-      </span>
+      </StatusWord>
     )
   }
   if (state === 'pending') {
     return (
-      <span className="text-text-tertiary flex items-center gap-1 text-xs">
-        <span className="bg-text-tertiary size-2 rounded-full" aria-hidden />
+      <StatusWord
+        tone="nominal"
+        icon={<span className="bg-text-tertiary block size-2 rounded-full" />}
+      >
         queued
-      </span>
+      </StatusWord>
     )
   }
   return null

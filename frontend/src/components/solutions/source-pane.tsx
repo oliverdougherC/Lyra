@@ -374,7 +374,7 @@ function PageImage({
       // on desk to either side of a whole page, rather than on a page grown past the fold:
       // a sheet the reader has to scroll to see the bottom of is the one thing this pane
       // exists to avoid.
-      className="border-border/60 relative mx-auto w-full overflow-hidden rounded-[3px] border bg-white shadow-md"
+      className="border-border/60 bg-paper-sheet relative mx-auto w-full overflow-hidden rounded-[3px] border shadow-md"
       style={
         shown.aspect > 0
           ? {

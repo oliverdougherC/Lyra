@@ -197,7 +197,7 @@ function CommentThread({
         // The quote is the anchor, so it is also the way there.
         <blockquote
           className={cn(
-            'border-border text-text-tertiary mb-1 border-l-2 pl-2 text-xs italic',
+            'border-border text-text-tertiary mb-1 border-l-2 pl-2 text-xs',
             onJump && 'hover:text-text-secondary cursor-pointer',
           )}
           role={onJump ? 'button' : undefined}

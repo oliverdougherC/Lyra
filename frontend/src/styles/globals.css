@@ -17,89 +17,115 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Lyra design tokens: the single source of truth, per docs/design-system.md. */
+/* Lyra design tokens: the single source of truth, per docs/exlibris-design-system.md.
+   Ex Libris, the reading room (light). Stone is structure, paper is content, ink is print;
+   the pen (hand) and the Mark (trust) are the only saturated colors, and they are earned. */
 :root {
-  --bg-primary: #f5f1eb;
-  --bg-secondary: #f9f8f6;
-  --bg-tertiary: #ebe4db;
-  --border: #dcd2c6;
-  --border-strong: #9e8167;
-  --text-primary: #302821;
-  --text-secondary: #655548;
-  --text-tertiary: #7d6959;
-  --accent-primary: #45684a;
-  --accent-primary-hover: #36543a;
-  --accent-foreground: #f9f8f6;
-  --accent-surface: #d8e4d2;
-  --accent-surface-foreground: #2a412d;
-  --accent-secondary: #dcc9b7;
-  --accent-secondary-foreground: #634b36;
-  --accent-tertiary: #dec7ba;
+  --bg-primary: #e9e4d8; /* stone: page and slab ground */
+  --bg-secondary: #faf7ee; /* paper: content sheets set into the stone */
+  --bg-tertiary: #efe9dc; /* quiet fill: a stone-tinted paper for hovers and chips */
+  --border: #d3c9b2; /* line: rules and borders */
+  --border-strong: #857a58; /* stronger line for inputs and dividers; clears 3:1 both grounds */
+  --text-primary: #28231a; /* ink */
+  --text-secondary: #645c4c; /* muted: secondary text, clears 4.5:1 on paper and stone */
+  --text-tertiary: #695f4e; /* quiet metadata; still prints as fact, still clears 4.5:1 */
+  --accent-primary: #a9c3a0; /* pastel sage: primary buttons, selected segment */
+  --accent-primary-hover: #9bb891;
+  --accent-foreground: #1d3324; /* accent ink: text on the sage plaque */
+  --accent-surface: #dce7d4; /* quiet sage surface */
+  --accent-surface-foreground: #1d3324;
+  --accent-text: #48684b; /* ghost buttons and quiet accent text */
+  /* Course marks: muted stone-world discs, decorative only, one per class identity. */
+  --accent-secondary: #dac9b4;
+  --accent-secondary-foreground: #5a4b36;
+  --accent-tertiary: #e0cbbe;
   --accent-tertiary-foreground: #6b4733;
-  --success-fill: #d3e0cc;
-  --success-text: #466039;
-  --info-fill: #d1dee0;
-  --info-text: #395960;
-  --danger-fill: #e0c6be;
-  --danger-foreground: #3d2a24;
-  --danger-text: #673e32;
-  --focus-ring: #45684a;
-  --overlay: rgb(48 40 33 / 0.2);
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
+  /* Nominal-good status. Distinct from the verdigris Mark, which is exclusive. */
+  --success-fill: #dce7d4;
+  --success-text: #48684b;
+  --info-fill: #dbe2e6;
+  --info-text: #3f5b62;
+  --danger-fill: #e7cfc7; /* soft salmon */
+  --danger-foreground: #3a241e;
+  --danger-text: #b23a2e; /* red pencil: printed warnings */
+  /* Ex Libris signature tokens. */
+  --hand: #2440c0; /* the pen: biro blue */
+  --hand-red: #b23a2e; /* red pencil */
+  --trust: #2f7052; /* verdigris: the Mark and machine verification, nothing else */
+  --hl: rgb(247 225 76 / 0.55); /* highlighter wash */
+  --gold: #a9863c; /* engraved detail only */
+  --gold-line: rgb(169 134 60 / 0.5);
+  --lamp: none; /* the lamp is a dark-mode atmosphere; light has marble instead */
+  --paper-sheet: #ffffff; /* a rendered PDF page is white paper in both themes */
+  --focus-ring: var(--hand); /* focus is the pen pointing at it */
+  --overlay: rgb(20 17 12 / 0.28);
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
   /* The workbench is one surface split into two columns, so the rules that open and close
      each column have to read as a single line across the seam. Both panes size their action
      bar's control row from this rather than from whatever their own contents measure: the
      composer is sized by its send button, the dropzone by a smaller pair of controls, and
      left alone they part company by 16px. */
   --pane-control-row: 3.75rem;
-  /* Fractal paper fiber. See `body::after`. */
-  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.62' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.188 0 0 0 0 0.157 0 0 0 0 0.129 0.34 0.34 0.34 0 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-grain-opacity: 0.055;
-  --elevation-sm: 0 2px 8px rgb(48 40 33 / 0.05);
-  --elevation-md: 0 12px 30px rgb(48 40 33 / 0.08);
-  --elevation-lg: 0 24px 60px rgb(48 40 33 / 0.12);
+  /* Marble: a baked SVG texture, light mode only, on the stone ground behind chrome. Soft
+     warm veining keyed into the alpha channel so it modulates the stone rather than tinting
+     it. One asset, one paint; it never sits behind running text (that is paper). */
+  --stone-texture: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='600'%3E%3Cfilter id='m'%3E%3CfeTurbulence type='turbulence' baseFrequency='0.012 0.006' numOctaves='3' seed='11' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.09 0 0 0 0 0.078 0 0 0 0 0.055 0 0 0 -0.7 0.12'/%3E%3C/filter%3E%3Crect width='600' height='600' filter='url(%23m)'/%3E%3C/svg%3E");
+  --elevation-sm: 0 2px 8px rgb(40 35 26 / 0.05);
+  --elevation-md: 0 12px 30px rgb(40 35 26 / 0.08);
+  --elevation-lg: 0 24px 60px rgb(40 35 26 / 0.12);
 }
 
+/* Ex Libris, after hours (dark). Deep warm blacks, gentle contrast, pastel emphasis only.
+   Nothing saturated, nothing glowing; the lamp is the one atmospheric touch. */
 .dark {
-  --bg-primary: #1d1a16;
-  --bg-secondary: #28241f;
-  --bg-tertiary: #37302a;
-  /* Lifted from #4f453b: the decorative rule is what separates one dark surface from the
-     next once shadows stop doing that work, so it has to be visible on its own. */
-  --border: #5b5044;
-  --border-strong: #a18c78;
-  --text-primary: #f3f0ed;
-  --text-secondary: #cdc1b6;
-  --text-tertiary: #b1a195;
-  --accent-primary: #9fc6a3;
-  --accent-primary-hover: #b1d3b4;
-  --accent-foreground: #1d1a16;
-  --accent-surface: #3d5c40;
-  --accent-surface-foreground: #e0ebe1;
-  --accent-secondary: #66503d;
-  --accent-secondary-foreground: #ebe2db;
-  --accent-tertiary: #744f3e;
-  --accent-tertiary-foreground: #f0e5e0;
-  --success-fill: #43593b;
-  --success-text: #b3cfaa;
-  --info-fill: #3b5459;
-  --info-text: #b1cdd3;
-  --danger-fill: #6a483e;
-  --danger-foreground: #f1e7e4;
-  --danger-text: #d7bfb7;
-  --focus-ring: #9fc6a3;
-  --overlay: rgb(14 12 10 / 0.48);
-  /* White fiber: black speckle on a dark ground is invisible. */
-  --paper-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.62' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 0.98 0 0 0 0 0.957 0.34 0.34 0.34 0 0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23g)'/%3E%3C/svg%3E");
-  --paper-grain-opacity: 0.045;
+  --bg-primary: #0f0d0a; /* body: the room with the lights off */
+  --bg-secondary: #171410; /* paper: content sheets, lifted in the lamp light */
+  --bg-tertiary: #221d16; /* quiet fill: a slight lift for hovers and chips */
+  --border: #2c2820; /* line */
+  --border-strong: #6b6449; /* stronger line; clears 3:1 on both grounds */
+  --text-primary: #e7dfcf; /* ink */
+  --text-secondary: #9a917d; /* muted */
+  --text-tertiary: #8c826e; /* quiet metadata; clears 4.5:1 on paper */
+  --accent-primary: #e6d69b; /* butter: primary buttons, selected segment */
+  --accent-primary-hover: #efe1ae;
+  --accent-foreground: #2a2410; /* accent ink: text on the butter plaque */
+  --accent-surface: #2e2a1c; /* quiet butter surface */
+  --accent-surface-foreground: #e6d69b;
+  --accent-text: #d9c98c; /* quiet accent text */
+  --accent-secondary: #2a2419;
+  --accent-secondary-foreground: #d8c3a0;
+  --accent-tertiary: #2e2118;
+  --accent-tertiary-foreground: #e0b9a0;
+  --success-fill: #24291b;
+  --success-text: #bcc79e;
+  --info-fill: #1e2a2c;
+  --info-text: #a9c6ce;
+  --danger-fill: #3a2620;
+  --danger-foreground: #f1e1db;
+  --danger-text: #e2a191; /* pastel salmon */
+  /* Signature tokens: the pen is periwinkle, the Mark is pastel mint, gold does not survive
+     the dark and becomes pale ivory. */
+  --hand: #a8b6f0; /* periwinkle */
+  --hand-red: #e2a191; /* salmon */
+  --trust: #9ccfae; /* pastel mint Mark */
+  --hl: rgb(233 217 155 / 0.22); /* butter wash */
+  --gold: #d6ccb4; /* inscription: what was gold by day */
+  --gold-line: rgb(233 217 155 / 0.18);
+  /* The lamp: dark mode's only atmosphere, one faint butter radial at the top of the page.
+     No marble, no texture behind anything at night. */
+  --lamp: radial-gradient(120% 62% at 50% -8%, rgb(233 217 155 / 0.05), transparent 62%);
+  --paper-sheet: #ffffff; /* a PDF page is white in both themes; paper is paper */
+  --focus-ring: var(--hand);
+  --overlay: rgb(6 5 3 / 0.62);
+  --stone-texture: none; /* marble is a light-mode material */
   /* A drop shadow is a light-theme device: on a dark canvas it darkens dark and reads as
      nothing. Dark earns the same separation with a hairline of lifted paper along the top
      of each surface, so raised paper still reads as raised. */
-  --elevation-sm: 0 2px 8px rgb(14 12 10 / 0.4), inset 0 1px 0 rgb(255 250 244 / 0.04);
-  --elevation-md: 0 12px 30px rgb(14 12 10 / 0.5), inset 0 1px 0 rgb(255 250 244 / 0.05);
-  --elevation-lg: 0 24px 60px rgb(14 12 10 / 0.62), inset 0 1px 0 rgb(255 250 244 / 0.06);
+  --elevation-sm: 0 2px 8px rgb(0 0 0 / 0.45), inset 0 1px 0 rgb(233 217 155 / 0.04);
+  --elevation-md: 0 12px 30px rgb(0 0 0 / 0.55), inset 0 1px 0 rgb(233 217 155 / 0.05);
+  --elevation-lg: 0 24px 60px rgb(0 0 0 / 0.66), inset 0 1px 0 rgb(233 217 155 / 0.06);
 }
 
 /*
@@ -126,7 +152,8 @@
   --destructive-foreground: var(--accent-foreground);
   --input: var(--border-strong);
   --ring: var(--focus-ring);
-  --sidebar: var(--bg-secondary);
+  /* The rail is stone, not paper: structure, the ground the sheets are set into. */
+  --sidebar: var(--bg-primary);
   --sidebar-foreground: var(--text-primary);
   --sidebar-primary: var(--accent-primary);
   --sidebar-primary-foreground: var(--accent-foreground);
@@ -157,7 +184,7 @@
   --color-border: var(--border);
   --color-input: var(--border-strong);
   --color-ring: var(--focus-ring);
-  --color-sidebar: var(--bg-secondary);
+  --color-sidebar: var(--bg-primary);
   --color-sidebar-foreground: var(--text-primary);
   --color-sidebar-primary: var(--accent-primary);
   --color-sidebar-primary-foreground: var(--accent-foreground);
@@ -175,6 +202,7 @@
   --color-accent-primary-hover: var(--accent-primary-hover);
   --color-accent-surface: var(--accent-surface);
   --color-accent-surface-foreground: var(--accent-surface-foreground);
+  --color-accent-text: var(--accent-text);
   --color-accent-secondary: var(--accent-secondary);
   --color-accent-secondary-foreground: var(--accent-secondary-foreground);
   --color-accent-tertiary: var(--accent-tertiary);
@@ -187,17 +215,31 @@
   --color-danger-text: var(--danger-text);
   --color-danger-foreground: var(--danger-foreground);
 
+  /* Ex Libris signature colors, as Tailwind utilities (text-hand, bg-trust, text-gold, ...). */
+  --color-hand: var(--hand);
+  --color-hand-red: var(--hand-red);
+  --color-trust: var(--trust);
+  --color-hl: var(--hl);
+  --color-gold: var(--gold);
+  --color-gold-line: var(--gold-line);
+  --color-paper-sheet: var(--paper-sheet);
+  --color-bg-tertiary: var(--bg-tertiary);
+
   --shadow-sm: var(--elevation-sm);
   --shadow-md: var(--elevation-md);
   --shadow-lg: var(--elevation-lg);
 
   --ease-gentle: cubic-bezier(0.25, 0.1, 0.3, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* The pen's own timing: draws in, never slides. */
+  --ease-draw: cubic-bezier(0.33, 0, 0.2, 1);
 
-  --font-sans: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  /* Print carries everything read; inscription names things; the hand is the student's. */
+  --font-sans: var(--font-eb-garamond), ui-serif, Georgia, serif;
   --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
-  --font-heading: var(--font-fraunces), ui-serif, Georgia, serif;
-  --font-ai-response: var(--font-source-serif), ui-serif, Georgia, serif;
+  --font-heading: var(--font-cinzel), ui-serif, Georgia, serif;
+  --font-ai-response: var(--font-eb-garamond), ui-serif, Georgia, serif;
+  --font-hand: var(--font-caveat), ui-serif, cursive;
 }
 
 @layer base {
@@ -205,43 +247,36 @@
     @apply border-border outline-ring/50;
   }
 
+  /* Stone is the ground the whole app stands on: the canvas and the rail. In light it
+     carries the baked marble, one fixed sheet so the veining never repeats per element; in
+     dark it carries the lamp, a single faint butter radial at the top of the page and no
+     texture at all. Paper sheets (bg-secondary) sit opaque on top, so running text never
+     reads over stone. It costs one paint and never intercepts a pointer. */
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
+    background-color: var(--bg-primary);
+    background-image: var(--stone-texture), var(--lamp);
+    background-repeat: repeat, no-repeat;
+    background-size:
+      600px 600px,
+      100% 62%;
+    background-position:
+      0 0,
+      top center;
+    background-attachment: fixed;
   }
 
   html {
     @apply font-sans;
   }
 
+  /* Inscription names things: Cinzel with the incised treatment applied by `.font-display`
+     and `.font-wordmark`. Below 17px, headings fall back to plain print caps in components
+     that need them (design system section 4). */
   h1,
   h2,
   h3 {
     @apply font-heading tracking-tight;
-  }
-
-  /* Paper is a material, not a hex value. One fixed sheet of fractal grain over the whole
-     window — above every surface, blended so it only modulates what is already there —
-     is what stops the parchment palette reading as flat beige rectangles. It sits on the
-     compositor, costs one paint, and never intercepts a pointer. */
-  /* Paper is a material, not a hex value. One fixed sheet of fractal fiber over the whole
-     window is what stops the parchment palette reading as flat beige rectangles.
-
-     The noise is keyed into the *alpha* channel by `feColorMatrix` -- flat black speckles
-     in light, flat white in dark, whose opacity varies -- rather than left as RGB noise
-     under a blend mode. Blended RGB noise is centred on mid-gray, and the blends that
-     respect mid-gray (soft-light above all) treat it as a near-identity: measured at full
-     opacity it was literally invisible. Alpha-keyed speckle cannot be a no-op.
-
-     It sits on the compositor, costs one paint, and never intercepts a pointer. */
-  body::after {
-    content: '';
-    position: fixed;
-    inset: 0;
-    z-index: 2147483647;
-    pointer-events: none;
-    background-image: var(--paper-grain);
-    background-size: 180px 180px;
-    opacity: var(--paper-grain-opacity);
   }
 
   /* Selection in the house accent rather than the browser's blue: the one default that
@@ -296,38 +331,50 @@
 }
 
 @layer components {
-  /* The one small-caps editorial label, defined once. Every "TUTOR", "SOLUTIONS", and
-     "Try asking" in the product is this class, so they are all the same label instead of
-     five hand-tuned approximations of one. */
+  /* The one letterspaced-caps label, defined once. Every "TUTOR", "SOLUTIONS", and "Try
+     asking" in the product is this class, so they are all the same label instead of five
+     hand-tuned approximations of one. Print, not inscription: below 17px, scannability
+     beats ceremony (design system section 4), so this is plain EB Garamond caps rather
+     than engraved Cinzel. */
   .eyebrow {
-    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
-    font-size: 0.6875rem;
+    font-family: var(--font-eb-garamond), ui-serif, Georgia, serif;
+    font-size: 0.71875rem; /* 11.5px */
     font-weight: 600;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
   }
 
-  /* Display setting for Fraunces: large optical size and the soft axis on, so a title is
-     the warm, slightly flared face the type was drawn to be at size — not body-text
-     letterforms scaled up. Wonk stays off here; it is reserved for the wordmark. */
+  /* Inscription. Cinzel is cut from Roman capitals, so a nameplate is engraved, not set:
+     an incised treatment gives the letters a light top edge and a soft shadow below, as if
+     carved into the stone. Nameplates only, 17px and up. */
   .font-display {
-    font-family: var(--font-fraunces), ui-serif, Georgia, serif;
-    font-variation-settings:
-      'opsz' 72,
-      'SOFT' 60,
-      'WONK' 0;
-    letter-spacing: -0.02em;
+    font-family: var(--font-cinzel), ui-serif, Georgia, serif;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-shadow:
+      0 1px 0 rgb(255 252 245 / 0.55),
+      0 -1px 1px rgb(40 35 26 / 0.1);
   }
 
-  /* The wordmark alone earns the wonky letterforms: at one word, quirk is identity. */
+  /* Pale ivory, gently embossed, in the lamp light: gold does not survive the dark, and
+     neither does the light-stone bevel. */
+  .dark .font-display,
+  .dark .font-wordmark {
+    text-shadow:
+      0 1px 0 rgb(0 0 0 / 0.5),
+      0 -1px 1px rgb(233 217 155 / 0.06);
+  }
+
+  /* The wordmark is the same engraving with a touch more tracking: at one word, the cut
+     letters are the identity. */
   .font-wordmark {
-    font-family: var(--font-fraunces), ui-serif, Georgia, serif;
-    font-variation-settings:
-      'opsz' 44,
-      'SOFT' 40,
-      'WONK' 1;
-    letter-spacing: -0.01em;
+    font-family: var(--font-cinzel), ui-serif, Georgia, serif;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-shadow:
+      0 1px 0 rgb(255 252 245 / 0.55),
+      0 -1px 1px rgb(40 35 26 / 0.1);
   }
 
   /* The tutor's reading surface. Slightly larger than the interface sans, because a serif
@@ -381,7 +428,7 @@
   .assistant-content h1,
   .assistant-content h2,
   .assistant-content h3 {
-    font-family: var(--font-fraunces), ui-serif, Georgia, serif;
+    font-family: var(--font-eb-garamond), ui-serif, Georgia, serif;
     font-weight: 500;
     letter-spacing: -0.025em;
   }
@@ -741,8 +788,8 @@ li[data-stream-word] {
   --crepe-color-selected: var(--accent-surface);
   --crepe-color-inline-area: var(--bg-tertiary);
 
-  --crepe-font-title: var(--font-fraunces), ui-serif, Georgia, serif;
-  --crepe-font-default: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  --crepe-font-title: var(--font-eb-garamond), ui-serif, Georgia, serif;
+  --crepe-font-default: var(--font-eb-garamond), ui-serif, Georgia, serif;
   --crepe-font-code: var(--font-jetbrains-mono), ui-monospace, monospace;
 
   /* Crepe uses shadow-1 for every floating popover (slash menu, toolbar, link tooltip);
@@ -760,7 +807,7 @@ li[data-stream-word] {
    for headings. The canvas takes no focus ring - the whole surface is the editor. */
 .draft-editor .milkdown .ProseMirror {
   position: relative;
-  font-family: var(--font-source-serif), ui-serif, Georgia, serif;
+  font-family: var(--font-eb-garamond), ui-serif, Georgia, serif;
   font-size: 1.0625rem;
   line-height: 1.65;
   color: var(--text-primary);
@@ -783,7 +830,7 @@ li[data-stream-word] {
 .draft-editor .milkdown .ProseMirror h1,
 .draft-editor .milkdown .ProseMirror h2,
 .draft-editor .milkdown .ProseMirror h3 {
-  font-family: var(--font-fraunces), ui-serif, Georgia, serif;
+  font-family: var(--font-eb-garamond), ui-serif, Georgia, serif;
   font-weight: 500;
   letter-spacing: -0.025em;
   color: var(--text-primary);
@@ -832,7 +879,7 @@ li[data-stream-word] {
   border-collapse: collapse;
   width: 100%;
   margin-block: 0 1.125rem;
-  font-family: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-eb-garamond), ui-serif, Georgia, serif;
   font-size: 0.875rem;
 }
 
@@ -870,7 +917,7 @@ li[data-stream-word] {
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   padding: 0.75rem 1rem;
   margin-block: 0.5rem 1.125rem;
-  font-family: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-eb-garamond), ui-serif, Georgia, serif;
   user-select: none;
   animation: lyra-reveal-enter 250ms var(--ease-gentle) both;
 }
@@ -946,7 +993,7 @@ li[data-stream-word] {
 /* Streaming / done: the drafted text in the document serif voice. */
 .ws-text {
   margin-top: 0.5rem;
-  font-family: var(--font-source-serif), ui-serif, Georgia, serif;
+  font-family: var(--font-eb-garamond), ui-serif, Georgia, serif;
   font-size: 1rem;
   line-height: 1.65;
   color: var(--text-primary);
@@ -1136,7 +1183,7 @@ li[data-stream-word] {
   align-items: center;
   justify-content: center;
   color: var(--text-tertiary);
-  font-family: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-eb-garamond), ui-serif, Georgia, serif;
   font-size: 1.45rem;
   line-height: 0;
   cursor: pointer;
@@ -1167,7 +1214,7 @@ li[data-stream-word] {
   background: color-mix(in srgb, var(--accent-surface) 55%, transparent);
   padding-inline: 0.3em;
   color: var(--accent-primary);
-  font-family: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-eb-garamond), ui-serif, Georgia, serif;
   font-size: 0.76em;
   line-height: 1.35;
   text-decoration: none;
@@ -1187,6 +1234,48 @@ li[data-stream-word] {
   }
 }
 
+/* ---- The pen draws ---------------------------------------------------------
+   Ex Libris motion: the pen draws (underlines, strokes) at 280 to 500ms ease-out; the Mark
+   fades in at 150ms and never performs; stone never moves. Data strokes (the penbar) are
+   never touched by motion settings, because their length is information. */
+
+/* An underline strokes in. pathLength=1 makes the dash geometry-independent, so one keyframe
+   serves every word width. */
+@keyframes hand-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.hand-underline path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: hand-draw 280ms var(--ease-draw) forwards;
+}
+
+/* The penbar's stroke eases a real change and nothing else; reduced motion drops the easing
+   but never the position, so the bar always shows exactly the progress that happened. */
+.penbar-fill {
+  transition: width 400ms var(--ease-draw);
+}
+
+/* The Mark fades in. Trust does not perform, so this is opacity only. */
+@keyframes the-mark-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.the-mark-reveal {
+  animation: the-mark-in 150ms var(--ease-gentle) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -1200,6 +1289,23 @@ li[data-stream-word] {
     opacity: 1;
     transform: none;
     animation: none !important;
+  }
+
+  /* Drawings land complete, not mid-stroke: the underline sits at dashoffset 0 and the Mark
+     at full opacity, rather than flashing in at 0.01ms. */
+  .hand-underline path {
+    animation: none !important;
+    stroke-dashoffset: 0;
+  }
+
+  .the-mark-reveal {
+    animation: none !important;
+  }
+
+  /* The penbar's width is a datum; the transition is only the easing, so removing it leaves
+     the stroke exactly where the data puts it. */
+  .penbar-fill {
+    transition: none !important;
   }
 
   /* The shimmer paints its text with a moving gradient and a transparent color. Freezing
@@ -1222,33 +1328,40 @@ li[data-stream-word] {
    would be worse than no export. Nothing about a verdict, a refutation, or a provenance
    line is dropped for tidiness. */
 @media print {
-  /* Screen atmosphere. Printed paper brings its own grain. */
-  body::after {
-    display: none;
-  }
-
-  /* Paper is paper. Both themes print on the light palette, so a dark-mode reader does
-     not get a page of ink or, worse, a light-on-light document. */
+  /* Paper is paper. Both themes print on the reading-room palette, so a dark-mode reader
+     does not get a page of ink or, worse, a light-on-light document. The stone texture and
+     the lamp are screen atmosphere; neither prints. */
   :root,
   .dark {
     --bg-primary: #ffffff;
     --bg-secondary: #ffffff;
-    --bg-tertiary: #f2efea;
-    --border: #cfc6ba;
-    --border-strong: #8a7460;
-    --text-primary: #1b1712;
-    --text-secondary: #3d342c;
-    --text-tertiary: #5b5045;
-    --accent-primary: #2f4a33;
+    --bg-tertiary: #f2efe6;
+    --border: #cfc6b4;
+    --border-strong: #8a7c60;
+    --text-primary: #201c14;
+    --text-secondary: #4a4335;
+    --text-tertiary: #5f5747;
+    --accent-primary: #4d6f51;
+    --accent-foreground: #ffffff;
     --accent-surface: #e6eee2;
-    --accent-surface-foreground: #24361f;
-    --success-fill: #e3ecdd;
-    --success-text: #2f4526;
+    --accent-surface-foreground: #26361f;
+    --accent-text: #3f5c43;
+    --success-fill: #e6eee2;
+    --success-text: #38513c;
     --info-fill: #e0eaec;
     --info-text: #27454b;
     --danger-fill: #f0dcd6;
     --danger-foreground: #2a1d19;
-    --danger-text: #5a3227;
+    --danger-text: #8a2f24;
+    /* The student's ink and the Mark still print: a solution's provenance is not decoration. */
+    --hand: #2440c0;
+    --hand-red: #8a2f24;
+    --trust: #2f7052;
+    --hl: rgb(247 225 76 / 0.5);
+    --gold: #7a5f2a;
+    --gold-line: rgb(122 95 42 / 0.5);
+    --lamp: none;
+    --stone-texture: none;
     --overlay: transparent;
   }
 

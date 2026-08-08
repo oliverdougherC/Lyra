@@ -1,7 +1,9 @@
-"""Verify the recorded contrast contracts in design-system.md against globals.css.
+"""Verify the Ex Libris contrast contract against globals.css.
 
-The design system states that a documentation value differing from `globals.css` is a defect,
-so this recomputes every recorded pair from the stylesheet rather than trusting the table.
+Design system section 3.3: every text pair clears 4.5:1 on its actual ground, stone
+included, in both modes; boundaries and the focus ring clear 3.0:1. This script recomputes
+every recorded pair from the stylesheet itself, so a value that drifts in globals.css fails
+the build rather than passing on a stale doc table. It gates every migration commit.
 """
 
 import re
@@ -9,7 +11,49 @@ import sys
 from pathlib import Path
 
 CSS = Path("frontend/src/styles/globals.css").read_text()
-DOC = Path("docs/design-system.md").read_text()
+
+# Grounds a pair may be read against. "paper" is the content sheet; "stone" is the canvas
+# and rail. Both are named so text-on-stone is checked as explicitly as text-on-paper.
+PAPER = "--bg-secondary"
+STONE = "--bg-primary"
+FILL = "--bg-tertiary"  # quiet fills: hovers, chips, code
+
+# (foreground, background, floor). 4.5 for anything read as text; 3.0 for a boundary or the
+# focus ring, which are shapes rather than glyphs.
+PAIRS: list[tuple[str, str, float]] = [
+    # Ink and its quieter voices, on every ground they land on.
+    ("--text-primary", PAPER, 4.5),
+    ("--text-primary", STONE, 4.5),
+    ("--text-primary", FILL, 4.5),
+    ("--text-secondary", PAPER, 4.5),
+    ("--text-secondary", STONE, 4.5),
+    ("--text-tertiary", PAPER, 4.5),
+    ("--text-tertiary", STONE, 4.5),
+    # Accent ink on the accent plaque, and quiet accent text on paper and stone.
+    ("--accent-foreground", "--accent-primary", 4.5),
+    ("--accent-surface-foreground", "--accent-surface", 4.5),
+    ("--accent-text", PAPER, 4.5),
+    ("--accent-text", STONE, 4.5),
+    # Status words, each on the ground it prints against.
+    ("--success-text", PAPER, 4.5),
+    ("--success-text", "--success-fill", 4.5),
+    ("--info-text", PAPER, 4.5),
+    ("--info-text", "--info-fill", 4.5),
+    ("--danger-text", PAPER, 4.5),
+    ("--danger-text", STONE, 4.5),
+    ("--danger-foreground", "--danger-fill", 4.5),
+    # The pen and the Mark, where they carry meaning as text.
+    ("--hand", PAPER, 4.5),
+    ("--hand", STONE, 4.5),
+    ("--hand-red", PAPER, 4.5),
+    ("--trust", PAPER, 4.5),
+    ("--trust", STONE, 4.5),
+    # Boundaries and the focus ring: shapes, so 3.0 is the floor.
+    ("--border-strong", PAPER, 3.0),
+    ("--border-strong", STONE, 3.0),
+    ("--focus-ring", PAPER, 3.0),
+    ("--focus-ring", STONE, 3.0),
+]
 
 
 def blocks(css: str) -> tuple[str, str]:
@@ -65,43 +109,22 @@ light, dark = tokens(light_block), tokens(dark_block)
 # The dark block overrides a subset; anything it does not restate keeps its light value.
 dark = {**light, **dark}
 
-rows = re.findall(
-    r"\|\s*`(--[\w-]+)`\s+on\s+`(--[\w-]+)`\s*\|\s*([\d.]+):1\s*\|\s*([\d.]+):1\s*\|", DOC
-)
-if not rows:
-    sys.exit("no contrast rows parsed from design-system.md")
-
-TOLERANCE = 0.05
 failures = 0
-print(f"{'pair':<58} {'light':>16} {'dark':>16}")
-print("-" * 92)
-for fg, bg, doc_light, doc_dark in rows:
+print(f"{'pair':<46} {'floor':>6} {'light':>10} {'dark':>10}")
+print("-" * 76)
+for fg, bg, floor in PAIRS:
     for name, table in (("light", light), ("dark", dark)):
         if fg not in table or bg not in table:
             print(f"MISSING TOKEN {fg} or {bg} in {name}")
             failures += 1
     actual_l, actual_d = ratio(fg, bg, light), ratio(fg, bg, dark)
-    ok_l = abs(actual_l - float(doc_light)) <= TOLERANCE
-    ok_d = abs(actual_d - float(doc_dark)) <= TOLERANCE
+    ok_l, ok_d = actual_l >= floor, actual_d >= floor
     failures += (not ok_l) + (not ok_d)
-    mark_l = "ok " if ok_l else "OFF"
-    mark_d = "ok " if ok_d else "OFF"
     print(
-        f"{fg + ' on ' + bg:<58} "
-        f"{actual_l:>6.2f} vs {doc_light:>5} {mark_l} "
-        f"{actual_d:>6.2f} vs {doc_dark:>5} {mark_d}"
+        f"{fg + ' on ' + bg:<46} {floor:>6.1f} "
+        f"{actual_l:>6.2f} {'ok ' if ok_l else 'OFF'} "
+        f"{actual_d:>6.2f} {'ok ' if ok_d else 'OFF'}"
     )
-
-print()
-print("Floor checks (body/status text >= 4.5, boundaries and focus >= 3.0):")
-FLOORS = {"--border-strong": 3.0, "--focus-ring": 3.0}
-for fg, bg, _, _ in rows:
-    floor = FLOORS.get(fg, 4.5)
-    for name, table in (("light", light), ("dark", dark)):
-        value = ratio(fg, bg, table)
-        if value < floor:
-            print(f"  BELOW FLOOR {name}: {fg} on {bg} = {value:.2f} < {floor}")
-            failures += 1
 
 print()
 print("FAILURES:", failures)

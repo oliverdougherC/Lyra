@@ -1,47 +1,52 @@
 import type { Metadata } from 'next'
-import { DM_Sans, Fraunces, JetBrains_Mono, Source_Serif_4 } from 'next/font/google'
+import { Caveat, Cinzel, EB_Garamond, JetBrains_Mono } from 'next/font/google'
 
 import { AppShell } from '@/components/layout/app-shell'
 import { Providers } from '@/app/providers'
 import { THEME_INIT_SCRIPT } from '@/lib/theme'
 import '@/styles/globals.css'
 
-const dmSans = DM_Sans({
-  variable: '--font-dm-sans',
+/**
+ * Inscription. Cinzel is a Roman capital face drawn from stone-cut letterforms; it names
+ * things and never navigates (design system section 4). Loaded at 600, the one weight the
+ * nameplates use, with the carved text-shadow applied in globals.css.
+ */
+const cinzel = Cinzel({
+  variable: '--font-cinzel',
   subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
+  weight: ['600'],
   display: 'swap',
 })
 
 /**
- * Loaded as a variable font with its optical-size and softness axes, not as three static
- * instances. Fraunces is designed to change shape with size — small text sharpens, display
- * text relaxes — and the axes are what make a heading set in it look typeset rather than
- * scaled up. `.font-heading` in globals.css turns the soft axis on for display work.
+ * Print. EB Garamond carries everything read: body at 15 to 16.5px, labels as letterspaced
+ * caps, numerals tabular where they align. The italic exists solely as a mathematics
+ * fallback where KaTeX is not in play; the interface itself never slants (section 4).
  */
-const fraunces = Fraunces({
-  variable: '--font-fraunces',
+const ebGaramond = EB_Garamond({
+  variable: '--font-eb-garamond',
   subsets: ['latin'],
-  axes: ['opsz', 'SOFT', 'WONK'],
+  weight: ['400', '500', '600'],
+  style: ['normal', 'italic'],
   display: 'swap',
 })
 
+/**
+ * The hand. Caveat renders only what the student did, chose, or must do (section 5): margin
+ * notes, the chosen depth, the place they are in. Loaded at 500, the weight the pen writes
+ * in.
+ */
+const caveat = Caveat({
+  variable: '--font-caveat',
+  subsets: ['latin'],
+  weight: ['500'],
+  display: 'swap',
+})
+
+/** Code, and only code. Status and numerals are print, never mono (section 4). */
 const jetbrainsMono = JetBrains_Mono({
   variable: '--font-jetbrains-mono',
   subsets: ['latin'],
-})
-
-/**
- * The tutor's reading voice. A text serif rather than a math face: answers are prose with
- * emphasis, and a single-weight math font leaves the browser to synthesize every bold run.
- * KaTeX keeps its own fonts for the math itself.
- */
-const sourceSerif = Source_Serif_4({
-  variable: '--font-source-serif',
-  subsets: ['latin'],
-  weight: ['400', '600'],
-  style: ['normal', 'italic'],
-  display: 'swap',
 })
 
 export const metadata: Metadata = {
@@ -57,7 +62,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${dmSans.variable} ${fraunces.variable} ${jetbrainsMono.variable} ${sourceSerif.variable} h-full antialiased`}
+      className={`${cinzel.variable} ${ebGaramond.variable} ${caveat.variable} ${jetbrainsMono.variable} h-full antialiased`}
       suppressHydrationWarning
     >
       <head>
