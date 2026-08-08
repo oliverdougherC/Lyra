@@ -123,7 +123,7 @@ export function jumpToComment(view: EditorView, commentId: number): boolean {
     if (!view.isDestroyed) {
       view.dispatch(view.state.tr.setMeta(key, { type: 'unflash', id: commentId } satisfies Meta))
     }
-  }, 1400)
+  }, 2400)
   return true
 }
 

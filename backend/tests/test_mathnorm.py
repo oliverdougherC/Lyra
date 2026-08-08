@@ -102,6 +102,59 @@ def test_delimiters_inside_display_math_are_left_alone() -> None:
     assert mathnorm.normalize(source) == source
 
 
+def test_undelimited_math_tokens_are_wrapped() -> None:
+    source = "From X_1 and λ_1, with R^n and \\frac{a}{b}."
+
+    normalized = mathnorm.normalize(source)
+
+    assert "$X_1$" in normalized
+    assert "$R^n$" in normalized
+    assert "$\\frac{a}{b}$" in normalized
+
+
+def test_editor_escaped_subscripts_are_restored_without_wrapping_identifiers() -> None:
+    source = r"Use X\_1 and λ\_1, but keep snake_case as prose."
+
+    assert mathnorm.normalize(source) == ("Use $X_1$ and $λ_1$, but keep snake_case as prose.")
+
+
+def test_leading_four_spaces_in_prose_are_dedented() -> None:
+    source = (
+        "The result:\n"
+        "    X_1 converges through every iteration because the transformation preserves "
+        "the relevant direction while changing only its magnitude across the complete basis."
+    )
+
+    normalized = mathnorm.normalize(source)
+
+    assert normalized == (
+        "The result:\n"
+        "$X_1$ converges through every iteration because the transformation preserves "
+        "the relevant direction while changing only its magnitude across the complete basis."
+    )
+
+
+def test_short_indented_code_is_preserved() -> None:
+    source = "Example:\n    X_1 = transform(vector)\n"
+
+    assert mathnorm.normalize(source) == source
+
+
+def test_space_entity_prose_is_dedented() -> None:
+    source = (
+        "&#x20;   Linear transformations preserve addition and scalar multiplication while "
+        "changing the direction and magnitude of ordinary vectors throughout the transformed space."
+    )
+
+    assert mathnorm.normalize(source).startswith("Linear transformations preserve")
+
+
+def test_undelimited_tokens_inside_inline_and_display_math_are_preserved() -> None:
+    source = "Existing $X_1$ and $$R^n + X_2$$ stay exactly as written."
+
+    assert mathnorm.normalize(source) == source
+
+
 def test_promotion_still_happens_outside_display_math() -> None:
     """The guard must not cost the rule its job."""
     source = "Before.\n\n\\begin{align}\nx &= 1\n\\end{align}\n\nAfter.\n"

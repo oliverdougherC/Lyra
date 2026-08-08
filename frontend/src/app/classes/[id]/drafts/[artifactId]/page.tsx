@@ -53,7 +53,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { api, ApiError } from '@/lib/api'
 import { normalizeMathDelimiters } from '@/lib/drafts/math-delimiters'
 import { createSaveEngine, flushOnHidden } from '@/lib/drafts/save-engine'
@@ -206,9 +206,9 @@ export default function DraftWorkspacePage() {
   const [writerSessionId, setWriterSessionId] = useState<number | null>(null)
   const activeWriterSessionId = writerSessionId ?? writerSessions.data?.[0]?.id ?? null
   const [railSide, setRailSide] = useLocalStorageState<RailSide>(RAIL_SIDE_KEY, 'right', parseSide)
-  // The split is the student's, and it is remembered. Below `lg` there is one column and
+  // The split is the student's, and it is remembered. Below `xl` there is one column and
   // nothing to split, so the group is not rendered at all rather than being disabled.
-  const wide = useMediaQuery('(min-width: 1024px)')
+  const wide = useMediaQuery('(min-width: 1280px)')
   const [railShare, setRailShare] = useLocalStorageState(
     RAIL_SHARE_KEY,
     DEFAULT_RAIL_SHARE,
@@ -513,14 +513,14 @@ export default function DraftWorkspacePage() {
   // The document column: centred to a reading measure, scrolling on its own. In print it
   // becomes its full height - a printed page cannot be scrolled.
   //
-  // `lg:h-full` is what stops the slash menu getting clipped. Inside a resizable panel the
+  // `xl:h-full` is what stops the slash menu getting clipped. Inside a resizable panel the
   // parent is not a flex container, so `flex-1` collapses this box to its content height;
   // the scroll box then hugs a short document, and the block-edit menu - positioned
   // absolutely inside the editor - is cut off at the content's bottom edge. `h-full` fills
   // the panel so the menu has the whole column to open into. `flex-1` still carries the
   // stacked mobile layout below `lg`, where the parent *is* a flex column.
   const documentPane = (
-    <div className="min-h-0 flex-1 overflow-y-auto lg:h-full print:overflow-visible">
+    <div className="min-h-0 flex-1 overflow-y-auto xl:h-full print:overflow-visible">
       {/* `inert` while a pass runs: the pass owns the document and the editor is a
           viewer following it - sections appear as they land. Typing into a body the
           server is rewriting would race the autosave against the pipeline, and the
@@ -585,12 +585,12 @@ export default function DraftWorkspacePage() {
   const railPane = (
     <aside
       className={cn(
-        // `lg:h-full` for the same reason the document column has it: inside a resizable
+        // `xl:h-full` for the same reason the document column has it: inside a resizable
         // panel the parent is not flex, so the tools fill the panel's height rather than
         // collapsing to the tab bar - which is what keeps the chat composer at the bottom.
-        'border-border flex min-h-0 flex-col border-t lg:h-full lg:border-t-0 print:hidden',
+        'border-border flex min-h-0 basis-[45%] shrink-0 flex-col border-t xl:h-full xl:basis-auto xl:shrink xl:border-t-0 print:hidden',
         // The rail's one border is whichever edge faces the page.
-        railSide === 'left' ? 'lg:border-r' : 'lg:border-l',
+        railSide === 'left' ? 'xl:border-r' : 'xl:border-l',
       )}
       aria-label="Draft tools"
     >
@@ -599,32 +599,47 @@ export default function DraftWorkspacePage() {
         onValueChange={(value) => setRailTab(value as RailTab)}
         className="flex min-h-0 flex-1 flex-col gap-0"
       >
-        <TabsList
+        <div
           ref={railTabsRef}
-          variant="line"
-          aria-label="Draft tools"
-          className="shrink-0 gap-1 overflow-x-auto px-2"
+          className="border-border flex min-w-0 shrink-0 items-center gap-2 border-b p-2"
         >
-          {activeLiveSuggestion ? <TabsTrigger value="live">Live draft</TabsTrigger> : null}
-          {edit ? <TabsTrigger value="suggestion">Suggestion</TabsTrigger> : null}
-          <TabsTrigger value="plan">Plan</TabsTrigger>
-          <TabsTrigger value="sources">Sources</TabsTrigger>
-          {/* Present once there is (or is about to be) something to read: a review
-              in flight counts, so the tab the Review button flipped to exists. */}
-          {(commentThreads.data?.length ?? 0) > 0 || reviewing || railTab === 'comments' ? (
-            <TabsTrigger value="comments">Comments</TabsTrigger>
+          <Label htmlFor="draft-tool-picker" className="sr-only">
+            Draft tool
+          </Label>
+          <Select value={railTab} onValueChange={(value) => setRailTab(value as RailTab)}>
+            <SelectTrigger
+              id="draft-tool-picker"
+              size="sm"
+              className="min-w-0 flex-1"
+              aria-label="Draft tool"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper" align="start">
+              {activeLiveSuggestion ? (
+                <SelectItem value="live">Draft · Live draft</SelectItem>
+              ) : null}
+              <SelectItem value="plan">Draft · Plan</SelectItem>
+              {edit ? <SelectItem value="suggestion">Review · Suggestion</SelectItem> : null}
+              {(commentThreads.data?.length ?? 0) > 0 || reviewing || railTab === 'comments' ? (
+                <SelectItem value="comments">
+                  Review · Comments
+                  {commentThreads.data?.length ? ` (${commentThreads.data.length})` : ''}
+                </SelectItem>
+              ) : null}
+              <SelectItem value="sources">Research · Sources</SelectItem>
+              <SelectItem value="history">Workspace · History</SelectItem>
+              <SelectItem value="chat">Assistant · Chat</SelectItem>
+            </SelectContent>
+          </Select>
+          {wide ? (
+            <RailSideToggle
+              side={railSide}
+              className="shrink-0"
+              onToggle={() => setRailSide(railSide === 'left' ? 'right' : 'left')}
+            />
           ) : null}
-          <TabsTrigger value="history">History</TabsTrigger>
-          <TabsTrigger value="chat">Chat</TabsTrigger>
-          {/* In the tab row rather than the draft's header, because it moves this
-              panel and belongs to it. `ml-auto` puts it on the far edge, which is the
-              edge it sends the panel to. */}
-          <RailSideToggle
-            side={railSide}
-            className="ml-auto"
-            onToggle={() => setRailSide(railSide === 'left' ? 'right' : 'left')}
-          />
-        </TabsList>
+        </div>
 
         {activeLiveSuggestion ? (
           <TabsContent value="live" className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -632,6 +647,7 @@ export default function DraftWorkspacePage() {
               draftId={artifact.id}
               suggestion={activeLiveSuggestion}
               onFinalized={onLiveSuggestionFinalized}
+              onOpenPlan={() => setRailTab('plan')}
             />
           </TabsContent>
         ) : null}
@@ -785,10 +801,7 @@ export default function DraftWorkspacePage() {
         />
         <SaveStateIndicator state={saveState} detail={saveDetail} />
         <div className="ml-auto flex items-center gap-1.5">
-          <DraftEntryActions
-            onDraftDocument={openDraftDocument}
-            onDraftPassage={openWrite}
-          />
+          <DraftEntryActions onDraftDocument={openDraftDocument} onDraftPassage={openWrite} />
           <Button
             variant="ghost"
             size="sm"
@@ -926,19 +939,14 @@ export default function DraftWorkspacePage() {
           <AlertTitle>Lyra could not finish that run</AlertTitle>
           <AlertDescription>
             <p>{errorMessage ?? 'Something went wrong while working on it.'}</p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-3"
-              onClick={openDraftDocument}
-            >
+            <Button variant="outline" size="sm" className="mt-3" onClick={openDraftDocument}>
               Try again
             </Button>
           </AlertDescription>
         </Alert>
       ) : null}
 
-      {/* Below `lg` the two stack and the rail sits under the page, because there is one
+      {/* Below `xl` the two stack and the rail sits under the page, because there is one
           column and the page is what it is for. Above it they share a draggable split:
           the measure was a hardcoded 760px against a fixed 380px rail, which on a wide
           window left the text in a narrow ribbon with a third of the screen of dead

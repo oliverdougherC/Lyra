@@ -61,20 +61,105 @@ const FENCE = /^ {0,3}(`{3,}|~{3,})/
  * is normalized on load and again whenever the server sends a fresh one.
  */
 export function normalizeMathDelimiters(text: string): string {
-  if (!text || !text.includes('\\')) return text
+  if (!text) return text
   return splitVerbatim(text)
-    .map(({ content, verbatim }) => (verbatim ? content : normalizeProse(content)))
+    .map(({ content, verbatim }) =>
+      verbatim ? content : normalizeProse(repairAccidentalProseIndentation(content)),
+    )
     .join('')
 }
 
 function normalizeProse(text: string): string {
-  return text
+  const delimited = text
     .replace(INLINE_PAREN, (_match, inner: string) => `$${inner.trim()}$`)
     .replace(DISPLAY_BRACKET, (_match, inner: string) => `\n$$\n${inner.trim()}\n$$\n`)
     .replace(
       BARE_ENVIRONMENT,
       (_match, indent: string, block: string) => `${indent}$$\n${block}\n$$`,
     )
+  // The conversions above can create fresh display blocks. Split once more so token
+  // repair does not add inline dollars inside the display math we just delimited.
+  return splitVerbatim(delimited)
+    .map(({ content, verbatim }) => (verbatim ? content : repairUndelimitedMathTokens(content)))
+    .join('')
+}
+
+/**
+ * Milkdown preserves leading paragraph spaces as `&#x20;` and Markdown reads four
+ * literal spaces as a code block. A long sentence is not code merely because a merge
+ * handed it four spaces, so repair only unmistakable prose lines and leave short,
+ * deliberately indented snippets alone.
+ */
+function repairAccidentalProseIndentation(text: string): string {
+  return text
+    .split(/(?<=\n)/)
+    .map((line) => {
+      const match = /^(?:(?:&#x20;|&#32;|&nbsp;)[ \t]{3}|[ \t]{4})(\S[\s\S]*)$/.exec(
+        line.replace(/\n$/, ''),
+      )
+      if (!match) return line
+      const prose = match[1]
+      const words = prose.trim().split(/\s+/).length
+      if (prose.length < 100 || words < 12) return line
+      return prose + (line.endsWith('\n') ? '\n' : '')
+    })
+    .join('')
+}
+
+const UNDELIMITED_COMMAND =
+  /(?<![\\\p{L}\p{N}_])(\\[A-Za-zα-ωΑ-Ω]+\*?(?:\{[^{}]*\}|\[[^\]]*\])*(?:\\?[_^](?:\{[^{}]*\}|\\[A-Za-z]+|[A-Za-z0-9]+))*)(?=$|[\s.,;:!?\\)])/gu
+const UNDELIMITED_VARIABLE =
+  /(?<![\\\p{L}\p{N}_])([A-Za-zα-ωΑ-Ω](?:\\?[_^](?:\{[^{}]*\}|[A-Za-z0-9]+|\\[A-Za-z]+))+)(?=$|[\s.,;:!?\\)])/gu
+
+/** Wrap only math-bearing tokens outside existing `$...$` spans. */
+function repairUndelimitedMathTokens(text: string): string {
+  return text
+    .split(/(?<=\n)/)
+    .map((line) => (/^(?: {4}|\t)/.test(line) ? line : repairMathTokensInRun(line)))
+    .join('')
+}
+
+function repairMathTokensInRun(text: string): string {
+  let output = ''
+  let proseStart = 0
+  let cursor = 0
+  while (cursor < text.length) {
+    if (text[cursor] !== '$' || isEscapedDollar(text, cursor)) {
+      cursor += 1
+      continue
+    }
+    const delimiter = text[cursor + 1] === '$' ? '$$' : '$'
+    const close = findDollarClose(text, cursor + delimiter.length, delimiter)
+    if (close === -1) break
+    output += repairTokenRun(text.slice(proseStart, cursor))
+    output += text.slice(cursor, close + delimiter.length)
+    cursor = close + delimiter.length
+    proseStart = cursor
+  }
+  return output + repairTokenRun(text.slice(proseStart))
+}
+
+function repairTokenRun(text: string): string {
+  return text
+    .replace(UNDELIMITED_COMMAND, (_match, token: string) => `$${unescapeMathScript(token)}$`)
+    .replace(UNDELIMITED_VARIABLE, (_match, token: string) => `$${unescapeMathScript(token)}$`)
+}
+
+function unescapeMathScript(token: string): string {
+  return token.replaceAll('\\_', '_').replaceAll('\\^', '^')
+}
+
+function isEscapedDollar(text: string, index: number): boolean {
+  let slashes = 0
+  for (let cursor = index - 1; cursor >= 0 && text[cursor] === '\\'; cursor -= 1) slashes += 1
+  return slashes % 2 === 1
+}
+
+function findDollarClose(text: string, start: number, delimiter: '$' | '$$'): number {
+  for (let cursor = start; cursor < text.length; cursor += 1) {
+    if (text.startsWith(delimiter, cursor) && !isEscapedDollar(text, cursor)) return cursor
+  }
+  return -1
 }
 
 /**

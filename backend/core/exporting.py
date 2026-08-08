@@ -22,6 +22,7 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 from pathlib import Path
 
+from backend.core import mathnorm
 from backend.core.errors import LyraError
 
 # Wall-clock ceiling per stage. Compiling a long draft is seconds; a minute means a
@@ -110,7 +111,8 @@ def render_pdf(
 
     with tempfile.TemporaryDirectory(prefix="lyra-export-") as workdir:
         work = Path(workdir)
-        (work / "draft.md").write_text(render_citations(body, sources), encoding="utf-8")
+        normalized = mathnorm.normalize(render_citations(body, sources))
+        (work / "draft.md").write_text(normalized, encoding="utf-8")
         # Pandoc's standalone Typst template renders the metadata as the title block,
         # which is the one clean default template this export ships with.
         _run(

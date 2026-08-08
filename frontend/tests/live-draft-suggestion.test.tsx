@@ -72,15 +72,20 @@ const PENDING_EDIT: PendingEdit = {
   hunks: [],
 }
 
-function renderPanel(suggestion = LIVE_SUGGESTION, onFinalized = vi.fn()) {
+function renderPanel(suggestion = LIVE_SUGGESTION, onFinalized = vi.fn(), onOpenPlan = vi.fn()) {
   const { wrapper } = createWrapper()
   const view = render(
-    <LiveDraftSuggestionPanel draftId={3} suggestion={suggestion} onFinalized={onFinalized} />,
+    <LiveDraftSuggestionPanel
+      draftId={3}
+      suggestion={suggestion}
+      onFinalized={onFinalized}
+      onOpenPlan={onOpenPlan}
+    />,
     {
       wrapper,
     },
   )
-  return { onFinalized, ...view }
+  return { onFinalized, onOpenPlan, ...view }
 }
 
 beforeEach(() => {
@@ -91,20 +96,26 @@ describe('LiveDraftSuggestionPanel', () => {
   it('renders fixed drafting stages and per-block targets in a separate live suggestion panel', () => {
     renderPanel()
 
-    expect(screen.getByText('Live draft suggestion')).toBeInTheDocument()
-    expect(screen.getByText('Gathering')).toBeInTheDocument()
-    expect(screen.getByText('Outline')).toBeInTheDocument()
-    expect(screen.getByText('Drafting')).toBeInTheDocument()
-    expect(screen.getByText('Transitions')).toBeInTheDocument()
-    expect(screen.getByText('Review')).toBeInTheDocument()
-    expect(screen.getByText('Finalize')).toBeInTheDocument()
-    expect(screen.getByText('Complete')).toBeInTheDocument()
+    expect(screen.getByText('Live draft')).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Drafting stages' })).toHaveTextContent(
+      'Gathering: doneOutline: doneDrafting: doneTransitions: activeReview: upcomingFinalize: upcomingComplete: upcoming',
+    )
     expect(screen.getByText('Bridging sections into one argument')).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'Introduction draft block' })).toHaveValue(
       'Original introduction.',
     )
     expect(screen.getByText('Target 180 words')).toBeInTheDocument()
     expect(screen.getByText('Target 260 words')).toBeInTheDocument()
+    expect(screen.getByText('Stage 4 of 7')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Draft body' })).toBeInTheDocument()
+  })
+
+  it('keeps planning canonical in the plan view', async () => {
+    const { onOpenPlan } = renderPanel()
+
+    await userEvent.click(screen.getByRole('button', { name: 'View plan' }))
+
+    expect(onOpenPlan).toHaveBeenCalledTimes(1)
   })
 
   it('follows polled server updates for blocks that are not locally dirty', () => {
@@ -190,7 +201,7 @@ describe('LiveDraftSuggestionPanel', () => {
       }),
     )
 
-    await userEvent.click(screen.getByRole('button', { name: 'Final review and merge' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Review and merge' }))
 
     await waitFor(() => expect(finalize).toHaveBeenCalledWith(3))
     await waitFor(() => expect(onFinalized).toHaveBeenCalledWith(PENDING_EDIT))

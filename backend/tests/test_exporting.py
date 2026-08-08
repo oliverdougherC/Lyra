@@ -59,6 +59,37 @@ def test_render_runs_both_stages_in_a_throwaway_directory(
     assert (pandoc_cwd / "draft.md").exists() is False  # the directory is gone after
 
 
+def test_render_pdf_normalizes_math_before_writing_markdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(exporting.shutil, "which", _which({"pandoc", "typst"}))
+    captured: dict[str, str] = {}
+
+    def fake_run(command, cwd, **kwargs):
+        if command[0] == "pandoc":
+            captured["draft"] = (cwd / "draft.md").read_text(encoding="utf-8")
+        elif command[0] == "typst":
+            (cwd / "draft.pdf").write_bytes(b"%PDF-fake")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(exporting.subprocess, "run", fake_run)
+    body = (
+        "## Results\n\n"
+        "    X_1 belongs to R^n because the selected basis spans every relevant direction "
+        "while \\dots denotes the omitted intermediate eigenvectors in this complete argument.\n"
+        "The resulting coefficient is \\frac{a}{b}.\n"
+    )
+
+    exporting.render_pdf(body, "Lab 3", "ECE 203")
+
+    assert captured["draft"] == (
+        "## Results\n\n"
+        "$X_1$ belongs to $R^n$ because the selected basis spans every relevant direction "
+        "while $\\dots$ denotes the omitted intermediate eigenvectors in this complete argument.\n"
+        "The resulting coefficient is $\\frac{a}{b}$.\n"
+    )
+
+
 def test_a_missing_binary_refuses_before_any_subprocess(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { PencilLine, Sparkles } from 'lucide-react'
+import { ListTree, PencilLine, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/components/ui/badge'
@@ -18,6 +18,7 @@ type LiveDraftSuggestionPanelProps = {
   draftId: number
   suggestion: LiveDraftSuggestion
   onFinalized: (edit: PendingEdit) => void
+  onOpenPlan?: () => void
 }
 
 type EditBase = { content: string; revision: number }
@@ -81,6 +82,7 @@ export function LiveDraftSuggestionPanel({
   draftId,
   suggestion,
   onFinalized,
+  onOpenPlan,
 }: LiveDraftSuggestionPanelProps) {
   const updateBlock = useUpdateLiveDraftSuggestionBlock(draftId)
   const finalize = useFinalizeLiveDraftSuggestion(draftId)
@@ -120,6 +122,17 @@ export function LiveDraftSuggestionPanel({
   }, [suggestion])
 
   const activeStage = ACTIVE_STAGE[suggestion.stage] ?? 'gathering'
+  const activeStageIndex = Math.max(
+    STAGES.findIndex((stage) => stage.key === activeStage),
+    0,
+  )
+  const completedBlocks = suggestion.blocks.filter((block) =>
+    ['complete', 'drafted', 'revised'].includes(block.status),
+  ).length
+  const draftedWords = suggestion.blocks.reduce(
+    (total, block) => total + (block.content.trim() ? block.content.trim().split(/\s+/).length : 0),
+    0,
+  )
   const canFinalize = suggestion.blocks.length > 0 && suggestion.status === 'ready'
   const savingBlockId =
     updateBlock.variables && updateBlock.isPending ? updateBlock.variables.blockId : null
@@ -133,9 +146,7 @@ export function LiveDraftSuggestionPanel({
   )
 
   function onConflict(error: unknown) {
-    toast.error(
-      error instanceof ApiError ? error.message : 'The live draft suggestion changed.',
-    )
+    toast.error(error instanceof ApiError ? error.message : 'The live draft suggestion changed.')
   }
 
   function saveBlock(block: LiveDraftSuggestionBlock) {
@@ -184,119 +195,175 @@ export function LiveDraftSuggestionPanel({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-4">
       <header className="flex flex-col gap-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="space-y-1">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0 space-y-1">
             <div className="flex items-center gap-2">
-              <Sparkles className="text-text-tertiary size-4" />
-              <h2 className="text-text-primary text-sm font-medium">Live draft suggestion</h2>
+              <Sparkles className="text-text-tertiary size-4 shrink-0" />
+              <h2 className="text-text-primary text-sm font-medium">Live draft</h2>
             </div>
             <p className="text-text-secondary text-sm">
-              Drafted separately from your document. Keep editing the real draft while Lyra builds
-              this proposal block by block.
+              The working document Lyra is assembling. Edit any paragraph while it develops; your
+              real draft stays untouched until review.
             </p>
           </div>
           <Badge variant={suggestion.status === 'failed' ? 'destructive' : 'outline'}>
             {suggestion.status}
           </Badge>
         </div>
-        <ol className="grid grid-cols-2 gap-2 xl:grid-cols-7" aria-label="Drafting stages">
-          {STAGES.map((stage) => {
-            const state = stageState(stage.key, activeStage)
-            return (
-              <li
-                key={stage.key}
-                className={cn(
-                  'border-border rounded-md border px-3 py-2 text-sm',
-                  state === 'active' && 'border-border-strong bg-muted',
-                  state === 'done' && 'bg-accent-surface/40',
-                )}
-              >
-                <span className="text-text-primary block font-medium">{stage.label}</span>
-              </li>
-            )
-          })}
-        </ol>
-        {suggestion.stage_detail ? (
-          <p className="text-text-secondary text-sm">{suggestion.stage_detail}</p>
-        ) : null}
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-text-tertiary text-xs">
-            Version {suggestion.version} • Run {suggestion.run_id}
+        <section
+          className="border-border bg-muted/30 min-w-0 rounded-md border p-3"
+          aria-label="Draft progress"
+        >
+          <div className="flex min-w-0 items-center justify-between gap-3 text-xs">
+            <span className="text-text-tertiary shrink-0">
+              Stage {activeStageIndex + 1} of {STAGES.length}
+            </span>
+            <span className="text-text-primary min-w-0 truncate font-medium">
+              {STAGES[activeStageIndex]?.label}
+            </span>
+          </div>
+          <ol className="mt-2 grid grid-cols-7 gap-1" aria-label="Drafting stages">
+            {STAGES.map((stage) => {
+              const state = stageState(stage.key, activeStage)
+              return (
+                <li
+                  key={stage.key}
+                  className={cn(
+                    'bg-border h-1.5 min-w-0 rounded-full',
+                    state === 'active' && 'bg-accent-primary',
+                    state === 'done' && 'bg-accent-primary/50',
+                  )}
+                >
+                  <span className="sr-only">
+                    {stage.label}: {state}
+                  </span>
+                </li>
+              )
+            })}
+          </ol>
+          {suggestion.stage_detail ? (
+            <p className="text-text-secondary mt-2 break-words text-sm">
+              {suggestion.stage_detail}
+            </p>
+          ) : null}
+        </section>
+        <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-text-tertiary min-w-0 text-xs">
+            {completedBlocks}/{suggestion.blocks.length || 0} paragraphs ·{' '}
+            {draftedWords.toLocaleString()} words · Run {suggestion.run_id}
           </p>
-          <Button size="sm" disabled={!canFinalize || finalize.isPending} onClick={finalizeSuggestion}>
-            <PencilLine className="size-3.5" />
-            Final review and merge
-          </Button>
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {onOpenPlan ? (
+              <Button variant="outline" size="sm" onClick={onOpenPlan}>
+                <ListTree className="size-3.5" />
+                View plan
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              className="min-w-0"
+              disabled={!canFinalize || finalize.isPending}
+              onClick={finalizeSuggestion}
+            >
+              <PencilLine className="size-3.5 shrink-0" />
+              <span className="truncate">Review and merge</span>
+            </Button>
+          </div>
         </div>
       </header>
 
-      <ul className="flex flex-col gap-3" aria-label="Live draft blocks">
-        {suggestion.blocks.map((block) => {
-          const title = block.heading ?? block.section_ref ?? `Block ${block.ordinal}`
-          const value = drafts[block.id] ?? block.content
-          const busy = savingBlockId === block.id
-          return (
-            <li key={block.id}>
-              <article className="border-border bg-card rounded-md border p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="text-text-primary text-sm font-medium">{title}</h3>
-                  <Badge variant={blockStatusVariant(block.status)}>{blockStatusLabel(block.status)}</Badge>
-                  {block.target_words ? (
-                    <Badge variant="outline">Target {block.target_words} words</Badge>
+      <section
+        className="border-border bg-card min-w-0 overflow-hidden rounded-md border"
+        aria-label="Draft body"
+      >
+        <div className="border-border flex min-w-0 items-center justify-between gap-2 border-b px-3 py-2">
+          <h3 className="text-text-primary text-sm font-medium">Draft body</h3>
+          <span className="text-text-tertiary text-xs">Version {suggestion.version}</span>
+        </div>
+        <ul className="divide-border min-w-0 divide-y" aria-label="Live draft blocks">
+          {suggestion.blocks.map((block, index) => {
+            const title = block.heading ?? block.section_ref ?? `Block ${block.ordinal}`
+            const value = drafts[block.id] ?? block.content
+            const busy = savingBlockId === block.id
+            const previous = suggestion.blocks[index - 1]
+            const showSection = Boolean(block.heading && block.heading !== previous?.heading)
+            return (
+              <li key={block.id} className="min-w-0 p-3">
+                <article className="min-w-0">
+                  {showSection ? (
+                    <p className="eyebrow text-text-tertiary mb-2 break-words">{block.heading}</p>
                   ) : null}
-                  {block.section_ref ? <Badge variant="outline">{block.section_ref}</Badge> : null}
-                </div>
-                {block.summary ? (
-                  <p className="text-text-secondary mt-2 text-sm">{block.summary}</p>
-                ) : null}
-                <label className="sr-only" htmlFor={`live-block-${block.id}`}>
-                  {title} draft block
-                </label>
-                <textarea
-                  id={`live-block-${block.id}`}
-                  aria-label={`${title} draft block`}
-                  className="border-border bg-background text-foreground mt-3 min-h-36 w-full rounded-md border px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
-                  value={value}
-                  onChange={(event) => {
-                    const nextValue = event.target.value
-                    if (!dirtyBlockIdsRef.current.has(block.id)) {
-                      editBasesRef.current[block.id] = {
-                        content: block.content,
-                        revision: block.revision,
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <span className="text-text-primary text-sm font-medium">
+                      Paragraph {block.ordinal}
+                    </span>
+                    <Badge variant={blockStatusVariant(block.status)}>
+                      {blockStatusLabel(block.status)}
+                    </Badge>
+                    {block.target_words ? (
+                      <span className="text-text-tertiary text-xs">
+                        Target {block.target_words} words
+                      </span>
+                    ) : null}
+                  </div>
+                  {block.summary ? (
+                    <details className="text-text-tertiary mt-2 text-xs">
+                      <summary className="hover:text-text-secondary cursor-pointer select-none">
+                        Plan note
+                      </summary>
+                      <p className="mt-1 break-words">{block.summary}</p>
+                    </details>
+                  ) : null}
+                  <label className="sr-only" htmlFor={`live-block-${block.id}`}>
+                    {title} draft block
+                  </label>
+                  <textarea
+                    id={`live-block-${block.id}`}
+                    aria-label={`${title} draft block`}
+                    className="border-border bg-background text-foreground mt-3 min-h-32 w-full min-w-0 resize-y overflow-y-auto rounded-md border px-3 py-2 text-sm leading-6 outline-none [field-sizing:content] focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+                    value={value}
+                    onChange={(event) => {
+                      const nextValue = event.target.value
+                      if (!dirtyBlockIdsRef.current.has(block.id)) {
+                        editBasesRef.current[block.id] = {
+                          content: block.content,
+                          revision: block.revision,
+                        }
                       }
-                    }
-                    setDrafts((current) => ({ ...current, [block.id]: nextValue }))
-                    setDirtyBlockIds((current) => {
-                      const next = new Set(current)
-                      if (nextValue === block.content) {
-                        next.delete(block.id)
-                        delete editBasesRef.current[block.id]
-                      } else next.add(block.id)
-                      return next
-                    })
-                  }}
-                />
-                <div className="mt-3 flex items-center justify-between gap-2">
-                  <p className="text-text-tertiary text-xs">
-                    Revision {block.revision}
-                    {block.user_revision > 0 ? ` • Your edits ${block.user_revision}` : ''}
-                  </p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busy || !dirtyBlocks.has(block.id)}
-                    onClick={() => saveBlock(block)}
-                  >
-                    {busy ? 'Saving…' : `Save ${title}`}
-                  </Button>
-                </div>
-              </article>
-            </li>
-          )
-        })}
-      </ul>
+                      setDrafts((current) => ({ ...current, [block.id]: nextValue }))
+                      setDirtyBlockIds((current) => {
+                        const next = new Set(current)
+                        if (nextValue === block.content) {
+                          next.delete(block.id)
+                          delete editBasesRef.current[block.id]
+                        } else next.add(block.id)
+                        return next
+                      })
+                    }}
+                  />
+                  <div className="mt-2 flex min-w-0 flex-wrap items-center justify-between gap-2">
+                    <p className="text-text-tertiary text-xs">
+                      Revision {block.revision}
+                      {block.user_revision > 0 ? ` • Your edits ${block.user_revision}` : ''}
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Save ${title}`}
+                      disabled={busy || !dirtyBlocks.has(block.id)}
+                      onClick={() => saveBlock(block)}
+                    >
+                      {busy ? 'Saving…' : 'Save'}
+                    </Button>
+                  </div>
+                </article>
+              </li>
+            )
+          })}
+        </ul>
+      </section>
     </div>
   )
 }

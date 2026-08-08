@@ -11,7 +11,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 
-from backend.core import artifacts
+from backend.core import artifacts, mathnorm
 from backend.core.errors import ConflictError, NotFoundError
 
 NOT_A_LIVE_SUGGESTION_MESSAGE = "That live suggestion does not exist."
@@ -508,9 +508,7 @@ def append_block_text(
                 conn,
                 current,
                 section_ref=section_ref if section_ref is not None else _UNSET,
-                paragraph_ordinal=(
-                    paragraph_ordinal if paragraph_ordinal is not None else _UNSET
-                ),
+                paragraph_ordinal=(paragraph_ordinal if paragraph_ordinal is not None else _UNSET),
                 kind=kind,
                 heading=heading if heading is not None else _UNSET,
                 content=str(current["content"]) + text,
@@ -618,7 +616,7 @@ def assemble_markdown(conn: sqlite3.Connection, suggestion_id: int) -> str:
             parts.append(content)
     if not parts:
         return ""
-    return "\n\n".join(parts).rstrip() + "\n"
+    return mathnorm.normalize("\n\n".join(parts).rstrip() + "\n")
 
 
 def finalize_to_pending_edit(

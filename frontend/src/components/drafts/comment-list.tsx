@@ -23,7 +23,7 @@ import type { CommentSeverity, DraftComment } from '@/types'
  * whose passage has since been deleted keep their place in a group of their own at the
  * bottom - the finding survives its anchor - and resolved threads dim out below that.
  *
- * Clicking a thread's quote jumps the editor to its underline. Replying and resolving
+ * Clicking anywhere on an anchored thread jumps the editor to its underline. Replying and resolving
  * live inline: the reply is the student's side of the conversation the writer joins
  * through its own tool, and resolution is the student's gesture alone.
  */
@@ -131,6 +131,13 @@ function CommentThread({
   const [replyText, setReplyText] = useState('')
   const severity = thread.severity ?? 'note'
   const settled = thread.resolved === 1
+  const canJump = Boolean(onJump && thread.quote)
+
+  function jumpToPassage() {
+    if (onJump && !onJump(thread)) {
+      toast.info('That passage is not in the document right now.')
+    }
+  }
 
   async function submitReply() {
     const body = replyText.trim()
@@ -148,7 +155,14 @@ function CommentThread({
     <li
       id={`comment-thread-${thread.id}`}
       tabIndex={-1}
-      className="border-border/70 rounded-md border px-3 py-2"
+      className={cn(
+        'border-border/70 rounded-md border px-3 py-2 transition-colors',
+        canJump && 'hover:bg-muted/50 cursor-pointer',
+      )}
+      onClick={(event) => {
+        if (!canJump || isInteractiveTarget(event.target)) return
+        jumpToPassage()
+      }}
     >
       <div className="mb-1 flex items-center gap-2">
         <span
@@ -190,14 +204,12 @@ function CommentThread({
           tabIndex={onJump ? 0 : undefined}
           aria-label={onJump ? 'Show this passage in the document' : undefined}
           onClick={() => {
-            if (onJump && !onJump(thread)) {
-              toast.info('That passage is not in the document right now.')
-            }
+            jumpToPassage()
           }}
           onKeyDown={(event) => {
             if (onJump && (event.key === 'Enter' || event.key === ' ')) {
               event.preventDefault()
-              if (!onJump(thread)) toast.info('That passage is not in the document right now.')
+              jumpToPassage()
             }
           }}
         >
@@ -284,6 +296,14 @@ function CommentThread({
         </div>
       )}
     </li>
+  )
+}
+
+/** Actions inside a thread keep their own meaning instead of also moving the canvas. */
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    Boolean(target.closest('button, input, textarea, select, form, a, [role="button"]'))
   )
 }
 

@@ -414,3 +414,34 @@ def test_finalize_updates_one_pending_edit_against_the_original_base(
     assert refreshed is not None
     assert refreshed["id"] == pending_row["id"]
     assert "An even stronger results section." in refreshed["proposed_content"]
+
+
+def test_assemble_markdown_canonicalizes_accidental_indentation_and_math_tokens(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, _ = _draft(db, class_id)
+    suggestion = live_drafts.create_live_suggestion(
+        db, artifact_id, run_id=17, stage="drafting", status="running"
+    )
+    live_drafts.model_update_block(
+        db,
+        int(suggestion["id"]),
+        "results-1",
+        section_ref="1.2",
+        paragraph_ordinal=1,
+        heading="Results",
+        content=(
+            "    X_1 converges to R^n while \\dots represents the omitted intermediate "
+            "eigenvectors throughout this complete basis argument for the transformed space.\n"
+            "The resulting scale is \\frac{a}{b}."
+        ),
+    )
+
+    assembled = live_drafts.assemble_markdown(db, int(suggestion["id"]))
+
+    assert assembled == (
+        "## Results\n\n"
+        "$X_1$ converges to $R^n$ while $\\dots$ represents the omitted intermediate "
+        "eigenvectors throughout this complete basis argument for the transformed space.\n"
+        "The resulting scale is $\\frac{a}{b}$.\n"
+    )

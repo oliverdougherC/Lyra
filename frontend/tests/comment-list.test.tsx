@@ -186,6 +186,22 @@ describe('CommentList', () => {
     expect(onJump.mock.calls[0][0].id).toBe(3)
   })
 
+  it('jumps from the whole comment card but not from its action buttons', async () => {
+    vi.spyOn(api, 'listComments').mockResolvedValue([
+      thread({ id: 4, quote: 'the pendulum swings', body: 'Connect this to the result.' }),
+    ])
+    vi.spyOn(api, 'resolveComment').mockResolvedValue(thread({ id: 4, resolved: 1 }))
+    const onJump = vi.fn().mockReturnValue(true)
+    const { wrapper } = createWrapper()
+    render(<CommentList draftId={8} onJump={onJump} />, { wrapper })
+
+    await userEvent.click(await screen.findByText('Connect this to the result.'))
+    expect(onJump).toHaveBeenCalledTimes(1)
+
+    await userEvent.click(screen.getByRole('button', { name: /Resolve/ }))
+    expect(onJump).toHaveBeenCalledTimes(1)
+  })
+
   it('dims resolved threads into their own group and renders replies', async () => {
     vi.spyOn(api, 'listComments').mockResolvedValue([
       thread({

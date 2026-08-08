@@ -79,6 +79,60 @@ describe('normalizeMathDelimiters', () => {
 
     expect(normalizeMathDelimiters(source)).toBe(source)
   })
+
+  it('repairs prose accidentally serialized as an indented code block', () => {
+    const first =
+      '&#x20;   Linear transformations preserve addition and scalar multiplication while changing the direction and magnitude of ordinary vectors throughout the transformed space.'
+    const second =
+      '    Eigenvectors are the exceptional directions that stay aligned with themselves while the matrix changes only their magnitude through a corresponding eigenvalue.'
+
+    const normalized = normalizeMathDelimiters(`${first}\n\n${second}`)
+
+    expect(normalized).toContain('Linear transformations preserve addition')
+    expect(normalized).toContain('\n\nEigenvectors are the exceptional directions')
+    expect(normalized).not.toContain('&#x20;')
+    expect(normalized).not.toContain('\n\n    Eigenvectors')
+  })
+
+  it('wraps undelimited LaTeX-bearing tokens without disturbing existing math', () => {
+    const source = String.raw`The basis uses X_1, X_2, \dots, X_n in R^n, while $A$ stays delimited.`
+
+    const normalized = normalizeMathDelimiters(source)
+
+    expect(normalized).toContain('$X_1$, $X_2$, $\\dots$, $X_n$')
+    expect(normalized).toContain('$R^n$')
+    expect(normalizeMathDelimiters(String.raw`Use λ_1 and \frac{a}{b}.`)).toBe(
+      'Use $λ_1$ and $\\frac{a}{b}$.',
+    )
+    expect(normalized).toContain('while $A$ stays delimited')
+    expect(normalizeMathDelimiters(normalized)).toBe(normalized)
+  })
+
+  it('restores editor-escaped subscripts without treating identifiers as math', () => {
+    const source = String.raw`Use X\_1 and λ\_1, but keep snake_case as prose.`
+
+    expect(normalizeMathDelimiters(source)).toBe(
+      'Use $X_1$ and $λ_1$, but keep snake_case as prose.',
+    )
+  })
+
+  it('preserves math-looking tokens already inside inline and display math', () => {
+    const source = 'Existing $X_1$ and $$R^n + X_2$$ stay exactly as written.'
+
+    expect(normalizeMathDelimiters(source)).toBe(source)
+  })
+
+  it('does not repair indented prose or math-looking tokens inside a fence', () => {
+    const source = '```text\n    X_1, X_2, \\dots, X_n remain literal here.\n```\n'
+
+    expect(normalizeMathDelimiters(source)).toBe(source)
+  })
+
+  it('preserves a short indented code example', () => {
+    const source = 'Example:\n    X_1 = transform(vector)\n'
+
+    expect(normalizeMathDelimiters(source)).toBe(source)
+  })
 })
 
 describe('idempotence over display math', () => {
