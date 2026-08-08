@@ -15,8 +15,12 @@ lives. Four requirements, in the order they matter:
 2. **Every call is recorded.** `ToolLoopResult.calls` is the transcript the interface
    renders. It is a debugging affordance now and the precondition for trusting the agent
    in Phase 4.
-3. **Tools are pure.** The Phase 2 set only computes. A call to a name outside the
-   registry is refused here and reported back to the model as a failed result.
+3. **The registry is the allowlist.** A call to a name outside it is refused here and
+   reported back to the model as a failed result. The default registry is the Phase 2
+   set, which only computes; a caller may pass its own (the writer's tools read and
+   propose through the database), and purity is then a property of that registry, not
+   a promise of the loop. What the loop does promise is the transcript: every call,
+   whichever registry it came from, lands in `ToolLoopResult.calls`.
 4. **A tool error is a result, not an exception.** Bad arguments, an unknown tool, and a
    computation that could not be done all travel back to the model as something it can
    act on. Only a bug in this module raises.
@@ -307,9 +311,10 @@ REGISTRY: dict[str, ToolDefinition] = {
 }
 
 
-def tool_schemas() -> list[dict[str, object]]:
+def tool_schemas(registry: dict[str, ToolDefinition] | None = None) -> list[dict[str, object]]:
     """Every registered tool, in the shape the chat-completions API wants."""
-    return [definition.schema() for definition in REGISTRY.values()]
+    definitions = REGISTRY if registry is None else registry
+    return [definition.schema() for definition in definitions.values()]
 
 
 def _parse_arguments(raw: str) -> dict[str, object] | None:
@@ -323,9 +328,9 @@ def _parse_arguments(raw: str) -> dict[str, object] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def _dispatch(call: ToolCall) -> RecordedCall:
+def _dispatch(call: ToolCall, registry: dict[str, ToolDefinition]) -> RecordedCall:
     """Run one tool call, turning every failure into a result the model can act on."""
-    definition = REGISTRY.get(call.name)
+    definition = registry.get(call.name)
     if definition is None:
         # The registry is the whole allowlist. Nothing outside it is reachable, whatever
         # the model asks for.
@@ -409,6 +414,8 @@ async def run_tool_loop(
     *,
     max_depth: int = MAX_DEPTH,
     timeout_seconds: float = TIMEOUT_SECONDS,
+    registry: dict[str, ToolDefinition] | None = None,
+    on_call: Callable[[RecordedCall], None] | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> ToolLoopResult:
     """Run the model with tools until it stops asking for them, or until a ceiling.
@@ -420,6 +427,12 @@ async def run_tool_loop(
         messages: The conversation to start from. Copied, not mutated.
         max_depth: Rounds of tool calls allowed. One round may hold several calls.
         timeout_seconds: Wall-clock ceiling for the whole loop.
+        registry: The tools on offer. Defaults to the Phase 2 computation set; the
+            writer passes its own. Whatever is passed is the whole allowlist.
+        on_call: Invoked with each recorded call as it lands, so a streaming caller can
+            narrate the loop while it runs. Runs on the event loop thread: keep it
+            cheap, and it must not raise - one that does is logged and ignored, because
+            a narration bug must not cost the pass.
         transport: Test seam. Leave unset in production code.
 
     Returns:
@@ -441,7 +454,15 @@ async def run_tool_loop(
     try:
         async with asyncio.timeout(timeout_seconds):
             return await _drive(
-                endpoint, api_key, model, list(messages), calls, max_depth, transport
+                endpoint,
+                api_key,
+                model,
+                list(messages),
+                calls,
+                max_depth,
+                REGISTRY if registry is None else registry,
+                on_call,
+                transport,
             )
     except TimeoutError:
         # `calls` is built outside the block precisely so a cut-off loop still reports
@@ -458,10 +479,12 @@ async def _drive(
     conversation: list[dict[str, object]],
     calls: list[RecordedCall],
     max_depth: int,
+    registry: dict[str, ToolDefinition],
+    on_call: Callable[[RecordedCall], None] | None,
     transport: httpx.AsyncBaseTransport | None,
 ) -> ToolLoopResult:
     """The loop itself. Appends to `calls` as it goes, so a caller can read them on a cut."""
-    tools = tool_schemas()
+    tools = tool_schemas(registry)
     for round_index in range(max_depth):
         try:
             answer = await complete_with_tools(
@@ -519,9 +542,16 @@ async def _drive(
             # is rare enough that a leak per timeout does not accumulate, and the
             # alternative - a kill-able subprocess per call - buys a daemon thread's
             # worth of safety at a process-management price this loop does not yet earn.
-            recorded = await asyncio.to_thread(_dispatch, call)
+            recorded = await asyncio.to_thread(_dispatch, call, registry)
             calls.append(recorded)
             conversation.append(_tool_turn(call, recorded))
+            if on_call is not None:
+                try:
+                    on_call(recorded)
+                except Exception:
+                    # Narration is an observer, never a participant: a broken callback
+                    # is logged and the pass continues as if it were absent.
+                    logger.exception("on_call callback raised; the loop continues")
 
     return ToolLoopResult(
         content="",

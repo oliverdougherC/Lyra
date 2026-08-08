@@ -29,6 +29,7 @@ from backend.core.app_settings import TutorConfig, resolve_tutor_config
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import LyraError
 from backend.core.profiles import select_active_facts, select_user_facts
+from backend.llm.budget import GENERATION_SHARE
 from backend.llm.client import stream_chat
 from backend.llm.prompts import ChatMode, build_system_prompt, format_context_block
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk, retrieve
@@ -43,8 +44,8 @@ DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
 
 # The four buckets of the context budget table in docs/rag-pipeline.md. They sum to 1.0,
 # and an 8192 window divides into 2048 generation, 1229 system, 1638 history, and 3277
-# retrieval.
-GENERATION_SHARE = 0.25
+# retrieval. The generation share is shared with the background pipelines, which reserve
+# the same quarter without assembling any of the other three.
 SYSTEM_SHARE = 0.15
 HISTORY_SHARE = 0.20
 RETRIEVAL_SHARE = 0.40
@@ -88,12 +89,16 @@ class SessionRename(BaseModel):
 
 
 class SessionRead(BaseModel):
-    """A conversation as the interface sees it."""
+    """A conversation as the interface sees it.
+
+    Mode is the session module's three-value kind, not the tutor's two: message history
+    is shared with the writer, and this shape must be able to describe what it lists.
+    """
 
     id: int
     class_id: int
     title: str | None
-    mode: ChatMode
+    mode: sessions.ChatMode
     artifact_part_id: int | None
     created_at: str
 
@@ -109,6 +114,7 @@ class MessageRead(BaseModel):
     thinking_ms: int
     retrieval_trimmed: bool
     omitted_document_count: int
+    tool_activity: list[dict[str, object]]
     created_at: str
 
 
@@ -289,6 +295,17 @@ async def regenerate_chat(
     )
 
 
+def _refuse_writer_session(session: dict[str, object]) -> None:
+    """The tutor never answers in a writer conversation.
+
+    Sending a tutor turn here would flip the session's mode and put a Socratic reply in
+    the middle of a working transcript. Nothing in the interface offers this; the guard
+    exists so a stale client or a hand-written request cannot do it either.
+    """
+    if session["mode"] == sessions.WRITER:
+        raise LyraError("That conversation belongs to a draft. Open it from the draft.")
+
+
 def _open_turn(
     conn: sqlite3.Connection, session_id: int, request: ChatRequest
 ) -> tuple[TutorConfig, TurnPlan]:
@@ -299,6 +316,7 @@ def _open_turn(
         ConfigurationError: no tutor endpoint is configured.
     """
     session = sessions.get_session(conn, session_id)
+    _refuse_writer_session(session)
     config = resolve_tutor_config(conn)
     # Persisted on the session, not just used for this turn, so the toggle survives a
     # reload and the next turn continues in the mode the student picked.
@@ -323,6 +341,7 @@ def _open_regeneration(
         ConfigurationError: no tutor endpoint is configured.
     """
     session = sessions.get_session(conn, session_id)
+    _refuse_writer_session(session)
     config = resolve_tutor_config(conn)
     question = sessions.last_user_message(conn, session_id)
     user_message_id = int(question["id"])
@@ -454,7 +473,7 @@ def _prepare_turn(
         for message in sessions.list_messages(conn, session_id)
         if int(message["id"]) not in excluded
     ]
-    history, history_used = _trim_history(earlier, budget.history)
+    history, history_used = trim_history(earlier, budget.history)
     # Unused history budget is lent to retrieval. The reverse never happens: retrieval
     # cannot borrow history's share, and neither may touch the generation reserve.
     retrieval_budget = max(0, budget.retrieval + budget.history - history_used - system_overrun)
@@ -487,7 +506,7 @@ def _build_turn(
     return Turn(messages=messages, retrieval=result)
 
 
-def _trim_history(
+def trim_history(
     messages: list[dict[str, object]], budget_tokens: int
 ) -> tuple[list[dict[str, object]], int]:
     """Keep the newest messages that fit, dropping oldest first.

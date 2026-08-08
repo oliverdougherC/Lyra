@@ -70,6 +70,10 @@ NO_QUESTIONS_MESSAGE = "Fewer than three valid questions survived validation."
 STUDY_KINDS: tuple[str, ...] = (artifacts.KIND_FLASHCARD_DECK, artifacts.KIND_QUIZ)
 
 
+class _GenerationCancelledError(Exception):
+    """The artifact was cancelled while the worker was running and should be left alone."""
+
+
 @dataclass(frozen=True)
 class _Job:
     """What a queued generation needs. Ids and options only, never rows or handles."""
@@ -147,6 +151,8 @@ def run_generation(job: _Job) -> None:
     conn = connect()
     try:
         artifact = artifacts.get_artifact(conn, job.artifact_id)
+        if _cancelled(conn, job.artifact_id):
+            return
         if artifact["kind"] == artifacts.KIND_FLASHCARD_DECK:
             _generate_deck(conn, job)
         else:
@@ -154,6 +160,8 @@ def run_generation(job: _Job) -> None:
     except NotFoundError:
         # Deleted between enqueue and run: the de-facto cancel, as in ingestion.
         logger.info("Study artifact %s vanished before generation", job.artifact_id)
+    except _GenerationCancelledError:
+        logger.info("Study artifact %s stopped: cancelled", job.artifact_id)
     except Exception as exc:
         conn.rollback()
         _mark_failed(conn, job.artifact_id, exc)
@@ -179,6 +187,7 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
         raise LyraError(BLOCKED_MESSAGES.get(blocked, BLOCKED_MESSAGES[NO_ENDPOINT]))
     config = resolve_tutor_config(conn)
 
+    _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(
         conn, job.artifact_id, artifacts.GENERATING, "Reading the material"
     )
@@ -186,10 +195,12 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
     if not gathered:
         raise LyraError(NO_TOPICS_MESSAGE)
 
+    _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(
         conn, job.artifact_id, artifacts.GENERATING, "Mapping study topics"
     )
     topics = _call_json(config, prompts.build_topics_prompt(gathered), prompts.TOPICS_SCHEMA)
+    _raise_if_cancelled(conn, job.artifact_id)
     topic_names = [t.strip() for t in _json_list(topics, "topics") if str(t).strip()]
     if not topic_names:
         raise LyraError(NO_TOPICS_MESSAGE)
@@ -201,6 +212,7 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
     failed: list[str] = []
     ordinal = 0
     for topic in topic_names:
+        _raise_if_cancelled(conn, job.artifact_id)
         artifacts.set_artifact_state(conn, job.artifact_id, artifacts.GENERATING, topic)
         try:
             written = _write_topic_cards(conn, job, config, class_id, topic, ordinal)
@@ -218,6 +230,7 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
         raise LyraError(NO_CARDS_MESSAGE)
 
     detail = f"{len(failed)} of {len(topic_names)} topics failed" if failed else None
+    _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(conn, job.artifact_id, artifacts.READY, detail)
 
 
@@ -237,6 +250,7 @@ def _write_topic_cards(
         prompts.build_flashcards_prompt(topic, context_block, job.cards_per_topic),
         prompts.FLASHCARDS_SCHEMA,
     )
+    _raise_if_cancelled(conn, job.artifact_id)
 
     written = 0
     for card in _json_list(reply, "cards"):
@@ -307,6 +321,7 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
         raise LyraError(BLOCKED_MESSAGES.get(blocked, BLOCKED_MESSAGES[NO_ENDPOINT]))
     config = resolve_tutor_config(conn)
 
+    _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(
         conn, job.artifact_id, artifacts.GENERATING, "Reading the material"
     )
@@ -314,6 +329,7 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     if not gathered:
         raise LyraError(NO_QUESTIONS_MESSAGE)
 
+    _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(conn, job.artifact_id, artifacts.GENERATING, "Writing questions")
     asked = list(job.types)
     reply = _call_json(
@@ -321,6 +337,7 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
         prompts.build_quiz_prompt(gathered, job.count, job.difficulty, asked),
         prompts.QUIZ_SCHEMA,
     )
+    _raise_if_cancelled(conn, job.artifact_id)
     questions, failures = _validate_questions(_json_list(reply, "questions"))
 
     # Fewer than half surviving means the reply misunderstood the shape badly enough
@@ -332,6 +349,7 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
             prompts.build_quiz_prompt(gathered + retry_note, job.count, job.difficulty, asked),
             prompts.QUIZ_SCHEMA,
         )
+        _raise_if_cancelled(conn, job.artifact_id)
         retried, _ = _validate_questions(_json_list(retry, "questions"))
         if len(retried) > len(questions):
             questions = retried
@@ -356,7 +374,19 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
         # whole-material call rather than per-question retrieval, so there is no small
         # set of chunks a question honestly traces to. Deck cards get theirs from the
         # per-topic retrieval; quizzes get this comment instead.
+    _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(conn, job.artifact_id, artifacts.READY)
+
+
+def _cancelled(conn: sqlite3.Connection, artifact_id: int) -> bool:
+    """Whether the artifact was cancelled and the worker should stop without writing more."""
+    return artifacts.get_artifact(conn, artifact_id)["state"] == artifacts.CANCELLED
+
+
+def _raise_if_cancelled(conn: sqlite3.Connection, artifact_id: int) -> None:
+    """Turn a cancelled artifact into the control flow that leaves it unchanged."""
+    if _cancelled(conn, artifact_id):
+        raise _GenerationCancelledError
 
 
 def _validate_questions(

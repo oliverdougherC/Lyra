@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install backend dependencies
+        run: uv sync --extra dev
+
+      - name: Check backend formatting
+        run: uv run --extra dev ruff format --check backend scripts
+
+      - name: Lint backend
+        run: uv run --extra dev ruff check backend scripts
+
+      - name: Run backend tests
+        run: uv run --extra dev pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check frontend formatting
+        run: pnpm format:check
+
+      - name: Lint frontend
+        run: pnpm lint
+
+      - name: Typecheck frontend
+        run: pnpm typecheck
+
+      - name: Run frontend unit tests
+        run: pnpm test
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Audit production dependencies
+        run: pnpm audit --prod
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run frontend smoke tests
+        run: pnpm test:e2e

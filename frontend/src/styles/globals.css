@@ -1,7 +1,14 @@
-/* KaTeX styles must lose to `@layer components` overrides. Naming the layer here, ahead
-   of Tailwind's own layer statement, pins katex first in the cascade-layer order;
-   otherwise the bundled import lands last and its rules win regardless of specificity. */
-@layer katex, theme, base, components, utilities;
+/* KaTeX sits between `base` and `components`: it must beat Tailwind's preflight and lose
+   to our own overrides. Naming the layers here, ahead of Tailwind's own layer statement,
+   is what pins that order; otherwise the bundled import lands last and wins everything.
+
+   Ahead of `base` it lost to preflight's `*, ::before, ::after { border: 0 solid }`,
+   which outranks `.katex .frac-line { border-bottom-width: .08em }` by layer order
+   whatever its specificity - so every fraction bar, square-root overline and \hline
+   vanished, in chat and in drafts alike. Behind `components` it would beat the overrides
+   at .katex-display below, which is what this ordering was written for in the first
+   place. Between the two, both hold. */
+@layer theme, base, katex, components, utilities;
 
 @import 'tailwindcss';
 @import 'tw-animate-css';
@@ -752,6 +759,7 @@ li[data-stream-word] {
 /* A draft reads like Lyra's answers do: the document serif for prose, the display face
    for headings. The canvas takes no focus ring - the whole surface is the editor. */
 .draft-editor .milkdown .ProseMirror {
+  position: relative;
   font-family: var(--font-source-serif), ui-serif, Georgia, serif;
   font-size: 1.0625rem;
   line-height: 1.65;
@@ -1075,6 +1083,108 @@ li[data-stream-word] {
 /* Accept entrance on the inserted block. */
 .ws-inserted {
   animation: lyra-reveal-enter 250ms var(--ease-gentle) both;
+}
+
+/* Margin-comment anchors: a quiet severity-tinted underline on the quoted passage.
+   Inline decorations, so a passage split across lines keeps its underline on every
+   fragment. The flash is the rail's click-to-jump landing. */
+.comment-anchor {
+  text-decoration-line: underline;
+  text-decoration-thickness: 2px;
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+  border-radius: 2px;
+  transition: background-color 500ms var(--ease-gentle);
+}
+
+.comment-anchor--critical {
+  text-decoration-color: color-mix(in srgb, var(--danger-text) 70%, transparent);
+}
+
+.comment-anchor--major {
+  text-decoration-color: color-mix(in srgb, var(--accent-primary) 70%, transparent);
+}
+
+.comment-anchor--minor,
+.comment-anchor--note {
+  text-decoration-color: color-mix(in srgb, var(--text-tertiary) 60%, transparent);
+}
+
+.comment-anchor--flash.comment-anchor--critical {
+  background-color: color-mix(in srgb, var(--danger-text) 18%, transparent);
+}
+
+.comment-anchor--flash.comment-anchor--major {
+  background-color: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+}
+
+.comment-anchor--flash.comment-anchor--minor,
+.comment-anchor--flash.comment-anchor--note {
+  background-color: color-mix(in srgb, var(--text-tertiary) 18%, transparent);
+}
+
+/* A compact margin affordance beside the first line of every anchored finding. It is a
+   ProseMirror widget, so it follows the passage through edits and stays reachable by
+   keyboard; the full card remains in the Comments index on narrow screens. */
+.comment-gutter-marker {
+  position: relative;
+  display: inline-flex;
+  width: 0;
+  height: 0;
+  inset-inline-start: -1.35rem;
+  inset-block-start: -0.05rem;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-family: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: 1.45rem;
+  line-height: 0;
+  cursor: pointer;
+  user-select: none;
+  z-index: 2;
+}
+
+.comment-gutter-marker--critical {
+  color: var(--danger-text);
+}
+
+.comment-gutter-marker--major {
+  color: var(--accent-primary);
+}
+
+.comment-gutter-marker:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 3px;
+  border-radius: 999px;
+}
+
+/* Source ids stay stable in markdown, while the editor presents them as compact
+   citations. Activating one opens the matching entry in the Sources tab. */
+.draft-citation {
+  display: inline-block;
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-surface) 55%, transparent);
+  padding-inline: 0.3em;
+  color: var(--accent-primary);
+  font-family: var(--font-dm-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.76em;
+  line-height: 1.35;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.draft-citation:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (max-width: 639px) {
+  .comment-gutter-marker {
+    /* The document has no reliable outer gutter on a phone; the rail index is the
+       accessible fallback and the inline underline still marks the passage. */
+    display: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

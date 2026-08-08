@@ -29,6 +29,7 @@ import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from backend.core import source_ledger
 from backend.core.app_settings import (
     EXTRACTION_DISABLED,
     NO_ENDPOINT,
@@ -45,13 +46,26 @@ logger = logging.getLogger(__name__)
 
 UNPARSEABLE_RESPONSE = "unparseable_response"
 
+# The endpoint answered the extraction request with a failure. Kept apart from
+# `EXTRACTION_FAILED` because it is the one extraction failure the student can act on: the
+# server is holding a model other than the one their settings name, or one whose context
+# window cannot take a prompt sized for the window they configured. Both are fixed in
+# Settings, which is what the profile panel offers when it sees this.
+ENDPOINT_FAILED = "endpoint_failed"
+
+# Extraction raised something that was not the endpoint saying no. Nothing here points at a
+# setting, so the panel says only that the pass did not finish and leaves it at that.
+EXTRACTION_FAILED = "extraction_failed"
+
 # Every reason a document can carry in `stage_detail` instead of having been extracted.
-# Three come from the settings rules; the fourth is the model's own fault.
+# Three come from the settings rules; the rest are the model's or the endpoint's own fault.
 KNOWN_SKIP_REASONS = (
     EXTRACTION_DISABLED,
     NO_ENDPOINT,
     REMOTE_UNACKNOWLEDGED,
     UNPARSEABLE_RESPONSE,
+    ENDPOINT_FAILED,
+    EXTRACTION_FAILED,
 )
 
 # Share of the tutor context window one extraction pass may spend on document text. The
@@ -170,10 +184,12 @@ order by f.kind, source_count desc, f.label
 
 _SELECT_PROFILE_FACTS = """
 select f.id, f.class_id, f.kind, f.label, f.value, f.confidence, f.confirmed, f.rejected,
-       f.edited, f.source_document_id, f.created_at,
+       f.edited, f.source_document_id, f.source_writer_id, f.source_excerpt_id,
+       w.title as source_title, w.url as source_url, f.created_at,
        count(s.document_id) as source_count
 from profile_facts f
 left join profile_fact_sources s on s.fact_id = f.id
+left join writer_sources w on w.id = f.source_writer_id
 where f.class_id is ? and f.rejected = 0
 group by f.id
 order by f.kind, source_count desc, f.label
@@ -728,6 +744,65 @@ def select_user_facts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return list(conn.execute(_SELECT_ACTIVE_FACTS, (None, CORROBORATION_THRESHOLD)))
 
 
+def propose_ledger_fact(
+    conn: sqlite3.Connection,
+    class_id: int,
+    *,
+    kind: str,
+    label: str,
+    value: str,
+    source_id: int,
+    excerpt_id: int,
+) -> dict[str, object]:
+    """Store one web-evidenced fact as an unconfirmed, inactive proposal."""
+    if kind not in _DEFAULT_LABELS:
+        raise ValueError(f"Unknown profile fact kind: {kind}")
+    clean_label = label.strip()
+    clean_value = value.strip()
+    if not clean_label or not clean_value:
+        raise ValueError("Profile fact labels and values cannot be blank.")
+    source = source_ledger.get_source(conn, source_id, class_id=class_id)
+    if source["source_type"] != source_ledger.WEB:
+        raise ValueError("Agent-proposed profile facts require a web source.")
+    evidence = next(
+        (item for item in source["excerpts"] if int(item["id"]) == excerpt_id),
+        None,
+    )
+    if evidence is None:
+        raise ValueError("That source excerpt does not belong to this source.")
+
+    identity = _identity(kind, clean_label, clean_value)
+    existing = next(
+        (
+            row
+            for row in conn.execute(_SELECT_CLASS_FACTS, (class_id,))
+            if _identity(row["kind"], row["label"], row["value"]) == identity
+        ),
+        None,
+    )
+    if existing is None:
+        fact_id = int(
+            conn.execute(
+                _INSERT_FACT,
+                (class_id, kind, clean_label, clean_value, _DEFAULT_CONFIDENCE, None),
+            ).lastrowid
+            or 0
+        )
+    else:
+        fact_id = int(existing["id"])
+        if bool(get_fact(conn, fact_id)["rejected"]):
+            raise ValueError("The student previously rejected that profile fact.")
+    conn.execute(
+        "update profile_facts set source_writer_id = coalesce(source_writer_id, ?), "
+        "source_excerpt_id = coalesce(source_excerpt_id, ?) where id = ?",
+        (source_id, excerpt_id, fact_id),
+    )
+    conn.commit()
+    fact = dict(get_fact(conn, fact_id))
+    fact["active"] = any(int(row["id"]) == fact_id for row in select_active_facts(conn, class_id))
+    return fact
+
+
 def _fact_dicts(conn: sqlite3.Connection, class_id: int | None) -> list[dict[str, object]]:
     """Every non-rejected fact in one scope, carrying every document that attests it.
 
@@ -746,6 +821,9 @@ def _fact_dicts(conn: sqlite3.Connection, class_id: int | None) -> list[dict[str
         fact["rejected"] = bool(fact["rejected"])
         fact["edited"] = bool(fact["edited"])
         filenames = sources.get(int(row["id"]), [])
+        source_title = str(fact["source_title"]) if fact["source_title"] else None
+        if source_title and source_title not in filenames:
+            filenames.append(source_title)
         fact["sources"] = filenames
         # The first document to say it, kept because a single-source fact still reads best
         # as "From homework_1.pdf" rather than as a count of one.

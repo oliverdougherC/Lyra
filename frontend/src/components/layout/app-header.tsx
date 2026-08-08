@@ -24,8 +24,14 @@ function readClassId(pathname: string): number | null {
 /**
  * The header carries the breadcrumb, and on class pages the class code and its profile
  * button, so the workspace below starts right at the panes.
+ *
+ * Args:
+ *   collapsed: Slide out of the way and give the row back, for a route that has asked for
+ *     the window. Rendered rather than unmounted, so the bar animates out and back and the
+ *     breadcrumb portal below it keeps its target across the transition - unmounting the
+ *     slot would leave a workspace's title with nowhere to go and nothing to return to.
  */
-export function AppHeader() {
+export function AppHeader({ collapsed = false }: { collapsed?: boolean }) {
   const pathname = usePathname()
   const { data: classes } = useClasses()
   const [profileOpen, setProfileOpen] = useState(false)
@@ -58,7 +64,17 @@ export function AppHeader() {
   return (
     <header
       data-app-header
-      className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-2 border-b bg-background/85 px-4 supports-[backdrop-filter]:backdrop-blur-sm"
+      data-collapsed={collapsed || undefined}
+      // `inert` rather than only hidden: a bar with no height still holds focusable
+      // controls, and tabbing into a breadcrumb nobody can see is how a keyboard user
+      // ends up somewhere the screen does not show them.
+      inert={collapsed}
+      className={cn(
+        'sticky top-0 z-10 flex shrink-0 items-center gap-2 bg-background/85 px-4 transition-[height,transform,opacity] duration-200 ease-out supports-[backdrop-filter]:backdrop-blur-sm',
+        collapsed
+          ? 'h-0 -translate-y-full overflow-hidden border-b-0 opacity-0'
+          : 'h-14 translate-y-0 border-b opacity-100',
+      )}
     >
       <SidebarTrigger className="-ml-1" />
       <nav aria-label="Breadcrumb" className="min-w-0 flex-1">

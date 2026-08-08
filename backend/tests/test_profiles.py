@@ -957,6 +957,24 @@ def test_class_profile_route_returns_facts_and_the_skip_reason(
     assert body["facts"][0]["confirmed"] is False
 
 
+@pytest.mark.parametrize("reason", profiles.KNOWN_SKIP_REASONS)
+def test_every_skip_reason_the_core_can_record_survives_the_response_schema(
+    client: TestClient, db: sqlite3.Connection, class_id: int, reason: str
+) -> None:
+    """The route's `Literal` and `KNOWN_SKIP_REASONS` are two copies of one list.
+
+    Letting them drift does not degrade gracefully. A reason the schema has not heard of
+    fails response validation, so the class with something to explain is the one whose
+    profile answers 500 and renders nothing at all.
+    """
+    _insert_document(db, class_id, stage_detail=reason)
+
+    response = client.get(f"/api/classes/{class_id}/profile")
+
+    assert response.status_code == 200
+    assert response.json()["extraction_skipped_reason"] == reason
+
+
 def test_class_profile_route_rejects_an_unknown_class(client: TestClient) -> None:
     assert client.get("/api/classes/404/profile").status_code == 404
 

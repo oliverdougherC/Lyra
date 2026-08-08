@@ -248,17 +248,33 @@ def get_artifact(conn: sqlite3.Connection, artifact_id: int) -> dict[str, object
     return dict(row)
 
 
-def list_artifacts(conn: sqlite3.Connection, class_id: int) -> list[dict[str, object]]:
-    """Every artifact in a class, most recently changed first.
+def list_artifacts(
+    conn: sqlite3.Connection, class_id: int, kind: str | None = None
+) -> list[dict[str, object]]:
+    """The artifacts of one kind in a class, most recently changed first.
 
     Ordered by `updated_at` rather than `created_at` because a part landing counts as the
     artifact changing, which is what a student looking for their in-progress run expects.
+
+    Args:
+        conn: Open database connection.
+        class_id: Class whose artifacts are wanted.
+        kind: One of `KINDS`, or None for every kind. Every surface passes one: the table
+            holds solution sets, decks, quizzes and drafts together, so an unfiltered list
+            is a solution list with the class's essays in it, which is what it was.
     """
-    rows = conn.execute(
-        f"select {_ARTIFACT_COLUMNS} from artifacts where class_id = ? "  # noqa: S608
-        "order by updated_at desc, id desc",
-        (class_id,),
-    )
+    if kind is None:
+        rows = conn.execute(
+            f"select {_ARTIFACT_COLUMNS} from artifacts where class_id = ? "  # noqa: S608
+            "order by updated_at desc, id desc",
+            (class_id,),
+        )
+    else:
+        rows = conn.execute(
+            f"select {_ARTIFACT_COLUMNS} from artifacts "  # noqa: S608
+            "where class_id = ? and kind = ? order by updated_at desc, id desc",
+            (class_id, kind),
+        )
     return [dict(row) for row in rows]
 
 

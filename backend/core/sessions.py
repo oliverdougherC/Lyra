@@ -4,18 +4,26 @@ Chat is session-scoped rather than class-scoped so a conversation has one unambi
 owner: messages cascade from the session, and deleting a session takes its history with
 it. The Guide/Show mode is stored on the session rather than read from each request, so
 the toggle survives a reload and the next turn continues in the mode the user chose.
+
+The third mode, `writer`, is the draft workspace's conversation. It rides everything
+here unchanged - transcript, title, deletion, the body-part anchor - and differs only in
+who answers: the writer's tool-using turn rather than the tutor's. The tutor routes
+refuse writer sessions and the sidebar does not list them, so the two surfaces share
+storage without sharing a doorway.
 """
 
+import json
 import sqlite3
 from typing import Literal
 
 from backend.core.errors import NotFoundError
 from backend.llm.prompts import format_step_context
 
-ChatMode = Literal["guide", "show"]
+ChatMode = Literal["guide", "show", "writer"]
 MessageRole = Literal["user", "assistant"]
 
-MODES: tuple[str, ...] = ("guide", "show")
+MODES: tuple[str, ...] = ("guide", "show", "writer")
+WRITER = "writer"
 
 # Title length: long enough to tell two conversations apart in a 260px rail, short enough
 # that most titles survive without an ellipsis.
@@ -24,7 +32,7 @@ _TITLE_MIN_CHARS = 24
 
 _MESSAGE_SQL = """
 select id, session_id, role, content, thinking, thinking_ms, retrieval_trimmed,
-       omitted_document_count, created_at
+       omitted_document_count, tool_activity, created_at
 from messages
 where session_id = ?
 order by id
@@ -39,6 +47,7 @@ def create_session(
     class_id: int,
     title: str | None = None,
     artifact_part_id: int | None = None,
+    mode: ChatMode = "guide",
 ) -> dict[str, object]:
     """Open a conversation on a class and return it.
 
@@ -50,13 +59,20 @@ def create_session(
         class_id: Class the conversation belongs to.
         title: Name it opens with, or None to be named from its first message.
         artifact_part_id: The step of a solution this conversation is about, when it was
-            opened by clicking one. It pins that step into every turn and is why dropping
-            from Solve to Guide is one product rather than two.
+            opened by clicking one - or, for a writer session, the draft body it works
+            on. It pins that step into every turn and is why dropping from Solve to
+            Guide is one product rather than two.
+        mode: `guide` for a tutor conversation, `writer` for a draft's. `show` is never
+            a starting mode; it is a toggle a tutor conversation moves to.
+
+    Raises:
+        ValueError: when `mode` is outside the allowed set.
     """
+    if mode not in MODES:
+        raise ValueError(f"Unknown chat mode: {mode}")
     cursor = conn.execute(
-        "insert into chat_sessions (class_id, title, mode, artifact_part_id) "
-        "values (?, ?, 'guide', ?)",
-        (class_id, title, artifact_part_id),
+        "insert into chat_sessions (class_id, title, mode, artifact_part_id) values (?, ?, ?, ?)",
+        (class_id, title, mode, artifact_part_id),
     )
     conn.commit()
     return get_session(conn, int(cursor.lastrowid or 0))
@@ -79,11 +95,28 @@ def get_session(conn: sqlite3.Connection, session_id: int) -> dict[str, object]:
 
 
 def list_sessions(conn: sqlite3.Connection, class_id: int) -> list[dict[str, object]]:
-    """Every session in a class, newest first, which is the order the sidebar shows."""
+    """Every tutor session in a class, newest first, which is the order the sidebar shows.
+
+    Writer sessions are excluded on purpose: they belong to a draft's rail, they open
+    from the draft, and a sidebar entry for one would be a second doorway into a
+    conversation whose subject is not on screen.
+    """
     rows = conn.execute(
         f"select {_SESSION_COLUMNS} from chat_sessions "  # noqa: S608
-        "where class_id = ? order by created_at desc, id desc",
-        (class_id,),
+        "where class_id = ? and mode != ? order by created_at desc, id desc",
+        (class_id, WRITER),
+    )
+    return [dict(row) for row in rows]
+
+
+def writer_sessions_for_part(
+    conn: sqlite3.Connection, artifact_part_id: int
+) -> list[dict[str, object]]:
+    """A draft body's writer sessions, newest first. The newest is the one the rail opens."""
+    rows = conn.execute(
+        f"select {_SESSION_COLUMNS} from chat_sessions "  # noqa: S608
+        "where artifact_part_id = ? and mode = ? order by created_at desc, id desc",
+        (artifact_part_id, WRITER),
     )
     return [dict(row) for row in rows]
 
@@ -234,6 +267,7 @@ def add_message(
     omitted_document_count: int = 0,
     thinking: str = "",
     thinking_ms: int = 0,
+    tool_activity: list[dict[str, object]] | None = None,
 ) -> int:
     """Append one message to a conversation and return its id.
 
@@ -248,6 +282,9 @@ def add_message(
             think or a server that does not expose it. Stored beside the answer, never
             inside it, and never replayed back to the model as history.
         thinking_ms: How long that reasoning took, zero when there was none.
+        tool_activity: What a writer turn did on the way to its answer, one entry per
+            tool call. Stored beside the answer like `thinking`, and for the same
+            reason: the record of the work belongs to the message it produced.
 
     Returns:
         The id of the inserted message.
@@ -258,7 +295,8 @@ def add_message(
     get_session(conn, session_id)
     cursor = conn.execute(
         "insert into messages (session_id, role, content, thinking, thinking_ms, "
-        "retrieval_trimmed, omitted_document_count) values (?, ?, ?, ?, ?, ?, ?)",
+        "retrieval_trimmed, omitted_document_count, tool_activity) "
+        "values (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             session_id,
             role,
@@ -267,6 +305,7 @@ def add_message(
             thinking_ms,
             int(retrieval_trimmed),
             omitted_document_count,
+            json.dumps(tool_activity or [], separators=(",", ":")),
         ),
     )
     conn.commit()
@@ -306,8 +345,14 @@ def delete_messages_after(conn: sqlite3.Connection, session_id: int, message_id:
 def list_messages(conn: sqlite3.Connection, session_id: int) -> list[dict[str, object]]:
     """A conversation's messages, oldest first, which is both reading and prompt order.
 
+    `tool_activity` is decoded here, so callers and the API always see the array and the
+    JSON encoding stays a storage detail of this module.
+
     Raises:
         NotFoundError: when no session carries that id.
     """
     get_session(conn, session_id)
-    return [dict(row) for row in conn.execute(_MESSAGE_SQL, (session_id,))]
+    messages = [dict(row) for row in conn.execute(_MESSAGE_SQL, (session_id,))]
+    for message in messages:
+        message["tool_activity"] = json.loads(str(message["tool_activity"] or "[]"))
+    return messages

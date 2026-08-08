@@ -160,6 +160,100 @@ def test_context_window_below_the_floor_is_rejected(client: TestClient) -> None:
     assert client.put("/api/settings", json={"context_window": 128}).status_code == 422
 
 
+def test_writer_capability_settings_roundtrip(client: TestClient) -> None:
+    defaults = client.get("/api/settings").json()
+    assert defaults["allow_web_research"] is False
+    assert defaults["parallel_requests"] is False
+    assert defaults["parallel_concurrency"] == 1
+
+    updated = client.put(
+        "/api/settings",
+        json={
+            "allow_web_research": True,
+            "parallel_requests": True,
+            "parallel_concurrency": 3,
+        },
+    ).json()
+
+    assert updated["allow_web_research"] is True
+    assert updated["parallel_requests"] is True
+    assert updated["parallel_concurrency"] == 3
+
+
+def test_firecrawl_settings_are_loopback_only_and_readiness_is_explicit(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    defaults = client.get("/api/settings").json()
+    assert defaults["firecrawl_base_url"] == "http://127.0.0.1:3002"
+    assert defaults["firecrawl_scrape_enabled"] is False
+
+    rejected = client.put(
+        "/api/settings", json={"firecrawl_base_url": "https://firecrawl.example.com"}
+    )
+    assert rejected.status_code == 422
+
+    class ReadyFirecrawl:
+        def __init__(self, *, base_url: str) -> None:
+            assert base_url == "http://127.0.0.1:3002"
+
+        def check_readiness(self) -> dict[str, object]:
+            return {"status": "ok"}
+
+    monkeypatch.setattr(routes_settings, "FirecrawlClient", ReadyFirecrawl)
+    result = client.post("/api/settings/test-firecrawl")
+    assert result.status_code == 200
+    assert result.json() == {
+        "ok": True,
+        "status": "available",
+        "message": "Firecrawl is available.",
+    }
+    assert client.put("/api/settings", json={"parallel_concurrency": 0}).status_code == 422
+
+
+def test_firecrawl_settings_probe_reports_temporary_unavailability(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class UnavailableFirecrawl:
+        def __init__(self, *, base_url: str) -> None:
+            assert base_url == "http://127.0.0.1:3002"
+
+        def check_readiness(self) -> dict[str, object]:
+            raise routes_settings.FirecrawlTransientError("temporarily down")
+
+    monkeypatch.setattr(routes_settings, "FirecrawlClient", UnavailableFirecrawl)
+
+    result = client.post("/api/settings/test-firecrawl")
+
+    assert result.status_code == 200
+    assert result.json() == {
+        "ok": False,
+        "status": "temporarily_unavailable",
+        "message": "Firecrawl is temporarily unavailable; web research is disabled.",
+    }
+
+
+def test_firecrawl_settings_probe_reports_misconfiguration(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class MisconfiguredFirecrawl:
+        def __init__(self, *, base_url: str) -> None:
+            assert base_url == "http://127.0.0.1:3002"
+
+        def check_readiness(self) -> dict[str, object]:
+            raise routes_settings.FirecrawlMisconfiguredError("wrong endpoint")
+
+    monkeypatch.setattr(routes_settings, "FirecrawlClient", MisconfiguredFirecrawl)
+
+    result = client.post("/api/settings/test-firecrawl")
+
+    assert result.status_code == 200
+    assert result.json() == {
+        "ok": False,
+        "status": "misconfigured",
+        "message": "Firecrawl is misconfigured; web research is disabled.",
+    }
+
+
 def test_repointing_the_endpoint_forgets_what_was_measured_about_tool_support(
     client: TestClient, db: sqlite3.Connection
 ) -> None:

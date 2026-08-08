@@ -1,0 +1,85 @@
+services:
+  api:
+    image: "lyra-firecrawl-api:v2.11.162"
+    ports: !override
+      - "127.0.0.1:${LYRA_FIRECRAWL_PORT:-3002}:${INTERNAL_PORT:-3002}"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cpus: 2.0
+    mem_limit: 4G
+    memswap_limit: 4G
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          require('http').get('http://127.0.0.1:3002/v0/health/readiness',
+          r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+      playwright-service:
+        condition: service_started
+      rabbitmq:
+        condition: service_healthy
+      nuq-postgres:
+        condition: service_healthy
+
+  playwright-service:
+    image: "lyra-firecrawl-playwright-service:v2.11.162"
+    restart: unless-stopped
+    cpus: 1.5
+    mem_limit: 2G
+    memswap_limit: 2G
+
+  redis:
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - lyra-firecrawl-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rabbitmq:
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - lyra-firecrawl-rabbitmq-data:/var/lib/rabbitmq
+
+  nuq-postgres:
+    image: "lyra-firecrawl-nuq-postgres:v2.11.162"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - lyra-firecrawl-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  # FoundationDB is an optional future queue backend. Upstream defines it without a
+  # profile, which starts an unused database beside the default Postgres backend.
+  foundationdb:
+    profiles: ["foundationdb"]
+
+  foundationdb-init:
+    profiles: ["foundationdb"]
+
+volumes:
+  lyra-firecrawl-postgres-data: {}
+  lyra-firecrawl-redis-data: {}
+  lyra-firecrawl-rabbitmq-data: {}

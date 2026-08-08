@@ -131,6 +131,10 @@ _FORMAT_COMPLAINTS = ("response_format", "json_schema", "schema", "grammar")
 _REFUSED = 400
 _REFUSAL_STATUSES = frozenset({_REFUSED, 500})
 
+# How much of an endpoint's own error body is worth carrying into the log. Servers range
+# from a sentence to a wall of C++, and the part that says which is always at the front.
+_UPSTREAM_DETAIL_CHARS = 400
+
 _ERROR_UNREACHABLE = "The tutor endpoint is not reachable. Check that the server is running."
 _ERROR_TIMEOUT = "The tutor endpoint did not respond in time."
 _ERROR_UNAUTHORIZED = "The tutor endpoint rejected the API key."
@@ -389,11 +393,44 @@ def _mapped_error(exc: Exception) -> UpstreamError:
         elif status == 404:
             error = UpstreamError(_ERROR_NOT_FOUND)
         else:
-            logger.warning("Tutor endpoint returned status %s", status)
+            detail = _upstream_detail(exc.response)
+            logger.warning(
+                "Tutor endpoint returned status %s%s", status, f": {detail}" if detail else ""
+            )
             error = UpstreamError(_ERROR_UPSTREAM)
         error.upstream_status = status  # type: ignore[attr-defined]
         return error
     return UpstreamError(_ERROR_UNREACHABLE)
+
+
+def _upstream_detail(response: httpx.Response) -> str:
+    """The endpoint's own account of why it failed, for the log and nowhere else.
+
+    An OpenAI-compatible server puts it in `error.message`. llama.cpp is the runtime this
+    matters most for, because a bare 500 from it is genuinely ambiguous and its message is
+    the only thing that resolves the ambiguity: "the request exceeds the available context
+    size" is a server holding a smaller model than the settings describe, and "failed to
+    load model" is a server holding no model at all. Without this, `check the logs` came
+    back with a status code and a traceback that only said where Lyra was standing.
+
+    Never returned to the browser. This is the one string in the exchange written by
+    software Lyra does not control, so the user gets settled prose and the log gets this.
+    """
+    try:
+        body = response.text
+    except Exception:  # noqa: BLE001 - a streamed body nobody read has no text to give.
+        return ""
+    try:
+        decoded = json.loads(body)
+    except ValueError:
+        decoded = None
+    if isinstance(decoded, dict):
+        error = decoded.get("error")
+        if isinstance(error, dict) and isinstance(message := error.get("message"), str):
+            body = message
+        elif isinstance(error, str):
+            body = error
+    return " ".join(body.split())[:_UPSTREAM_DETAIL_CHARS]
 
 
 def _chat_body(
@@ -637,6 +674,7 @@ async def complete(
     schema: JsonSchema | None = None,
     request_timeout: httpx.Timeout | None = None,
     fail_on_truncation: bool = False,
+    truncated: list[bool] | None = None,
 ) -> str:
     """Run a single non-streaming completion and return the assistant message content.
 
@@ -665,6 +703,10 @@ async def complete(
             the probes read a partial reply for what it is; a caller that *stores* the
             reply - transcription above all - must set it, or a half-read page is filed
             as if it were the whole page.
+        truncated: A list appended to when the reply was cut off. For the caller that
+            wants the partial text *and* wants to know it is partial - a drafted section
+            is worth keeping and worth flagging, so neither discarding it nor filing it
+            silently is right.
 
     Raises:
         UpstreamError: The endpoint failed, its reply had no readable message content,
@@ -688,6 +730,8 @@ async def complete(
         if fail_on_truncation:
             raise UpstreamError(_ERROR_TRUNCATED)
         logger.warning("Tutor endpoint reply hit the output-token ceiling and was cut off")
+        if truncated is not None:
+            truncated.append(True)
     return strip_reasoning(content)
 
 

@@ -26,6 +26,7 @@ import { $prose } from '@milkdown/kit/utils'
 import { toast } from 'sonner'
 
 import { streamWrite } from '@/lib/api'
+import { normalizeMathDelimiters } from '@/lib/drafts/math-delimiters'
 import type { WriteRequest } from '@/types'
 
 const key = new PluginKey<DecorationSet>('lyra-write-suggestion')
@@ -369,7 +370,10 @@ class Suggestion {
     }
     let slice: Slice
     try {
-      slice = this.opts.toSlice(this.text.trim())
+      // Normalized before parsing: the passage is model-written, and the editor's
+      // remark-math only reads `$`. A passage streamed as `\(x\)` would otherwise land
+      // in the document as literal backslashes and stay that way.
+      slice = this.opts.toSlice(normalizeMathDelimiters(this.text.trim()))
     } catch {
       this.showError('Could not parse the suggestion into the document.')
       return

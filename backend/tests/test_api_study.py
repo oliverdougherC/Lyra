@@ -340,6 +340,39 @@ def test_reading_a_quiz_carries_full_payloads(
     assert question["question"]["explanation"] == "The sifting property."
 
 
+def test_cancelling_a_running_deck_marks_it_cancelled(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    deck_id = _deck(db, class_id, _document(db, class_id), state=artifacts.GENERATING)
+
+    response = client.post(f"/api/decks/{deck_id}/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == artifacts.CANCELLED
+
+
+def test_cancelling_a_pending_quiz_marks_it_cancelled(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    quiz_id = _quiz(db, class_id, _document(db, class_id), state=artifacts.PENDING)
+
+    response = client.post(f"/api/quizzes/{quiz_id}/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["state"] == artifacts.CANCELLED
+
+
+def test_cancelling_a_ready_deck_is_refused(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    deck_id = _deck(db, class_id, _document(db, class_id), state=artifacts.READY)
+
+    response = client.post(f"/api/decks/{deck_id}/cancel")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == routes_study.NOT_RUNNING_MESSAGE
+
+
 def test_an_attempt_grades_answers_and_scores_by_topic(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:
@@ -430,6 +463,8 @@ def test_kind_guards_return_404_across_decks_and_quizzes(
     assert client.get(f"/api/quizzes/{deck_id}").status_code == 404
     assert client.get(f"/api/decks/{quiz_id}/status").status_code == 404
     assert client.get(f"/api/quizzes/{deck_id}/status").status_code == 404
+    assert client.post(f"/api/decks/{quiz_id}/cancel").status_code == 404
+    assert client.post(f"/api/quizzes/{deck_id}/cancel").status_code == 404
     assert client.patch(f"/api/decks/{quiz_id}", json={"title": "x"}).status_code == 404
     assert client.delete(f"/api/quizzes/{deck_id}").status_code == 404
 

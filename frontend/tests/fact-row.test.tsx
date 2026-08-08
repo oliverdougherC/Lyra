@@ -18,6 +18,10 @@ function fact(overrides: Partial<FactRead> = {}): FactRead {
     source_document_id: 1,
     source_filename: 'homework_1.pdf',
     sources: ['homework_1.pdf'],
+    source_writer_id: null,
+    source_excerpt_id: null,
+    source_title: null,
+    source_url: null,
     created_at: '2026-01-01T00:00:00Z',
     ...overrides,
   }
@@ -46,6 +50,24 @@ describe('FactRow', () => {
 
     expect(screen.getByText('In 3 documents')).toBeInTheDocument()
     expect(screen.queryByText(/^From /)).not.toBeInTheDocument()
+  })
+
+  it('links a web-evidenced proposal to its source', () => {
+    renderRow({
+      confidence: 'low',
+      source_document_id: null,
+      source_filename: 'Method reference',
+      sources: ['Method reference'],
+      source_writer_id: 4,
+      source_excerpt_id: 8,
+      source_title: 'Method reference',
+      source_url: 'https://example.com/method',
+    })
+
+    expect(screen.getByRole('link', { name: 'From Method reference' })).toHaveAttribute(
+      'href',
+      'https://example.com/method',
+    )
   })
 
   it('says nothing about sources when a fact has none', () => {

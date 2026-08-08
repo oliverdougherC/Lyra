@@ -161,7 +161,22 @@ export function FactRow({ fact, onCorrect, onResolve, busy }: FactRowProps) {
             </button>
           )}
 
-          {source ? <p className="text-text-tertiary mt-1 text-xs">{source}</p> : null}
+          {source ? (
+            <p className="text-text-tertiary mt-1 text-xs">
+              {fact.source_url ? (
+                <a
+                  href={fact.source_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline underline-offset-2"
+                >
+                  {source}
+                </a>
+              ) : (
+                source
+              )}
+            </p>
+          ) : null}
 
           {needsConfirmation ? (
             <>

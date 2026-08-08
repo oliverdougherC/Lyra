@@ -28,9 +28,9 @@ import sqlite_vec
 from backend.config import settings
 from backend.core import recognition
 from backend.core.consolidation import consolidate_class
-from backend.core.errors import LyraError
+from backend.core.errors import LyraError, UpstreamError
 from backend.core.figures import store_figures
-from backend.core.profiles import extract_facts
+from backend.core.profiles import ENDPOINT_FAILED, EXTRACTION_FAILED, extract_facts
 from backend.rag.chunk import Chunk, chunk_document, detect_doc_type
 from backend.rag.embed import BATCH_SIZE as EMBED_BATCH_SIZE
 from backend.rag.embed import EMBEDDING_DIM, EMBEDDING_MODEL, embed_documents
@@ -53,7 +53,6 @@ NON_TERMINAL_STATES = (PENDING, PARSING, CHUNKING, EMBEDDING, EXTRACTING)
 
 SCANNED_MESSAGE = "This looks like a scanned document, so there is no text to read yet."
 INTERRUPTED_MESSAGE = "Interrupted, please retry"
-EXTRACTION_FAILED_DETAIL = "extraction_failed"
 
 _STAGE_FAILURE_MESSAGES = {
     PARSING: "This document could not be read.",
@@ -260,6 +259,19 @@ def _extract_profile_facts(
     """
     try:
         return extract_facts(conn, document_id, text, doc_type)
+    except UpstreamError:
+        # Separated from everything below because this one has an address. The endpoint
+        # answered, and what it answered was a refusal, which on a local runtime almost
+        # always means the server is holding a different model than the settings name -
+        # smaller context above all, since extraction sends the largest prompt Lyra
+        # builds and is therefore the first thing to fall over. The profile panel turns
+        # this reason into a sentence with a link to Settings; `llm.client` has already
+        # logged the server's own words for it, which is the part worth reading.
+        conn.rollback()
+        logger.warning(
+            "Profile extraction for document %s was refused by the tutor endpoint", document_id
+        )
+        return ENDPOINT_FAILED
     except Exception:
         # Whatever the failed pass half-wrote is discarded rather than left uncommitted
         # on the shared connection, where the next commit would silently keep it.
@@ -267,7 +279,7 @@ def _extract_profile_facts(
         # The chunks are already stored, so the document is searchable and lands `ready`
         # either way. A missed fact proposal is not worth failing an upload over.
         logger.exception("Profile extraction failed for document %s", document_id)
-        return EXTRACTION_FAILED_DETAIL
+        return EXTRACTION_FAILED
 
 
 def _consolidate_profile(conn: sqlite3.Connection, class_id: int) -> None:

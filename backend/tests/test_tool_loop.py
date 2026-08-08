@@ -390,3 +390,112 @@ async def test_a_result_that_cannot_be_serialized_costs_one_check_and_not_the_pa
     # The check beside it ran, and a pass that reaches the model is a pass that can be read.
     assert result.calls[1].ok is True
     json.dumps([call.result for call in result.calls])
+
+
+# ---------------------------------------------------------------------------------
+# A caller's own registry, and the narration callback. The writer runs the same loop
+# with different tools; the contract is that the passed registry is the whole
+# allowlist and that narration can never cost the pass.
+# ---------------------------------------------------------------------------------
+
+
+def _echo_registry() -> dict[str, tools.ToolDefinition]:
+    """One tool that reports what it was asked."""
+
+    def echo(text: str) -> ToolResult:
+        return success(echoed=text)
+
+    return {
+        "echo": tools.ToolDefinition(
+            name="echo",
+            description="Echo the text back.",
+            parameters={
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"],
+            },
+            handler=echo,
+        )
+    }
+
+
+async def test_a_passed_registry_is_what_the_model_is_offered_and_dispatched_to() -> None:
+    transport, sent = _scripted(
+        _reply(tool_calls=[_tool_call("echo", {"text": "hello"})]),
+        _reply(content="Done."),
+    )
+
+    result = await tools.run_tool_loop(
+        _ENDPOINT, None, "local-model", _MESSAGES, registry=_echo_registry(), transport=transport
+    )
+
+    assert result.stopped == tools.COMPLETED
+    assert [tool["function"]["name"] for tool in sent[0]["tools"]] == ["echo"]
+    assert result.calls[0].ok is True
+    assert result.calls[0].result == {"ok": True, "echoed": "hello"}
+
+
+async def test_a_passed_registry_is_the_whole_allowlist() -> None:
+    # cas_evaluate exists in the default registry, but this loop was not given it.
+    transport, _ = _scripted(
+        _reply(tool_calls=[_tool_call("cas_evaluate", {"expression": "2 + 2"})]),
+        _reply(content="Done."),
+    )
+
+    result = await tools.run_tool_loop(
+        _ENDPOINT, None, "local-model", _MESSAGES, registry=_echo_registry(), transport=transport
+    )
+
+    assert result.calls[0].ok is False
+    assert "no tool called" in str(result.calls[0].result["error"])
+
+
+async def test_on_call_narrates_each_call_in_order() -> None:
+    transport, _ = _scripted(
+        _reply(
+            tool_calls=[
+                _tool_call("echo", {"text": "one"}, call_id="call_1"),
+                _tool_call("echo", {"text": "two"}, call_id="call_2"),
+            ]
+        ),
+        _reply(content="Done."),
+    )
+    narrated: list[tools.RecordedCall] = []
+
+    result = await tools.run_tool_loop(
+        _ENDPOINT,
+        None,
+        "local-model",
+        _MESSAGES,
+        registry=_echo_registry(),
+        on_call=narrated.append,
+        transport=transport,
+    )
+
+    assert result.stopped == tools.COMPLETED
+    assert [call.arguments["text"] for call in narrated] == ["one", "two"]
+    assert narrated == list(result.calls)
+
+
+async def test_a_raising_on_call_is_ignored_and_the_pass_completes() -> None:
+    transport, _ = _scripted(
+        _reply(tool_calls=[_tool_call("echo", {"text": "one"})]),
+        _reply(content="Done."),
+    )
+
+    def broken(_: tools.RecordedCall) -> None:
+        raise RuntimeError("narration bug")
+
+    result = await tools.run_tool_loop(
+        _ENDPOINT,
+        None,
+        "local-model",
+        _MESSAGES,
+        registry=_echo_registry(),
+        on_call=broken,
+        transport=transport,
+    )
+
+    assert result.stopped == tools.COMPLETED
+    assert result.content == "Done."
+    assert result.calls[0].ok is True

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Check, Copy, RefreshCw } from 'lucide-react'
+import { Check, Copy, RefreshCw, X } from 'lucide-react'
 
 import { LyraAvatar } from '@/components/chat/lyra-mark'
 import { ReasoningTrace } from '@/components/chat/reasoning-trace'
@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatCount, formatRelativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import type { WriterActivity } from '@/types'
 
 export type ChatMessage = {
   id: number
@@ -24,6 +25,8 @@ export type ChatMessage = {
   thinking_ms: number
   retrieval_trimmed: boolean
   omitted_document_count: number
+  /** What a writer turn did on the way to this reply. Empty for tutor messages. */
+  tool_activity: WriterActivity[]
   created_at: string
 }
 
@@ -34,6 +37,12 @@ type MessageRowProps = {
   /** True when a visible gap in time separates this message from the previous one. */
   startsTimeGap?: boolean
   streaming?: boolean
+  /**
+   * The live activity trail while a writer turn streams; a settled message carries its
+   * own in `tool_activity`. Passed separately because the streaming row is a
+   * placeholder the pane fills in from frames as they arrive.
+   */
+  activity?: WriterActivity[]
   /** The stage label to show before any text has arrived. */
   processingStage?: ProcessingStage | null
   /** When the turn started, so the wait can report how long it has run. */
@@ -54,6 +63,7 @@ export function MessageRow({
   className,
   startsTimeGap,
   streaming,
+  activity,
   processingStage,
   turnStartedAt,
   thinkingDurationMs,
@@ -84,7 +94,9 @@ export function MessageRow({
   // Thinking is only "in progress" while nothing has been answered yet: the first word of
   // the reply is what ends it, whichever channel the model is still writing on.
   const thinkingNow = Boolean(streaming) && !hasAnswer && message.thinking.trim().length > 0
-  const waiting = Boolean(streaming) && !hasAnswer && !thinkingNow
+  const trail = activity ?? message.tool_activity
+  const working = Boolean(streaming) && !hasAnswer && trail.length > 0
+  const waiting = Boolean(streaming) && !hasAnswer && !thinkingNow && !working
 
   return (
     <div className={cn('group flex w-full gap-3', className)}>
@@ -98,6 +110,8 @@ export function MessageRow({
             durationMs={thinkingDurationMs ?? (message.thinking_ms || null)}
           />
         ) : null}
+
+        {trail.length > 0 ? <ActivityTrail entries={trail} working={working} /> : null}
 
         {waiting ? (
           <ThinkingIndicator
@@ -128,6 +142,44 @@ export function MessageRow({
           />
         )}
       </div>
+    </div>
+  )
+}
+
+/**
+ * What a writer turn did on its way to the answer, one quiet line per tool call, in the
+ * accent rail that marks Lyra's own work elsewhere. While the turn is running the last
+ * line carries the pulse; settled, the trail reads as the reply's provenance. A failed
+ * call stays in the trail - the model was told and moved on, and hiding it would make
+ * the record a story.
+ */
+function ActivityTrail({ entries, working }: { entries: WriterActivity[]; working?: boolean }) {
+  return (
+    <div
+      className="border-accent-primary/40 mb-2 flex flex-col gap-1 border-l-2 py-0.5 pl-3"
+      aria-label="What Lyra did for this reply"
+    >
+      {entries.map((entry, index) => {
+        const active = Boolean(working) && index === entries.length - 1
+        return (
+          <div
+            key={`${index}-${entry.tool}`}
+            className={cn(
+              'flex items-center gap-1.5 text-xs',
+              active ? 'text-text-secondary' : 'text-text-tertiary',
+            )}
+          >
+            {active ? (
+              <span className="bg-accent-primary size-1.5 shrink-0 animate-pulse rounded-full" />
+            ) : entry.ok ? (
+              <Check className="text-accent-primary/70 size-3 shrink-0" />
+            ) : (
+              <X className="text-destructive/70 size-3 shrink-0" />
+            )}
+            <span className="min-w-0 truncate">{entry.label}</span>
+          </div>
+        )
+      })}
     </div>
   )
 }

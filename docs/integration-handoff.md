@@ -1,5 +1,10 @@
 # Integration Handoff: Study Tools, Hybrid Retrieval, and the Draft Workspace
 
+**Status: all three workstreams landed on `main` on 6 August 2026.** This document is retained as
+the decision and implementation record. Its imperative language describes the work as it was handed
+off; it is not an outstanding task list. Later writer work extends the completed draft workspace and
+is tracked separately.
+
 This document specifies three workstreams that port the best ideas from two external projects
 into Lyra. It is written to be handed to an implementation agent and executed without further
 design decisions. Where a decision could have gone two ways, it has been made here, and the
@@ -791,8 +796,8 @@ From **NitroAI** — ideas only, never code (AGPL):
   workspace, feedback through Guide-mode chat.
 - A `SOLUTIONS_RRF_BONUS` follow-up sweep if the first measurement is ambiguous.
 
-## 6. Suite health
+## 6. Suite health at handoff
 
-Before starting: 794 backend / ~360 frontend tests pass. Each workstream lands with its
+Before starting, 794 backend / ~360 frontend tests passed. Each workstream landed with its
 suites green and its new tests in place. Nothing in this document may be closed with a
 failing or skipped test, and no test may call a live model.

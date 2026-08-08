@@ -309,7 +309,13 @@ def create_solution(class_id: int, payload: SolutionCreate, conn: DbConn) -> dic
 def list_solutions(class_id: int, conn: DbConn) -> list[dict[str, object]]:
     # An unknown class is a 404 rather than an empty list, so a stale link is obvious.
     get_class(conn, class_id)
-    return [_with_sources(conn, artifact) for artifact in artifacts.list_artifacts(conn, class_id)]
+    # Filtered by kind, because `artifacts` is one table for four things. Without it this
+    # route answered with the class's drafts, decks and quizzes as well, and each arrived
+    # as a solution set with no problems in it.
+    return [
+        _with_sources(conn, artifact)
+        for artifact in artifacts.list_artifacts(conn, class_id, artifacts.KIND_SOLUTION_SET)
+    ]
 
 
 @router.get("/solutions/{artifact_id}", response_model=SolutionDetail)

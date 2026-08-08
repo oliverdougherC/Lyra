@@ -486,10 +486,10 @@ computed 4/3, the solution says 3/4.` Never `Your solution is wrong`, and never 
 
 In addition to every item in ui-phase-1.md's definition of done:
 
-- [ ] All five artifact phases implemented as designed screens, including `awaiting_review`
-- [ ] No progress indicator advances on anything but polled backend state
-- [ ] Every verdict is distinguishable without color, and no non-verdict renders as a pass
-- [ ] Both panes are keyboard-navigable and anchoring works in both directions from the keyboard
-- [ ] The print stylesheet drops no verdict, refutation, or provenance
-- [ ] A solve survives closing the tab, and the route recovers its state from the poll
-- [ ] Correct at 1280, 768, and 375, with the panes becoming line tabs below 1024
+- [x] All five artifact phases implemented as designed screens, including `awaiting_review`
+- [x] No progress indicator advances on anything but polled backend state
+- [x] Every verdict is distinguishable without color, and no non-verdict renders as a pass
+- [x] Both panes are keyboard-navigable and anchoring works in both directions from the keyboard
+- [x] The print stylesheet drops no verdict, refutation, or provenance
+- [x] A solve survives closing the tab, and the route recovers its state from the poll
+- [x] Correct at 1280, 768, and 375, with the panes becoming line tabs below 1024

@@ -1,68 +1,55 @@
-"""Draft suggestion runs: whole-document AI revisions, proposed for review.
+"""The draft workspace's background worker: one queue, one thread, jobs by type.
 
 The same background shape as ingestion, solving, and study: an in-memory queue, one
-worker thread, state on the artifact row. A suggestion run reads the draft body, grounds
-the instruction in the class's material, asks for the complete revised document, and
-lands it as a pending edit (`core/suggestions.py`) - never directly into the document.
-The student reviews the diff hunk by hunk.
+worker thread, state on the artifact row. What runs here is registered by type - the
+draft pass in `core/writer_pipeline.py` is the resident - and everything registered
+shares the one thread on purpose: the tutor endpoint serves one request at a time, and
+two workers would be two callers.
 
-A failed or interrupted run costs the suggestion, not the draft: the artifact goes back
-to `ready` either way, because the document the student wrote was never touched.
+The original resident was the one-shot whole-document suggestion, replaced by the
+pipeline's section-scoped passes once documents outgrew one prompt. What survives it
+here is the shape it proved: a failed or interrupted run costs the run, never the
+draft, because background work lands either as revisions or as a pending edit and the
+document the student wrote is not touched by anything else.
 """
 
-import asyncio
 import logging
 import queue
 import sqlite3
 import threading
-from dataclasses import dataclass
+from collections.abc import Callable
 
-from backend.core import artifacts, suggestions
-from backend.core.app_settings import (
-    NO_ENDPOINT,
-    REMOTE_UNACKNOWLEDGED,
-    document_text_allowed,
-    resolve_tutor_config,
-)
-from backend.core.errors import LyraError, NotFoundError
-from backend.core.profiles import select_active_facts
-from backend.llm import client, prompts
-from backend.rag.retrieve import retrieve
-from backend.storage.database import connect
+from backend.core import artifacts, writer_runs
 
 logger = logging.getLogger(__name__)
 
-# Retrieval budget for grounding a revision, in estimated tokens. A revision instruction
-# is a question about the draft, and the course material answers it.
-SUGGEST_RETRIEVAL_BUDGET = 2_500
+# "Steps" rather than a job-specific noun, because the artifact row is all this module
+# sees and two residents count differently: a draft pass counts sections, a review
+# counts lenses. What both promise is the same - the work that finished is kept.
+INTERRUPTED_DETAIL = "The pass was interrupted by a restart. The draft is unchanged."
+_INTERRUPTED_PARTIAL_DETAIL = (
+    "The pass was interrupted by a restart; {done} of {total} steps finished."
+)
 
-BLOCKED_MESSAGES = {
-    NO_ENDPOINT: "No tutor endpoint is configured. Add one in Settings, then suggest.",
-    REMOTE_UNACKNOWLEDGED: (
-        "Your tutor endpoint is not on this machine, and a suggestion has to send it "
-        "your draft. Allow that in Settings, then suggest."
-    ),
-}
-
-NO_CHANGES_DETAIL = "no changes suggested"
-INTERRUPTED_DETAIL = "The suggestion was interrupted by a restart. The draft is unchanged."
-
-
-@dataclass(frozen=True)
-class _Job:
-    """What a queued suggestion needs. Ids and the instruction only."""
-
-    artifact_id: int
-    instruction: str
-
-
-_queue: queue.Queue[_Job] = queue.Queue()
+_queue: queue.Queue[object] = queue.Queue()
 _worker_lock = threading.Lock()
 _worker_started = False
 
+# Job type -> runner. Populated at import time by the modules whose jobs run here;
+# dispatch is by exact type, and an unregistered job is a bug worth a loud log, not a
+# dead worker.
+_RUNNERS: dict[type, Callable[[object], None]] = {}
 
-def enqueue(job: _Job) -> None:
-    """Queue a suggestion run for a draft."""
+
+def register_runner(job_type: type, runner: Callable[[object], None]) -> None:
+    """Declare who runs jobs of one type. Called at import time by the job's module."""
+    _RUNNERS[job_type] = runner
+
+
+def enqueue(job: object) -> None:
+    """Queue one background job for the draft workspace's worker."""
+    if type(job) not in _RUNNERS:
+        raise ValueError(f"No runner is registered for {type(job).__name__}.")
     _queue.put(job)
 
 
@@ -81,93 +68,93 @@ def _drain_queue() -> None:
     while True:
         job = _queue.get()
         try:
-            run_suggestion(job)
+            runner = _RUNNERS.get(type(job))
+            if runner is None:
+                # enqueue() refuses these, so reaching here means a registration was
+                # torn down mid-flight. The job is dropped; the worker survives.
+                logger.error("No runner for queued job %r", job)
+            else:
+                runner(job)
         except Exception:
-            logger.exception("Suggestion run failed for draft %s", job.artifact_id)
+            logger.exception("Draft worker job failed: %r", job)
         finally:
             _queue.task_done()
 
 
-def reconcile_interrupted(conn: sqlite3.Connection) -> int:
-    """Return drafts caught mid-suggestion to `ready`. Returns how many.
+class UpstreamTolerance:
+    """One failure is weather; two in a row is the endpoint being down.
 
-    The draft itself is intact - a suggestion run never writes the document - so this is
-    not a failure: only the run died, and `stage_detail` says so.
+    The student's llama-server flakes under long runs - the first live review died to a
+    one-off 500 nine minutes in, taking two whole lenses with it. A run that aborts on
+    the first failure loses everything after it for no reason; a run that never aborts
+    burns every remaining call to settle a partial result as if it were whole. Both
+    background residents make many calls in a row, so both need this same middle.
+
+    Not thread-safe, and does not need to be: one worker thread runs everything here.
     """
-    cursor = conn.execute(
-        "update artifacts set state = ?, stage_detail = ?, updated_at = datetime('now') "
-        "where state = ? and kind = ?",
-        (artifacts.READY, INTERRUPTED_DETAIL, artifacts.GENERATING, artifacts.KIND_DRAFT),
-    )
-    conn.commit()
-    return cursor.rowcount
+
+    def __init__(self, limit: int = 2) -> None:
+        self._limit = limit
+        self._consecutive = 0
+
+    def failed(self) -> bool:
+        """Record a failure. True when the run should give up."""
+        self._consecutive += 1
+        return self._consecutive >= self._limit
+
+    def succeeded(self) -> None:
+        """Record anything that was not a failure, which resets the streak."""
+        self._consecutive = 0
 
 
-def run_suggestion(job: _Job) -> None:
-    """Run one suggestion. The worker calls this; tests call it directly."""
-    conn = connect()
-    try:
-        _suggest(conn, job)
-    except NotFoundError:
-        # Deleted between enqueue and run: the de-facto cancel, as in ingestion.
-        logger.info("Draft %s vanished before its suggestion ran", job.artifact_id)
-    except Exception as exc:
-        conn.rollback()
-        _settle_failed(conn, job.artifact_id, exc)
-    finally:
-        conn.close()
+def reconcile_interrupted(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Requeue durable runs and return legacy drafts caught mid-run to `ready`.
 
+    Persisted runs survive a restart as queued jobs rebuilt from `writer_runs`. Drafts
+    without a durable run row are legacy interrupted work and fall back to the older
+    honest contract: the draft is intact, only the run died, and `stage_detail` says so.
 
-def _settle_failed(conn: sqlite3.Connection, artifact_id: int, exc: Exception) -> None:
-    """Back to ready with the reason: the run failed, the draft is intact."""
-    row = conn.execute("select id from artifacts where id = ?", (artifact_id,)).fetchone()
-    if row is None:
-        return
-    message = exc.message if isinstance(exc, LyraError) else str(exc)
-    artifacts.set_artifact_state(conn, artifact_id, artifacts.READY)
-    conn.execute("update artifacts set error_message = ? where id = ?", (message, artifact_id))
-    conn.commit()
-
-
-def _suggest(conn: sqlite3.Connection, job: _Job) -> None:
-    """Read the draft, ground the instruction, and propose the revised document."""
-    artifact = artifacts.get_artifact(conn, job.artifact_id)
-    class_id = int(artifact["class_id"])
-    part = _body_part(conn, job.artifact_id)
-    blocked = document_text_allowed(conn)
-    if blocked is not None:
-        raise LyraError(BLOCKED_MESSAGES.get(blocked, BLOCKED_MESSAGES[NO_ENDPOINT]))
-    config = resolve_tutor_config(conn)
-
-    artifacts.set_artifact_state(conn, job.artifact_id, artifacts.GENERATING, "Revising the draft")
-    result = retrieve(conn, class_id, job.instruction, SUGGEST_RETRIEVAL_BUDGET)
-    context_block = prompts.format_context_block([vars(chunk) for chunk in result.chunks])
-    facts_block = prompts.format_facts_block(select_active_facts(conn, class_id))
-    reply = asyncio.run(
-        client.complete(
-            config.endpoint_url,
-            config.api_key,
-            config.model,
-            prompts.build_suggest_prompt(
-                str(part["content"]), job.instruction, context_block, facts_block
-            ),
-            request_timeout=client.BACKGROUND_TIMEOUT,
+    `pending` counts as caught: the queue is in memory, and jobs are marked pending in
+    the request that queues them, so a restart between the queueing and the worker taking
+    the job leaves an artifact waiting on a job that no longer exists. Development reloads
+    this file often enough that the difference is not theoretical.
+    """
+    requeued = 0
+    active_run_artifacts: set[int] = set()
+    for run in writer_runs.recoverable_runs(conn):
+        active_run_artifacts.add(int(run["artifact_id"]))
+        message = (
+            "This run resumed after a restart from the last completed boundary."
+            if run["status"] != writer_runs.QUEUED
+            else "This queued run resumed after a restart."
         )
-    )
+        requeued_run = writer_runs.queue_for_restart(conn, int(run["id"]), message)
+        enqueue(writer_runs.build_job(requeued_run))
+        requeued += 1
 
-    proposed = reply.strip()
-    # Both sides are stripped for the comparison: a reply that differs only in edge
-    # whitespace is "no changes", not a suggestion to review.
-    if not proposed or proposed == str(part["content"]).strip():
-        artifacts.set_artifact_state(conn, job.artifact_id, artifacts.READY, NO_CHANGES_DETAIL)
-        return
-    suggestions.propose(conn, int(part["id"]), proposed, job.instruction)
-    artifacts.set_artifact_state(conn, job.artifact_id, artifacts.READY)
-
-
-def _body_part(conn: sqlite3.Connection, artifact_id: int) -> dict[str, object]:
-    """The draft's one body part."""
-    for part in artifacts.list_parts(conn, artifact_id):
-        if part["kind"] == artifacts.DRAFT_BODY:
-            return part
-    raise NotFoundError("That draft has no body.")
+    rows = conn.execute(
+        "select id, state, problems_total, problems_done from artifacts "
+        "where state in (?, ?) and kind = ?",
+        (artifacts.PENDING, artifacts.GENERATING, artifacts.KIND_DRAFT),
+    ).fetchall()
+    recovered = 0
+    for row in rows:
+        if int(row["id"]) in active_run_artifacts:
+            continue
+        # Only a run that actually started can report progress. A pending one never
+        # cleared its counters, so reading them would report the *previous* pass's
+        # sections as this one's - "5 of 5 steps finished" for a job that never began.
+        total = row["problems_total"] if row["state"] == artifacts.GENERATING else None
+        detail = (
+            _INTERRUPTED_PARTIAL_DETAIL.format(done=int(row["problems_done"]), total=int(total))
+            if total
+            else INTERRUPTED_DETAIL
+        )
+        conn.execute(
+            "update artifacts set state = ?, stage_detail = ?, updated_at = datetime('now') "
+            "where id = ?",
+            (artifacts.READY, detail, int(row["id"])),
+        )
+        recovered += 1
+    conn.commit()
+    return requeued, recovered

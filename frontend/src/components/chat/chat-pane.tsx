@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { ApiError, streamChat, streamRegenerate } from '@/lib/api'
+import { ApiError, api, streamChat, streamRegenerate, streamWriterChat } from '@/lib/api'
 import { formatCount, parseTimestamp } from '@/lib/format'
 import { chatKeys, useCreateSession, useMessages, useSessions } from '@/lib/hooks/use-chat'
 import { useDocuments } from '@/lib/hooks/use-documents'
@@ -24,7 +24,7 @@ import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { cn } from '@/lib/utils'
-import type { ChatEvent, ChatMode } from '@/types'
+import type { ChatEvent, ChatMode, WriterActivity } from '@/types'
 
 const MODES: { value: ChatMode; label: string; hint: string }[] = [
   {
@@ -35,11 +35,32 @@ const MODES: { value: ChatMode; label: string; hint: string }[] = [
   { value: 'show', label: 'Show', hint: 'Lyra explains the full solution directly.' },
 ]
 
+/**
+ * The pane in the draft workspace's rail: same conversation surface, a different
+ * answerer. No Guide/Show - there is one writer - and turns go to the writer endpoint,
+ * which narrates its tool calls as activity frames and reports landed side effects.
+ */
+type WriterVariant = {
+  artifactId: number
+  /** A proposal landed mid-turn; the workspace flips the rail to the suggestion. */
+  onProposed?: (editId: number) => void
+  /** The assistant recorded its guess at the brief; the card above should refetch. */
+  onBrief?: () => void
+  /** The assistant queued a draft pass; the workspace's status poll should notice. */
+  onPass?: () => void
+  /** The assistant queued a review; the status poll and the Comments tab should notice. */
+  onReview?: () => void
+  /** The assistant replied under comment threads; the Comments tab should refetch. */
+  onComments?: () => void
+}
+
 type ChatPaneProps = {
   classId: number
   className?: string
   selectedDocumentId: number | null
   onClearSelectedDocument: () => void
+  /** Present in the draft workspace: this pane speaks to the writer, not the tutor. */
+  writer?: WriterVariant
   /** The conversation to show; `null` falls back to the newest one. */
   sessionId?: number | null
   /**
@@ -107,6 +128,7 @@ export function ChatPane({
   className = 'Class',
   selectedDocumentId,
   onClearSelectedDocument,
+  writer,
   sessionId: sessionIdProp = null,
   draft: isDraft = false,
   anchorPartId = null,
@@ -138,6 +160,7 @@ export function ChatPane({
   const [turnBase, setTurnBase] = useState<ChatMessage[] | null>(null)
   const [streamText, setStreamText] = useState('')
   const [streamThinking, setStreamThinking] = useState('')
+  const [streamActivity, setStreamActivity] = useState<WriterActivity[]>([])
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
   const [thinkingDurationMs, setThinkingDurationMs] = useState<number | null>(null)
   const [processingStage, setProcessingStage] = useState<ProcessingStage | null>(null)
@@ -181,8 +204,18 @@ export function ChatPane({
     () => (sessions && sessions.length > 0 ? [...sessions].sort((a, b) => b.id - a.id)[0] : null),
     [sessions],
   )
-  const activeSessionId = isDraft ? null : (sessionId ?? newestSession?.id ?? null)
-  const activeMode = sessionId === null && !isDraft ? (newestSession?.mode ?? mode) : mode
+  // The writer's conversation is the draft's, never the class's: falling back to the
+  // newest tutor session here would put the tutor's transcript in the writer's rail.
+  const activeSessionId = writer
+    ? sessionId
+    : isDraft
+      ? null
+      : (sessionId ?? newestSession?.id ?? null)
+  const newestMode = newestSession?.mode
+  const activeMode =
+    sessionId === null && !isDraft && !writer && newestMode !== 'writer'
+      ? (newestMode ?? mode)
+      : mode
   const scopedDocument = useMemo(
     () => documents?.find((document) => document.id === selectedDocumentId) ?? null,
     [documents, selectedDocumentId],
@@ -230,16 +263,26 @@ export function ChatPane({
   const ensureSession = useCallback(async (): Promise<number | null> => {
     if (activeSessionId !== null) return activeSessionId
     try {
+      if (writer) {
+        const session = await api.createWriterSession(writer.artifactId)
+        turnSessionRef.current = session.id
+        onSessionIdChange?.(session.id)
+        return session.id
+      }
       const session = await createSession.mutateAsync(anchorPartId)
       turnSessionRef.current = session.id
       onSessionIdChange?.(session.id)
-      setMode(session.mode)
+      if (session.mode !== 'writer') setMode(session.mode)
       return session.id
     } catch {
-      toast.error('Could not start a conversation for this class.')
+      toast.error(
+        writer
+          ? 'Could not start a conversation for this draft.'
+          : 'Could not start a conversation for this class.',
+      )
       return null
     }
-  }, [activeSessionId, anchorPartId, createSession, onSessionIdChange])
+  }, [activeSessionId, anchorPartId, createSession, onSessionIdChange, writer])
 
   useEffect(() => {
     return () => abortRef.current?.abort()
@@ -254,6 +297,7 @@ export function ChatPane({
     setTurnBase(null)
     setStreamText('')
     setStreamThinking('')
+    setStreamActivity([])
     setTurnStartedAt(null)
     setThinkingDurationMs(null)
     streamTextRef.current = ''
@@ -332,6 +376,7 @@ export function ChatPane({
       thinking_ms: 0,
       retrieval_trimmed: false,
       omitted_document_count: 0,
+      tool_activity: [],
       created_at: createdAt,
     }),
     [],
@@ -377,6 +422,7 @@ export function ChatPane({
 
       setStreamText('')
       setStreamThinking('')
+      setStreamActivity([])
       // Fixed for the length of the turn, and taken from the render the student sent from:
       // for a conversation that did not exist a moment ago that is an empty transcript,
       // which is exactly what this turn is being appended to.
@@ -393,6 +439,7 @@ export function ChatPane({
                 thinking_ms: 0,
                 retrieval_trimmed: false,
                 omitted_document_count: 0,
+                tool_activity: [],
                 created_at: now,
               },
               placeholderReply(now),
@@ -432,6 +479,21 @@ export function ChatPane({
                   : message,
               ) ?? null,
           )
+        } else if (event.type === 'activity') {
+          setStreamActivity((current) => [
+            ...current,
+            { tool: event.tool, label: event.label, ok: event.ok },
+          ])
+        } else if (event.type === 'proposed') {
+          writer?.onProposed?.(event.edit_id)
+        } else if (event.type === 'brief') {
+          writer?.onBrief?.()
+        } else if (event.type === 'pass') {
+          writer?.onPass?.()
+        } else if (event.type === 'review') {
+          writer?.onReview?.()
+        } else if (event.type === 'comments') {
+          writer?.onComments?.()
         } else if (event.type === 'done') {
           setOutcome('completed')
           if (assistantText.trim().length === 0) {
@@ -446,19 +508,27 @@ export function ChatPane({
 
       try {
         const documentId = scopedDocument?.id ?? null
-        await (kind === 'regenerate'
-          ? streamRegenerate(
+        await (writer
+          ? streamWriterChat(
+              writer.artifactId,
               turnSessionId,
-              { mode: activeMode, document_id: documentId },
+              { content },
               onEvent,
               controller.signal,
             )
-          : streamChat(
-              turnSessionId,
-              { content, mode: activeMode, document_id: documentId },
-              onEvent,
-              controller.signal,
-            ))
+          : kind === 'regenerate'
+            ? streamRegenerate(
+                turnSessionId,
+                { mode: activeMode, document_id: documentId },
+                onEvent,
+                controller.signal,
+              )
+            : streamChat(
+                turnSessionId,
+                { content, mode: activeMode, document_id: documentId },
+                onEvent,
+                controller.signal,
+              ))
       } catch (caught) {
         if (!owns()) {
           // Nothing to report and nobody to report it to: this turn's rows are gone.
@@ -498,6 +568,7 @@ export function ChatPane({
       queryClient,
       scopedDocument,
       setOutcome,
+      writer,
     ],
   )
 
@@ -527,9 +598,11 @@ export function ChatPane({
    */
   const regenerate = useCallback(() => {
     // Reachable only from an answer that is already on screen, so the conversation exists.
-    if (activeSessionId === null) return
+    // Not offered on writer turns: a retried turn could re-run tools whose first effects
+    // (a proposal, a saved brief) are already rows, and "again" would mean "on top of".
+    if (activeSessionId === null || writer) return
     void runTurn('regenerate', '', activeSessionId)
-  }, [activeSessionId, runTurn])
+  }, [activeSessionId, runTurn, writer])
 
   const stop = useCallback(() => {
     if (!abortRef.current) return
@@ -704,7 +777,8 @@ export function ChatPane({
   // A segmented control rather than underlined tabs. These do not navigate anywhere — they
   // change how the next answer is written — and in the header bar there is no pane rule for
   // an underline to sit on, so the honest idiom is a switch with a travelling thumb.
-  const modeToggle = (
+  // The writer has no modes: there is one assistant, so there is nothing to toggle.
+  const modeToggle = writer ? null : (
     <div
       className="border-border/70 bg-muted/70 flex items-center rounded-full border p-0.5"
       role="group"
@@ -751,7 +825,9 @@ export function ChatPane({
       ref={contentRef}
       className={cn(inline ? 'space-y-5' : 'mx-auto max-w-[860px] p-4 md:px-6')}
     >
-      {sessionsPending || messagesPending ? (
+      {/* The writer never falls back to the class's newest session, so its empty state
+          must not wait on the class session list either. */}
+      {(writer ? false : sessionsPending) || messagesPending ? (
         <div className="space-y-4" aria-busy="true" aria-label="Loading conversation">
           <Skeleton className="ml-auto h-12 w-2/3" />
           <Skeleton className="h-24 w-full" />
@@ -779,6 +855,7 @@ export function ChatPane({
               className={cn(!inline && index > 0 && (message.role === 'user' ? 'mt-11' : 'mt-5'))}
               startsTimeGap={startsTimeGap(rendered, index)}
               streaming={isStreamingReply}
+              activity={isStreamingReply ? streamActivity : undefined}
               processingStage={isStreamingReply ? processingStage : null}
               turnStartedAt={isStreamingReply ? turnStartedAt : null}
               thinkingDurationMs={isStreamingReply ? thinkingDurationMs : null}
@@ -788,7 +865,7 @@ export function ChatPane({
                   : undefined
               }
               onRevealComplete={isStreamingReply ? handleRevealComplete : undefined}
-              canRetry={!optimisticTurn && index === lastAssistantIndex}
+              canRetry={!optimisticTurn && index === lastAssistantIndex && !writer}
               onRetry={regenerate}
             />
           )
@@ -814,15 +891,18 @@ export function ChatPane({
 
   if (inline) {
     // No scroll container of its own and no header rule: this is a passage of the page it
-    // was opened inside, not a panel sitting on top of one.
+    // was opened inside, not a panel sitting on top of one. The writer variant usually
+    // has neither a toggle nor actions, and an empty control row would be a blank gap.
     return (
       <div className="flex flex-col gap-4">
-        <div className="flex items-center gap-2">
-          {modeToggle}
-          {headerActions ? (
-            <div className="ml-auto flex shrink-0 items-center gap-1">{headerActions}</div>
-          ) : null}
-        </div>
+        {modeToggle || headerActions ? (
+          <div className="flex items-center gap-2">
+            {modeToggle}
+            {headerActions ? (
+              <div className="ml-auto flex shrink-0 items-center gap-1">{headerActions}</div>
+            ) : null}
+          </div>
+        ) : null}
         {conversation}
         {composer}
       </div>

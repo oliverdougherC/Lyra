@@ -529,12 +529,12 @@ find, reload, or zoom.
 
 A screen is complete when all of the following hold:
 
-- [ ] All four data states implemented, each visually designed
-- [ ] Skeletons match final layout dimensions, so nothing shifts on load
-- [ ] Correct in light and dark, verified against the design-system contrast contracts
-- [ ] Fully keyboard operable, with visible `:focus-visible` rings throughout
-- [ ] Correct at all three breakpoints
-- [ ] `prefers-reduced-motion` respected in CSS and the Motion `Reveal` contract
-- [ ] Zero hardcoded colors; every value resolves to a token
-- [ ] Every icon-only control has an `aria-label`
-- [ ] No `console` noise, no layout shift after hydration
+- [x] All four data states implemented, each visually designed
+- [x] Skeletons match final layout dimensions, so nothing shifts on load
+- [x] Correct in light and dark, verified against the design-system contrast contracts
+- [x] Fully keyboard operable, with visible `:focus-visible` rings throughout
+- [x] Correct at all three breakpoints
+- [x] `prefers-reduced-motion` respected in CSS and the Motion `Reveal` contract
+- [x] Zero hardcoded colors; every value resolves to a token
+- [x] Every icon-only control has an `aria-label`
+- [x] No `console` noise, no layout shift after hydration

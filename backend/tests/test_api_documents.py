@@ -310,6 +310,24 @@ def test_an_image_upload_is_accepted(
     assert no_worker == [response.json()["id"]]
 
 
+def test_a_folder_upload_is_named_after_the_file_rather_than_the_folder(
+    client: TestClient, class_id: int, no_worker: list[int]
+) -> None:
+    """A folder upload sends each file's path relative to the folder as its name.
+
+    Kept whole, that made every row in the list read as the folder it came from, all of
+    them truncated to the same few characters. The class is the folder here.
+    """
+    response = client.post(
+        f"/api/classes/{class_id}/documents",
+        files={"file": ("course_files/week 3/CE203_Lab3.pdf", b"%PDF-1.4", "application/pdf")},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["filename"] == "CE203_Lab3.pdf"
+    assert no_worker == [response.json()["id"]]
+
+
 def test_a_webp_upload_is_refused_naming_the_types_that_work(
     client: TestClient, class_id: int
 ) -> None:

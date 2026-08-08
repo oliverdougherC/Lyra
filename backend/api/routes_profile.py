@@ -25,9 +25,16 @@ DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
 FactKind = Literal["deadline", "topic", "grading", "professor", "prerequisite", "note"]
 Confidence = Literal["high", "low"]
 
-# Keep in step with `profiles.KNOWN_SKIP_REASONS`, which is what fills this field.
+# Keep in step with `profiles.KNOWN_SKIP_REASONS`, which is what fills this field. Drifting
+# apart does not degrade gracefully: the reason reaches here and Pydantic answers the whole
+# profile with a 500, so the class with something to explain is the one that cannot load.
 ExtractionSkipReason = Literal[
-    "extraction_disabled", "no_endpoint", "remote_unacknowledged", "unparseable_response"
+    "extraction_disabled",
+    "no_endpoint",
+    "remote_unacknowledged",
+    "unparseable_response",
+    "endpoint_failed",
+    "extraction_failed",
 ]
 
 
@@ -51,6 +58,10 @@ class FactRead(BaseModel):
     source_document_id: int | None
     source_filename: str | None
     sources: list[str]
+    source_writer_id: int | None
+    source_excerpt_id: int | None
+    source_title: str | None
+    source_url: str | None
     created_at: str
 
 

@@ -25,7 +25,12 @@ export type ApiKeyStorage = 'keychain' | 'file'
 
 /** Reason the `extracting` stage did not run. Rendered as an explanation, never as an error. */
 export type ExtractionSkipReason =
-  'extraction_disabled' | 'no_endpoint' | 'remote_unacknowledged' | 'unparseable_response'
+  | 'extraction_disabled'
+  | 'no_endpoint'
+  | 'remote_unacknowledged'
+  | 'unparseable_response'
+  | 'endpoint_failed'
+  | 'extraction_failed'
 
 export interface ClassRead {
   id: number
@@ -79,14 +84,27 @@ export interface DocumentStatus {
   error_message: string | null
 }
 
+/**
+ * What a session can be, which is one more thing than a tutor turn can request: writer
+ * sessions belong to a draft's rail and never take Guide/Show turns.
+ */
+export type SessionMode = ChatMode | 'writer'
+
 export interface SessionRead {
   id: number
   class_id: number
   title: string | null
-  mode: ChatMode
+  mode: SessionMode
   /** The step of a solution this conversation is anchored to, pinned into every turn. */
   artifact_part_id: number | null
   created_at: string
+}
+
+/** One tool call a writer turn made, in words: shown live and stored with the reply. */
+export interface WriterActivity {
+  tool: string
+  label: string
+  ok: boolean
 }
 
 export interface MessageRead {
@@ -100,6 +118,8 @@ export interface MessageRead {
   thinking_ms: number
   retrieval_trimmed: boolean
   omitted_document_count: number
+  /** What a writer turn did on the way to this reply. Empty for tutor messages. */
+  tool_activity: WriterActivity[]
   created_at: string
 }
 
@@ -118,6 +138,10 @@ export interface FactRead {
   source_filename: string | null
   /** Every document that states this fact. Its length is how well evidenced the fact is. */
   sources: string[]
+  source_writer_id: number | null
+  source_excerpt_id: number | null
+  source_title: string | null
+  source_url: string | null
   created_at: string
 }
 
@@ -149,6 +173,15 @@ export interface SettingsRead {
   /** Same three states, for whether the endpoint can read an image. */
   vision_supported: boolean | null
   vision_message: string | null
+  /** Whether the writer may search and snapshot public web sources. */
+  allow_web_research: boolean
+  /** Whether independent writer stages may issue bounded concurrent requests. */
+  parallel_requests: boolean
+  parallel_concurrency: number
+  /** Loopback-only Firecrawl service used for public web search and snapshots. */
+  firecrawl_base_url: string
+  /** Enabled only after the installed Firecrawl build passes the redirect safety gate. */
+  firecrawl_scrape_enabled: boolean
 }
 
 export interface SettingsUpdate {
@@ -157,9 +190,33 @@ export interface SettingsUpdate {
   context_window?: number
   extraction_enabled?: boolean
   remote_ack?: boolean
+  allow_web_research?: boolean
+  parallel_requests?: boolean
+  parallel_concurrency?: number
+  firecrawl_base_url?: string
+  firecrawl_scrape_enabled?: boolean
   /** Sent once and never read back. An empty string deletes the stored key. */
   api_key?: string
 }
+
+export interface WriterCapabilities {
+  allow_web_research: boolean
+  parallel_requests: boolean
+  parallel_concurrency: number
+}
+
+export interface WriterCapabilityOverrides {
+  allow_web_research: boolean | null
+  parallel_requests: boolean | null
+  parallel_concurrency: number | null
+}
+
+export interface ClassWriterSettingsRead {
+  overrides: WriterCapabilityOverrides
+  effective: WriterCapabilities
+}
+
+export type ClassWriterSettingsUpdate = Partial<WriterCapabilityOverrides>
 
 export interface ConnectionTestResult {
   ok: boolean
@@ -167,10 +224,131 @@ export interface ConnectionTestResult {
   message: string
 }
 
+export interface FirecrawlTestResult {
+  ok: boolean
+  status: 'available' | 'temporarily_unavailable' | 'misconfigured'
+  message: string
+}
+
+export interface AgentWorkspaceRead {
+  id: number
+  class_id: number
+  root_path: string
+  display_name: string
+  read_enabled: boolean
+  change_proposals_enabled: boolean
+  commands_enabled: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface AgentWorkspaceGrantsUpdate {
+  read_enabled?: boolean
+  change_proposals_enabled?: boolean
+  commands_enabled?: boolean
+}
+
+export interface AgentAuditEventRead {
+  id: string
+  tool: string
+  capability: string
+  effect: string
+  state: string
+  target_kind: string | null
+  target_id: string | null
+  error_message: string | null
+  started_at: string
+  finished_at: string | null
+  result_summary: Record<string, unknown> | null
+}
+
+export interface AgentWorkspaceHunkRead {
+  index: number
+  hash: string
+  lines: string[]
+  decision?: 'accepted' | 'rejected'
+}
+
+export interface AgentWorkspaceChangeRead {
+  id: number
+  workspace_id: number
+  session_id: number
+  path: string
+  rationale: string | null
+  state: 'pending' | 'partially_applied' | 'applied' | 'rejected' | 'stale' | 'failed'
+  current_hash: string
+  current_content: string | null
+  proposed_content: string | null
+  hunks: AgentWorkspaceHunkRead[]
+  created_at: string
+  updated_at: string
+  wrote?: boolean
+}
+
+export interface AgentCommandRequestRead {
+  id: number
+  workspace_id: number
+  session_id: number
+  argv: string[]
+  relative_cwd: string
+  reason: string
+  expected_signal: string | null
+  timeout_seconds: number
+  state: 'pending' | 'running' | 'completed' | 'failed' | 'timed_out' | 'rejected' | 'abandoned'
+  confirmed_at: string | null
+  exit_code: number | null
+  stdout_text: string | null
+  stderr_text: string | null
+  truncated: boolean
+}
+
+export interface AgentConfirmationRead {
+  token: string
+  expires_at: string
+}
+
+export type AgentProfile = 'research' | 'code' | 'command'
+
+export interface AgentChatActivity {
+  audit_id: string
+  tool: string
+  capability: string
+  effect: string
+  state: string
+  target_kind: string | null
+  target_id: string | null
+}
+
+export interface AgentChatResult {
+  message_id: number
+  content: string
+  stopped: string
+  detail: string
+  activity: AgentChatActivity[]
+  source_ids: number[]
+  workspace_change_ids: number[]
+  command_request_ids: number[]
+  profile_fact_ids: number[]
+}
+
+export interface AgentChatFailure {
+  detail: string
+  retryable: boolean
+  stopped: string
+  activity: AgentChatActivity[]
+  source_ids: number[]
+  workspace_change_ids: number[]
+  command_request_ids: number[]
+  profile_fact_ids: number[]
+}
+
 /**
- * The seven SSE frame shapes emitted by `POST /api/sessions/{id}/chat` and
- * `/regenerate`. `reasoning` carries a thinking model's deliberation and never overlaps
- * with `token`, which carries the answer.
+ * The SSE frame shapes emitted by `POST /api/sessions/{id}/chat`, `/regenerate`, and
+ * the writer's `POST /api/drafts/{id}/chat/{session_id}`. `reasoning` carries a
+ * thinking model's deliberation and never overlaps with `token`, which carries the
+ * answer. The last three are the writer's alone: its turn narrates each tool call as
+ * an `activity` frame, and reports a landed proposal or saved brief as its own event
+ * so the rail can react without polling.
  */
 export type ChatEvent =
   | { type: 'start'; message_id: number }
@@ -180,6 +358,12 @@ export type ChatEvent =
   | { type: 'token'; text: string }
   | { type: 'done'; message_id: number }
   | { type: 'error'; message: string }
+  | { type: 'activity'; tool: string; label: string; ok: boolean }
+  | { type: 'proposed'; edit_id: number }
+  | { type: 'brief' }
+  | { type: 'pass' }
+  | { type: 'review' }
+  | { type: 'comments' }
 
 export interface ChatRequest {
   content: string
@@ -627,6 +811,32 @@ export interface DraftStatus {
   state: ArtifactState
   stage_detail: string | null
   error_message: string | null
+  /** Steps the run has: sections for a draft pass, lenses for a review. Null until counted. */
+  problems_total: number | null
+  problems_done: number
+  /** Explicit run metadata; older servers may omit it or report `legacy`. */
+  run_id?: number | null
+  job_kind?: 'pass' | 'review' | null
+  depth?: WriterDepth | null
+  started_at?: string | null
+  run_status?:
+    | 'queued'
+    | 'running'
+    | 'cancel_requested'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'legacy'
+    | null
+  cancel_requested?: boolean
+  cancel_requested_at?: string | null
+  finished_at?: string | null
+  warnings?: DraftStatusWarning[]
+}
+
+export interface DraftStatusWarning {
+  code: string
+  message: string
 }
 
 /**
@@ -674,6 +884,151 @@ export interface DraftBodyUpdate {
   content: string
   snapshot?: boolean
   note?: string
+}
+
+/**
+ * What the document is, kept where every writer prompt can reach it. Proposed by the
+ * assistant, confirmed by the student; a proposed brief is usable but flagged as a
+ * guess until confirmed.
+ */
+export interface DraftBrief {
+  artifact_id: number
+  assignment_type: string
+  summary: string
+  audience: string
+  length_target: string
+  /** The handout the brief was discerned from, when it was. Survives its deletion as null. */
+  source_document_id: number | null
+  status: 'proposed' | 'confirmed'
+  created_at: string
+  updated_at: string
+}
+
+/** Body of `PUT /api/drafts/{id}/brief` - the student's own edit, which lands confirmed. */
+export interface BriefWrite {
+  assignment_type?: string
+  summary?: string
+  audience?: string
+  length_target?: string
+  source_document_id?: number | null
+}
+
+/** Body of `POST /api/drafts/{id}/chat/{session_id}`: the writer turn carries no mode. */
+export interface WriterChatRequest {
+  content: string
+}
+
+/**
+ * Body of `POST /api/drafts/{id}/pass`. Everything optional on purpose: empty is the
+ * full draft pass, an instruction is a lens over it, `sections` filters it.
+ */
+export type WriterDepth = 'quick' | 'standard' | 'deep'
+
+export interface PassRequest {
+  instruction?: string | null
+  sections?: string[]
+  depth?: WriterDepth
+  pause_at_plan?: boolean
+  /** Resolve this finding only after the targeted pass lands successfully. */
+  address_comment_id?: number
+}
+
+export interface ReviewRequest {
+  depth?: WriterDepth
+}
+
+export interface DraftPlanSection {
+  id: number
+  section_ref: string
+  ordinal: number
+  title: string
+  job: string
+  claim: string
+  evidence: string[]
+  sources: number[]
+  word_budget: number | null
+  research_notes: string
+}
+
+/** Argument-map entries stay open-ended so the planner can add typed relations over time. */
+export type DraftArgumentMapEntry = Record<string, unknown>
+
+export interface DraftPlan {
+  id: number
+  artifact_id: number
+  version: number
+  status: string
+  brief_analysis: string
+  thesis: string
+  argument_map: DraftArgumentMapEntry[]
+  sections: DraftPlanSection[]
+  created_at: string
+  updated_at: string
+}
+
+export interface DraftPlanUpdate {
+  brief_analysis: string
+  thesis: string
+  argument_map: DraftArgumentMapEntry[]
+  sections: DraftPlanSection[]
+}
+
+export interface SourceExcerpt {
+  id: number
+  section_ref: string | null
+  excerpt: string
+}
+
+export interface DraftSource {
+  id: number
+  class_id: number
+  source_type: 'course' | 'web'
+  document_id: number | null
+  url: string | null
+  title: string
+  accessed_at: string | null
+  excerpts: SourceExcerpt[]
+}
+
+export type CommentSeverity = 'critical' | 'major' | 'minor' | 'note'
+
+export type CommentAuthor = 'reviewer' | 'writer' | 'student'
+
+/** Where a thread's quote sits in the body as the server last resolved it. */
+export interface CommentAnchor {
+  start: number
+  end: number
+  /** False when the match came through the whitespace-normalized fallback. */
+  exact: boolean
+}
+
+/** One reply under a thread root. Replies carry no severity and no anchor. */
+export interface DraftCommentReply {
+  id: number
+  author: CommentAuthor
+  body: string
+  created_at: string
+}
+
+/**
+ * One margin-comment thread, anchored by verbatim quote rather than position: the
+ * server re-resolves the quote on every read, and a passage that is gone leaves the
+ * thread orphaned rather than lost.
+ */
+export interface DraftComment {
+  id: number
+  author: CommentAuthor
+  severity: CommentSeverity | null
+  /** The quoted passage, or null for a whole-document finding. */
+  quote: string | null
+  body: string
+  resolved: 0 | 1
+  orphaned: 0 | 1
+  anchor: CommentAnchor | null
+  /** Stable plan section used by Address to target the right pass. */
+  section_ref?: string | null
+  replies: DraftCommentReply[]
+  created_at: string
 }
 
 /** What accepting or rejecting a pending edit answers: how many hunks are left of it. */

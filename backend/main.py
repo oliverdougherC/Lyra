@@ -14,27 +14,30 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from backend.api import (
+    routes_agent,
+    routes_agent_chat,
     routes_chat,
     routes_classes,
     routes_documents,
     routes_drafts,
+    routes_health,
     routes_profile,
     routes_settings,
     routes_solutions,
     routes_study,
+    routes_writer,
 )
 from backend.config import settings
-from backend.core import drafting, sessions, solver, study
+from backend.core import agent_store, drafting, sessions, solver, study, tool_audit
 from backend.core.errors import LyraError
 from backend.core.ingestion import reconcile_interrupted, start_worker
+from backend.core.origins import ALLOWED_BROWSER_ORIGINS
 from backend.llm.embed_server import embedding_server
 from backend.llm.ocr_server import ocr_server
 from backend.llm.rerank_server import rerank_server
 from backend.storage.database import connect, migrate
 
 logger = logging.getLogger("lyra")
-
-ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
 
 @asynccontextmanager
@@ -58,9 +61,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if interrupted_study:
             logger.warning("Marked %d interrupted study generation(s) as failed", interrupted_study)
         # Drafts caught mid-suggestion go back to ready: the draft was never touched.
-        resumed_drafts = drafting.reconcile_interrupted(conn)
+        requeued_drafts, resumed_drafts = drafting.reconcile_interrupted(conn)
+        if requeued_drafts:
+            logger.info("Requeued %d durable draft run(s) after restart", requeued_drafts)
         if resumed_drafts:
-            logger.info("Returned %d interrupted suggestion run(s) to ready", resumed_drafts)
+            logger.info("Returned %d interrupted legacy suggestion run(s) to ready", resumed_drafts)
+        abandoned_tools = tool_audit.reconcile_inflight(conn)
+        if abandoned_tools:
+            logger.warning("Marked %d interrupted agent tool call(s) as abandoned", abandoned_tools)
+        abandoned_commands = agent_store.reconcile_running_commands(conn)
+        if abandoned_commands:
+            logger.warning(
+                "Marked %d interrupted verification command(s) as abandoned",
+                abandoned_commands,
+            )
         discarded = sessions.discard_empty_sessions(conn)
         if discarded:
             logger.info("Discarded %d conversation(s) that were never used", discarded)
@@ -118,7 +132,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=ALLOWED_ORIGINS,
+        allow_origins=list(ALLOWED_BROWSER_ORIGINS),
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -134,6 +148,7 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=500, content={"detail": "Internal error"})
 
     app.include_router(routes_classes.router)
+    app.include_router(routes_health.router)
     app.include_router(routes_documents.router)
     app.include_router(routes_chat.router)
     app.include_router(routes_profile.router)
@@ -141,6 +156,9 @@ def create_app() -> FastAPI:
     app.include_router(routes_solutions.router)
     app.include_router(routes_study.router)
     app.include_router(routes_drafts.router)
+    app.include_router(routes_writer.router)
+    app.include_router(routes_agent.router)
+    app.include_router(routes_agent_chat.router)
 
     return app
 

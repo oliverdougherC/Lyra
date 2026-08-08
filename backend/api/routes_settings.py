@@ -9,13 +9,20 @@ import sqlite3
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.core.app_settings import (
     get_settings_row,
     resolve_tutor_config,
     update_settings_row,
 )
+from backend.core.firecrawl import (
+    FirecrawlClient,
+    FirecrawlError,
+    FirecrawlMisconfiguredError,
+    FirecrawlTransientError,
+)
+from backend.core.web_policy import LoopbackPolicyError, validate_firecrawl_base_url
 from backend.llm import client
 from backend.llm.locality import hostname_of, is_local_endpoint
 from backend.storage import secrets
@@ -50,6 +57,11 @@ class SettingsRead(BaseModel):
     # would fail one page at a time.
     vision_supported: bool | None
     vision_message: str | None
+    allow_web_research: bool
+    parallel_requests: bool
+    parallel_concurrency: int
+    firecrawl_base_url: str
+    firecrawl_scrape_enabled: bool
 
 
 class SettingsUpdate(BaseModel):
@@ -62,10 +74,25 @@ class SettingsUpdate(BaseModel):
     remote_ack: bool | None = None
     embedding_model: str | None = None
     embedding_dim: int | None = None
+    allow_web_research: bool | None = None
+    parallel_requests: bool | None = None
+    parallel_concurrency: int | None = Field(default=None, ge=1)
+    firecrawl_base_url: str | None = None
+    firecrawl_scrape_enabled: bool | None = None
     api_key: str | None = Field(
         default=None,
         description="Routed to the keychain, never stored in the database. Empty string deletes.",
     )
+
+    @field_validator("firecrawl_base_url")
+    @classmethod
+    def _validate_firecrawl_base_url(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            return validate_firecrawl_base_url(value).normalized_url
+        except (LoopbackPolicyError, ValueError) as exc:
+            raise ValueError(str(exc)) from exc
 
 
 class ConnectionTestResult(BaseModel):
@@ -96,6 +123,14 @@ class ModelList(BaseModel):
     models: list[str]
 
 
+class FirecrawlTestResult(BaseModel):
+    """Outcome of the loopback Firecrawl readiness probe."""
+
+    ok: bool
+    status: Literal["available", "temporarily_unavailable", "misconfigured"]
+    message: str
+
+
 def _normalize_endpoint(value: object) -> str | None:
     """Blank and whitespace-only endpoints mean 'not configured'."""
     if not isinstance(value, str):
@@ -122,6 +157,11 @@ def _settings_response(row: sqlite3.Row) -> SettingsRead:
         tools_message=row["tools_message"],
         vision_supported=None if row["vision_supported"] is None else bool(row["vision_supported"]),
         vision_message=row["vision_message"],
+        allow_web_research=bool(row["allow_web_research"]),
+        parallel_requests=bool(row["parallel_requests"]),
+        parallel_concurrency=int(row["parallel_concurrency"]),
+        firecrawl_base_url=str(row["firecrawl_base_url"]),
+        firecrawl_scrape_enabled=bool(row["firecrawl_scrape_enabled"]),
     )
 
 
@@ -134,6 +174,21 @@ def read_settings(conn: DbConn) -> SettingsRead:
 def write_settings(payload: SettingsUpdate, conn: DbConn) -> SettingsRead:
     current = get_settings_row(conn)
     values = payload.model_dump(exclude_unset=True)
+    for column in (
+        "allow_web_research",
+        "parallel_requests",
+        "parallel_concurrency",
+        "firecrawl_scrape_enabled",
+    ):
+        if values.get(column) is None:
+            values.pop(column, None)
+
+    if "firecrawl_base_url" in values:
+        base_url = values["firecrawl_base_url"]
+        if base_url is None:
+            values.pop("firecrawl_base_url")
+        else:
+            values["firecrawl_base_url"] = validate_firecrawl_base_url(str(base_url)).normalized_url
 
     if "api_key" in values:
         api_key = values.pop("api_key")
@@ -221,3 +276,24 @@ async def test_endpoint_vision(conn: DbConn) -> VisionSupportResult:
 async def read_endpoint_models(conn: DbConn) -> ModelList:
     config = resolve_tutor_config(conn)
     return ModelList(models=await client.list_models(config.endpoint_url, config.api_key))
+
+
+@router.post("/settings/test-firecrawl", response_model=FirecrawlTestResult)
+def test_firecrawl(conn: DbConn) -> FirecrawlTestResult:
+    """Probe only the configured loopback readiness endpoint; never a cloud service."""
+    row = get_settings_row(conn)
+    try:
+        FirecrawlClient(base_url=str(row["firecrawl_base_url"])).check_readiness()
+    except (FirecrawlMisconfiguredError, ValueError):
+        return FirecrawlTestResult(
+            ok=False,
+            status="misconfigured",
+            message="Firecrawl is misconfigured; web research is disabled.",
+        )
+    except (FirecrawlTransientError, FirecrawlError):
+        return FirecrawlTestResult(
+            ok=False,
+            status="temporarily_unavailable",
+            message="Firecrawl is temporarily unavailable; web research is disabled.",
+        )
+    return FirecrawlTestResult(ok=True, status="available", message="Firecrawl is available.")

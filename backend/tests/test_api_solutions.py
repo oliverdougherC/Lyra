@@ -132,6 +132,32 @@ def test_creating_a_solution_set_returns_202_and_queues_it(
     assert no_worker == [body["id"]]
 
 
+def test_the_solutions_list_holds_only_solution_sets(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """One table holds four kinds of artifact, and this route answers for one of them.
+
+    Unfiltered, a class's drafts, decks and quizzes each arrived here as a solution set
+    with no problems in it, which is what writing an essay used to add to this list.
+    """
+    document_id = _document(db, class_id, "hw4.pdf")
+    client.post(
+        f"/api/classes/{class_id}/solutions", json={"sources": [{"document_id": document_id}]}
+    )
+    artifacts.create_artifact(db, class_id, "Essay draft", [], kind=artifacts.KIND_DRAFT)
+    artifacts.create_artifact(
+        db,
+        class_id,
+        "Week 4 cards",
+        [artifacts.SourceSpec(document_id=document_id, role=artifacts.STUDY_SOURCE)],
+        kind=artifacts.KIND_FLASHCARD_DECK,
+    )
+
+    listed = client.get(f"/api/classes/{class_id}/solutions").json()
+
+    assert [artifact["kind"] for artifact in listed] == [artifacts.KIND_SOLUTION_SET]
+
+
 def test_a_reference_solution_source_is_recorded_with_its_role(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:

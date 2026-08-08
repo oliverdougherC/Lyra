@@ -15,7 +15,8 @@ import pymupdf
 import pytest
 
 from backend.config import settings
-from backend.core import ingestion
+from backend.core import ingestion, profiles
+from backend.core.errors import UpstreamError
 from backend.core.ingestion import (
     INTERRUPTED_MESSAGE,
     SCANNED_MESSAGE,
@@ -247,6 +248,29 @@ def test_a_failed_extraction_still_lands_the_document_ready(
     assert row["state"] == "ready"
     assert row["stage_detail"] == "extraction_failed"
     assert _chunk_count(db, document_id) > 0
+
+
+def test_an_extraction_the_endpoint_refused_records_a_reason_with_an_address(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An endpoint that answers with an error is the one extraction failure a student can
+    fix, so it is kept apart from every other way the pass can die: the profile panel turns
+    this reason into a sentence with a link to Settings."""
+
+    def refused(conn: sqlite3.Connection, document_id: int, text: str, doc_type: str) -> str | None:
+        raise UpstreamError("The tutor endpoint returned an error.")
+
+    monkeypatch.setattr(ingestion, "extract_facts", refused)
+    stored = _write_markdown(settings.uploads_dir / "hw3.md", _homework_markdown())
+    document_id = _seed_document(db, class_id, stored, mime=MARKDOWN_MIME)
+
+    run_ingestion(document_id)
+
+    row = _document(db, document_id)
+    assert row["state"] == "ready"
+    assert row["stage_detail"] == profiles.ENDPOINT_FAILED
+    # And it reaches the panel, which renders only the reasons it knows.
+    assert profiles.ENDPOINT_FAILED in profiles.KNOWN_SKIP_REASONS
 
 
 def test_a_skipped_extraction_records_its_reason(

@@ -34,6 +34,7 @@ config.yaml
 dist/
 build/
 out/
+output/playwright/
 coverage/
 *.tsbuildinfo
 
@@ -43,6 +44,8 @@ logs/
 
 # Tooling and agent state
 .omx/
+.lyra/
+.playwright-cli/
 .claude/
 .opencode
 
