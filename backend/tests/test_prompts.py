@@ -10,7 +10,10 @@ from backend.llm import prompts
 from backend.llm.prompts import (
     EXTRACTION_PROFILES,
     MAX_FACTS_PER_KIND,
+    OVERALL_ASSESSMENT_SCHEMA,
+    PARAGRAPH_OUTLINE_SCHEMA,
     PLAN_ARGUMENT_SCHEMA,
+    TRANSITION_REVIEW_SCHEMA,
     build_consolidation_prompt,
     build_extraction_prompt,
     build_section_prompt,
@@ -114,6 +117,67 @@ def test_the_structured_skeptic_reads_the_section_job_and_ledger() -> None:
 def test_argument_map_schema_matches_the_public_list_contract() -> None:
     assert PLAN_ARGUMENT_SCHEMA.schema["type"] == "array"
     assert PLAN_ARGUMENT_SCHEMA.schema["items"]["required"] == ["id", "claim", "supports"]
+
+
+def test_paragraph_outline_schema_gives_every_paragraph_a_stable_job_and_budget() -> None:
+    paragraph = PARAGRAPH_OUTLINE_SCHEMA.schema["properties"]["paragraphs"]["items"]
+
+    assert paragraph["required"] == [
+        "key",
+        "purpose",
+        "claim",
+        "evidence",
+        "target_words",
+        "transition_in",
+        "transition_out",
+    ]
+    assert paragraph["additionalProperties"] is False
+
+
+def test_transition_and_overall_review_schemas_are_targeted_not_whole_document_rewrites() -> None:
+    assert TRANSITION_REVIEW_SCHEMA.schema["properties"]["needs_change"] == {"type": "boolean"}
+    assert "revised_next_paragraph" in TRANSITION_REVIEW_SCHEMA.schema["properties"]
+    issue = OVERALL_ASSESSMENT_SCHEMA.schema["properties"]["issues"]["items"]
+
+    assert issue["required"] == ["block_key", "problem", "revision_instruction"]
+    assert "document" not in OVERALL_ASSESSMENT_SCHEMA.schema["properties"]
+
+
+def test_paragraph_prompt_receives_global_map_neighbours_and_local_evidence() -> None:
+    messages = prompts.build_paragraph_draft_prompt(
+        "Essay",
+        document_map="Thesis: T. Sections: context, evidence, conclusion.",
+        section_plan="Evidence section proves C.",
+        paragraph_plan="P2 compares the two results.",
+        research_block="Source 7 reports the result.",
+        ledger_block="Source ledger: id 7",
+        previous_paragraph="P1 establishes the baseline.",
+        next_paragraph_summary="P3 explains the consequence.",
+        target_words=180,
+    )
+    rendered = "\n".join(message["content"] for message in messages)
+
+    assert "Thesis: T" in rendered
+    assert "P1 establishes" in rendered
+    assert "P3 explains" in rendered
+    assert "about 180 words" in rendered
+    assert "one paragraph" in rendered.lower()
+
+
+def test_transition_prompt_knows_the_document_map_and_only_revises_the_next_paragraph() -> None:
+    messages = prompts.build_transition_review_prompt(
+        "Essay",
+        document_map="A three-part causal argument.",
+        previous_plan="Establish cause A.",
+        next_plan="Show effect B.",
+        previous_paragraph="Cause A is established.",
+        next_paragraph="Effect B follows.",
+    )
+    rendered = "\n".join(message["content"] for message in messages)
+
+    assert "three-part causal argument" in rendered
+    assert "Do not rewrite the preceding paragraph" in rendered
+    assert "old information" in rendered.lower()
 
 
 def test_claims_review_requires_ledger_verification_for_web_and_course_sources() -> None:

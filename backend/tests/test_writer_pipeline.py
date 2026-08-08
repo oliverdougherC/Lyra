@@ -17,11 +17,13 @@ from backend.core import (
     artifacts,
     briefs,
     comments,
+    live_drafts,
     query_guard,
     source_ledger,
     suggestions,
     writer_pipeline,
     writer_plans,
+    writer_runs,
 )
 from backend.core.app_settings import TutorConfig
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk
@@ -145,6 +147,155 @@ def _body(db: sqlite3.Connection, part_id: int) -> str:
 
 def _section_reply(heading: str, prose: str) -> str:
     return f"## {heading}\n\n{prose}\n"
+
+
+def test_a_durable_full_pass_uses_fixed_paragraph_stages_and_never_writes_the_document(
+    db: sqlite3.Connection,
+    class_id: int,
+    model: _StubModel,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_id, part_id = _draft(db, class_id, content="My notes stay editable.\n")
+    briefs.save_brief(
+        db,
+        artifact_id,
+        summary="Explain why pendulum period depends on length.",
+        length_target="700 words",
+    )
+    writer_plans.create_plan(
+        db,
+        artifact_id,
+        brief_analysis='{"assignment_type":"essay","task":"explain","success_criteria":[]}',
+        thesis="A pendulum's period is controlled by its length.",
+        argument_map=[{"id": "c1", "claim": "Length changes period", "supports": []}],
+        sections=[
+            {
+                "section_ref": "1.1",
+                "ordinal": 0,
+                "title": "Introduction",
+                "job": "Frame the question and thesis.",
+                "claim": "Length is the key variable.",
+                "evidence": [],
+                "source_ids": [],
+                "word_budget": 320,
+            },
+            {
+                "section_ref": "1.2",
+                "ordinal": 1,
+                "title": "Explanation",
+                "job": "Explain the physical relationship.",
+                "claim": "A longer pendulum has a longer period.",
+                "evidence": [],
+                "source_ids": [],
+                "word_budget": 380,
+            },
+        ],
+    )
+    run = writer_runs.create_run(
+        db,
+        artifact_id,
+        writer_runs.PASS,
+        "quick",
+        request={},
+        started_at="2026-08-07T00:00:00+00:00",
+    )
+    db.commit()
+    monkeypatch.setattr(writer_pipeline, "_prepare_research_batch", lambda *args, **kwargs: [])
+    streamed_jobs: list[tuple[str, str, str | None]] = []
+
+    def stream_paragraph(
+        conn: sqlite3.Connection,
+        job: writer_pipeline.PassJob,
+        config: TutorConfig,
+        suggestion_id: int,
+        block: dict[str, object],
+        messages: list[dict[str, str]],
+    ) -> dict[str, object]:
+        rendered = "\n".join(message["content"] for message in messages)
+        previous = next(
+            (
+                line.split("The preceding paragraph:\n", 1)[1]
+                for line in (message["content"] for message in messages)
+                if "The preceding paragraph:\n" in line
+            ),
+            None,
+        )
+        streamed_jobs.append((str(block["stable_key"]), rendered, previous))
+        return live_drafts.append_block_text(
+            conn,
+            suggestion_id,
+            str(block["stable_key"]),
+            f"Paragraph {block['paragraph_ordinal']} prose.",
+            status="complete",
+        )
+
+    monkeypatch.setattr(writer_pipeline, "_stream_live_paragraph", stream_paragraph)
+    model.script = [
+        json.dumps(
+            {
+                "paragraphs": [
+                    {
+                        "key": "intro-1",
+                        "purpose": "Open with the question.",
+                        "claim": "Length matters.",
+                        "evidence": [],
+                        "target_words": 150,
+                        "transition_in": "Open the paper.",
+                        "transition_out": "Move to the mechanism.",
+                    },
+                    {
+                        "key": "intro-2",
+                        "purpose": "State the thesis.",
+                        "claim": "Length controls period.",
+                        "evidence": [],
+                        "target_words": 170,
+                        "transition_in": "Narrow the question.",
+                        "transition_out": "Set up the explanation.",
+                    },
+                ]
+            }
+        ),
+        json.dumps(
+            {
+                "paragraphs": [
+                    {
+                        "key": "explain-1",
+                        "purpose": "Explain the mechanism.",
+                        "claim": "Longer length increases period.",
+                        "evidence": [],
+                        "target_words": 380,
+                        "transition_in": "Develop the thesis.",
+                        "transition_out": "Close the explanation.",
+                    }
+                ]
+            }
+        ),
+        '{"needs_change":false,"rationale":"clear","revised_next_paragraph":"Paragraph 2 prose."}',
+        '{"needs_change":false,"rationale":"clear","revised_next_paragraph":"Paragraph 3 prose."}',
+        '{"summary":"The chunk is coherent.","issues":[]}',
+    ]
+
+    writer_pipeline.run_pass(
+        writer_pipeline.PassJob(artifact_id, depth="quick", run_id=int(run["id"]))
+    )
+
+    assert _body(db, part_id) == "My notes stay editable.\n"
+    live = live_drafts.get_live_suggestion_for_run(db, int(run["id"]))
+    assert live is not None
+    assert live["stage"] == "completed"
+    assert live["status"] == "ready"
+    assert [block["stable_key"] for block in live["blocks"]] == [
+        "1.1:p1",
+        "1.1:p2",
+        "1.2:p1",
+    ]
+    assert all(block["status"] == "complete" for block in live["blocks"])
+    assert len(streamed_jobs) == 3
+    assert "Global document map" in streamed_jobs[0][1]
+    assert "Paragraph 1 prose." in streamed_jobs[1][1]
+    pending = suggestions.pending_for_part(db, part_id)
+    assert pending is not None
+    assert "Paragraph 3 prose." in str(pending["proposed_content"])
 
 
 def test_an_empty_draft_becomes_a_skeleton_and_then_a_full_document(

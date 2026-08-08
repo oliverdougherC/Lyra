@@ -101,6 +101,30 @@ describe('request construction', () => {
     expect(spy.mock.calls[1][0]).toContain('/api/classes/9/sources')
   })
 
+  it('uses the live draft suggestion routes and carries revision tokens', async () => {
+    const spy = mockFetch(async () => jsonResponse({ id: 14, blocks: [] }))
+
+    await api.getLiveDraftSuggestion(5)
+    await api.updateLiveDraftSuggestionBlock(5, 101, {
+      content: 'Edited block',
+      expected_revision: 7,
+      base_content: 'Original block',
+    })
+    await api.finalizeLiveDraftSuggestion(5)
+
+    expect(spy.mock.calls[0][0]).toContain('/api/drafts/5/live-suggestion')
+    expect(spy.mock.calls[0][1].method).toBe('GET')
+    expect(spy.mock.calls[1][0]).toContain('/api/drafts/5/live-suggestion/blocks/101')
+    expect(spy.mock.calls[1][1].method).toBe('PATCH')
+    expect(JSON.parse(spy.mock.calls[1][1].body as string)).toEqual({
+      content: 'Edited block',
+      expected_revision: 7,
+      base_content: 'Original block',
+    })
+    expect(spy.mock.calls[2][0]).toContain('/api/drafts/5/live-suggestion/finalize')
+    expect(spy.mock.calls[2][1].method).toBe('POST')
+  })
+
   it('reads and updates inheritance-aware class writer settings', async () => {
     const spy = mockFetch(async () => jsonResponse({ overrides: {}, effective: {} }))
 

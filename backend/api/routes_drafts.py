@@ -32,6 +32,7 @@ from backend.core import (
     briefs,
     comments,
     exporting,
+    live_drafts,
     review_pipeline,
     sections,
     sessions,
@@ -67,6 +68,7 @@ DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
 
 NOT_A_DRAFT_MESSAGE = "That draft does not exist."
 NOT_A_SUGGESTION_MESSAGE = "That suggestion does not exist."
+NOT_A_LIVE_BLOCK_MESSAGE = "That live suggestion block does not exist."
 NO_DOCUMENT_MESSAGE = "This draft has no body."
 ALREADY_RUNNING_MESSAGE = "This draft already has a run in flight."
 
@@ -198,6 +200,23 @@ class RejectRequest(BaseModel):
     """Body of `POST /api/pending-edits/{edit_id}/reject`."""
 
     hunk: HunkRef | None = None
+
+
+class LiveSuggestionBlockPatch(BaseModel):
+    """Body of `PATCH /api/drafts/{artifact_id}/live-suggestion/blocks/{block_id}`."""
+
+    expected_revision: int = Field(ge=1)
+    base_content: str | None = None
+    section_ref: str | None = None
+    ordinal: int | None = Field(default=None, ge=0)
+    kind: str | None = None
+    heading: str | None = None
+    content: str | None = None
+    status: str | None = None
+    target_words: int | None = Field(default=None, ge=0)
+    summary: str | None = None
+    context: dict[str, object] | list[object] | str | int | float | bool | None = None
+    metadata: dict[str, object] | list[object] | str | int | float | bool | None = None
 
 
 def _require_draft(conn: sqlite3.Connection, artifact_id: int) -> dict[str, object]:
@@ -488,6 +507,15 @@ def start_pass(artifact_id: int, payload: PassRequest, conn: DbConn) -> dict[str
         },
     )
     run = writer_runs.active_run(conn, artifact_id)
+    if run is not None and not payload.sections and payload.address_comment_id is None:
+        live_drafts.create_live_suggestion(
+            conn,
+            artifact_id,
+            int(run["id"]),
+            stage="gathering",
+            status="pending",
+            detail="Queued to understand the assignment",
+        )
     writer_pipeline.enqueue(
         writer_tools._compatible_job(
             writer_pipeline.PassJob,
@@ -639,6 +667,61 @@ def resolve_comment(comment_id: int, payload: ResolveWrite, conn: DbConn) -> dic
 def read_pending(artifact_id: int, conn: DbConn) -> dict[str, object] | None:
     """The pending edit for the draft, refreshed against the body, or null."""
     _require_draft(conn, artifact_id)
+    part = _body_part(conn, artifact_id)
+    return suggestions.pending_for_part(conn, int(part["id"]))
+
+
+@router.get("/drafts/{artifact_id}/live-suggestion", response_model=None)
+def read_live_suggestion(artifact_id: int, conn: DbConn) -> dict[str, object] | None:
+    """The latest structured live suggestion for the draft, blocks included."""
+    _require_draft(conn, artifact_id)
+    return live_drafts.get_latest_live_suggestion(conn, artifact_id)
+
+
+def _require_live_block_on_draft(conn: sqlite3.Connection, artifact_id: int, block_id: int) -> None:
+    _require_draft(conn, artifact_id)
+    if not live_drafts.block_belongs_to_artifact(conn, artifact_id, block_id):
+        raise NotFoundError(NOT_A_LIVE_BLOCK_MESSAGE)
+
+
+@router.patch("/drafts/{artifact_id}/live-suggestion/blocks/{block_id}", response_model=None)
+def patch_live_suggestion_block(
+    artifact_id: int, block_id: int, payload: LiveSuggestionBlockPatch, conn: DbConn
+) -> dict[str, object]:
+    """User-edit one live suggestion block with CAS protection."""
+    _require_live_block_on_draft(conn, artifact_id, block_id)
+    fields = payload.model_dump(exclude_unset=True)
+    update: dict[str, object] = {"expected_revision": int(fields.pop("expected_revision"))}
+    if "base_content" in fields:
+        update["base_content"] = fields.pop("base_content")
+    if "section_ref" in fields:
+        update["section_ref"] = fields["section_ref"]
+    if "ordinal" in fields:
+        update["paragraph_ordinal"] = fields["ordinal"]
+    for key in ("kind", "heading", "content", "status", "target_words", "summary"):
+        if key in fields:
+            update[key] = fields[key]
+    if "context" in fields:
+        update["context"] = fields["context"]
+    if "metadata" in fields:
+        update["metadata"] = fields["metadata"]
+    return live_drafts.patch_block(conn, block_id, **update)
+
+
+@router.post("/drafts/{artifact_id}/live-suggestion/finalize", response_model=None)
+def finalize_live_suggestion(artifact_id: int, conn: DbConn) -> dict[str, object] | None:
+    """Publish the completed live artifact into ordinary pending-edit review."""
+    _require_draft(conn, artifact_id)
+    live = live_drafts.get_latest_live_suggestion(conn, artifact_id)
+    if live is None:
+        raise NotFoundError(live_drafts.NOT_A_LIVE_SUGGESTION_MESSAGE)
+    if live["status"] != "ready":
+        raise ConflictError("The live draft suggestion is still being written.")
+    live_drafts.finalize_to_pending_edit(
+        conn,
+        int(live["id"]),
+        note="agentic long-form draft",
+    )
     part = _body_part(conn, artifact_id)
     return suggestions.pending_for_part(conn, int(part["id"]))
 

@@ -867,6 +867,63 @@ export interface PendingEdit {
   base_content?: string
 }
 
+export type LiveDraftSuggestionStatus =
+  | 'queued'
+  | 'running'
+  | 'ready'
+  | 'failed'
+  | 'finalized'
+  | 'complete'
+  | 'paused'
+  | 'cancelled'
+
+export type LiveDraftSuggestionStage =
+  | 'gathering'
+  | 'outline'
+  | 'drafting'
+  | 'transitions'
+  | 'review'
+  | 'finalize'
+  | 'complete'
+  | 'done'
+  | (string & {})
+
+export type LiveDraftBlockStatus =
+  | 'queued'
+  | 'drafting'
+  | 'drafted'
+  | 'revising'
+  | 'revised'
+  | 'failed'
+  | (string & {})
+
+export interface LiveDraftSuggestionBlock {
+  id: number
+  block_key: string
+  section_ref: string | null
+  ordinal: number
+  kind: string
+  heading: string | null
+  content: string
+  status: LiveDraftBlockStatus
+  target_words: number | null
+  summary: string | null
+  revision: number
+  user_revision: number
+}
+
+export interface LiveDraftSuggestion {
+  id: number
+  artifact_id: number
+  run_id: number
+  status: LiveDraftSuggestionStatus
+  stage: LiveDraftSuggestionStage
+  stage_detail: string | null
+  version: number
+  base_content: string
+  blocks: LiveDraftSuggestionBlock[]
+}
+
 /** Body of `POST /api/drafts/{id}/write`: the instruction plus what the editor gathered. */
 export interface WriteRequest {
   instruction: string

@@ -1520,6 +1520,84 @@ PLAN_SECTIONS_SCHEMA = JsonSchema(
     },
 )
 
+# A section plan is still too large a unit for reliable small-model drafting.  The
+# paragraph outline is produced one section at a time and becomes the executable work
+# queue: every prose call receives one stable job and a deliberately small word budget.
+PARAGRAPH_OUTLINE_SCHEMA = JsonSchema(
+    name="writer_paragraph_outline",
+    schema={
+        "type": "object",
+        "properties": {
+            "paragraphs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string"},
+                        "purpose": {"type": "string"},
+                        "claim": {"type": "string"},
+                        "evidence": {"type": "array", "items": {"type": "string"}},
+                        "target_words": {"type": "integer"},
+                        "transition_in": {"type": "string"},
+                        "transition_out": {"type": "string"},
+                    },
+                    "required": [
+                        "key",
+                        "purpose",
+                        "claim",
+                        "evidence",
+                        "target_words",
+                        "transition_in",
+                        "transition_out",
+                    ],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["paragraphs"],
+        "additionalProperties": False,
+    },
+)
+
+TRANSITION_REVIEW_SCHEMA = JsonSchema(
+    name="writer_transition_review",
+    schema={
+        "type": "object",
+        "properties": {
+            "needs_change": {"type": "boolean"},
+            "rationale": {"type": "string"},
+            "revised_next_paragraph": {"type": "string"},
+        },
+        "required": ["needs_change", "rationale", "revised_next_paragraph"],
+        "additionalProperties": False,
+    },
+)
+
+OVERALL_ASSESSMENT_SCHEMA = JsonSchema(
+    name="writer_overall_assessment",
+    schema={
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "issues": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "block_key": {"type": "string"},
+                        "problem": {"type": "string"},
+                        "revision_instruction": {"type": "string"},
+                    },
+                    "required": ["block_key", "problem", "revision_instruction"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["summary", "issues"],
+        "additionalProperties": False,
+    },
+)
+
 SKEPTIC_SCHEMA = JsonSchema(
     name="writer_section_skeptic",
     schema={
@@ -1649,6 +1727,146 @@ def build_plan_sections_prompt(
                 if existing_outline
                 else ""
             ),
+        ],
+    )
+
+
+def build_paragraph_outline_prompt(
+    title: str,
+    document_map: str,
+    section_plan: str,
+    research_block: str,
+    target_words: int,
+) -> list[dict[str, str]]:
+    """Turn one planned section into paragraph-sized executable jobs.
+
+    Keeping this call section-local prevents a small model from having to emit a large
+    nested document plan while the document map preserves its global responsibilities.
+    """
+    paragraph_count = max(1, round(target_words / 180))
+    return _review_messages(
+        (
+            "Create the complete paragraph outline for this one section. Produce "
+            f"roughly {paragraph_count} paragraph jobs whose word budgets total about "
+            f"{target_words} words. Each paragraph must do one distinct job, advance "
+            "the section claim, name the evidence it will use, and state its logical "
+            "handoff from and to neighbouring paragraphs. Use stable keys supplied as "
+            "short identifiers, not prose headings. Do not draft prose. "
+        )
+        + _JSON_ONLY,
+        [
+            f'The document is titled "{title}".',
+            f"Global document map:\n{document_map}",
+            f"Section plan:\n{section_plan}",
+            f"Research available to this section:\n{research_block}",
+        ],
+    )
+
+
+def build_paragraph_draft_prompt(
+    title: str,
+    *,
+    document_map: str,
+    section_plan: str,
+    paragraph_plan: str,
+    research_block: str,
+    ledger_block: str,
+    previous_paragraph: str | None,
+    next_paragraph_summary: str | None,
+    target_words: int,
+) -> list[dict[str, str]]:
+    """Draft exactly one paragraph with local evidence and compact global context."""
+    context = [
+        f'The document is titled "{title}".',
+        f"Global document map:\n{document_map}",
+        f"Section plan:\n{section_plan}",
+        f"This paragraph's fixed job:\n{paragraph_plan}",
+        f"Write about {target_words} words. Write one paragraph only.",
+    ]
+    if research_block:
+        context.append(f"Research for this paragraph:\n{research_block}")
+    if ledger_block:
+        context.extend(
+            [
+                ledger_block,
+                "Cite only listed sources, using [@lyra:<ID>] immediately after the "
+                "claim the source supports.",
+            ]
+        )
+    if previous_paragraph:
+        context.append(f"The preceding paragraph:\n{previous_paragraph}")
+    if next_paragraph_summary:
+        context.append(f"The next paragraph will:\n{next_paragraph_summary}")
+    return [
+        {
+            "role": "system",
+            "content": (
+                _WRITING_CRAFT
+                + "\n\nExecute the supplied paragraph job. Return prose only: no heading, "
+                "outline, notes, preface, or explanation. Establish the paragraph's "
+                "relationship to the preceding idea through meaning, not a generic "
+                "transition phrase. Do not perform work assigned to later paragraphs."
+            ),
+        },
+        {"role": "user", "content": "\n\n".join(context)},
+    ]
+
+
+def build_transition_review_prompt(
+    title: str,
+    *,
+    document_map: str,
+    previous_plan: str,
+    next_plan: str,
+    previous_paragraph: str,
+    next_paragraph: str,
+) -> list[dict[str, str]]:
+    """Review one paragraph boundary with enough global context to judge its logic."""
+    return _review_messages(
+        (
+            "Evaluate only the handoff between these adjacent paragraphs. Prefer a "
+            "meaningful transition that begins with old information and then introduces "
+            "new information. If the relationship is already clear, set needs_change "
+            "false and return the next paragraph unchanged. Otherwise revise the next "
+            "paragraph only, preserving its facts, citations, purpose, and approximate "
+            "length. Do not rewrite the preceding paragraph. "
+        )
+        + _JSON_ONLY,
+        [
+            f'The document is titled "{title}".',
+            f"Global document map:\n{document_map}",
+            f"Previous paragraph job:\n{previous_plan}",
+            f"Next paragraph job:\n{next_plan}",
+            f"Previous paragraph:\n{previous_paragraph}",
+            f"Next paragraph:\n{next_paragraph}",
+        ],
+    )
+
+
+def build_overall_assessment_prompt(
+    title: str,
+    *,
+    document_map: str,
+    chunk_label: str,
+    block_summaries: str,
+    prose_chunk: str,
+) -> list[dict[str, str]]:
+    """Assess one context-sized chunk and return only targeted block instructions."""
+    return _review_messages(
+        (
+            "Act as the document-level editor for this chunk. Check assignment coverage, "
+            "argument progression, contradictions, repetition, support, pacing, tone, "
+            "and terminology against the global document map. Report only material, "
+            "actionable issues. Point every issue at one stable block key and give a "
+            "bounded revision instruction; never return a rewritten document. "
+        )
+        + _JSON_ONLY,
+        [
+            f'The document is titled "{title}".',
+            f"Global document map:\n{document_map}",
+            f"Chunk: {chunk_label}",
+            f"Block summaries:\n{block_summaries}",
+            f"Prose in this chunk:\n{prose_chunk}",
         ],
     )
 

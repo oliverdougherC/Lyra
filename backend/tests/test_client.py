@@ -155,6 +155,27 @@ async def test_stream_chat_omits_model_when_unset() -> None:
     assert b'"model"' not in bodies[0]
 
 
+async def test_stream_chat_accepts_a_bounded_background_generation_budget() -> None:
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, text="data: [DONE]\n")
+
+    async for _ in client.stream_chat(
+        _ENDPOINT,
+        None,
+        "local-model",
+        [{"role": "user", "content": "write one paragraph"}],
+        transport=_transport(handler),
+        max_tokens=320,
+        request_timeout=client.BACKGROUND_TIMEOUT,
+    ):
+        pass
+
+    assert bodies[0]["max_tokens"] == 320
+
+
 async def test_not_found_reports_a_wrong_path_without_leaking_endpoint_or_key() -> None:
     transport = _transport(lambda request: httpx.Response(404, json={"error": "no such route"}))
 

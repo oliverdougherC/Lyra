@@ -604,6 +604,8 @@ async def stream_chat(
     messages: list[dict[str, str]],
     *,
     transport: httpx.AsyncBaseTransport | None = None,
+    max_tokens: int | None = None,
+    request_timeout: httpx.Timeout | None = None,
 ) -> AsyncIterator[StreamDelta]:
     """Stream assistant deltas from the tutor endpoint, split by channel.
 
@@ -613,6 +615,9 @@ async def stream_chat(
         model: Model identifier, omitted from the request when None.
         messages: OpenAI-shaped chat messages.
         transport: Test seam. Leave unset in production code.
+        max_tokens: Optional output ceiling for bounded background prose jobs.
+        request_timeout: Timeout profile; background drafting uses the longer worker
+            timeout while interactive chat keeps the default.
 
     Yields:
         Non-empty `StreamDelta` fragments in arrival order, each tagged `answer` or
@@ -624,10 +629,10 @@ async def stream_chat(
             llama.cpp says anything once a 200 and half a reply are already on the wire.
     """
     url = f"{_base_url(endpoint)}/chat/completions"
-    body = _chat_body(model, messages, stream=True)
+    body = _chat_body(model, messages, stream=True, max_tokens=max_tokens)
     splitter = _ReasoningTagSplitter()
     finished = False
-    async with _client(CHAT_TIMEOUT, api_key, transport) as client:
+    async with _client(request_timeout or CHAT_TIMEOUT, api_key, transport) as client:
         try:
             async with client.stream("POST", url, json=body) as response:
                 if response.status_code >= 400:

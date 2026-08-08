@@ -24,6 +24,7 @@ import { BriefCard } from '@/components/drafts/brief-card'
 import type { AnchorThread } from '@/components/drafts/comment-highlights'
 import { CommentList } from '@/components/drafts/comment-list'
 import type { DraftEditorHandle } from '@/components/drafts/draft-editor'
+import { LiveDraftSuggestionPanel } from '@/components/drafts/live-draft-suggestion'
 import { PlanPanel } from '@/components/drafts/plan-panel'
 import { SourceLedger } from '@/components/drafts/source-ledger'
 import { SuggestionPanel } from '@/components/drafts/suggestion-panel'
@@ -69,6 +70,7 @@ import {
   useDraft,
   useDraftStatus,
   useExportAvailability,
+  useLiveDraftSuggestion,
   usePendingEdit,
   useRenameDraft,
   useStartPass,
@@ -80,6 +82,7 @@ import { cn } from '@/lib/utils'
 import type {
   AcceptRejectResult,
   DraftDetail,
+  LiveDraftSuggestion,
   PassRequest,
   PendingEdit,
   SolutionPart,
@@ -101,7 +104,7 @@ function readId(value: string | string[] | undefined): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
 }
 
-type RailTab = 'suggestion' | 'plan' | 'sources' | 'comments' | 'history' | 'chat'
+type RailTab = 'live' | 'suggestion' | 'plan' | 'sources' | 'comments' | 'history' | 'chat'
 
 /**
  * Where the tools sit, and whether the application is on screen at all.
@@ -179,6 +182,11 @@ export default function DraftWorkspacePage() {
   const writerSessions = useWriterSessions(artifactId ?? Number.NaN, artifactId !== null)
   const commentThreads = useComments(artifactId ?? Number.NaN, artifactId !== null, reviewRunning)
   const exportability = useExportAvailability()
+  const liveSuggestion = useLiveDraftSuggestion(
+    artifactId ?? Number.NaN,
+    artifactId !== null,
+    passRunning,
+  )
   const [exporting, setExporting] = useState(false)
 
   const editorRef = useRef<DraftEditorHandle | null>(null)
@@ -232,33 +240,14 @@ export default function DraftWorkspacePage() {
   // `generating` state, and each landing is worth refetching for.
   useEffect(() => {
     if (!polledState || artifactId === null) return
-    queryClient.invalidateQueries({ queryKey: draftKeys.detail(artifactId) })
     queryClient.invalidateQueries({ queryKey: draftKeys.pending(artifactId) })
+    queryClient.invalidateQueries({ queryKey: draftKeys.liveSuggestion(artifactId) })
     // Address-comment passes resolve their finding only after a successful landing.
     // Refetch on the settling status frame so the card closes without a page reload.
     queryClient.invalidateQueries({ queryKey: draftKeys.comments(artifactId) })
     queryClient.invalidateQueries({ queryKey: draftKeys.plan(artifactId) })
     if (classId !== null) queryClient.invalidateQueries({ queryKey: draftKeys.sources(classId) })
   }, [polledState, polledDetail, artifactId, classId, queryClient])
-
-  // A running pass writes the document server-side, so the editor follows the poll
-  // instead of the keyboard: inert below, re-seeded as sections land, and re-seeded
-  // once more when the pass settles. The student's own last edits were flushed before
-  // the pass was queued (see the dialog and the pass frame), so nothing of theirs is
-  // in flight while this holds the pen.
-  const passRunningRef = useRef(passRunning)
-  passRunningRef.current = passRunning
-  const wasRunningRef = useRef(false)
-  useEffect(() => {
-    const was = wasRunningRef.current
-    wasRunningRef.current = passRunning
-    // While running: follow each landing. On settling: one final seed. Never on an
-    // ordinary visit, where the editor is the student's and must not be re-seeded
-    // under their cursor.
-    if (passRunning || (was && polledState === 'ready')) void syncEditorFromServer()
-    // syncEditorFromServer reads refs and the query client; it has no state of its own.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [passRunning, polledState, polledDetail])
 
   // The comment anchors: every open, quoted thread, handed to the editor's decoration
   // plugin whenever the set changes - and again when a fresh editor mounts, through
@@ -275,8 +264,8 @@ export default function DraftWorkspacePage() {
     [commentThreads.data],
   )
   const anchorThreadsRef = useRef<AnchorThread[]>([])
-  anchorThreadsRef.current = anchorThreads
   useEffect(() => {
+    anchorThreadsRef.current = anchorThreads
     editorRef.current?.setComments(anchorThreads)
   }, [anchorThreads])
 
@@ -346,6 +335,16 @@ export default function DraftWorkspacePage() {
     setEditOverride(null)
   }
   const edit = editOverride ?? pendingData ?? null
+  const liveSuggestionData = liveSuggestion.data ?? null
+  const [liveSuggestionOverride, setLiveSuggestionOverride] = useState<LiveDraftSuggestion | null>(
+    null,
+  )
+  const [liveSuggestionSeen, setLiveSuggestionSeen] = useState(liveSuggestionData)
+  if (liveSuggestionData !== liveSuggestionSeen) {
+    setLiveSuggestionSeen(liveSuggestionData)
+    setLiveSuggestionOverride(null)
+  }
+  const activeLiveSuggestion = liveSuggestionOverride ?? liveSuggestionData ?? null
 
   // The plan and source ledger make the rail wider in purpose than in pixels. Keep the
   // selected tab visible when the row scrolls instead of leaving (for example) Chat
@@ -355,7 +354,7 @@ export default function DraftWorkspacePage() {
       '[data-state="active"], [data-active]',
     )
     selected?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [railTab, edit, commentThreads.data?.length])
+  }, [railTab, activeLiveSuggestion, edit, commentThreads.data?.length])
 
   // A fresh edit opens the rail on it; a resolved one hands the rail back to the chat.
   const [editSeenId, setEditSeenId] = useState<number | null>(null)
@@ -366,6 +365,16 @@ export default function DraftWorkspacePage() {
   if (!edit && editSeenId !== null) {
     setEditSeenId(null)
     if (railTab === 'suggestion') setRailTab('chat')
+  }
+
+  const [liveSuggestionSeenId, setLiveSuggestionSeenId] = useState<number | null>(null)
+  if (!edit && activeLiveSuggestion && liveSuggestionSeenId !== activeLiveSuggestion.id) {
+    setLiveSuggestionSeenId(activeLiveSuggestion.id)
+    setRailTab('live')
+  }
+  if (!activeLiveSuggestion && liveSuggestionSeenId !== null) {
+    setLiveSuggestionSeenId(null)
+    if (railTab === 'live') setRailTab('chat')
   }
 
   const loaded = draft.data ?? null
@@ -423,6 +432,12 @@ export default function DraftWorkspacePage() {
       setEditOverride(result.edit)
     }
     void syncEditorFromServer()
+  }
+
+  function onLiveSuggestionFinalized(nextEdit: PendingEdit) {
+    setEditOverride(nextEdit)
+    setLiveSuggestionOverride(null)
+    setRailTab('suggestion')
   }
 
   async function onSnapshot() {
@@ -488,7 +503,6 @@ export default function DraftWorkspacePage() {
     generating &&
     (status.data?.job_kind === 'review' ||
       (status.data?.job_kind == null && (stageDetail?.startsWith('Reviewing') ?? false)))
-  const editorHeld = generating && !reviewing
   const className = classes.data?.find((entry) => entry.id === classId)?.name ?? 'Class'
   // Both residents run for minutes: a pass counts sections, a review counts its four
   // lenses. Without the count a stage name that sits still reads as a hang.
@@ -522,7 +536,6 @@ export default function DraftWorkspacePage() {
           server is rewriting would race the autosave against the pipeline, and the
           autosave writes whole documents. */}
       <div
-        inert={editorHeld || undefined}
         className={cn(
           // 760px of column meant ~680px of text however wide the window: a fine prose
           // measure and a bad one for the equations and tables a technical draft is full
@@ -531,7 +544,6 @@ export default function DraftWorkspacePage() {
           // a large screen, and the split beside it is draggable for anyone who wants
           // more still.
           'mx-auto w-full max-w-[900px] px-8 py-8 md:px-12 xl:max-w-[1040px]',
-          editorHeld && 'opacity-70 transition-opacity duration-300',
         )}
       >
         <DraftEditor
@@ -555,10 +567,6 @@ export default function DraftWorkspacePage() {
             }, 0)
           }}
           onChange={(markdown) => {
-            // A running pass owns the document; the wrapper is inert, so nothing
-            // should arrive here - this is the belt to that suspender, keeping a
-            // stray programmatic change from autosaving over a landing section.
-            if (passRunningRef.current) return
             latestMarkdownRef.current = markdown
             setLatestMarkdown(markdown)
             engine.schedule(markdown)
@@ -607,6 +615,7 @@ export default function DraftWorkspacePage() {
           aria-label="Draft tools"
           className="shrink-0 gap-1 overflow-x-auto px-2"
         >
+          {activeLiveSuggestion ? <TabsTrigger value="live">Live draft</TabsTrigger> : null}
           {edit ? <TabsTrigger value="suggestion">Suggestion</TabsTrigger> : null}
           <TabsTrigger value="plan">Plan</TabsTrigger>
           <TabsTrigger value="sources">Sources</TabsTrigger>
@@ -626,6 +635,16 @@ export default function DraftWorkspacePage() {
             onToggle={() => setRailSide(railSide === 'left' ? 'right' : 'left')}
           />
         </TabsList>
+
+        {activeLiveSuggestion ? (
+          <TabsContent value="live" className="min-h-0 flex-1 overflow-y-auto p-4">
+            <LiveDraftSuggestionPanel
+              draftId={artifact.id}
+              suggestion={activeLiveSuggestion}
+              onFinalized={onLiveSuggestionFinalized}
+            />
+          </TabsContent>
+        ) : null}
 
         {edit ? (
           <TabsContent value="suggestion" className="min-h-0 flex-1 overflow-y-auto p-4">

@@ -49,6 +49,7 @@ from backend.core import (
     briefs,
     comments,
     drafting,
+    live_drafts,
     mathnorm,
     sections,
     source_ledger,
@@ -131,6 +132,9 @@ _EMPTY_STRUCTURE_ERROR = "The model returned nothing for the document's structur
 _NO_SECTIONS_DETAIL = "There are no sections to draft."
 _NO_SECTION_MESSAGE = 'No section matches "{ref}".'
 PLAN_PARKED_DETAIL = "The writing plan is ready. Review or edit it, then draft again."
+LIVE_READY_DETAIL = "The live draft suggestion is ready for review."
+LIVE_REVIEW_CHUNK_BLOCKS = 6
+LIVE_STREAM_FLUSH_CHARS = 64
 
 
 @dataclass(frozen=True)
@@ -376,6 +380,14 @@ def _settle_failed(conn: sqlite3.Connection, job: PassJob, exc: Exception) -> No
     artifacts.mark_artifact_failed(conn, job.artifact_id, _FAILED_DETAIL, message)
     if job.run_id is not None:
         writer_runs.mark_failed(conn, job.run_id, message)
+        live = live_drafts.get_live_suggestion_for_run(conn, job.run_id)
+        if live is not None:
+            live_drafts.update_live_suggestion(
+                conn,
+                int(live["id"]),
+                status="failed",
+                detail=message,
+            )
     conn.execute(
         "update artifacts set writer_job_completed_at = datetime('now') where id = ?",
         (job.artifact_id,),
@@ -450,6 +462,30 @@ def _run(conn: sqlite3.Connection, job: PassJob) -> None:
     if _cancel_requested(conn, job):
         return
 
+    # HTTP/chat-started full passes are durable runs. They build a separate live
+    # suggestion paragraph by paragraph; the legacy section path remains for targeted
+    # section edits and for direct unit-test calls without a durable run.
+    if job.run_id is not None and not job.section_refs and job.address_comment_id is None:
+        live = live_drafts.get_live_suggestion_for_run(conn, job.run_id)
+        checkpoint_stage = (
+            str(checkpoint.get("stage") or "") if isinstance(checkpoint, dict) else ""
+        )
+        live_stages = {
+            "gathering",
+            "outlining",
+            "drafting",
+            "transitions",
+            "reviewing",
+            "finalizing",
+            "completed",
+        }
+        # Old installations can restart section-pipeline checkpoints after this upgrade.
+        # Only a live artifact, a genuinely fresh run, or a v2 stage selects the new
+        # workflow; legacy `sections`/`revise`/`weave`/`done` resumes where it left off.
+        if live is not None or not isinstance(checkpoint, dict) or checkpoint_stage in live_stages:
+            _run_live_pipeline(conn, job, artifact, config, class_id, int(part["id"]))
+            return
+
     artifacts.set_artifact_state(
         conn, job.artifact_id, artifacts.GENERATING, "Reading the document"
     )
@@ -483,6 +519,696 @@ def _run(conn: sqlite3.Connection, job: PassJob) -> None:
         plan,
         prefetched_reply=prefetched_reply,
     )
+
+
+def _live_stage(
+    conn: sqlite3.Connection,
+    job: PassJob,
+    suggestion_id: int,
+    stage: str,
+    detail: str,
+    *,
+    index: int = 0,
+    targets: tuple[str, ...] = (),
+) -> None:
+    """Publish one fixed stage to both durable state surfaces."""
+    live_drafts.update_live_suggestion(
+        conn,
+        suggestion_id,
+        stage=stage,
+        status="running",
+        detail=detail,
+    )
+    _checkpoint(conn, job, stage, index=index, targets=targets)
+    artifacts.set_artifact_state(conn, job.artifact_id, artifacts.GENERATING, detail)
+    conn.commit()
+
+
+def _live_cancelled(conn: sqlite3.Connection, job: PassJob, suggestion_id: int) -> bool:
+    if not _cancel_requested(conn, job):
+        return False
+    live_drafts.update_live_suggestion(
+        conn,
+        suggestion_id,
+        status="cancelled",
+        detail="The run was cancelled. Completed suggestion blocks were kept.",
+    )
+    return True
+
+
+def _run_live_pipeline(
+    conn: sqlite3.Connection,
+    job: PassJob,
+    artifact: dict[str, object],
+    config: TutorConfig,
+    class_id: int,
+    part_id: int,
+) -> None:
+    """Build one persistent suggestion through a fixed paragraph-level workflow.
+
+    This is the product-level Draft contract. The real part is read only; every model
+    result lands in ``live_draft_blocks`` until finalization creates one ordinary
+    pending edit against the original base.
+    """
+    if job.run_id is None:
+        raise RuntimeError("A live drafting pipeline requires a durable writer run.")
+    live = live_drafts.get_live_suggestion_for_run(conn, job.run_id)
+    if live is None:
+        live = live_drafts.create_live_suggestion(
+            conn,
+            job.artifact_id,
+            job.run_id,
+            stage="gathering",
+            status="running",
+            detail="Understanding the assignment",
+        )
+    suggestion_id = int(live["id"])
+    run = writer_runs.get_run(conn, job.run_id)
+    checkpoint = run.get("checkpoint")
+    resume_stage = str(checkpoint.get("stage") or "") if isinstance(checkpoint, dict) else ""
+
+    plan = _active_plan(conn, job.artifact_id)
+    if plan is None:
+        _live_stage(
+            conn,
+            job,
+            suggestion_id,
+            "gathering",
+            "Understanding the assignment and choosing a strategy",
+        )
+        plan = _build_live_plan(conn, job, artifact, config, class_id, part_id)
+    if _live_cancelled(conn, job, suggestion_id):
+        return
+
+    target_pairs = _plan_targets(plan)
+    if not target_pairs:
+        raise LyraError("The writing plan has no sections to execute.")
+
+    # Research is gathered before prose and saved back into the durable plan. On a
+    # restart after outlining, the saved notes are already the authoritative result.
+    if resume_stage in {"", "start", "gathering", "planning"}:
+        _live_stage(
+            conn,
+            job,
+            suggestion_id,
+            "gathering",
+            "Gathering research and source-bound evidence",
+            targets=tuple(ref for ref, _ in target_pairs),
+        )
+        work = _prepare_research_batch(conn, job, artifact, config, class_id, target_pairs, plan)
+        for index, research in enumerate(work):
+            if _live_cancelled(conn, job, suggestion_id):
+                return
+            _live_stage(
+                conn,
+                job,
+                suggestion_id,
+                "gathering",
+                f"Researching {research.section_ref}",
+                index=index,
+                targets=tuple(ref for ref, _ in target_pairs),
+            )
+            reply = _complete(config, research.messages, schema=prompts.RESEARCH_NOTES_SCHEMA)
+            _finish_research_section(conn, job, class_id, plan, research, reply)
+        plan = _active_plan(conn, job.artifact_id) or plan
+
+    if job.pause_at_plan:
+        live_drafts.update_live_suggestion(
+            conn,
+            suggestion_id,
+            stage="outlining",
+            status="paused",
+            detail=PLAN_PARKED_DETAIL,
+        )
+        artifacts.set_artifact_state(conn, job.artifact_id, artifacts.READY, PLAN_PARKED_DETAIL)
+        return
+
+    live = live_drafts.get_live_suggestion(conn, suggestion_id)
+    if not live["blocks"] or resume_stage in {"", "start", "gathering", "planning", "outlining"}:
+        _build_live_outline(conn, job, artifact, config, suggestion_id, plan)
+    if _live_cancelled(conn, job, suggestion_id):
+        return
+
+    document_map = _live_document_map(plan, job)
+    _draft_live_blocks(conn, job, artifact, config, class_id, suggestion_id, plan, document_map)
+    if _live_cancelled(conn, job, suggestion_id):
+        return
+
+    _review_live_transitions(conn, job, artifact, config, suggestion_id, document_map)
+    if _live_cancelled(conn, job, suggestion_id):
+        return
+
+    _review_live_chunks(conn, job, artifact, config, class_id, suggestion_id, plan, document_map)
+    if _live_cancelled(conn, job, suggestion_id):
+        return
+
+    _live_stage(
+        conn,
+        job,
+        suggestion_id,
+        "finalizing",
+        "Checking coverage, length, and the assembled suggestion",
+    )
+    final = live_drafts.get_live_suggestion(conn, suggestion_id)
+    incomplete = [
+        str(block["stable_key"]) for block in final["blocks"] if not str(block["content"]).strip()
+    ]
+    if incomplete:
+        raise LyraError("The live draft still has empty paragraph blocks: " + ", ".join(incomplete))
+    live_drafts.finalize_to_pending_edit(
+        conn,
+        suggestion_id,
+        note=job.instruction or "agentic long-form draft",
+    )
+    live_drafts.update_live_suggestion(
+        conn,
+        suggestion_id,
+        stage="completed",
+        status="ready",
+        detail=LIVE_READY_DETAIL,
+    )
+    blocks = live_drafts.get_live_suggestion(conn, suggestion_id)["blocks"]
+    artifacts.set_problems_total(conn, job.artifact_id, len(blocks))
+    artifacts.set_problems_done(conn, job.artifact_id, len(blocks))
+    artifacts.set_artifact_state(conn, job.artifact_id, artifacts.READY, LIVE_READY_DETAIL)
+    _checkpoint(
+        conn,
+        job,
+        "completed",
+        index=len(blocks),
+        targets=tuple(str(block["stable_key"]) for block in blocks),
+    )
+
+
+def _build_live_plan(
+    conn: sqlite3.Connection,
+    job: PassJob,
+    artifact: dict[str, object],
+    config: TutorConfig,
+    class_id: int,
+    part_id: int,
+) -> dict[str, object]:
+    """Run the narrow strategy calls without ever landing a skeleton in the body."""
+    body = str(artifacts.get_part(conn, part_id)["content"])
+    brief = briefs.get_brief(conn, job.artifact_id)
+    brief_block = prompts.format_brief_block(brief)
+    analysis_reply = _complete(
+        config,
+        prompts.build_plan_brief_prompt(
+            str(artifact["title"]),
+            body,
+            brief_block,
+            job.instruction,
+            prompts.format_length_block(_target_words(conn, job)),
+        ),
+        schema=prompts.PLAN_BRIEF_SCHEMA,
+    )
+    analysis = replies.loads_object(analysis_reply)
+    if analysis is None:
+        raise LyraError("The model did not return a usable assignment analysis.")
+    query = str(analysis.get("task") or artifact["title"])
+    result = retrieve(conn, class_id, query, STRUCTURE_RETRIEVAL_BUDGET)
+    context_block = prompts.format_context_block([vars(chunk) for chunk in result.chunks])
+    thesis_reply = _complete(
+        config,
+        prompts.build_plan_thesis_prompt(str(artifact["title"]), analysis, context_block),
+        schema=prompts.PLAN_THESIS_SCHEMA,
+    )
+    thesis_payload = replies.loads_object(thesis_reply)
+    if thesis_payload is None or not str(thesis_payload.get("selected") or "").strip():
+        raise LyraError("The model did not return a usable thesis plan.")
+    thesis = str(thesis_payload["selected"]).strip()
+    argument_reply = _complete(
+        config,
+        prompts.build_plan_argument_prompt(thesis, analysis, context_block),
+        schema=prompts.PLAN_ARGUMENT_SCHEMA,
+    )
+    argument_map = replies.loads(argument_reply)
+    if not isinstance(argument_map, list):
+        raise LyraError("The model did not return a usable argument map.")
+    sections_reply = _complete(
+        config,
+        prompts.build_plan_sections_prompt(
+            str(artifact["title"]),
+            thesis,
+            argument_map,
+            _target_words(conn, job),
+            context_block,
+            sections.outline(body),
+        ),
+        schema=prompts.PLAN_SECTIONS_SCHEMA,
+    )
+    payload = replies.loads_object(sections_reply)
+    raw_sections = payload.get("sections") if payload else None
+    if not isinstance(raw_sections, list) or not raw_sections:
+        raise LyraError("The model did not return a usable annotated section plan.")
+    normalized = [
+        {
+            **entry,
+            "section_ref": str(entry.get("ref") or f"1.{index + 1}"),
+            "ordinal": index,
+        }
+        for index, entry in enumerate(raw_sections)
+        if isinstance(entry, dict)
+    ]
+    normalized = _normalize_plan_word_budgets(normalized, _target_words(conn, job))
+    stored = _save_plan(
+        conn,
+        job.artifact_id,
+        {
+            "brief_analysis": json.dumps(
+                {
+                    **analysis,
+                    "thesis_candidates": thesis_payload.get("candidates", []),
+                    "thesis_rationale": thesis_payload.get("rationale", ""),
+                },
+                ensure_ascii=False,
+            ),
+            "thesis": thesis,
+            "argument_map": argument_map,
+            "sections": normalized,
+        },
+    )
+    if stored is None:
+        raise LyraError("The writing plan could not be saved.")
+    return stored
+
+
+def _plan_targets(plan: dict[str, object]) -> list[tuple[str, str]]:
+    entries = plan.get("sections")
+    if not isinstance(entries, list):
+        return []
+    return [
+        (
+            str(entry.get("section_ref") or entry.get("ref") or "").strip(),
+            str(entry.get("title") or "").strip(),
+        )
+        for entry in entries
+        if isinstance(entry, dict)
+        and str(entry.get("section_ref") or entry.get("ref") or "").strip()
+    ]
+
+
+def _live_document_map(plan: dict[str, object], job: PassJob) -> str:
+    entries = plan.get("sections") if isinstance(plan.get("sections"), list) else []
+    payload = {
+        "request": job.instruction or "draft the document from its brief",
+        "thesis": plan.get("thesis", ""),
+        "argument_map": plan.get("argument_map", []),
+        "sections": [
+            {key: entry.get(key) for key in ("section_ref", "title", "job", "claim", "word_budget")}
+            for entry in entries
+            if isinstance(entry, dict)
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _build_live_outline(
+    conn: sqlite3.Connection,
+    job: PassJob,
+    artifact: dict[str, object],
+    config: TutorConfig,
+    suggestion_id: int,
+    plan: dict[str, object],
+) -> None:
+    document_map = _live_document_map(plan, job)
+    entries = plan.get("sections")
+    if not isinstance(entries, list):
+        raise LyraError("The writing plan has no section outline.")
+    ordinal = 0
+    for section_index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        if _live_cancelled(conn, job, suggestion_id):
+            return
+        ref = str(entry.get("section_ref") or entry.get("ref") or f"1.{section_index + 1}")
+        title = str(entry.get("title") or ref)
+        target = int(entry.get("word_budget") or MINIMUM_SECTION_WORDS)
+        _live_stage(
+            conn,
+            job,
+            suggestion_id,
+            "outlining",
+            f"Outlining every paragraph in {ref} {title}".strip(),
+            index=section_index,
+            targets=tuple(ref for ref, _ in _plan_targets(plan)),
+        )
+        research = entry.get("research_notes") or (
+            plan.get("research_notes", {}).get(ref, "")
+            if isinstance(plan.get("research_notes"), dict)
+            else ""
+        )
+        reply = _complete(
+            config,
+            prompts.build_paragraph_outline_prompt(
+                str(artifact["title"]),
+                document_map,
+                json.dumps(entry, ensure_ascii=False, sort_keys=True),
+                json.dumps(research, ensure_ascii=False, sort_keys=True),
+                target,
+            ),
+            schema=prompts.PARAGRAPH_OUTLINE_SCHEMA,
+        )
+        payload = replies.loads_object(reply)
+        paragraphs = payload.get("paragraphs") if payload else None
+        if not isinstance(paragraphs, list) or not paragraphs:
+            raise LyraError(f"The model did not return paragraph jobs for {ref} {title}.")
+        useful = [item for item in paragraphs if isinstance(item, dict)]
+        weights = [max(1, int(item.get("target_words") or 1)) for item in useful]
+        allocations = _allocate_words(target, weights)
+        for paragraph_index, (item, words) in enumerate(zip(useful, allocations, strict=True)):
+            ordinal += 1
+            stable_key = f"{ref}:p{paragraph_index + 1}"
+            paragraph_plan = {
+                **item,
+                "key": stable_key,
+                "model_key": item.get("key"),
+                "target_words": words,
+            }
+            current = _live_block_by_key(conn, suggestion_id, stable_key)
+            live_drafts.model_update_block(
+                conn,
+                suggestion_id,
+                stable_key,
+                section_ref=ref,
+                paragraph_ordinal=ordinal,
+                heading=title,
+                status=str(current["status"]) if current is not None else "queued",
+                target_words=words,
+                summary=str(item.get("purpose") or item.get("claim") or "").strip(),
+                context=paragraph_plan,
+                metadata={"section_plan": entry, "document_map": document_map},
+            )
+
+
+def _live_block_by_key(
+    conn: sqlite3.Connection, suggestion_id: int, stable_key: str
+) -> dict[str, object] | None:
+    live = live_drafts.get_live_suggestion(conn, suggestion_id)
+    return next(
+        (block for block in live["blocks"] if block["stable_key"] == stable_key),
+        None,
+    )
+
+
+def _draft_live_blocks(
+    conn: sqlite3.Connection,
+    job: PassJob,
+    artifact: dict[str, object],
+    config: TutorConfig,
+    class_id: int,
+    suggestion_id: int,
+    plan: dict[str, object],
+    document_map: str,
+) -> None:
+    live = live_drafts.get_live_suggestion(conn, suggestion_id)
+    targets = tuple(str(block["stable_key"]) for block in live["blocks"])
+    artifacts.set_problems_total(conn, job.artifact_id, len(targets))
+    for index, snapshot in enumerate(live["blocks"]):
+        block = _live_block_by_key(conn, suggestion_id, str(snapshot["stable_key"])) or snapshot
+        if str(block["content"]).strip() and str(block["status"]) in {
+            "complete",
+            "drafted",
+            "revised",
+        }:
+            artifacts.increment_problems_done(conn, job.artifact_id)
+            continue
+        if _live_cancelled(conn, job, suggestion_id):
+            return
+        _live_stage(
+            conn,
+            job,
+            suggestion_id,
+            "drafting",
+            f"Drafting paragraph {index + 1} of {len(targets)}",
+            index=index,
+            targets=targets,
+        )
+        section_ref = str(block["section_ref"] or "")
+        section_plan = _section_plan(plan, section_ref, str(block["heading"] or "")) or {}
+        current_live = live_drafts.get_live_suggestion(conn, suggestion_id)
+        current_blocks = current_live["blocks"]
+        previous = str(current_blocks[index - 1]["content"]) if index > 0 else None
+        next_summary = (
+            str(current_blocks[index + 1]["summary"] or "")
+            if index + 1 < len(current_blocks)
+            else None
+        )
+        messages = prompts.build_paragraph_draft_prompt(
+            str(artifact["title"]),
+            document_map=document_map,
+            section_plan=json.dumps(section_plan, ensure_ascii=False, sort_keys=True),
+            paragraph_plan=json.dumps(block["context"], ensure_ascii=False, sort_keys=True),
+            research_block=str(section_plan.get("research_notes") or ""),
+            ledger_block=prompts.format_ledger_block(
+                _ledger_entries(conn, class_id, section_plan, section_ref)
+            ),
+            previous_paragraph=previous,
+            next_paragraph_summary=next_summary,
+            target_words=int(block["target_words"] or 180),
+        )
+        live_drafts.model_update_block(
+            conn,
+            suggestion_id,
+            str(block["stable_key"]),
+            status="drafting",
+        )
+        completed = _stream_live_paragraph(conn, job, config, suggestion_id, block, messages)
+        live_drafts.model_update_block(
+            conn,
+            suggestion_id,
+            str(block["stable_key"]),
+            content=str(completed["content"]),
+            status="complete",
+        )
+        artifacts.increment_problems_done(conn, job.artifact_id)
+
+
+def _stream_live_paragraph(
+    conn: sqlite3.Connection,
+    job: PassJob,
+    config: TutorConfig,
+    suggestion_id: int,
+    block: dict[str, object],
+    messages: list[dict[str, str]],
+) -> dict[str, object]:
+    """Stream one bounded prose job into its persistent block in visible batches."""
+    stable_key = str(block["stable_key"])
+    existing = str((_live_block_by_key(conn, suggestion_id, stable_key) or block)["content"])
+    if existing.strip():
+        messages = [
+            *messages,
+            {
+                "role": "user",
+                "content": (
+                    "This paragraph already has the partial text below. Continue from its "
+                    "exact end without repeating or rewriting it:\n\n" + existing[-2_000:]
+                ),
+            },
+        ]
+    target_words = int(block.get("target_words") or 180)
+    max_tokens = min(
+        budget.tokens_for_words(target_words), budget.generation_reserve(config.context_window)
+    )
+
+    async def consume() -> int:
+        buffer = ""
+        written = 0
+        async for delta in client.stream_chat(
+            config.endpoint_url,
+            config.api_key,
+            config.model,
+            messages,
+            max_tokens=max_tokens,
+            request_timeout=client.BACKGROUND_TIMEOUT,
+        ):
+            if delta.channel != "answer" or not delta.text:
+                continue
+            buffer += delta.text
+            written += len(delta.text)
+            if len(buffer) >= LIVE_STREAM_FLUSH_CHARS:
+                live_drafts.append_block_text(
+                    conn, suggestion_id, stable_key, buffer, status="drafting"
+                )
+                buffer = ""
+        if buffer:
+            live_drafts.append_block_text(
+                conn, suggestion_id, stable_key, buffer, status="drafting"
+            )
+        return written
+
+    written = asyncio.run(consume())
+    result = _live_block_by_key(conn, suggestion_id, stable_key)
+    if result is None or (written == 0 and not str(result["content"]).strip()):
+        raise LyraError(f"The model returned no prose for {stable_key}.")
+    return result
+
+
+def _review_live_transitions(
+    conn: sqlite3.Connection,
+    job: PassJob,
+    artifact: dict[str, object],
+    config: TutorConfig,
+    suggestion_id: int,
+    document_map: str,
+) -> None:
+    live = live_drafts.get_live_suggestion(conn, suggestion_id)
+    pairs = list(zip(live["blocks"], live["blocks"][1:], strict=False))
+    targets = tuple(str(right["stable_key"]) for _, right in pairs)
+    for index, (left_snapshot, right_snapshot) in enumerate(pairs):
+        if _live_cancelled(conn, job, suggestion_id):
+            return
+        left = _live_block_by_key(conn, suggestion_id, str(left_snapshot["stable_key"]))
+        right = _live_block_by_key(conn, suggestion_id, str(right_snapshot["stable_key"]))
+        if left is None or right is None:
+            continue
+        _live_stage(
+            conn,
+            job,
+            suggestion_id,
+            "transitions",
+            f"Reviewing transition {index + 1} of {len(pairs)}",
+            index=index,
+            targets=targets,
+        )
+        reply = _complete(
+            config,
+            prompts.build_transition_review_prompt(
+                str(artifact["title"]),
+                document_map=document_map,
+                previous_plan=json.dumps(left["context"], ensure_ascii=False, sort_keys=True),
+                next_plan=json.dumps(right["context"], ensure_ascii=False, sort_keys=True),
+                previous_paragraph=str(left["content"]),
+                next_paragraph=str(right["content"]),
+            ),
+            schema=prompts.TRANSITION_REVIEW_SCHEMA,
+        )
+        payload = replies.loads_object(reply)
+        if payload is None or not payload.get("needs_change"):
+            continue
+        revised = str(payload.get("revised_next_paragraph") or "").strip()
+        metadata = dict(right["metadata"]) if isinstance(right["metadata"], dict) else {}
+        metadata["transition_review"] = {
+            "rationale": str(payload.get("rationale") or ""),
+            "left": left["stable_key"],
+        }
+        live_drafts.model_update_block(
+            conn,
+            suggestion_id,
+            str(right["stable_key"]),
+            content=revised or None,
+            status="complete",
+            metadata=metadata,
+        )
+
+
+def _review_live_chunks(
+    conn: sqlite3.Connection,
+    job: PassJob,
+    artifact: dict[str, object],
+    config: TutorConfig,
+    class_id: int,
+    suggestion_id: int,
+    plan: dict[str, object],
+    document_map: str,
+) -> None:
+    blocks = live_drafts.get_live_suggestion(conn, suggestion_id)["blocks"]
+    chunks = [
+        blocks[index : index + LIVE_REVIEW_CHUNK_BLOCKS]
+        for index in range(0, len(blocks), LIVE_REVIEW_CHUNK_BLOCKS)
+    ]
+    targets = tuple(f"chunk-{index + 1}" for index in range(len(chunks)))
+    for chunk_index, chunk in enumerate(chunks):
+        if _live_cancelled(conn, job, suggestion_id):
+            return
+        _live_stage(
+            conn,
+            job,
+            suggestion_id,
+            "reviewing",
+            f"Reviewing document chunk {chunk_index + 1} of {len(chunks)}",
+            index=chunk_index,
+            targets=targets,
+        )
+        summaries = "\n".join(
+            f"{block['stable_key']}: {block['summary'] or block['context']}" for block in chunk
+        )
+        prose = "\n\n".join(f"[{block['stable_key']}]\n{block['content']}" for block in chunk)
+        reply = _complete(
+            config,
+            prompts.build_overall_assessment_prompt(
+                str(artifact["title"]),
+                document_map=document_map,
+                chunk_label=f"{chunk_index + 1}/{len(chunks)}",
+                block_summaries=summaries,
+                prose_chunk=prose,
+            ),
+            schema=prompts.OVERALL_ASSESSMENT_SCHEMA,
+        )
+        payload = replies.loads_object(reply)
+        if payload is None:
+            continue
+        issues = payload.get("issues")
+        issue_list = issues if isinstance(issues, list) else []
+        for snapshot in chunk:
+            current = _live_block_by_key(conn, suggestion_id, str(snapshot["stable_key"]))
+            if current is None:
+                continue
+            own_issues = [
+                issue
+                for issue in issue_list
+                if isinstance(issue, dict)
+                and str(issue.get("block_key") or "") == str(current["stable_key"])
+            ]
+            metadata = dict(current["metadata"]) if isinstance(current["metadata"], dict) else {}
+            metadata["overall_assessment"] = {
+                "summary": str(payload.get("summary") or ""),
+                "issues": own_issues,
+            }
+            if not own_issues or int(current["user_revision"]) > 0:
+                live_drafts.model_update_block(
+                    conn,
+                    suggestion_id,
+                    str(current["stable_key"]),
+                    status="complete",
+                    metadata=metadata,
+                )
+                continue
+            instruction = "\n".join(
+                str(issue.get("revision_instruction") or "") for issue in own_issues
+            ).strip()
+            section_ref = str(current["section_ref"] or "")
+            section_plan = _section_plan(plan, section_ref, str(current["heading"] or "")) or {}
+            revised = _complete(
+                config,
+                prompts.build_paragraph_draft_prompt(
+                    str(artifact["title"]),
+                    document_map=document_map,
+                    section_plan=json.dumps(section_plan, ensure_ascii=False, sort_keys=True),
+                    paragraph_plan=(
+                        json.dumps(current["context"], ensure_ascii=False, sort_keys=True)
+                        + "\nRevision instruction: "
+                        + instruction
+                    ),
+                    research_block=str(section_plan.get("research_notes") or ""),
+                    ledger_block=prompts.format_ledger_block(
+                        _ledger_entries(conn, class_id, section_plan, section_ref)
+                    ),
+                    previous_paragraph=None,
+                    next_paragraph_summary=None,
+                    target_words=int(current["target_words"] or 180),
+                ),
+                target_words=int(current["target_words"] or 180),
+            )
+            live_drafts.model_update_block(
+                conn,
+                suggestion_id,
+                str(current["stable_key"]),
+                content=mathnorm.normalize(revised.strip()),
+                status="complete",
+                metadata=metadata,
+            )
 
 
 def _planning_stage(
@@ -2142,8 +2868,7 @@ def _normalize_plan_word_budgets(
     ]
     allocations = _allocate_words(total_words, weights)
     return [
-        {**entry, "word_budget": words}
-        for entry, words in zip(entries, allocations, strict=True)
+        {**entry, "word_budget": words} for entry, words in zip(entries, allocations, strict=True)
     ]
 
 

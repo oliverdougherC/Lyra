@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from backend.api import routes_drafts
-from backend.core import artifacts, comments, suggestions, writer_pipeline
+from backend.core import artifacts, comments, live_drafts, suggestions, writer_pipeline
 from backend.core.errors import ConflictError, LyraError
 from backend.llm.client import StreamDelta
 from backend.rag.retrieve import RetrievalResult
@@ -178,6 +178,10 @@ def test_an_empty_body_is_the_full_draft_pass(
     assert response.status_code == 202
     assert no_worker[0].instruction is None
     assert no_worker[0].section_refs == ()
+    live = client.get(f"/api/drafts/{artifact_id}/live-suggestion").json()
+    assert live["run_id"] == no_worker[0].run_id
+    assert live["stage"] == "gathering"
+    assert live["status"] == "pending"
 
 
 def test_pass_contract_carries_depth_pause_and_the_comment_being_addressed(
@@ -473,6 +477,129 @@ def test_pending_reads_null_then_the_edit(
     assert edit["stale"] is False
     assert len(edit["hunks"]) == 1
     assert "base_content" not in edit
+
+
+def test_live_suggestion_reads_null_then_the_latest_suggestion(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, _ = _draft(db, class_id)
+
+    assert client.get(f"/api/drafts/{artifact_id}/live-suggestion").json() is None
+
+    suggestion = live_drafts.create_live_suggestion(
+        db,
+        artifact_id,
+        run_id=41,
+        stage="drafting",
+        status="running",
+        detail="Drafting the structure",
+        version=2,
+    )
+    live_drafts.model_update_block(
+        db,
+        int(suggestion["id"]),
+        "intro-1",
+        section_ref="1.1",
+        paragraph_ordinal=1,
+        heading="Introduction",
+        content="A tighter opening.",
+    )
+
+    response = client.get(f"/api/drafts/{artifact_id}/live-suggestion")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == 41
+    assert body["stage"] == "drafting"
+    assert body["status"] == "running"
+    assert body["detail"] == "Drafting the structure"
+    assert body["version"] == 2
+    assert [block["stable_key"] for block in body["blocks"]] == ["intro-1"]
+
+
+def test_live_suggestion_block_patch_is_cas_guarded(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, _ = _draft(db, class_id)
+    suggestion = live_drafts.create_live_suggestion(db, artifact_id, run_id=43)
+    block = live_drafts.model_update_block(
+        db,
+        int(suggestion["id"]),
+        "intro-1",
+        paragraph_ordinal=1,
+        content="A first draft.",
+    )
+
+    accepted = client.patch(
+        f"/api/drafts/{artifact_id}/live-suggestion/blocks/{block['id']}",
+        json={
+            "expected_revision": block["revision"],
+            "content": "My own first draft.",
+            "status": "editing",
+        },
+    )
+
+    assert accepted.status_code == 200
+    body = accepted.json()
+    assert body["content"] == "My own first draft."
+    assert body["status"] == "editing"
+    assert body["user_revision"] == body["revision"]
+
+    streamed = live_drafts.append_block_text(
+        db,
+        int(suggestion["id"]),
+        "intro-1",
+        " Streamed suffix.",
+    )
+    merged = client.patch(
+        f"/api/drafts/{artifact_id}/live-suggestion/blocks/{block['id']}",
+        json={
+            "expected_revision": body["revision"],
+            "base_content": body["content"],
+            "content": "My edited opening.",
+        },
+    )
+
+    assert streamed["content"] == "My own first draft. Streamed suffix."
+    assert merged.status_code == 200
+    assert merged.json()["content"] == "My edited opening. Streamed suffix."
+
+    stale = client.patch(
+        f"/api/drafts/{artifact_id}/live-suggestion/blocks/{block['id']}",
+        json={"expected_revision": block["revision"], "content": "A stale overwrite."},
+    )
+
+    assert stale.status_code == 409
+    assert "changed since it was fetched" in stale.json()["detail"]
+
+
+def test_live_suggestion_finalize_enters_pending_review_without_writing_the_body(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft(db, class_id, content="Student draft.\n")
+    suggestion = live_drafts.create_live_suggestion(
+        db,
+        artifact_id,
+        run_id=47,
+        stage="completed",
+        status="ready",
+    )
+    live_drafts.model_update_block(
+        db,
+        int(suggestion["id"]),
+        "1.1:p1",
+        section_ref="1.1",
+        paragraph_ordinal=1,
+        heading="Introduction",
+        content="Suggested introduction.",
+        status="complete",
+    )
+
+    response = client.post(f"/api/drafts/{artifact_id}/live-suggestion/finalize")
+
+    assert response.status_code == 200
+    assert response.json()["proposed_content"].startswith("## Introduction")
+    assert artifacts.get_part(db, part_id)["content"] == "Student draft.\n"
 
 
 def test_accept_and_reject_over_http(

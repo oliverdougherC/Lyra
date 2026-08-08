@@ -51,6 +51,8 @@ import type {
   DraftStatus,
   FigureRead,
   FirecrawlTestResult,
+  LiveDraftSuggestion,
+  LiveDraftSuggestionBlock,
   MessageRead,
   PassRequest,
   PendingEdit,
@@ -199,6 +201,101 @@ function agentChatErrorFactory(status: number, payload: unknown | undefined): Er
   return isAgentChatFailure(payload)
     ? new AgentChatError(status, payload)
     : defaultErrorFactory(status, payload)
+}
+
+function normalizeLiveDraftSuggestionStage(stage: unknown): LiveDraftSuggestion['stage'] {
+  switch (stage) {
+    case 'plan':
+    case 'structure':
+    case 'outline':
+    case 'outlining':
+      return 'outline'
+    case 'research':
+    case 'gathering':
+      return 'gathering'
+    case 'sections':
+    case 'drafting':
+      return 'drafting'
+    case 'weave':
+    case 'transitions':
+      return 'transitions'
+    case 'revise':
+    case 'review':
+    case 'reviewing':
+      return 'review'
+    case 'finalize':
+    case 'finalizing':
+      return 'finalize'
+    case 'done':
+    case 'complete':
+    case 'completed':
+      return 'complete'
+    default:
+      return typeof stage === 'string' && stage.trim() ? (stage as LiveDraftSuggestion['stage']) : 'gathering'
+  }
+}
+
+function normalizeLiveDraftSuggestionStatus(status: unknown): LiveDraftSuggestion['status'] {
+  switch (status) {
+    case 'pending':
+      return 'queued'
+    case 'queued':
+    case 'running':
+    case 'ready':
+    case 'failed':
+    case 'finalized':
+    case 'complete':
+    case 'paused':
+    case 'cancelled':
+      return status
+    default:
+      return 'running'
+  }
+}
+
+function normalizeLiveDraftSuggestionBlock(payload: unknown): LiveDraftSuggestionBlock {
+  const value = payload as Record<string, unknown>
+  return {
+    id: Number(value.id),
+    block_key: String(value.block_key ?? value.stable_key ?? ''),
+    section_ref:
+      value.section_ref == null || value.section_ref === ''
+        ? null
+        : String(value.section_ref),
+    ordinal: Number(value.ordinal ?? value.paragraph_ordinal ?? 0),
+    kind: String(value.kind ?? 'paragraph'),
+    heading: value.heading == null || value.heading === '' ? null : String(value.heading),
+    content: String(value.content ?? ''),
+    status: String(value.status ?? 'queued') as LiveDraftSuggestionBlock['status'],
+    target_words:
+      typeof value.target_words === 'number'
+        ? value.target_words
+        : value.target_words == null
+          ? null
+          : Number(value.target_words),
+    summary: value.summary == null || value.summary === '' ? null : String(value.summary),
+    revision: Number(value.revision ?? 0),
+    user_revision: Number(value.user_revision ?? 0),
+  }
+}
+
+function normalizeLiveDraftSuggestion(payload: unknown): LiveDraftSuggestion | null {
+  if (!payload || typeof payload !== 'object') return null
+  const value = payload as Record<string, unknown>
+  return {
+    id: Number(value.id),
+    artifact_id: Number(value.artifact_id),
+    run_id: Number(value.run_id),
+    status: normalizeLiveDraftSuggestionStatus(value.status),
+    stage: normalizeLiveDraftSuggestionStage(value.stage),
+    stage_detail:
+      value.stage_detail == null && value.detail == null
+        ? null
+        : String(value.stage_detail ?? value.detail),
+    version: Number(value.version ?? 0),
+    base_content: String(value.base_content ?? ''),
+    blocks: Array.isArray(value.blocks) ? value.blocks.map(normalizeLiveDraftSuggestionBlock) : [],
+  }
 }
 
 async function send(path: string, options: RequestOptions = {}): Promise<Response> {
@@ -692,6 +789,28 @@ export const api = {
 
   createWriterSession: (draftId: number) =>
     requestJson<SessionRead>(`/api/drafts/${draftId}/sessions`, { method: 'POST' }),
+
+  getLiveDraftSuggestion: async (draftId: number, signal?: AbortSignal) =>
+    normalizeLiveDraftSuggestion(
+      await requestJson<LiveDraftSuggestion | null>(`/api/drafts/${draftId}/live-suggestion`, {
+        signal,
+      }),
+    ),
+
+  updateLiveDraftSuggestionBlock: (
+    draftId: number,
+    blockId: number,
+    body: { content: string; expected_revision: number; base_content: string },
+  ) =>
+    requestJson<LiveDraftSuggestionBlock>(`/api/drafts/${draftId}/live-suggestion/blocks/${blockId}`, {
+      method: 'PATCH',
+      body,
+    }).then(normalizeLiveDraftSuggestionBlock),
+
+  finalizeLiveDraftSuggestion: (draftId: number) =>
+    requestJson<PendingEdit>(`/api/drafts/${draftId}/live-suggestion/finalize`, {
+      method: 'POST',
+    }),
 
   getPendingEdit: (draftId: number, signal?: AbortSignal) =>
     requestJson<PendingEdit | null>(`/api/drafts/${draftId}/pending`, { signal }),

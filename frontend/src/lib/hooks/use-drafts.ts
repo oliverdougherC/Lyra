@@ -12,6 +12,7 @@ import type {
   DraftBodyUpdate,
   DraftPlanUpdate,
   DraftStatus,
+  LiveDraftSuggestion,
   PassRequest,
   ReviewRequest,
 } from '@/types'
@@ -26,6 +27,7 @@ export const draftKeys = {
   comments: (draftId: number) => ['draft-comments', draftId] as const,
   plan: (draftId: number) => ['draft-plan', draftId] as const,
   sources: (classId: number) => ['draft-sources', classId] as const,
+  liveSuggestion: (draftId: number) => ['draft-live-suggestion', draftId] as const,
 }
 
 /** How often the list asks again while a suggestion run is on any draft in it. */
@@ -101,6 +103,39 @@ export function usePendingEdit(draftId: number, enabled = true) {
     queryKey: draftKeys.pending(draftId),
     queryFn: ({ signal }) => api.getPendingEdit(draftId, signal),
     enabled: enabled && Number.isFinite(draftId),
+  })
+}
+
+function isLiveSuggestionRunning(status: LiveDraftSuggestion['status'] | undefined): boolean {
+  return status === 'queued' || status === 'running'
+}
+
+/**
+ * The staged-drafting resident starts as null, so the pass state has to keep the poll
+ * alive until the first block arrives. After that, the suggestion's own status decides.
+ */
+export function liveSuggestionPollInterval(
+  query: {
+    state: {
+      data: LiveDraftSuggestion | null | undefined
+      dataUpdateCount: number
+    }
+  },
+  passRunning: boolean,
+): number | false {
+  const live = query.state.data
+  if (!live) return passRunning ? 750 : false
+  if (!isLiveSuggestionRunning(live.status) && !passRunning) return false
+  return Math.min(750 + query.state.dataUpdateCount * 250, 2000)
+}
+
+export function useLiveDraftSuggestion(draftId: number, enabled = true, passRunning = false) {
+  return useQuery({
+    queryKey: draftKeys.liveSuggestion(draftId),
+    queryFn: ({ signal }) => api.getLiveDraftSuggestion(draftId, signal),
+    enabled: enabled && Number.isFinite(draftId),
+    refetchInterval: (query) => liveSuggestionPollInterval(query, passRunning),
+    refetchIntervalInBackground: true,
   })
 }
 
@@ -339,6 +374,82 @@ export function useCreateWriterSession(draftId: number) {
     mutationFn: () => api.createWriterSession(draftId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: draftKeys.sessions(draftId) })
+    },
+  })
+}
+
+export function useUpdateLiveDraftSuggestionBlock(draftId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      blockId,
+      content,
+      expectedRevision,
+      baseContent,
+    }: {
+      blockId: number
+      content: string
+      expectedRevision: number
+      baseContent: string
+    }) =>
+      api.updateLiveDraftSuggestionBlock(draftId, blockId, {
+        content,
+        expected_revision: expectedRevision,
+        base_content: baseContent,
+      }),
+    onMutate: async ({ blockId, content }) => {
+      await queryClient.cancelQueries({ queryKey: draftKeys.liveSuggestion(draftId) })
+      const previous = queryClient.getQueryData<LiveDraftSuggestion | null>(
+        draftKeys.liveSuggestion(draftId),
+      )
+      if (!previous) return { previous }
+      queryClient.setQueryData<LiveDraftSuggestion>(draftKeys.liveSuggestion(draftId), {
+        ...previous,
+        blocks: previous.blocks.map((block) =>
+          block.id === blockId
+            ? {
+                ...block,
+                content,
+                revision: block.revision + 1,
+                user_revision: block.user_revision + 1,
+              }
+            : block,
+        ),
+      })
+      return { previous }
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(draftKeys.liveSuggestion(draftId), context.previous)
+      }
+      queryClient.invalidateQueries({ queryKey: draftKeys.liveSuggestion(draftId) })
+    },
+    onSuccess: (updatedBlock) => {
+      queryClient.setQueryData<LiveDraftSuggestion | null>(
+        draftKeys.liveSuggestion(draftId),
+        (current) =>
+          current
+            ? {
+                ...current,
+                blocks: current.blocks.map((block) =>
+                  block.id === updatedBlock.id ? updatedBlock : block,
+                ),
+              }
+            : current,
+      )
+    },
+  })
+}
+
+export function useFinalizeLiveDraftSuggestion(draftId: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.finalizeLiveDraftSuggestion(draftId),
+    onSuccess: (edit) => {
+      queryClient.setQueryData(draftKeys.pending(draftId), edit)
+      queryClient.invalidateQueries({ queryKey: draftKeys.liveSuggestion(draftId) })
+      queryClient.invalidateQueries({ queryKey: draftKeys.pending(draftId) })
+      queryClient.invalidateQueries({ queryKey: draftKeys.detail(draftId) })
     },
   })
 }
