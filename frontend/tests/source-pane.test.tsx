@@ -201,19 +201,17 @@ describe('SourcePane', () => {
     expect(screen.queryByRole('button', { name: /Go to the solution/ })).not.toBeInTheDocument()
   })
   it('renders the controls its caller puts in the header', async () => {
-    // The pane owns the page, not the layout around it: sizing the column and filling the
-    // window are the workspace's to decide, so it hands them in and this only finds them a
-    // place to sit.
+    // The pane owns the page, not the layout around it: sizing the column to the page is
+    // the workspace's to decide, so it hands the control in and this only finds it a place
+    // to sit.
     renderPane(
       { documentId: 7, pageNumber: 1 },
       {
         fitToggle: <button type="button">Fit</button>,
-        focusToggle: <button type="button">Focus</button>,
       },
     )
     await decodePages()
 
     expect(screen.getByRole('button', { name: 'Fit' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Focus' })).toBeInTheDocument()
   })
 })

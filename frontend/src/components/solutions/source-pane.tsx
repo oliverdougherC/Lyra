@@ -39,8 +39,6 @@ type SourcePaneProps = {
   onFitWidth?: (width: number) => void
   /** The control that sizes the column to the page, rendered in this pane's header. */
   fitToggle?: React.ReactNode
-  /** The control that gives this pane the whole window, rendered in its header. */
-  focusToggle?: React.ReactNode
 }
 
 /** The padding around the page inside the scrolling area, per side. Matches `p-5`. */
@@ -87,7 +85,6 @@ export function SourcePane({
   onSelectProblem,
   onFitWidth,
   fitToggle = null,
-  focusToggle = null,
 }: SourcePaneProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null)
   // The shape of the page on screen, learned when it decoded. Held here rather than inside
@@ -216,7 +213,6 @@ export function SourcePane({
             </select>
           ) : null}
           {fitToggle}
-          {focusToggle}
         </span>
       </header>
 
