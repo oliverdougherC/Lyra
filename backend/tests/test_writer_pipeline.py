@@ -87,6 +87,7 @@ class _StubModel:
         target_words: int | None = None,
         truncated: list[bool] | None = None,
         schema: object | None = None,
+        enable_thinking: bool | None = None,
     ) -> str:
         self.prompts.append(messages)
         self.targets.append(target_words)
@@ -779,6 +780,65 @@ def test_live_paragraph_retries_when_the_model_spends_the_first_call_only_reason
     assert calls[1][1]["enable_thinking"] is False
     assert "/no_think" in calls[1][0][-1]["content"]
     assert completed["content"] == "The paragraph begins immediately."
+
+
+def test_empty_overall_revision_never_erases_completed_prose(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_id, _ = _draft(db, class_id)
+    suggestion = live_drafts.create_live_suggestion(db, artifact_id, run_id=92)
+    live_drafts.model_update_block(
+        db,
+        int(suggestion["id"]),
+        "1:p1",
+        section_ref="1",
+        paragraph_ordinal=1,
+        content="Original paragraph remains.",
+        status="complete",
+        target_words=180,
+        summary="Explain the central claim.",
+        context={"claim": "The central claim."},
+    )
+    replies = iter(
+        [
+            json.dumps(
+                {
+                    "summary": "One revision is needed.",
+                    "issues": [
+                        {
+                            "block_key": "1:p1",
+                            "problem": "Clarify the claim.",
+                            "revision_instruction": "State the claim more directly.",
+                        }
+                    ],
+                }
+            ),
+            "",
+        ]
+    )
+    calls: list[dict[str, object]] = []
+
+    def complete(config, messages, **kwargs):  # noqa: ANN001
+        calls.append(kwargs)
+        return next(replies)
+
+    monkeypatch.setattr(writer_pipeline, "_complete", complete)
+
+    writer_pipeline._review_live_chunks(
+        db,
+        writer_pipeline.PassJob(artifact_id, _deadline=time.monotonic() + 60),
+        artifacts.get_artifact(db, artifact_id),
+        TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+        class_id,
+        int(suggestion["id"]),
+        {"sections": []},
+        "1:p1: Explain the central claim.",
+    )
+
+    block = live_drafts.get_live_suggestion(db, int(suggestion["id"]))["blocks"][0]
+    assert block["content"] == "Original paragraph remains."
+    assert calls[1]["enable_thinking"] is False
+    assert block["metadata"]["overall_assessment"]["issues"]
 
 
 # --------------------------------------------------------------------------------

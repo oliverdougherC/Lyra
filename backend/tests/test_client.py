@@ -586,6 +586,14 @@ async def test_temperature_zero_is_sent_rather_than_dropped_as_falsy() -> None:
     assert sent[0]["temperature"] == 0.0
 
 
+async def test_non_streaming_completion_can_disable_template_level_thinking() -> None:
+    transport, sent = _recorder({})
+
+    await _complete(transport, enable_thinking=False)
+
+    assert sent[0]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
 async def test_a_schema_is_sent_as_a_strict_json_schema_response_format() -> None:
     transport, sent = _recorder({})
 

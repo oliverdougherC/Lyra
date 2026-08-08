@@ -695,6 +695,7 @@ async def complete(
     request_timeout: httpx.Timeout | None = None,
     fail_on_truncation: bool = False,
     truncated: list[bool] | None = None,
+    enable_thinking: bool | None = None,
 ) -> str:
     """Run a single non-streaming completion and return the assistant message content.
 
@@ -727,6 +728,8 @@ async def complete(
             wants the partial text *and* wants to know it is partial - a drafted section
             is worth keeping and worth flagging, so neither discarding it nor filing it
             silently is right.
+        enable_thinking: Optional chat-template control for local reasoning models. Fixed
+            prose execution can disable it without changing ordinary chat or planning.
 
     Raises:
         UpstreamError: The endpoint failed, its reply had no readable message content,
@@ -735,7 +738,15 @@ async def complete(
     url = f"{_base_url(endpoint)}/chat/completions"
     async with _client(request_timeout or CHAT_TIMEOUT, api_key, transport) as client:
         payload = await _post_constrained(
-            client, url, endpoint, model, messages, max_tokens, temperature, schema
+            client,
+            url,
+            endpoint,
+            model,
+            messages,
+            max_tokens,
+            temperature,
+            schema,
+            enable_thinking,
         )
 
     choices = payload.get("choices") if isinstance(payload, dict) else None
@@ -764,6 +775,7 @@ async def _post_constrained(
     max_tokens: int | None,
     temperature: float | None,
     schema: JsonSchema | None,
+    enable_thinking: bool | None,
 ) -> dict[str, object]:
     """Post one completion, stepping down the constraint ladder if the endpoint refuses.
 
@@ -794,6 +806,7 @@ async def _post_constrained(
             max_tokens=max_tokens,
             temperature=temperature,
             response_format=_response_format(level, schema),
+            enable_thinking=enable_thinking,
         )
         try:
             response = await client.post(url, json=body)

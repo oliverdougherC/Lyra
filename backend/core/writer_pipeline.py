@@ -404,6 +404,7 @@ def _complete(
     target_words: int | None = None,
     truncated: list[bool] | None = None,
     schema: client.JsonSchema | None = None,
+    enable_thinking: bool | None = None,
 ) -> str:
     """One model call, stripped. The test seam for every stage.
 
@@ -427,6 +428,7 @@ def _complete(
             truncated=truncated,
             schema=schema,
             temperature=client.DETERMINISTIC_TEMPERATURE if schema else None,
+            enable_thinking=enable_thinking,
         )
     ).strip()
 
@@ -1238,12 +1240,27 @@ def _review_live_chunks(
                     target_words=int(current["target_words"] or 180),
                 ),
                 target_words=int(current["target_words"] or 180),
+                enable_thinking=False,
             )
+            normalized_revision = mathnorm.normalize(revised.strip())
+            if not normalized_revision:
+                metadata["overall_assessment"]["revision_skipped"] = (
+                    "The model returned no replacement prose, so the completed paragraph "
+                    "was preserved."
+                )
+                live_drafts.model_update_block(
+                    conn,
+                    suggestion_id,
+                    str(current["stable_key"]),
+                    status="complete",
+                    metadata=metadata,
+                )
+                continue
             live_drafts.model_update_block(
                 conn,
                 suggestion_id,
                 str(current["stable_key"]),
-                content=mathnorm.normalize(revised.strip()),
+                content=normalized_revision,
                 status="complete",
                 metadata=metadata,
             )
