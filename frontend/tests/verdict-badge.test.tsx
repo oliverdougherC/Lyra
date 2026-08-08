@@ -17,7 +17,7 @@ describe('VerdictBadge', () => {
   })
 
   it.each<[Verdict, string]>([
-    ['verified', 'Checked'],
+    ['verified', 'Verified'],
     ['refuted', 'Check failed'],
     ['uncheckable', 'Nothing to check'],
     ['unchecked', 'Not checked'],
@@ -45,11 +45,22 @@ describe('VerdictBadge', () => {
     expect(VERDICTS.uncheckable.explanation).toMatch(/^Nothing here could be settled/)
   })
 
+  it('reserves the Mark for the one verdict that passed', () => {
+    // Verdigris and the ring-and-check are the Mark's alone (design system 3.3, 6): only a
+    // passing verification may wear it. Every other verdict is a printed word, so the words
+    // carry the whole distinction that color used to.
+    expect(VERDICTS.verified.tone).toBe('mark')
+    for (const verdict of ['refuted', 'uncheckable', 'unchecked'] as const) {
+      expect(VERDICTS[verdict].tone).not.toBe('mark')
+    }
+  })
+
   it('keeps a job left undone looking undone', () => {
-    // `unchecked` is the one state where something was owed and did not arrive, so it is
-    // the one state that must not read as fine.
-    expect(VERDICTS.unchecked.className).not.toContain('success')
-    expect(VERDICTS.uncheckable.className).toContain('success')
+    // `unchecked` is the one state where something was owed and did not arrive, and
+    // `uncheckable` is fine; with color gone from both, their sentences must differ so the
+    // student can tell "nothing to check" from "not checked".
+    expect(VERDICTS.unchecked.label).not.toBe(VERDICTS.uncheckable.label)
+    expect(VERDICTS.refuted.tone).toBe('warn')
   })
 
   it('prefers the backend reason over the generic one', () => {

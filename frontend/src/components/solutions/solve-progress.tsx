@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react'
 
 import { LyraMark } from '@/components/chat/lyra-mark'
+import { Penbar } from '@/components/ex-libris'
 import { Button } from '@/components/ui/button'
-import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
 import type { SolutionState } from '@/types'
 
@@ -89,10 +89,11 @@ export function SolveProgress({
           {detail ? <span className="text-text-tertiary truncate text-xs">{detail}</span> : null}
         </span>
         {counted ? (
-          <Progress
-            value={(problemsDone / problemsTotal) * 100}
-            className="w-40"
-            aria-label={`${problemsDone} of ${problemsTotal} problems solved`}
+          <Penbar
+            value={problemsDone}
+            total={problemsTotal}
+            label={`${problemsDone} of ${problemsTotal} problems solved`}
+            className="w-48"
           />
         ) : null}
         {elapsed >= ELAPSED_AFTER_MS ? (
@@ -123,10 +124,11 @@ export function SolveProgress({
       {/* No bar until the count is real. A bar sitting at zero implies a denominator
           nobody has computed yet, which is a guess dressed as information. */}
       {counted ? (
-        <Progress
-          value={(problemsDone / problemsTotal) * 100}
+        <Penbar
+          value={problemsDone}
+          total={problemsTotal}
+          label={`${problemsDone} of ${problemsTotal} problems solved`}
           className="w-64"
-          aria-label={`${problemsDone} of ${problemsTotal} problems solved`}
         />
       ) : null}
       {onCancel ? (

@@ -180,9 +180,9 @@ describe('ProblemPanel', () => {
   it('says what is happening while a problem is still being checked', () => {
     renderPanel(node({ problem: { ...PROBLEM, status: 'verifying' } }))
 
-    // A verdict badge here would claim an outcome that has not been reached.
+    // The Mark here would claim an outcome that has not been reached.
     expect(screen.getByText('Checking')).toBeInTheDocument()
-    expect(screen.queryByText('Checked')).not.toBeInTheDocument()
+    expect(screen.queryByText('Verified')).not.toBeInTheDocument()
   })
 
   it('offers re-solving only on the problem, never per step', async () => {
@@ -337,8 +337,8 @@ describe('a section whose parts are questions of their own', () => {
     expect(screen.getByText('Answer 0.')).toBeInTheDocument()
     expect(screen.getByText('Working for part 1.')).toBeInTheDocument()
     expect(screen.getByText('Answer 1.')).toBeInTheDocument()
-    // One badge per part, and one summarising them on the section heading.
-    expect(screen.getAllByText('Checked')).toHaveLength(3)
+    // One Mark per part, and one summarising them on the section heading.
+    expect(screen.getAllByText('Verified')).toHaveLength(3)
   })
 
   it('sums the parts into the worst verdict among them, never an average', () => {
