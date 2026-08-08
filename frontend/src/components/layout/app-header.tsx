@@ -5,6 +5,8 @@ import { ChevronRight, UserRound } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
+import { Dentil } from '@/components/ex-libris'
+import { EndpointLocalityBadge } from '@/components/layout/endpoint-locality-badge'
 import { HEADER_ACTIONS_SLOT, HEADER_CRUMB_SLOT } from '@/components/layout/page-chrome'
 import { ClassProfileSheet } from '@/components/profile/class-profile-sheet'
 import { Button } from '@/components/ui/button'
@@ -72,10 +74,13 @@ export function AppHeader({ collapsed = false }: { collapsed?: boolean }) {
       className={cn(
         'sticky top-0 z-10 flex shrink-0 items-center gap-2 bg-background/85 px-4 transition-[height,transform,opacity] duration-200 ease-out supports-[backdrop-filter]:backdrop-blur-sm',
         collapsed
-          ? 'h-0 -translate-y-full overflow-hidden border-b-0 opacity-0'
-          : 'h-14 translate-y-0 border-b opacity-100',
+          ? 'relative h-0 -translate-y-full overflow-hidden border-b-0 opacity-0'
+          : 'relative h-14 translate-y-0 border-b opacity-100',
       )}
     >
+      {/* The lintel's dentil course, cut into the stone beneath the crumb. Decorative, still,
+          and clipped away with the rest of the bar in immersive mode. */}
+      {collapsed ? null : <Dentil className="absolute inset-x-0 -bottom-1" />}
       <SidebarTrigger className="-ml-1" />
       <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
         <ol className="flex items-center gap-1.5 text-[13px]">
@@ -131,6 +136,9 @@ export function AppHeader({ collapsed = false }: { collapsed?: boolean }) {
       {/* The route's own actions, ahead of the class-level ones: they belong to what is on
           screen, and a workspace that gives up its title row has nowhere else to put them. */}
       <div id={HEADER_ACTIONS_SLOT} className="flex shrink-0 items-center gap-1" />
+
+      {/* The privacy readout is always on the lintel, whatever route is open. */}
+      <EndpointLocalityBadge className="hidden shrink-0 sm:inline-flex" />
 
       {klass ? (
         <div className="flex shrink-0 items-center gap-2">
