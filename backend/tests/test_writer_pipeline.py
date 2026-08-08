@@ -754,10 +754,10 @@ def test_live_paragraph_retries_when_the_model_spends_the_first_call_only_reason
         paragraph_ordinal=1,
         target_words=180,
     )
-    calls: list[list[dict[str, str]]] = []
+    calls: list[tuple[list[dict[str, str]], dict[str, object]]] = []
 
     async def fake_stream_chat(endpoint, api_key, model, messages, **kwargs):  # noqa: ANN001
-        calls.append(messages)
+        calls.append((messages, kwargs))
         if len(calls) == 1:
             yield writer_pipeline.client.StreamDelta("reasoning", "I should plan this paragraph.")
             return
@@ -775,7 +775,9 @@ def test_live_paragraph_retries_when_the_model_spends_the_first_call_only_reason
     )
 
     assert len(calls) == 2
-    assert "/no_think" in calls[1][-1]["content"]
+    assert calls[0][1]["enable_thinking"] is False
+    assert calls[1][1]["enable_thinking"] is False
+    assert "/no_think" in calls[1][0][-1]["content"]
     assert completed["content"] == "The paragraph begins immediately."
 
 

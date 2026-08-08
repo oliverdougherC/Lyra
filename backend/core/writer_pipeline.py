@@ -1040,6 +1040,7 @@ def _stream_live_paragraph(
             call_messages,
             max_tokens=max_tokens,
             request_timeout=_deadline_timeout(),
+            enable_thinking=False,
         ):
             if delta.channel != "answer" or not delta.text:
                 continue

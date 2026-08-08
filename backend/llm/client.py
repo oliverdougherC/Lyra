@@ -441,6 +441,7 @@ def _chat_body(
     max_tokens: int | None = None,
     temperature: float | None = None,
     response_format: dict[str, object] | None = None,
+    enable_thinking: bool | None = None,
 ) -> dict[str, object]:
     """Assemble a chat-completions body, omitting `model` when the user has not picked one.
 
@@ -454,9 +455,12 @@ def _chat_body(
     request that never ends; the capability probes do too, because their answers are tiny
     and someone is watching the settings screen while they run.
 
-    `temperature` and `response_format` follow the same rule: a caller that has no opinion
-    sends nothing and gets the server's own behaviour. `temperature` is written out even
-    when it is 0, which is why the test is against None rather than falsiness.
+    `temperature`, `response_format`, and `enable_thinking` follow the same rule: a caller
+    that has no opinion sends nothing and gets the server's own behaviour. `temperature`
+    and `enable_thinking` are written out even when they are 0 or false, which is why the
+    tests are against None rather than falsiness. Thinking control is carried in the
+    OpenAI-compatible `chat_template_kwargs` extension used by reasoning-capable local
+    runtimes.
     """
     body: dict[str, object] = {"messages": messages, "stream": stream}
     if model is not None:
@@ -469,6 +473,8 @@ def _chat_body(
         body["temperature"] = temperature
     if response_format is not None:
         body["response_format"] = response_format
+    if enable_thinking is not None:
+        body["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
     return body
 
 
@@ -606,6 +612,7 @@ async def stream_chat(
     transport: httpx.AsyncBaseTransport | None = None,
     max_tokens: int | None = None,
     request_timeout: httpx.Timeout | None = None,
+    enable_thinking: bool | None = None,
 ) -> AsyncIterator[StreamDelta]:
     """Stream assistant deltas from the tutor endpoint, split by channel.
 
@@ -618,6 +625,8 @@ async def stream_chat(
         max_tokens: Optional output ceiling for bounded background prose jobs.
         request_timeout: Timeout profile; background drafting uses the longer worker
             timeout while interactive chat keeps the default.
+        enable_thinking: Optional chat-template control for local reasoning models. It is
+            left unset for ordinary chat and disabled for fixed paragraph execution jobs.
 
     Yields:
         Non-empty `StreamDelta` fragments in arrival order, each tagged `answer` or
@@ -629,7 +638,13 @@ async def stream_chat(
             llama.cpp says anything once a 200 and half a reply are already on the wire.
     """
     url = f"{_base_url(endpoint)}/chat/completions"
-    body = _chat_body(model, messages, stream=True, max_tokens=max_tokens)
+    body = _chat_body(
+        model,
+        messages,
+        stream=True,
+        max_tokens=max_tokens,
+        enable_thinking=enable_thinking,
+    )
     splitter = _ReasoningTagSplitter()
     finished = False
     async with _client(request_timeout or CHAT_TIMEOUT, api_key, transport) as client:
