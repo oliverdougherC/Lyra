@@ -9,8 +9,10 @@ what parks, and what a failure costs (never the student's words).
 import json
 import sqlite3
 import threading
+import time
 from collections.abc import Callable
 
+import httpx
 import pytest
 
 from backend.core import (
@@ -712,12 +714,20 @@ def test_the_generation_ceiling_is_computed_and_capped(
     from backend.llm import budget
 
     sent: list[object] = []
+    timeouts: list[object] = []
 
     async def fake_complete(endpoint, api_key, model, messages, **kwargs):  # noqa: ANN001
         sent.append(kwargs.get("max_tokens"))
+        timeouts.append(kwargs.get("request_timeout"))
         return "text"
 
     monkeypatch.setattr(writer_pipeline.client, "complete", fake_complete)
+    monkeypatch.setattr(
+        writer_pipeline._writer_local,
+        "deadline",
+        time.monotonic() + 30,
+        raising=False,
+    )
     config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192)
 
     writer_pipeline._complete(config, [{"role": "user", "content": "x"}], 300)
@@ -728,6 +738,8 @@ def test_the_generation_ceiling_is_computed_and_capped(
     assert sent[0] == budget.tokens_for_words(300)
     assert sent[1] == reserve  # A target larger than the window is clamped to it.
     assert sent[2] == reserve  # No target at all still sends the reserve.
+    assert all(isinstance(timeout, httpx.Timeout) for timeout in timeouts)
+    assert all(0 < timeout.read <= 30 for timeout in timeouts if isinstance(timeout, httpx.Timeout))
 
 
 # --------------------------------------------------------------------------------

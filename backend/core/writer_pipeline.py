@@ -44,6 +44,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
+import httpx
+
 from backend.core import (
     artifacts,
     briefs,
@@ -412,10 +414,7 @@ def _complete(
     """
     reserve = budget.generation_reserve(config.context_window)
     max_tokens = min(budget.tokens_for_words(target_words), reserve) if target_words else reserve
-    deadline = getattr(_writer_local, "deadline", None)
-    timeout = client.BACKGROUND_TIMEOUT
-    if isinstance(deadline, float):
-        timeout = max(0.001, min(timeout, deadline - time.monotonic()))
+    timeout = _deadline_timeout()
     return asyncio.run(
         client.complete(
             config.endpoint_url,
@@ -429,6 +428,24 @@ def _complete(
             temperature=client.DETERMINISTIC_TEMPERATURE if schema else None,
         )
     ).strip()
+
+
+def _deadline_timeout(profile: httpx.Timeout = client.BACKGROUND_TIMEOUT) -> httpx.Timeout:
+    """Cap an HTTP timeout profile at the writer run's remaining wall clock."""
+    deadline = getattr(_writer_local, "deadline", None)
+    if not isinstance(deadline, float):
+        return profile
+    remaining = max(0.001, deadline - time.monotonic())
+
+    def capped(value: float | None) -> float:
+        return remaining if value is None else min(value, remaining)
+
+    return httpx.Timeout(
+        connect=capped(profile.connect),
+        read=capped(profile.read),
+        write=capped(profile.write),
+        pool=capped(profile.pool),
+    )
 
 
 def _run(conn: sqlite3.Connection, job: PassJob) -> None:
@@ -1021,7 +1038,7 @@ def _stream_live_paragraph(
             config.model,
             messages,
             max_tokens=max_tokens,
-            request_timeout=client.BACKGROUND_TIMEOUT,
+            request_timeout=_deadline_timeout(),
         ):
             if delta.channel != "answer" or not delta.text:
                 continue
