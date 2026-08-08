@@ -162,6 +162,7 @@ def test_paragraph_prompt_receives_global_map_neighbours_and_local_evidence() ->
     assert "P3 explains" in rendered
     assert "about 180 words" in rendered
     assert "one paragraph" in rendered.lower()
+    assert "/no_think" in messages[-1]["content"]
 
 
 def test_transition_prompt_knows_the_document_map_and_only_revises_the_next_paragraph() -> None:

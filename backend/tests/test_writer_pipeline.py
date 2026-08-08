@@ -742,6 +742,43 @@ def test_the_generation_ceiling_is_computed_and_capped(
     assert all(0 < timeout.read <= 30 for timeout in timeouts if isinstance(timeout, httpx.Timeout))
 
 
+def test_live_paragraph_retries_when_the_model_spends_the_first_call_only_reasoning(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_id, _ = _draft(db, class_id)
+    suggestion = live_drafts.create_live_suggestion(db, artifact_id, run_id=91)
+    block = live_drafts.model_update_block(
+        db,
+        int(suggestion["id"]),
+        "1:p1",
+        paragraph_ordinal=1,
+        target_words=180,
+    )
+    calls: list[list[dict[str, str]]] = []
+
+    async def fake_stream_chat(endpoint, api_key, model, messages, **kwargs):  # noqa: ANN001
+        calls.append(messages)
+        if len(calls) == 1:
+            yield writer_pipeline.client.StreamDelta("reasoning", "I should plan this paragraph.")
+            return
+        yield writer_pipeline.client.StreamDelta("answer", "The paragraph begins immediately.")
+
+    monkeypatch.setattr(writer_pipeline.client, "stream_chat", fake_stream_chat)
+
+    completed = writer_pipeline._stream_live_paragraph(
+        db,
+        writer_pipeline.PassJob(artifact_id, _deadline=time.monotonic() + 60),
+        TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+        int(suggestion["id"]),
+        block,
+        [{"role": "user", "content": "/no_think\n\nWrite the paragraph."}],
+    )
+
+    assert len(calls) == 2
+    assert "/no_think" in calls[1][-1]["content"]
+    assert completed["content"] == "The paragraph begins immediately."
+
+
 # --------------------------------------------------------------------------------
 # The revise stage: the pass reads back what it wrote before handing it over.
 # --------------------------------------------------------------------------------

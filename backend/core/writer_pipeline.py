@@ -137,6 +137,7 @@ PLAN_PARKED_DETAIL = "The writing plan is ready. Review or edit it, then draft a
 LIVE_READY_DETAIL = "The live draft suggestion is ready for review."
 LIVE_REVIEW_CHUNK_BLOCKS = 6
 LIVE_STREAM_FLUSH_CHARS = 64
+LIVE_PARAGRAPH_ATTEMPTS = 2
 
 
 @dataclass(frozen=True)
@@ -1029,14 +1030,14 @@ def _stream_live_paragraph(
         budget.tokens_for_words(target_words), budget.generation_reserve(config.context_window)
     )
 
-    async def consume() -> int:
+    async def consume(call_messages: list[dict[str, str]]) -> int:
         buffer = ""
         written = 0
         async for delta in client.stream_chat(
             config.endpoint_url,
             config.api_key,
             config.model,
-            messages,
+            call_messages,
             max_tokens=max_tokens,
             request_timeout=_deadline_timeout(),
         ):
@@ -1055,11 +1056,30 @@ def _stream_live_paragraph(
             )
         return written
 
-    written = asyncio.run(consume())
-    result = _live_block_by_key(conn, suggestion_id, stable_key)
-    if result is None or (written == 0 and not str(result["content"]).strip()):
-        raise LyraError(f"The model returned no prose for {stable_key}.")
-    return result
+    call_messages = messages
+    for attempt in range(LIVE_PARAGRAPH_ATTEMPTS):
+        written = asyncio.run(consume(call_messages))
+        result = _live_block_by_key(conn, suggestion_id, stable_key)
+        if result is not None and (written > 0 or str(result["content"]).strip()):
+            return result
+        if attempt + 1 < LIVE_PARAGRAPH_ATTEMPTS:
+            live_drafts.update_live_suggestion(
+                conn,
+                suggestion_id,
+                detail=f"Retrying {stable_key} with immediate prose",
+            )
+            call_messages = [
+                *messages,
+                {
+                    "role": "user",
+                    "content": (
+                        "/no_think\n\nThe previous attempt produced no paragraph text. "
+                        "Do not analyze, outline, or explain. Begin the first sentence now "
+                        "and return only the finished paragraph."
+                    ),
+                },
+            ]
+    raise LyraError(f"The model returned no prose for {stable_key} after a bounded retry.")
 
 
 def _review_live_transitions(

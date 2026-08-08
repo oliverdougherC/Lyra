@@ -1805,10 +1805,11 @@ def build_paragraph_draft_prompt(
                 + "\n\nExecute the supplied paragraph job. Return prose only: no heading, "
                 "outline, notes, preface, or explanation. Establish the paragraph's "
                 "relationship to the preceding idea through meaning, not a generic "
-                "transition phrase. Do not perform work assigned to later paragraphs."
+                "transition phrase. Do not perform work assigned to later paragraphs. "
+                "Do not plan or reason about the job; begin the paragraph immediately."
             ),
         },
-        {"role": "user", "content": "\n\n".join(context)},
+        {"role": "user", "content": "/no_think\n\n" + "\n\n".join(context)},
     ]
 
 
