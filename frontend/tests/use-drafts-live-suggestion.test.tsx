@@ -7,6 +7,7 @@ import { ApiError, api } from '@/lib/api'
 import {
   draftKeys,
   liveSuggestionPollInterval,
+  useStartPass,
   useUpdateLiveDraftSuggestionBlock,
 } from '@/lib/hooks/use-drafts'
 import type { LiveDraftSuggestion } from '@/types'
@@ -95,6 +96,23 @@ describe('liveSuggestionPollInterval', () => {
     expect(liveSuggestionPollInterval(query('running', 0), false)).toBe(750)
     expect(liveSuggestionPollInterval(query('running', 2), false)).toBe(1250)
     expect(liveSuggestionPollInterval(query('running', 99), false)).toBe(2000)
+  })
+})
+
+describe('useStartPass', () => {
+  it('refreshes the live artifact immediately after the staged pass is queued', async () => {
+    vi.spyOn(api, 'startDraftPass').mockResolvedValue({ id: 3 } as never)
+    const { queryClient, wrapper } = createWrapper()
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+    const { result } = renderHook(() => useStartPass(3), { wrapper })
+
+    result.current.mutate({ instruction: 'Write a complete draft.' })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(api.startDraftPass).toHaveBeenCalledWith(3, {
+      instruction: 'Write a complete draft.',
+    })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: draftKeys.liveSuggestion(3) })
   })
 })
 

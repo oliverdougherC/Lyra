@@ -204,6 +204,7 @@ export function useStartPass(draftId: number) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: draftKeys.status(draftId) })
       queryClient.invalidateQueries({ queryKey: draftKeys.detail(draftId) })
+      queryClient.invalidateQueries({ queryKey: draftKeys.liveSuggestion(draftId) })
     },
   })
 }

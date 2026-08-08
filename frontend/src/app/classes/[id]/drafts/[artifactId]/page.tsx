@@ -11,8 +11,6 @@ import {
   Pencil,
   Printer,
   SearchCheck,
-  Sparkles,
-  Wand2,
 } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { useParams } from 'next/navigation'
@@ -23,6 +21,7 @@ import { ChatPane } from '@/components/chat/chat-pane'
 import { BriefCard } from '@/components/drafts/brief-card'
 import type { AnchorThread } from '@/components/drafts/comment-highlights'
 import { CommentList } from '@/components/drafts/comment-list'
+import { DraftEntryActions } from '@/components/drafts/draft-entry-actions'
 import type { DraftEditorHandle } from '@/components/drafts/draft-editor'
 import { LiveDraftSuggestionPanel } from '@/components/drafts/live-draft-suggestion'
 import { PlanPanel } from '@/components/drafts/plan-panel'
@@ -195,7 +194,7 @@ export default function DraftWorkspacePage() {
   const [latestMarkdown, setLatestMarkdown] = useState('')
   const [saveState, setSaveState] = useState<SaveStateName>('saved')
   const [saveDetail, setSaveDetail] = useState<string | null>(null)
-  const [suggestOpen, setSuggestOpen] = useState(false)
+  const [draftDialogOpen, setDraftDialogOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [railTab, setRailTab] = useState<RailTab>('chat')
@@ -297,7 +296,9 @@ export default function DraftWorkspacePage() {
     }
   }, [engine])
 
-  /** Open the `/write` block at the caret: the toolbar button and Mod-/ share this. */
+  const openDraftDocument = useCallback(() => setDraftDialogOpen(true), [])
+
+  /** Open the legacy one-passage `/write` block at the editor caret. */
   const openWrite = useCallback(() => {
     const handle = editorRef.current
     const view = handle?.view()
@@ -311,17 +312,6 @@ export default function DraftWorkspacePage() {
       },
     })
   }, [artifactId])
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === '/') {
-        event.preventDefault()
-        openWrite()
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [openWrite])
 
   // The pending edit as the panel last resolved it, falling back to the query. The
   // override keeps the panel on what the server just answered instead of waiting a round
@@ -795,14 +785,10 @@ export default function DraftWorkspacePage() {
         />
         <SaveStateIndicator state={saveState} detail={saveDetail} />
         <div className="ml-auto flex items-center gap-1.5">
-          <Button variant="ghost" size="sm" onClick={openWrite} title="Draft with AI (Ctrl-/)">
-            <Sparkles className="size-4" />
-            Draft with AI
-          </Button>
-          <Button variant="ghost" size="sm" onClick={() => setSuggestOpen(true)}>
-            <Wand2 className="size-4" />
-            Suggest changes
-          </Button>
+          <DraftEntryActions
+            onDraftDocument={openDraftDocument}
+            onDraftPassage={openWrite}
+          />
           <Button
             variant="ghost"
             size="sm"
@@ -944,7 +930,7 @@ export default function DraftWorkspacePage() {
               variant="outline"
               size="sm"
               className="mt-3"
-              onClick={() => setSuggestOpen(true)}
+              onClick={openDraftDocument}
             >
               Try again
             </Button>
@@ -1015,10 +1001,10 @@ export default function DraftWorkspacePage() {
         />
       ) : null}
 
-      <SuggestDialog
-        open={suggestOpen}
+      <DraftDocumentDialog
+        open={draftDialogOpen}
         pending={startPass.isPending}
-        onOpenChange={setSuggestOpen}
+        onOpenChange={setDraftDialogOpen}
         onStart={async (request) => {
           // The pass reads the body server-side, so the student's newest words must be
           // there before the job is queued - after would race the first landing.
@@ -1210,7 +1196,7 @@ function SaveStateIndicator({ state, detail }: { state: SaveStateName; detail: s
 }
 
 /** The instruction a whole-document suggestion pass starts from. */
-function SuggestDialog({
+function DraftDocumentDialog({
   open,
   pending,
   onOpenChange,
@@ -1254,20 +1240,21 @@ function SuggestDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Suggest changes</DialogTitle>
+          <DialogTitle>Draft the document</DialogTitle>
           <DialogDescription>
-            Lyra works through the draft section by section. Empty sections are written in; anything
-            you wrote comes back as one suggestion you review piece by piece.
+            Lyra researches and plans first, outlines every paragraph, drafts each block, then
+            reviews transitions and the complete piece. The live draft stays separate from your
+            document until you review and accept it.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-2">
-          <Label htmlFor={instructionId}>What should change?</Label>
+          <Label htmlFor={instructionId}>What should Lyra draft?</Label>
           <Input
             id={instructionId}
             value={instruction}
             autoFocus
             autoComplete="off"
-            placeholder="Leave empty to draft the document from the brief"
+            placeholder="For example: Write a complete five-page paper"
             onChange={(event) => setInstruction(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
@@ -1298,7 +1285,7 @@ function SuggestDialog({
           </Button>
           <Button disabled={pending} onClick={() => void submit()}>
             {pending ? <Spinner /> : null}
-            {instruction.trim() ? 'Suggest changes' : 'Draft the document'}
+            Start staged draft
           </Button>
         </DialogFooter>
       </DialogContent>
