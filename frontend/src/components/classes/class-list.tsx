@@ -85,19 +85,14 @@ export function ClassList() {
     // A reading measure, not a dashboard: the index is a centered column with room to
     // breathe, because eleven classes is a page of a book, not a wall of tiles.
     <div className="mx-auto w-full max-w-3xl space-y-8">
-      <div className="flex items-end justify-between gap-4 pt-2 md:pt-6">
-        <div>
-          <h1 className="font-display text-3xl leading-tight md:text-4xl">Classes</h1>
-          <p className="text-text-secondary mt-1.5 text-sm">
-            Everything Lyra knows is organized by class.
-          </p>
-        </div>
-        {isPending || (classes.length === 0 && !isError) ? null : (
-          <Button size="lg" onClick={(event) => openCreate(event.currentTarget)}>
-            <Plus />
-            New class
-          </Button>
-        )}
+      {/* One action, one home (ui-overhaul 2.1): New class lives only as the ledger's final
+          line and the keyboard shortcut. The header carries the title, not a second button
+          for the verb the list already ends with. */}
+      <div className="pt-2 md:pt-6">
+        <h1 className="font-display text-3xl leading-tight md:text-4xl">Classes</h1>
+        <p className="text-text-secondary mt-1.5 text-sm">
+          Everything Lyra knows is organized by class.
+        </p>
       </div>
 
       {archivedCount > 0 ? (
