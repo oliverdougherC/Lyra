@@ -6,16 +6,27 @@ import sqlite3
 
 import pytest
 
+from backend.llm import prompts
 from backend.llm.prompts import (
     EXTRACTION_PROFILES,
     MAX_FACTS_PER_KIND,
+    OVERALL_ASSESSMENT_SCHEMA,
+    PARAGRAPH_OUTLINE_SCHEMA,
+    PLAN_ARGUMENT_SCHEMA,
+    TRANSITION_REVIEW_SCHEMA,
     build_consolidation_prompt,
     build_extraction_prompt,
+    build_section_prompt,
     build_segmentation_prompt,
+    build_skeptic_prompt,
     build_solve_prompt,
     build_system_prompt,
+    build_writer_chat_prompt,
     extraction_schema,
+    format_brief_block,
     format_context_block,
+    format_ledger_block,
+    format_plan_block,
 )
 
 
@@ -49,6 +60,138 @@ def _active_facts(db: sqlite3.Connection, class_id: int) -> list[sqlite3.Row]:
 def _normalized(text: str) -> str:
     """Collapse wrapping so an assertion does not depend on where a line breaks."""
     return re.sub(r"\s+", " ", text).lower()
+
+
+def test_plan_and_ledger_context_bind_drafting_to_stable_citation_ids() -> None:
+    plan = {
+        "thesis": "Length controls period.",
+        "sections": [
+            {
+                "section_ref": "1.1",
+                "title": "Results",
+                "job": "Establish the relationship",
+                "claim": "Period rises with length",
+                "source_ids": [7],
+                "word_budget": 300,
+            },
+            {"section_ref": "1.2", "title": "Conclusion", "job": "Close"},
+        ],
+    }
+    plan_block = format_plan_block(plan, "1.1")
+    ledger_block = format_ledger_block([{"id": 7, "title": "Lab handout", "source_type": "course"}])
+    messages = build_section_prompt(
+        "Pendulum",
+        "1.1 Results",
+        "## Results\n\n[TODO: write results]",
+        None,
+        None,
+        None,
+        "",
+        "",
+        "",
+        plan_block=plan_block,
+        ledger_block=ledger_block,
+    )
+    text = messages[-1]["content"]
+
+    assert "Establish the relationship" in text
+    assert "Conclusion" not in plan_block
+    assert "[@lyra:<ID>]" in text
+    assert "invent, renumber" in text
+
+
+def test_the_structured_skeptic_reads_the_section_job_and_ledger() -> None:
+    messages = build_skeptic_prompt(
+        "Essay",
+        "## Evidence\n\nA claim [@lyra:3].",
+        "Persistent writing plan: do the evidence job",
+        "Source ledger: id 3",
+    )
+    rendered = "\n".join(message["content"] for message in messages)
+
+    assert "performs its planned job" in rendered
+    assert "do the evidence job" in rendered
+    assert "Source ledger: id 3" in rendered
+
+
+def test_argument_map_schema_matches_the_public_list_contract() -> None:
+    assert PLAN_ARGUMENT_SCHEMA.schema["type"] == "array"
+    assert PLAN_ARGUMENT_SCHEMA.schema["items"]["required"] == ["id", "claim", "supports"]
+
+
+def test_paragraph_outline_schema_gives_every_paragraph_a_stable_job_and_budget() -> None:
+    paragraph = PARAGRAPH_OUTLINE_SCHEMA.schema["properties"]["paragraphs"]["items"]
+
+    assert paragraph["required"] == [
+        "key",
+        "purpose",
+        "claim",
+        "evidence",
+        "target_words",
+        "transition_in",
+        "transition_out",
+    ]
+    assert paragraph["additionalProperties"] is False
+
+
+def test_transition_and_overall_review_schemas_are_targeted_not_whole_document_rewrites() -> None:
+    assert TRANSITION_REVIEW_SCHEMA.schema["properties"]["needs_change"] == {"type": "boolean"}
+    assert "revised_next_paragraph" in TRANSITION_REVIEW_SCHEMA.schema["properties"]
+    issue = OVERALL_ASSESSMENT_SCHEMA.schema["properties"]["issues"]["items"]
+
+    assert issue["required"] == ["block_key", "problem", "revision_instruction"]
+    assert "document" not in OVERALL_ASSESSMENT_SCHEMA.schema["properties"]
+
+
+def test_paragraph_prompt_receives_global_map_neighbours_and_local_evidence() -> None:
+    messages = prompts.build_paragraph_draft_prompt(
+        "Essay",
+        document_map="Thesis: T. Sections: context, evidence, conclusion.",
+        section_plan="Evidence section proves C.",
+        paragraph_plan="P2 compares the two results.",
+        research_block="Source 7 reports the result.",
+        ledger_block="Source ledger: id 7",
+        previous_paragraph="P1 establishes the baseline.",
+        next_paragraph_summary="P3 explains the consequence.",
+        target_words=180,
+    )
+    rendered = "\n".join(message["content"] for message in messages)
+
+    assert "Thesis: T" in rendered
+    assert "P1 establishes" in rendered
+    assert "P3 explains" in rendered
+    assert "about 180 words" in rendered
+    assert "one paragraph" in rendered.lower()
+    assert "/no_think" in messages[-1]["content"]
+
+
+def test_transition_prompt_knows_the_document_map_and_only_revises_the_next_paragraph() -> None:
+    messages = prompts.build_transition_review_prompt(
+        "Essay",
+        document_map="A three-part causal argument.",
+        previous_plan="Establish cause A.",
+        next_plan="Show effect B.",
+        previous_paragraph="Cause A is established.",
+        next_paragraph="Effect B follows.",
+    )
+    rendered = "\n".join(message["content"] for message in messages)
+
+    assert "three-part causal argument" in rendered
+    assert "Do not rewrite the preceding paragraph" in rendered
+    assert "old information" in rendered.lower()
+
+
+def test_claims_review_requires_ledger_verification_for_web_and_course_sources() -> None:
+    messages = prompts.build_review_claims_prompt(
+        "Essay",
+        "## Evidence\n\nA claim [@lyra:3].",
+        "",
+        ledger_block="Source ledger: web source 3",
+    )
+    rendered = "\n".join(message["content"] for message in messages)
+
+    assert "cannot be checked here" not in rendered
+    assert "cited ledger entry" in rendered
 
 
 def test_guide_withholds_the_answer_and_show_does_not() -> None:
@@ -301,3 +444,58 @@ def test_a_whole_problem_is_sent_exactly_as_it_always_was() -> None:
     messages = build_solve_prompt("Find $X(j\\omega)$.", "Problem 4")
 
     assert messages[1]["content"] == "Problem 4\n\nFind $X(j\\omega)$."
+
+
+def test_brief_block_renders_fields_and_flags_an_unconfirmed_guess() -> None:
+    block = format_brief_block(
+        {
+            "assignment_type": "lab report",
+            "summary": "Pendulum period vs length.",
+            "audience": "",
+            "length_target": "5 pages",
+            "status": "proposed",
+        }
+    )
+
+    assert block.startswith("What this document is:")
+    assert "- Assignment: lab report" in block
+    assert "- Length: 5 pages" in block
+    assert "Audience" not in block
+    assert "not confirmed" in block
+
+
+def test_a_confirmed_brief_carries_no_caveat() -> None:
+    block = format_brief_block({"summary": "An essay.", "status": "confirmed"})
+
+    assert "not confirmed" not in block
+
+
+def test_no_brief_and_an_all_blank_brief_render_as_nothing() -> None:
+    assert format_brief_block(None) == ""
+    assert format_brief_block({"summary": "  ", "status": "proposed"}) == ""
+
+
+def test_writer_chat_prompt_orients_grounds_and_never_hands_over_the_pen() -> None:
+    prompt = build_writer_chat_prompt(
+        "Lab 3",
+        format_brief_block({"summary": "Pendulum lab.", "status": "confirmed"}),
+        "1 Introduction (12 words)\n2 Methods (empty)",
+        "",
+    )
+
+    assert '"Lab 3"' in prompt
+    assert "Pendulum lab." in prompt
+    assert "2 Methods (empty)" in prompt
+    # The two behaviors everything else hangs off: proposals not edits, and the brief.
+    assert "never say you changed the document" in _normalized(prompt)
+    assert "save_brief" in prompt
+    # The craft bar rides along, same one the drafting prompts hold to.
+    assert "Cut surplusage" in prompt
+
+
+def test_writer_chat_prompt_omits_empty_blocks() -> None:
+    prompt = build_writer_chat_prompt("Essay", "", "The document is empty.", "")
+
+    assert "What this document is:" not in prompt
+    assert "about this class" not in prompt
+    assert "The document right now:\nThe document is empty." in prompt

@@ -25,6 +25,11 @@ UPDATABLE_COLUMNS = frozenset(
         "tools_message",
         "vision_supported",
         "vision_message",
+        "allow_web_research",
+        "parallel_requests",
+        "parallel_concurrency",
+        "firecrawl_base_url",
+        "firecrawl_scrape_enabled",
     }
 )
 

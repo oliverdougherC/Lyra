@@ -1,11 +1,12 @@
 'use client'
 
 import { useCallback, useState } from 'react'
-import { FileText, SquareCheckBig } from 'lucide-react'
+import { Bot, FileText, SquareCheckBig } from 'lucide-react'
 import Link from 'next/link'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 
 import { ChatPane } from '@/components/chat/chat-pane'
+import { AgentPanel } from '@/components/agent/agent-panel'
 import { DocumentsPane } from '@/components/documents/documents-pane'
 import { useFullBleed } from '@/components/layout/page-chrome'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -68,6 +69,8 @@ export default function ClassWorkspacePage() {
     false,
     parseOpen,
   )
+  const agentStorageKey = `lyra-workspace-agent-open-${classId ?? 'unknown'}`
+  const [agentOpen, setAgentOpen] = useLocalStorageState(agentStorageKey, false, parseOpen)
 
   const classQuery = useClass(classId ?? Number.NaN)
   const { data: documentList } = useDocuments(classId ?? Number.NaN)
@@ -140,20 +143,39 @@ export default function ClassWorkspacePage() {
             </Link>
           </Button>
           {compact ? null : (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8"
-              aria-expanded={documentsOpen}
-              aria-controls="documents-pane-body"
-              onClick={() => setDocumentsOpen(!documentsOpen)}
-            >
-              <FileText aria-hidden className="size-3.5" />
-              Documents
-              {documentCount === null ? null : (
-                <span className="text-text-tertiary tabular-nums">{documentCount}</span>
-              )}
-            </Button>
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8"
+                aria-expanded={agentOpen}
+                aria-controls="agent-pane-body"
+                onClick={() => {
+                  setAgentOpen(!agentOpen)
+                  if (!agentOpen) setDocumentsOpen(false)
+                }}
+              >
+                <Bot aria-hidden className="size-3.5" />
+                Agent
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8"
+                aria-expanded={documentsOpen}
+                aria-controls="documents-pane-body"
+                onClick={() => {
+                  setDocumentsOpen(!documentsOpen)
+                  if (!documentsOpen) setAgentOpen(false)
+                }}
+              >
+                <FileText aria-hidden className="size-3.5" />
+                Documents
+                {documentCount === null ? null : (
+                  <span className="text-text-tertiary tabular-nums">{documentCount}</span>
+                )}
+              </Button>
+            </>
           )}
         </>
       }
@@ -174,6 +196,7 @@ export default function ClassWorkspacePage() {
                 <span className="text-text-tertiary tabular-nums">{documentCount}</span>
               )}
             </TabsTrigger>
+            <TabsTrigger value="agent">Agent</TabsTrigger>
           </TabsList>
           <TabsContent
             value="chat"
@@ -187,12 +210,27 @@ export default function ClassWorkspacePage() {
           >
             {documents}
           </TabsContent>
+          <TabsContent
+            value="agent"
+            className="mt-0 min-h-0 flex-1 overflow-hidden rounded-none border-0"
+          >
+            <AgentPanel classId={classId} sessionId={sessionId} />
+          </TabsContent>
         </Tabs>
       ) : (
         <div className="flex min-h-0 flex-1 overflow-hidden bg-background">
           <div className="min-w-0 flex-1">{chat}</div>
           {documentsOpen ? (
             <div className="w-[340px] shrink-0 border-l xl:w-[380px]">{documents}</div>
+          ) : null}
+          {agentOpen ? (
+            <div id="agent-pane-body" className="w-[420px] shrink-0 border-l">
+              <AgentPanel
+                classId={classId}
+                sessionId={sessionId}
+                onClose={() => setAgentOpen(false)}
+              />
+            </div>
           ) : null}
         </div>
       )}

@@ -1,13 +1,16 @@
 """Contract tests for the draft endpoints.
 
-The drafting worker is never started here: `drafting.enqueue` is stubbed so `/suggest`
-stays a pure write. `/write` streams from a stubbed `stream_chat`. This file is the HTTP
-surface; the hunk math is test_suggestions.py and the run is test_drafting.py.
+The drafting worker is never started here: `writer_pipeline.enqueue` is stubbed so
+`/pass` stays a pure write. `/write` streams from a stubbed `stream_chat`. This file is
+the HTTP surface; the hunk math is test_suggestions.py and the pass itself is
+test_writer_pipeline.py.
 """
 
 import json
 import sqlite3
+import threading
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi import FastAPI, Request
@@ -15,9 +18,10 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from backend.api import routes_drafts
-from backend.core import artifacts, drafting, suggestions
-from backend.core.errors import LyraError
+from backend.core import artifacts, comments, live_drafts, suggestions, writer_pipeline
+from backend.core.errors import ConflictError, LyraError
 from backend.llm.client import StreamDelta
+from backend.rag.retrieve import RetrievalResult
 from backend.storage.database import connect, get_db
 
 BASE = (
@@ -47,10 +51,10 @@ def _request_db() -> Iterator[sqlite3.Connection]:
 
 
 @pytest.fixture(autouse=True)
-def no_worker(monkeypatch: pytest.MonkeyPatch) -> list[drafting._Job]:
+def no_worker(monkeypatch: pytest.MonkeyPatch) -> list[writer_pipeline.PassJob]:
     """Record what would have been queued instead of running it."""
-    queued: list[drafting._Job] = []
-    monkeypatch.setattr(routes_drafts.drafting, "enqueue", queued.append)
+    queued: list[writer_pipeline.PassJob] = []
+    monkeypatch.setattr(routes_drafts.writer_pipeline, "enqueue", queued.append)
     return queued
 
 
@@ -145,18 +149,319 @@ def test_autosave_writes_no_revision_but_a_snapshot_does(
     assert revisions[0]["origin"] == artifacts.USER_CORRECTED
 
 
-def test_suggest_queues_a_run(
+def test_a_pass_queues_with_its_lens_and_filter(
     client: TestClient, db: sqlite3.Connection, class_id: int, no_worker: list
 ) -> None:
     artifact_id, _ = _draft(db, class_id)
 
     response = client.post(
-        f"/api/drafts/{artifact_id}/suggest", json={"instruction": "Argue the converse"}
+        f"/api/drafts/{artifact_id}/pass",
+        json={"instruction": "Argue the converse", "sections": [" 2 ", ""]},
     )
 
     assert response.status_code == 202
     assert [job.artifact_id for job in no_worker] == [artifact_id]
     assert no_worker[0].instruction == "Argue the converse"
+    # Refs arrive stripped, and blank ones do not survive validation.
+    assert no_worker[0].section_refs == ("2",)
+    assert no_worker[0].depth == "quick"
+    assert no_worker[0].pause_at_plan is False
+
+
+def test_an_empty_body_is_the_full_draft_pass(
+    client: TestClient, db: sqlite3.Connection, class_id: int, no_worker: list
+) -> None:
+    artifact_id, _ = _draft(db, class_id)
+
+    response = client.post(f"/api/drafts/{artifact_id}/pass", json={})
+
+    assert response.status_code == 202
+    assert no_worker[0].instruction is None
+    assert no_worker[0].section_refs == ()
+    live = client.get(f"/api/drafts/{artifact_id}/live-suggestion").json()
+    assert live["run_id"] == no_worker[0].run_id
+    assert live["stage"] == "gathering"
+    assert live["status"] == "pending"
+
+
+def test_pass_contract_carries_depth_pause_and_the_comment_being_addressed(
+    client: TestClient, db: sqlite3.Connection, class_id: int, no_worker: list
+) -> None:
+    artifact_id, part_id = _draft(db, class_id)
+    root = comments.add_comment(db, part_id, comments.REVIEWER, "Strengthen this section.")
+
+    response = client.post(
+        f"/api/drafts/{artifact_id}/pass",
+        json={
+            "depth": "deep",
+            "pause_at_plan": True,
+            "address_comment_id": root["id"],
+            "sections": ["1"],
+        },
+    )
+
+    assert response.status_code == 202
+    assert no_worker[0].depth == "deep"
+    assert no_worker[0].pause_at_plan is True
+    assert no_worker[0].address_comment_id == root["id"]
+    status = client.get(f"/api/drafts/{artifact_id}/status").json()
+    assert (status["job_kind"], status["depth"]) == ("pass", "deep")
+    assert status["started_at"]
+
+
+def test_a_review_queues_on_the_same_worker(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.core import review_pipeline
+
+    artifact_id, _ = _draft(db, class_id)
+    queued: list[review_pipeline.ReviewJob] = []
+    monkeypatch.setattr(routes_drafts.review_pipeline, "enqueue", queued.append)
+
+    response = client.post(f"/api/drafts/{artifact_id}/review", json={"depth": "standard"})
+
+    assert response.status_code == 202
+    assert len(queued) == 1
+    assert queued[0].artifact_id == artifact_id
+    assert queued[0].depth == "standard"
+    assert queued[0].run_id is not None
+    assert client.get(f"/api/drafts/{artifact_id}/status").json()["depth"] == "standard"
+    assert client.post("/api/drafts/999999/review").status_code == 404
+
+
+def test_a_queued_run_is_pending_before_the_worker_touches_it(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bug that made the Review button look dead.
+
+    The workspace polls `/status` and gives up the moment the artifact is neither pending
+    nor generating. Both queueing endpoints used to leave it `ready` and let the worker
+    move it, which the first poll beat every time: the poll stopped, the comments tab
+    never refetched, and a review that filed four findings looked like nothing happened.
+    """
+    from backend.core import review_pipeline
+
+    monkeypatch.setattr(routes_drafts.review_pipeline, "enqueue", lambda job: None)
+
+    review_id, _ = _draft(db, class_id)
+    queued = client.post(f"/api/drafts/{review_id}/review").json()
+    assert queued["state"] == artifacts.PENDING
+    # The prefix is the contract that keeps the editor live under a review, and it has to
+    # hold from the first poll - not from whenever the worker gets to the job.
+    assert str(queued["stage_detail"]).startswith("Reviewing")
+    assert review_pipeline is not None
+
+    pass_id, _ = _draft(db, class_id)
+    started = client.post(f"/api/drafts/{pass_id}/pass", json={}).json()
+    assert started["state"] == artifacts.PENDING
+    # A pass owns the document, so its detail must *not* read as a review.
+    assert not str(started["stage_detail"]).startswith("Reviewing")
+
+
+def test_a_second_run_on_a_busy_draft_is_refused(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One worker, one draft, one run: a double-click must not stack two jobs."""
+    monkeypatch.setattr(routes_drafts.review_pipeline, "enqueue", lambda job: None)
+    artifact_id, _ = _draft(db, class_id)
+
+    assert client.post(f"/api/drafts/{artifact_id}/review").status_code == 202
+    assert client.post(f"/api/drafts/{artifact_id}/review").status_code == 409
+    assert client.post(f"/api/drafts/{artifact_id}/pass", json={}).status_code == 409
+
+
+def test_concurrent_writer_starts_claim_the_draft_once(
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two request connections cannot both pass the ready-to-pending transition."""
+    artifact_id, _ = _draft(db, class_id)
+    barrier = threading.Barrier(2)
+    original_get = routes_drafts.artifacts.get_artifact
+
+    def synchronized_get(conn: sqlite3.Connection, requested_id: int) -> dict[str, object]:
+        artifact = original_get(conn, requested_id)
+        if requested_id == artifact_id and artifact["state"] == artifacts.READY:
+            barrier.wait(timeout=2)
+        return artifact
+
+    monkeypatch.setattr(routes_drafts.artifacts, "get_artifact", synchronized_get)
+
+    def attempt() -> str:
+        conn = connect()
+        try:
+            routes_drafts.begin_writer_run(conn, artifact_id, routes_drafts.PASS_JOB_KIND, "quick")
+            return "queued"
+        except ConflictError:
+            return "busy"
+        finally:
+            conn.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(lambda _: attempt(), range(2)))
+
+    assert sorted(outcomes) == ["busy", "queued"]
+
+
+def test_the_status_endpoint_carries_the_progress_counters(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """The polled contract, whole: a stage name with no count reads as a hang."""
+    artifact_id, _ = _draft(db, class_id)
+    artifacts.set_artifact_state(db, artifact_id, artifacts.GENERATING, "Reviewing prose")
+    artifacts.set_problems_total(db, artifact_id, 4)
+    artifacts.set_problems_done(db, artifact_id, 2)
+
+    body = client.get(f"/api/drafts/{artifact_id}/status").json()
+
+    assert set(body) == {
+        "state",
+        "stage_detail",
+        "error_message",
+        "problems_total",
+        "problems_done",
+        "run_id",
+        "job_kind",
+        "depth",
+        "started_at",
+        "run_status",
+        "cancel_requested",
+        "cancel_requested_at",
+        "finished_at",
+        "warnings",
+    }
+    assert body["problems_total"] == 4
+    assert body["problems_done"] == 2
+    assert body["job_kind"] == "review"
+
+
+def test_cancelling_a_draft_run_marks_cancel_requested_in_status(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.core import review_pipeline
+
+    monkeypatch.setattr(routes_drafts.review_pipeline, "enqueue", lambda job: None)
+    artifact_id, _ = _draft(db, class_id)
+
+    started = client.post(f"/api/drafts/{artifact_id}/review", json={"depth": "deep"})
+    assert started.status_code == 202
+
+    cancelled = client.post(f"/api/drafts/{artifact_id}/cancel")
+
+    assert cancelled.status_code == 200
+    body = cancelled.json()
+    assert body["job_kind"] == "review"
+    assert body["run_status"] == "cancel_requested"
+    assert body["cancel_requested"] is True
+    assert body["cancel_requested_at"]
+    assert body["stage_detail"] == "Cancelling after the current step"
+    assert review_pipeline is not None
+
+
+def test_comments_list_anchored_threads_against_the_current_body(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    from backend.core import comments
+
+    artifact_id, part_id = _draft(db, class_id)
+    root = comments.add_comment(
+        db,
+        part_id,
+        comments.REVIEWER,
+        "Say which area.",
+        severity="major",
+        quote="Scaling scales the area.",
+        hint=BASE.index("Scaling scales"),
+    )
+    comments.add_reply(db, int(root["id"]), comments.STUDENT, "The unit area?")
+    comments.add_comment(
+        db, part_id, comments.REVIEWER, "A finding whose passage is gone.", quote="vanished text"
+    )
+
+    response = client.get(f"/api/drafts/{artifact_id}/comments")
+
+    assert response.status_code == 200
+    anchored, orphaned = response.json()
+    assert anchored["severity"] == "major"
+    assert anchored["anchor"]["start"] == BASE.index("Scaling scales")
+    assert anchored["orphaned"] == 0
+    assert [reply["body"] for reply in anchored["replies"]] == ["The unit area?"]
+    assert orphaned["anchor"] is None
+    assert orphaned["orphaned"] == 1
+    assert client.get("/api/drafts/999999/comments").status_code == 404
+
+
+def test_export_returns_a_pdf_attachment(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.core import exporting
+
+    artifact_id, _ = _draft(db, class_id)
+    rendered: list[tuple[str, str, str]] = []
+    real_render = exporting.render_pdf
+
+    def fake_render(body: str, title: str, class_name: str, sources=None) -> bytes:
+        rendered.append((body, title, class_name))
+        return b"%PDF-fake"
+
+    monkeypatch.setattr(routes_drafts.exporting, "render_pdf", fake_render)
+
+    response = client.post(f"/api/drafts/{artifact_id}/export")
+
+    assert response.status_code == 200
+    assert response.content == b"%PDF-fake"
+    assert response.headers["content-type"] == "application/pdf"
+    assert 'filename="Essay.pdf"' in response.headers["content-disposition"]
+    assert rendered[0][0] == BASE
+    assert client.post("/api/drafts/999999/export").status_code == 404
+
+    monkeypatch.setattr(routes_drafts.exporting, "render_pdf", real_render)
+    monkeypatch.setattr(routes_drafts.exporting.shutil, "which", lambda name: None)
+    blocked = client.post(f"/api/drafts/{artifact_id}/export")
+    assert blocked.status_code == 400
+    assert "pandoc" in blocked.json()["detail"]
+
+
+def test_export_availability_reports_the_probe(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(routes_drafts.exporting, "export_available", lambda: None)
+    assert client.get("/api/export/availability").json() == {"available": True, "message": None}
+
+    monkeypatch.setattr(
+        routes_drafts.exporting, "export_available", lambda: "PDF export needs typst."
+    )
+    answer = client.get("/api/export/availability").json()
+    assert answer["available"] is False and "typst" in answer["message"]
+
+
+def test_replying_and_resolving_over_http(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    from backend.core import comments
+
+    artifact_id, part_id = _draft(db, class_id)
+    root = comments.add_comment(db, part_id, comments.REVIEWER, "Say which area.", severity="major")
+    root_id = int(root["id"])
+
+    reply = client.post(f"/api/comments/{root_id}/replies", json={"body": "  The unit area.  "})
+    assert reply.status_code == 201
+    assert reply.json()["author"] == "student"
+    assert reply.json()["body"] == "The unit area."
+
+    resolved = client.post(f"/api/comments/{root_id}/resolve", json={"resolved": True})
+    assert resolved.status_code == 200
+    assert resolved.json()["resolved"] == 1
+    reopened = client.post(f"/api/comments/{root_id}/resolve", json={"resolved": False})
+    assert reopened.json()["resolved"] == 0
+
+    # A reply is not a thread: resolving one is refused, as is replying under it.
+    reply_id = int(reply.json()["id"])
+    assert client.post(f"/api/comments/{reply_id}/resolve", json={}).status_code == 404
+    assert client.post(f"/api/comments/{reply_id}/replies", json={"body": "x"}).status_code == 404
+    assert client.post("/api/comments/999999/replies", json={"body": "x"}).status_code == 404
+    assert client.post(f"/api/comments/{root_id}/replies", json={"body": "  "}).status_code == 422
 
 
 def test_pending_reads_null_then_the_edit(
@@ -172,6 +477,129 @@ def test_pending_reads_null_then_the_edit(
     assert edit["stale"] is False
     assert len(edit["hunks"]) == 1
     assert "base_content" not in edit
+
+
+def test_live_suggestion_reads_null_then_the_latest_suggestion(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, _ = _draft(db, class_id)
+
+    assert client.get(f"/api/drafts/{artifact_id}/live-suggestion").json() is None
+
+    suggestion = live_drafts.create_live_suggestion(
+        db,
+        artifact_id,
+        run_id=41,
+        stage="drafting",
+        status="running",
+        detail="Drafting the structure",
+        version=2,
+    )
+    live_drafts.model_update_block(
+        db,
+        int(suggestion["id"]),
+        "intro-1",
+        section_ref="1.1",
+        paragraph_ordinal=1,
+        heading="Introduction",
+        content="A tighter opening.",
+    )
+
+    response = client.get(f"/api/drafts/{artifact_id}/live-suggestion")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == 41
+    assert body["stage"] == "drafting"
+    assert body["status"] == "running"
+    assert body["detail"] == "Drafting the structure"
+    assert body["version"] == 2
+    assert [block["stable_key"] for block in body["blocks"]] == ["intro-1"]
+
+
+def test_live_suggestion_block_patch_is_cas_guarded(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, _ = _draft(db, class_id)
+    suggestion = live_drafts.create_live_suggestion(db, artifact_id, run_id=43)
+    block = live_drafts.model_update_block(
+        db,
+        int(suggestion["id"]),
+        "intro-1",
+        paragraph_ordinal=1,
+        content="A first draft.",
+    )
+
+    accepted = client.patch(
+        f"/api/drafts/{artifact_id}/live-suggestion/blocks/{block['id']}",
+        json={
+            "expected_revision": block["revision"],
+            "content": "My own first draft.",
+            "status": "editing",
+        },
+    )
+
+    assert accepted.status_code == 200
+    body = accepted.json()
+    assert body["content"] == "My own first draft."
+    assert body["status"] == "editing"
+    assert body["user_revision"] == body["revision"]
+
+    streamed = live_drafts.append_block_text(
+        db,
+        int(suggestion["id"]),
+        "intro-1",
+        " Streamed suffix.",
+    )
+    merged = client.patch(
+        f"/api/drafts/{artifact_id}/live-suggestion/blocks/{block['id']}",
+        json={
+            "expected_revision": body["revision"],
+            "base_content": body["content"],
+            "content": "My edited opening.",
+        },
+    )
+
+    assert streamed["content"] == "My own first draft. Streamed suffix."
+    assert merged.status_code == 200
+    assert merged.json()["content"] == "My edited opening. Streamed suffix."
+
+    stale = client.patch(
+        f"/api/drafts/{artifact_id}/live-suggestion/blocks/{block['id']}",
+        json={"expected_revision": block["revision"], "content": "A stale overwrite."},
+    )
+
+    assert stale.status_code == 409
+    assert "changed since it was fetched" in stale.json()["detail"]
+
+
+def test_live_suggestion_finalize_enters_pending_review_without_writing_the_body(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft(db, class_id, content="Student draft.\n")
+    suggestion = live_drafts.create_live_suggestion(
+        db,
+        artifact_id,
+        run_id=47,
+        stage="completed",
+        status="ready",
+    )
+    live_drafts.model_update_block(
+        db,
+        int(suggestion["id"]),
+        "1.1:p1",
+        section_ref="1.1",
+        paragraph_ordinal=1,
+        heading="Introduction",
+        content="Suggested introduction.",
+        status="complete",
+    )
+
+    response = client.post(f"/api/drafts/{artifact_id}/live-suggestion/finalize")
+
+    assert response.status_code == 200
+    assert response.json()["proposed_content"].startswith("## Introduction")
+    assert artifacts.get_part(db, part_id)["content"] == "Student draft.\n"
 
 
 def test_accept_and_reject_over_http(
@@ -192,6 +620,95 @@ def test_accept_and_reject_over_http(
     assert rejected.json()["remaining"] == 0
     assert str(artifacts.get_part(db, part_id)["content"]) == PROPOSED
     assert client.get(f"/api/drafts/{artifact_id}/pending").json() is None
+
+
+def test_address_comment_resolves_only_after_its_linked_proposal_lands(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft(db, class_id)
+    root = comments.add_comment(
+        db,
+        part_id,
+        comments.REVIEWER,
+        "State the symmetry explicitly.",
+        severity="major",
+        quote="The delta function is even.",
+        section_ref="Essay",
+    )
+    edit = suggestions.propose(db, part_id, PROPOSED, "Address comment")
+    assert edit is not None
+    db.execute(
+        "insert into pending_edit_comment_links (edit_id, comment_id) values (?, ?)",
+        (edit.id, root["id"]),
+    )
+    db.commit()
+
+    assert comments._get(db, int(root["id"]))["resolved"] == 0
+    accepted = client.post(f"/api/pending-edits/{edit.id}/accept", json={})
+
+    assert accepted.status_code == 200
+    assert comments._get(db, int(root["id"]))["resolved"] == 1
+
+
+def test_rejecting_a_linked_proposal_keeps_the_comment_open(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    _, part_id = _draft(db, class_id)
+    root = comments.add_comment(
+        db,
+        part_id,
+        comments.REVIEWER,
+        "State the symmetry explicitly.",
+        section_ref="Essay",
+    )
+    edit = suggestions.propose(db, part_id, PROPOSED, "Address comment")
+    assert edit is not None
+    db.execute(
+        "insert into pending_edit_comment_links (edit_id, comment_id) values (?, ?)",
+        (edit.id, root["id"]),
+    )
+    db.commit()
+
+    rejected = client.post(f"/api/pending-edits/{edit.id}/reject", json={})
+
+    assert rejected.status_code == 200
+    assert comments._get(db, int(root["id"]))["resolved"] == 0
+
+
+def test_accepting_an_unrelated_hunk_does_not_resolve_the_addressed_section(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    two_change = PROPOSED.replace(
+        "And one more line for good measure.\n", "And a final line to close with.\n"
+    )
+    artifact_id, part_id = _draft(db, class_id)
+    root = comments.add_comment(
+        db,
+        part_id,
+        comments.REVIEWER,
+        "Strengthen the close.",
+        section_ref="Scaling",
+    )
+    edit = suggestions.propose(db, part_id, two_change, "Address scaling")
+    assert edit is not None
+    db.execute(
+        "insert into pending_edit_comment_links (edit_id, comment_id) values (?, ?)",
+        (edit.id, root["id"]),
+    )
+    db.commit()
+    pending = client.get(f"/api/drafts/{artifact_id}/pending").json()
+
+    first = pending["hunks"][0]
+    accepted = client.post(
+        f"/api/pending-edits/{edit.id}/accept",
+        json={"hunk": {"index": first["index"], "hash": first["hash"]}},
+    )
+
+    assert accepted.json()["remaining"] == 1
+    assert comments._get(db, int(root["id"]))["resolved"] == 0
+    finished = client.post(f"/api/pending-edits/{edit.id}/accept", json={})
+    assert finished.json()["remaining"] == 0
+    assert comments._get(db, int(root["id"]))["resolved"] == 1
 
 
 def test_a_hunk_accept_over_http(client: TestClient, db: sqlite3.Connection, class_id: int) -> None:
@@ -280,6 +797,14 @@ def test_write_streams_tokens_then_done(
         routes_drafts,
         "resolve_tutor_config",
         lambda conn: routes_drafts.TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+    )
+    # Patched where the route looks it up, as test_api_chat does. Unstubbed, retrieval
+    # embeds the query, and in a test data dir that means "weights not downloaded" - it
+    # only ever passed by adopting a llama-server some earlier run had leaked.
+    monkeypatch.setattr(
+        routes_drafts,
+        "retrieve",
+        lambda *args, **kwargs: RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0),
     )
 
     async def fake_stream(*args: object, **kwargs: object) -> Iterator[StreamDelta]:

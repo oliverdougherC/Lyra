@@ -383,6 +383,88 @@ def test_reconcile_fails_interrupted_study_runs(db: sqlite3.Connection, class_id
     assert artifacts.get_artifact(db, int(solution_set["id"]))["state"] == artifacts.PENDING
 
 
+def test_a_cancelled_deck_is_skipped_before_generation_starts(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    artifacts.set_artifact_state(db, artifact_id, artifacts.CANCELLED)
+    llm.replies = [{"topics": ["delta functions"]}]
+
+    study.run_generation(study._Job(artifact_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.CANCELLED
+    assert artifacts.list_parts(db, artifact_id) == []
+    assert llm.calls == []
+
+
+def test_cancelling_a_deck_mid_run_keeps_finished_cards_and_stops(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [
+        {"topics": ["delta functions", "convolution"]},
+        {"cards": [{"front": "What is sifting?", "back": "It picks x(0).", "topic": "t"}]},
+        {"cards": [{"front": "Define convolution.", "back": "An integral.", "topic": "t"}]},
+    ]
+
+    original = study._write_topic_cards
+
+    def cancel_after_first_topic(*args: object, **kwargs: object) -> int:
+        written = original(*args, **kwargs)
+        if not artifacts.list_parts(db, artifact_id):
+            return written
+        from backend.storage.database import connect
+
+        other = connect()
+        try:
+            artifacts.set_artifact_state(other, artifact_id, artifacts.CANCELLED)
+        finally:
+            other.close()
+        return written
+
+    monkeypatch.setattr(study, "_write_topic_cards", cancel_after_first_topic)
+
+    study.run_generation(study._Job(artifact_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.CANCELLED
+    parts = artifacts.list_parts(db, artifact_id)
+    assert len(parts) == 1
+    assert json.loads(str(parts[0]["content"]))["front"] == "What is sifting?"
+
+
+def test_cancelling_a_quiz_before_writing_questions_keeps_it_empty(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _quiz(db, class_id, document_id)
+    llm.replies = [{"questions": [_mcq("a"), _mcq("b"), _mcq("c")]}]
+
+    original = study._call_json
+
+    def cancel_before_write(*args: object, **kwargs: object) -> object:
+        reply = original(*args, **kwargs)
+        from backend.storage.database import connect
+
+        other = connect()
+        try:
+            artifacts.set_artifact_state(other, artifact_id, artifacts.CANCELLED)
+        finally:
+            other.close()
+        return reply
+
+    monkeypatch.setattr(study, "_call_json", cancel_before_write)
+
+    study.run_generation(study._Job(artifact_id, count=3))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.CANCELLED
+    assert artifacts.list_parts(db, artifact_id) == []
+
+
 def test_the_solver_reconcile_leaves_study_artifacts_alone(
     db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:

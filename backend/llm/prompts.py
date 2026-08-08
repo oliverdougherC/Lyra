@@ -567,6 +567,58 @@ SEGMENTATION_SCHEMA = JsonSchema(
 )
 
 
+# The segmentation pass restores LaTeX while it lists the problems, but only for the
+# problems it lists. A problem it dropped, mis-numbered, read at a coarser grain, or whose
+# reading was rejected as a summary keeps the chunker's text, and that text is what PDF
+# extraction left: `e^{-2t}u(t-3)` flattened to `e-2tu(t -3)`. This pass exists to catch
+# exactly those, one narrow job on text that is already the right problem's own words, so
+# it cannot lose or reorder a problem the way a whole-sheet re-reading can. It is handed a
+# list of statements with an id apiece and asked to hand each back with its mathematics put
+# back, and nothing else changed.
+_LATEX_RESTORE_PROMPT = f"""\
+Each entry below is a homework problem's text that came out of a PDF, and extraction
+flattened its mathematics onto the line: exponents, subscripts, fractions, integrals, and
+operators all lost their layout. Put the mathematics back into LaTeX and change nothing
+else.
+
+Return JSON with one field, "statements", holding a list with one object per entry you were
+given:
+- "id": the id that entry was given, copied exactly.
+- "statement": that entry's text with its mathematics written in LaTeX, using $...$ for a
+  quantity inside a line of text and $$...$$ on its own line for a displayed equation.
+
+This is a transcription, not a rewrite. Keep every word, every number, and the order they
+came in. "x(t) = e-2tu(t -3)" is "$x(t) = e^{{-2t}}u(t-3)$", and a starting pair written
+"e-2tu(t) <-> 1 2 + jw" is "$e^{{-2t}}u(t) \\longleftrightarrow \\frac{{1}}{{2 + j\\omega}}$".
+A run of loose numbers that was a fraction is a fraction; a stack that was an integral is an
+integral. Do not solve anything, do not explain, and do not add or drop a single word.
+
+{_JSON_ONLY}"""
+
+LATEX_RESTORE_SCHEMA = JsonSchema(
+    name="restored_statements",
+    schema={
+        "type": "object",
+        "properties": {
+            "statements": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "statement": {"type": "string"},
+                    },
+                    "required": ["id", "statement"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["statements"],
+        "additionalProperties": False,
+    },
+)
+
+
 # Assembled by concatenation rather than by `format` or an f-string, and it has to be: the
 # body contains `e^{-t}u(t)`, and both of those read a LaTeX brace group as a placeholder.
 _SOLVE_BODY = """\
@@ -730,6 +782,24 @@ def build_segmentation_prompt(text: str, filename: str) -> list[dict[str, str]]:
     return [
         {"role": "system", "content": _SEGMENTATION_PROMPT},
         {"role": "user", "content": f"File: {filename}\n\n{text}"},
+    ]
+
+
+def build_latex_restore_prompt(items: list[tuple[str, str]]) -> list[dict[str, str]]:
+    """Build the messages that ask the model to restore LaTeX in flattened statements.
+
+    Args:
+        items: `(id, statement)` pairs. The id is echoed back so a reply that drops or
+            reorders entries still maps to the right statement rather than the wrong one.
+
+    Returns:
+        OpenAI-shaped messages. Best-effort like segmentation itself: a statement the reply
+        does not cover keeps the flattened text it had, which is no worse than today.
+    """
+    body = "\n\n".join(f"id: {item_id}\n{statement}" for item_id, statement in items)
+    return [
+        {"role": "system", "content": _LATEX_RESTORE_PROMPT},
+        {"role": "user", "content": body},
     ]
 
 
@@ -1210,7 +1280,14 @@ one idea per paragraph; open sentences with what the reader already knows and cl
 them with what is new. Cut surplusage: "it is worth noting that X" is "X"; prefer the
 plain word (use, not utilize; before, not prior to). Active voice unless the actor
 genuinely does not matter. Spell out an abbreviation at first use. Keep the student's
-own voice and vocabulary level - polish, do not transplant."""
+own voice and vocabulary level - polish, do not transplant.
+
+None of this is an instruction to write less. Concision is density, not brevity: it
+means every sentence you write earns its place, not that you write fewer of them. When
+you are given a length to write to, reach it by developing the material - evidence,
+mechanism, worked reasoning, the objection and the answer to it - and never by padding
+and never by stopping early. A section that stops short of what it was asked for is not
+concise; it is unfinished."""
 
 _WRITE_BODY = """\
 You are drafting one passage to insert at the cursor of a document the student is
@@ -1242,6 +1319,34 @@ def format_facts_block(facts: list[sqlite3.Row]) -> str:
     return _render_facts(facts, "What you know about this class:")
 
 
+def format_brief_block(brief: Mapping[str, object] | None) -> str:
+    """The draft's brief for the writer prompts, or an empty string when there is none.
+
+    A proposed brief renders with a caveat line instead of being withheld: a guess at
+    the assignment beats no idea of the assignment, and the caveat is what keeps the
+    model from asserting it back to the student as settled fact.
+    """
+    if brief is None:
+        return ""
+    labelled = [
+        ("Assignment", brief.get("assignment_type")),
+        ("Brief", brief.get("summary")),
+        ("Audience", brief.get("audience")),
+        ("Length", brief.get("length_target")),
+    ]
+    lines = [
+        f"- {label}: {str(value).strip()}" for label, value in labelled if str(value or "").strip()
+    ]
+    if not lines:
+        return ""
+    if brief.get("status") != "confirmed":
+        lines.append(
+            "- Note: the student has not confirmed this brief. Treat it as your working "
+            "guess, and say so when you lean on it."
+        )
+    return "What this document is:\n" + "\n".join(lines)
+
+
 def build_write_prompt(
     instruction: str,
     heading: str | None,
@@ -1249,12 +1354,13 @@ def build_write_prompt(
     nearby: str | None,
     context_block: str,
     facts_block: str,
+    brief_block: str = "",
 ) -> list[dict[str, str]]:
     """Build the messages for the `/write` inline generation.
 
     The user message is the instruction first, then whatever the editor gathered around
     the caret (current heading, selected text, surrounding text - whichever exist), then
-    the retrieval context and confirmed class facts.
+    the brief, the retrieval context, and confirmed class facts.
     """
     sections = [f"Instruction: {instruction}"]
     surroundings: list[str] = []
@@ -1266,6 +1372,8 @@ def build_write_prompt(
         surroundings.append(f"Surrounding text:\n{nearby}")
     if surroundings:
         sections.append("\n\n".join(surroundings))
+    if brief_block:
+        sections.append(brief_block)
     if context_block:
         sections.append(context_block)
     if facts_block:
@@ -1277,7 +1385,11 @@ def build_write_prompt(
 
 
 def build_suggest_prompt(
-    draft: str, instruction: str, context_block: str, facts_block: str
+    draft: str,
+    instruction: str,
+    context_block: str,
+    facts_block: str,
+    brief_block: str = "",
 ) -> list[dict[str, str]]:
     """Build the messages that revise a whole draft per the student's instruction.
 
@@ -1286,6 +1398,8 @@ def build_suggest_prompt(
     deletion of everything it left out.
     """
     sections = [f"The draft:\n\n{draft}", f"Instruction: {instruction}"]
+    if brief_block:
+        sections.append(brief_block)
     if context_block:
         sections.append(context_block)
     if facts_block:
@@ -1294,3 +1408,1115 @@ def build_suggest_prompt(
         {"role": "system", "content": _SUGGEST_PROMPT},
         {"role": "user", "content": "\n\n".join(sections)},
     ]
+
+
+# The structure pass: the first pass over a document, headings before prose. The reply
+# replaces or proposes the whole document, so the contract forbids fragments the same
+# way the suggest prompt does.
+_STRUCTURE_BODY = """\
+You are laying out the structure of a document a student is about to write. Return the
+complete document as markdown: a heading for each section the assignment needs, and
+under each heading exactly one [TODO: ...] marker stating, in a sentence, what that
+section will do. No prose outside the TODO markers - a section's intent lives inside
+its marker, because the writing happens section by section, later, against the intent
+you record now, and prose left here would read as writing already done.
+
+Return only the markdown document: no preamble, no explanation, no code fence.
+
+If the student has already written text, every word of it must survive: place their
+prose under the heading where it belongs, unchanged, and add headings and TODOs around
+it. Losing or rewording their text is the one failure this pass cannot have.
+
+The structure carries the length. Each section is written separately, later, at roughly
+the size you plan for here, so the number of sections you lay out decides how long the
+finished document can be: a document asked to run several pages and given three headings
+cannot reach it however well those three are written. Where a target length is given
+below, plan enough sections to carry it and say in each TODO roughly how many words that
+section should run."""
+
+# The section pass: one section at a time, because the whole document does not fit and
+# would not be written well in one breath if it did.
+_SECTION_BODY = """\
+You are writing one section of a student's document. Return the complete section as
+markdown, beginning with its heading line exactly as given, and nothing outside the
+section: no preamble, no explanation, no code fence. The reply replaces the section
+where it stands.
+
+Write the section to do what its intent says. Ground it in the provided course
+material where it is relevant, and where a needed fact is not in front of you, write
+[TODO: ...] naming what is missing rather than inventing it. Open in a way that
+follows from the end of the preceding section, and close in a way the next section's
+opening can follow.
+
+Write as much of the complete section as fits cleanly in this reply. The writing
+controller may ask for a continuation when the endpoint stops at its output limit; if
+it does, that later call will append to this one rather than replace it."""
+
+_SECTION_CONTINUATION_BODY = """\
+You are continuing one section that was too long for a single model reply. Return only
+new markdown prose to append after the supplied tail. Do not repeat the heading, the
+tail, or any earlier paragraph. Begin exactly where the existing prose leaves off and
+finish a sentence or paragraph before stopping when possible. Keep following the
+original section assignment, evidence constraints, and citation rules."""
+
+# The revise pass: after every section is written, the pass reads the document whole and
+# decides what its own first draft got wrong. Code can already see which sections are
+# thin or still hold TODO markers; this is for what only a reader can see - a section
+# that never does what its heading promised, an argument that skips a step, two sections
+# saying the same thing, a join that does not carry.
+_REVISE_EVAL_BODY = """\
+You are reading a draft you have just written, whole, before handing it to the student.
+Name only what a targeted rewrite of one section would fix.
+
+Report a section when: it does not do what its heading and the brief say it should; it
+repeats another section rather than advancing on it; it asserts something the draft
+never supports; it is markedly thinner than the work its place in the argument requires;
+or the handoff into or out of it does not carry.
+
+Do not report matters of taste, and do not report a section merely because it could be
+longer - the word counts below are given so you can tell "underdeveloped" from "short
+and complete". A draft that holds up is an empty list, and an empty list is a good
+answer: say nothing rather than manufacturing a finding.
+
+Return JSON: {"sections": [{"section": "2.1", "problem": "..."}]}. The section is its
+number exactly as the outline gives it, and the problem is one sentence saying what is
+wrong and what the rewrite should do about it."""
+
+REVISE_SCHEMA = JsonSchema(
+    name="draft_revision_targets",
+    schema={
+        "type": "object",
+        "properties": {
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "section": {"type": "string"},
+                        "problem": {"type": "string"},
+                    },
+                    "required": ["section", "problem"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["sections"],
+        "additionalProperties": False,
+    },
+)
+
+# The ghostwriter pipeline keeps each planning question deliberately narrow.  These
+# schemas are public constants because the pipeline passes them straight through to
+# constrained decoding, and tests can therefore lock the contract independently of a
+# particular model's prose habits.
+PLAN_BRIEF_SCHEMA = JsonSchema(
+    name="writer_plan_brief",
+    schema={
+        "type": "object",
+        "properties": {
+            "assignment_type": {"type": "string"},
+            "task": {"type": "string"},
+            "success_criteria": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["assignment_type", "task", "success_criteria"],
+        "additionalProperties": False,
+    },
+)
+
+PLAN_THESIS_SCHEMA = JsonSchema(
+    name="writer_plan_thesis",
+    schema={
+        "type": "object",
+        "properties": {
+            "candidates": {"type": "array", "items": {"type": "string"}},
+            "selected": {"type": "string"},
+            "rationale": {"type": "string"},
+        },
+        "required": ["candidates", "selected", "rationale"],
+        "additionalProperties": False,
+    },
+)
+
+PLAN_ARGUMENT_SCHEMA = JsonSchema(
+    name="writer_plan_argument",
+    schema={
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "claim": {"type": "string"},
+                "supports": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["id", "claim", "supports"],
+            "additionalProperties": False,
+        },
+    },
+)
+
+PLAN_SECTIONS_SCHEMA = JsonSchema(
+    name="writer_plan_sections",
+    schema={
+        "type": "object",
+        "properties": {
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "ref": {"type": "string"},
+                        "title": {"type": "string"},
+                        "job": {"type": "string"},
+                        "claim": {"type": "string"},
+                        "evidence": {"type": "array", "items": {"type": "string"}},
+                        "source_ids": {"type": "array", "items": {"type": "integer"}},
+                        "word_budget": {"type": "integer"},
+                    },
+                    "required": [
+                        "ref",
+                        "title",
+                        "job",
+                        "claim",
+                        "evidence",
+                        "source_ids",
+                        "word_budget",
+                    ],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["sections"],
+        "additionalProperties": False,
+    },
+)
+
+# A section plan is still too large a unit for reliable small-model drafting.  The
+# paragraph outline is produced one section at a time and becomes the executable work
+# queue: every prose call receives one stable job and a deliberately small word budget.
+PARAGRAPH_OUTLINE_SCHEMA = JsonSchema(
+    name="writer_paragraph_outline",
+    schema={
+        "type": "object",
+        "properties": {
+            "paragraphs": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string"},
+                        "purpose": {"type": "string"},
+                        "claim": {"type": "string"},
+                        "evidence": {"type": "array", "items": {"type": "string"}},
+                        "target_words": {"type": "integer"},
+                        "transition_in": {"type": "string"},
+                        "transition_out": {"type": "string"},
+                    },
+                    "required": [
+                        "key",
+                        "purpose",
+                        "claim",
+                        "evidence",
+                        "target_words",
+                        "transition_in",
+                        "transition_out",
+                    ],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["paragraphs"],
+        "additionalProperties": False,
+    },
+)
+
+TRANSITION_REVIEW_SCHEMA = JsonSchema(
+    name="writer_transition_review",
+    schema={
+        "type": "object",
+        "properties": {
+            "needs_change": {"type": "boolean"},
+            "rationale": {"type": "string"},
+            "revised_next_paragraph": {"type": "string"},
+        },
+        "required": ["needs_change", "rationale", "revised_next_paragraph"],
+        "additionalProperties": False,
+    },
+)
+
+OVERALL_ASSESSMENT_SCHEMA = JsonSchema(
+    name="writer_overall_assessment",
+    schema={
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "issues": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "block_key": {"type": "string"},
+                        "problem": {"type": "string"},
+                        "revision_instruction": {"type": "string"},
+                    },
+                    "required": ["block_key", "problem", "revision_instruction"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["summary", "issues"],
+        "additionalProperties": False,
+    },
+)
+
+SKEPTIC_SCHEMA = JsonSchema(
+    name="writer_section_skeptic",
+    schema={
+        "type": "object",
+        "properties": {
+            "passes": {"type": "boolean"},
+            "faults": {"type": "array", "items": {"type": "string"}},
+            "rewrite_instruction": {"type": "string"},
+        },
+        "required": ["passes", "faults", "rewrite_instruction"],
+        "additionalProperties": False,
+    },
+)
+
+RESEARCH_NOTES_SCHEMA = JsonSchema(
+    name="writer_section_research_notes",
+    schema={
+        "type": "object",
+        "properties": {
+            "notes": {"type": "array", "items": {"type": "string"}},
+            "source_ids": {"type": "array", "items": {"type": "string"}},
+            "gaps": {"type": "array", "items": {"type": "string"}},
+            "relied_on": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "source_id": {"type": "integer"},
+                        "excerpt": {"type": "string"},
+                    },
+                    "required": ["source_id", "excerpt"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["notes", "source_ids", "gaps", "relied_on"],
+        "additionalProperties": False,
+    },
+)
+
+CONTINUITY_SCHEMA = REVISE_SCHEMA
+
+
+def build_plan_brief_prompt(
+    title: str,
+    existing_body: str,
+    brief_block: str,
+    instruction: str | None,
+    length_block: str = "",
+) -> list[dict[str, str]]:
+    """Interrogate the assignment before proposing an argument."""
+    user = [f'The document is titled "{title}".', brief_block]
+    if instruction:
+        user.append(f"The student's request:\n{instruction}")
+    if length_block:
+        user.append(length_block)
+    if existing_body.strip():
+        user.append(f"Existing notes or prose:\n{existing_body}")
+    return _review_messages(
+        (
+            "Identify only the assignment type, the exact task, and the concrete "
+            "criteria a strong submission must satisfy. "
+        )
+        + _JSON_ONLY,
+        user,
+    )
+
+
+def build_plan_thesis_prompt(
+    title: str, brief_analysis: Mapping[str, object], context_block: str
+) -> list[dict[str, str]]:
+    """Generate a small candidate set and select the defensible thesis."""
+    return _review_messages(
+        (
+            "Propose three distinct, arguable thesis candidates. Select the one best "
+            "supported by the available evidence and explain the selection in one sentence. "
+        )
+        + _JSON_ONLY,
+        [f'The document is titled "{title}".', json.dumps(dict(brief_analysis)), context_block],
+    )
+
+
+def build_plan_argument_prompt(
+    thesis: str, brief_analysis: Mapping[str, object], context_block: str
+) -> list[dict[str, str]]:
+    """Turn the selected thesis into an ordered dependency map of claims."""
+    return _review_messages(
+        (
+            "Build the smallest ordered argument map that proves the thesis. Each claim "
+            "gets a stable short id; supports lists earlier claim ids it depends on. "
+        )
+        + _JSON_ONLY,
+        [f"Selected thesis: {thesis}", json.dumps(dict(brief_analysis)), context_block],
+    )
+
+
+def build_plan_sections_prompt(
+    title: str,
+    thesis: str,
+    argument_map: list[object],
+    total_words: int | None,
+    context_block: str,
+    existing_outline: str = "",
+) -> list[dict[str, str]]:
+    """Produce the annotated outline consumed by every downstream stage."""
+    length = (
+        f"The section word budgets must total about {total_words:,} words."
+        if total_words
+        else "Choose concise, realistic section word budgets."
+    )
+    return _review_messages(
+        (
+            "Turn the argument into an annotated section plan. Every section needs one "
+            "job, one claim, evidence to use, exact source ids when known, and a word "
+            "budget. Use refs 1.1, 1.2, ... in document order. "
+        )
+        + _JSON_ONLY,
+        [
+            f'The document is titled "{title}".',
+            f"Selected thesis: {thesis}",
+            json.dumps(argument_map),
+            length,
+            context_block,
+            (
+                "The document already has this outline. Preserve every heading, its "
+                f"order, and its section ref exactly:\n{existing_outline}"
+                if existing_outline
+                else ""
+            ),
+        ],
+    )
+
+
+def build_paragraph_outline_prompt(
+    title: str,
+    document_map: str,
+    section_plan: str,
+    research_block: str,
+    target_words: int,
+) -> list[dict[str, str]]:
+    """Turn one planned section into paragraph-sized executable jobs.
+
+    Keeping this call section-local prevents a small model from having to emit a large
+    nested document plan while the document map preserves its global responsibilities.
+    """
+    paragraph_count = max(1, round(target_words / 180))
+    return _review_messages(
+        (
+            "Create the complete paragraph outline for this one section. Produce "
+            f"roughly {paragraph_count} paragraph jobs whose word budgets total about "
+            f"{target_words} words. Each paragraph must do one distinct job, advance "
+            "the section claim, name the evidence it will use, and state its logical "
+            "handoff from and to neighbouring paragraphs. Use stable keys supplied as "
+            "short identifiers, not prose headings. Do not draft prose. "
+        )
+        + _JSON_ONLY,
+        [
+            f'The document is titled "{title}".',
+            f"Global document map:\n{document_map}",
+            f"Section plan:\n{section_plan}",
+            f"Research available to this section:\n{research_block}",
+        ],
+    )
+
+
+def build_paragraph_draft_prompt(
+    title: str,
+    *,
+    document_map: str,
+    section_plan: str,
+    paragraph_plan: str,
+    research_block: str,
+    ledger_block: str,
+    previous_paragraph: str | None,
+    next_paragraph_summary: str | None,
+    target_words: int,
+) -> list[dict[str, str]]:
+    """Draft exactly one paragraph with local evidence and compact global context."""
+    context = [
+        f'The document is titled "{title}".',
+        f"Global document map:\n{document_map}",
+        f"Section plan:\n{section_plan}",
+        f"This paragraph's fixed job:\n{paragraph_plan}",
+        f"Write about {target_words} words. Write one paragraph only.",
+    ]
+    if research_block:
+        context.append(f"Research for this paragraph:\n{research_block}")
+    if ledger_block:
+        context.extend(
+            [
+                ledger_block,
+                "Cite only listed sources, using [@lyra:<ID>] immediately after the "
+                "claim the source supports.",
+            ]
+        )
+    if previous_paragraph:
+        context.append(f"The preceding paragraph:\n{previous_paragraph}")
+    if next_paragraph_summary:
+        context.append(f"The next paragraph will:\n{next_paragraph_summary}")
+    return [
+        {
+            "role": "system",
+            "content": (
+                _WRITING_CRAFT
+                + "\n\nExecute the supplied paragraph job. Return prose only: no heading, "
+                "outline, notes, preface, or explanation. Establish the paragraph's "
+                "relationship to the preceding idea through meaning, not a generic "
+                "transition phrase. Do not perform work assigned to later paragraphs. "
+                "Do not plan or reason about the job; begin the paragraph immediately."
+            ),
+        },
+        {"role": "user", "content": "/no_think\n\n" + "\n\n".join(context)},
+    ]
+
+
+def build_transition_review_prompt(
+    title: str,
+    *,
+    document_map: str,
+    previous_plan: str,
+    next_plan: str,
+    previous_paragraph: str,
+    next_paragraph: str,
+) -> list[dict[str, str]]:
+    """Review one paragraph boundary with enough global context to judge its logic."""
+    return _review_messages(
+        (
+            "Evaluate only the handoff between these adjacent paragraphs. Prefer a "
+            "meaningful transition that begins with old information and then introduces "
+            "new information. If the relationship is already clear, set needs_change "
+            "false and return the next paragraph unchanged. Otherwise revise the next "
+            "paragraph only, preserving its facts, citations, purpose, and approximate "
+            "length. Do not rewrite the preceding paragraph. "
+        )
+        + _JSON_ONLY,
+        [
+            f'The document is titled "{title}".',
+            f"Global document map:\n{document_map}",
+            f"Previous paragraph job:\n{previous_plan}",
+            f"Next paragraph job:\n{next_plan}",
+            f"Previous paragraph:\n{previous_paragraph}",
+            f"Next paragraph:\n{next_paragraph}",
+        ],
+    )
+
+
+def build_overall_assessment_prompt(
+    title: str,
+    *,
+    document_map: str,
+    chunk_label: str,
+    block_summaries: str,
+    prose_chunk: str,
+) -> list[dict[str, str]]:
+    """Assess one context-sized chunk and return only targeted block instructions."""
+    return _review_messages(
+        (
+            "Act as the document-level editor for this chunk. Check assignment coverage, "
+            "argument progression, contradictions, repetition, support, pacing, tone, "
+            "and terminology against the global document map. Report only material, "
+            "actionable issues. Point every issue at one stable block key and give a "
+            "bounded revision instruction; never return a rewritten document. "
+        )
+        + _JSON_ONLY,
+        [
+            f'The document is titled "{title}".',
+            f"Global document map:\n{document_map}",
+            f"Chunk: {chunk_label}",
+            f"Block summaries:\n{block_summaries}",
+            f"Prose in this chunk:\n{prose_chunk}",
+        ],
+    )
+
+
+def format_plan_block(plan: Mapping[str, object] | None, section_ref: str | None = None) -> str:
+    """Render persistent plan context, optionally narrowed to one section job."""
+    if not plan:
+        return ""
+    payload = {
+        key: plan[key]
+        for key in ("brief_analysis", "thesis", "argument_map", "sections", "research_notes")
+        if key in plan
+    }
+    entries = payload.get("sections")
+    if section_ref and isinstance(entries, list):
+        chosen = [
+            {
+                key: entry[key]
+                for key in (
+                    "section_ref",
+                    "title",
+                    "job",
+                    "claim",
+                    "evidence",
+                    "source_ids",
+                    "word_budget",
+                    "research_notes",
+                )
+                if key in entry
+            }
+            for entry in entries
+            if isinstance(entry, Mapping)
+            and str(entry.get("section_ref") or entry.get("ref") or "") == section_ref
+        ]
+        payload["sections"] = chosen
+        research_notes = payload.get("research_notes")
+        if isinstance(research_notes, Mapping):
+            payload["research_notes"] = (
+                {section_ref: research_notes[section_ref]} if section_ref in research_notes else {}
+            )
+        else:
+            payload["research_notes"] = {}
+    label = "Persistent writing plan"
+    if section_ref:
+        label += f" (section {section_ref} job)"
+    return f"{label}:\n{json.dumps(payload, ensure_ascii=False, sort_keys=True)}"
+
+
+def format_ledger_block(entries: list[Mapping[str, object]] | None) -> str:
+    """Render source ids and relied-on excerpts without inventing citation syntax."""
+    if not entries:
+        return ""
+    return "Source ledger (cite only these stable source IDs):\n" + json.dumps(
+        [dict(entry) for entry in entries], ensure_ascii=False, sort_keys=True
+    )
+
+
+def build_skeptic_prompt(
+    title: str,
+    section_text: str,
+    plan_block: str,
+    ledger_block: str,
+    previous_tail: str | None = None,
+    next_heading: str | None = None,
+) -> list[dict[str, str]]:
+    """Structured adversarial read for one draft/critique/rewrite iteration."""
+    return _review_messages(
+        (
+            "Act as a skeptical editor. Pass only if the section performs its planned "
+            "job, supports its claim with the named evidence and sources, connects "
+            "reasoning, carries both seams, meets its word budget, and clears the prose "
+            "craft bar. Name only actionable faults and combine them into one targeted "
+            "rewrite instruction. "
+        )
+        + _JSON_ONLY,
+        [
+            f'The document is titled "{title}".',
+            plan_block,
+            ledger_block,
+            f"Section:\n{section_text}",
+            f"Previous tail:\n{previous_tail}" if previous_tail else "",
+            f"Next heading: {next_heading}" if next_heading else "",
+        ],
+    )
+
+
+def build_research_notes_prompt(
+    title: str,
+    section_job: str,
+    context_block: str,
+    ledger_block: str,
+) -> list[dict[str, str]]:
+    """Distill raw retrieval into persistent, source-bound notes for one section."""
+    return _review_messages(
+        (
+            "Act as the section researcher. Extract only facts, quotations, and reasoning "
+            "useful for the named section job. Every note that depends on a source must "
+            "name its exact source ID; list honest gaps instead of inventing support. "
+            "In relied_on, include only passages you actually selected and used, copied "
+            "exactly from the candidate text. Never put summaries, paraphrases, or every "
+            "available candidate in relied_on. "
+        )
+        + _JSON_ONLY,
+        [f'The document is titled "{title}".', section_job, context_block, ledger_block],
+    )
+
+
+def build_revise_eval_prompt(
+    title: str,
+    outline: str,
+    word_counts: str,
+    seams: str,
+    brief_block: str,
+    length_block: str,
+    plan_block: str = "",
+    ledger_block: str = "",
+) -> list[dict[str, str]]:
+    """The revise stage's one evaluation call over the whole document."""
+    sections = [f'The document is titled "{title}".']
+    if brief_block:
+        sections.append(brief_block)
+    if length_block:
+        sections.append(length_block)
+    if plan_block:
+        sections.append(plan_block)
+    if ledger_block:
+        sections.append(ledger_block)
+    sections.append(f"Its outline:\n{outline}")
+    sections.append(f"What each section actually runs to:\n{word_counts}")
+    if seams:
+        sections.append(f"Where each section hands off to the next:\n\n{seams}")
+    return [
+        {"role": "system", "content": _REVISE_EVAL_BODY},
+        {"role": "user", "content": "\n\n".join(sections)},
+    ]
+
+
+_STRUCTURE_PROMPT = _STRUCTURE_BODY
+
+_SECTION_PROMPT = "\n\n".join([_SECTION_BODY, _WRITING_CRAFT])
+
+
+def format_length_block(total_words: int | None) -> str:
+    """The document's length target as a section-count instruction, or nothing.
+
+    The brief renders "Length: 5 pages" as one labelled line among several, which a model
+    planning headings reads as background. This says the arithmetic out loud, because the
+    section count is the only lever the structure stage has over how long the finished
+    document can be.
+    """
+    if not total_words:
+        return ""
+    # A section much under ~250 words is a stub and one much over ~450 is really two;
+    # the range is what keeps a "five page" document from becoming three vast headings
+    # or twenty thin ones.
+    fewest = max(3, round(total_words / 450))
+    most = max(fewest + 1, round(total_words / 250))
+    return (
+        f"The finished document should run about {total_words:,} words. Plan roughly "
+        f"{fewest} to {most} sections that will be written to that total, and give each "
+        "TODO the approximate word count its section should run."
+    )
+
+
+def build_structure_prompt(
+    title: str,
+    existing_body: str,
+    brief_block: str,
+    context_block: str,
+    facts_block: str,
+    instruction: str | None = None,
+    length_block: str = "",
+) -> list[dict[str, str]]:
+    """Build the messages for the pipeline's structure stage.
+
+    The instruction is the student's own words for the pass ("write a five page argument
+    about X"). It used to be dropped here and used only as the proposal's note, so a
+    length or an emphasis the student typed had no effect on the shape that was planned.
+    """
+    sections = [f'The document is titled "{title}".']
+    if instruction:
+        sections.append(f"What the student asked for:\n\n{instruction}")
+    if existing_body.strip():
+        sections.append(f"What the student has written so far:\n\n{existing_body}")
+    if brief_block:
+        sections.append(brief_block)
+    if length_block:
+        sections.append(length_block)
+    if context_block:
+        sections.append(context_block)
+    if facts_block:
+        sections.append(facts_block)
+    return [
+        {"role": "system", "content": _STRUCTURE_PROMPT},
+        {"role": "user", "content": "\n\n".join(sections)},
+    ]
+
+
+def build_section_prompt(
+    title: str,
+    outline: str,
+    section_text: str,
+    previous_tail: str | None,
+    next_heading: str | None,
+    instruction: str | None,
+    brief_block: str,
+    context_block: str,
+    facts_block: str,
+    target_words: int | None = None,
+    plan_block: str = "",
+    ledger_block: str = "",
+) -> list[dict[str, str]]:
+    """Build the messages for one section of the pipeline's drafting stage.
+
+    The section's current text rides in full - for an empty section that is its heading
+    and intent, which is the assignment for the run; for an occupied one it is what the
+    lens instruction revises. Neighbours arrive as a tail and a heading, not whole
+    sections, because the transition is what they are there to carry.
+
+    `target_words` is the document's target divided by its sections. A model writing one
+    section of a five-page paper cannot infer from "Length: 5 pages" whether its share is
+    200 words or 900, and left to guess it consistently guesses low.
+    """
+    sections = [f'The document is titled "{title}".', f"Its outline:\n{outline}"]
+    if brief_block:
+        sections.append(brief_block)
+    if plan_block:
+        sections.append(plan_block)
+    if ledger_block:
+        sections.append(ledger_block)
+        sections.append(
+            "Bind every factual citation marker to a source ID from that ledger. Use "
+            "the exact marker [@lyra:<ID>] immediately after the supported claim; never "
+            "invent, renumber, or cite an ID that is not listed."
+        )
+    if target_words:
+        sections.append(
+            f"Write about {target_words:,} words for this section. That is this "
+            "section's share of the document's length, so treat it as the size the "
+            "section is meant to be: develop the material to reach it, and do not pad "
+            "to reach it."
+        )
+    sections.append(f"The section to write, as it stands:\n\n{section_text}")
+    if previous_tail:
+        sections.append(f"The end of the preceding section:\n\n{previous_tail}")
+    if next_heading:
+        sections.append(f"The next section opens with: {next_heading}")
+    if instruction:
+        sections.append(f"Instruction for this pass: {instruction}")
+    if context_block:
+        sections.append(context_block)
+    if facts_block:
+        sections.append(facts_block)
+    return [
+        {"role": "system", "content": _SECTION_PROMPT},
+        {"role": "user", "content": "\n\n".join(sections)},
+    ]
+
+
+def build_section_continuation_prompt(
+    original: list[dict[str, str]],
+    section_ref: str,
+    section_title: str,
+    drafted_tail: str,
+    words_written: int,
+    words_remaining: int | None,
+) -> list[dict[str, str]]:
+    """Narrow append-only follow-up for a section that needs another output chunk.
+
+    The original evidence-bearing request remains in the conversation. Only a bounded
+    tail of generated prose is repeated, so a small context window does not have to hold
+    the growing section twice.
+    """
+    progress = f"The section currently contains about {words_written:,} words."
+    if words_remaining is not None:
+        progress += (
+            f" Add about {words_remaining:,} more words, developing the remaining "
+            "reasoning without padding."
+        )
+    first = original[0] if original else {"role": "system", "content": _SECTION_PROMPT}
+    rest = original[1:] if original else []
+    return [
+        {
+            "role": "system",
+            "content": f"{first['content']}\n\n{_SECTION_CONTINUATION_BODY}",
+        },
+        *rest,
+        {
+            "role": "user",
+            "content": (
+                f"Continue section {section_ref} {section_title}. {progress}\n\n"
+                "The exact tail already written is below. Do not repeat it; write only "
+                f"what follows.\n\n{drafted_tail}"
+            ),
+        },
+    ]
+
+
+# The reviewer: the adversarial read, delivered as margin comments. The core carries
+# kuhn's conventions - be specific, cite, do not rewrite, do not fill gaps - and its
+# severity scale with the definitions that make the scale mean something. Each lens
+# below prepends its own scope; the core is what makes four lenses one reviewer.
+_REVIEWER_CORE = """\
+You are reviewing a student's document before their grader does. You are deliberately
+critical: find the problems now, specifically, so they can be fixed. You never change
+the document - you file findings as margin comments with add_comment, and the fixing
+is someone else's job.
+
+How to file:
+
+- One comment per finding, on the most specific passage that shows the problem. Copy
+  the quote verbatim from the current text - re-read the section first if you drafted
+  the finding from an earlier read. Omit the quote only for a finding about the whole
+  document.
+- Be specific. "Section 2 claims X but the handout says Y" is a finding; "the methods
+  need work" is not. When a finding leans on a source, name the document and where in
+  it.
+- Distinguish fact from judgment. A contradiction or a missing element is a fact; how
+  persuasive a justification reads is a judgment, and the comment should read as one.
+- Do not rewrite. Identify the problem and what needs to change, never the new text.
+- Do not fill gaps. A claim you cannot verify is filed as exactly that, not assumed
+  right or wrong.
+- [TODO: ...] markers are the document's own scaffolding for unwritten work. Do not
+  review what is inside them.
+
+Severity, one per comment:
+
+- critical: unsupported or contradicted by sources, or a flaw that would sink the
+  piece. Must be fixed.
+- major: ambiguous, incomplete, or under-justified on a point a grader would flag.
+  Should be fixed.
+- minor: formatting, clarity, or consistency; the argument survives it.
+- note: an observation that could strengthen the piece; not a deficiency.
+
+When you have filed your findings, reply with one short sentence saying how many you
+filed, and nothing else. Filing nothing is a legitimate outcome; do not invent a
+finding to have one."""
+
+_REVIEW_STRUCTURE_BODY = """\
+This pass reviews structure only, from the outline and the brief: does the document
+have the sections its assignment type needs, in an order that serves the point?
+Missing moves, ordering that buries the argument, imbalance between sections, and
+sections that do not serve the brief. Read a full section only when the outline alone
+cannot settle a finding. A structural finding rarely has one passage: quote one heading
+line from the list below, copied character for character, or omit the quote when the
+finding is about the document as a whole. The outline's numbers and word counts are
+navigation, not text - they appear nowhere in the document, so a quote built out of them
+cannot anchor."""
+
+_REVIEW_ARGUMENT_BODY = """\
+This pass reviews the argument at section granularity: does each section earn the one
+that follows, are claims sequenced so each stands on what came before, and does the
+conclusion follow from what was argued rather than restating it? The seams below show
+where each section hands off to the next - judge every handoff, and read a full
+section when a seam suggests the fault is inside it. File a transition finding on the
+sentence that fails to carry the handoff."""
+
+_REVIEW_PROSE_BODY = """\
+This pass calibrates one section's prose against the craft bar below, sentence by
+sentence: claims stronger than their evidence, empty intensifiers and verdict words,
+surplusage, actors hidden by the passive voice, abbreviations never spelled out. File
+each finding on the exact sentence that shows it. Judge this section's own prose
+only - its place in the document is reviewed separately."""
+
+_REVIEW_CLAIMS_BODY = """\
+This pass checks one section's factual claims against the source ledger. Extract each
+claim of fact and each citation, read the cited ledger entry and its recorded excerpts,
+and search course material when a course claim needs more context. File a comment wherever
+the prose says more than its source does, contradicts it, cites an unknown ledger ID, or
+leans on no source at all. Quote the claim, name the ledger source you checked, and say
+what it does or does not support. Web and course sources follow the same rule: verify the
+claim against the cited ledger entry and never guess beyond its recorded evidence."""
+
+_REVIEW_STRUCTURE_PROMPT = "\n\n".join([_REVIEW_STRUCTURE_BODY, _REVIEWER_CORE])
+_REVIEW_ARGUMENT_PROMPT = "\n\n".join([_REVIEW_ARGUMENT_BODY, _REVIEWER_CORE])
+_REVIEW_PROSE_PROMPT = "\n\n".join([_REVIEW_PROSE_BODY, _WRITING_CRAFT, _REVIEWER_CORE])
+_REVIEW_CLAIMS_PROMPT = "\n\n".join([_REVIEW_CLAIMS_BODY, _REVIEWER_CORE])
+_REVIEW_SKEPTIC_PROMPT = "\n\n".join(
+    [
+        (
+            "This is a full skeptical read of one section. Judge whether it performs its "
+            "planned job, supports its claim with real ledger evidence, connects the "
+            "reasoning, carries its seams, respects its word budget, and clears the prose "
+            "craft bar. File one specific margin comment per actionable fault; a clean "
+            "section may produce none."
+        ),
+        _WRITING_CRAFT,
+        _REVIEWER_CORE,
+    ]
+)
+
+
+def _review_messages(system: str, sections: list[str]) -> list[dict[str, str]]:
+    """Assemble one lens's messages from its system prompt and user-message blocks."""
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "\n\n".join(block for block in sections if block)},
+    ]
+
+
+def build_review_structure_prompt(
+    title: str,
+    outline: str,
+    headings: str,
+    brief_block: str,
+    facts_block: str,
+    plan_block: str = "",
+    ledger_block: str = "",
+) -> list[dict[str, str]]:
+    """The structure lens: the outline and the brief are the whole exhibit.
+
+    The headings ride along verbatim so a finding about a section has something quotable
+    in it - the outline is rendered for navigation and none of its lines exist in the
+    document.
+    """
+    return _review_messages(
+        _REVIEW_STRUCTURE_PROMPT,
+        [
+            f'The document is titled "{title}".',
+            brief_block,
+            plan_block,
+            ledger_block,
+            f"Its outline:\n{outline}",
+            f"Its headings, verbatim - quote from these:\n{headings}" if headings else "",
+            facts_block,
+        ],
+    )
+
+
+def build_review_argument_prompt(
+    title: str,
+    outline: str,
+    seams: str,
+    brief_block: str,
+    plan_block: str = "",
+    ledger_block: str = "",
+) -> list[dict[str, str]]:
+    """The argument lens: the outline plus the code-built seams between sections."""
+    return _review_messages(
+        _REVIEW_ARGUMENT_PROMPT,
+        [
+            f'The document is titled "{title}".',
+            brief_block,
+            plan_block,
+            ledger_block,
+            f"Its outline:\n{outline}",
+            f"Where each section hands off to the next:\n\n{seams}",
+        ],
+    )
+
+
+def build_review_prose_prompt(
+    title: str,
+    section_text: str,
+    brief_block: str,
+    plan_block: str = "",
+    ledger_block: str = "",
+) -> list[dict[str, str]]:
+    """The prose lens, one section at a time."""
+    return _review_messages(
+        _REVIEW_PROSE_PROMPT,
+        [
+            f'The document is titled "{title}".',
+            brief_block,
+            plan_block,
+            ledger_block,
+            f"The section under review:\n\n{section_text}",
+        ],
+    )
+
+
+def build_review_claims_prompt(
+    title: str,
+    section_text: str,
+    brief_block: str,
+    plan_block: str = "",
+    ledger_block: str = "",
+) -> list[dict[str, str]]:
+    """The claims lens, one section at a time; retrieval happens through the search tool."""
+    return _review_messages(
+        _REVIEW_CLAIMS_PROMPT,
+        [
+            f'The document is titled "{title}".',
+            brief_block,
+            plan_block,
+            ledger_block,
+            f"The section under review:\n\n{section_text}",
+            (
+                "Check every [@lyra:<ID>] marker against the ledger entry with that "
+                "exact ID. A missing, unknown, or mismatched ID is a claim finding."
+                if ledger_block
+                else ""
+            ),
+        ],
+    )
+
+
+def build_review_skeptic_prompt(
+    title: str,
+    section_text: str,
+    brief_block: str,
+    plan_block: str,
+    ledger_block: str,
+) -> list[dict[str, str]]:
+    """Deep review's full rubric, retaining the reviewer tool contract."""
+    return _review_messages(
+        _REVIEW_SKEPTIC_PROMPT,
+        [
+            f'The document is titled "{title}".',
+            brief_block,
+            plan_block,
+            ledger_block,
+            f"The section under review:\n\n{section_text}",
+        ],
+    )
+
+
+# The writer: one assistant for the draft workspace, no modes. It talks like chat and
+# works like an editor-in-the-room: reads before advising, grounds in the class's own
+# material, and never lands a change except as a proposal the student reviews.
+_WRITER_CHAT_PROMPT = """\
+You are Lyra, working with a student on a document they are writing. You are their
+writing partner: you can research the class material, help them plan, draft passages,
+rework what is there, and give a straight editorial read. The document is theirs - your
+job is to make their writing better, in their voice, never to take the pen away.
+
+How to work:
+
+- Know what the document is before advising. The brief, when there is one, says so. If
+  there is no brief, work it out: the title, what is already written, and the class
+  documents (an assignment handout or rubric, if one was uploaded - search for it). Save
+  what you conclude with save_brief and say it is your guess until the student confirms.
+  If you cannot work it out, ask - one or two plain questions, not an interview.
+- Read before you advise. The outline is in front of you; read the sections your answer
+  depends on. Advice about a paragraph you have not read is guessing with confidence.
+- Ground factual help in the course material. Search when the document leans on the
+  class's content, and say which source you used. Do not invent citations or facts.
+- Changes are proposals. propose_revision records a suggestion the student reviews hunk
+  by hunk; the document does not change until they accept. Never say you changed the
+  document - say what you proposed. For a sentence-level idea it is often better to
+  quote the rewrite in your reply and let them take it themselves.
+- Addressing the reviewer's comments is a loop, not a rewrite: read_comments, then for
+  each finding worth acting on, propose the fix and reply to that thread with what you
+  proposed - or reply with why you disagree. Work the critical and major findings
+  first. Resolving a thread is the student's gesture; yours is the reply.
+- Work at whole-document scale through the pipeline, never in the chat window. Any
+  request to draft, extend, or rework the document as a whole or across several sections
+  - "write the draft", "write me five pages on X", "flesh this out", "tighten the whole
+  thing" - is a start_draft_pass call carrying the student's request as its instruction,
+  and if they named a length, save_brief that length first. The pass structures the
+  document and writes it section by section, which is the only way a document longer
+  than a couple of pages gets written well. Answering such a request with a few
+  paragraphs in the chat window is the one wrong response: it looks like a refusal to do
+  the work, and the paragraphs land nowhere.
+- Answer in chat like a colleague: short, specific, in plain words. That is a rule about
+  the conversation, not about the document - long prose belongs in a pass or a proposal,
+  and it belongs there at full length."""
+
+
+def build_writer_chat_prompt(
+    title: str,
+    brief_block: str,
+    outline: str,
+    facts_block: str,
+) -> str:
+    """The writer conversation's system prompt.
+
+    The outline rides in the prompt on every turn rather than being left to the tool:
+    it is cheap, it is the map the model orients by, and a stale map is worse than the
+    tokens it saves. Tools re-read it when the turn itself changes the document.
+    """
+    parts = [
+        _WRITER_CHAT_PROMPT,
+        _WRITING_CRAFT,
+        f'The document is titled "{title}".',
+    ]
+    if brief_block:
+        parts.append(brief_block)
+    parts.append(f"The document right now:\n{outline}")
+    if facts_block:
+        parts.append(facts_block)
+    return "\n\n".join(parts)

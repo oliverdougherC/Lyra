@@ -3,11 +3,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '@/lib/api'
-import type { SettingsUpdate } from '@/types'
+import type { ClassWriterSettingsUpdate, SettingsUpdate } from '@/types'
 
 export const settingsKeys = {
   all: ['settings'] as const,
   models: ['settings', 'models'] as const,
+  writerClass: (classId: number) => ['settings', 'writer-class', classId] as const,
 }
 
 export function useSettings() {
@@ -22,6 +23,25 @@ export function useUpdateSettings() {
   return useMutation({
     mutationFn: (body: SettingsUpdate) => api.updateSettings(body),
     onSuccess: (settings) => queryClient.setQueryData(settingsKeys.all, settings),
+  })
+}
+
+export function useClassWriterSettings(classId: number) {
+  return useQuery({
+    queryKey: settingsKeys.writerClass(classId),
+    queryFn: ({ signal }) => api.getClassWriterSettings(classId, signal),
+    enabled: Number.isFinite(classId),
+  })
+}
+
+export function useUpdateClassWriterSettings() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ classId, body }: { classId: number; body: ClassWriterSettingsUpdate }) =>
+      api.updateClassWriterSettings(classId, body),
+    onSuccess: (updated, { classId }) => {
+      queryClient.setQueryData(settingsKeys.writerClass(classId), updated)
+    },
   })
 }
 
@@ -52,4 +72,8 @@ export function useTestVision() {
     mutationFn: () => api.testVision(),
     onSettled: () => queryClient.invalidateQueries({ queryKey: settingsKeys.all }),
   })
+}
+
+export function useTestFirecrawl() {
+  return useMutation({ mutationFn: () => api.testFirecrawl() })
 }

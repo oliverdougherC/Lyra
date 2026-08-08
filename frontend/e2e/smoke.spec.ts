@@ -1,0 +1,98 @@
+import { expect, test, type Page, type Route } from '@playwright/test'
+
+type RouteHandler = (route: Route) => Promise<void>
+
+async function installApiMocks(page: Page) {
+  const seenRequests: string[] = []
+  const unexpectedRequests: string[] = []
+  const handlers = new Map<string, RouteHandler>([
+    [
+      '/api/classes',
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: '[]',
+        })
+      },
+    ],
+    [
+      '/api/settings',
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            endpoint_url: 'http://127.0.0.1:8080/v1',
+            api_key_set: false,
+            api_key_storage: 'file',
+            model: null,
+            context_window: 8192,
+            extraction_enabled: true,
+            remote_ack: false,
+            endpoint_is_local: true,
+            endpoint_host: '127.0.0.1',
+            embedding_model: null,
+            embedding_dim: null,
+            tools_supported: null,
+            tools_message: null,
+            vision_supported: null,
+            vision_message: null,
+            allow_web_research: false,
+            parallel_requests: true,
+            parallel_concurrency: 2,
+            firecrawl_base_url: 'http://127.0.0.1:3002',
+            firecrawl_scrape_enabled: false,
+          }),
+        })
+      },
+    ],
+  ])
+
+  await page.route('http://127.0.0.1:8000/api/**', async (route) => {
+    const pathname = new URL(route.request().url()).pathname
+    seenRequests.push(pathname)
+    const handler = handlers.get(pathname)
+    if (handler) {
+      await handler(route)
+      return
+    }
+    unexpectedRequests.push(pathname)
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: `unexpected API call in smoke test: ${pathname}` }),
+    })
+  })
+
+  return { seenRequests, unexpectedRequests }
+}
+
+test.describe('nonvisual browser smoke', () => {
+  test('renders the classes home page without API or runtime errors', async ({ page }) => {
+    const api = await installApiMocks(page)
+    const pageErrors: string[] = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
+
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+
+    await expect(page.getByRole('heading', { name: 'Classes' })).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Settings' }).first()).toBeVisible()
+    expect(api.unexpectedRequests).toEqual([])
+    expect(pageErrors).toEqual([])
+  })
+
+  test('renders the settings page from mocked local configuration', async ({ page }) => {
+    const api = await installApiMocks(page)
+    const pageErrors: string[] = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
+
+    await page.goto('/settings')
+    await page.waitForLoadState('networkidle')
+
+    await expect(page.getByLabel('Breadcrumb').getByText('Settings')).toBeVisible()
+    expect(api.unexpectedRequests).toEqual([])
+    expect(pageErrors).toEqual([])
+  })
+})

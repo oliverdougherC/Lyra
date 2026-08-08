@@ -1,5 +1,5 @@
 ---
-name: 🌟 Epic
+name: Epic
 about: User stories and specs
 title: 'epic: '
 type: Epic

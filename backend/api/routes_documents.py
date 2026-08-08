@@ -193,7 +193,7 @@ def upload_document(
     class_id: int, file: Annotated[UploadFile, File()], conn: DbConn
 ) -> dict[str, object]:
     get_class(conn, class_id)
-    filename = (file.filename or "").strip()
+    filename = _display_filename(file.filename or "")
     mime = _mime_for(filename)
 
     # Checked against the bytes actually read. A `content-length` header is whatever the
@@ -583,6 +583,19 @@ def _mime_for(filename: str) -> str:
     if mime is None:
         raise LyraError(UNSUPPORTED_MESSAGE)
     return mime
+
+
+def _display_filename(filename: str) -> str:
+    """The name to show for an upload: its own, without the folders it was found in.
+
+    A folder upload sends each file's path relative to the chosen folder as its multipart
+    filename, so a term of notes arrives as `week 3/lecture/slides.pdf` and the document
+    list reads as one folder repeated rather than as a list of files. The path is the
+    browser's bookkeeping and not something the student typed, and there is nowhere to put
+    it back: a Lyra class is the folder. Both separators are cut, because a Windows browser
+    is entitled to send either.
+    """
+    return filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
 
 
 def _safe_filename(filename: str) -> str:

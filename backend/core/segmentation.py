@@ -27,12 +27,17 @@ import logging
 import re
 import sqlite3
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from backend.core.app_settings import document_text_allowed, resolve_tutor_config
 from backend.core.errors import ConfigurationError
 from backend.llm import client, replies
-from backend.llm.prompts import SEGMENTATION_SCHEMA, build_segmentation_prompt
+from backend.llm.prompts import (
+    LATEX_RESTORE_SCHEMA,
+    SEGMENTATION_SCHEMA,
+    build_latex_restore_prompt,
+    build_segmentation_prompt,
+)
 from backend.rag.tokens import CHARS_PER_TOKEN
 
 logger = logging.getLogger(__name__)
@@ -476,6 +481,138 @@ def reconcile(
     return merged
 
 
+# A statement that already carries a `$` has been through a transcription: its notation is
+# in LaTeX and there is nothing here to restore. The mark is the delimiter itself, because
+# every path that produces LaTeX in this module produces `$...$`, and a statement without
+# one is a statement extraction flattened and no reading put back.
+def _has_latex(statement: str) -> bool:
+    return "$" in statement
+
+
+# Whether a `$`-less statement is flattened *mathematics* rather than flattened prose. A
+# reading-comprehension worksheet has no math to restore, and a set of them should not cost
+# a model call, so the pass runs only for a statement carrying one of these marks: a math
+# operator or relation, a function application like `x(t)`, or the letter-digit runs an
+# exponent or subscript leaves when the layout that separated them is gone (`e2t`, `4t`).
+_MATH_SIGNAL = re.compile(
+    r"[=<>≤≥≠→←↔∗×÷∫∑∏√∞∂]"  # a relation, a math operator, or a math symbol
+    r"|[+\-*/^_](?=\s*[\w(])"  # a binary operator with an operand behind it
+    r"|[A-Za-z]\s*\(\s*[A-Za-z]"  # a function application: x(t), u(t-1)
+    r"|[A-Za-z]\d|\d[A-Za-z]"  # a letter beside a digit, as a flattened exponent leaves
+)
+
+
+def _needs_restoring(statement: str) -> bool:
+    """Whether a statement is flattened mathematics with no LaTeX put back yet."""
+    return not _has_latex(statement) and bool(_MATH_SIGNAL.search(statement))
+
+
+def _parse_restored(content: str) -> dict[str, str]:
+    """Read the restoration reply into `id -> statement`, tolerating a loose reply.
+
+    An empty map is a real outcome, treated the same everywhere: this pass contributed
+    nothing and the flattened statements stand, which is what they did before it ran.
+    """
+    payload = replies.loads(_strip_code_fence(content))
+    if not isinstance(payload, Mapping):
+        return {}
+    entries = payload.get("statements")
+    if not isinstance(entries, list):
+        return {}
+    restored: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        item_id = _text(entry.get("id"))
+        statement = _text(entry.get("statement"))
+        if item_id and statement:
+            restored[item_id] = statement
+    return restored
+
+
+def restore_latex(
+    problems: list[SegmentedProblem],
+    endpoint: str,
+    api_key: str | None,
+    model: str | None,
+) -> list[SegmentedProblem]:
+    """Put LaTeX back into any statement the segmentation pass left flattened.
+
+    Segmentation restores LaTeX as it reads, but only for the problems it reads: one it
+    dropped, mis-numbered, read at a coarser grain, or whose reading lost the sheet's words
+    keeps the chunker's text, and that text is what extraction flattened. So a second,
+    narrower pass runs over the reconciled list and asks for LaTeX on the statements still
+    without it -- problem statements and sub-parts alike. Its input is each problem's own
+    words, keyed by an id, so unlike a whole-sheet re-reading it cannot lose a problem or
+    fold two together: the worst it does on a reply it cannot use is leave the flattened
+    text exactly as it found it.
+
+    Best-effort, like the pass it backs up. A restored statement replaces the flattened one
+    only when it kept the sheet's words -- the same guard `_statement_for` applies, so a
+    paraphrase loses to the document's own text here too. No endpoint work happens when
+    there is nothing to restore, which is the common case once segmentation has run.
+
+    Args:
+        problems: The reconciled list.
+        endpoint: Tutor endpoint base URL, already resolved and permitted by the caller.
+        api_key: Bearer token, or None when the endpoint needs none.
+        model: Model identifier, or None to let the endpoint choose.
+
+    Returns:
+        The list with flattened statements transcribed where a faithful reading came back,
+        and unchanged everywhere else.
+    """
+    items: list[tuple[str, str]] = []
+    for problem_index, problem in enumerate(problems):
+        if _needs_restoring(problem.statement):
+            items.append((f"p{problem_index}", problem.statement))
+        for part_index, part in enumerate(problem.parts):
+            if _needs_restoring(part.statement):
+                items.append((f"p{problem_index}q{part_index}", part.statement))
+    if not items:
+        return problems
+
+    messages = build_latex_restore_prompt(items)
+    try:
+        content = asyncio.run(
+            client.complete(
+                endpoint,
+                api_key,
+                model,
+                messages,
+                temperature=client.DETERMINISTIC_TEMPERATURE,
+                schema=LATEX_RESTORE_SCHEMA,
+                request_timeout=client.BACKGROUND_TIMEOUT,
+            )
+        )
+    except Exception:
+        logger.exception("LaTeX restoration pass failed")
+        return problems
+
+    restored = _parse_restored(content)
+    if not restored:
+        return problems
+
+    def _pick(item_id: str, original: str) -> str:
+        candidate = restored.get(item_id)
+        if candidate and _keeps_the_words(original, candidate):
+            return candidate
+        return original
+
+    result: list[SegmentedProblem] = []
+    for problem_index, problem in enumerate(problems):
+        statement = _pick(f"p{problem_index}", problem.statement)
+        parts = tuple(
+            replace(part, statement=_pick(f"p{problem_index}q{part_index}", part.statement))
+            for part_index, part in enumerate(problem.parts)
+        )
+        if statement == problem.statement and parts == problem.parts:
+            result.append(problem)
+        else:
+            result.append(replace(problem, statement=statement, parts=parts))
+    return result
+
+
 def propose_problems(
     conn: sqlite3.Connection, document_id: int, filename: str, text: str
 ) -> list[SegmentedProblem]:
@@ -534,4 +671,9 @@ def propose_problems(
         logger.exception("Segmentation model pass failed for document %s", document_id)
         return from_chunks
 
-    return reconcile(from_chunks, parse_segmentation(content, document_id))
+    proposed = reconcile(from_chunks, parse_segmentation(content, document_id))
+    # A problem the pass above dropped or read past keeps the chunker's flattened text, so
+    # one more narrow pass restores LaTeX in whatever it left. It reuses the endpoint this
+    # function already resolved and the caller already permitted, so it adds no new path on
+    # which document text could leave the machine.
+    return restore_latex(proposed, config.endpoint_url, config.api_key, config.model)

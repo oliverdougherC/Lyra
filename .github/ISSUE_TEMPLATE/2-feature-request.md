@@ -1,9 +1,11 @@
 ---
-name: 🚀 Feature Request
-about: Suggest an idea for this project 😻!
+name: Feature request
+about: Suggest a product improvement for Lyra
 title: 'idea: '
 type: Idea
 ---
+
+Check [docs/feature-roadmap.md](../../docs/feature-roadmap.md) before filing.
 
 ## Problem Statement
 <!-- Describe the problem you're facing -->

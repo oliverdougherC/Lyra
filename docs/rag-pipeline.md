@@ -1318,7 +1318,6 @@ user has confirmed, rejected, or corrected it, so removing an upload removes wha
 
 ## Future Extensions
 
-- Structure-aware retrieval resolving an explicit section reference in a problem (Phase 3)
 - Long-horizon multi-page OCR once R-SWA (#24975) lands upstream (Phase 6)
 - Cross-class retrieval for prerequisite connections (Phase 5)
 - Conversational RAG: use history to rewrite the retrieval query

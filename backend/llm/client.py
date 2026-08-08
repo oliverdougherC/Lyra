@@ -131,6 +131,10 @@ _FORMAT_COMPLAINTS = ("response_format", "json_schema", "schema", "grammar")
 _REFUSED = 400
 _REFUSAL_STATUSES = frozenset({_REFUSED, 500})
 
+# How much of an endpoint's own error body is worth carrying into the log. Servers range
+# from a sentence to a wall of C++, and the part that says which is always at the front.
+_UPSTREAM_DETAIL_CHARS = 400
+
 _ERROR_UNREACHABLE = "The tutor endpoint is not reachable. Check that the server is running."
 _ERROR_TIMEOUT = "The tutor endpoint did not respond in time."
 _ERROR_UNAUTHORIZED = "The tutor endpoint rejected the API key."
@@ -389,11 +393,44 @@ def _mapped_error(exc: Exception) -> UpstreamError:
         elif status == 404:
             error = UpstreamError(_ERROR_NOT_FOUND)
         else:
-            logger.warning("Tutor endpoint returned status %s", status)
+            detail = _upstream_detail(exc.response)
+            logger.warning(
+                "Tutor endpoint returned status %s%s", status, f": {detail}" if detail else ""
+            )
             error = UpstreamError(_ERROR_UPSTREAM)
         error.upstream_status = status  # type: ignore[attr-defined]
         return error
     return UpstreamError(_ERROR_UNREACHABLE)
+
+
+def _upstream_detail(response: httpx.Response) -> str:
+    """The endpoint's own account of why it failed, for the log and nowhere else.
+
+    An OpenAI-compatible server puts it in `error.message`. llama.cpp is the runtime this
+    matters most for, because a bare 500 from it is genuinely ambiguous and its message is
+    the only thing that resolves the ambiguity: "the request exceeds the available context
+    size" is a server holding a smaller model than the settings describe, and "failed to
+    load model" is a server holding no model at all. Without this, `check the logs` came
+    back with a status code and a traceback that only said where Lyra was standing.
+
+    Never returned to the browser. This is the one string in the exchange written by
+    software Lyra does not control, so the user gets settled prose and the log gets this.
+    """
+    try:
+        body = response.text
+    except Exception:  # noqa: BLE001 - a streamed body nobody read has no text to give.
+        return ""
+    try:
+        decoded = json.loads(body)
+    except ValueError:
+        decoded = None
+    if isinstance(decoded, dict):
+        error = decoded.get("error")
+        if isinstance(error, dict) and isinstance(message := error.get("message"), str):
+            body = message
+        elif isinstance(error, str):
+            body = error
+    return " ".join(body.split())[:_UPSTREAM_DETAIL_CHARS]
 
 
 def _chat_body(
@@ -404,6 +441,7 @@ def _chat_body(
     max_tokens: int | None = None,
     temperature: float | None = None,
     response_format: dict[str, object] | None = None,
+    enable_thinking: bool | None = None,
 ) -> dict[str, object]:
     """Assemble a chat-completions body, omitting `model` when the user has not picked one.
 
@@ -417,9 +455,12 @@ def _chat_body(
     request that never ends; the capability probes do too, because their answers are tiny
     and someone is watching the settings screen while they run.
 
-    `temperature` and `response_format` follow the same rule: a caller that has no opinion
-    sends nothing and gets the server's own behaviour. `temperature` is written out even
-    when it is 0, which is why the test is against None rather than falsiness.
+    `temperature`, `response_format`, and `enable_thinking` follow the same rule: a caller
+    that has no opinion sends nothing and gets the server's own behaviour. `temperature`
+    and `enable_thinking` are written out even when they are 0 or false, which is why the
+    tests are against None rather than falsiness. Thinking control is carried in the
+    OpenAI-compatible `chat_template_kwargs` extension used by reasoning-capable local
+    runtimes.
     """
     body: dict[str, object] = {"messages": messages, "stream": stream}
     if model is not None:
@@ -432,6 +473,8 @@ def _chat_body(
         body["temperature"] = temperature
     if response_format is not None:
         body["response_format"] = response_format
+    if enable_thinking is not None:
+        body["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
     return body
 
 
@@ -567,6 +610,9 @@ async def stream_chat(
     messages: list[dict[str, str]],
     *,
     transport: httpx.AsyncBaseTransport | None = None,
+    max_tokens: int | None = None,
+    request_timeout: httpx.Timeout | None = None,
+    enable_thinking: bool | None = None,
 ) -> AsyncIterator[StreamDelta]:
     """Stream assistant deltas from the tutor endpoint, split by channel.
 
@@ -576,6 +622,11 @@ async def stream_chat(
         model: Model identifier, omitted from the request when None.
         messages: OpenAI-shaped chat messages.
         transport: Test seam. Leave unset in production code.
+        max_tokens: Optional output ceiling for bounded background prose jobs.
+        request_timeout: Timeout profile; background drafting uses the longer worker
+            timeout while interactive chat keeps the default.
+        enable_thinking: Optional chat-template control for local reasoning models. It is
+            left unset for ordinary chat and disabled for fixed paragraph execution jobs.
 
     Yields:
         Non-empty `StreamDelta` fragments in arrival order, each tagged `answer` or
@@ -587,10 +638,16 @@ async def stream_chat(
             llama.cpp says anything once a 200 and half a reply are already on the wire.
     """
     url = f"{_base_url(endpoint)}/chat/completions"
-    body = _chat_body(model, messages, stream=True)
+    body = _chat_body(
+        model,
+        messages,
+        stream=True,
+        max_tokens=max_tokens,
+        enable_thinking=enable_thinking,
+    )
     splitter = _ReasoningTagSplitter()
     finished = False
-    async with _client(CHAT_TIMEOUT, api_key, transport) as client:
+    async with _client(request_timeout or CHAT_TIMEOUT, api_key, transport) as client:
         try:
             async with client.stream("POST", url, json=body) as response:
                 if response.status_code >= 400:
@@ -637,6 +694,8 @@ async def complete(
     schema: JsonSchema | None = None,
     request_timeout: httpx.Timeout | None = None,
     fail_on_truncation: bool = False,
+    truncated: list[bool] | None = None,
+    enable_thinking: bool | None = None,
 ) -> str:
     """Run a single non-streaming completion and return the assistant message content.
 
@@ -665,6 +724,12 @@ async def complete(
             the probes read a partial reply for what it is; a caller that *stores* the
             reply - transcription above all - must set it, or a half-read page is filed
             as if it were the whole page.
+        truncated: A list appended to when the reply was cut off. For the caller that
+            wants the partial text *and* wants to know it is partial - a drafted section
+            is worth keeping and worth flagging, so neither discarding it nor filing it
+            silently is right.
+        enable_thinking: Optional chat-template control for local reasoning models. Fixed
+            prose execution can disable it without changing ordinary chat or planning.
 
     Raises:
         UpstreamError: The endpoint failed, its reply had no readable message content,
@@ -673,7 +738,15 @@ async def complete(
     url = f"{_base_url(endpoint)}/chat/completions"
     async with _client(request_timeout or CHAT_TIMEOUT, api_key, transport) as client:
         payload = await _post_constrained(
-            client, url, endpoint, model, messages, max_tokens, temperature, schema
+            client,
+            url,
+            endpoint,
+            model,
+            messages,
+            max_tokens,
+            temperature,
+            schema,
+            enable_thinking,
         )
 
     choices = payload.get("choices") if isinstance(payload, dict) else None
@@ -688,6 +761,8 @@ async def complete(
         if fail_on_truncation:
             raise UpstreamError(_ERROR_TRUNCATED)
         logger.warning("Tutor endpoint reply hit the output-token ceiling and was cut off")
+        if truncated is not None:
+            truncated.append(True)
     return strip_reasoning(content)
 
 
@@ -700,6 +775,7 @@ async def _post_constrained(
     max_tokens: int | None,
     temperature: float | None,
     schema: JsonSchema | None,
+    enable_thinking: bool | None,
 ) -> dict[str, object]:
     """Post one completion, stepping down the constraint ladder if the endpoint refuses.
 
@@ -730,6 +806,7 @@ async def _post_constrained(
             max_tokens=max_tokens,
             temperature=temperature,
             response_format=_response_format(level, schema),
+            enable_thinking=enable_thinking,
         )
         try:
             response = await client.post(url, json=body)

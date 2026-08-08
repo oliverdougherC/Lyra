@@ -14,6 +14,12 @@
  * spending another 48px row on a title of its own. Portals rather than state: the header
  * is above the route in the tree, the actions are JSX that changes identity every render,
  * and lifting them through context would re-render the shell on every keystroke below it.
+ *
+ * `useImmersiveChrome` goes one step further and takes the navigation away too, for the
+ * one route where the chrome is not the point: a draft is a page of writing, and the
+ * sidebar and header around it are two borders and 320px of somewhere else to be. It is
+ * the route's own state - a route that asks for it and then unmounts hands the chrome
+ * back, so no student can navigate away and find the application missing.
  */
 
 import { ChevronRight } from 'lucide-react'
@@ -31,6 +37,7 @@ export const HEADER_CRUMB_SLOT = 'lyra-header-crumb'
 export const HEADER_ACTIONS_SLOT = 'lyra-header-actions'
 
 const FullBleedContext = createContext<(bleed: boolean) => void>(() => undefined)
+const ImmersiveContext = createContext<(immersive: boolean) => void>(() => undefined)
 
 export function FullBleedProvider({
   onChange,
@@ -40,6 +47,16 @@ export function FullBleedProvider({
   children: ReactNode
 }) {
   return <FullBleedContext.Provider value={onChange}>{children}</FullBleedContext.Provider>
+}
+
+export function ImmersiveProvider({
+  onChange,
+  children,
+}: {
+  onChange: (immersive: boolean) => void
+  children: ReactNode
+}) {
+  return <ImmersiveContext.Provider value={onChange}>{children}</ImmersiveContext.Provider>
 }
 
 /**
@@ -55,6 +72,24 @@ export function useFullBleed(enabled: boolean): void {
     setBleed(enabled)
     return () => setBleed(false)
   }, [enabled, setBleed])
+}
+
+/**
+ * Slide the sidebar and the header away for as long as this route asks for it.
+ *
+ * Full bleed removes the frame around a route; this removes the application around it, so
+ * what is left is the student's own page and the tools that act on it. Cleared on unmount
+ * for the same reason `useFullBleed` is, and it matters more here: navigating out of a
+ * route with no navigation on screen must not be something a student has to discover how
+ * to undo. The preference that turns it on belongs to the route, which is what lets it
+ * survive a session without following anyone onto a page that has no way back.
+ */
+export function useImmersiveChrome(enabled: boolean): void {
+  const setImmersive = useContext(ImmersiveContext)
+  useEffect(() => {
+    setImmersive(enabled)
+    return () => setImmersive(false)
+  }, [enabled, setImmersive])
 }
 
 function Slot({ id, children }: { id: string; children: ReactNode }) {

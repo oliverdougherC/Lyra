@@ -5,8 +5,9 @@
 Lyra is a single-user, local-first study application. The frontend runs in the user's browser, the
 backend runs on the user's machine, and inference runs against an OpenAI-compatible endpoint. That
 endpoint is user-configured today and bundled with the application in Phase 6, at which point Lyra
-is local end to end. The user opens the app when studying and closes it when done. No background
-services, no persistent daemon, no cloud account.
+is local end to end. Web research runs through a loopback Firecrawl stack that `./run` provisions
+and supervises. The user opens the app when studying and stops it when done; there is no cloud
+account or always-on Lyra daemon.
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -34,8 +35,12 @@ services, no persistent daemon, no cloud account.
 │  llama.cpp (GGUF)   │  │ Tutor LLM endpoint  │
 │   local, bundled    │  │  user-configured    │
 │ llama-server: embed │  │llama-server / Ollama│
-│ mtmd-cli: OCR (P3)  │  │ bundled in Phase 6  │
+│ llama-server: OCR   │  │ bundled in Phase 6  │
 └─────────────────────┘  └─────────────────────┘
+
+FastAPI ── HTTP on loopback ──> Firecrawl API (`127.0.0.1:3002`)
+                                └─ Docker-only workers, browser,
+                                   Postgres, Redis, and RabbitMQ
 ```
 
 Two inference concerns, deliberately separated:
@@ -79,7 +84,7 @@ During that period:
    - Automatic profile extraction (which sends document text to the tutor model) is **skipped** when
      the endpoint is non-local and the acknowledgement has not been given. It is never performed
      silently against a remote endpoint.
-4. Embeddings, and text recognition once it lands, never leave the machine under any configuration.
+4. Embeddings and text recognition never leave the machine under any configuration.
 
 **Model baseline.** Development and testing target Qwen3.6 27B as the reference, with Gemma4
 covering smaller memory configurations. Both are vision-capable, and a vision-capable tutor model is
@@ -89,7 +94,7 @@ requirements are Phase 6, once there is enough built to measure honestly.
 **On "never phones home."** There is no telemetry, no analytics, and no update check, and there will
 not be. That is a different claim from "makes no network requests": inference against a configured
 endpoint is a network request, and the web tools in Phase 4 are outbound requests to arbitrary
-hosts through a self-hosted FireCrawl instance. Both are user-initiated and user-controlled. The
+hosts through a self-hosted Firecrawl instance. Both are user-initiated and user-controlled. The
 distinction to hold is that Lyra never reports on the user, which is a stronger and more honest
 promise than pretending the socket is never opened.
 
@@ -99,8 +104,7 @@ promise than pretending the socket is never opened.
 
 **Role:** User interface, state management, streaming rendering.
 
-- Client-side navigation across workspace routes: `/`, `/classes/[id]`, `/classes/[id]/chat`,
-  `/settings`
+- Client-side navigation across class, chat, solver, study, draft, and settings routes
 - Document upload via drag-and-drop, with ingestion progress
 - Streaming tutor responses rendered incrementally
 - Reads and writes all state through `lib/api.ts`
@@ -108,10 +112,13 @@ promise than pretending the socket is never opened.
 **Key pages:**
 - **Home:** Class list, recent activity
 - **Class hub (`/classes/[id]`):** The class as a place. Its conversations, solution sets,
-  documents, and profile in one tab bar, with every action that belongs to the class: rename,
+  study tools, drafts, documents, and profile in one tab bar, with every action that belongs to the class: rename,
   archive, delete, rename or delete a chat or a solution set, and move, reindex, or delete files.
   The open tab is a `?tab=` parameter, so any section of a class is a link.
 - **Class workspace (`/classes/[id]/chat`):** Conversation and documents, side by side
+- **Study workspace (`/classes/[id]/study/[artifactId]`):** Deck review or quiz attempt flow
+- **Draft workspace (`/classes/[id]/drafts/[artifactId]`):** Milkdown editor with streamed writing,
+  pending-edit review, and revision history
 - **Settings:** Tutor endpoint configuration, model selection, theme
 
 ### 2. Backend (FastAPI)
@@ -135,6 +142,11 @@ No wildcard origins.
 | `llm/` | Tutor client abstraction, prompt templates, streaming |
 
 ### 3. API Surface
+
+**Health**
+- `GET /api/health/live` - Process liveness only; no database or network probe
+- `GET /api/health/ready` - Required SQLite access/migration readiness plus separately reported,
+  optional Firecrawl availability
 
 Ingestion is slow (embedding a long document takes seconds, and profile extraction on a local tutor
 model can take minutes), so document upload is asynchronous and status is polled. Every list
@@ -169,8 +181,9 @@ student who closes the laptop mid-solve comes back to finished work.
   is what the solver's source pane shows beside a solution
 - `GET /api/documents/{document_id}/text` - The extracted text of a source with no pages to draw, so
   a TXT or MD file has the same reading pane as a PDF. Truncated: this is a pane, not a download
-- `POST /api/documents/{document_id}/reingest` - Re-run ingestion, for example once OCR support
-  lands for a document previously marked `unsupported`
+- `POST /api/documents/{document_id}/reingest` - Re-run ingestion after a pipeline change
+- `POST /api/documents/{document_id}/recognize` - Recognize unread pages in place, with per-page
+  progress and retry
 - `POST /api/documents/{document_id}/move` - File the document under another class. Returns `202`:
   a move is a re-ingest, because chunks carry a denormalized `class_id`, their vectors live in a
   table partitioned by it, and the facts drawn out of the text belong to whichever class asked for
@@ -183,9 +196,9 @@ student who closes the laptop mid-solve comes back to finished work.
 
 Two terminal states besides `ready`:
 - `failed` carries a user-facing `error_message` and the stage that failed.
-- `unsupported` means the file is a kind Lyra cannot read yet, in practice a fully scanned PDF
-  before Phase 3. The original file is retained so it can be re-ingested later without re-uploading.
-  It is deliberately distinct from `failed`: nothing went wrong, the feature is not built yet.
+- `unsupported` means the file is retained but is not currently readable. A scanned PDF or image can
+  move out of this state through explicit recognition when the configured tutor endpoint supports
+  vision. It is deliberately distinct from `failed`: nothing went wrong during ingestion.
 
 `GET .../status` returns the current stage, a page-level progress counter where known, the count of
 pages skipped for lack of extractable text, and the error if failed.
@@ -250,6 +263,19 @@ Chat is session-scoped, not class-scoped, so conversation history has an unambig
 Full specification, including the state machine and the review gate, in
 [solver-phase-2.md](solver-phase-2.md).
 
+**Study tools (Phase 5, completed ahead of Phase 4)**
+- `POST /api/classes/{class_id}/decks` and `/quizzes` - Create grounded study artifacts as jobs
+- `GET /api/classes/{class_id}/study` - List the class's decks and quizzes
+- `GET /api/decks/{artifact_id}` and `/quizzes/{artifact_id}` - Read generated content and status
+- Deck card ratings update the spaced-repetition schedule; quiz attempts retain answers and scores
+
+**Drafts (Phase 5 baseline, completed ahead of Phase 4)**
+- `POST /api/classes/{class_id}/drafts` and `GET /api/classes/{class_id}/drafts` - Create and list drafts
+- `GET/PATCH /api/drafts/{artifact_id}` and `PATCH .../body` - Read, rename, and autosave a draft
+- `POST /api/drafts/{artifact_id}/write` - Stream a proposed passage without silently applying it
+- `POST /api/drafts/{artifact_id}/suggest` and `GET .../pending` - Produce and review pending edits
+- Draft revisions and status polling reuse the artifact substrate and background-job pattern
+
 **Profile**
 - `GET /api/classes/{class_id}/profile` - Class profile, including unconfirmed extracted facts
 - `PATCH /api/classes/{class_id}/profile` - Correct or delete a field
@@ -272,7 +298,8 @@ invocations and their currently-known upstream limitations.
 **Summary:**
 - Documents are ingested by a background job on upload
 - Text-based PDFs are parsed with PyMuPDF
-- Fully scanned documents terminate as `unsupported` today; text recognition arrives in Phase 3
+- Fully scanned documents and images can be recognized explicitly, per page, through a local
+  vision-capable tutor endpoint
 - Text is chunked semantically, with a hard token ceiling per chunk
 - Chunks are embedded locally with `nomic-embed-text-v1.5` GGUF, using mandatory task prefixes
 - Stored in SQLite with `sqlite-vec`, searched by exact brute-force KNN
@@ -366,19 +393,20 @@ Requirements, in the order they matter:
 - **Tools are pure until Phase 4.** The Phase 2 tool set only computes. Nothing reads or writes
   outside `data/`
 
-Two consequences worth recording here rather than only in the phase spec. The LLM client does not
-send or parse tool calls today, so this is new code in `llm/client.py` rather than a flag; and not
-every OpenAI-compatible endpoint a user configures implements `tools`, so the capability is probed
+Two consequences worth recording here rather than only in the phase spec. Tool-call support lives in
+`llm/client.py`, not behind a provider-specific framework; and not every OpenAI-compatible endpoint
+a user configures implements `tools`, so the capability is probed
 and a negative result degrades verification honestly instead of failing the solver. See
 [solver-phase-2.md](solver-phase-2.md).
 
-**Threat model, to be specified before any tool touches the filesystem.** Uploaded documents are
+**Threat model, specified before any tool touches the filesystem.** Uploaded documents are
 untrusted input by design: a student uploads whatever their professor handed them. Once the model
 holds tools, document and web content becomes an injection vector, and the instruction boundary
 matters. Today the backend is loopback-only and writes only to `data/`, which is a defensible
-boundary. Filesystem and execution tools move it, and Phase 4 does not begin until path
-allowlisting, confirmation before execution, and a written threat model covering a poisoned upload
-are in place.
+boundary. Filesystem and execution tools move it. [phase-4-threat-model.md](phase-4-threat-model.md)
+defines path containment, proposal-only model effects, confirmation before execution, durable audit,
+SSRF controls, and the hostile-input release gate. Those controls are implemented in the Phase 4
+agent substrate; scrape remains default-off until the real pinned-Firecrawl redirect drill passes.
 
 ### 8. Data Storage
 
@@ -392,6 +420,17 @@ are in place.
   solver follows the same pattern, keeping its job state on `artifacts`
 - `artifacts`, `artifact_sources`, `artifact_parts`, `artifact_part_revisions`, and
   `artifact_provenance` from Phase 2. See [solver-phase-2.md](solver-phase-2.md)
+- Study tables hold cards, scheduler state, quiz questions, answers, and attempts; decks and quizzes
+  remain artifacts rather than a parallel ownership model
+- `pending_edits` stores server-authoritative draft suggestions and their derived review hunks;
+  drafts themselves are single-part artifacts with the same revision guarantees as solutions
+- `class_workspaces`, `workspace_changes`, and `command_requests` hold default-off workspace grants,
+  inert model proposals, reviewed file decisions, and bounded command results
+- `tool_audit_events` and `confirmation_nonces` separate durable dispatch history from single-use,
+  browser-origin-bound authority for host effects
+- `writer_sources`, immutable `writer_source_revisions`, and exact excerpts are the shared evidence
+  ledger for writer and class-agent research; web-proposed profile facts retain that evidence and
+  stay inactive until confirmation
 
 **Vector store (`sqlite-vec`):**
 - A `vec0` virtual table holding chunk embeddings, partitioned by `class_id`
@@ -417,19 +456,45 @@ returned by any API response and never written to logs.
 **Local-only, single-user:**
 - No authentication, no multi-tenancy, no network exposure beyond loopback
 - All user data on the user's machine
-- Two processes in both development and production: Next.js on `3000`, FastAPI on `127.0.0.1:8000`
+- One app-like entry point, `./run`, supervising Next.js on `3000`, FastAPI on
+  `127.0.0.1:8000`, and a pinned Firecrawl stack exposed on `127.0.0.1:3002`
+- Docker publishes no Firecrawl database, cache, queue, browser, or worker port to the host
 
-**Why two processes rather than the backend serving the frontend.** A single-process deployment
-would require a Next.js static export, and static export cannot render dynamic route segments such
-as `/classes/[id]` without knowing every id at build time. Working around that would mean
-abandoning route segments or the app router. Running the Next.js server is simpler, keeps the
-framework intact, and costs only a second local process. `scripts/dev` and `scripts/start` launch
-both and are the supported entry points.
+**One launch does not mean one process.** Lyra's frontend and backend remain separate because a
+Next.js static export cannot render the app's dynamic route segments without knowing their ids at
+build time. Firecrawl is also a multi-service system: its API, workers, browser service, Postgres,
+Redis, and RabbitMQ have different reliability and persistence concerns. `./run` turns those
+details into one lifecycle with prerequisite checks, idempotent provisioning, migrations, health
+gates, diagnostics, and browser launch; it does not hide them in one oversized container.
 
-**Known consequence:** this requires both a Node and a Python runtime on the machine. That is
-acceptable during development, when the audience already runs a local model server. Collapsing this
-into one distributable artifact is the job of the native wrapper in Phase 6, which will supervise
-both processes.
+Firecrawl is built from the pinned upstream
+[`v2.11.162`](https://github.com/firecrawl/firecrawl/tree/v2.11.162) source rather than following a
+mutable `latest` image. The pin makes rebuilds reviewable and repeatable while retaining the official
+self-host layout. The [official self-host guide](https://docs.firecrawl.dev/contributing/self-host)
+and [upstream repository](https://github.com/firecrawl/firecrawl) remain the source of truth for
+that dependency. Updating the pin is an explicit maintenance change followed by the complete live
+search, scrape, and redirect-safety acceptance drill.
+
+There are two readiness levels:
+
+- `GET /api/health/live` proves only that the FastAPI process answers.
+- `GET /api/health/ready` returns `503` when SQLite is inaccessible or behind the checked-in
+  migrations. It reports Firecrawl as a separate, non-required component, so a Firecrawl outage
+  does not take local documents, chat, study tools, or drafts down with it.
+- The launcher applies the stricter whole-stack rule. In a normal launch, it also requires the
+  Docker services and Firecrawl's own readiness probe before it opens the browser. Only the
+  explicit `--skip-firecrawl` path accepts degraded web capability.
+
+The Compose boundary is intentionally extensible. Phase 6 can add a loopback OpenAI-compatible
+`inference` service backed by llama.cpp, or a hardware-specific vLLM profile, without changing the
+browser-to-backend contract. Model weights and user data remain host-owned volumes; the inference
+port is not made public merely because the process moves into a container.
+
+The current launcher still requires compatible Node and Python runtimes on the host and cannot
+safely install Docker Desktop or the Docker daemon for the user. A signed native wrapper remains a
+Phase 6 distribution option; it will replace the launcher as the desktop entry point, not flatten
+the service architecture. Operational details and recovery commands live in
+[local-deployment.md](local-deployment.md).
 
 ## Design Decisions
 

@@ -15,6 +15,10 @@ function fact(overrides: Partial<FactRead> & { kind: FactKind; value: string }):
     source_document_id: 1,
     source_filename: 'homework_1.pdf',
     sources: ['homework_1.pdf'],
+    source_writer_id: null,
+    source_excerpt_id: null,
+    source_title: null,
+    source_url: null,
     created_at: '2026-01-01T00:00:00Z',
     ...overrides,
   }

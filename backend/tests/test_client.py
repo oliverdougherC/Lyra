@@ -155,6 +155,47 @@ async def test_stream_chat_omits_model_when_unset() -> None:
     assert b'"model"' not in bodies[0]
 
 
+async def test_stream_chat_accepts_a_bounded_background_generation_budget() -> None:
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, text="data: [DONE]\n")
+
+    async for _ in client.stream_chat(
+        _ENDPOINT,
+        None,
+        "local-model",
+        [{"role": "user", "content": "write one paragraph"}],
+        transport=_transport(handler),
+        max_tokens=320,
+        request_timeout=client.BACKGROUND_TIMEOUT,
+    ):
+        pass
+
+    assert bodies[0]["max_tokens"] == 320
+
+
+async def test_stream_chat_can_disable_template_level_thinking() -> None:
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, text="data: [DONE]\n")
+
+    async for _ in client.stream_chat(
+        _ENDPOINT,
+        None,
+        "local-model",
+        [{"role": "user", "content": "write one paragraph"}],
+        transport=_transport(handler),
+        enable_thinking=False,
+    ):
+        pass
+
+    assert bodies[0]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
 async def test_not_found_reports_a_wrong_path_without_leaking_endpoint_or_key() -> None:
     transport = _transport(lambda request: httpx.Response(404, json={"error": "no such route"}))
 
@@ -488,22 +529,29 @@ def forget_endpoint_support() -> None:
 
 def _recorder(
     statuses: dict[str, int],
+    body: dict[str, object] | None = None,
 ) -> tuple[httpx.MockTransport, list[dict[str, object]]]:
     """A transport that refuses the `response_format` types named in `statuses`.
 
-    Returns the transport and the list every request body is recorded into, which is what
-    lets a test assert on what was *sent* rather than only on what came back.
+    Args:
+        statuses: Status to answer each `response_format` type with.
+        body: What a refusal says, for the tests about a server explaining itself.
+            Defaults to naming the format, which is what the ladder reads a 400 for.
+
+    Returns:
+        The transport and the list every request body is recorded into, which is what
+        lets a test assert on what was *sent* rather than only on what came back.
     """
     sent: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        sent.append(body)
-        declared = body.get("response_format") or {}
+        request_body = json.loads(request.content)
+        sent.append(request_body)
+        declared = request_body.get("response_format") or {}
         status = statuses.get(str(declared.get("type", "none")), 200)
         # A refusing server names the thing it refused, and the ladder only trusts a 400
         # that does: an anonymous 400 is a request problem, not a capability signal.
-        refusal = {"error": {"message": "response_format is not supported"}}
+        refusal = body or {"error": {"message": "response_format is not supported"}}
         return httpx.Response(status, json=_OK if status == 200 else refusal)
 
     return _transport(handler), sent
@@ -536,6 +584,14 @@ async def test_temperature_zero_is_sent_rather_than_dropped_as_falsy() -> None:
     await _complete(transport, temperature=client.DETERMINISTIC_TEMPERATURE)
 
     assert sent[0]["temperature"] == 0.0
+
+
+async def test_non_streaming_completion_can_disable_template_level_thinking() -> None:
+    transport, sent = _recorder({})
+
+    await _complete(transport, enable_thinking=False)
+
+    assert sent[0]["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 async def test_a_schema_is_sent_as_a_strict_json_schema_response_format() -> None:
@@ -645,6 +701,35 @@ async def test_a_500_carrying_a_format_is_retried_weaker_but_not_remembered() ->
         "json_schema",
         "json_object",
     ]
+
+
+async def test_a_failing_endpoints_own_words_reach_the_log_but_not_the_user(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A bare 500 from llama.cpp is ambiguous, and its message is what resolves it.
+
+    Without this, someone told to check the logs found a status code and a traceback that
+    only said where Lyra was standing when the endpoint said no - never that the server
+    was holding a model whose context window is smaller than the settings describe. The
+    message still goes nowhere near the browser: it is the one string in the exchange that
+    software Lyra does not control wrote.
+    """
+    transport, _ = _recorder(
+        {"json_schema": 500, "json_object": 500, "none": 500},
+        body={"error": {"message": "the request exceeds the available context size"}},
+    )
+
+    with (
+        caplog.at_level(logging.WARNING, logger="backend.llm.client"),
+        pytest.raises(UpstreamError) as caught,
+    ):
+        await _complete(transport, schema=_SCHEMA)
+
+    assert "context size" not in caught.value.message
+    assert any(
+        "the request exceeds the available context size" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 async def test_an_endpoint_that_is_simply_down_still_reports_an_error() -> None:

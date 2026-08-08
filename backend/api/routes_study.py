@@ -36,6 +36,7 @@ NOT_A_CARD_MESSAGE = "That card does not exist."
 NOT_AN_ATTEMPT_MESSAGE = "That attempt does not exist."
 NOTHING_READY_MESSAGE = "There are no processed documents to study from yet."
 NAMED_NOT_READY_MESSAGE = "None of the chosen documents has finished processing yet."
+NOT_RUNNING_MESSAGE = "This study run is not running."
 DECK_NOT_READY_MESSAGE = "This deck is still being generated."
 ATTEMPT_FINISHED_MESSAGE = "This attempt has already been finished."
 NOT_THIS_QUIZ_MESSAGE = "That question does not belong to this quiz's attempt."
@@ -539,10 +540,23 @@ def finish_attempt(attempt_id: int, conn: DbConn) -> dict[str, object]:
     }
 
 
+def _cancel_study(artifact: dict[str, object], conn: sqlite3.Connection) -> dict[str, object]:
+    """Stop a queued or running study generation, keeping anything already written."""
+    if artifact["state"] not in (artifacts.PENDING, artifacts.GENERATING):
+        raise ConflictError(NOT_RUNNING_MESSAGE)
+    artifacts.set_artifact_state(conn, int(artifact["id"]), artifacts.CANCELLED)
+    return artifacts.get_artifact(conn, int(artifact["id"]))
+
+
 @router.patch("/decks/{artifact_id}", response_model=None)
 def rename_deck(artifact_id: int, payload: StudyRename, conn: DbConn) -> dict[str, object]:
     _require_deck(conn, artifact_id)
     return artifacts.rename_artifact(conn, artifact_id, payload.title)
+
+
+@router.post("/decks/{artifact_id}/cancel", response_model=None)
+def cancel_deck(artifact_id: int, conn: DbConn) -> dict[str, object]:
+    return _cancel_study(_require_deck(conn, artifact_id), conn)
 
 
 @router.delete("/decks/{artifact_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -555,6 +569,11 @@ def delete_deck(artifact_id: int, conn: DbConn) -> None:
 def rename_quiz(artifact_id: int, payload: StudyRename, conn: DbConn) -> dict[str, object]:
     _require_quiz(conn, artifact_id)
     return artifacts.rename_artifact(conn, artifact_id, payload.title)
+
+
+@router.post("/quizzes/{artifact_id}/cancel", response_model=None)
+def cancel_quiz(artifact_id: int, conn: DbConn) -> dict[str, object]:
+    return _cancel_study(_require_quiz(conn, artifact_id), conn)
 
 
 @router.delete("/quizzes/{artifact_id}", status_code=status.HTTP_204_NO_CONTENT)

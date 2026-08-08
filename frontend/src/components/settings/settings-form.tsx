@@ -21,15 +21,20 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { api, ApiError } from '@/lib/api'
+import { useClasses } from '@/lib/hooks/use-classes'
 import {
+  useClassWriterSettings,
   useSettings,
   useTestConnection,
+  useTestFirecrawl,
   useTestTools,
   useTestVision,
   useUpdateSettings,
+  useUpdateClassWriterSettings,
 } from '@/lib/hooks/use-settings'
 import { useTheme, type Theme } from '@/lib/theme'
 import type { ConnectionTestResult, SettingsRead, SettingsUpdate } from '@/types'
+import type { ClassRead } from '@/types'
 
 const MIN_RECOMMENDED_CONTEXT = 8192
 
@@ -99,6 +104,7 @@ function SettingsSection({
 function SettingsSections({ settings }: { settings: SettingsRead }) {
   const updateSettings = useUpdateSettings()
   const testConnection = useTestConnection()
+  const testFirecrawl = useTestFirecrawl()
   const testTools = useTestTools()
   const testVision = useTestVision()
   const { theme, setTheme } = useTheme()
@@ -106,17 +112,23 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
   const [endpoint, setEndpoint] = useState(settings.endpoint_url ?? '')
   const [apiKey, setApiKey] = useState('')
   const [contextWindow, setContextWindow] = useState(String(settings.context_window))
+  const [parallelConcurrency, setParallelConcurrency] = useState(
+    String(settings.parallel_concurrency),
+  )
+  const [firecrawlBaseUrl, setFirecrawlBaseUrl] = useState(settings.firecrawl_base_url)
   const [models, setModels] = useState<string[]>([])
   const [test, setTest] = useState<TestState>({ status: 'idle' })
 
   // A save writes the canonical values back into the cache, and the inputs have to follow.
   // Adjusting during render rather than in an effect avoids a frame showing the stale text.
-  const serverEcho = `${settings.endpoint_url ?? ''}|${settings.context_window}`
+  const serverEcho = `${settings.endpoint_url ?? ''}|${settings.context_window}|${settings.parallel_concurrency}|${settings.firecrawl_base_url}`
   const [lastEcho, setLastEcho] = useState(serverEcho)
   if (serverEcho !== lastEcho) {
     setLastEcho(serverEcho)
     setEndpoint(settings.endpoint_url ?? '')
     setContextWindow(String(settings.context_window))
+    setParallelConcurrency(String(settings.parallel_concurrency))
+    setFirecrawlBaseUrl(settings.firecrawl_base_url)
   }
 
   // A successful test is what proves the endpoint answers, so the model select stays locked
@@ -360,6 +372,134 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
       </SettingsSection>
 
       <SettingsSection
+        title="Writer"
+        description="Choose what the writer may research and how it uses a capable endpoint."
+      >
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="firecrawl-base-url">Local Firecrawl URL</FieldLabel>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                id="firecrawl-base-url"
+                className="min-w-64 flex-1"
+                inputMode="url"
+                autoComplete="off"
+                value={firecrawlBaseUrl}
+                onChange={(event) => setFirecrawlBaseUrl(event.target.value)}
+                onBlur={() => {
+                  const next = firecrawlBaseUrl.trim()
+                  if (next && next !== settings.firecrawl_base_url) {
+                    void save({ firecrawl_base_url: next })
+                  }
+                }}
+              />
+              <Button
+                variant="outline"
+                disabled={testFirecrawl.isPending || !firecrawlBaseUrl.trim()}
+                onClick={async () => {
+                  if (!(await save({ firecrawl_base_url: firecrawlBaseUrl.trim() }))) return
+                  testFirecrawl.mutate()
+                }}
+              >
+                {testFirecrawl.isPending ? <Spinner /> : null}
+                Test Firecrawl
+              </Button>
+            </div>
+            <FieldDescription>
+              Must resolve entirely to this machine. Lyra uses only bounded search and scrape
+              endpoints; it never sends headers, cookies, actions, browser profiles, or proxy
+              settings.
+            </FieldDescription>
+            {testFirecrawl.data ? (
+              <p
+                className={
+                  testFirecrawl.data.ok ? 'text-success-text text-sm' : 'text-danger-text text-sm'
+                }
+              >
+                {testFirecrawl.data.message}
+              </p>
+            ) : null}
+          </Field>
+
+          <Field orientation="horizontal">
+            <div className="min-w-0 flex-1">
+              <FieldLabel htmlFor="firecrawl-scrape-enabled">Enable source snapshots</FieldLabel>
+              <FieldDescription>
+                Keep this off until the installed Firecrawl release passes the documented
+                public-to-private redirect safety check. Search metadata can work independently.
+              </FieldDescription>
+            </div>
+            <Switch
+              id="firecrawl-scrape-enabled"
+              checked={settings.firecrawl_scrape_enabled}
+              disabled={!testFirecrawl.data?.ok}
+              onCheckedChange={(checked) => void save({ firecrawl_scrape_enabled: checked })}
+            />
+          </Field>
+
+          <Field orientation="horizontal">
+            <div className="min-w-0 flex-1">
+              <FieldLabel htmlFor="allow-web-research">Allow web research</FieldLabel>
+              <FieldDescription>
+                Lets the writer search public pages and save the passages it actually relies on.
+                Every fetched source remains visible in the draft&apos;s source ledger.
+              </FieldDescription>
+            </div>
+            <Switch
+              id="allow-web-research"
+              checked={settings.allow_web_research}
+              onCheckedChange={(checked) => void save({ allow_web_research: checked })}
+            />
+          </Field>
+
+          <ClassResearchOverrides />
+
+          <Field orientation="horizontal">
+            <div className="min-w-0 flex-1">
+              <FieldLabel htmlFor="parallel-requests">Parallel writer requests</FieldLabel>
+              <FieldDescription>
+                Runs independent research, drafting, and review jobs together when the endpoint can
+                safely accept them. Leave this off for a serial local server.
+              </FieldDescription>
+            </div>
+            <Switch
+              id="parallel-requests"
+              checked={settings.parallel_requests}
+              onCheckedChange={(checked) => void save({ parallel_requests: checked })}
+            />
+          </Field>
+
+          <Field>
+            <FieldLabel htmlFor="parallel-concurrency">Maximum concurrent requests</FieldLabel>
+            <Input
+              id="parallel-concurrency"
+              className="w-28"
+              type="number"
+              min={1}
+              max={16}
+              step={1}
+              disabled={!settings.parallel_requests}
+              value={parallelConcurrency}
+              onChange={(event) => setParallelConcurrency(event.target.value)}
+              onBlur={() => {
+                const parsed = Number(parallelConcurrency)
+                if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 16) {
+                  setParallelConcurrency(String(settings.parallel_concurrency))
+                  return
+                }
+                if (parsed !== settings.parallel_concurrency) {
+                  void save({ parallel_concurrency: parsed })
+                }
+              }}
+            />
+            <FieldDescription>
+              A bound, not a target. Lyra only fans out stages that do not depend on one another.
+            </FieldDescription>
+          </Field>
+        </FieldGroup>
+      </SettingsSection>
+
+      <SettingsSection
         title="Privacy"
         description="See what stays on this machine and control what may leave it."
       >
@@ -398,6 +538,75 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
           ))}
         </RadioGroup>
       </SettingsSection>
+    </div>
+  )
+}
+
+function ClassResearchOverrides() {
+  const classes = useClasses()
+
+  if (!classes.data?.length) return null
+
+  return (
+    <Field>
+      <FieldLabel>Course web research</FieldLabel>
+      <FieldDescription>
+        Each course inherits the global choice unless you explicitly allow or block it here.
+      </FieldDescription>
+      <div className="mt-2 grid gap-2">
+        {classes.data.map((course) => (
+          <ClassResearchOverride key={course.id} course={course} />
+        ))}
+      </div>
+    </Field>
+  )
+}
+
+function ClassResearchOverride({ course }: { course: ClassRead }) {
+  const writerSettings = useClassWriterSettings(course.id)
+  const update = useUpdateClassWriterSettings()
+  const override = writerSettings.data?.overrides.allow_web_research
+  const value =
+    override === null || override === undefined ? 'inherit' : override ? 'allow' : 'block'
+
+  async function change(next: string) {
+    const allowWebResearch = next === 'inherit' ? null : next === 'allow'
+    try {
+      await update.mutateAsync({
+        classId: course.id,
+        body: { allow_web_research: allowWebResearch },
+      })
+    } catch (caught) {
+      toast.error(
+        caught instanceof ApiError ? caught.message : 'Could not save that course override.',
+      )
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2">
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium">{course.name}</p>
+        {writerSettings.data ? (
+          <p className="text-text-secondary text-xs">
+            Effective: {writerSettings.data.effective.allow_web_research ? 'allowed' : 'blocked'}
+          </p>
+        ) : null}
+      </div>
+      <Select
+        value={value}
+        disabled={writerSettings.isPending || update.isPending}
+        onValueChange={(next) => void change(next)}
+      >
+        <SelectTrigger size="sm" className="w-28" aria-label={`${course.name} web research`}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="inherit">Inherit</SelectItem>
+          <SelectItem value="allow">Allow</SelectItem>
+          <SelectItem value="block">Block</SelectItem>
+        </SelectContent>
+      </Select>
     </div>
   )
 }

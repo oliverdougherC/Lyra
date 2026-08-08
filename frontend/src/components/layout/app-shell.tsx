@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 
 import { AppHeader } from '@/components/layout/app-header'
 import { AppSidebar } from '@/components/layout/app-sidebar'
-import { FullBleedProvider } from '@/components/layout/page-chrome'
+import { FullBleedProvider, ImmersiveProvider } from '@/components/layout/page-chrome'
 import { MobileBottomNav } from '@/components/layout/mobile-bottom-nav'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { useAppShortcuts } from '@/lib/hooks/use-app-shortcuts'
@@ -28,10 +28,23 @@ function parseOpen(raw: string): boolean | null {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useLocalStorageState(SIDEBAR_STORAGE_KEY, true, parseOpen)
   const [bleed, setBleed] = useState(false)
+  const [immersive, setImmersive] = useState(false)
   const router = useRouter()
 
   // Stable, so a route's effect does not re-run on every render of the shell.
   const handleBleedChange = useCallback((next: boolean) => setBleed(next), [])
+  const handleImmersiveChange = useCallback((next: boolean) => setImmersive(next), [])
+
+  // The trigger is off screen in immersive mode, but its keyboard shortcut is not: Ctrl-B
+  // still reaches the sidebar's own handler. Left alone it would rewrite the preference
+  // with nothing on screen to show for it, so the state the student returns to is the
+  // opposite of the one they left. A mode that has asked for no sidebar keeps the answer.
+  const handleOpenChange = useCallback(
+    (next: boolean) => {
+      if (!immersive) setOpen(next)
+    },
+    [immersive, setOpen],
+  )
 
   const shortcuts = useMemo(
     () => [
@@ -50,8 +63,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <SidebarProvider
-      open={open}
-      onOpenChange={setOpen}
+      // Immersive mode collapses the sidebar without touching the stored preference, so
+      // leaving it hands the student back the sidebar they had rather than the one the
+      // mode left behind. The sidebar animates off-canvas on its own; nothing here has to
+      // arrange the slide.
+      open={open && !immersive}
+      onOpenChange={handleOpenChange}
       style={SIDEBAR_STYLE}
       className="h-svh overflow-hidden"
     >
@@ -72,7 +89,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* The canvas, flush to the window on every route. `bleed` no longer changes the
           frame — there is no frame — only the reading measure and padding below. */}
       <SidebarInset className="min-h-0 min-w-0 overflow-clip">
-        <AppHeader />
+        <AppHeader collapsed={immersive} />
         {/* `main` is the one scroll container below the header, so the rail and header
             stay put on long routes while a full-height route (the workspace) can still
             size itself to exactly what is left. It is `relative` so that it, and not
@@ -90,7 +107,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               bleed ? 'max-w-none' : 'max-w-[1320px] p-4 pb-0 md:p-6 md:pb-0',
             )}
           >
-            <FullBleedProvider onChange={handleBleedChange}>{children}</FullBleedProvider>
+            <FullBleedProvider onChange={handleBleedChange}>
+              <ImmersiveProvider onChange={handleImmersiveChange}>{children}</ImmersiveProvider>
+            </FullBleedProvider>
             {/* Breathing room as a spacer rather than as padding on this box.
                 `flex-1` is `1 1 0%`, so this box is always exactly the scroll container's
                 height and a long page's content overflows it; padding here would sit above
@@ -113,7 +132,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </main>
       </SidebarInset>
-      <MobileBottomNav />
+      {/* The phone's navigation goes with the rest of it: a mode that exists to hand the
+          window to one page cannot leave a fixed bar across the bottom of that page. */}
+      {immersive ? null : <MobileBottomNav />}
     </SidebarProvider>
   )
 }

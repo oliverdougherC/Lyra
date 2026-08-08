@@ -43,8 +43,7 @@ if (!Element.prototype.scrollIntoView) {
 // needs fetch stubs it with `vi.stubGlobal('fetch', ...)`, and `unstubGlobals` restores the
 // guard afterwards.
 globalThis.fetch = ((input: RequestInfo | URL) => {
-  const url =
-    typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   throw new Error('unstubbed fetch in test: ' + url)
 }) as typeof fetch
 

@@ -9,6 +9,7 @@ key is left dangling, and both the old and the new kinds insert afterwards.
 import sqlite3
 from pathlib import Path
 
+from backend.storage import database
 from backend.storage.database import MIGRATIONS_DIR, connect, migrate
 
 
@@ -130,5 +131,64 @@ def test_016_accepts_the_new_kinds_and_keeps_the_old(tmp_path: Path) -> None:
             (deck_id,),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def test_016_rolls_back_cleanly_and_can_retry_after_fault_injection(
+    tmp_path: Path, monkeypatch
+) -> None:
+    conn = connect(tmp_path / "pre016.db")
+    try:
+        _migrate_through(conn, 15)
+        artifact_id = _seed_solver_artifact(conn)
+        version_before = conn.execute("pragma user_version").fetchone()[0]
+        original_schema = conn.execute(
+            "select sql from sqlite_master where type = 'table' and name = 'artifacts'"
+        ).fetchone()[0]
+        original_execute = database._execute_migration_statements
+
+        def fail_mid_rebuild(connection: sqlite3.Connection, statements: list[str]) -> None:
+            for statement in statements[:4]:
+                connection.execute(statement)
+            raise sqlite3.OperationalError("fault injection during migration 016")
+
+        monkeypatch.setattr(database, "_execute_migration_statements", fail_mid_rebuild)
+
+        try:
+            migrate(conn)
+        except sqlite3.OperationalError as exc:
+            assert "fault injection" in str(exc)
+        else:
+            raise AssertionError("migration 016 should have failed under fault injection")
+
+        assert conn.execute("pragma user_version").fetchone()[0] == version_before == 15
+        assert conn.execute("pragma foreign_keys").fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "select name from sqlite_master where type = 'table' and name = 'artifacts_new'"
+            ).fetchone()
+            is None
+        )
+        artifact = conn.execute(
+            "select kind, title from artifacts where id = ?", (artifact_id,)
+        ).fetchone()
+        assert (artifact["kind"], artifact["title"]) == ("solution_set", "Homework 3")
+        rolled_back_schema = conn.execute(
+            "select sql from sqlite_master where type = 'table' and name = 'artifacts'"
+        ).fetchone()[0]
+        assert rolled_back_schema == original_schema
+
+        monkeypatch.setattr(database, "_execute_migration_statements", original_execute)
+        version = migrate(conn)
+
+        assert version >= 16
+        migrated_artifact = conn.execute(
+            "select kind, title from artifacts where id = ?", (artifact_id,)
+        ).fetchone()
+        assert (migrated_artifact["kind"], migrated_artifact["title"]) == (
+            "solution_set",
+            "Homework 3",
+        )
     finally:
         conn.close()

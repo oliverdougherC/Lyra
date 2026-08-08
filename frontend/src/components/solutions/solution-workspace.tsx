@@ -1,11 +1,11 @@
 'use client'
 
 import { Printer } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import { FitPageButton } from '@/components/solutions/fit-page-button'
-import { FocusToggle } from '@/components/solutions/focus-toggle'
 import { MarkWrongDialog } from '@/components/solutions/mark-wrong-dialog'
 import { ProblemPanel, type ProblemTree } from '@/components/solutions/problem-panel'
 import { ProblemStrip } from '@/components/solutions/problem-strip'
@@ -171,6 +171,14 @@ type SolutionWorkspaceProps = {
   solution: SolutionDetail
   classId: number
   className: string
+  /**
+   * The control that folds the sidebar and header away, rendered in the solutions pane
+   * header. Handed in rather than built here because the mode it toggles is the page's:
+   * the page owns the state and calls `useImmersiveChrome`, and this only finds the button
+   * a place to sit that stays on screen once the app header it would otherwise live in has
+   * folded away.
+   */
+  immersiveToggle?: ReactNode
 }
 
 /**
@@ -180,7 +188,12 @@ type SolutionWorkspaceProps = {
  * columns are two columns nobody can read. The split is persisted per class, so a student
  * who widened the source pane for a diagram-heavy course keeps it.
  */
-export function SolutionWorkspace({ solution, classId, className }: SolutionWorkspaceProps) {
+export function SolutionWorkspace({
+  solution,
+  classId,
+  className,
+  immersiveToggle,
+}: SolutionWorkspaceProps) {
   const wide = useMediaQuery('(min-width: 1024px)')
   // A width, not a share: see `parseSourceWidth`. The share-keyed entries the earlier keys
   // hold are deliberately abandoned rather than migrated — a share cannot say what the
@@ -201,9 +214,6 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
   // that is what a page has to fit into.
   const [fitWidth, setFitWidth] = useState<number | null>(null)
   const [collapsed, setCollapsed] = useState<string[]>([])
-  // Which pane, if either, has the window to itself. Not persisted: it is a thing you do
-  // to read one page closely, not a layout you live in.
-  const [focused, setFocused] = useState<'source' | 'solutions' | null>(null)
   const [askingAbout, setAskingAbout] = useState<SolutionPart | null>(null)
   const [markingWrong, setMarkingWrong] = useState<SolutionPart | null>(null)
   const [showingHistory, setShowingHistory] = useState<SolutionPart | null>(null)
@@ -244,9 +254,9 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
   const shown = tree.find((node) => node.problem.id === activeId)
   const anchor = shown ? anchorOf(shown.problem) : null
 
-  // The problem to scroll to once there is a pane to scroll. Clicking a band on the page
-  // while the document has the window to itself has to bring the solutions back first, and
-  // the pane it needs to scroll does not exist until it does.
+  // The problem to scroll to once there is a pane to scroll. Below 1024px the solutions
+  // are a tab that need not be mounted, and the pane a jump has to scroll does not exist
+  // until it is, so the request is held and replayed once it does.
   const pendingJump = useRef<number | null>(null)
   const [jumpVersion, setJumpVersion] = useState(0)
 
@@ -259,8 +269,6 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
       // want, so the strip and the source page should not hang back until a scroll event
       // confirms it.
       setActiveId(problemId)
-      // Asking for a solution is asking to see it.
-      setFocused((current) => (current === 'source' ? null : current))
       pendingJump.current = problemId
       setJumpVersion((version) => version + 1)
     },
@@ -302,7 +310,7 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
    * a window whose new height wants a different width, a reader dragging the split.
    */
   useLayoutEffect(() => {
-    if (!wide || focused !== null) return
+    if (!wide) return
     const group = groupRef.current
     // Read live rather than taken from `groupWidth`, which is only what told this effect to
     // run again: reading the element here is a measurement taken now, and a share computed
@@ -317,7 +325,7 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
     // difference between the width asked for and the width applied.
     if (Math.abs(shareOf(group.getLayout(), 'source') - share) * (total / 100) < 0.5) return
     group.setLayout({ source: share, solutions: 100 - share })
-  }, [chosenWidth, fitWidth, focused, groupWidth, wide])
+  }, [chosenWidth, fitWidth, groupWidth, wide])
 
   // The group's own width, which nothing else reports. Only the window is listened to, and
   // deliberately: a group that changed width because something inside the page moved — the
@@ -333,7 +341,7 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
     window.addEventListener('resize', measure)
     return () => window.removeEventListener('resize', measure)
     // The element exists only while the two columns are actually split.
-  }, [focused, wide])
+  }, [wide])
 
   const handleRegenerate = (problem: SolutionPart, correction: string) => {
     regenerate.mutate(
@@ -367,13 +375,7 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
             <Printer className="size-4" />
             Export
           </Button>
-          {wide ? (
-            <FocusToggle
-              focused={focused === 'solutions'}
-              pane="the solutions"
-              onToggle={() => setFocused(focused === 'solutions' ? null : 'solutions')}
-            />
-          ) : null}
+          {immersiveToggle}
         </span>
       </header>
       {/* No bar down the edge. Every problem's heading is `sticky top-0` and paints over
@@ -435,23 +437,14 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
       activeProblemId={activeId}
       onSelectProblem={jumpTo}
       onFitWidth={setFitWidth}
-      // Only where there is a split to size. Focused, the pane already has the window;
-      // narrow, the two panes stack and neither has a width of its own to set.
+      // Only where there is a split to size. Narrow, the two panes stack as tabs and
+      // neither has a width of its own to set.
       fitToggle={
-        wide && focused === null ? (
+        wide ? (
           // Zero is "never dragged", which is what puts the measured fit back in charge —
           // and keeps it there, so the column tracks the fit again when the window changes
           // height rather than holding a width that was right for the old one.
           <FitPageButton fitted={chosenWidth === 0} onFit={() => setChosenWidth(0)} />
-        ) : null
-      }
-      focusToggle={
-        wide ? (
-          <FocusToggle
-            focused={focused === 'source'}
-            pane="the document"
-            onToggle={() => setFocused(focused === 'source' ? null : 'source')}
-          />
         ) : null
       }
     />
@@ -471,7 +464,7 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
           `border-b`, and stacking the two made the line 2px on this side of the window
           while the rail's was 1px. */}
       <div className="bg-background min-h-[420px] flex-1 overflow-hidden print:h-auto print:min-h-0 print:flex-none print:overflow-visible">
-        {wide && focused === null ? (
+        {wide ? (
           <ResizablePanelGroup
             orientation="horizontal"
             groupRef={groupRef}
@@ -513,10 +506,6 @@ export function SolutionWorkspace({ solution, classId, className }: SolutionWork
               {solutionPane}
             </ResizablePanel>
           </ResizablePanelGroup>
-        ) : wide ? (
-          // One pane, the whole width. On a small laptop this is the difference between
-          // reading the sheet and squinting at a thumbnail of it.
-          <div className="h-full">{focused === 'source' ? sourcePane : solutionPane}</div>
         ) : (
           // Tabs below 1024px, not a stack. Two half-height panes would leave neither one
           // tall enough to read, and the student is only ever reading one of them.

@@ -1,0 +1,154 @@
+{
+  "version": "writer-turn-contract.v1",
+  "cases": [
+    {
+      "name": "short_essay_draft",
+      "request": "Write a short essay from this brief in about 600 words.",
+      "intent": "draft",
+      "tools": ["start_draft_pass"],
+      "satisfied": true
+    },
+    {
+      "name": "short_essay_unrouted",
+      "request": "Write a short essay from this brief in about 600 words.",
+      "intent": "draft",
+      "tools": [],
+      "satisfied": false
+    },
+    {
+      "name": "failed_research_attempt_does_not_count",
+      "request": "Find sources for this source-heavy paper and note where they disagree.",
+      "intent": "research",
+      "tools": [],
+      "failed_tools": ["search_course_material"],
+      "satisfied": false
+    },
+    {
+      "name": "source_heavy_paper_research",
+      "request": "Find sources for this source-heavy paper and note where they disagree.",
+      "intent": "research",
+      "tools": ["search_course_material", "search_web", "fetch_source", "record_source_excerpt"],
+      "satisfied": true
+    },
+    {
+      "name": "lab_report_draft",
+      "request": "Draft the methods and results for my lab report.",
+      "intent": "draft",
+      "tools": ["start_draft_pass"],
+      "satisfied": true
+    },
+    {
+      "name": "interrupted_deep_pass",
+      "request": "Resume the interrupted deep pass on the whole draft.",
+      "intent": "draft",
+      "tools": ["start_draft_pass"],
+      "satisfied": true
+    },
+    {
+      "name": "contradictory_sources",
+      "request": "Compare contradictory sources on this claim before I cite it.",
+      "intent": "research",
+      "tools": ["search_course_material", "fetch_source"],
+      "satisfied": true
+    },
+    {
+      "name": "missing_firecrawl_fallback",
+      "request": "Research supporting evidence, but stick to course docs if the web is unavailable.",
+      "intent": "research",
+      "tools": ["search_course_material"],
+      "satisfied": true
+    },
+    {
+      "name": "whole_draft_review",
+      "request": "Review the whole draft and leave feedback.",
+      "intent": "review",
+      "tools": ["start_review"],
+      "satisfied": true
+    },
+    {
+      "name": "section_revision",
+      "request": "Tighten the results section and fix the repetition.",
+      "intent": "revise",
+      "tools": ["propose_revision"],
+      "satisfied": true
+    },
+    {
+      "name": "write_conclusion_is_draft",
+      "request": "Write a conclusion for this essay.",
+      "intent": "draft",
+      "tools": ["start_draft_pass"],
+      "satisfied": true
+    },
+    {
+      "name": "write_section_is_draft",
+      "request": "Write the discussion section.",
+      "intent": "draft",
+      "tools": ["start_draft_pass"],
+      "satisfied": true
+    },
+    {
+      "name": "how_can_i_improve_is_question",
+      "request": "How can I improve the conclusion?",
+      "intent": "question",
+      "tools": [],
+      "satisfied": true
+    },
+    {
+      "name": "peer_review_definition_is_question",
+      "request": "What does peer review mean in this class?",
+      "intent": "question",
+      "tools": [],
+      "satisfied": true
+    },
+    {
+      "name": "research_and_draft_lit_review_is_draft",
+      "request": "Research and draft the literature review.",
+      "intent": "draft",
+      "tools": ["start_draft_pass"],
+      "satisfied": true
+    },
+    {
+      "name": "polite_write_conclusion_is_draft",
+      "request": "Can you write the conclusion?",
+      "intent": "draft",
+      "tools": ["start_draft_pass"],
+      "satisfied": true
+    },
+    {
+      "name": "polite_draft_section_is_draft",
+      "request": "Can you draft the discussion section?",
+      "intent": "draft",
+      "tools": ["start_draft_pass"],
+      "satisfied": true
+    },
+    {
+      "name": "polite_write_abstract_is_draft",
+      "request": "Could you write the abstract?",
+      "intent": "draft",
+      "tools": ["start_draft_pass"],
+      "satisfied": true
+    },
+    {
+      "name": "polite_revise_conclusion_is_revise",
+      "request": "Can you revise the conclusion?",
+      "intent": "revise",
+      "tools": ["propose_revision"],
+      "satisfied": true
+    },
+    {
+      "name": "question_only",
+      "request": "Does the transition between my intro and methods make sense?",
+      "intent": "question",
+      "tools": [],
+      "satisfied": true
+    },
+    {
+      "name": "upstream_model_failure",
+      "request": "Write the whole paper from this outline.",
+      "intent": "draft",
+      "tools": [],
+      "complete": false,
+      "satisfied": true
+    }
+  ]
+}

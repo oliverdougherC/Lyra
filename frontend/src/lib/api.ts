@@ -5,6 +5,16 @@
 
 import type {
   AcceptRejectResult,
+  AgentAuditEventRead,
+  AgentChatActivity,
+  AgentChatFailure,
+  AgentChatResult,
+  AgentCommandRequestRead,
+  AgentConfirmationRead,
+  AgentWorkspaceChangeRead,
+  AgentWorkspaceGrantsUpdate,
+  AgentWorkspaceRead,
+  AgentProfile,
   AnswerCreate,
   AnswerRead,
   AttemptRead,
@@ -18,6 +28,8 @@ import type {
   ClassProfile,
   ClassRead,
   ClassUpdate,
+  ClassWriterSettingsRead,
+  ClassWriterSettingsUpdate,
   ConnectionTestResult,
   DeckCreate,
   DeckDetail,
@@ -26,17 +38,29 @@ import type {
   DocumentRead,
   DocumentStatus,
   DocumentText,
+  BriefWrite,
   DraftBodyUpdate,
+  DraftBrief,
+  DraftComment,
+  DraftCommentReply,
   DraftDetail,
+  DraftPlan,
+  DraftPlanUpdate,
   DraftRead,
+  DraftSource,
   DraftStatus,
   FigureRead,
+  FirecrawlTestResult,
+  LiveDraftSuggestion,
+  LiveDraftSuggestionBlock,
   MessageRead,
+  PassRequest,
   PendingEdit,
   QuizCreate,
   QuizDetail,
   Rating,
   RegenerateRequest,
+  ReviewRequest,
   SegmentationUpdate,
   SessionRead,
   SettingsRead,
@@ -55,6 +79,7 @@ import type {
   VisionSupportResult,
   WriteEvent,
   WriteRequest,
+  WriterChatRequest,
 } from '@/types'
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://127.0.0.1:8000'
@@ -80,21 +105,197 @@ export function figureUrl(figureId: number): string {
 /** A backend response that was not 2xx. `status === 0` means the request never landed. */
 export class ApiError extends Error {
   readonly status: number
+  readonly detail: string
 
   constructor(status: number, detail: string) {
     super(detail)
     this.name = 'ApiError'
     this.status = status
+    this.detail = detail
+  }
+}
+
+export class AgentChatError extends ApiError implements AgentChatFailure {
+  readonly retryable: boolean
+  readonly stopped: string
+  readonly activity: AgentChatActivity[]
+  readonly source_ids: number[]
+  readonly workspace_change_ids: number[]
+  readonly command_request_ids: number[]
+  readonly profile_fact_ids: number[]
+
+  constructor(status: number, payload: AgentChatFailure) {
+    super(status, payload.detail)
+    this.name = 'AgentChatError'
+    this.retryable = payload.retryable
+    this.stopped = payload.stopped
+    this.activity = payload.activity
+    this.source_ids = payload.source_ids
+    this.workspace_change_ids = payload.workspace_change_ids
+    this.command_request_ids = payload.command_request_ids
+    this.profile_fact_ids = payload.profile_fact_ids
   }
 }
 
 const UNREACHABLE =
-  'Could not reach the Lyra server. It runs locally, so check that scripts/dev is still running.'
+  'Could not reach the Lyra server. It runs locally, so check that ./run or ./run --dev is still running.'
 
 type RequestOptions = {
   method?: string
   body?: unknown
   signal?: AbortSignal
+  errorFactory?: (status: number, payload: unknown | undefined) => Error
+}
+
+function readDetail(payload: unknown, status: number): string {
+  const detail = `Request failed with status ${status}.`
+  if (!payload || typeof payload !== 'object') return detail
+  const maybe = payload as { detail?: unknown }
+  if (typeof maybe.detail === 'string') return maybe.detail
+  if (Array.isArray(maybe.detail) && maybe.detail.length > 0) {
+    const first = maybe.detail[0] as { msg?: string }
+    if (first.msg) return first.msg
+  }
+  return detail
+}
+
+function defaultErrorFactory(status: number, payload: unknown | undefined): ApiError {
+  return new ApiError(status, readDetail(payload, status))
+}
+
+function isAgentChatActivity(payload: unknown): payload is AgentChatActivity {
+  if (!payload || typeof payload !== 'object') return false
+  const value = payload as Record<string, unknown>
+  return (
+    typeof value.audit_id === 'string' &&
+    typeof value.tool === 'string' &&
+    typeof value.capability === 'string' &&
+    typeof value.effect === 'string' &&
+    typeof value.state === 'string' &&
+    (typeof value.target_kind === 'string' || value.target_kind === null) &&
+    (typeof value.target_id === 'string' || value.target_id === null)
+  )
+}
+
+function isNumberArray(payload: unknown): payload is number[] {
+  return Array.isArray(payload) && payload.every((value) => typeof value === 'number')
+}
+
+function isAgentChatFailure(payload: unknown): payload is AgentChatFailure {
+  if (!payload || typeof payload !== 'object') return false
+  const value = payload as Record<string, unknown>
+  return (
+    typeof value.detail === 'string' &&
+    typeof value.retryable === 'boolean' &&
+    typeof value.stopped === 'string' &&
+    Array.isArray(value.activity) &&
+    value.activity.every(isAgentChatActivity) &&
+    isNumberArray(value.source_ids) &&
+    isNumberArray(value.workspace_change_ids) &&
+    isNumberArray(value.command_request_ids) &&
+    isNumberArray(value.profile_fact_ids)
+  )
+}
+
+function agentChatErrorFactory(status: number, payload: unknown | undefined): Error {
+  return isAgentChatFailure(payload)
+    ? new AgentChatError(status, payload)
+    : defaultErrorFactory(status, payload)
+}
+
+function normalizeLiveDraftSuggestionStage(stage: unknown): LiveDraftSuggestion['stage'] {
+  switch (stage) {
+    case 'plan':
+    case 'structure':
+    case 'outline':
+    case 'outlining':
+      return 'outline'
+    case 'research':
+    case 'gathering':
+      return 'gathering'
+    case 'sections':
+    case 'drafting':
+      return 'drafting'
+    case 'weave':
+    case 'transitions':
+      return 'transitions'
+    case 'revise':
+    case 'review':
+    case 'reviewing':
+      return 'review'
+    case 'finalize':
+    case 'finalizing':
+      return 'finalize'
+    case 'done':
+    case 'complete':
+    case 'completed':
+      return 'complete'
+    default:
+      return typeof stage === 'string' && stage.trim() ? (stage as LiveDraftSuggestion['stage']) : 'gathering'
+  }
+}
+
+function normalizeLiveDraftSuggestionStatus(status: unknown): LiveDraftSuggestion['status'] {
+  switch (status) {
+    case 'pending':
+      return 'queued'
+    case 'queued':
+    case 'running':
+    case 'ready':
+    case 'failed':
+    case 'finalized':
+    case 'complete':
+    case 'paused':
+    case 'cancelled':
+      return status
+    default:
+      return 'running'
+  }
+}
+
+function normalizeLiveDraftSuggestionBlock(payload: unknown): LiveDraftSuggestionBlock {
+  const value = payload as Record<string, unknown>
+  return {
+    id: Number(value.id),
+    block_key: String(value.block_key ?? value.stable_key ?? ''),
+    section_ref:
+      value.section_ref == null || value.section_ref === ''
+        ? null
+        : String(value.section_ref),
+    ordinal: Number(value.ordinal ?? value.paragraph_ordinal ?? 0),
+    kind: String(value.kind ?? 'paragraph'),
+    heading: value.heading == null || value.heading === '' ? null : String(value.heading),
+    content: String(value.content ?? ''),
+    status: String(value.status ?? 'queued') as LiveDraftSuggestionBlock['status'],
+    target_words:
+      typeof value.target_words === 'number'
+        ? value.target_words
+        : value.target_words == null
+          ? null
+          : Number(value.target_words),
+    summary: value.summary == null || value.summary === '' ? null : String(value.summary),
+    revision: Number(value.revision ?? 0),
+    user_revision: Number(value.user_revision ?? 0),
+  }
+}
+
+function normalizeLiveDraftSuggestion(payload: unknown): LiveDraftSuggestion | null {
+  if (!payload || typeof payload !== 'object') return null
+  const value = payload as Record<string, unknown>
+  return {
+    id: Number(value.id),
+    artifact_id: Number(value.artifact_id),
+    run_id: Number(value.run_id),
+    status: normalizeLiveDraftSuggestionStatus(value.status),
+    stage: normalizeLiveDraftSuggestionStage(value.stage),
+    stage_detail:
+      value.stage_detail == null && value.detail == null
+        ? null
+        : String(value.stage_detail ?? value.detail),
+    version: Number(value.version ?? 0),
+    base_content: String(value.base_content ?? ''),
+    blocks: Array.isArray(value.blocks) ? value.blocks.map(normalizeLiveDraftSuggestionBlock) : [],
+  }
 }
 
 async function send(path: string, options: RequestOptions = {}): Promise<Response> {
@@ -120,19 +321,13 @@ async function send(path: string, options: RequestOptions = {}): Promise<Respons
   }
 
   if (!response.ok) {
-    // FastAPI errors are `{ detail: string }`; 422 bodies carry a validation array.
-    let detail = `Request failed with status ${response.status}.`
+    let payload: unknown | undefined
     try {
-      const payload = (await response.json()) as { detail?: unknown }
-      if (typeof payload.detail === 'string') detail = payload.detail
-      else if (Array.isArray(payload.detail) && payload.detail.length > 0) {
-        const first = payload.detail[0] as { msg?: string }
-        if (first.msg) detail = first.msg
-      }
+      payload = await response.json()
     } catch {
       // A non-JSON error body carries nothing useful; keep the status message.
     }
-    throw new ApiError(response.status, detail)
+    throw (options.errorFactory ?? defaultErrorFactory)(response.status, payload)
   }
 
   return response
@@ -255,6 +450,15 @@ export const api = {
   updateSettings: (body: SettingsUpdate) =>
     requestJson<SettingsRead>('/api/settings', { method: 'PUT', body }),
 
+  getClassWriterSettings: (classId: number, signal?: AbortSignal) =>
+    requestJson<ClassWriterSettingsRead>(`/api/classes/${classId}/writer-settings`, { signal }),
+
+  updateClassWriterSettings: (classId: number, body: ClassWriterSettingsUpdate) =>
+    requestJson<ClassWriterSettingsRead>(`/api/classes/${classId}/writer-settings`, {
+      method: 'PUT',
+      body,
+    }),
+
   testConnection: () =>
     requestJson<ConnectionTestResult>('/api/settings/test-connection', { method: 'POST' }),
 
@@ -262,6 +466,118 @@ export const api = {
 
   testVision: () =>
     requestJson<VisionSupportResult>('/api/settings/test-vision', { method: 'POST' }),
+
+  testFirecrawl: () =>
+    requestJson<FirecrawlTestResult>('/api/settings/test-firecrawl', { method: 'POST' }),
+
+  getAgentWorkspace: (classId: number, signal?: AbortSignal) =>
+    requestJson<AgentWorkspaceRead | null>(`/api/classes/${classId}/workspace`, { signal }),
+
+  attachAgentWorkspace: (classId: number, rootPath: string, displayName?: string) =>
+    requestJson<AgentWorkspaceRead>(`/api/classes/${classId}/workspace`, {
+      method: 'PUT',
+      body: { root_path: rootPath, display_name: displayName },
+    }),
+
+  detachAgentWorkspace: async (classId: number) => {
+    await send(`/api/classes/${classId}/workspace`, { method: 'DELETE' })
+  },
+
+  updateAgentWorkspaceGrants: (classId: number, body: AgentWorkspaceGrantsUpdate) =>
+    requestJson<AgentWorkspaceRead>(`/api/classes/${classId}/workspace/grants`, {
+      method: 'PATCH',
+      body,
+    }),
+
+  listAgentActivity: (classId: number, sessionId: number, signal?: AbortSignal) =>
+    requestJson<AgentAuditEventRead[]>(
+      `/api/classes/${classId}/sessions/${sessionId}/agent/activity`,
+      { signal },
+    ),
+
+  sendAgentChat: (classId: number, sessionId: number, content: string, profile: AgentProfile) =>
+    requestJson<AgentChatResult>(`/api/classes/${classId}/sessions/${sessionId}/agent-chat`, {
+      method: 'POST',
+      body: { content, profile },
+      errorFactory: agentChatErrorFactory,
+    }),
+
+  listAgentWorkspaceChanges: (classId: number, sessionId: number, signal?: AbortSignal) =>
+    requestJson<AgentWorkspaceChangeRead[]>(
+      `/api/classes/${classId}/sessions/${sessionId}/workspace/changes`,
+      { signal },
+    ),
+
+  reviewAgentWorkspaceChange: (classId: number, sessionId: number, changeId: number) =>
+    requestJson<AgentWorkspaceChangeRead>(
+      `/api/classes/${classId}/sessions/${sessionId}/workspace/changes/${changeId}/review`,
+    ),
+
+  confirmAgentWorkspaceChange: (
+    classId: number,
+    sessionId: number,
+    changeId: number,
+    acceptedHunks: { index: number; hash: string }[],
+  ) =>
+    requestJson<AgentConfirmationRead>(
+      `/api/classes/${classId}/sessions/${sessionId}/workspace/changes/${changeId}/confirmation`,
+      { method: 'POST', body: { accepted_hunks: acceptedHunks } },
+    ),
+
+  applyAgentWorkspaceChange: (
+    classId: number,
+    sessionId: number,
+    changeId: number,
+    acceptedHunks: { index: number; hash: string }[],
+    confirmationToken: string,
+  ) =>
+    requestJson<AgentWorkspaceChangeRead>(
+      `/api/classes/${classId}/sessions/${sessionId}/workspace/changes/${changeId}/apply`,
+      {
+        method: 'POST',
+        body: { accepted_hunks: acceptedHunks, confirmation_token: confirmationToken },
+      },
+    ),
+
+  rejectAgentWorkspaceChange: (
+    classId: number,
+    sessionId: number,
+    changeId: number,
+    rejectedHunks: { index: number; hash: string }[] = [],
+  ) =>
+    requestJson<AgentWorkspaceChangeRead>(
+      `/api/classes/${classId}/sessions/${sessionId}/workspace/changes/${changeId}/reject`,
+      { method: 'POST', body: { rejected_hunks: rejectedHunks } },
+    ),
+
+  listAgentCommands: (classId: number, sessionId: number, signal?: AbortSignal) =>
+    requestJson<AgentCommandRequestRead[]>(
+      `/api/classes/${classId}/sessions/${sessionId}/workspace/commands`,
+      { signal },
+    ),
+
+  confirmAgentCommand: (classId: number, sessionId: number, requestId: number) =>
+    requestJson<AgentConfirmationRead>(
+      `/api/classes/${classId}/sessions/${sessionId}/workspace/commands/${requestId}/confirmation`,
+      { method: 'POST' },
+    ),
+
+  executeAgentCommand: (
+    classId: number,
+    sessionId: number,
+    requestId: number,
+    confirmationToken: string,
+  ) =>
+    requestJson<AgentCommandRequestRead>(
+      `/api/classes/${classId}/sessions/${sessionId}/workspace/commands/${requestId}/execute`,
+      { method: 'POST', body: { confirmation_token: confirmationToken } },
+    ),
+
+  rejectAgentCommand: (classId: number, sessionId: number, requestId: number) =>
+    requestJson<AgentCommandRequestRead>(
+      `/api/classes/${classId}/sessions/${sessionId}/workspace/commands/${requestId}/reject`,
+      { method: 'POST' },
+    ),
 
   listModels: (signal?: AbortSignal) =>
     requestJson<{ models: string[] }>('/api/settings/models', { signal }),
@@ -406,14 +722,95 @@ export const api = {
       body,
     }),
 
-  suggestDraft: (draftId: number, instruction: string) =>
-    requestJson<DraftRead>(`/api/drafts/${draftId}/suggest`, {
+  startDraftPass: (draftId: number, body: PassRequest = {}) =>
+    requestJson<DraftRead>(`/api/drafts/${draftId}/pass`, {
       method: 'POST',
-      body: { instruction },
+      body,
+    }),
+
+  startReview: (draftId: number, body: ReviewRequest = {}) =>
+    requestJson<DraftRead>(`/api/drafts/${draftId}/review`, { method: 'POST', body }),
+
+  cancelDraftRun: (draftId: number) =>
+    requestJson<DraftStatus>(`/api/drafts/${draftId}/cancel`, { method: 'POST' }),
+
+  getDraftPlan: (draftId: number, signal?: AbortSignal) =>
+    requestJson<DraftPlan | null>(`/api/drafts/${draftId}/plan`, { signal }),
+
+  updateDraftPlan: (draftId: number, body: DraftPlanUpdate) =>
+    requestJson<DraftPlan>(`/api/drafts/${draftId}/plan`, { method: 'PUT', body }),
+
+  listDraftSources: (classId: number, signal?: AbortSignal) =>
+    requestJson<DraftSource[]>(`/api/classes/${classId}/sources`, { signal }),
+
+  listComments: (draftId: number, signal?: AbortSignal) =>
+    requestJson<DraftComment[]>(`/api/drafts/${draftId}/comments`, { signal }),
+
+  getExportAvailability: (signal?: AbortSignal) =>
+    requestJson<{ available: boolean; message: string | null }>('/api/export/availability', {
+      signal,
+    }),
+
+  // A blob, not JSON: the PDF is the response. `send` raises ApiError on non-2xx, so
+  // a missing binary or a failed stage arrives as its message.
+  exportDraftPdf: async (draftId: number): Promise<Blob> => {
+    const response = await send(`/api/drafts/${draftId}/export`, { method: 'POST' })
+    return response.blob()
+  },
+
+  replyToComment: (commentId: number, body: string) =>
+    requestJson<DraftCommentReply>(`/api/comments/${commentId}/replies`, {
+      method: 'POST',
+      body: { body },
+    }),
+
+  resolveComment: (commentId: number, resolved: boolean) =>
+    requestJson<DraftComment>(`/api/comments/${commentId}/resolve`, {
+      method: 'POST',
+      body: { resolved },
     }),
 
   getDraftStatus: (draftId: number, signal?: AbortSignal) =>
     requestJson<DraftStatus>(`/api/drafts/${draftId}/status`, { signal }),
+
+  getBrief: (draftId: number, signal?: AbortSignal) =>
+    requestJson<DraftBrief | null>(`/api/drafts/${draftId}/brief`, { signal }),
+
+  // A PUT because the student's edit replaces the brief whole; it lands confirmed,
+  // because saving your own words is agreeing with them.
+  putBrief: (draftId: number, body: BriefWrite) =>
+    requestJson<DraftBrief>(`/api/drafts/${draftId}/brief`, { method: 'PUT', body }),
+
+  confirmBrief: (draftId: number) =>
+    requestJson<DraftBrief>(`/api/drafts/${draftId}/brief/confirm`, { method: 'POST' }),
+
+  listWriterSessions: (draftId: number, signal?: AbortSignal) =>
+    requestJson<SessionRead[]>(`/api/drafts/${draftId}/sessions`, { signal }),
+
+  createWriterSession: (draftId: number) =>
+    requestJson<SessionRead>(`/api/drafts/${draftId}/sessions`, { method: 'POST' }),
+
+  getLiveDraftSuggestion: async (draftId: number, signal?: AbortSignal) =>
+    normalizeLiveDraftSuggestion(
+      await requestJson<LiveDraftSuggestion | null>(`/api/drafts/${draftId}/live-suggestion`, {
+        signal,
+      }),
+    ),
+
+  updateLiveDraftSuggestionBlock: (
+    draftId: number,
+    blockId: number,
+    body: { content: string; expected_revision: number; base_content: string },
+  ) =>
+    requestJson<LiveDraftSuggestionBlock>(`/api/drafts/${draftId}/live-suggestion/blocks/${blockId}`, {
+      method: 'PATCH',
+      body,
+    }).then(normalizeLiveDraftSuggestionBlock),
+
+  finalizeLiveDraftSuggestion: (draftId: number) =>
+    requestJson<PendingEdit>(`/api/drafts/${draftId}/live-suggestion/finalize`, {
+      method: 'POST',
+    }),
 
   getPendingEdit: (draftId: number, signal?: AbortSignal) =>
     requestJson<PendingEdit | null>(`/api/drafts/${draftId}/pending`, { signal }),
@@ -476,9 +873,24 @@ export function streamWrite(
   return streamTurn(`/api/drafts/${draftId}/write`, body, onEvent, signal)
 }
 
+/**
+ * Streams one writer turn over the chat frame protocol plus the writer's own frames:
+ * `activity` narrating each tool call, `proposed` when a suggestion landed mid-turn,
+ * `brief` when the assistant recorded its guess at the assignment.
+ */
+export function streamWriterChat(
+  draftId: number,
+  sessionId: number,
+  body: WriterChatRequest,
+  onEvent: (event: ChatEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamTurn(`/api/drafts/${draftId}/chat/${sessionId}`, body, onEvent, signal)
+}
+
 async function streamTurn<StreamEvent>(
   path: string,
-  body: ChatRequest | RegenerateRequest | WriteRequest,
+  body: ChatRequest | RegenerateRequest | WriteRequest | WriterChatRequest,
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {

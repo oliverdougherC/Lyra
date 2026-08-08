@@ -1,9 +1,12 @@
 ---
-name: 🐛 Bug Report
-about: If something isn't working as expected 🤔
+name: Bug report
+about: Report a broken behavior in Lyra
 title: 'bug: '
 type: Bug
 ---
+
+Before filing, check [README.md](../../README.md) and
+[docs/local-deployment.md](../../docs/local-deployment.md).
 
 **Version:** e.g. 0.5.x-xxx
 
@@ -19,6 +22,6 @@ type: Bug
 
 
 ## Operating System
-- [ ] MacOS
+- [ ] macOS
 - [ ] Windows
 - [ ] Linux
