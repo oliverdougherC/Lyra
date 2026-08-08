@@ -24,7 +24,10 @@ export function HandUnderline({
       viewBox="0 0 100 6"
       preserveAspectRatio="none"
       className={cn(
-        'pointer-events-none absolute -bottom-1 left-0 h-[6px] w-full overflow-visible text-hand',
+        // `size-full` (not `w-full`) so the class carries a `size-` token: some hosts, the
+        // tab trigger among them, clamp any bare descendant svg to `size-4`, which would
+        // shrink the underline to an icon. `!h-[6px]` then restores the stroke's height.
+        'pointer-events-none absolute -bottom-1 left-0 size-full !h-[6px] overflow-visible text-hand',
         animate && 'hand-underline',
         className,
       )}

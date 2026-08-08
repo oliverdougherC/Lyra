@@ -95,8 +95,11 @@ describe('ClassHub', () => {
     expect(await screen.findByRole('tab', { name: 'Documents 2' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Chats 1' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: 'Solutions 1' })).toBeInTheDocument()
-    // Zero is left unsaid rather than shown as a nought beside the label.
-    expect(screen.getByRole('tab', { name: 'Profile' })).toBeInTheDocument()
+    // Every collection tab counts once its data has loaded, zero included, so the strip is
+    // consistent rather than counting only the tabs that happen to be non-empty (ui-overhaul
+    // 3.2). Overview is a synthesis, not a collection, so it carries no count.
+    expect(screen.getByRole('tab', { name: 'Profile 0' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Overview' })).toBeInTheDocument()
   })
 
   it('digests each section on the overview and links into the work itself', async () => {
