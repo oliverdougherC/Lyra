@@ -1,7 +1,6 @@
 'use client'
 
 import { AlertCircle, Check } from 'lucide-react'
-import { motion, useReducedMotion } from 'motion/react'
 
 import { cn } from '@/lib/utils'
 
@@ -34,8 +33,6 @@ export function BatchLoader({
   complete,
   className,
 }: BatchLoaderProps) {
-  const reduceMotion = useReducedMotion()
-  const spin = reduceMotion ? { rotate: 0 } : { rotate: 360 }
   const completed = processed + failed
   const percent = total > 0 ? Math.min(Math.round((completed / total) * 100), 100) : 0
 
@@ -62,16 +59,17 @@ export function BatchLoader({
         </span>
       ) : (
         <span className="relative size-9 shrink-0" aria-hidden>
-          <span className="absolute inset-0 rounded-full border border-border" />
-          <motion.span
-            className="absolute inset-0 rounded-full border-2 border-transparent border-t-accent-primary border-r-accent-primary"
-            animate={spin}
-            transition={{ duration: 1.1, repeat: Infinity, ease: 'linear' }}
+          <span className="border-border absolute inset-0 rounded-full border" />
+          {/* Two rings turning at different rates, in CSS rather than a motion library: the
+              rotation stops under reduced motion via `motion-safe`, matching the honest
+              machinery rule that decoration never overrides a motion preference. */}
+          <span
+            className="border-t-accent-primary border-r-accent-primary absolute inset-0 rounded-full border-2 border-transparent motion-safe:animate-spin"
+            style={{ animationDuration: '1.1s' }}
           />
-          <motion.span
-            className="absolute inset-1 rounded-full border border-transparent border-b-accent-tertiary border-l-accent-tertiary"
-            animate={spin}
-            transition={{ duration: 1.8, repeat: Infinity, ease: 'linear' }}
+          <span
+            className="border-b-accent-tertiary border-l-accent-tertiary absolute inset-1 rounded-full border border-transparent motion-safe:animate-spin"
+            style={{ animationDuration: '1.8s' }}
           />
         </span>
       )}

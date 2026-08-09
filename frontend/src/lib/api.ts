@@ -231,7 +231,9 @@ function normalizeLiveDraftSuggestionStage(stage: unknown): LiveDraftSuggestion[
     case 'completed':
       return 'complete'
     default:
-      return typeof stage === 'string' && stage.trim() ? (stage as LiveDraftSuggestion['stage']) : 'gathering'
+      return typeof stage === 'string' && stage.trim()
+        ? (stage as LiveDraftSuggestion['stage'])
+        : 'gathering'
   }
 }
 
@@ -259,9 +261,7 @@ function normalizeLiveDraftSuggestionBlock(payload: unknown): LiveDraftSuggestio
     id: Number(value.id),
     block_key: String(value.block_key ?? value.stable_key ?? ''),
     section_ref:
-      value.section_ref == null || value.section_ref === ''
-        ? null
-        : String(value.section_ref),
+      value.section_ref == null || value.section_ref === '' ? null : String(value.section_ref),
     ordinal: Number(value.ordinal ?? value.paragraph_ordinal ?? 0),
     kind: String(value.kind ?? 'paragraph'),
     heading: value.heading == null || value.heading === '' ? null : String(value.heading),
@@ -802,10 +802,13 @@ export const api = {
     blockId: number,
     body: { content: string; expected_revision: number; base_content: string },
   ) =>
-    requestJson<LiveDraftSuggestionBlock>(`/api/drafts/${draftId}/live-suggestion/blocks/${blockId}`, {
-      method: 'PATCH',
-      body,
-    }).then(normalizeLiveDraftSuggestionBlock),
+    requestJson<LiveDraftSuggestionBlock>(
+      `/api/drafts/${draftId}/live-suggestion/blocks/${blockId}`,
+      {
+        method: 'PATCH',
+        body,
+      },
+    ).then(normalizeLiveDraftSuggestionBlock),
 
   finalizeLiveDraftSuggestion: (draftId: number) =>
     requestJson<PendingEdit>(`/api/drafts/${draftId}/live-suggestion/finalize`, {

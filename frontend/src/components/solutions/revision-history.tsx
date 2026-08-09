@@ -99,7 +99,7 @@ export function RevisionHistory({
                   {revision.note ? (
                     // Why this version exists: the student's own correction, or the
                     // refutation that prompted the re-solve.
-                    <p className="text-text-secondary text-xs italic">{revision.note}</p>
+                    <p className="text-text-secondary text-xs">{revision.note}</p>
                   ) : null}
                   {/* Typeset and whole. A version is chosen by reading it, and six
                       clamped lines of raw LaTeX made restoring one a guess. The sheet

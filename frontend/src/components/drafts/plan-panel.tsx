@@ -270,8 +270,8 @@ export function PlanPanel({
 function argumentSummary(entry: DraftPlan['argument_map'][number]): string {
   const claim = typeof entry.claim === 'string' ? entry.claim : null
   const relation = typeof entry.relation === 'string' ? entry.relation : null
-  if (claim && relation) return `${claim} — ${relation}`
+  if (claim && relation) return `${claim} · ${relation}`
   if (claim) return claim
   const values = Object.values(entry).filter((value): value is string => typeof value === 'string')
-  return values.join(' — ') || 'Untitled claim'
+  return values.join(' · ') || 'Untitled claim'
 }

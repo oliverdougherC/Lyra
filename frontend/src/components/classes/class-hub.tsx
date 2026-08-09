@@ -18,6 +18,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 
+import { HandUnderline, StatusWord } from '@/components/ex-libris'
 import { ClassChatsPanel } from '@/components/classes/class-chats-panel'
 import { ClassDraftsPanel } from '@/components/classes/class-drafts-panel'
 import { ClassFormDialog } from '@/components/classes/class-form-dialog'
@@ -234,31 +235,23 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
           aria-label="Class sections"
           className="shrink-0 overflow-x-auto overflow-y-hidden"
         >
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="chats">
-            Chats
-            <TabCount value={chatCount} />
-          </TabsTrigger>
-          <TabsTrigger value="solutions">
-            Solutions
-            <TabCount value={solutionCount} />
-          </TabsTrigger>
-          <TabsTrigger value="study">
-            Study
-            <TabCount value={studyCount} />
-          </TabsTrigger>
-          <TabsTrigger value="drafts">
-            Drafts
-            <TabCount value={draftCount} />
-          </TabsTrigger>
-          <TabsTrigger value="documents">
-            Documents
-            <TabCount value={documentCount} />
-          </TabsTrigger>
-          <TabsTrigger value="profile">
-            Profile
-            <TabCount value={factCount} />
-          </TabsTrigger>
+          <HubTab value="overview" label="Overview" count={null} active={tab === 'overview'} />
+          <HubTab value="chats" label="Chats" count={chatCount} active={tab === 'chats'} />
+          <HubTab
+            value="solutions"
+            label="Solutions"
+            count={solutionCount}
+            active={tab === 'solutions'}
+          />
+          <HubTab value="study" label="Study" count={studyCount} active={tab === 'study'} />
+          <HubTab value="drafts" label="Drafts" count={draftCount} active={tab === 'drafts'} />
+          <HubTab
+            value="documents"
+            label="Documents"
+            count={documentCount}
+            active={tab === 'documents'}
+          />
+          <HubTab value="profile" label="Profile" count={factCount} active={tab === 'profile'} />
         </TabsList>
 
         <TabsContent value="overview">
@@ -330,14 +323,42 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
   )
 }
 
-function TabCount({ value }: { value: number | null }) {
-  if (value === null || value === 0) return null
+/**
+ * One section tab. The active tab is marked by the pen: a wobbled hand underline that hugs
+ * the word itself, drawn in on selection, excluding the count superscript (design system
+ * section 6). The default full-width line underline is suppressed so only the pen marks the
+ * place. Counts are printed superscripts and, once their data has loaded, appear on every
+ * collection tab including zero, so the strip is consistent rather than counting only some
+ * of its tabs (ui-overhaul 3.2).
+ */
+function HubTab({
+  value,
+  label,
+  count,
+  active,
+}: {
+  value: HubTab
+  label: string
+  count: number | null
+  active: boolean
+}) {
   return (
-    <>
-      {/* A real space, not only the margin: without it the tab announces as
-          "Documents17", because JSX drops the newline between the label and this. */}{' '}
-      <span className="text-text-tertiary text-xs tabular-nums">{value}</span>
-    </>
+    <TabsTrigger value={value} className="after:hidden">
+      {/* inline-block, so the absolutely positioned underline has a containing block the
+          exact width of the word rather than collapsing to its intrinsic width. */}
+      <span className="relative inline-block">
+        {label}
+        {active ? <HandUnderline /> : null}
+      </span>
+      {/* A real space before the count, not only the margin: without it the tab announces
+          as "Documents17", because JSX drops the newline between the label and this. */}
+      {count !== null ? (
+        <>
+          {' '}
+          <span className="text-text-tertiary text-xs tabular-nums">{count}</span>
+        </>
+      ) : null}
+    </TabsTrigger>
   )
 }
 
@@ -421,14 +442,14 @@ function HubOverview({
             <span className="min-w-0 flex-1 truncate" title={document.filename}>
               {document.filename}
             </span>
-            <span
-              className={cn(
-                'shrink-0 text-xs',
-                document.state === 'failed' ? 'text-danger-text' : 'text-text-tertiary',
-              )}
+            {/* The same word the Documents tab uses, so one fact reads one way (ui-overhaul
+                2.5). */}
+            <StatusWord
+              tone={document.state === 'failed' ? 'warn' : 'nominal'}
+              className="shrink-0"
             >
-              {document.state === 'ready' ? 'Indexed' : document.state}
-            </span>
+              {document.state === 'ready' ? 'Ready' : document.state}
+            </StatusWord>
           </li>
         ))}
       </HubSection>

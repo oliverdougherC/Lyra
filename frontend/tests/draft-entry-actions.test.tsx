@@ -8,12 +8,7 @@ describe('DraftEntryActions', () => {
   it('routes the primary button and shortcut to full-document drafting', async () => {
     const onDraftDocument = vi.fn()
     const onDraftPassage = vi.fn()
-    render(
-      <DraftEntryActions
-        onDraftDocument={onDraftDocument}
-        onDraftPassage={onDraftPassage}
-      />,
-    )
+    render(<DraftEntryActions onDraftDocument={onDraftDocument} onDraftPassage={onDraftPassage} />)
 
     await userEvent.click(screen.getByRole('button', { name: 'Draft document' }))
     expect(onDraftDocument).toHaveBeenCalledTimes(1)
@@ -27,12 +22,7 @@ describe('DraftEntryActions', () => {
   it('keeps the legacy one-shot tool explicitly scoped to a passage', async () => {
     const onDraftDocument = vi.fn()
     const onDraftPassage = vi.fn()
-    render(
-      <DraftEntryActions
-        onDraftDocument={onDraftDocument}
-        onDraftPassage={onDraftPassage}
-      />,
-    )
+    render(<DraftEntryActions onDraftDocument={onDraftDocument} onDraftPassage={onDraftPassage} />)
 
     await userEvent.click(screen.getByRole('button', { name: 'Draft passage' }))
 

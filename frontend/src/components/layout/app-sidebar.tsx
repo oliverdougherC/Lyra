@@ -1,9 +1,9 @@
 'use client'
 
 import { Suspense, useCallback, useState } from 'react'
-import { Archive, ChevronDown, Plus, RotateCcw, Settings } from 'lucide-react'
+import { Archive, ChevronDown, Moon, RotateCcw, Settings, Sun } from 'lucide-react'
 import Link from 'next/link'
-import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 
 import { CourseMark } from '@/components/classes/course-mark'
 import { LyraMark } from '@/components/chat/lyra-mark'
@@ -31,6 +31,7 @@ import { useClasses, useUpdateClass } from '@/lib/hooks/use-classes'
 import { useSessions } from '@/lib/hooks/use-chat'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
 import { useSolutions } from '@/lib/hooks/use-solutions'
+import { useTheme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 import type { ClassRead, SolutionRead } from '@/types'
 
@@ -106,7 +107,6 @@ function ClassNavItem({
   sessionsPending,
   solutions,
   activeSolutionId,
-  onNewChat,
 }: {
   klass: ClassRead
   selected: boolean
@@ -115,7 +115,6 @@ function ClassNavItem({
   sessionsPending?: boolean
   solutions?: SolutionRead[]
   activeSolutionId: string | null
-  onNewChat: () => void
 }) {
   const href = `/classes/${klass.id}`
   const [showAllSessions, setShowAllSessions] = useState(false)
@@ -159,22 +158,9 @@ function ClassNavItem({
 
         {selected ? (
           <SidebarMenuSub>
-            {/* Above the history, not under it: starting a chat is the one thing here that
-                does not depend on what is already in the list, so it should not move down
-                the rail as the term fills it up. */}
-            <SidebarMenuSubItem>
-              <SidebarMenuSubButton
-                asChild
-                onClick={onNewChat}
-                isActive={activeSessionId === 'new'}
-              >
-                <button type="button" aria-label="Start a new chat" className="text-text-secondary">
-                  <Plus />
-                  <span>New chat</span>
-                </button>
-              </SidebarMenuSubButton>
-            </SidebarMenuSubItem>
-
+            {/* The rail is navigation, never verbs (ui-overhaul 2.2): it lists a class's
+                recent destinations - conversations and solution sets - and the hub owns the
+                actions that create them. */}
             {sessionsPending ? (
               <SidebarMenuSubItem aria-busy="true">
                 <SidebarMenuSkeleton />
@@ -229,21 +215,6 @@ function ClassNavItem({
                 Solutions
               </Link>
             </SidebarMenuSubItem>
-            {/* Directly under its heading, for the same reason as New chat: the one entry
-                point that does not depend on the list below it should not sit at the end
-                of that list. */}
-            <SidebarMenuSubItem>
-              <SidebarMenuSubButton asChild>
-                <Link
-                  href={`${href}/solutions/new`}
-                  aria-label="Start a new solution set"
-                  className="text-text-secondary"
-                >
-                  <Plus />
-                  <span>New solution set</span>
-                </Link>
-              </SidebarMenuSubButton>
-            </SidebarMenuSubItem>
             {(solutions ?? []).map((solution) => (
               <SidebarMenuSubItem key={solution.id}>
                 <SidebarMenuSubButton asChild isActive={activeSolutionId === String(solution.id)}>
@@ -267,9 +238,26 @@ function ClassNavItem({
   )
 }
 
+/**
+ * The reading-room / after-hours quick-toggle. Two states, one tap; the icon and label name
+ * the mode it switches to, so the control says what it does rather than what is on.
+ */
+function ModeToggle() {
+  const { resolvedTheme, setTheme } = useTheme()
+  const isDark = resolvedTheme === 'dark'
+  return (
+    <SidebarMenuButton
+      onClick={() => setTheme(isDark ? 'light' : 'dark')}
+      tooltip={isDark ? 'Switch to the reading room' : 'Switch to after hours'}
+    >
+      {isDark ? <Sun /> : <Moon />}
+      <span>{isDark ? 'Reading room' : 'After hours'}</span>
+    </SidebarMenuButton>
+  )
+}
+
 export function AppSidebar() {
   const pathname = usePathname()
-  const router = useRouter()
   const { data: classes, isPending } = useClasses()
   const updateClass = useUpdateClass()
   const [archivedOpen, setArchivedOpen] = useLocalStorageState(
@@ -291,13 +279,6 @@ export function AppSidebar() {
     selectedClassIsValid,
   )
   const solutionMatch = /^\/classes\/\d+\/solutions\/(\d+)/.exec(pathname)
-
-  // Navigation, not creation. The conversation starts existing when the student sends
-  // something into it; until then there is nothing to put in this list.
-  const startNewChat = useCallback(() => {
-    if (selectedClassId === null) return
-    router.push(`/classes/${selectedClassId}/chat?session=new`)
-  }, [router, selectedClassId])
 
   const restoreClass = useCallback(
     (classId: number) => {
@@ -368,7 +349,6 @@ export function AppSidebar() {
                     activeSolutionId={solutionMatch ? solutionMatch[1] : null}
                     sessions={sessions}
                     sessionsPending={sessionsPending}
-                    onNewChat={startNewChat}
                   />
                 ))}
               >
@@ -384,7 +364,6 @@ export function AppSidebar() {
                         activeSolutionId={solutionMatch ? solutionMatch[1] : null}
                         sessions={sessions}
                         sessionsPending={sessionsPending}
-                        onNewChat={startNewChat}
                       />
                     ))
                   }
@@ -457,6 +436,11 @@ export function AppSidebar() {
       <SidebarFooter>
         <SidebarSeparator />
         <SidebarMenu>
+          {/* The mode quick-toggle lives at the foot of the rail (design system section 8);
+              the full three-way control, with system, stays in Settings. */}
+          <SidebarMenuItem>
+            <ModeToggle />
+          </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
               asChild

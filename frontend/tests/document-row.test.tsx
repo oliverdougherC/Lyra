@@ -281,7 +281,7 @@ describe('DocumentRow, text recognition', () => {
     })
     renderRow(documentAt('ready'), vi.fn(), true)
 
-    await userEvent.click(screen.getByText('Structure Lyra found'))
+    await userEvent.click(screen.getByText('Outline'))
 
     expect(await screen.findByText(/No sections found/)).toBeInTheDocument()
     expect(screen.getByText(/596 passages/)).toBeInTheDocument()
@@ -312,7 +312,7 @@ describe('DocumentRow, text recognition', () => {
     })
     renderRow(documentAt('ready'), vi.fn(), true)
 
-    await userEvent.click(screen.getByText('Structure Lyra found'))
+    await userEvent.click(screen.getByText('Outline'))
 
     // The leaf title, not the whole path: the levels above it are already on screen above it.
     expect(await screen.findByText('Subspaces')).toBeInTheDocument()
@@ -324,7 +324,7 @@ describe('DocumentRow, text recognition', () => {
     const outline = vi.spyOn(api, 'getDocumentOutline')
     renderRow(documentAt('ready'), vi.fn(), true)
 
-    expect(await screen.findByText('Structure Lyra found')).toBeInTheDocument()
+    expect(await screen.findByText('Outline')).toBeInTheDocument()
     // A closed disclosure is the default on every row, and this is a group-by over every
     // chunk of what may be a 600-page book.
     expect(outline).not.toHaveBeenCalled()

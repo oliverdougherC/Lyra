@@ -868,14 +868,7 @@ export interface PendingEdit {
 }
 
 export type LiveDraftSuggestionStatus =
-  | 'queued'
-  | 'running'
-  | 'ready'
-  | 'failed'
-  | 'finalized'
-  | 'complete'
-  | 'paused'
-  | 'cancelled'
+  'queued' | 'running' | 'ready' | 'failed' | 'finalized' | 'complete' | 'paused' | 'cancelled'
 
 export type LiveDraftSuggestionStage =
   | 'gathering'
@@ -889,13 +882,7 @@ export type LiveDraftSuggestionStage =
   | (string & {})
 
 export type LiveDraftBlockStatus =
-  | 'queued'
-  | 'drafting'
-  | 'drafted'
-  | 'revising'
-  | 'revised'
-  | 'failed'
-  | (string & {})
+  'queued' | 'drafting' | 'drafted' | 'revising' | 'revised' | 'failed' | (string & {})
 
 export interface LiveDraftSuggestionBlock {
   id: number
