@@ -21,6 +21,9 @@ jobs:
 
       - uses: astral-sh/setup-uv@v6
 
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       - name: Install backend dependencies
         run: uv sync --extra dev
 
