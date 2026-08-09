@@ -49,8 +49,10 @@ describe('no em dashes in the interface', () => {
         offenders.push(`${rel}:${line}`)
       }
     }
-    expect(offenders, `use " · " or restructure; em dashes are banned:\n${offenders.join('\n')}`)
-      .toEqual([])
+    expect(
+      offenders,
+      `use " · " or restructure; em dashes are banned:\n${offenders.join('\n')}`,
+    ).toEqual([])
   })
 })
 

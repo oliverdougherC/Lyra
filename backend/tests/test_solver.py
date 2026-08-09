@@ -609,9 +609,7 @@ def test_restore_latex_reaches_into_sub_parts(monkeypatch: pytest.MonkeyPatch) -
     ]
 
     async def complete(*args: object, **kwargs: object) -> str:
-        return json.dumps(
-            {"statements": [{"id": "p0q0", "statement": r"Sketch $e^{-2t} u(t)$."}]}
-        )
+        return json.dumps({"statements": [{"id": "p0q0", "statement": r"Sketch $e^{-2t} u(t)$."}]})
 
     monkeypatch.setattr(segmentation.client, "complete", complete)
     restored = segmentation.restore_latex(problems, "http://127.0.0.1:8080/v1", None, "m")

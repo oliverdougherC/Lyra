@@ -444,7 +444,10 @@ function HubOverview({
             </span>
             {/* The same word the Documents tab uses, so one fact reads one way (ui-overhaul
                 2.5). */}
-            <StatusWord tone={document.state === 'failed' ? 'warn' : 'nominal'} className="shrink-0">
+            <StatusWord
+              tone={document.state === 'failed' ? 'warn' : 'nominal'}
+              className="shrink-0"
+            >
               {document.state === 'ready' ? 'Ready' : document.state}
             </StatusWord>
           </li>

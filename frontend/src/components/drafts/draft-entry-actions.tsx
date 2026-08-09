@@ -11,10 +11,7 @@ type DraftEntryActionsProps = {
 }
 
 /** The two drafting scopes, with the primary action and shortcut sharing one path. */
-export function DraftEntryActions({
-  onDraftDocument,
-  onDraftPassage,
-}: DraftEntryActionsProps) {
+export function DraftEntryActions({ onDraftDocument, onDraftPassage }: DraftEntryActionsProps) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === '/') {

@@ -118,7 +118,7 @@ describe('useStartPass', () => {
 
 describe('useUpdateLiveDraftSuggestionBlock', () => {
   it('optimistically updates the block and then replaces it with the server copy', async () => {
-    const pending = deferred<typeof LIVE_SUGGESTION.blocks[number]>()
+    const pending = deferred<(typeof LIVE_SUGGESTION.blocks)[number]>()
     vi.spyOn(api, 'updateLiveDraftSuggestionBlock').mockImplementation(() => pending.promise)
 
     const { queryClient, wrapper } = createWrapper()
