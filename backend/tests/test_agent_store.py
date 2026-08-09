@@ -419,3 +419,9 @@ def test_only_one_command_runs_while_multiple_proposals_can_wait(
         )
     assert agent_store.reconcile_running_commands(db) == 1
     assert agent_store.get_command_request(db, int(request["id"]))["state"] == "abandoned"
+    # A restart abandons what was running; a command still waiting for approval was not
+    # working when the process stopped, so the reconcile leaves it pending to run later.
+    assert (
+        agent_store.get_command_request(db, int(second["id"]))["state"]
+        == agent_store.COMMAND_PENDING
+    )
