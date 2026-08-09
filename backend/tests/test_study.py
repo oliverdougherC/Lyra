@@ -383,6 +383,41 @@ def test_reconcile_fails_interrupted_study_runs(db: sqlite3.Connection, class_id
     assert artifacts.get_artifact(db, int(solution_set["id"]))["state"] == artifacts.PENDING
 
 
+def test_reconcile_keeps_the_cards_a_generating_deck_had_already_written(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """A crash mid-generation fails the deck but never discards the cards already written.
+
+    The reconcile settles only the artifact row; the parts a `generating` run had already
+    committed stay put. Rollback here means the failed deck the student retries from is
+    honest about what was done rather than quietly dropping half a deck's work.
+    """
+    document_id = _document(db, class_id)
+    deck_id = _deck(db, class_id, document_id)
+    artifacts.set_artifact_state(db, deck_id, artifacts.GENERATING, "Writing cards")
+    card_id = artifacts.create_part(
+        db,
+        deck_id,
+        artifacts.CARD,
+        1,
+        content=json.dumps({"front": "What is sifting?", "back": "It picks out x(0)."}),
+        content_type=artifacts.JSON,
+        status=artifacts.PART_COMPLETE,
+    )
+
+    failed = study.reconcile_interrupted(db)
+
+    assert failed == 1
+    deck = artifacts.get_artifact(db, deck_id)
+    assert deck["state"] == artifacts.FAILED
+    assert deck["error_message"] == study.INTERRUPTED_MESSAGE
+    # stage_detail keeps the lost stage: the pre-update row read `generating`.
+    assert deck["stage_detail"] == artifacts.GENERATING
+    parts = artifacts.list_parts(db, deck_id)
+    assert [int(part["id"]) for part in parts] == [card_id]
+    assert json.loads(str(parts[0]["content"]))["front"] == "What is sifting?"
+
+
 def test_a_cancelled_deck_is_skipped_before_generation_starts(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM
 ) -> None:

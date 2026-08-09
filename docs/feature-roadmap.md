@@ -88,7 +88,7 @@ making the product that already exists dependable during real study sessions.
 - [x] Prevent private draft, brief, plan, comment, and conversation text from being copied into web
   search queries.
 - [x] Keep raw writer search queries out of persisted activity labels.
-- [ ] Complete restart, interruption, and rollback tests for every long-running artifact type.
+- [x] Complete restart, interruption, and rollback tests for every long-running artifact type.
 - [x] Document and test backup and restore of the local data directory before a public release.
 
 ### 2. Long-running workflow durability

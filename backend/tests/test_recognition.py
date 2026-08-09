@@ -348,6 +348,54 @@ def test_a_plain_reindex_never_re_pays_for_a_page_that_failed_for_good(
     assert _document(db, document_id)["state"] == "ready"
 
 
+def test_a_restart_mid_recognition_fails_the_run_and_keeps_the_pages_already_read(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A process death mid-recognition is failed by the reconcile, never left spinning,
+    and the transcription work it had already committed survives the restart.
+
+    Recognition has no reconcile of its own: it rides inside ingestion's `parsing` stage,
+    so a run interrupted mid-recognition is a `parsing` document with some pages already
+    `recognized`. Ingestion's reconcile fails the row - a click to retry, not an endless
+    spinner - while the per-page rows it committed are left untouched. The retry then
+    reads only the pages that were still scanned, so a restart never re-pays the model for
+    a page that was already read.
+    """
+    _configure_endpoint(db)
+    stored = _write_pdf(settings.uploads_dir / "scanned.pdf", ["1", "2", "3"])
+    document_id = _seed_document(db, class_id, stored, recognize=True)
+
+    # First run reads page 1 and then the endpoint drops: pages 2-3 fail, page 1 is stored.
+    _reader(monkeypatch, replies=lambda n: TRANSCRIPT if n == 1 else UpstreamError("Dropped."))
+    run_ingestion(document_id)
+    assert _page_states(db, document_id) == {1: "recognized", 2: "failed", 3: "failed"}
+
+    # The student retries the failed pages, and that run is interrupted by a restart: the
+    # failed pages are back to scanned and the document is mid-`parsing` when the process
+    # dies. Setting the state directly is how every reconcile test stands in for a crash.
+    recognition.reset_failed_pages(db, document_id)
+    db.execute("update documents set state = 'parsing' where id = ?", (document_id,))
+    db.commit()
+
+    requeued, failed = ingestion.reconcile_interrupted(db)
+
+    assert (requeued, failed) == (0, 1)
+    row = _document(db, document_id)
+    assert row["state"] == "failed"
+    assert row["error_message"] == ingestion.INTERRUPTED_MESSAGE
+    assert row["stage_detail"] == "parsing"
+    # The page read before the crash is preserved; only the unread pages remain to do.
+    assert _page_states(db, document_id) == {1: "recognized", 2: "scanned", 3: "scanned"}
+
+    # Retrying reads exactly the two pages that were never read, and not page 1.
+    second = _reader(monkeypatch)
+    run_ingestion(document_id)
+
+    assert len(second) == 2
+    assert _page_states(db, document_id) == {1: "recognized", 2: "recognized", 3: "recognized"}
+    assert _document(db, document_id)["state"] == "ready"
+
+
 def test_a_retry_without_the_endpoint_says_so_instead_of_repeating_the_old_failure(
     db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
