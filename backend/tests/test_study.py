@@ -348,6 +348,44 @@ def test_dedupe_key_folds_only_cosmetic_differences(left: str, right: str, colli
     assert (study._dedupe_key(left) == study._dedupe_key(right)) is collide
 
 
+def test_quiz_questions_are_grounded_at_the_document_level(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    """A quiz cannot honestly cite a chunk per question - one call reads all the material -
+    but it can name the documents that fed it.
+
+    Each question carries the contributing source documents as provenance, with no chunk and
+    no page: the honest degraded record for a whole-material call, which list_provenance
+    still resolves to a filename the student can open.
+    """
+    first = _document(db, class_id, filename="signals.pdf")
+    second = _document(db, class_id, filename="notes.pdf")
+    created = artifacts.create_artifact(
+        db,
+        class_id,
+        "Grounded quiz",
+        [
+            artifacts.SourceSpec(document_id=first, role=artifacts.STUDY_SOURCE),
+            artifacts.SourceSpec(document_id=second, role=artifacts.STUDY_SOURCE),
+        ],
+        kind=artifacts.KIND_QUIZ,
+    )
+    artifact_id = int(created["id"])
+    llm.replies = [{"questions": [_mcq("delta"), _mcq("convolution"), _mcq("fourier")]}]
+
+    study.run_generation(study._Job(artifact_id, count=3))
+
+    parts = artifacts.list_parts(db, artifact_id)
+    assert len(parts) == 3
+    for part in parts:
+        provenance = artifacts.list_provenance(db, int(part["id"]))
+        assert [entry["document_id"] for entry in provenance] == [first, second]
+        assert all(
+            entry["chunk_id"] is None and entry["page_number"] is None for entry in provenance
+        )
+        assert [entry["filename"] for entry in provenance] == ["signals.pdf", "notes.pdf"]
+
+
 def test_a_mostly_broken_reply_is_retried_once_with_the_failures_named(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM
 ) -> None:
@@ -629,10 +667,12 @@ def test_gathering_round_robins_and_caps(db: sqlite3.Connection, class_id: int) 
     )
     db.commit()
 
-    gathered = study._gather_source_text(db, artifact_id)
+    gathered, contributing = study._gather_source_text(db, artifact_id)
 
     assert "Some course text." in gathered  # the syllabus made it in
     assert gathered.count("big chunk") == 11
+    # Both documents fed the material, so both are its provenance, in source order.
+    assert contributing == [big, small]
 
 
 def test_new_card_states_are_due_immediately(
