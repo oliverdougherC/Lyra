@@ -170,6 +170,46 @@ def test_deck_generation_writes_cards_states_and_provenance(
     assert provenance[0]["label"] == "delta functions"
 
 
+def test_a_deck_drops_cards_that_repeat_a_front(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    """Duplicate control spans the whole deck, not one topic's call.
+
+    A front is stored once whether one topic's reply repeated it or two topics converged on
+    it, and a cosmetic difference in wording is not a new card. Review never shows the same
+    front twice, and the ordinals stay contiguous so the deck has no gaps where a duplicate
+    was dropped.
+    """
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [
+        {"topics": ["delta functions", "convolution"]},
+        {
+            "cards": [
+                {"front": "What is sifting?", "back": "It picks x(0).", "topic": "t"},
+                # A cosmetic repeat inside the same topic's reply.
+                {"front": "what is sifting", "back": "Picks the sample.", "topic": "t"},
+            ]
+        },
+        {
+            "cards": [
+                # The second topic converges on the first topic's front.
+                {"front": "What is sifting?", "back": "Again.", "topic": "t"},
+                {"front": "Define convolution.", "back": "An integral.", "topic": "t"},
+            ]
+        },
+    ]
+
+    study.run_generation(study._Job(artifact_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.READY
+    parts = artifacts.list_parts(db, artifact_id)
+    fronts = [json.loads(str(part["content"]))["front"] for part in parts]
+    assert fronts == ["What is sifting?", "Define convolution."]
+    assert [int(part["ordinal"]) for part in parts] == [1, 2]
+
+
 def test_a_topic_failure_is_counted_not_fatal(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM
 ) -> None:
@@ -233,7 +273,10 @@ def _quiz(db: sqlite3.Connection, class_id: int, document_id: int) -> int:
 def _mcq(topic: str = "delta") -> dict[str, object]:
     return {
         "type": "mcq",
-        "question": "Which picks x(0)?",
+        # The stem varies with the topic so distinct topics read as distinct questions:
+        # duplicate control keys on the stem, and a helper that returned one stem for every
+        # call would collapse a whole reply to a single question.
+        "question": f"Which property picks x(0) for {topic}?",
         "options": ["sifting", "scaling", "shifting", "sampling"],
         "correct_index": 0,
         "explanation": "The sifting property.",
@@ -259,6 +302,50 @@ def test_quiz_validation_drops_invalid_questions(
     assert artifact["problems_total"] == 4
     assert artifact["problems_done"] == 3
     assert len(llm.calls) == 1, "three of four surviving is above the retry floor"
+
+
+def test_a_quiz_drops_questions_that_repeat_a_stem(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    """Two questions with the same stem are the same question.
+
+    Distinctness is by stem alone, folding cosmetic differences, so a repeated question is
+    stored once. Otherwise a slot is wasted and one attempt would count the same knowledge
+    twice in the weakness report.
+    """
+    document_id = _document(db, class_id)
+    artifact_id = _quiz(db, class_id, document_id)
+    original = _mcq("delta")
+    cosmetic = {**_mcq("delta"), "question": str(original["question"]).upper()}
+    llm.replies = [{"questions": [original, cosmetic, _mcq("convolution"), _mcq("fourier")]}]
+
+    study.run_generation(study._Job(artifact_id, count=4))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.READY
+    parts = artifacts.list_parts(db, artifact_id)
+    stems = [json.loads(str(part["content"]))["question"] for part in parts]
+    assert stems == [
+        original["question"],
+        _mcq("convolution")["question"],
+        _mcq("fourier")["question"],
+    ]
+    assert artifact["problems_done"] == 3
+
+
+@pytest.mark.parametrize(
+    ("left", "right", "collide"),
+    [
+        ("What is a delta?", "what is a delta", True),
+        ("What is a delta?", "What is a delta.", True),
+        ("  What is   a delta?  ", "What is a delta?", True),
+        ("What is a delta?", "What is a ramp?", False),
+    ],
+)
+def test_dedupe_key_folds_only_cosmetic_differences(left: str, right: str, collide: bool) -> None:
+    """The conservative rule: case, whitespace, and trailing punctuation fold; wording does
+    not. Two prompts collide only when the student would not tell them apart."""
+    assert (study._dedupe_key(left) == study._dedupe_key(right)) is collide
 
 
 def test_a_mostly_broken_reply_is_retried_once_with_the_failures_named(
