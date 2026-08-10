@@ -559,42 +559,198 @@ def _grade_one(config: object, problem: dict[str, object], key_text: str) -> dic
     }
 
 
+def _rate(part: int, whole: int) -> float | None:
+    """A fraction rounded to three places, or None when there is nothing to divide.
+
+    None rather than zero, so a stage that was never exercised reads as unmeasured rather
+    than as a perfect zero or a division that crashes the report.
+    """
+    return round(part / whole, 3) if whole else None
+
+
+def score_stages(
+    segmentation_runs: dict[str, object],
+    solutions: dict[str, object],
+    grades: dict[str, object],
+) -> dict[str, object]:
+    """Reduce the recorded reports to one score per pipeline stage.
+
+    Pure by construction: it reads the JSON the stages wrote and returns numbers, so the
+    arithmetic a run is read by is testable without an endpoint or a corpus. Parsing,
+    reasoning, deterministic verification, and final-answer accuracy are scored apart
+    because a solver can be strong at one and weak at another, and a single blended number
+    hides which stage is the one to fix.
+    """
+    return {
+        "parsing": _parsing_score(segmentation_runs),
+        "reasoning": _reasoning_score(solutions),
+        "verification": _verification_score(solutions),
+        "final_answer": _final_answer_score(grades),
+    }
+
+
+def _parsing_score(runs: dict[str, object]) -> dict[str, object]:
+    """How segmentation did: how many problems it found, and how stably.
+
+    Stability is only meaningful where a set was segmented more than once, so it is scored
+    over exactly those sets; the problem counts come from each set's first run so repeats
+    do not inflate the total.
+    """
+    attempts = [attempt for runlist in runs.values() for attempt in list(runlist)]
+    failures = sum(1 for a in attempts if a.get("error") or a.get("state") == "failed")
+    repeated = [list(runlist) for runlist in runs.values() if len(list(runlist)) >= 2]
+    stable = sum(1 for runlist in repeated if len({a["problem_count"] for a in runlist}) == 1)
+    first_counts = [list(runlist)[0]["problem_count"] for runlist in runs.values() if list(runlist)]
+    problems = sum(int(count) for count in first_counts)
+    return {
+        "sets": len(runs),
+        "runs": len(attempts),
+        "failures": failures,
+        "stable_sets": stable,
+        "sets_measured_for_stability": len(repeated),
+        "stability_rate": _rate(stable, len(repeated)),
+        "problems_found": problems,
+        "mean_problems_per_set": (round(problems / len(first_counts), 2) if first_counts else None),
+    }
+
+
+def _reasoning_score(solutions: dict[str, object]) -> dict[str, object]:
+    """How solving did: how many problems reached a complete solution, and how grounded.
+
+    Grounded steps are the ones that cite a source; the rate is the model-derived-vs-cited
+    split the lifecycle contract cares about, aggregated over every step written.
+    """
+    records = list(solutions.values())
+    problems = sum(int(record["problem_count"]) for record in records)
+    solved = sum(int(record["solved_count"]) for record in records)
+    steps = sum(int(p["step_count"]) for record in records for p in record["problems"])
+    grounded = sum(int(p["grounded_steps"]) for record in records for p in record["problems"])
+    return {
+        "sets": len(records),
+        "set_failures": sum(1 for record in records if record.get("state") == "failed"),
+        "problems": problems,
+        "solved": solved,
+        "solve_rate": _rate(solved, problems),
+        "steps": steps,
+        "grounded_steps": grounded,
+        "grounded_rate": _rate(grounded, steps),
+    }
+
+
+def _verification_score(solutions: dict[str, object]) -> dict[str, object]:
+    """How deterministic checking did: how often a tool could run, and how often it agreed.
+
+    A verdict counts as checked only when a tool actually ran (verified or refuted);
+    uncheckable and unchecked did not settle by calculation and are kept out of the
+    verified rate rather than counted as failures against it.
+    """
+    verdicts: dict[str, int] = {}
+    checks = 0
+    problems = 0
+    for record in solutions.values():
+        for problem in record["problems"]:
+            problems += 1
+            verdict = str(problem["verdict"])
+            verdicts[verdict] = verdicts.get(verdict, 0) + 1
+            checks += int(problem["check_count"])
+    verified = verdicts.get(artifacts.VERIFIED, 0)
+    refuted = verdicts.get(artifacts.REFUTED, 0)
+    checked = verified + refuted
+    return {
+        "problems": problems,
+        "verdicts": verdicts,
+        "checks": checks,
+        "checked": checked,
+        "coverage_rate": _rate(checked, problems),
+        "verified": verified,
+        "refuted": refuted,
+        "verified_rate": _rate(verified, checked),
+    }
+
+
+def _final_answer_score(grades: dict[str, object]) -> dict[str, object]:
+    """How final answers did against the key: agreement over the problems the key covered.
+
+    key_not_found, not_solved, and the grader's own failures are reported but kept out of
+    the denominator: the agreement rate is over problems that were both solved and covered
+    by the key, which is the only set the number can honestly speak for.
+    """
+    verdicts: dict[str, int] = {}
+    for results in grades.values():
+        for result in list(results):
+            verdict = str(result["verdict"])
+            verdicts[verdict] = verdicts.get(verdict, 0) + 1
+    agrees = verdicts.get("agrees", 0)
+    disagrees = verdicts.get("disagrees", 0)
+    marked = agrees + disagrees
+    return {
+        "verdicts": verdicts,
+        "graded": sum(verdicts.values()),
+        "marked": marked,
+        "agrees": agrees,
+        "agreement_rate": _rate(agrees, marked),
+    }
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Print what the recorded runs say, which is the only output anyone reads twice."""
     workspace = Workspace(Path(args.workspace).resolve())
     segmentation = _existing(workspace, "segmentation").get("runs", {})
     solutions = _existing(workspace, "solutions")
     grades = _existing(workspace, "grades")
+    scores = score_stages(segmentation, solutions, grades)
 
     if segmentation:
-        print("Segmentation")
+        parsing = scores["parsing"]
+        print("Parsing (segmentation)")
         for name, runs in sorted(segmentation.items()):
             counts = [run["problem_count"] for run in runs]
             seconds = [run["seconds"] for run in runs]
             stable = "stable" if len(set(counts)) == 1 else "UNSTABLE"
             print(f"  {name}: {counts} problems, {seconds}s, {stable}")
+        print(
+            f"  score: {parsing['problems_found']} problems across {parsing['sets']} sets "
+            f"({parsing['mean_problems_per_set']}/set), stability "
+            f"{parsing['stable_sets']}/{parsing['sets_measured_for_stability']} "
+            f"({parsing['stability_rate']}), {parsing['failures']} failed"
+        )
 
     if solutions:
-        print("\nSolving")
+        reasoning = scores["reasoning"]
+        print("\nReasoning (solving)")
         for name, record in sorted(solutions.items()):
             print(
                 f"  {name}: {record['solved_count']}/{record['problem_count']} solved in "
-                f"{record['minutes']} min, verdicts {record['verdicts']}"
+                f"{record['minutes']} min"
             )
+        print(
+            f"  score: {reasoning['solved']}/{reasoning['problems']} solved "
+            f"({reasoning['solve_rate']}), {reasoning['grounded_steps']}/{reasoning['steps']} "
+            f"steps grounded ({reasoning['grounded_rate']}), "
+            f"{reasoning['set_failures']} sets failed"
+        )
+
+        verification = scores["verification"]
+        print("\nDeterministic verification")
+        print(
+            f"  score: {verification['checked']}/{verification['problems']} checked "
+            f"({verification['coverage_rate']}), {verification['verified']}/"
+            f"{verification['checked']} verified ({verification['verified_rate']}), "
+            f"verdicts {verification['verdicts']}"
+        )
 
     if grades:
-        print("\nGrading against the answer key")
-        totals: dict[str, int] = {}
+        final = scores["final_answer"]
+        print("\nFinal answer (against the key)")
         for name, results in sorted(grades.items()):
             counts: dict[str, int] = {}
             for result in results:
                 counts[result["verdict"]] = counts.get(result["verdict"], 0) + 1
-                totals[result["verdict"]] = totals.get(result["verdict"], 0) + 1
             print(f"  {name}: {counts}")
-        agreed = totals.get("agrees", 0)
-        marked = sum(totals.values()) - totals.get("key_not_found", 0)
-        share = f"{agreed}/{marked}" if marked else "0/0"
-        print(f"  total: {totals}, agreed {share}")
+        print(
+            f"  score: {final['agrees']}/{final['marked']} agreed "
+            f"({final['agreement_rate']}), verdicts {final['verdicts']}"
+        )
     return 0
 
 
