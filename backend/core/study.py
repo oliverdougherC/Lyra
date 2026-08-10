@@ -191,7 +191,7 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
     artifacts.set_artifact_state(
         conn, job.artifact_id, artifacts.GENERATING, "Reading the material"
     )
-    gathered = _gather_source_text(conn, job.artifact_id)
+    gathered, _ = _gather_source_text(conn, job.artifact_id)
     if not gathered:
         raise LyraError(NO_TOPICS_MESSAGE)
 
@@ -211,11 +211,14 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
     cards_written = 0
     failed: list[str] = []
     ordinal = 0
+    # Deck-wide, so a card is dropped whether one topic's call repeated itself or two
+    # topics converged on the same front. The set outlives any single topic's call.
+    seen_fronts: set[str] = set()
     for topic in topic_names:
         _raise_if_cancelled(conn, job.artifact_id)
         artifacts.set_artifact_state(conn, job.artifact_id, artifacts.GENERATING, topic)
         try:
-            written = _write_topic_cards(conn, job, config, class_id, topic, ordinal)
+            written = _write_topic_cards(conn, job, config, class_id, topic, ordinal, seen_fronts)
         except Exception:
             # One topic's call failing must not sink the deck: the student keeps what
             # the other topics produced, and the failure count says what was lost.
@@ -241,8 +244,13 @@ def _write_topic_cards(
     class_id: int,
     topic: str,
     first_ordinal: int,
+    seen_fronts: set[str],
 ) -> int:
-    """One topic's retrieval, one call, and the cards it produced. Returns the count."""
+    """One topic's retrieval, one call, and the cards it produced. Returns the count.
+
+    `seen_fronts` carries the fronts already written to the deck; a card repeating one is
+    dropped and `seen_fronts` grows with each card kept.
+    """
     result = retrieve(conn, class_id, topic, TOPIC_RETRIEVAL_BUDGET)
     context_block = prompts.format_context_block([vars(chunk) for chunk in result.chunks])
     reply = _call_json(
@@ -260,6 +268,10 @@ def _write_topic_cards(
         back = str(card.get("back") or "").strip()
         if not front or not back:
             continue
+        key = _dedupe_key(front)
+        if key in seen_fronts:
+            continue
+        seen_fronts.add(key)
         payload = json.dumps({"front": front, "back": back, "topic": topic})
         part_id = artifacts.create_part(
             conn,
@@ -325,7 +337,7 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     artifacts.set_artifact_state(
         conn, job.artifact_id, artifacts.GENERATING, "Reading the material"
     )
-    gathered = _gather_source_text(conn, job.artifact_id)
+    gathered, source_ids = _gather_source_text(conn, job.artifact_id)
     if not gathered:
         raise LyraError(NO_QUESTIONS_MESSAGE)
 
@@ -354,13 +366,23 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
         if len(retried) > len(questions):
             questions = retried
 
+    questions = _dedupe_questions(questions)
     if len(questions) < 3:
         raise LyraError(NO_QUESTIONS_MESSAGE)
 
+    # Every question is grounded at the document level, not the chunk level. The quiz is
+    # written by one call over the whole gathered material, so no question honestly traces
+    # to a small set of chunks the way a deck card traces to its topic's retrieval. What is
+    # honestly true is which documents fed that material, and provenance degrades to exactly
+    # that: document_id with no chunk or page, which list_provenance still resolves to a
+    # filename the student can open.
+    source_entries = [
+        artifacts.ProvenanceEntry(document_id=document_id) for document_id in source_ids
+    ]
     artifacts.set_problems_total(conn, job.artifact_id, job.count)
     artifacts.set_problems_done(conn, job.artifact_id, len(questions))
     for ordinal, question in enumerate(questions, start=1):
-        artifacts.create_part(
+        part_id = artifacts.create_part(
             conn,
             job.artifact_id,
             artifacts.QUIZ_QUESTION,
@@ -370,10 +392,8 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
             content_type=artifacts.JSON,
             status=artifacts.PART_COMPLETE,
         )
-        # No provenance is recorded on quiz questions: this pipeline grounds through one
-        # whole-material call rather than per-question retrieval, so there is no small
-        # set of chunks a question honestly traces to. Deck cards get theirs from the
-        # per-topic retrieval; quizzes get this comment instead.
+        if source_entries:
+            artifacts.set_provenance(conn, part_id, source_entries)
     _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(conn, job.artifact_id, artifacts.READY)
 
@@ -387,6 +407,38 @@ def _raise_if_cancelled(conn: sqlite3.Connection, artifact_id: int) -> None:
     """Turn a cancelled artifact into the control flow that leaves it unchanged."""
     if _cancelled(conn, artifact_id):
         raise _GenerationCancelledError
+
+
+def _dedupe_key(text: str) -> str:
+    """A comparison key for duplicate detection.
+
+    Case, surrounding whitespace, and trailing sentence punctuation are folded away so two
+    cards or questions that differ only cosmetically - "What is a delta?" against "What is
+    a delta" - collide, while anything that differs in wording stays distinct. Deliberately
+    conservative: it drops a near-identical repeat without risking a merge of two prompts
+    the student would recognise as different.
+    """
+    collapsed = " ".join(text.casefold().split())
+    return collapsed.rstrip(".?!:;, ")
+
+
+def _dedupe_questions(questions: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Drop questions whose stem repeats one already kept, preserving order.
+
+    The model is asked for distinct questions but is not held to it, so a quiz could
+    otherwise store the same stem twice - wasting a slot and letting one attempt count the
+    same knowledge twice in the weakness report. Distinctness is by stem alone: two
+    questions with the same wording are the same question whatever their options say.
+    """
+    seen: set[str] = set()
+    unique: list[dict[str, object]] = []
+    for question in questions:
+        key = _dedupe_key(str(question.get("question") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(question)
+    return unique
 
 
 def _validate_questions(
@@ -451,22 +503,27 @@ def _question_problem(item: dict[str, object]) -> str | None:
     return None
 
 
-def _gather_source_text(conn: sqlite3.Connection, artifact_id: int) -> str:
+def _gather_source_text(conn: sqlite3.Connection, artifact_id: int) -> tuple[str, list[int]]:
     """The source documents' chunk text, round-robined and capped.
 
     One document at a time in turns, so a long textbook cannot spend the whole budget
     before the syllabus is read once: each document gives at most DOCUMENT_TOKEN_CAP
     estimated tokens, and the gathering stops at TOTAL_TOKEN_CAP across all of them.
+
+    Returns the joined text and the ids of the documents that actually contributed to it,
+    in source order. The latter is what a quiz question honestly traces to: the whole-
+    material call read this text, so the documents behind it are its provenance.
     """
     sources = artifacts.list_sources(conn, artifact_id, artifacts.STUDY_SOURCE)
+    source_order = [int(source["document_id"]) for source in sources]
     queues: list[tuple[int, list[sqlite3.Row]]] = []
-    for source in sources:
+    for document_id in source_order:
         rows = conn.execute(
             "select content from chunks where document_id = ? order by id",
-            (int(source["document_id"]),),
+            (document_id,),
         ).fetchall()
         if rows:
-            queues.append((int(source["document_id"]), list(rows)))
+            queues.append((document_id, list(rows)))
 
     gathered: list[str] = []
     per_document: dict[int, int] = {}
@@ -482,7 +539,8 @@ def _gather_source_text(conn: sqlite3.Connection, artifact_id: int) -> str:
             total += cost
         if rows and per_document.get(document_id, 0) < DOCUMENT_TOKEN_CAP:
             queues.append((document_id, rows))
-    return "\n\n".join(gathered)
+    contributing = [document_id for document_id in source_order if per_document.get(document_id, 0)]
+    return "\n\n".join(gathered), contributing
 
 
 def _call_json(
