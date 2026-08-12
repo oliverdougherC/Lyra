@@ -27,7 +27,7 @@ from backend.core import (
     writer_plans,
     writer_runs,
 )
-from backend.core.app_settings import TutorConfig
+from backend.core.app_settings import TutorAccess, TutorConfig
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk
 
 SKELETON = (
@@ -115,11 +115,14 @@ def model(monkeypatch: pytest.MonkeyPatch) -> _StubModel:
 
 @pytest.fixture(autouse=True)
 def _open_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(writer_pipeline, "document_text_allowed", lambda conn: None)
     monkeypatch.setattr(
         writer_pipeline,
-        "resolve_tutor_config",
-        lambda conn: TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
     monkeypatch.setattr(
         writer_pipeline,
@@ -506,7 +509,13 @@ def test_a_blocked_gate_settles_with_its_message(
     from backend.core.app_settings import NO_ENDPOINT
 
     artifact_id, _ = _draft(db, class_id, content=STRUCTURED)
-    monkeypatch.setattr(writer_pipeline, "document_text_allowed", lambda conn: NO_ENDPOINT)
+    monkeypatch.setattr(
+        writer_pipeline,
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=None, document_block=NO_ENDPOINT, remote_ack=False
+        ),
+    )
 
     writer_pipeline.run_pass(writer_pipeline.PassJob(artifact_id))
 
@@ -677,8 +686,12 @@ def test_a_long_section_uses_as_many_output_chunks_as_its_small_window_requires(
     briefs.save_brief(db, artifact_id, summary="Pendulum.", length_target="5 pages")
     monkeypatch.setattr(
         writer_pipeline,
-        "resolve_tutor_config",
-        lambda conn: TutorConfig("http://127.0.0.1:9/v1", None, "m", 4096),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=TutorConfig("http://127.0.0.1:9/v1", None, "m", 4096),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
 
     def chunk(

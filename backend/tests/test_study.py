@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from backend.core import artifacts, scheduler, solver, study
-from backend.core.app_settings import TutorConfig
+from backend.core.app_settings import TutorAccess, TutorConfig
 from backend.core.errors import LyraError
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk
 
@@ -43,12 +43,15 @@ def llm(monkeypatch: pytest.MonkeyPatch) -> _StubLLM:
 
 @pytest.fixture(autouse=True)
 def _open_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No endpoint and no locality decision: generation is allowed, config is fake."""
-    monkeypatch.setattr(study, "document_text_allowed", lambda conn: None)
+    """Generation is allowed against a fake local endpoint, from one snapshot."""
     monkeypatch.setattr(
         study,
-        "resolve_tutor_config",
-        lambda conn: TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
 
 

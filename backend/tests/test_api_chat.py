@@ -868,3 +868,128 @@ def test_regeneration_is_refused_on_an_unacknowledged_remote_endpoint(
         ("user", QUESTION),
         ("assistant", "First answer."),
     ]
+
+
+# --- The config/consent snapshot is atomic ----------------------------------------------
+#
+# The consent decision and the endpoint it authorizes must come from one settings read.
+# Resolving the endpoint and checking the permission as two independent reads leaves a
+# window: settings can change between them, so a turn can be authorized against one endpoint
+# and sent to another. These tests fail on that two-read shape and pass on the single-read
+# snapshot the turn now takes.
+
+
+def _settings_row(endpoint_url: str, *, remote_ack: int) -> dict[str, object]:
+    """A stand-in for the single settings row, for hooking `get_settings_row`.
+
+    Carries the columns the tutor snapshot reads; a chat turn touches no others.
+    """
+    return {
+        "endpoint_url": endpoint_url,
+        "model": "m",
+        "context_window": 8192,
+        "remote_ack": remote_ack,
+        "extraction_enabled": 1,
+    }
+
+
+def _hand_out(monkeypatch: pytest.MonkeyPatch, *rows: dict[str, object]) -> None:
+    """Hook `get_settings_row` to return each of `rows` in turn, then the real row.
+
+    This is the interleaving a two-read code path could hit: the first read sees one endpoint
+    state, a later read sees another. A single-read snapshot consumes exactly one.
+    """
+    real = app_settings.get_settings_row
+    handed = iter(rows)
+    monkeypatch.setattr(
+        app_settings, "get_settings_row", lambda conn: next(handed, None) or real(conn)
+    )
+
+
+def test_config_and_consent_come_from_one_settings_snapshot(
+    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`resolve_tutor_access` reads the settings row once, so the endpoint it returns and the
+    permission it returns describe the same snapshot - never a local "allowed" paired with a
+    remote endpoint.
+
+    The hook offers a remote-unacknowledged row first and a local-acknowledged row second. A
+    single read consumes only the first, so the config is the remote endpoint and the block
+    is `remote_unacknowledged`: they agree. The previous two-read shape - resolve the config,
+    then separately check the permission - would take the remote config from the first read
+    and a permissive answer from the second, and this would fail.
+    """
+    _hand_out(
+        monkeypatch,
+        _settings_row(REMOTE_ENDPOINT, remote_ack=0),
+        _settings_row("http://127.0.0.1:9/v1", remote_ack=1),
+    )
+
+    access = app_settings.resolve_tutor_access(db)
+
+    assert access.config is not None
+    assert access.config.endpoint_url == REMOTE_ENDPOINT
+    assert access.document_block == app_settings.REMOTE_UNACKNOWLEDGED
+    assert access.document_allowed is False
+
+
+def test_a_settings_flip_between_reads_cannot_send_to_the_captured_endpoint(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Remote captured, then settings go local before the permission would be re-read.
+
+    The turn resolves the remote endpoint and its consent from one snapshot, refuses it, and
+    puts nothing on the wire - even though a second read would say the endpoint is now local
+    and fine. A two-read path would pair the remote config with the local read's permission
+    and stream the turn upstream.
+    """
+    calls: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _spy_stream(calls))
+    _hand_out(
+        monkeypatch,
+        _settings_row(REMOTE_ENDPOINT, remote_ack=0),
+        _settings_row("http://127.0.0.1:9/v1", remote_ack=1),
+    )
+
+    response = _send(client, session_id)
+
+    assert response.status_code == 400
+    assert calls == []
+    assert sessions.list_messages(db, session_id) == []
+
+
+def test_a_local_turn_is_not_redirected_by_a_later_flip_to_remote(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mirror: local captured, then settings go remote-unacknowledged.
+
+    One read authorizes the local endpoint and the turn is answered there. The old two-read
+    path would take the remote-unacknowledged second read as the permission and refuse a turn
+    that was only ever local.
+    """
+    endpoints: list[str] = []
+
+    async def record_endpoint(
+        endpoint_url: str,
+        api_key: str | None,
+        model: str | None,
+        messages: list[dict[str, str]],
+        **kwargs: object,
+    ) -> AsyncIterator[StreamDelta]:
+        endpoints.append(endpoint_url)
+        yield StreamDelta("answer", "Sure.")
+
+    monkeypatch.setattr(routes_chat, "stream_chat", record_endpoint)
+    _hand_out(
+        monkeypatch,
+        _settings_row("http://127.0.0.1:9/v1", remote_ack=0),
+        _settings_row(REMOTE_ENDPOINT, remote_ack=0),
+    )
+
+    response = _send(client, session_id)
+
+    assert response.status_code == 200
+    # Answered on the local endpoint from the authorizing snapshot, never the remote one a
+    # second read produced.
+    assert endpoints == ["http://127.0.0.1:9/v1"]
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user", "assistant"]

@@ -27,7 +27,7 @@ from backend.api import (
 )
 from backend.config import settings
 from backend.core import app_settings, artifacts, drafting, sessions, solver
-from backend.core.app_settings import TutorConfig
+from backend.core.app_settings import TutorAccess, TutorConfig
 from backend.core.errors import LyraError
 from backend.core.firecrawl import FirecrawlError
 from backend.core.segmentation import SegmentedProblem
@@ -376,11 +376,14 @@ def test_writer_chat_faults_leave_only_the_user_turn_for_retry(
     draft_id = _draft(db, class_id)
     session_id = client.post(f"/api/drafts/{draft_id}/sessions").json()["id"]
 
-    monkeypatch.setattr(routes_drafts, "document_text_allowed", lambda conn: None)
     monkeypatch.setattr(
         routes_drafts,
-        "resolve_tutor_config",
-        lambda conn: TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
 
     async def failed_loop(*args: object, **kwargs: object) -> ToolLoopResult:
@@ -407,11 +410,14 @@ def test_writer_chat_replaces_malformed_draft_answers_with_an_honest_retry_messa
     draft_id = _draft(db, class_id)
     session_id = client.post(f"/api/drafts/{draft_id}/sessions").json()["id"]
 
-    monkeypatch.setattr(routes_drafts, "document_text_allowed", lambda conn: None)
     monkeypatch.setattr(
         routes_drafts,
-        "resolve_tutor_config",
-        lambda conn: TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
 
     async def malformed_loop(*args: object, **kwargs: object) -> ToolLoopResult:

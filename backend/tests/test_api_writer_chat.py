@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from backend.api import routes_drafts
 from backend.core import artifacts, briefs, sessions
-from backend.core.app_settings import TutorConfig
+from backend.core.app_settings import TutorAccess, TutorConfig
 from backend.core.errors import LyraError
 from backend.llm.tools import COMPLETED, TIMEOUT, UPSTREAM_FAILED, RecordedCall, ToolLoopResult
 from backend.storage.database import connect, get_db
@@ -50,11 +50,14 @@ def client(db: sqlite3.Connection) -> Iterator[TestClient]:
 @pytest.fixture
 def allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     """A configured, local, acknowledged endpoint, so turns open."""
-    monkeypatch.setattr(routes_drafts, "document_text_allowed", lambda conn: None)
     monkeypatch.setattr(
         routes_drafts,
-        "resolve_tutor_config",
-        lambda conn: TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
 
 

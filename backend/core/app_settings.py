@@ -101,19 +101,76 @@ def _changes_endpoint(conn: sqlite3.Connection, values: dict[str, object]) -> bo
     return any(column in values and values[column] != row[column] for column in _PROBE_INPUTS)
 
 
-def resolve_tutor_config(conn: sqlite3.Connection) -> TutorConfig:
-    """The tutor endpoint configuration, or a ConfigurationError when none is set."""
-    row = get_settings_row(conn)
+@dataclass(frozen=True)
+class TutorAccess:
+    """The tutor endpoint configuration and its document-text permission, from one read.
+
+    The two are inseparable on purpose. `document_text_allowed` answers a question about a
+    specific endpoint - is *this* destination one document text may be sent to - and the
+    answer is worthless if the endpoint it was asked about is not the endpoint the request
+    then goes to. Resolving the config and deriving the permission from a single
+    `get_settings_row` closes the window in which the settings could change between "may I
+    send to X?" and "send to Y": whatever `config` points at is exactly what
+    `document_block` and `remote_ack` were evaluated against. A document-sending caller
+    takes this snapshot once and uses it for the whole operation, so a settings change after
+    the snapshot cannot split the authorization from the endpoint it authorized.
+
+    Attributes:
+        config: The resolved endpoint, or None only when no endpoint is configured (in which
+            case `document_block` is `no_endpoint`). Populated even when document text is
+            blocked, because the block is a fact about *this* endpoint.
+        document_block: None when document text may be sent to `config`, otherwise the reason
+            it may not (`extraction_disabled`, `no_endpoint`, or `remote_unacknowledged`).
+        remote_ack: The acknowledgement flag from the same row, for callers (recognition)
+            that pass it on to a lower layer whose re-check must agree with this snapshot.
+    """
+
+    config: TutorConfig | None
+    document_block: str | None
+    remote_ack: bool
+
+    @property
+    def document_allowed(self) -> bool:
+        """Whether document-derived text may be sent to `config`."""
+        return self.document_block is None
+
+
+def _tutor_config_from_row(row: sqlite3.Row) -> TutorConfig | None:
+    """The endpoint configuration described by `row`, or None when none is set."""
     endpoint_url = (row["endpoint_url"] or "").strip()
     if not endpoint_url:
-        raise ConfigurationError("No tutor endpoint is configured. Add one in Settings.")
-
+        return None
     return TutorConfig(
         endpoint_url=endpoint_url,
         api_key=get_api_key(),
         model=row["model"],
         context_window=int(row["context_window"]),
     )
+
+
+def _document_block_from_row(row: sqlite3.Row) -> str | None:
+    """Why document text may not be sent to the endpoint `row` describes, or None if it may."""
+    endpoint_url = (row["endpoint_url"] or "").strip()
+    if not endpoint_url:
+        return NO_ENDPOINT
+    if not is_local_endpoint(endpoint_url) and not row["remote_ack"]:
+        return REMOTE_UNACKNOWLEDGED
+    return None
+
+
+def _extraction_block_from_row(row: sqlite3.Row) -> str | None:
+    """Profile extraction's own toggle, then the shared document-text rule, from one row."""
+    if not row["extraction_enabled"]:
+        return EXTRACTION_DISABLED
+    return _document_block_from_row(row)
+
+
+def resolve_tutor_config(conn: sqlite3.Connection) -> TutorConfig:
+    """The tutor endpoint configuration, or a ConfigurationError when none is set."""
+    config = _tutor_config_from_row(get_settings_row(conn))
+    if config is None:
+        raise ConfigurationError("No tutor endpoint is configured. Add one in Settings.")
+    return config
 
 
 def document_text_allowed(conn: sqlite3.Connection) -> str | None:
@@ -125,20 +182,19 @@ def document_text_allowed(conn: sqlite3.Connection) -> str | None:
     model, so both ask here. A second copy of this rule per feature is a second place for
     one of them to quietly stop asking.
 
+    A caller that then *uses* the endpoint - resolves a `TutorConfig` and sends the request -
+    must not call this separately from resolving that config: two independent reads can
+    straddle a settings change and authorize one endpoint while sending to another. Such a
+    caller takes `resolve_tutor_access` instead, which answers this question and returns the
+    config from the same snapshot. This function stands alone only for a caller that is
+    deciding whether to proceed at all and resolves nothing (or resolves through
+    `resolve_tutor_access`).
+
     Returns:
         None when document text may be sent, otherwise `no_endpoint` or
         `remote_unacknowledged`.
     """
-    row = get_settings_row(conn)
-
-    endpoint_url = (row["endpoint_url"] or "").strip()
-    if not endpoint_url:
-        return NO_ENDPOINT
-
-    if not is_local_endpoint(endpoint_url) and not row["remote_ack"]:
-        return REMOTE_UNACKNOWLEDGED
-
-    return None
+    return _document_block_from_row(get_settings_row(conn))
 
 
 def extraction_allowed(conn: sqlite3.Connection) -> str | None:
@@ -150,6 +206,30 @@ def extraction_allowed(conn: sqlite3.Connection) -> str | None:
         None when extraction may run, otherwise the skip reason recorded on the
         document: `extraction_disabled`, `no_endpoint`, or `remote_unacknowledged`.
     """
-    if not get_settings_row(conn)["extraction_enabled"]:
-        return EXTRACTION_DISABLED
-    return document_text_allowed(conn)
+    return _extraction_block_from_row(get_settings_row(conn))
+
+
+def resolve_tutor_access(conn: sqlite3.Connection, *, for_extraction: bool = False) -> TutorAccess:
+    """The tutor config and its document-text permission, from a single settings read.
+
+    The atomic form of "resolve the endpoint, and check whether document text may be sent to
+    it". Every document-sending caller - chat, solving, study, writing/review, segmentation,
+    recognition, profile extraction/consolidation - takes this rather than calling
+    `document_text_allowed` and `resolve_tutor_config` as two separate reads, so the endpoint
+    a turn is authorized against is provably the endpoint it is sent to.
+
+    Args:
+        for_extraction: Apply profile extraction's Settings toggle as well, so an extraction
+            caller gets `extraction_disabled` from the same snapshot instead of re-reading.
+
+    Returns:
+        A `TutorAccess` whose `document_block` is None exactly when the operation may send
+        document text to its `config`.
+    """
+    row = get_settings_row(conn)
+    block = _extraction_block_from_row(row) if for_extraction else _document_block_from_row(row)
+    return TutorAccess(
+        config=_tutor_config_from_row(row),
+        document_block=block,
+        remote_ack=bool(row["remote_ack"]),
+    )

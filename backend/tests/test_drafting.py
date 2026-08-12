@@ -20,6 +20,7 @@ from backend.core import (
     writer_plans,
     writer_runs,
 )
+from backend.core.app_settings import TutorAccess
 
 
 def _draft(db: sqlite3.Connection, class_id: int, content: str = "x") -> tuple[int, int]:
@@ -228,11 +229,14 @@ def test_recovered_pass_skips_a_validated_completed_section(
 
     queued: list[object] = []
     monkeypatch.setattr(drafting, "enqueue", queued.append)
-    monkeypatch.setattr(writer_pipeline, "document_text_allowed", lambda conn: None)
     monkeypatch.setattr(
         writer_pipeline,
-        "resolve_tutor_config",
-        lambda conn: writer_pipeline.TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=writer_pipeline.TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
     seen: list[str] = []
     captured_owned: dict[str, str] = {}
@@ -338,11 +342,14 @@ def test_recovered_done_pass_settles_without_final_stage_calls(
             AssertionError("should not redo research preparation")
         ),
     )
-    monkeypatch.setattr(writer_pipeline, "document_text_allowed", lambda conn: None)
     monkeypatch.setattr(
         writer_pipeline,
-        "resolve_tutor_config",
-        lambda conn: writer_pipeline.TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=writer_pipeline.TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
 
     requeued, recovered = drafting.reconcile_interrupted(db)
@@ -445,11 +452,14 @@ def test_recovered_partial_parallel_planned_pass_resumes_serially_from_checkpoin
     )
     monkeypatch.setattr(writer_pipeline, "_converge_section", lambda *args: False)
     monkeypatch.setattr(writer_pipeline, "_weave_stage", lambda *args: False)
-    monkeypatch.setattr(writer_pipeline, "document_text_allowed", lambda conn: None)
     monkeypatch.setattr(
         writer_pipeline,
-        "resolve_tutor_config",
-        lambda conn: writer_pipeline.TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=writer_pipeline.TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
     seen: list[str] = []
 

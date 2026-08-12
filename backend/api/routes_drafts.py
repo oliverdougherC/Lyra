@@ -47,8 +47,7 @@ from backend.core.app_settings import (
     NO_ENDPOINT,
     REMOTE_UNACKNOWLEDGED,
     TutorConfig,
-    document_text_allowed,
-    resolve_tutor_config,
+    resolve_tutor_access,
 )
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import ConflictError, LyraError, NotFoundError
@@ -433,10 +432,11 @@ def _open_write(
 ) -> tuple[TutorConfig, list[dict[str, str]]]:
     """Everything fallible, before the first byte: guards, grounding, and the prompt."""
     artifact = _require_draft(conn, artifact_id)
-    blocked = document_text_allowed(conn)
-    if blocked is not None:
-        raise LyraError(BLOCKED_MESSAGES.get(blocked, BLOCKED_MESSAGES[NO_ENDPOINT]))
-    config = resolve_tutor_config(conn)
+    # One snapshot: the endpoint checked for consent is the endpoint the turn is sent to.
+    access = resolve_tutor_access(conn)
+    if access.document_block is not None:
+        raise LyraError(BLOCKED_MESSAGES.get(access.document_block, BLOCKED_MESSAGES[NO_ENDPOINT]))
+    config = access.config
     class_id = int(artifact["class_id"])
 
     query = payload.instruction + " " + (payload.selection or payload.heading or "")
@@ -1050,10 +1050,11 @@ def _open_writer_turn(
     session = sessions.get_session(conn, session_id)
     if session["mode"] != sessions.WRITER or session["artifact_part_id"] != part["id"]:
         raise NotFoundError(WRONG_SESSION_MESSAGE)
-    blocked = document_text_allowed(conn)
-    if blocked is not None:
-        raise LyraError(BLOCKED_MESSAGES.get(blocked, BLOCKED_MESSAGES[NO_ENDPOINT]))
-    config = resolve_tutor_config(conn)
+    # One snapshot: the endpoint checked for consent is the endpoint the turn is sent to.
+    access = resolve_tutor_access(conn)
+    if access.document_block is not None:
+        raise LyraError(BLOCKED_MESSAGES.get(access.document_block, BLOCKED_MESSAGES[NO_ENDPOINT]))
+    config = access.config
     sessions.set_session_title_if_unset(conn, session_id, payload.content)
     user_message_id = sessions.add_message(conn, session_id, "user", payload.content)
     touch_class(conn, int(artifact["class_id"]))

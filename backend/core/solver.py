@@ -52,9 +52,8 @@ from backend.core.app_settings import (
     NO_ENDPOINT,
     REMOTE_UNACKNOWLEDGED,
     TutorConfig,
-    document_text_allowed,
     get_settings_row,
-    resolve_tutor_config,
+    resolve_tutor_access,
     update_settings_row,
 )
 from backend.core.artifacts import ProvenanceEntry
@@ -682,10 +681,11 @@ def _solve(conn: sqlite3.Connection, artifact_id: int) -> None:
     # never sent to a non-local endpoint the student has not acknowledged. Asked before
     # any statement is read, so there is no path on which it leaks. Unlike segmentation,
     # solving cannot degrade around this: without the statement there is nothing to solve.
-    blocked = document_text_allowed(conn)
-    if blocked is not None:
-        raise LyraError(BLOCKED_MESSAGES.get(blocked, BLOCKED_MESSAGES[NO_ENDPOINT]))
-    config = resolve_tutor_config(conn)
+    # One snapshot: the endpoint checked for consent is the endpoint solving is sent to.
+    access = resolve_tutor_access(conn)
+    if access.document_block is not None:
+        raise LyraError(BLOCKED_MESSAGES.get(access.document_block, BLOCKED_MESSAGES[NO_ENDPOINT]))
+    config = access.config
 
     # Units, not problems: a section of five independent questions is five things to
     # solve and the progress line should say so. Counting sections instead reported a
@@ -1100,10 +1100,13 @@ def run_regeneration(artifact_id: int, part_id: int, correction: str = "") -> No
     conn = connect()
     try:
         artifact = artifacts.get_artifact(conn, artifact_id)
-        blocked = document_text_allowed(conn)
-        if blocked is not None:
-            raise LyraError(BLOCKED_MESSAGES.get(blocked, BLOCKED_MESSAGES[NO_ENDPOINT]))
-        config = resolve_tutor_config(conn)
+        # One snapshot: the endpoint checked for consent is the endpoint solving is sent to.
+        access = resolve_tutor_access(conn)
+        if access.document_block is not None:
+            raise LyraError(
+                BLOCKED_MESSAGES.get(access.document_block, BLOCKED_MESSAGES[NO_ENDPOINT])
+            )
+        config = access.config
         unit = _unit_for(conn, part_id)
         _solve_one(
             conn, artifact_id, int(artifact["class_id"]), config, unit, correction=correction
