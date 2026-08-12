@@ -219,3 +219,96 @@ def test_a_damaged_image_says_it_is_an_image_that_would_not_open(tmp_path: Path)
         render.render_page(1, broken, "image/png", 1)
 
     assert caught.value.message == parse.UNREADABLE_IMAGE_MESSAGE
+
+
+def _sized_pdf(path: Path, width_pt: float, height_pt: float) -> Path:
+    """A one-page PDF whose page box is exactly `width_pt` x `height_pt` points.
+
+    The point of these fixtures is geometry: a compact file can declare an enormous page,
+    which is what a raster bound has to defend against.
+    """
+    document = pymupdf.open()
+    document.new_page(width=width_pt, height=height_pt)
+    document.save(path)
+    document.close()
+    return path
+
+
+@pytest.mark.parametrize(
+    ("width_pt", "height_pt"),
+    [(612, 792), (595, 842)],  # US Letter and A4, the ordinary case at the highest dpi.
+)
+def test_normal_pages_render_at_recognition_dpi(
+    tmp_path: Path, width_pt: float, height_pt: float
+) -> None:
+    source = _sized_pdf(tmp_path / "normal.pdf", width_pt, height_pt)
+
+    rendered = render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI)
+
+    assert rendered.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_an_extreme_mediabox_is_refused_and_leaves_no_cache(tmp_path: Path) -> None:
+    """The PDF format permits a 14400pt (200in) page, which at 300 dpi is ~3.6 billion px.
+
+    That is a multi-gigabyte native allocation from a tiny file: it spikes memory or kills
+    the process before Python can react, and the upload-byte limit cannot see it because the
+    geometry, not the file, is large. It is refused before `get_pixmap`.
+    """
+    source = _sized_pdf(tmp_path / "poster.pdf", 14400, 14400)
+
+    with pytest.raises(LyraError) as caught:
+        render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI)
+
+    assert caught.value.message == render.TOO_LARGE_TO_RENDER
+    # The message names no path, because it reaches the browser like every other render
+    # error here.
+    assert str(tmp_path) not in caught.value.message
+    # Refused before any write, so nothing is left to serve or to poison the next request:
+    # the cache directory is never even created for this document.
+    assert not render.page_path(1, 1, render.RECOGNITION_DPI).exists()
+    assert not render.pages_dir(1).exists()
+
+
+def test_a_needle_thin_page_is_refused_on_its_long_side(tmp_path: Path) -> None:
+    """A page whose area is modest but whose one dimension is enormous.
+
+    200 x 20000 pt is under the pixel-area ceiling at 300 dpi but ~83000 px tall, so it is
+    the per-side cap, not the area cap, that has to catch it.
+    """
+    source = _sized_pdf(tmp_path / "strip.pdf", 200, 20000)
+
+    with pytest.raises(LyraError) as caught:
+        render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI)
+
+    assert caught.value.message == render.TOO_LARGE_TO_RENDER
+
+
+def test_a_page_far_larger_than_a_poster_is_refused_by_area(tmp_path: Path) -> None:
+    """5000 x 5000 pt is under the per-side cap at 300 dpi but ~434 megapixels.
+
+    So this is the area ceiling doing the work that the dimension cap does not.
+    """
+    source = _sized_pdf(tmp_path / "huge.pdf", 5000, 5000)
+
+    with pytest.raises(LyraError) as caught:
+        render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI)
+
+    assert caught.value.message == render.TOO_LARGE_TO_RENDER
+
+
+def test_a_figure_crop_is_bounded_by_the_crop_not_the_whole_page(tmp_path: Path) -> None:
+    """A small crop of a pathological page renders; a full crop of it is refused.
+
+    The clipped pixmap allocates only the crop, so the bound is on the clip. A tiny corner
+    of a 5000pt page is a cheap render, while the whole page would be far past the envelope,
+    which is exactly the distinction the crop-level check has to make.
+    """
+    source = _sized_pdf(tmp_path / "huge.pdf", 5000, 5000)
+
+    corner = render.render_figure(1, source, "application/pdf", 1, 1, (0.0, 0.0, 0.1, 0.1))
+    assert corner.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+    with pytest.raises(LyraError) as caught:
+        render.render_figure(1, source, "application/pdf", 1, 2, (0.0, 0.0, 1.0, 1.0))
+    assert caught.value.message == render.TOO_LARGE_TO_RENDER

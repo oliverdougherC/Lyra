@@ -47,6 +47,41 @@ FIGURE_DPI = 220
 
 NOT_A_PAGE = "That page does not exist in this document."
 NOT_RENDERABLE = "This document has no pages to show."
+TOO_LARGE_TO_RENDER = "This page is too large to render."
+
+# The largest raster Lyra will ask PyMuPDF to allocate for one page or crop, as a pixel
+# count and a per-side ceiling.
+#
+# `get_pixmap` scales the page rectangle (in points, 72 to the inch) by dpi/72, so a compact
+# PDF can describe an enormous page - the format permits a MediaBox up to 14400pt (200in) a
+# side - and ask for a single native allocation of many gigabytes at the 300 dpi recognition
+# path. That spikes memory or kills the process before Python-level error handling can help,
+# and the upload-byte limit does not protect against it: the geometry is what is large, not
+# the file. So the raster size is computed and checked before every `get_pixmap`.
+#
+# 100 megapixels is roughly 300MB at 3 bytes per pixel and comfortably covers normal course
+# material at every dpi Lyra renders: US Letter and A4 land near 8.4M px at 300 dpi, A3 and
+# tabloid/ledger near 17M, and even A1 near 70M. It refuses A0 posters and the pathological
+# pages a hostile or broken PDF describes. The 30000 px per-side cap additionally catches a
+# needle-thin page whose area is modest but whose one dimension would still allocate a
+# degenerate buffer.
+MAX_RASTER_PIXELS = 100_000_000
+MAX_RASTER_DIMENSION = 30_000
+
+
+def _raster_within_bounds(rect: pymupdf.Rect, dpi: int) -> bool:
+    """Whether rasterizing `rect` at `dpi` stays inside the supported raster envelope.
+
+    Mirrors what `get_pixmap` does to size its buffer - scale the rectangle from points to
+    pixels at dpi/72 - so the check is against the exact allocation it would make, for a
+    full page (`page.rect`) or a figure crop (the clip rectangle) alike.
+    """
+    scale = dpi / 72.0
+    width = rect.width * scale
+    height = rect.height * scale
+    if width > MAX_RASTER_DIMENSION or height > MAX_RASTER_DIMENSION:
+        return False
+    return width * height <= MAX_RASTER_PIXELS
 
 
 def _partial_path(cached: Path) -> Path:
@@ -108,7 +143,13 @@ def render_page(
         with pymupdf.open(source) as document:
             if page_number > document.page_count:
                 raise NotFoundError(NOT_A_PAGE)
-            pixmap = document[page_number - 1].get_pixmap(dpi=dpi)
+            page = document[page_number - 1]
+            # Checked before the allocation, and before any cache file is created, so a
+            # pathological page is refused cleanly rather than crashing the process and
+            # leaves nothing behind to poison a later request for the same page.
+            if not _raster_within_bounds(page.rect, dpi):
+                raise LyraError(TOO_LARGE_TO_RENDER)
+            pixmap = page.get_pixmap(dpi=dpi)
             cached.parent.mkdir(parents=True, exist_ok=True)
             # Written beside the target and moved into place, because the cache is trusted
             # on the strength of the file existing. A process killed partway through a
@@ -191,6 +232,11 @@ def render_figure(
                 box.x0 + bbox[2] * box.width,
                 box.y0 + bbox[3] * box.height,
             )
+            # A clipped pixmap allocates only the crop, so the bound is on the clip rather
+            # than the whole page - but a pathological page makes even a fractional crop
+            # enormous, so the same envelope applies here.
+            if not _raster_within_bounds(clip, FIGURE_DPI):
+                raise LyraError(TOO_LARGE_TO_RENDER)
             # Higher than the page pane reads at, because a figure is shown at the width of
             # the reading column while occupying a fraction of a page: the same pixels
             # stretched over several times the area.
