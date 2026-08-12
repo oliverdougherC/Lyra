@@ -18,7 +18,9 @@ reads a verification pass live. Tool definitions are never sent on an ordinary c
 so an endpoint that cannot accept them still carries the whole Phase 1 conversation.
 
 Every failure becomes an `UpstreamError` with a message written for the user. Those messages,
-and any log line this module writes, never contain the endpoint URL or the API key.
+and any log line this module writes, never contain the endpoint URL, the API key, or the
+upstream server's own error prose: an endpoint's error body is attacker-controllable, so it is
+classified into a bounded category and then dropped rather than copied anywhere.
 """
 
 import base64
@@ -131,9 +133,27 @@ _FORMAT_COMPLAINTS = ("response_format", "json_schema", "schema", "grammar")
 _REFUSED = 400
 _REFUSAL_STATUSES = frozenset({_REFUSED, 500})
 
-# How much of an endpoint's own error body is worth carrying into the log. Servers range
-# from a sentence to a wall of C++, and the part that says which is always at the front.
+# How much of an endpoint's own error body is read before it is classified and dropped.
+# The body is never logged - the part worth having is which *kind* of failure it is, and
+# that is always at the front - so this only bounds the substring scan below, not anything
+# that survives it.
 _UPSTREAM_DETAIL_CHARS = 400
+
+# Bounded, safe categories an upstream failure is mapped to for logging. The server's own
+# prose is never written to a log: it is produced by software Lyra does not control and can
+# reflect the API key, the Authorization header, retrieved course text, or a filesystem
+# path straight back, and docs/privacy-and-data-location.md promises none of that reaches
+# the logs. What is worth keeping is the *classification* - a context-window complaint and
+# a schema complaint each send the reader somewhere different - so a recognized failure is
+# logged as one of these codes plus the HTTP status, and nothing the server wrote.
+_UPSTREAM_CONTEXT = "context-window-exceeded"
+_UPSTREAM_FORMAT = "unsupported-response-format"
+_UPSTREAM_GENERIC = "unspecified-upstream-error"
+
+# Substrings, matched case-insensitively, that mark a body as a context-window complaint.
+# llama.cpp says "the request exceeds the available context size", others "maximum context
+# length" or name `n_ctx`; all of them contain "context", which is the signal.
+_CONTEXT_COMPLAINTS = ("context", "n_ctx")
 
 _ERROR_UNREACHABLE = "The tutor endpoint is not reachable. Check that the server is running."
 _ERROR_TIMEOUT = "The tutor endpoint did not respond in time."
@@ -145,6 +165,8 @@ _ERROR_NO_TOOLS = "The tutor endpoint does not accept tool calls."
 _ERROR_TRUNCATED = (
     "The tutor endpoint's reply hit the output-token ceiling and was cut off before it finished."
 )
+_ERROR_MIDREPLY = "The tutor endpoint failed partway through the reply."
+_ERROR_MIDREPLY_CONTEXT = "The tutor endpoint ran out of context window partway through the reply."
 
 # The smallest tool that cannot be answered from prose. Addition is chosen so a model
 # that ignores the tool and answers anyway is still obviously not calling it.
@@ -393,28 +415,24 @@ def _mapped_error(exc: Exception) -> UpstreamError:
         elif status == 404:
             error = UpstreamError(_ERROR_NOT_FOUND)
         else:
-            detail = _upstream_detail(exc.response)
-            logger.warning(
-                "Tutor endpoint returned status %s%s", status, f": {detail}" if detail else ""
-            )
+            category = _classify_upstream(_upstream_message(exc.response))
+            # Status and category only. The server's own words are read to classify and
+            # then discarded, because a compromised endpoint can put the API key or course
+            # text in that body and this line is the one the log keeps.
+            logger.warning("Tutor endpoint returned status %s (%s)", status, category)
             error = UpstreamError(_ERROR_UPSTREAM)
         error.upstream_status = status  # type: ignore[attr-defined]
         return error
     return UpstreamError(_ERROR_UNREACHABLE)
 
 
-def _upstream_detail(response: httpx.Response) -> str:
-    """The endpoint's own account of why it failed, for the log and nowhere else.
+def _upstream_message(response: httpx.Response) -> str:
+    """The endpoint's own account of why it failed, read to classify it and nothing else.
 
-    An OpenAI-compatible server puts it in `error.message`. llama.cpp is the runtime this
-    matters most for, because a bare 500 from it is genuinely ambiguous and its message is
-    the only thing that resolves the ambiguity: "the request exceeds the available context
-    size" is a server holding a smaller model than the settings describe, and "failed to
-    load model" is a server holding no model at all. Without this, `check the logs` came
-    back with a status code and a traceback that only said where Lyra was standing.
-
-    Never returned to the browser. This is the one string in the exchange written by
-    software Lyra does not control, so the user gets settled prose and the log gets this.
+    An OpenAI-compatible server puts it in `error.message`. This is the one string in the
+    exchange written by software Lyra does not control, so it never leaves this module: it
+    is not logged, not returned to the browser, and not stored. It exists only to be handed
+    to `_classify_upstream`, which reads which *kind* of failure it is and drops the prose.
     """
     try:
         body = response.text
@@ -431,6 +449,24 @@ def _upstream_detail(response: httpx.Response) -> str:
         elif isinstance(error, str):
             body = error
     return " ".join(body.split())[:_UPSTREAM_DETAIL_CHARS]
+
+
+def _classify_upstream(message: str) -> str:
+    """Map an upstream error body to a bounded category, keeping none of it.
+
+    Recognition is by substring because error envelopes have no structure worth trusting:
+    what is stable is that a server refusing a format names the format, and a server out of
+    context window says "context". The message is read here and discarded; only the returned
+    code is safe to log, because it is a constant this module chose rather than anything the
+    server wrote. An unrecognized failure is `generic`, which is the honest reading - Lyra
+    could not tell what went wrong - and still pairs with the HTTP status at the call site.
+    """
+    lowered = message.lower()
+    if any(marker in lowered for marker in _CONTEXT_COMPLAINTS):
+        return _UPSTREAM_CONTEXT
+    if _names_a_format(message):
+        return _UPSTREAM_FORMAT
+    return _UPSTREAM_GENERIC
 
 
 def _chat_body(
@@ -548,15 +584,21 @@ def _stream_error(error: object) -> UpstreamError:
 
     llama.cpp cannot change the HTTP status once streaming has begun, so a mid-generation
     failure - the model crashing, the prompt overflowing the context window during
-    processing - arrives as a `data: {"error": ...}` frame inside a 200 response. The
-    server's own message is kept because it is the only diagnosis that exists: "the
-    endpoint returned an error" would send the user to check a connection that is fine.
+    processing - arrives as a `data: {"error": ...}` frame inside a 200 response.
+
+    The server's own message is *classified*, not carried. It is attacker-controllable text
+    written by software Lyra does not control, and it does not stay on the user's screen: a
+    background caller like the writer pipeline logs the `LyraError` it becomes, so reflecting
+    the raw body here would put a compromised endpoint's echo of the API key or course text
+    straight into `backend.log`. What survives is which kind of failure it was, mapped to a
+    message Lyra wrote - still more than "the endpoint returned an error", which would send
+    the user to check a connection that is fine.
     """
     detail = error.get("message") if isinstance(error, dict) else error
     text = str(detail).strip() if isinstance(detail, (str, int, float)) else ""
-    if not text:
-        return UpstreamError(_ERROR_UPSTREAM)
-    return UpstreamError(f"The tutor endpoint failed mid-reply: {text}")
+    if text and _classify_upstream(text) == _UPSTREAM_CONTEXT:
+        return UpstreamError(_ERROR_MIDREPLY_CONTEXT)
+    return UpstreamError(_ERROR_MIDREPLY)
 
 
 def _delta_fields(payload: str) -> tuple[str, str]:

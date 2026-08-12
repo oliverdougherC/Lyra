@@ -35,7 +35,11 @@ path overrides the database location.
 - The tutor API key is stored in the OS keychain when one is available.
 - On machines without a working keyring backend, Lyra falls back to `data/.api_key` with `0600`
   permissions and says so plainly in the UI.
-- The key is never returned by an API response or written to logs.
+- The key is never returned by an API response or written to logs. This holds by construction, not
+  by trusting the tutor endpoint: an endpoint's own error body is classified into a bounded category
+  (for example context-window-exceeded or unsupported-response-format) and only that category and the
+  HTTP status are logged, so a server that reflected the key or course text back cannot get it into a
+  log line or a user-facing error.
 - `./run backup --archive /path/to/lyra-backup.tgz` captures the configured `LYRA_DATA_DIR` tree and
   the active SQLite database. That includes `data/.api_key` when Lyra had to fall back to it, but it
   does not include OS-keychain secrets, `.lyra/`, or `logs/`.
