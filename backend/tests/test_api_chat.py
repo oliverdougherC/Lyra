@@ -732,3 +732,139 @@ def test_a_session_anchored_to_a_part_that_does_not_exist_is_refused(
     response = client.post(f"/api/classes/{class_id}/sessions", json={"artifact_part_id": 999})
 
     assert response.status_code == 404
+
+
+# --- The document-context consent gate ----------------------------------------------
+
+# A documentation-range IP (RFC 5737): non-loopback, and numeric so `is_local_endpoint`
+# classifies it without a DNS lookup.
+REMOTE_ENDPOINT = "http://203.0.113.10:8081/v1"
+
+
+def _use_remote_endpoint(db: sqlite3.Connection, *, acknowledged: bool) -> None:
+    """Point the tutor at a non-loopback endpoint, with or without the acknowledgement."""
+    db.execute(
+        "update settings set endpoint_url = ?, remote_ack = ?",
+        (REMOTE_ENDPOINT, int(acknowledged)),
+    )
+    db.commit()
+
+
+def _spy_stream(calls: list[list[dict[str, str]]]) -> StreamFactory:
+    """A `stream_chat` stand-in that records every call, to prove one never happened."""
+
+    async def stream(
+        endpoint_url: str,
+        api_key: str | None,
+        model: str | None,
+        messages: list[dict[str, str]],
+        **kwargs: object,
+    ) -> AsyncIterator[StreamDelta]:
+        calls.append(messages)
+        yield StreamDelta("answer", "This turn should never have reached the endpoint.")
+
+    return stream
+
+
+def test_a_loopback_endpoint_answers_without_acknowledgement(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The default endpoint is 127.0.0.1 with remote_ack unset. Loopback is local, so it must
+    # never need the remote acknowledgement.
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Sure."))
+
+    assert _send(client, session_id).status_code == 200
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user", "assistant"]
+
+
+def test_an_acknowledged_remote_endpoint_still_answers(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The development transition keeps working once the student has allowed it in Settings.
+    _use_remote_endpoint(db, acknowledged=True)
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Sure."))
+
+    response = _send(client, session_id)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user", "assistant"]
+
+
+def test_an_unacknowledged_remote_endpoint_refuses_and_sends_nothing(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_remote_endpoint(db, acknowledged=False)
+    calls: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _spy_stream(calls))
+
+    response = _send(client, session_id)
+
+    assert response.status_code == 400
+    # A plain error response, not a stream: the composer renders this as the reason it is
+    # disabled, and the wording points at Settings like the rest of the privacy language.
+    assert response.headers["content-type"].startswith("application/json")
+    assert "Settings" in str(response.json()["detail"])
+    # Zero upstream requests carrying the turn or retrieved material...
+    assert calls == []
+    # ...and no orphaned question persisted merely because the gate refused.
+    assert sessions.list_messages(db, session_id) == []
+
+
+def test_a_document_scoped_turn_is_refused_on_an_unacknowledged_remote_endpoint(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_remote_endpoint(db, acknowledged=False)
+    calls: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _spy_stream(calls))
+
+    response = client.post(
+        f"/api/sessions/{session_id}/chat",
+        json={"content": QUESTION, "mode": "guide", "document_id": 1},
+    )
+
+    assert response.status_code == 400
+    assert calls == []
+    assert sessions.list_messages(db, session_id) == []
+
+
+def test_an_anchored_turn_is_refused_on_an_unacknowledged_remote_endpoint(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The pinned solution step is document-derived context, so an anchored turn is gated
+    # exactly like an ordinary one, and the step never reaches the wire.
+    step_id = _anchored_step(db, class_id)
+    anchored_session = client.post(
+        f"/api/classes/{class_id}/sessions", json={"artifact_part_id": step_id}
+    ).json()["id"]
+    _use_remote_endpoint(db, acknowledged=False)
+    calls: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _spy_stream(calls))
+
+    response = _send(client, anchored_session)
+
+    assert response.status_code == 400
+    assert calls == []
+
+
+def test_regeneration_is_refused_on_an_unacknowledged_remote_endpoint(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A first turn on the loopback endpoint, so there is a question to retry.
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("First answer."))
+    _send(client, session_id)
+
+    # The endpoint then becomes remote and unacknowledged before the retry.
+    _use_remote_endpoint(db, acknowledged=False)
+    calls: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _spy_stream(calls))
+
+    response = client.post(f"/api/sessions/{session_id}/regenerate", json={"mode": "guide"})
+
+    assert response.status_code == 400
+    assert calls == []
+    # The answer the student already had is left exactly in place.
+    assert [(m["role"], m["content"]) for m in sessions.list_messages(db, session_id)] == [
+        ("user", QUESTION),
+        ("assistant", "First answer."),
+    ]

@@ -25,7 +25,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from backend.core import artifacts, sessions
-from backend.core.app_settings import TutorConfig, resolve_tutor_config
+from backend.core.app_settings import (
+    NO_ENDPOINT,
+    REMOTE_UNACKNOWLEDGED,
+    TutorConfig,
+    document_text_allowed,
+    resolve_tutor_config,
+)
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import LyraError
 from backend.core.profiles import select_active_facts, select_user_facts
@@ -62,6 +68,38 @@ SSE_HEADERS = {
 }
 
 _UNEXPECTED_ERROR = "Something went wrong while answering. Try again."
+
+# Why a tutor turn may not run, in the words the student needs to act on. The rule itself
+# lives in `app_settings.document_text_allowed`; these are its consequences for chat, which
+# grounds every reply in retrieved course material and so is bound by the same rule as
+# solving, writing, and study. The `no_endpoint` case is normally caught earlier by
+# `resolve_tutor_config`, but the mapping is complete so the gate is safe wherever it runs.
+_BLOCKED_MESSAGES = {
+    NO_ENDPOINT: "No tutor endpoint is configured. Add one in Settings, then chat.",
+    REMOTE_UNACKNOWLEDGED: (
+        "Your tutor endpoint is not on this machine, and a tutor reply has to send it your "
+        "course material. Allow that in Settings, then chat."
+    ),
+}
+
+
+def _require_document_text_allowed(conn: sqlite3.Connection) -> None:
+    """Refuse the turn when document text may not be sent to the configured endpoint.
+
+    A tutor reply is grounded in retrieved course material - ordinary class retrieval, a
+    document the question is scoped to, or the solution step a conversation is anchored to -
+    so chat is bound by the same locality/acknowledgement rule as solving, writing, and
+    study. Checked when the turn opens, before the student's message is persisted and before
+    any upstream request, and re-checked on every turn and regeneration: changing the
+    endpoint or revoking the acknowledgement takes effect on the very next turn, a refusal
+    puts nothing on the wire, and it leaves no orphaned question behind to answer later.
+
+    Raises:
+        LyraError: document text may not be sent to the current endpoint.
+    """
+    blocked = document_text_allowed(conn)
+    if blocked is not None:
+        raise LyraError(_BLOCKED_MESSAGES.get(blocked, _BLOCKED_MESSAGES[NO_ENDPOINT]))
 
 
 class SessionCreate(BaseModel):
@@ -318,6 +356,10 @@ def _open_turn(
     session = sessions.get_session(conn, session_id)
     _refuse_writer_session(session)
     config = resolve_tutor_config(conn)
+    # Before the question is stored and before any retrieval or upstream call, so an
+    # unacknowledged remote endpoint refuses the turn without persisting an orphaned
+    # question and without a byte of course material leaving the machine.
+    _require_document_text_allowed(conn)
     # Persisted on the session, not just used for this turn, so the toggle survives a
     # reload and the next turn continues in the mode the student picked.
     sessions.set_session_mode(conn, session_id, request.mode)
@@ -343,6 +385,9 @@ def _open_regeneration(
     session = sessions.get_session(conn, session_id)
     _refuse_writer_session(session)
     config = resolve_tutor_config(conn)
+    # Re-checked here so a retry is gated exactly like a fresh turn: the endpoint may have
+    # gone remote, or the acknowledgement been revoked, since the question was first asked.
+    _require_document_text_allowed(conn)
     question = sessions.last_user_message(conn, session_id)
     user_message_id = int(question["id"])
     superseded = tuple(
