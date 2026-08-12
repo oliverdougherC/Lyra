@@ -1534,3 +1534,51 @@ def test_subprocess_timeout_is_not_mistaken_for_a_valid_dependency_check(
     monkeypatch.setattr(launcher.subprocess, "run", timeout)
 
     assert launcher.backend_imports_work(python) is False
+
+
+def test_diagnostics_is_a_registered_command(launcher: ModuleType) -> None:
+    assert launcher.parse_args(["diagnostics"]).command == "diagnostics"
+
+
+def test_diagnostics_writes_the_backend_bundle_when_the_endpoint_is_up(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    destination = tmp_path / "diagnostics.json"
+    monkeypatch.setattr(launcher, "DIAGNOSTICS_FILE", destination)
+    bundle = {"bundle_version": 1, "schema": {"version": 31, "latest": 31, "current": True}}
+    monkeypatch.setattr(launcher, "_fetch_diagnostics_endpoint", lambda: json.dumps(bundle))
+    monkeypatch.setattr(
+        launcher,
+        "_build_diagnostics_offline",
+        lambda: pytest.fail("the offline builder must not run when the endpoint answers"),
+    )
+
+    assert launcher.diagnostics_command(launcher.parse_args(["diagnostics"])) == 0
+    assert json.loads(destination.read_text()) == bundle
+
+
+def test_diagnostics_falls_back_to_the_offline_builder_when_the_endpoint_is_down(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    destination = tmp_path / "diagnostics.json"
+    monkeypatch.setattr(launcher, "DIAGNOSTICS_FILE", destination)
+    offline = {"bundle_version": 1, "schema": {"version": 31, "latest": 31, "current": True}}
+    monkeypatch.setattr(launcher, "_fetch_diagnostics_endpoint", lambda: None)
+    monkeypatch.setattr(launcher, "_build_diagnostics_offline", lambda: offline)
+
+    assert launcher.diagnostics_command(launcher.parse_args(["diagnostics"])) == 0
+    assert json.loads(destination.read_text()) == offline
+
+
+def test_diagnostics_writes_a_launcher_only_note_when_nothing_is_reachable(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    destination = tmp_path / "diagnostics.json"
+    monkeypatch.setattr(launcher, "DIAGNOSTICS_FILE", destination)
+    monkeypatch.setattr(launcher, "_fetch_diagnostics_endpoint", lambda: None)
+    monkeypatch.setattr(launcher, "_build_diagnostics_offline", lambda: None)
+
+    assert launcher.diagnostics_command(launcher.parse_args(["diagnostics"])) == 0
+    written = json.loads(destination.read_text())
+    assert written["backend_reachable"] is False
+    assert "Start Lyra" in written["note"]
