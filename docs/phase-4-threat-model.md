@@ -256,7 +256,10 @@ source. Refresh creates a new source revision rather than silently rewriting cit
 
 **Path:** a malicious website, extension, or local process calls apply/execute routes.
 
-**Controls:** keep JSON-only mutating routes behind strict CORS/origin checks and reject form/simple
+**Controls:** reject any request whose `Host` header is not a Lyra loopback host (`127.0.0.1`,
+`localhost`, `::1`; any port) before routing, so a DNS-rebinding page that stays same-origin to a
+name rebound to `127.0.0.1` is refused on its `Host` alone, independent of `Origin`. Beyond that,
+keep JSON-only mutating routes behind strict CORS/origin checks and reject form/simple
 content types. A preflight returns a cryptographically random nonce with at least 256 bits of entropy;
 the backend stores only its hash, expires it after 120 seconds, consumes it atomically once, and binds
 it to origin, class/session context, action kind, target ID, current hash, and exact command/change.
