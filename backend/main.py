@@ -6,10 +6,10 @@ boundary and must never become `0.0.0.0`.
 
 import logging
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -31,13 +31,15 @@ from backend.config import settings
 from backend.core import agent_store, drafting, sessions, solver, study, tool_audit
 from backend.core.errors import LyraError
 from backend.core.ingestion import reconcile_interrupted, start_worker
-from backend.core.origins import ALLOWED_BROWSER_ORIGINS
+from backend.core.origins import ALLOWED_BROWSER_ORIGINS, host_is_allowed
 from backend.llm.embed_server import embedding_server
 from backend.llm.ocr_server import ocr_server
 from backend.llm.rerank_server import rerank_server
 from backend.storage.database import connect, migrate
 
 logger = logging.getLogger("lyra")
+
+_INVALID_HOST = "Request rejected: the Host header is not a recognized Lyra loopback host."
 
 
 @asynccontextmanager
@@ -137,6 +139,21 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Registered after CORS so it wraps it: a request whose `Host` is not a Lyra loopback
+    # host is refused here before CORS, routing, or any route body runs. CORS alone does
+    # not close DNS rebinding - a page can stay same-origin to a name it controls while
+    # that name is rebound to 127.0.0.1 - and this API is unauthenticated with
+    # state-changing and, when granted, workspace/command routes, so the Host check is
+    # part of the loopback-only boundary rather than an optimization. The refusal does not
+    # depend on `Origin`: a missing or acceptable-looking `Origin` cannot rescue a bad Host.
+    @app.middleware("http")
+    async def enforce_trusted_host(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        if not host_is_allowed(request.headers.get("host")):
+            return JSONResponse(status_code=400, content={"detail": _INVALID_HOST})
+        return await call_next(request)
 
     @app.exception_handler(LyraError)
     async def handle_lyra_error(request: Request, exc: LyraError) -> JSONResponse:

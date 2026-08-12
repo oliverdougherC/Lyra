@@ -131,6 +131,13 @@ authentication, so loopback-only binding is the security boundary.
 **CORS:** Allowed origin is exactly `http://localhost:3000` (plus `http://127.0.0.1:3000`).
 No wildcard origins.
 
+**Host validation:** A trusted-host check runs before every route and rejects any request whose
+`Host` header is not a Lyra loopback host (`127.0.0.1`, `localhost`, or `::1`; any port). This is
+part of the loopback-only boundary, not a duplicate of CORS: CORS does not close DNS rebinding,
+where a page stays same-origin to a name it controls while that name is rebound to `127.0.0.1`. The
+browser cannot forge the `Host` value, so refusing an unrecognized one fails the rebinding request
+even when `Origin` is absent or looks acceptable.
+
 **Core modules:**
 
 | Module | Responsibility |
