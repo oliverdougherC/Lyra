@@ -246,22 +246,44 @@ async def test_stream_chat_maps_status_failures_too() -> None:
     assert caught.value.message == "The tutor endpoint returned an error."
 
 
-async def test_an_in_band_error_frame_fails_the_stream_with_the_servers_words() -> None:
-    """llama.cpp cannot change the HTTP status once streaming has begun.
+async def test_an_in_band_error_frame_fails_the_stream_without_echoing_the_server() -> None:
+    """A mid-generation failure arrives as a `data: {"error": ...}` frame inside a 200.
 
-    A mid-generation failure arrives as a `data: {"error": ...}` frame inside a 200, and
-    reading it as keep-alive noise ended those streams looking like short but successful
-    replies. The server's message is kept because it is the only diagnosis there is.
+    Reading it as keep-alive noise ended those streams looking like short but successful
+    replies, so it must still fail the stream. But the server's own words are classified,
+    not carried: a background caller (the writer pipeline) logs the resulting `LyraError`,
+    and the body is attacker-controllable, so a sentinel in it must reach neither the
+    user-facing message nor, through it, the log.
     """
     body = _body(
         '{"choices":[{"delta":{"content":"partial "}}]}',
-        '{"error":{"message":"CUDA error: out of memory","code":500}}',
+        '{"error":{"message":"CUDA error: out of memory at /home/attacker/secret","code":500}}',
     )
 
     with pytest.raises(UpstreamError) as caught:
         await _collect(body)
 
-    assert "out of memory" in caught.value.message
+    assert caught.value.message == client._ERROR_MIDREPLY
+    assert "out of memory" not in caught.value.message
+    assert "/home/attacker/secret" not in caught.value.message
+
+
+async def test_a_mid_reply_context_overflow_is_named_in_lyras_own_words() -> None:
+    """Running out of context window is the one mid-stream failure worth distinguishing.
+
+    It is classified from the body and reported in Lyra's own words, so the reader learns
+    the prompt was too long without the server's prose being copied into the message.
+    """
+    body = _body(
+        '{"choices":[{"delta":{"content":"partial "}}]}',
+        '{"error":{"message":"the request exceeds the available context size","code":500}}',
+    )
+
+    with pytest.raises(UpstreamError) as caught:
+        await _collect(body)
+
+    assert caught.value.message == client._ERROR_MIDREPLY_CONTEXT
+    assert "context size" not in caught.value.message
 
 
 async def test_a_json_frame_in_the_wrong_shape_is_an_unreadable_reply_not_a_crash() -> None:
@@ -703,16 +725,16 @@ async def test_a_500_carrying_a_format_is_retried_weaker_but_not_remembered() ->
     ]
 
 
-async def test_a_failing_endpoints_own_words_reach_the_log_but_not_the_user(
+async def test_a_failing_endpoints_words_are_classified_not_copied_into_the_log(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A bare 500 from llama.cpp is ambiguous, and its message is what resolves it.
+    """A bare 500 from llama.cpp is ambiguous, but its body is attacker-controllable.
 
-    Without this, someone told to check the logs found a status code and a traceback that
-    only said where Lyra was standing when the endpoint said no - never that the server
-    was holding a model whose context window is smaller than the settings describe. The
-    message still goes nowhere near the browser: it is the one string in the exchange that
-    software Lyra does not control wrote.
+    The useful part is the classification, not the prose: a context-window complaint and a
+    schema complaint send the reader somewhere different. So the log records a bounded
+    category and the HTTP status, and the server's own sentence - which a compromised
+    endpoint could fill with a reflected API key or course text - reaches neither the log
+    nor the user-facing message.
     """
     transport, _ = _recorder(
         {"json_schema": 500, "json_object": 500, "none": 500},
@@ -726,10 +748,86 @@ async def test_a_failing_endpoints_own_words_reach_the_log_but_not_the_user(
         await _complete(transport, schema=_SCHEMA)
 
     assert "context size" not in caught.value.message
-    assert any(
-        "the request exceeds the available context size" in record.getMessage()
-        for record in caplog.records
+    log = "\n".join(record.getMessage() for record in caplog.records)
+    assert "context size" not in log
+    assert client._UPSTREAM_CONTEXT in log
+    assert "500" in log
+
+
+@pytest.mark.parametrize(
+    ("body", "category"),
+    [
+        ("the request exceeds the available context size", client._UPSTREAM_CONTEXT),
+        ("n_ctx is too small for this prompt", client._UPSTREAM_CONTEXT),
+        ("response_format json_schema is not supported", client._UPSTREAM_FORMAT),
+        ("could not compile the grammar", client._UPSTREAM_FORMAT),
+        ("segmentation fault in worker 3", client._UPSTREAM_GENERIC),
+        ("", client._UPSTREAM_GENERIC),
+    ],
+)
+def test_upstream_bodies_map_to_bounded_categories(body: str, category: str) -> None:
+    # Context is checked before format so a body mentioning both reads as the more specific
+    # problem, and anything unrecognized is generic rather than guessed at.
+    assert client._classify_upstream(body) == category
+
+
+# Sentinels a compromised or buggy endpoint might reflect into an error body: course text,
+# a bearer token, a private path, and a wall of arbitrary prose. None may appear in a log.
+_SENTINELS = (
+    "PHOTOSYNTHESIS_CHAPTER_SECRET",
+    "Bearer sk-lyra-real-key-do-not-log",
+    "/Users/student/Private/thesis.pdf",
+    "Z" * 5000,
+)
+
+
+async def test_no_upstream_sentinel_reaches_the_log_on_a_non_streaming_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    reflected = " ".join(_SENTINELS)
+    transport, _ = _recorder(
+        {"json_schema": 500, "json_object": 500, "none": 500},
+        body={"error": {"message": reflected}},
     )
+
+    with (
+        caplog.at_level(logging.DEBUG, logger="backend.llm.client"),
+        pytest.raises(UpstreamError),
+    ):
+        await _complete(transport, schema=_SCHEMA)
+
+    log = "\n".join(record.getMessage() for record in caplog.records)
+    for sentinel in _SENTINELS:
+        assert sentinel not in log
+
+
+async def test_no_upstream_sentinel_reaches_the_log_on_a_streaming_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The streaming path fails on a real HTTP status, which routes through the same mapper.
+    # The key is sent as a header here too, to pin that neither it nor the body is logged.
+    reflected = " ".join(_SENTINELS)
+    transport = _transport(
+        lambda request: httpx.Response(500, json={"error": {"message": reflected}})
+    )
+
+    with (
+        caplog.at_level(logging.DEBUG, logger="backend.llm.client"),
+        pytest.raises(UpstreamError),
+    ):
+        async for _ in client.stream_chat(
+            _ENDPOINT,
+            _API_KEY,
+            "local-model",
+            [{"role": "user", "content": "hi"}],
+            transport=transport,
+        ):
+            pass
+
+    log = "\n".join(record.getMessage() for record in caplog.records)
+    for sentinel in _SENTINELS:
+        assert sentinel not in log
+    assert _API_KEY not in log
 
 
 async def test_an_endpoint_that_is_simply_down_still_reports_an_error() -> None:
