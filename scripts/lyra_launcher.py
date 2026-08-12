@@ -1681,7 +1681,17 @@ def backup(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="lyra-backup-") as temporary:
         stage_root = Path(temporary)
         manifest = stage_backup_tree(stage_root, data_dir, db_path)
-        with tarfile.open(archive, mode="x:gz", format=tarfile.PAX_FORMAT) as bundle:
+        # Created 0o600 from the first byte. The archive holds the whole data tree - and, on
+        # a keychain-less machine, the fallback API key - but lives outside the data
+        # directory, so it has no owner-only parent to hide behind and its own mode is the
+        # only thing keeping it private. Setting the mode after writing would leave the
+        # sensitive bytes briefly world-readable. O_EXCL preserves the refuse-if-exists that
+        # tar mode "x" gave, backing up the earlier existence check.
+        descriptor = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with (
+            os.fdopen(descriptor, "wb") as raw,
+            tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.PAX_FORMAT) as bundle,
+        ):
             bundle.add(stage_root / BACKUP_MANIFEST, arcname=BACKUP_MANIFEST, recursive=False)
             bundle.add(stage_root / BACKUP_DATA_PREFIX, arcname=BACKUP_DATA_PREFIX)
             db_member = str(manifest["db"]["member"])  # type: ignore[index]

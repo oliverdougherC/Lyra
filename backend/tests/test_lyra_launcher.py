@@ -8,6 +8,7 @@ import json
 import os
 import signal
 import sqlite3
+import stat
 import subprocess
 import tarfile
 from pathlib import Path
@@ -329,6 +330,33 @@ def test_backup_and_restore_roundtrip_preserves_workspace_data(
 
     assert stops == ["stop", "stop"]
     assert_restored_workspace(restored_data, restored_data / db_path.name)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_backup_archive_is_created_private_regardless_of_umask(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The archive carries the whole data tree, so it must be owner-only from creation.
+
+    Written under a wide-open umask on purpose: the archive lives outside the data
+    directory and so has no owner-only parent to hide behind, and its mode must not depend
+    on the umask the backup happened to run under.
+    """
+    data_dir, _db_path = seed_workspace(tmp_path)
+    archive = tmp_path / "lyra-backup.tgz"
+    monkeypatch.setenv("LYRA_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("LYRA_DB_PATH", raising=False)
+    monkeypatch.setattr(launcher, "load_runtime", lambda: launcher.empty_runtime())
+    monkeypatch.setattr(launcher, "stop_supervised_stack", lambda _runtime: True)
+
+    previous_umask = os.umask(0)
+    try:
+        assert launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)])) == 0
+    finally:
+        os.umask(previous_umask)
+
+    assert archive.exists()
+    assert stat.S_IMODE(archive.stat().st_mode) == 0o600
 
 
 def test_backup_and_restore_roundtrip_supports_external_database_path(

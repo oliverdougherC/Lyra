@@ -13,6 +13,11 @@ from pathlib import Path
 import sqlite_vec
 
 from backend.config import settings
+from backend.storage import private
+
+# WAL leaves two sidecars beside the database. SQLite creates them with the process umask,
+# so they are re-hardened to `0o600` here alongside the database itself.
+_DB_SIDECAR_SUFFIXES = ("-wal", "-shm")
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 _MIGRATION_NAME = re.compile(r"^(\d+)_.+\.sql$")
@@ -26,7 +31,7 @@ _SQLITE_BUSY_TIMEOUT_MS = 5_000
 def connect(db_path: Path | None = None) -> sqlite3.Connection:
     """Open a connection with row access by name, cascades on, WAL, and sqlite-vec loaded."""
     path = db_path or settings.db_path
-    path.parent.mkdir(parents=True, exist_ok=True)
+    private.secure_mkdir(path.parent)
     # check_same_thread=False: FastAPI submits a sync dependency generator and its sync
     # handler as two separate threadpool jobs, which are not guaranteed to land on the
     # same worker. A connection is never shared between concurrent requests, so the
@@ -39,6 +44,15 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     conn.execute("pragma foreign_keys = on")
     conn.execute(f"pragma busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
     conn.execute("pragma journal_mode = wal")
+    # The database and its WAL sidecars hold the same private state as the rest of the data
+    # tree. The parent directory is `0o700`, which is what actually keeps other users out;
+    # tightening the files as well is defence in depth for a database placed, by an explicit
+    # `LYRA_DB_PATH`, somewhere the directory contract does not otherwise reach.
+    private.harden_file(path)
+    for suffix in _DB_SIDECAR_SUFFIXES:
+        sidecar = path.with_name(path.name + suffix)
+        if sidecar.exists():
+            private.harden_file(sidecar)
     return conn
 
 

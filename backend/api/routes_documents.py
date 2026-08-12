@@ -24,6 +24,7 @@ from backend.core.ingestion import PENDING, delete_chunks, enqueue
 from backend.core.profiles import forget_document_evidence
 from backend.rag import render, structure
 from backend.rag.parse import PDF_MIME, UNSUPPORTED_MESSAGE
+from backend.storage import private
 from backend.storage.database import get_db
 
 router = APIRouter(prefix="/api", tags=["documents"])
@@ -214,8 +215,10 @@ def upload_document(
         or 0
     )
     stored_path = settings.uploads_dir / str(class_id) / f"{document_id}-{_safe_filename(filename)}"
-    stored_path.parent.mkdir(parents=True, exist_ok=True)
-    stored_path.write_bytes(payload)
+    # The class upload directory is `0o700` and the stored file `0o600`: an uploaded source
+    # is coursework, private like the rest of the data tree and not left to the umask.
+    private.secure_mkdir(stored_path.parent)
+    private.write_private_bytes(stored_path, payload)
     conn.execute(
         "update documents set stored_path = ? where id = ?", (str(stored_path), document_id)
     )

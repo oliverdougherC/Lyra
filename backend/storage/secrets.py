@@ -17,6 +17,7 @@ import keyring
 import keyring.errors
 
 from backend.config import settings
+from backend.storage import private
 
 SERVICE = "lyra"
 USERNAME = "tutor-endpoint"
@@ -74,7 +75,9 @@ def set_api_key(value: str) -> None:
             return
 
     path = _key_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # `0o700`, so the key file sits in an owner-only directory even if the data tree was
+    # somehow created before the permissions contract existed.
+    private.secure_mkdir(path.parent)
     # The mode belongs on the `open` call: setting it afterwards leaves a window in
     # which the key is world-readable.
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
