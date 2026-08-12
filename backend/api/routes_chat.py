@@ -60,6 +60,16 @@ RETRIEVAL_SHARE = 0.40
 # reads as a non sequitur, which is worse than overrunning an estimate by one exchange.
 MINIMUM_HISTORY_MESSAGES = 2
 
+# An absolute ceiling on one question, measured in Unicode characters (code points, not
+# bytes), so the boundary is the same whatever alphabet the student writes in. It is a
+# sanity limit, not the working limit: a normal question is a fraction of this, and the
+# context-window fit check below is what a long-but-reasonable paste actually meets. The
+# ceiling exists so a runaway paste cannot be persisted or budgeted at arbitrary size,
+# independent of whatever context window the endpoint is configured with. At four chars a
+# token this is about 4000 tokens, which already exceeds the question share of any window
+# small enough to matter.
+MAX_QUESTION_CHARS = 16_000
+
 SSE_HEADERS = {
     # Buffering defeats streaming, and both browser caches and reverse proxies buffer by
     # default. `x-accel-buffering` is the nginx opt-out and is ignored elsewhere.
@@ -162,9 +172,15 @@ class MessageRead(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    """Body of `POST /api/sessions/{session_id}/chat`."""
+    """Body of `POST /api/sessions/{session_id}/chat`.
 
-    content: str = Field(min_length=1)
+    `content` is capped at `MAX_QUESTION_CHARS`. The cap is on characters, so an
+    over-length paste is rejected as a 422 before it is stripped, persisted, or budgeted,
+    whatever the configured context window. The narrower, window-relative limit lives in
+    `_require_turn_fits`.
+    """
+
+    content: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
     mode: ChatMode
     document_id: int | None = None
 
@@ -218,6 +234,164 @@ class TurnPlan:
 
 
 @dataclass(frozen=True)
+class TurnCost:
+    """The unavoidable cost of one turn, and the room it leaves for optional context.
+
+    Assembled once, before the student's message is persisted, from the same estimator the
+    prompt is later measured with. Everything counted here is material the turn cannot trim
+    away: the generation reserve, the system prompt, the pinned solution step, the current
+    question, and the newest history `trim_history` is obliged to keep whatever the budget.
+    `_require_turn_fits` refuses the turn when those do not fit the window; `_prepare_turn`
+    spends whatever room is left on optional older history and retrieval. Both read this one
+    object, so the inequality the preflight refuses on is the inequality preparation obeys -
+    they cannot drift into disagreeing about what fits.
+
+    Attributes:
+        context_window: The endpoint's configured window, the ceiling the turn must fit.
+        budget: The window split into the four Stage 7 buckets.
+        class_id: The class this session belongs to, resolved here so `_prepare_turn` need
+            not read it again.
+        system_prompt: The assembled system instructions for this turn's mode.
+        anchor: The pinned solution step, or None for an ordinary conversation.
+        earlier: History candidates in chronological order, already stripped of the current
+            question and any superseded reply.
+        question_tokens: The estimated cost of the current question, appended and never
+            trimmed.
+    """
+
+    context_window: int
+    budget: TurnBudget
+    class_id: int
+    system_prompt: str
+    anchor: str | None
+    earlier: list[dict[str, object]]
+    question_tokens: int
+
+    @property
+    def system_tokens(self) -> int:
+        """The system message before retrieval: instruction and pinned subject, never trimmed.
+
+        Measured on the same joined string `_build_turn` assembles from the system prompt and
+        the anchor, not on the two estimated apart, so the cost charged here is the cost the
+        prompt actually carries - the join's separator cannot make the assembled message a
+        token or two larger than the preflight allowed for.
+        """
+        return estimate_tokens(_join_blocks(self.system_prompt, self.anchor))
+
+    @property
+    def mandatory_history_tokens(self) -> int:
+        """The newest messages `trim_history` keeps whatever the budget, charged in full.
+
+        `trim_history` retains at least `MINIMUM_HISTORY_MESSAGES`, so the newest that many
+        messages are as non-negotiable as the question: their cost is charged up front rather
+        than left to overflow the window after retrieval has already been clamped to nothing.
+        """
+        kept = self.earlier[-MINIMUM_HISTORY_MESSAGES:]
+        return sum(estimate_tokens(str(message["content"])) for message in kept)
+
+    @property
+    def reserved(self) -> int:
+        """Every token the turn cannot avoid spending, measured against the window."""
+        return (
+            self.budget.generation
+            + self.system_tokens
+            + self.mandatory_history_tokens
+            + self.question_tokens
+        )
+
+    @property
+    def prompt_room(self) -> int:
+        """Window left for history and retrieval once the reserve, system, and question go.
+
+        Non-negative exactly when the turn fits, and then it is the room the mandatory
+        history and everything optional after it must share.
+        """
+        return (
+            self.context_window - self.budget.generation - self.system_tokens - self.question_tokens
+        )
+
+    @property
+    def fits(self) -> bool:
+        """Whether the reserve plus all non-trimmable material fits the window."""
+        return self.reserved <= self.context_window
+
+
+def plan_budget(context_window: int) -> TurnBudget:
+    """Split a context window into the four buckets of the Stage 7 table.
+
+    The generation reserve is taken off the top and never lent out, so the three prompt
+    buckets together are all the prompt can ever occupy. For an 8192 window that is
+    2048 reserved and 6144 for system, history, and retrieval.
+    """
+    return TurnBudget(
+        generation=round(context_window * GENERATION_SHARE),
+        system=round(context_window * SYSTEM_SHARE),
+        history=round(context_window * HISTORY_SHARE),
+        retrieval=round(context_window * RETRIEVAL_SHARE),
+    )
+
+
+def _plan_turn_cost(
+    conn: sqlite3.Connection,
+    session_id: int,
+    mode: ChatMode,
+    question: str,
+    excluded: frozenset[int],
+    config: TutorConfig,
+) -> TurnCost:
+    """Cost a turn before it is persisted: the budget, the fixed prompt material, and the
+    newest history that cannot be trimmed.
+
+    Shared by the preflight that refuses an oversized turn and the preparation that lays out
+    history and retrieval, so a single set of token estimates drives both. Reads only what a
+    turn already reads - the session's class, the profile facts, the pinned step, and the
+    prior messages - and touches no settings row, so it never resolves the endpoint a second
+    time behind the consent snapshot the caller already took.
+    """
+    class_id = int(sessions.get_session(conn, session_id)["class_id"])
+    system_prompt = build_system_prompt(
+        mode, select_user_facts(conn), select_active_facts(conn, class_id)
+    )
+    anchor = sessions.anchored_context(conn, session_id)
+    earlier = [
+        message
+        for message in sessions.list_messages(conn, session_id)
+        if int(message["id"]) not in excluded
+    ]
+    return TurnCost(
+        context_window=config.context_window,
+        budget=plan_budget(config.context_window),
+        class_id=class_id,
+        system_prompt=system_prompt,
+        anchor=anchor,
+        earlier=earlier,
+        question_tokens=estimate_tokens(question),
+    )
+
+
+def _require_turn_fits(cost: TurnCost) -> None:
+    """Refuse a turn whose non-trimmable material cannot fit the configured window.
+
+    The current question is appended to every turn and never trimmed, and it does not stand
+    alone: the generation reserve, the system prompt, the pinned solution step, and the
+    newest history `trim_history` always keeps are all non-negotiable too. When their sum
+    exceeds the window, no amount of trimming history or retrieval can bring the prompt back
+    under it - `trim_history` would keep its mandatory pair regardless, and retrieval only
+    clamps to zero - so the turn could reach the endpoint only by overrunning the window.
+    It is refused here instead, before the question is persisted and before any upstream
+    call, the way a missing endpoint is.
+
+    Raises:
+        LyraError: the turn cannot fit the window with the reserves intact.
+    """
+    if not cost.fits:
+        raise LyraError(
+            "That message is too long to answer within the tutor's context window. "
+            "Shorten it and send it again."
+        )
+
+
+@dataclass(frozen=True)
 class TurnPreparation:
     """Prompt and budget work completed before the blocking retrieval call.
 
@@ -240,21 +414,6 @@ class Turn:
 
     messages: list[dict[str, str]]
     retrieval: RetrievalResult
-
-
-def plan_budget(context_window: int) -> TurnBudget:
-    """Split a context window into the four buckets of the Stage 7 table.
-
-    The generation reserve is taken off the top and never lent out, so the three prompt
-    buckets together are all the prompt can ever occupy. For an 8192 window that is
-    2048 reserved and 6144 for system, history, and retrieval.
-    """
-    return TurnBudget(
-        generation=round(context_window * GENERATION_SHARE),
-        system=round(context_window * SYSTEM_SHARE),
-        history=round(context_window * HISTORY_SHARE),
-        retrieval=round(context_window * RETRIEVAL_SHARE),
-    )
 
 
 @router.post(
@@ -356,8 +515,9 @@ def _open_turn(
 
     Raises:
         NotFoundError: no session carries that id.
-        LyraError: no tutor endpoint is configured, or document text may not be sent to the
-            configured one (an unacknowledged remote endpoint).
+        LyraError: no tutor endpoint is configured, document text may not be sent to the
+            configured one (an unacknowledged remote endpoint), or the question cannot fit
+            the configured context window beside the reserves it may not trim.
     """
     session = sessions.get_session(conn, session_id)
     _refuse_writer_session(session)
@@ -369,6 +529,16 @@ def _open_turn(
     access = resolve_tutor_access(conn)
     _require_document_allowed(access)
     config = access.config
+    # The privacy gate above proves the endpoint is one document text may reach; this proves
+    # the turn fits it. Both run before the message is stored and before any retrieval or
+    # upstream call, so a question too large for the window - once the generation reserve,
+    # system prompt, pinned step, and the history Lyra always keeps are set aside - refuses
+    # cleanly instead of being persisted and then forcing context to be truncated past the
+    # window. The current question is not yet persisted, so `excluded` is empty and the
+    # history it costs is exactly the prior conversation.
+    _require_turn_fits(
+        _plan_turn_cost(conn, session_id, request.mode, request.content, frozenset(), config)
+    )
     # Persisted on the session, not just used for this turn, so the toggle survives a
     # reload and the next turn continues in the mode the student picked.
     sessions.set_session_mode(conn, session_id, request.mode)
@@ -389,8 +559,9 @@ def _open_regeneration(
 
     Raises:
         NotFoundError: no session carries that id, or it holds no question yet.
-        LyraError: no tutor endpoint is configured, or document text may not be sent to the
-            configured one (an unacknowledged remote endpoint).
+        LyraError: no tutor endpoint is configured, document text may not be sent to the
+            configured one (an unacknowledged remote endpoint), or the window has been
+            reconfigured too small for the question to fit beside the reserves.
     """
     session = sessions.get_session(conn, session_id)
     _refuse_writer_session(session)
@@ -407,9 +578,20 @@ def _open_regeneration(
         for message in sessions.list_messages(conn, session_id)
         if int(message["id"]) > user_message_id
     )
+    plan = TurnPlan(user_message_id=user_message_id, superseded=superseded)
+    # Gated exactly like a fresh turn: the window may have been reconfigured smaller since the
+    # question was first asked, and a retry must not send what a first turn would not. Checked
+    # before anything is mutated and before any upstream call, and since the reply being
+    # retried is deleted only when its replacement is written, a refusal here leaves the
+    # existing answer untouched. The question is already persisted, so it and any superseded
+    # reply are excluded from the history it is charged against.
+    _require_turn_fits(
+        _plan_turn_cost(
+            conn, session_id, request.mode, str(question["content"]), plan.excluded, config
+        )
+    )
     sessions.set_session_mode(conn, session_id, request.mode)
     touch_class(conn, int(session["class_id"]))
-    plan = TurnPlan(user_message_id=user_message_id, superseded=superseded)
     return config, plan, str(question["content"])
 
 
@@ -506,41 +688,47 @@ def _prepare_turn(
     config: TutorConfig,
     plan: TurnPlan,
 ) -> TurnPreparation:
-    """Prepare system instructions, history, and the retrieval budget for one turn."""
-    class_id = int(sessions.get_session(conn, session_id)["class_id"])
-    budget = plan_budget(config.context_window)
+    """Prepare system instructions, history, and the retrieval budget for one turn.
 
-    system_prompt = build_system_prompt(
-        request.mode, select_user_facts(conn), select_active_facts(conn, class_id)
-    )
-    anchor = sessions.anchored_context(conn, session_id)
-    # The system prompt is instruction, not material, so it is never trimmed. An overrun
-    # is charged to retrieval rather than to the generation reserve. The pinned step is
-    # charged the same way: it is the subject of the question, so it is never the thing
-    # that gets dropped to make room.
-    system_overrun = max(
-        0, estimate_tokens(system_prompt) + estimate_tokens(anchor or "") - budget.system
-    )
+    Reads the same `TurnCost` the preflight refused on, so an accepted turn's assembled
+    prompt provably fits the window: the mandatory pieces already fit (`_require_turn_fits`),
+    and everything allocated here is drawn from the room they leave behind.
+    """
+    cost = _plan_turn_cost(conn, session_id, request.mode, request.content, plan.excluded, config)
+    budget = cost.budget
 
-    # The question itself is appended last, and a reply being retried is on its way out, so
-    # neither belongs in the history the model is shown.
-    excluded = plan.excluded
-    earlier = [
-        message
-        for message in sessions.list_messages(conn, session_id)
-        if int(message["id"]) not in excluded
-    ]
-    history, history_used = trim_history(earlier, budget.history)
-    # Unused history budget is lent to retrieval. The reverse never happens: retrieval
-    # cannot borrow history's share, and neither may touch the generation reserve.
-    retrieval_budget = max(0, budget.retrieval + budget.history - history_used - system_overrun)
+    # History keeps its own share, with the question charged against it first so a long
+    # question shrinks history before anything else, but never more than the room the fixed
+    # material actually leaves. That second bound only binds when the system prompt or pinned
+    # step is itself outsized: then history shrinks toward its mandatory pair too, rather than
+    # holding its full share and pushing the prompt past the window once retrieval has already
+    # clamped to nothing.
+    history_budget = max(0, min(budget.history - cost.question_tokens, cost.prompt_room))
+    history, history_used = trim_history(cost.earlier, history_budget)
+    # Retrieval spends only what the window still holds once the generation reserve, the
+    # system prompt, the pinned step, the question, and the history actually kept are all set
+    # aside. Unused history budget is lent to retrieval this way; the reverse never happens,
+    # and neither may touch the generation reserve. This is `_require_turn_fits`'s inequality
+    # rearranged, so `system + history + question + retrieval + generation <= context_window`
+    # holds by construction for every accepted turn.
+    retrieval_budget = max(0, cost.prompt_room - history_used)
     return TurnPreparation(
-        class_id=class_id,
-        system_prompt=system_prompt,
+        class_id=cost.class_id,
+        system_prompt=cost.system_prompt,
         history=history,
         retrieval_budget=retrieval_budget,
-        anchor=anchor,
+        anchor=cost.anchor,
     )
+
+
+def _join_blocks(*blocks: str | None) -> str:
+    """Join the non-empty prompt blocks with the blank line that separates them.
+
+    The one place the system message's shape is defined, so `_build_turn` (which assembles
+    it) and `TurnCost` (which budgets it) measure the same string and cannot disagree about
+    what the separators cost.
+    """
+    return "\n\n".join(block for block in blocks if block)
 
 
 def _build_turn(
@@ -550,9 +738,7 @@ def _build_turn(
     context_block = format_context_block([_context_entry(chunk) for chunk in result.chunks])
     # The anchor sits above retrieved material, because it is what the question is about
     # and the retrieval is background for it.
-    system_content = "\n\n".join(
-        block for block in (preparation.system_prompt, preparation.anchor, context_block) if block
-    )
+    system_content = _join_blocks(preparation.system_prompt, preparation.anchor, context_block)
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system_content}]
     messages += [
