@@ -14,13 +14,17 @@ from backend.storage.database import MIGRATIONS_DIR, connect, migrate
 
 
 def _migrate_through(conn: sqlite3.Connection, version: int) -> None:
-    """Apply migrations up to `version`, the way `migrate()` applies all of them."""
+    """Reach `version` the way a real install did: through the production apply path.
+
+    Not `executescript`. `_apply_migration` is what `migrate()` runs per file, so it strips
+    the foreign-key pragmas the file owns, applies inside `begin immediate`, and advances
+    `user_version` only after the commit sticks. Reaching the old version any other way would
+    test an upgrade from a state the app never actually produced.
+    """
     for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
         number = int(path.name.split("_")[0])
         if number <= version:
-            conn.executescript(path.read_text(encoding="utf-8"))
-            conn.execute(f"pragma user_version = {number}")
-            conn.commit()
+            database._apply_migration(conn, number, path)
 
 
 def _seed_solver_artifact(conn: sqlite3.Connection) -> int:
