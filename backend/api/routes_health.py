@@ -16,6 +16,7 @@ from fastapi import APIRouter, Response, status
 from pydantic import BaseModel
 
 from backend.core.app_settings import get_settings_row
+from backend.core.diagnostics import build_diagnostics
 from backend.core.firecrawl import (
     FirecrawlClient,
     FirecrawlError,
@@ -63,6 +64,21 @@ class _DatabaseProbe:
 def live() -> LiveHealth:
     """Prove only that the FastAPI process can answer HTTP requests."""
     return LiveHealth(status="ok")
+
+
+@router.get("/diagnostics")
+def diagnostics() -> dict[str, object]:
+    """A structured, redacted snapshot of this install, safe to paste into a bug report.
+
+    Carries schema currency, tutor and web-research configuration, installed optional
+    models, content counts, and platform - never document text, the tutor key, or a private
+    path. See `core.diagnostics` for the rules it holds to.
+    """
+    conn = connect()
+    try:
+        return build_diagnostics(conn)
+    finally:
+        conn.close()
 
 
 @router.get(

@@ -9,7 +9,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.api import routes_health
+from backend.config import settings
 from backend.main import create_app
+from backend.storage import secrets
 from backend.storage.database import connect, migrate
 
 
@@ -29,11 +31,28 @@ def _migrated_database(path: Path) -> None:
         conn.close()
 
 
-def test_application_registers_both_health_routes() -> None:
+def test_application_registers_the_health_routes() -> None:
     paths = create_app().openapi()["paths"]
 
     assert "/api/health/live" in paths
     assert "/api/health/ready" in paths
+    assert "/api/health/diagnostics" in paths
+
+
+def test_diagnostics_returns_a_redacted_bundle(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _migrated_database(settings.db_path)
+    monkeypatch.setattr(secrets, "has_api_key", lambda: False)
+    monkeypatch.setattr(secrets, "api_key_storage", lambda: "keychain")
+
+    response = client.get("/api/health/diagnostics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["schema"]["current"] is True
+    # The key is reported as presence and storage location only, never as a value.
+    assert body["api_key"] == {"present": False, "storage": "keychain"}
 
 
 def test_live_does_not_probe_dependencies(

@@ -1990,6 +1990,106 @@ def logs(args: argparse.Namespace) -> int:
     return 0
 
 
+DIAGNOSTICS_URL = f"http://127.0.0.1:{BACKEND_PORT}/api/health/diagnostics"
+DIAGNOSTICS_FILE = LOG_DIR / "diagnostics.json"
+
+
+def _fetch_diagnostics_endpoint(timeout: float = 2.0) -> str | None:
+    """The running backend's diagnostics bundle as text, or None when it is not reachable."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(DIAGNOSTICS_URL, timeout=timeout) as response:
+            if 200 <= response.status < 300:
+                return response.read().decode("utf-8")
+    except (OSError, urllib.error.URLError, ValueError):
+        return None
+    return None
+
+
+def _build_diagnostics_offline() -> dict[str, Any] | None:
+    """Build the same bundle through the venv when the HTTP server is down.
+
+    A bug report is most needed exactly when the backend will not start, so the offline
+    path runs the real `build_diagnostics` in the venv rather than a second, drifting copy
+    of it: the redaction rules are identical because the code is identical.
+    """
+    python = venv_python()
+    if not python.is_file():
+        return None
+    code = (
+        "import json;"
+        "from backend.storage.database import connect;"
+        "from backend.core.diagnostics import build_diagnostics;"
+        "print(json.dumps(build_diagnostics(connect())))"
+    )
+    try:
+        result = subprocess.run(  # noqa: S603
+            [str(python), "-c", code],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        )
+        return json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def _launcher_only_diagnostics() -> dict[str, Any]:
+    """A last-resort bundle when neither the endpoint nor the venv can be reached.
+
+    Deliberately thin, and it reads nothing out of the runtime file: with the real builder
+    unavailable there is no vetted redaction here, so it reports only facts that cannot
+    carry a private path - the interpreter and an instruction to bring the app up and retry.
+    """
+    return {
+        "bundle_version": None,
+        "backend_reachable": False,
+        "python": sys.version.split()[0],
+        "note": (
+            "The backend was not reachable and the offline builder could not run. "
+            "Start Lyra with ./run and try diagnostics again for the full bundle."
+        ),
+    }
+
+
+def diagnostics_command(args: argparse.Namespace) -> int:
+    """Write a redacted diagnostics bundle to a file for pasting into a bug report.
+
+    Prefers the running backend's endpoint, falls back to building the same bundle offline
+    through the venv, and only then to a launcher-only note. The written file never carries
+    document text, the tutor key, or a private path.
+    """
+    endpoint = _fetch_diagnostics_endpoint()
+    if endpoint is not None:
+        try:
+            bundle, source = json.loads(endpoint), "backend endpoint"
+        except ValueError:
+            bundle, source = _build_diagnostics_offline() or {}, "offline"
+    else:
+        offline = _build_diagnostics_offline()
+        if offline is not None:
+            bundle, source = offline, "offline (backend not reachable)"
+        else:
+            bundle, source = _launcher_only_diagnostics(), "launcher only"
+
+    DIAGNOSTICS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    DIAGNOSTICS_FILE.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
+
+    say("Lyra diagnostics")
+    ok(f"source: {source}")
+    ok(f"written to {helper_label(DIAGNOSTICS_FILE)}")
+    schema = bundle.get("schema")
+    if isinstance(schema, dict):
+        state = (
+            "current" if schema.get("current") else f"behind (at version {schema.get('version')})"
+        )
+        say(f"  schema: {state}")
+    say("  No document text, tutor key, or private path is in this file; safe to attach.")
+    return 0
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="./run",
@@ -1998,7 +2098,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=("start", "stop", "status", "doctor", "logs", "backup", "restore"),
+        choices=(
+            "start",
+            "stop",
+            "status",
+            "doctor",
+            "diagnostics",
+            "logs",
+            "backup",
+            "restore",
+        ),
         default="start",
     )
     parser.add_argument("--dev", action="store_true", help="use hot-reloading dev servers")
@@ -2054,6 +2163,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "stop": stop,
         "status": status,
         "doctor": doctor,
+        "diagnostics": diagnostics_command,
         "logs": logs,
         "backup": backup,
         "restore": restore,
