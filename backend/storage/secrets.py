@@ -8,7 +8,6 @@ plainly that the key is stored unencrypted.
 The key is never returned by any endpoint and never written to a log line.
 """
 
-import os
 from pathlib import Path
 from types import ModuleType
 from typing import Literal
@@ -77,12 +76,11 @@ def set_api_key(value: str) -> None:
     path = _key_file()
     # `0o700`, so the key file sits in an owner-only directory even if the data tree was
     # somehow created before the permissions contract existed.
-    private.secure_mkdir(path.parent)
-    # The mode belongs on the `open` call: setting it afterwards leaves a window in
-    # which the key is world-readable.
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(value)
+    private.secure_mkdir(path.parent, root=settings.data_dir)
+    # Written private from the first byte and without following a symlink at the key path:
+    # `write_private_text` opens with O_NOFOLLOW so the key can never be written through a
+    # link to some other file, and sets the mode on the open so it is never briefly broad.
+    private.write_private_text(path, value)
 
 
 def get_api_key() -> str | None:

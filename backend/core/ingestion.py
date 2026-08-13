@@ -438,7 +438,7 @@ def _write_extracted_text(document_id: int, text: str) -> None:
     Extracted text is the coursework in plain form, so it is written `0o600` inside the
     `0o700` text directory rather than at the mercy of the umask.
     """
-    private.secure_mkdir(settings.text_dir)
+    private.secure_mkdir(settings.text_dir, root=settings.data_dir)
     private.write_private_text(settings.text_dir / f"{document_id}.txt", text)
 
 

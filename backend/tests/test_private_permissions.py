@@ -3,10 +3,18 @@
 Every creation path runs under a deliberately permissive umask, so what the tests pin down
 is that the modes come from the contract in `storage.private` and not from whatever umask
 the process happened to inherit. POSIX-only: the modes are meaningless on a filesystem that
-does not carry them, which is the same reason `storage.private` treats a failed chmod as a
-no-op rather than an error.
+does not carry them, which is the same reason `storage.private` tolerates a chmod a
+mode-less filesystem cannot honour rather than treating it as an error.
+
+The symlink regressions below all share one shape: a symlink is planted where Lyra is about
+to create, write, harden, or walk owned state, and the test asserts that the operation
+fails closed (or skips the link) and that the link's external target is never created
+through, truncated, chmodded, or traversed. That boundary is the whole point of the privacy
+contract - Lyra must not follow a link out of its own tree and quietly rewrite or expose a
+user's unrelated file.
 """
 
+import errno
 import os
 import stat
 from collections.abc import Iterator
@@ -37,26 +45,29 @@ def wide_open_umask() -> Iterator[None]:
 
 
 def test_secure_mkdir_creates_owner_only_directories(tmp_path: Path, wide_open_umask: None) -> None:
-    created = private.secure_mkdir(tmp_path / "a" / "b" / "c")
+    root = tmp_path / "a"
+    created = private.secure_mkdir(root / "b" / "c", root=root)
 
     assert _mode(created) == 0o700
-    assert _mode(tmp_path / "a") == 0o700
-    assert _mode(tmp_path / "a" / "b") == 0o700
+    assert _mode(root) == 0o700
+    assert _mode(root / "b") == 0o700
 
 
 def test_secure_mkdir_leaves_a_preexisting_parent_alone(
     tmp_path: Path, wide_open_umask: None
 ) -> None:
     # A data directory may live inside a folder the user chose to share; only the
-    # directories Lyra itself creates are its to harden.
+    # directories Lyra itself creates are its to harden. The owned root is the data
+    # directory, and its already-existing ancestors are left as the user set them.
     outer = tmp_path / "outer"
     outer.mkdir(mode=0o755)
     os.chmod(outer, 0o755)  # noqa: S103 - deliberately broad: the user's own parent folder
 
-    private.secure_mkdir(outer / "lyra-data")
+    data_root = outer / "lyra-data"
+    private.secure_mkdir(data_root, root=data_root)
 
     assert _mode(outer) == 0o755
-    assert _mode(outer / "lyra-data") == 0o700
+    assert _mode(data_root) == 0o700
 
 
 def test_write_private_bytes_is_owner_only_from_creation(
@@ -184,3 +195,200 @@ def test_extracted_text_is_written_owner_only(
     assert written.read_text() == "extracted coursework"
     assert _mode(written) == 0o600
     assert _mode(text_root) == 0o700
+
+
+# --- Symlink boundary regressions -------------------------------------------------------
+#
+# Each of these fails on the pre-hardening implementation, where an ordinary path-following
+# open/chmod/mkdir/walk would reach the link's target.
+
+
+def _external_dir(tmp_path: Path, mode: int = 0o755) -> Path:
+    """A directory outside any Lyra tree, holding a file, both left deliberately broad."""
+    external = tmp_path / "external"
+    external.mkdir()
+    resident = external / "someone-elses-notes.txt"
+    resident.write_text("not Lyra's to touch")
+    os.chmod(external, mode)  # noqa: S103 - the user's own directory, mode is theirs
+    os.chmod(resident, 0o644)  # noqa: S103 - and so is the file inside it
+    return external
+
+
+def test_symlinked_data_root_is_refused_and_its_target_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_open_umask: None
+) -> None:
+    # A data root that is itself a symlink must never be followed: hardening its target would
+    # walk and chmod a whole external directory the user only linked to.
+    external = _external_dir(tmp_path)
+    resident = external / "someone-elses-notes.txt"
+    # Named away from the autouse fixture's own `tmp_path/data` real directory.
+    link_root = tmp_path / "linked-data"
+    link_root.symlink_to(external, target_is_directory=True)
+    monkeypatch.setattr(settings, "data_dir", link_root)
+    monkeypatch.setattr(settings, "db_path", link_root / "lyra.db")
+
+    with pytest.raises(private.PrivacyContractError):
+        settings.ensure_directories()
+    # The tree walk helper refuses a symlinked root just as directly.
+    with pytest.raises(private.PrivacyContractError):
+        private.harden_data_tree(link_root)
+
+    assert link_root.is_symlink()
+    assert _mode(external) == 0o755
+    assert _mode(resident) == 0o644
+    assert resident.read_text() == "not Lyra's to touch"
+
+
+def test_secure_mkdir_refuses_a_symlinked_component_beneath_the_root(
+    tmp_path: Path, wide_open_umask: None
+) -> None:
+    # An old install may have linked a cache/upload subdirectory out to another disk. Creating
+    # beneath it must fail closed, not create (and later chmod) inside the link's target.
+    data = tmp_path / "install"
+    data.mkdir()
+    external = _external_dir(tmp_path)
+    (data / "uploads").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(private.PrivacyContractError):
+        private.secure_mkdir(data / "uploads" / "3", root=data)
+
+    assert list(external.iterdir()) == [external / "someone-elses-notes.txt"]
+    assert _mode(external) == 0o755
+
+
+def test_runtime_write_beneath_a_symlinked_owned_dir_creates_nothing_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_open_umask: None
+) -> None:
+    # The real ingestion write path, with `text/` linked out of the tree: it must refuse
+    # rather than drop extracted coursework into the external target.
+    data = tmp_path / "install"
+    data.mkdir()
+    external = _external_dir(tmp_path)
+    (data / "text").symlink_to(external, target_is_directory=True)
+    monkeypatch.setattr(settings, "data_dir", data)
+
+    with pytest.raises(private.PrivacyContractError):
+        ingestion._write_extracted_text(7, "extracted coursework")
+
+    assert list(external.iterdir()) == [external / "someone-elses-notes.txt"]
+    assert _mode(external) == 0o755
+
+
+def test_write_private_bytes_refuses_a_symlink_target(
+    tmp_path: Path, wide_open_umask: None
+) -> None:
+    # A sensitive write must not follow a symlink and truncate, rewrite, or chmod whatever it
+    # points at. O_NOFOLLOW turns the write into a clean refusal.
+    external = tmp_path / "outside.txt"
+    external.write_text("original contents")
+    os.chmod(external, 0o644)  # noqa: S103 - an unrelated external file, left as it was
+    link = tmp_path / "link-to-api-key"
+    link.symlink_to(external)
+
+    with pytest.raises(private.PrivacyContractError):
+        private.write_private_bytes(link, b"a fresh secret")
+
+    assert link.is_symlink()
+    assert external.read_text() == "original contents"
+    assert _mode(external) == 0o644
+
+
+def test_sentinel_symlink_neither_skips_migration_nor_touches_its_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_open_umask: None
+) -> None:
+    # A symlink at `.permissions-hardened` must not pass as "already migrated", must not be
+    # followed and overwritten, and must not modify the file it points at.
+    data = tmp_path / "install"
+    (data / "uploads").mkdir(parents=True)
+    external = tmp_path / "outside.txt"
+    external.write_text("original contents")
+    os.chmod(external, 0o644)  # noqa: S103 - an unrelated external file, left as it was
+    (data / ".permissions-hardened").symlink_to(external)
+    monkeypatch.setattr(settings, "data_dir", data)
+    monkeypatch.setattr(settings, "db_path", data / "lyra.db")
+
+    with pytest.raises(private.PrivacyContractError):
+        settings.ensure_directories()
+
+    # The link was refused, not trusted as a done-marker and not written through.
+    assert (data / ".permissions-hardened").is_symlink()
+    assert external.read_text() == "original contents"
+    assert _mode(external) == 0o644
+
+
+def test_connect_refuses_a_symlinked_database_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_open_umask: None
+) -> None:
+    # An explicit LYRA_DB_PATH that is a symlink must be handled explicitly: Lyra must not
+    # open/create through it and then chmod the external target while reporting the configured
+    # path as secured.
+    external = tmp_path / "real-elsewhere.db"
+    external.write_bytes(b"someone else's database")
+    os.chmod(external, 0o644)  # noqa: S103 - an unrelated external file, left as it was
+    link = tmp_path / "db" / "lyra.db"
+    link.parent.mkdir()
+    link.symlink_to(external)
+    monkeypatch.setattr(settings, "db_path", link)
+
+    with pytest.raises(private.PrivacyContractError):
+        connect()
+
+    assert link.is_symlink()
+    assert external.read_bytes() == b"someone else's database"
+    assert _mode(external) == 0o644
+
+
+def test_harden_data_tree_does_not_follow_a_nested_directory_symlink(
+    tmp_path: Path, wide_open_umask: None
+) -> None:
+    # The one-time migration walk encounters a linked-in workspace *directory* and must
+    # neither descend into it nor chmod the link or its target.
+    root = tmp_path / "old-install"
+    (root / "uploads").mkdir(parents=True)
+    os.chmod(root, 0o755)  # noqa: S103 - simulating an old umask-broad install
+    os.chmod(root / "uploads", 0o755)  # noqa: S103 - simulating an old umask-broad install
+    external = _external_dir(tmp_path)
+    resident = external / "someone-elses-notes.txt"
+    (root / "uploads" / "workspace").symlink_to(external, target_is_directory=True)
+
+    private.harden_data_tree(root)
+
+    assert (root / "uploads" / "workspace").is_symlink()
+    assert _mode(external) == 0o755
+    assert _mode(resident) == 0o644
+    assert _mode(root / "uploads") == 0o700
+
+
+def test_fchmod_permission_failure_fails_closed_on_posix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_open_umask: None
+) -> None:
+    # On a mode-carrying POSIX filesystem, a genuine failure to tighten owned state must
+    # surface, not be swallowed into a "successful" startup that leaves the file broad.
+    target = tmp_path / "coursework.bin"
+    target.write_bytes(b"payload")
+    os.chmod(target, 0o644)  # noqa: S103 - the broad state the harden is meant to fix
+
+    def deny(_fd: int, _mode: int) -> None:
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(os, "fchmod", deny)
+
+    with pytest.raises(private.PrivacyContractError):
+        private.harden_file(target)
+
+
+def test_fchmod_unsupported_filesystem_is_tolerated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_open_umask: None
+) -> None:
+    # A filesystem that cannot carry POSIX modes (ENOTSUP) is the one case the contract
+    # tolerates: the data directory's location is the isolation there, so this is not an error.
+    target = tmp_path / "coursework.bin"
+    target.write_bytes(b"payload")
+    os.chmod(target, 0o644)  # noqa: S103 - broad, and this filesystem cannot narrow it
+
+    def unsupported(_fd: int, _mode: int) -> None:
+        raise OSError(errno.ENOTSUP, "Operation not supported")
+
+    monkeypatch.setattr(os, "fchmod", unsupported)
+
+    private.harden_file(target)  # tolerated: no exception

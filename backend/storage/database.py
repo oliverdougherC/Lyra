@@ -31,7 +31,21 @@ _SQLITE_BUSY_TIMEOUT_MS = 5_000
 def connect(db_path: Path | None = None) -> sqlite3.Connection:
     """Open a connection with row access by name, cascades on, WAL, and sqlite-vec loaded."""
     path = db_path or settings.db_path
-    private.secure_mkdir(path.parent)
+    # A symlinked database path is refused before anything opens it: sqlite would follow the
+    # link to create or open the target, and the hardening below would chmod that outside
+    # file while reporting the configured path as secured. An explicit LYRA_DB_PATH should
+    # name a real file (or a location under a real directory), not a link out of the tree.
+    private.assert_not_symlink(path, "the database path")
+    # Inside the data tree, the database's parent chain is owned by Lyra and created with the
+    # same no-symlink-beneath-root guarantee as the rest of it. An explicit LYRA_DB_PATH may
+    # point outside that tree, into a location the user chose; there Lyra owns only the
+    # immediate directory it creates for the database (created `0o700`, like any Lyra
+    # directory), and treats that as its own root so it neither re-permissions a pre-existing
+    # external directory nor follows a symlink where that directory belongs.
+    owned_root = (
+        settings.data_dir if private.is_within(path.parent, settings.data_dir) else path.parent
+    )
+    private.secure_mkdir(path.parent, root=owned_root)
     # check_same_thread=False: FastAPI submits a sync dependency generator and its sync
     # handler as two separate threadpool jobs, which are not guaranteed to land on the
     # same worker. A connection is never shared between concurrent requests, so the

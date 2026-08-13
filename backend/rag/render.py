@@ -187,7 +187,7 @@ def render_page(
             if not _raster_within_bounds(page.rect, dpi):
                 raise LyraError(TOO_LARGE_TO_RENDER)
             pixmap = page.get_pixmap(dpi=dpi)
-            private.secure_mkdir(cached.parent)
+            private.secure_mkdir(cached.parent, root=settings.data_dir)
             # Written beside the target and moved into place, because the cache is trusted
             # on the strength of the file existing. A process killed partway through a
             # direct write would leave a truncated PNG that `cached.exists()` then serves
@@ -285,7 +285,7 @@ def render_figure(
             # the reading column while occupying a fraction of a page: the same pixels
             # stretched over several times the area.
             pixmap = page.get_pixmap(dpi=FIGURE_DPI, clip=clip)
-            private.secure_mkdir(cached.parent)
+            private.secure_mkdir(cached.parent, root=settings.data_dir)
             partial = _partial_path(cached)
             try:
                 pixmap.save(partial, output="png")

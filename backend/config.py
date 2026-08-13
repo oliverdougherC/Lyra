@@ -96,10 +96,16 @@ class Settings(BaseSettings):
         this holds whatever umask the process inherited. The top-level directories are
         re-hardened every startup; the deeper tree is walked once, to bring an installation
         created before this contract up to it without re-walking on every launch.
+
+        The data directory must be a real directory. A symlinked `LYRA_DATA_DIR` is refused
+        here rather than followed, so Lyra never recursively hardens, walks, or writes into
+        whatever the link points at. The directory's own ancestors may be symlinks - that is
+        the user's home layout, not Lyra's to police - and are left alone.
         """
-        private.secure_mkdir(self.data_dir)
+        private.assert_not_symlink(self.data_dir, "LYRA_DATA_DIR")
+        private.secure_mkdir(self.data_dir, root=self.data_dir)
         for directory in (self.uploads_dir, self.text_dir, self.pages_dir, self.models_dir):
-            private.secure_mkdir(directory)
+            private.secure_mkdir(directory, root=self.data_dir)
             private.harden_dir(directory)
         private.harden_dir(self.data_dir)
         self._harden_existing_tree_once()
@@ -110,8 +116,13 @@ class Settings(BaseSettings):
         `models_dir` is kept out of the file pass: it holds a bundled executable, and a
         `0o600` file cannot be run. Its directory is still made private, and every other
         Lyra-owned file is brought to `0o600`.
+
+        The sentinel is security-relevant state, so it is read and written with no-follow
+        semantics: a symlink where the marker belongs is refused rather than trusted (it
+        must not let a link claim the migration ran, and the write below must not follow it
+        to overwrite an outside file).
         """
-        if self._hardened_marker.exists():
+        if private.regular_file_present(self._hardened_marker):
             return
         private.harden_data_tree(self.data_dir, keep_file_modes=(self.models_dir,))
         private.write_private_bytes(self._hardened_marker, b"")

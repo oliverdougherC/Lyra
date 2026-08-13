@@ -37,6 +37,46 @@ The first launch after upgrading tightens an older data tree that a previous ver
 walking it once. **Attached external workspaces are never touched**: they are your own project
 trees, and Lyra reads and edits their files without rewriting their permissions.
 
+### What Lyra treats as its own
+
+Lyra's owned tree is the data directory (`LYRA_DATA_DIR`, default `data/`) and everything it
+creates beneath it: `uploads/`, `text/`, `pages/`, `models/`, the SQLite database and its
+sidecars, the sentinel that records the one-time upgrade, and the fallback API-key file. The
+backup archive is owned too, even though it is written outside the tree. Those are the only paths
+Lyra sets modes on. The data directory's own *ancestors* — the folders above it in your home
+layout — are yours; Lyra creates them if they are missing but never re-permissions a folder that
+already existed, and they may be symlinks.
+
+### Symlinks
+
+Lyra never follows a symlink out of its owned tree to create through it, write through it, change
+its permissions, or walk into it. The boundary is enforced, not assumed:
+
+- **The data directory must be a real directory.** If `LYRA_DATA_DIR` is a symlink, Lyra refuses
+  to start with an actionable error rather than recursively hardening or walking whatever it points
+  at. (Symlinks *above* the data directory, in your home layout, are fine.)
+- **No directory or file *inside* the tree may be a symlink to somewhere outside it.** If an older
+  install linked, say, `uploads/` or a cache directory out to another disk, Lyra fails closed the
+  next time it would create or write beneath that link, instead of silently placing coursework — or
+  changing permissions — at the link's target. The one-time upgrade walk likewise never descends a
+  symlinked directory and never changes a link or its target.
+- **A sensitive file is opened without following a link.** Writing the fallback key, extracted text,
+  an upload, a rendered cache entry, or the upgrade sentinel refuses if a symlink sits where the file
+  belongs, so it can never truncate or overwrite an unrelated file the link points at.
+- **An explicit `LYRA_DB_PATH` that is a symlink is refused** rather than opened and chmodded through
+  — Lyra will not modify an external file while reporting the configured path as secured. A database
+  placed at a real path outside the data tree is still hardened to `0600`, and Lyra creates (and owns)
+  only the immediate directory it makes for it.
+
+### Non-POSIX filesystems
+
+These modes are POSIX. On Windows, `chmod` only toggles the read-only bit and there is no atomic
+no-follow open; Lyra relies on the per-user location of the data directory and does a best-effort
+check instead. On a POSIX filesystem that genuinely cannot carry modes (some network mounts report
+"operation not supported"), Lyra tolerates the unsupported chmod for the same reason — the directory
+location is the isolation there. Any *other* failure to set a mode on owned state is surfaced rather
+than passed over, so Lyra does not report a private layout it did not actually achieve.
+
 ## What can leave the machine
 
 - The tutor endpoint can be remote. Lyra treats any non-loopback endpoint as remote unless you
