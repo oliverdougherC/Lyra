@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from backend.api import routes_drafts
 from backend.core import artifacts, comments, live_drafts, suggestions, writer_pipeline
+from backend.core.app_settings import TutorAccess
 from backend.core.errors import ConflictError, LyraError
 from backend.llm.client import StreamDelta
 from backend.rag.retrieve import RetrievalResult
@@ -792,11 +793,14 @@ def test_write_streams_tokens_then_done(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     artifact_id, _ = _draft(db, class_id)
-    monkeypatch.setattr(routes_drafts, "document_text_allowed", lambda conn: None)
     monkeypatch.setattr(
         routes_drafts,
-        "resolve_tutor_config",
-        lambda conn: routes_drafts.TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=routes_drafts.TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
     # Patched where the route looks it up, as test_api_chat does. Unstubbed, retrieval
     # embeds the query, and in a test data dir that means "weights not downloaded" - it

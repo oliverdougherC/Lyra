@@ -25,7 +25,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from backend.core import artifacts, sessions
-from backend.core.app_settings import TutorConfig, resolve_tutor_config
+from backend.core.app_settings import (
+    NO_ENDPOINT,
+    REMOTE_UNACKNOWLEDGED,
+    TutorAccess,
+    TutorConfig,
+    resolve_tutor_access,
+)
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import LyraError
 from backend.core.profiles import select_active_facts, select_user_facts
@@ -62,6 +68,43 @@ SSE_HEADERS = {
 }
 
 _UNEXPECTED_ERROR = "Something went wrong while answering. Try again."
+
+# Why a tutor turn may not run, in the words the student needs to act on. The rule itself
+# lives in `app_settings` (`document_text_allowed`); these are its consequences for chat,
+# which grounds every reply in retrieved course material and so is bound by the same rule as
+# solving, writing, and study. The `no_endpoint` case is normally caught earlier by
+# resolving the config, but the mapping is complete so the gate is safe wherever it runs.
+_BLOCKED_MESSAGES = {
+    NO_ENDPOINT: "No tutor endpoint is configured. Add one in Settings, then chat.",
+    REMOTE_UNACKNOWLEDGED: (
+        "Your tutor endpoint is not on this machine, and a tutor reply has to send it your "
+        "course material. Allow that in Settings, then chat."
+    ),
+}
+
+
+def _require_document_allowed(access: TutorAccess) -> None:
+    """Refuse the turn when document text may not be sent to the *resolved* endpoint.
+
+    Takes the same snapshot the turn will be sent through, so the endpoint this authorizes is
+    exactly the endpoint the reply goes to - a settings change cannot slip between the check
+    and the send to authorize a local endpoint while the turn leaves for a remote one.
+
+    A tutor reply is grounded in retrieved course material - ordinary class retrieval, a
+    document the question is scoped to, or the solution step a conversation is anchored to -
+    so chat is bound by the same locality/acknowledgement rule as solving, writing, and
+    study. Applied when the turn opens, before the student's message is persisted and before
+    any upstream request, and re-derived on every turn and regeneration: changing the
+    endpoint or revoking the acknowledgement takes effect on the very next turn, a refusal
+    puts nothing on the wire, and it leaves no orphaned question behind to answer later.
+
+    Raises:
+        LyraError: document text may not be sent to the resolved endpoint.
+    """
+    if access.document_block is not None:
+        raise LyraError(
+            _BLOCKED_MESSAGES.get(access.document_block, _BLOCKED_MESSAGES[NO_ENDPOINT])
+        )
 
 
 class SessionCreate(BaseModel):
@@ -313,11 +356,19 @@ def _open_turn(
 
     Raises:
         NotFoundError: no session carries that id.
-        ConfigurationError: no tutor endpoint is configured.
+        LyraError: no tutor endpoint is configured, or document text may not be sent to the
+            configured one (an unacknowledged remote endpoint).
     """
     session = sessions.get_session(conn, session_id)
     _refuse_writer_session(session)
-    config = resolve_tutor_config(conn)
+    # One snapshot for the endpoint and its consent, so the endpoint authorized below is the
+    # exact endpoint this turn is later streamed to. Taken before the question is stored and
+    # before any retrieval or upstream call, so an unacknowledged remote endpoint refuses the
+    # turn without persisting an orphaned question and without a byte of course material
+    # leaving the machine.
+    access = resolve_tutor_access(conn)
+    _require_document_allowed(access)
+    config = access.config
     # Persisted on the session, not just used for this turn, so the toggle survives a
     # reload and the next turn continues in the mode the student picked.
     sessions.set_session_mode(conn, session_id, request.mode)
@@ -338,11 +389,17 @@ def _open_regeneration(
 
     Raises:
         NotFoundError: no session carries that id, or it holds no question yet.
-        ConfigurationError: no tutor endpoint is configured.
+        LyraError: no tutor endpoint is configured, or document text may not be sent to the
+            configured one (an unacknowledged remote endpoint).
     """
     session = sessions.get_session(conn, session_id)
     _refuse_writer_session(session)
-    config = resolve_tutor_config(conn)
+    # A fresh snapshot, so a retry is gated exactly like a first turn against the endpoint it
+    # will actually use: the endpoint may have gone remote, or the acknowledgement been
+    # revoked, since the question was first asked.
+    access = resolve_tutor_access(conn)
+    _require_document_allowed(access)
+    config = access.config
     question = sessions.last_user_message(conn, session_id)
     user_message_id = int(question["id"])
     superseded = tuple(

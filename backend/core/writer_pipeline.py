@@ -65,8 +65,7 @@ from backend.core.app_settings import (
     NO_ENDPOINT,
     REMOTE_UNACKNOWLEDGED,
     TutorConfig,
-    document_text_allowed,
-    resolve_tutor_config,
+    resolve_tutor_access,
 )
 from backend.core.errors import LyraError, NotFoundError
 from backend.core.profiles import select_active_facts
@@ -464,10 +463,11 @@ def _run(conn: sqlite3.Connection, job: PassJob) -> None:
         raise NotFoundError("That draft does not exist.")
     class_id = int(artifact["class_id"])
     part = _body_part(conn, job.artifact_id)
-    blocked = document_text_allowed(conn)
-    if blocked is not None:
-        raise LyraError(BLOCKED_MESSAGES.get(blocked, BLOCKED_MESSAGES[NO_ENDPOINT]))
-    config = resolve_tutor_config(conn)
+    # One snapshot: the endpoint checked for consent is the endpoint the pass is sent to.
+    access = resolve_tutor_access(conn)
+    if access.document_block is not None:
+        raise LyraError(BLOCKED_MESSAGES.get(access.document_block, BLOCKED_MESSAGES[NO_ENDPOINT]))
+    config = access.config
 
     conn.execute(
         "update artifacts set writer_job_kind = 'pass', writer_job_depth = ?, "

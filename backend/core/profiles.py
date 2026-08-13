@@ -34,8 +34,7 @@ from backend.core.app_settings import (
     EXTRACTION_DISABLED,
     NO_ENDPOINT,
     REMOTE_UNACKNOWLEDGED,
-    extraction_allowed,
-    resolve_tutor_config,
+    resolve_tutor_access,
 )
 from backend.core.errors import NotFoundError
 from backend.llm import client, replies
@@ -686,14 +685,14 @@ def extract_facts(
         NotFoundError: No document carries that id, which is a caller bug rather than one
             of the expected skip conditions above.
     """
-    reason = extraction_allowed(conn)
-    if reason is not None:
-        return reason
+    access = resolve_tutor_access(conn, for_extraction=True)
+    if access.document_block is not None:
+        return access.document_block
 
     document = _get_document(conn, document_id)
-    # `extraction_allowed` has already established that an endpoint is configured, so
-    # this cannot raise ConfigurationError. `context_window` comes off the settings row.
-    config = resolve_tutor_config(conn)
+    # The snapshot above resolved the endpoint together with the permission, so `config` is
+    # present and is the exact endpoint this extraction is authorized to send to.
+    config = access.config
     budget = extraction_budget_chars(config.context_window)
     # The truncated text is what the model is shown, so it is also what a quote has to be
     # found in. Checking against the whole document instead would accept a quote from a

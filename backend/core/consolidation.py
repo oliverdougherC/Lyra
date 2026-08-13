@@ -27,7 +27,7 @@ import logging
 import sqlite3
 from collections.abc import Mapping, Sequence
 
-from backend.core.app_settings import extraction_allowed, resolve_tutor_config
+from backend.core.app_settings import resolve_tutor_access
 from backend.llm import client, replies
 from backend.llm.prompts import CONSOLIDATION_SCHEMA, build_consolidation_prompt
 
@@ -172,7 +172,10 @@ def consolidate_class(conn: sqlite3.Connection, class_id: int) -> None:
         UpstreamError: The tutor endpoint failed. The ingestion job catches this: a profile
             that did not get tidied is still a profile.
     """
-    if extraction_allowed(conn) is not None:
+    # One snapshot for the permission and the endpoint, so the endpoint this consolidation
+    # is authorized against is the one it is sent to below.
+    access = resolve_tutor_access(conn, for_extraction=True)
+    if access.document_block is not None:
         return
 
     rows = list(conn.execute(_SELECT_CANDIDATES, (class_id, *CONSOLIDATED_KINDS)))
@@ -190,7 +193,7 @@ def consolidate_class(conn: sqlite3.Connection, class_id: int) -> None:
         )
         rows = rows[-MAX_ENTRIES:]
 
-    config = resolve_tutor_config(conn)
+    config = access.config
     messages = build_consolidation_prompt([_entry_text(row) for row in rows])
     # Sync for the same reason `extract_facts` is: the ingestion worker is a plain thread
     # with no event loop, and owning one for the call keeps it free of async plumbing.

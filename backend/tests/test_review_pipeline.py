@@ -23,7 +23,7 @@ from backend.core import (
     writer_plans,
     writer_runs,
 )
-from backend.core.app_settings import TutorConfig
+from backend.core.app_settings import TutorAccess, TutorConfig
 from backend.core.errors import LyraError
 from backend.llm.tools import COMPLETED, DEPTH, UPSTREAM_FAILED, ToolDefinition, ToolLoopResult
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk
@@ -87,11 +87,14 @@ def reviewer(monkeypatch: pytest.MonkeyPatch) -> _StubReviewer:
 
 @pytest.fixture(autouse=True)
 def _open_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(review_pipeline, "document_text_allowed", lambda conn: None)
     monkeypatch.setattr(
         review_pipeline,
-        "resolve_tutor_config",
-        lambda conn: TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
 
 
@@ -860,7 +863,13 @@ def test_a_deleted_draft_is_the_cancel_and_a_blocked_gate_reports(
     assert reviewer.runs == []
 
     artifact_id, _ = _draft(db, class_id)
-    monkeypatch.setattr(review_pipeline, "document_text_allowed", lambda conn: NO_ENDPOINT)
+    monkeypatch.setattr(
+        review_pipeline,
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=None, document_block=NO_ENDPOINT, remote_ack=False
+        ),
+    )
     review_pipeline.run_review(review_pipeline.ReviewJob(artifact_id))
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.FAILED

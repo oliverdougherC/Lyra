@@ -38,9 +38,7 @@ from backend.core.app_settings import (
     NO_ENDPOINT,
     REMOTE_UNACKNOWLEDGED,
     TutorConfig,
-    document_text_allowed,
-    get_settings_row,
-    resolve_tutor_config,
+    resolve_tutor_access,
 )
 from backend.rag import render, transcribe
 from backend.rag.parse import ParsedDocument, ParsedPage
@@ -237,14 +235,18 @@ def recognize_pages(
 
     # Before a single page is rendered, let alone encoded and sent. The rule is about
     # document content leaving the machine, and a picture of a page is the most complete
-    # form of it there is.
-    reason = document_text_allowed(conn)
-    if reason is not None:
-        logger.info("Recognition skipped for document %s: %s", document_id, reason)
-        return reason
+    # form of it there is. One snapshot resolves the endpoint, the permission, and the
+    # acknowledgement together, so the whole run reads and transcribes against the exact
+    # endpoint this decision authorized - the `remote_ack` passed down to `transcribe` is
+    # the one the skip check agreed with, not a value a concurrent settings write could have
+    # changed between two reads.
+    access = resolve_tutor_access(conn)
+    if access.document_block is not None:
+        logger.info("Recognition skipped for document %s: %s", document_id, access.document_block)
+        return access.document_block
 
-    config = resolve_tutor_config(conn)
-    remote_ack = bool(get_settings_row(conn)["remote_ack"])
+    config = access.config
+    remote_ack = access.remote_ack
     source = Path(str(document["stored_path"]))
     mime = str(document["mime"])
 

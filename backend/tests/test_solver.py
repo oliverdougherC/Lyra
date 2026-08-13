@@ -17,7 +17,12 @@ import pytest
 
 from backend.config import settings
 from backend.core import artifacts, segmentation, solver
-from backend.core.app_settings import document_text_allowed
+from backend.core.app_settings import (
+    NO_ENDPOINT,
+    TutorAccess,
+    TutorConfig,
+    resolve_tutor_access,
+)
 from backend.core.artifacts import SourceSpec
 from backend.core.segmentation import SegmentedPart, SegmentedProblem
 
@@ -42,25 +47,26 @@ def no_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     The model pass is opt-in per test through `fake_model`, so a test that does not ask
     for it cannot accidentally depend on one.
     """
-    monkeypatch.setattr(segmentation, "resolve_tutor_config", _raise_configuration_error)
-
-
-def _raise_configuration_error(conn: sqlite3.Connection) -> object:
-    from backend.core.errors import ConfigurationError
-
-    raise ConfigurationError("No tutor endpoint is configured. Add one in Settings.")
+    monkeypatch.setattr(
+        segmentation,
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=None, document_block=NO_ENDPOINT, remote_ack=False
+        ),
+    )
 
 
 def fake_model(monkeypatch: pytest.MonkeyPatch, reply: object) -> None:
     """Answer the segmentation pass with `reply`, or raise it when it is an exception."""
-    from backend.core.app_settings import TutorConfig
-
     monkeypatch.setattr(
         segmentation,
-        "resolve_tutor_config",
-        lambda conn: TutorConfig("http://127.0.0.1:8080/v1", None, "m", 8192),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=TutorConfig("http://127.0.0.1:8080/v1", None, "m", 8192),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
-    monkeypatch.setattr(segmentation, "document_text_allowed", lambda conn: None)
 
     async def complete(*args: object, **kwargs: object) -> str:
         if isinstance(reply, Exception):
@@ -77,14 +83,15 @@ def fake_model_by_schema(monkeypatch: pytest.MonkeyPatch, replies: dict[str, obj
     so a test that exercises the two together dispatches on the schema each one sends: a
     reply is picked by `replies[schema.name]`, and a pass with no entry gets an empty one.
     """
-    from backend.core.app_settings import TutorConfig
-
     monkeypatch.setattr(
         segmentation,
-        "resolve_tutor_config",
-        lambda conn: TutorConfig("http://127.0.0.1:8080/v1", None, "m", 8192),
+        "resolve_tutor_access",
+        lambda conn, **_kwargs: TutorAccess(
+            config=TutorConfig("http://127.0.0.1:8080/v1", None, "m", 8192),
+            document_block=None,
+            remote_ack=True,
+        ),
     )
-    monkeypatch.setattr(segmentation, "document_text_allowed", lambda conn: None)
 
     async def complete(*args: object, **kwargs: object) -> str:
         schema = kwargs.get("schema")
@@ -839,13 +846,9 @@ def test_document_text_never_reaches_an_unacknowledged_remote_endpoint(
         reached = True
         return "{}"
 
-    from backend.core.app_settings import TutorConfig
-
-    monkeypatch.setattr(
-        segmentation,
-        "resolve_tutor_config",
-        lambda conn: TutorConfig("https://api.example.com/v1", None, "m", 8192),
-    )
+    # The real rule, against the row written below, so this exercises the actual
+    # unacknowledged-remote decision rather than the autouse no-endpoint stub.
+    monkeypatch.setattr(segmentation, "resolve_tutor_access", resolve_tutor_access)
     monkeypatch.setattr(segmentation.client, "complete", complete)
     db.execute(
         "update settings set endpoint_url = 'https://api.example.com/v1', remote_ack = 0 "
@@ -879,8 +882,9 @@ def test_acknowledging_a_remote_endpoint_lets_the_model_pass_run(
         {"problems": [{"label": "Exercise 3.14", "number": "3.14", "statement": "Prove it."}]},
     )
     # The acknowledgement is the whole difference here, so `fake_model`'s blanket allow is
-    # undone and the real rule runs against the settings row written above.
-    monkeypatch.setattr(segmentation, "document_text_allowed", document_text_allowed)
+    # undone and the real rule runs against the settings row written above. `complete` stays
+    # stubbed, so the acknowledged remote endpoint is exercised without a real request.
+    monkeypatch.setattr(segmentation, "resolve_tutor_access", resolve_tutor_access)
 
     solver.run_segmentation(artifact_id)
 

@@ -29,8 +29,7 @@ from backend.core.app_settings import (
     NO_ENDPOINT,
     REMOTE_UNACKNOWLEDGED,
     TutorConfig,
-    document_text_allowed,
-    resolve_tutor_config,
+    resolve_tutor_access,
 )
 from backend.core.errors import LyraError, NotFoundError
 from backend.core.scheduler import new_card_state
@@ -182,10 +181,11 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
     """Map the sources to topics, then write each topic's cards against retrieval."""
     artifact = artifacts.get_artifact(conn, job.artifact_id)
     class_id = int(artifact["class_id"])
-    blocked = document_text_allowed(conn)
-    if blocked is not None:
-        raise LyraError(BLOCKED_MESSAGES.get(blocked, BLOCKED_MESSAGES[NO_ENDPOINT]))
-    config = resolve_tutor_config(conn)
+    # One snapshot: the endpoint checked for consent is the endpoint generation is sent to.
+    access = resolve_tutor_access(conn)
+    if access.document_block is not None:
+        raise LyraError(BLOCKED_MESSAGES.get(access.document_block, BLOCKED_MESSAGES[NO_ENDPOINT]))
+    config = access.config
 
     _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(
@@ -328,10 +328,11 @@ def _record_card_provenance(
 
 def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     """One call for the whole quiz, then code-enforced validation of every question."""
-    blocked = document_text_allowed(conn)
-    if blocked is not None:
-        raise LyraError(BLOCKED_MESSAGES.get(blocked, BLOCKED_MESSAGES[NO_ENDPOINT]))
-    config = resolve_tutor_config(conn)
+    # One snapshot: the endpoint checked for consent is the endpoint generation is sent to.
+    access = resolve_tutor_access(conn)
+    if access.document_block is not None:
+        raise LyraError(BLOCKED_MESSAGES.get(access.document_block, BLOCKED_MESSAGES[NO_ENDPOINT]))
+    config = access.config
 
     _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(

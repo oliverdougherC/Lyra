@@ -29,8 +29,7 @@ import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
-from backend.core.app_settings import document_text_allowed, resolve_tutor_config
-from backend.core.errors import ConfigurationError
+from backend.core.app_settings import resolve_tutor_access
 from backend.llm import client, replies
 from backend.llm.prompts import (
     LATEX_RESTORE_SCHEMA,
@@ -639,17 +638,16 @@ def propose_problems(
     # The model pass sends the whole document to the tutor endpoint, exactly as profile
     # extraction does, so it is bound by the same rule: document text is never sent to a
     # non-local endpoint the student has not acknowledged. Asked before the text is read,
-    # truncated, or built into a prompt, so there is no path on which it leaks.
-    blocked = document_text_allowed(conn)
-    if blocked is not None:
-        logger.info("Segmenting document %s from chunk markers only: %s", document_id, blocked)
+    # truncated, or built into a prompt, so there is no path on which it leaks. One snapshot
+    # gives both the decision and the endpoint, so the two cannot disagree; a missing
+    # endpoint reads as a block here (`no_endpoint`) and degrades the same way.
+    access = resolve_tutor_access(conn)
+    if access.document_block is not None:
+        logger.info(
+            "Segmenting document %s from chunk markers only: %s", document_id, access.document_block
+        )
         return from_chunks
-
-    try:
-        config = resolve_tutor_config(conn)
-    except ConfigurationError:
-        logger.info("Segmenting document %s from chunk markers only: no endpoint", document_id)
-        return from_chunks
+    config = access.config
 
     budget = int(config.context_window * SEGMENTATION_BUDGET_SHARE) * CHARS_PER_TOKEN
     messages = build_segmentation_prompt(text[:budget], filename)
