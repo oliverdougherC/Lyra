@@ -1,34 +1,22 @@
 'use client'
 
 import { useState } from 'react'
-import {
-  Archive,
-  ArrowRight,
-  FileText,
-  MessageSquare,
-  MoreVertical,
-  Pencil,
-  Plus,
-  RotateCcw,
-  SquareCheckBig,
-  Trash2,
-  UserRound,
-} from 'lucide-react'
+import { Archive, MoreVertical, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 
-import { HandUnderline, StatusWord } from '@/components/ex-libris'
+import { HandUnderline } from '@/components/ex-libris'
 import { ClassChatsPanel } from '@/components/classes/class-chats-panel'
 import { ClassDraftsPanel } from '@/components/classes/class-drafts-panel'
 import { ClassFormDialog } from '@/components/classes/class-form-dialog'
+import { ClassOverview } from '@/components/classes/class-overview'
 import { ClassSolutionsPanel } from '@/components/classes/class-solutions-panel'
 import { ClassStudyPanel } from '@/components/classes/class-study-panel'
 import { CourseMark } from '@/components/classes/course-mark'
 import { DeleteClassDialog } from '@/components/classes/delete-class-dialog'
 import { DocumentsPane } from '@/components/documents/documents-pane'
 import { ProfileFacts } from '@/components/profile/profile-facts'
-import { SolutionRow } from '@/components/solutions/solution-row'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -39,7 +27,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { formatCount, formatRelativeTime, formatSessionFallbackTitle } from '@/lib/format'
+import { formatRelativeTime } from '@/lib/format'
 import { useSessions } from '@/lib/hooks/use-chat'
 import { useClass, useUpdateClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
@@ -64,9 +52,6 @@ export type HubTab = (typeof HUB_TABS)[number]
 export function readHubTab(value: string | null): HubTab {
   return HUB_TABS.includes(value as HubTab) ? (value as HubTab) : 'overview'
 }
-
-/** How many rows of each kind the overview shows before it defers to the tab. */
-const DIGEST_ROWS = 3
 
 /**
  * The course mark, sized to the two lines it stands beside rather than to the first of
@@ -255,14 +240,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
         </TabsList>
 
         <TabsContent value="overview">
-          <HubOverview
-            classId={classId}
-            chatCount={chatCount}
-            solutionCount={solutionCount}
-            documentCount={documentCount}
-            factCount={factCount}
-            onSelectTab={selectTab}
-          />
+          <ClassOverview classId={classId} className={klass?.name} />
         </TabsContent>
 
         <TabsContent value="chats">
@@ -359,177 +337,5 @@ function HubTab({
         </>
       ) : null}
     </TabsTrigger>
-  )
-}
-
-function HubOverview({
-  classId,
-  chatCount,
-  solutionCount,
-  documentCount,
-  factCount,
-  onSelectTab,
-}: {
-  classId: number
-  chatCount: number | null
-  solutionCount: number | null
-  documentCount: number | null
-  factCount: number | null
-  onSelectTab: (tab: HubTab) => void
-}) {
-  const { data: sessions } = useSessions(classId)
-  const { data: solutions } = useSolutions(classId)
-  const { data: documents } = useDocuments(classId)
-  const { data: profile } = useClassProfile(classId)
-
-  const unconfirmed =
-    profile?.facts.filter((fact) => fact.confidence === 'low' && !fact.confirmed && !fact.rejected)
-      .length ?? 0
-
-  return (
-    <div className="flex flex-col gap-8">
-      <HubSection
-        title="Conversations"
-        icon={<MessageSquare aria-hidden className="size-4" />}
-        count={chatCount}
-        empty="Nothing asked yet."
-        action={{ label: 'New chat', href: `/classes/${classId}/chat?session=new` }}
-        onViewAll={chatCount ? () => onSelectTab('chats') : undefined}
-      >
-        {(sessions ?? []).slice(0, DIGEST_ROWS).map((session) => (
-          <li key={session.id}>
-            <Link
-              href={`/classes/${classId}/chat?session=${session.id}`}
-              className="hover:bg-muted focus-visible:ring-ring flex items-center gap-3 rounded-md px-3 py-2 transition-colors focus-visible:ring-2 focus-visible:outline-none"
-            >
-              <span className="min-w-0 flex-1 truncate text-sm">
-                {session.title || formatSessionFallbackTitle(session.created_at)}
-              </span>
-              <span className="text-text-tertiary shrink-0 text-xs">
-                {formatRelativeTime(session.created_at)}
-              </span>
-            </Link>
-          </li>
-        ))}
-      </HubSection>
-
-      <HubSection
-        title="Solution sets"
-        icon={<SquareCheckBig aria-hidden className="size-4" />}
-        count={solutionCount}
-        empty="No problem sets solved yet."
-        action={{ label: 'New solution set', href: `/classes/${classId}/solutions/new` }}
-        onViewAll={solutionCount ? () => onSelectTab('solutions') : undefined}
-      >
-        {(solutions ?? []).slice(0, DIGEST_ROWS).map((solution) => (
-          <li key={solution.id}>
-            <SolutionRow classId={classId} solution={solution} />
-          </li>
-        ))}
-      </HubSection>
-
-      <HubSection
-        title="Documents"
-        icon={<FileText aria-hidden className="size-4" />}
-        count={documentCount}
-        empty="Nothing uploaded yet."
-        action={{ label: 'Manage files', onClick: () => onSelectTab('documents') }}
-        onViewAll={documentCount ? () => onSelectTab('documents') : undefined}
-      >
-        {(documents ?? []).slice(0, DIGEST_ROWS + 1).map((document) => (
-          <li key={document.id} className="flex items-center gap-3 rounded-md px-3 py-2 text-sm">
-            <FileText aria-hidden className="text-text-tertiary size-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate" title={document.filename}>
-              {document.filename}
-            </span>
-            {/* The same word the Documents tab uses, so one fact reads one way (ui-overhaul
-                2.5). */}
-            <StatusWord
-              tone={document.state === 'failed' ? 'warn' : 'nominal'}
-              className="shrink-0"
-            >
-              {document.state === 'ready' ? 'Ready' : document.state}
-            </StatusWord>
-          </li>
-        ))}
-      </HubSection>
-
-      <HubSection
-        title="Class profile"
-        icon={<UserRound aria-hidden className="size-4" />}
-        count={factCount}
-        empty="Upload a syllabus and Lyra will fill this in."
-        action={{ label: 'Open profile', onClick: () => onSelectTab('profile') }}
-      >
-        {factCount ? (
-          <li className="text-text-secondary px-3 py-2 text-sm">
-            {formatCount(factCount, 'fact')} about this class.
-            {unconfirmed > 0 ? (
-              <span className="text-info-text">
-                {' '}
-                {unconfirmed === 1 ? 'One still needs' : `${unconfirmed} still need`} your
-                confirmation.
-              </span>
-            ) : null}
-          </li>
-        ) : null}
-      </HubSection>
-    </div>
-  )
-}
-
-function HubSection({
-  title,
-  icon,
-  count,
-  empty,
-  action,
-  onViewAll,
-  children,
-}: {
-  title: string
-  icon: React.ReactNode
-  count: number | null
-  empty: string
-  action: { label: string; href?: string; onClick?: () => void }
-  onViewAll?: () => void
-  children: React.ReactNode
-}) {
-  const hasRows = Array.isArray(children) ? children.length > 0 : Boolean(children)
-
-  return (
-    <section className="flex flex-col gap-3">
-      <div className="border-border/70 flex items-center gap-2 border-b pb-2">
-        <span className="text-text-tertiary">{icon}</span>
-        <h2 className="text-xs font-medium tracking-[0.14em] uppercase">{title}</h2>
-        {count ? <span className="text-text-tertiary text-xs tabular-nums">{count}</span> : null}
-        {action.href ? (
-          <Button asChild variant="ghost" size="sm" className="ml-auto h-7">
-            <Link href={action.href}>{action.label}</Link>
-          </Button>
-        ) : (
-          <Button variant="ghost" size="sm" className="ml-auto h-7" onClick={action.onClick}>
-            {action.label}
-          </Button>
-        )}
-      </div>
-
-      {hasRows ? (
-        <ul className="flex flex-col gap-1">{children}</ul>
-      ) : (
-        <p className="text-text-tertiary px-3 py-2 text-sm">{empty}</p>
-      )}
-
-      {onViewAll ? (
-        <button
-          type="button"
-          onClick={onViewAll}
-          className="text-text-secondary hover:text-accent-primary focus-visible:ring-ring inline-flex items-center gap-1.5 self-start rounded-sm px-3 text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
-        >
-          View all
-          <ArrowRight aria-hidden className="size-3" />
-        </button>
-      ) : null}
-    </section>
   )
 }

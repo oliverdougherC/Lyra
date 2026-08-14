@@ -102,7 +102,7 @@ describe('QuizRunner', () => {
   it('grades an option as soon as it is chosen and explains the reveal', async () => {
     mockAttemptLifecycle(quizWith([MCQ]))
     const { wrapper } = createWrapper()
-    render(<QuizRunner quizId={9} />, { wrapper })
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
 
     expect(
       await screen.findByText('What is the determinant of the identity matrix?'),
@@ -123,7 +123,7 @@ describe('QuizRunner', () => {
   it('marks a wrong option and names the right one', async () => {
     mockAttemptLifecycle(quizWith([MCQ]))
     const { wrapper } = createWrapper()
-    render(<QuizRunner quizId={9} />, { wrapper })
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
 
     await screen.findByText('What is the determinant of the identity matrix?')
     await userEvent.click(screen.getByRole('button', { name: 'Two' }))
@@ -135,10 +135,31 @@ describe('QuizRunner', () => {
     expect(screen.getByText('The answer:')).toBeInTheDocument()
   })
 
+  it('offers to take a miss to the tutor, question and answers in hand', async () => {
+    mockAttemptLifecycle(quizWith([MCQ]))
+    const { wrapper } = createWrapper()
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+
+    await screen.findByText('What is the determinant of the identity matrix?')
+    await userEvent.click(screen.getByRole('button', { name: 'Two' }))
+    await screen.findByText('Not quite.')
+
+    // The link opens a fresh conversation with the question prefilled, not sent: the
+    // words are generated, so the student sees them in the composer before they go.
+    const link = screen.getByRole('link', { name: 'Go over this with Lyra' })
+    const href = link.getAttribute('href') ?? ''
+    expect(href).toContain('/classes/1/chat?session=new&ask=')
+    expect(href).not.toContain('send=1')
+    const ask = new URLSearchParams(href.split('?')[1]).get('ask') ?? ''
+    expect(ask).toContain('What is the determinant of the identity matrix?')
+    expect(ask).toContain('"Two"')
+    expect(ask).toContain('"One"')
+  })
+
   it('maps a matching fill_blank answer to selected_index 0', async () => {
     mockAttemptLifecycle(quizWith([FILL_BLANK]))
     const { wrapper } = createWrapper()
-    render(<QuizRunner quizId={9} />, { wrapper })
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
 
     await screen.findByText('The capital of France is ...')
     // Case and surrounding whitespace do not count against the student.
@@ -153,7 +174,7 @@ describe('QuizRunner', () => {
   it('maps a missing fill_blank answer to selected_index -1', async () => {
     mockAttemptLifecycle(quizWith([FILL_BLANK]))
     const { wrapper } = createWrapper()
-    render(<QuizRunner quizId={9} />, { wrapper })
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
 
     await screen.findByText('The capital of France is ...')
     await userEvent.type(screen.getByLabelText('Your answer'), 'Lyon')
@@ -175,7 +196,7 @@ describe('QuizRunner', () => {
       ],
     })
     const { wrapper } = createWrapper()
-    render(<QuizRunner quizId={9} />, { wrapper })
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
 
     await screen.findByText('What is the determinant of the identity matrix?')
     await userEvent.click(screen.getByRole('button', { name: 'One' }))

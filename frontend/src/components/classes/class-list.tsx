@@ -6,6 +6,7 @@ import { Archive, GraduationCap, Plus } from 'lucide-react'
 import { ClassCard, ClassCardSkeleton, NewClassCard } from '@/components/classes/class-card'
 import { ClassFormDialog } from '@/components/classes/class-form-dialog'
 import { DeleteClassDialog } from '@/components/classes/delete-class-dialog'
+import { ResumeStrip } from '@/components/classes/resume-strip'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -167,22 +168,27 @@ export function ClassList() {
           </Empty>
         )
       ) : (
-        <div className={LEDGER}>
-          {activeClasses.map((klass, index) => (
-            <ClassCard
-              key={klass.id}
-              klass={klass}
-              index={index}
-              autoFocus={klass.id === focusClassId}
-              onRename={openRename}
-              onDelete={setDeleting}
-              onArchive={(picked) =>
-                updateClass.mutate({ classId: picked.id, body: { archived: true } })
-              }
-            />
-          ))}
-          <NewClassCard onClick={openCreate} />
-        </div>
+        <>
+          {/* The most recently touched class carries the way back into whatever was
+              happening there. One row, above the index, not a dashboard. */}
+          <ResumeStrip klass={activeClasses[0]} />
+          <div className={LEDGER}>
+            {activeClasses.map((klass, index) => (
+              <ClassCard
+                key={klass.id}
+                klass={klass}
+                index={index}
+                autoFocus={klass.id === focusClassId}
+                onRename={openRename}
+                onDelete={setDeleting}
+                onArchive={(picked) =>
+                  updateClass.mutate({ classId: picked.id, body: { archived: true } })
+                }
+              />
+            ))}
+            <NewClassCard onClick={openCreate} />
+          </div>
+        </>
       )}
 
       <ClassFormDialog

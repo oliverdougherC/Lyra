@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -7,8 +8,10 @@ import { ClassStudyPanel } from '@/components/classes/class-study-panel'
 import { api } from '@/lib/api'
 import type { DeckSummary, StudyArtifactRead, StudyListRead } from '@/types'
 
+const push = vi.fn()
+
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
+  useRouter: () => ({ replace: vi.fn(), push, prefetch: vi.fn() }),
   useParams: () => ({ id: '1' }),
   useSearchParams: () => new URLSearchParams(),
   usePathname: () => '/classes/1',
@@ -63,7 +66,8 @@ function quiz(overrides: Partial<StudyArtifactRead>): StudyArtifactRead {
 
 beforeEach(() => {
   vi.restoreAllMocks()
-  // The create dialog reads the documents whenever it might open.
+  push.mockClear()
+  // The create dialog and the quick-practice guard both read the documents.
   vi.spyOn(api, 'listDocuments').mockResolvedValue([])
 })
 
@@ -79,15 +83,53 @@ describe('ClassStudyPanel', () => {
     expect(screen.getByLabelText('Loading study tools')).toBeInTheDocument()
   })
 
-  it('says what is missing and offers both creates when there is nothing yet', async () => {
+  it('leads with practice and keeps both custom creates when there is nothing yet', async () => {
     vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
     const { wrapper } = createWrapper()
 
     render(<ClassStudyPanel classId={1} />, { wrapper })
 
-    expect(await screen.findByText('No study tools yet')).toBeInTheDocument()
+    expect(await screen.findByText('Nothing to study from yet')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Practice now' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'New deck' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'New quiz' })).toBeInTheDocument()
+  })
+
+  it('starts a practice quiz in one click, at the defaults, named after the day', async () => {
+    vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
+    vi.spyOn(api, 'listDocuments').mockResolvedValue([
+      { id: 3, class_id: 1, filename: 'notes.pdf', state: 'ready' },
+    ] as never)
+    const createQuiz = vi
+      .spyOn(api, 'createQuiz')
+      .mockResolvedValue(quiz({ id: 12, state: 'pending' }))
+    const { wrapper } = createWrapper()
+
+    render(<ClassStudyPanel classId={1} />, { wrapper })
+
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Practice now' }))
+
+    // No name asked for, no sources picked, no counts chosen: the backend's own defaults
+    // carry the run, and the artifact page it lands on shows the progress.
+    await waitFor(() =>
+      expect(createQuiz).toHaveBeenCalledWith(1, { title: expect.stringMatching(/^Practice · /) }),
+    )
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/classes/1/study/12'))
+  })
+
+  it('refuses quick practice plainly when nothing has finished processing', async () => {
+    vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
+    vi.spyOn(api, 'listDocuments').mockResolvedValue([])
+    const createQuiz = vi.spyOn(api, 'createQuiz')
+    const { wrapper } = createWrapper()
+
+    render(<ClassStudyPanel classId={1} />, { wrapper })
+
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: 'Practice now' }))
+
+    expect(createQuiz).not.toHaveBeenCalled()
   })
 
   it('lists decks with their bucket counts and a due badge, and quizzes with their size', async () => {

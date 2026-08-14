@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -8,9 +9,10 @@ import { api } from '@/lib/api'
 import type { ClassProfile, ClassRead, DocumentRead, SessionRead, SolutionRead } from '@/types'
 
 const replace = vi.fn()
+const push = vi.fn()
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ replace, push: vi.fn(), prefetch: vi.fn() }),
+  useRouter: () => ({ replace, push, prefetch: vi.fn() }),
   useParams: () => ({ id: '1' }),
   useSearchParams: () => new URLSearchParams(),
   usePathname: () => '/classes/1',
@@ -60,6 +62,7 @@ beforeEach(() => {
     { id: 5, class_id: 1, filename: 'syllabus.pdf', state: 'failed' },
   ] as DocumentRead[])
   vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
+  vi.spyOn(api, 'listDrafts').mockResolvedValue([])
   vi.spyOn(api, 'getClassProfile').mockResolvedValue({
     facts: [],
     extraction_skipped_reason: null,
@@ -102,11 +105,17 @@ describe('ClassHub', () => {
     expect(screen.getByRole('tab', { name: 'Overview' })).toBeInTheDocument()
   })
 
-  it('digests each section on the overview and links into the work itself', async () => {
+  it('opens on a continuation surface: ask, resume, and the ways to start', async () => {
     const { wrapper } = createWrapper()
 
     render(<ClassHub classId={1} tab="overview" />, { wrapper })
 
+    // The ask box is the front door: a question typed here lands in a conversation.
+    expect(
+      await screen.findByRole('textbox', { name: 'Ask about Continuous-Time Signals' }),
+    ).toBeInTheDocument()
+
+    // The most recent work links straight back into itself, whatever kind it is.
     expect(await screen.findByRole('link', { name: /Fourier week/ })).toHaveAttribute(
       'href',
       '/classes/1/chat?session=4',
@@ -115,7 +124,33 @@ describe('ClassHub', () => {
       'href',
       '/classes/1/solutions/8',
     )
-    expect(screen.getByText('syllabus.pdf')).toBeInTheDocument()
+
+    // The common starts are verbs, not feature cards, and each goes somewhere real.
+    expect(screen.getByRole('button', { name: 'Practice this material' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Solve a problem set' })).toHaveAttribute(
+      'href',
+      '/classes/1/solutions/new',
+    )
+    expect(screen.getByRole('button', { name: 'Start writing' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Add documents' })).toHaveAttribute(
+      'href',
+      '/classes/1?tab=documents',
+    )
+  })
+
+  it('sends a typed question into a new conversation, words and all', async () => {
+    const { wrapper } = createWrapper()
+
+    render(<ClassHub classId={1} tab="overview" />, { wrapper })
+
+    const user = userEvent.setup()
+    const box = await screen.findByRole('textbox', { name: 'Ask about Continuous-Time Signals' })
+    await user.type(box, 'Why does convolution flip the signal?')
+    await user.click(screen.getByRole('button', { name: 'Ask' }))
+
+    expect(push).toHaveBeenCalledWith(
+      '/classes/1/chat?session=new&ask=Why+does+convolution+flip+the+signal%3F&send=1',
+    )
   })
 
   it('opens a new conversation at the chat route rather than at the class itself', async () => {

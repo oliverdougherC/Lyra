@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Bot, FileText, SquareCheckBig } from 'lucide-react'
 import Link from 'next/link'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
@@ -12,6 +12,7 @@ import { useFullBleed } from '@/components/layout/page-chrome'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { CHAT_HANDOFF_PARAMS } from '@/lib/handoff'
 import { useClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
@@ -41,7 +42,26 @@ export default function ClassWorkspacePage() {
   const compact = useMediaQuery('(max-width: 1023px)')
   const router = useRouter()
   const searchParams = useSearchParams()
-  const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(null)
+
+  // A handoff from another surface: a question carried in from a quiz miss or the class
+  // landing, or a document to scope the first question to. Captured once, on the render
+  // the page arrives on, then stripped from the URL below so Back and reload never carry
+  // the question in again.
+  const [handoff] = useState(() => ({
+    ask: searchParams.get('ask'),
+    send: searchParams.get('send') === '1',
+    documentId: readSessionId(searchParams.get('document')),
+  }))
+
+  const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(handoff.documentId)
+
+  useEffect(() => {
+    if (!CHAT_HANDOFF_PARAMS.some((param) => searchParams.has(param))) return
+    const next = new URLSearchParams(searchParams)
+    for (const param of CHAT_HANDOFF_PARAMS) next.delete(param)
+    const query = next.toString()
+    router.replace(`/classes/${classId}/chat${query ? `?${query}` : ''}`, { scroll: false })
+  }, [classId, router, searchParams])
 
   // The conversation is part of the URL so sidebar chats are linkable and reloadable.
   // The URL is the only source of truth here: mirroring it into state meant every
@@ -128,6 +148,8 @@ export default function ClassWorkspacePage() {
       onClearSelectedDocument={() => setSelectedDocumentId(null)}
       sessionId={sessionId}
       draft={draftSession}
+      initialAsk={handoff.ask}
+      initialSend={handoff.send}
       onSessionIdChange={handleSessionIdChange}
       headerActions={
         <>

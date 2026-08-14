@@ -72,6 +72,18 @@ type ChatPaneProps = {
    */
   draft?: boolean
   /**
+   * A question carried in from somewhere else: the class landing's ask box, a quiz miss,
+   * a weak topic on a results screen. Placed in the composer on arrival, so the student
+   * sees the words before they go anywhere.
+   */
+  initialAsk?: string | null
+  /**
+   * Send `initialAsk` immediately instead of leaving it in the composer. Only for the
+   * student's own words, typed somewhere that hands off to here: they already asked, and
+   * making them press Enter twice would be the page charging a toll for moving.
+   */
+  initialSend?: boolean
+  /**
    * The step of a solution a newly opened conversation is about.
    *
    * Pins that step into every turn. It is what makes asking about step 2 a conversation
@@ -131,6 +143,8 @@ export function ChatPane({
   writer,
   sessionId: sessionIdProp = null,
   draft: isDraft = false,
+  initialAsk = null,
+  initialSend = false,
   anchorPartId = null,
   layout = 'pane',
   scrollViewportRef,
@@ -155,7 +169,7 @@ export function ChatPane({
 
   const sessionId = sessionIdProp
   const [mode, setMode] = useState<ChatMode>('guide')
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState(initialAsk ?? '')
   const [pendingTurn, setPendingTurn] = useState<ChatMessage[] | null>(null)
   const [turnBase, setTurnBase] = useState<ChatMessage[] | null>(null)
   const [streamText, setStreamText] = useState('')
@@ -590,6 +604,25 @@ export function ChatPane({
     },
     [ensureSession, runTurn],
   )
+
+  /**
+   * A question typed on another surface and handed off with send set: it goes the moment
+   * the pane can send it. Waits for settings to load so a missing endpoint leaves the
+   * words in the composer with the reason visible, rather than firing into a composer
+   * that cannot answer. Fires once: the page strips the handoff from the URL, and this
+   * ref covers the renders in between.
+   */
+  const autoSentRef = useRef(false)
+  useEffect(() => {
+    if (!initialSend || !initialAsk || autoSentRef.current) return
+    if (settings === undefined) return
+    autoSentRef.current = true
+    if (disabledReason) return
+    // Deferred a tick so the send is not a state change inside the effect body itself;
+    // the ref above already guarantees exactly one schedule, so there is no cleanup to
+    // race against.
+    window.setTimeout(() => send(initialAsk), 0)
+  }, [disabledReason, initialAsk, initialSend, send, settings])
 
   /**
    * Retry means answer again, not ask again. The question stays put and its reply is
