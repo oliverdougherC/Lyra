@@ -401,7 +401,7 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
             </Link>
           </Button>
         </div>
-        {readyCount === 0 && ingestingCount === 0 ? (
+        {documents !== undefined && readyCount === 0 && ingestingCount === 0 ? (
           <p className="text-text-tertiary text-sm">
             Nothing uploaded yet. Add a syllabus, lecture notes, or a problem set and every verb
             above has something to work from.
