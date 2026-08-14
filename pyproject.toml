@@ -15,7 +15,7 @@ dependencies = [
   # Starlette parses multipart uploads through this. FastAPI raises at import time, not
   # at request time, when a route declares an UploadFile without it installed.
   "python-multipart==0.0.32",
-  "pymupdf==1.28.0",
+  "pymupdf==1.28.2",
   "sqlite-vec==0.1.9",
   "keyring==25.7.0",
   "httpx==0.28.1",
