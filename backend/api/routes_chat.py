@@ -206,6 +206,21 @@ class RegenerateRequest(BaseModel):
 
 
 @dataclass(frozen=True)
+class TurnInput:
+    """Validated input used after the HTTP persistence boundary.
+
+    Fresh messages reach this type only after `ChatRequest` has enforced the absolute
+    character cap. Regeneration may construct it from an already-persisted question, so a
+    legacy row is governed by the context-window fit check rather than retroactively by a
+    validator introduced for new messages.
+    """
+
+    content: str
+    mode: ChatMode
+    document_id: int | None = None
+
+
+@dataclass(frozen=True)
 class TurnBudget:
     """One turn's context window split into tokens per bucket."""
 
@@ -234,13 +249,22 @@ class TurnPlan:
 
 
 @dataclass(frozen=True)
+class HistoryMessage:
+    """The immutable part of a persisted message that can enter a prompt."""
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
+@dataclass(frozen=True)
 class TurnCost:
     """The unavoidable cost of one turn, and the room it leaves for optional context.
 
-    Assembled once, before the student's message is persisted, from the same estimator the
-    prompt is later measured with. Everything counted here is material the turn cannot trim
-    away: the generation reserve, the system prompt, the pinned solution step, the current
-    question, and the newest history `trim_history` is obliged to keep whatever the budget.
+    Assembled once, before a fresh message is persisted or a regeneration mutates the
+    conversation, from the same estimator the prompt is later measured with. Everything
+    counted here is material the turn cannot trim away: the generation reserve, the system
+    prompt, the pinned solution step, the current question, and the newest history
+    `trim_history` is obliged to keep whatever the budget.
     `_require_turn_fits` refuses the turn when those do not fit the window; `_prepare_turn`
     spends whatever room is left on optional older history and retrieval. Both read this one
     object, so the inequality the preflight refuses on is the inequality preparation obeys -
@@ -253,8 +277,8 @@ class TurnCost:
             not read it again.
         system_prompt: The assembled system instructions for this turn's mode.
         anchor: The pinned solution step, or None for an ordinary conversation.
-        earlier: History candidates in chronological order, already stripped of the current
-            question and any superseded reply.
+        earlier: Immutable history candidates in chronological order, already stripped of
+            the current question and any superseded reply.
         question_tokens: The estimated cost of the current question, appended and never
             trimmed.
     """
@@ -264,7 +288,7 @@ class TurnCost:
     class_id: int
     system_prompt: str
     anchor: str | None
-    earlier: list[dict[str, object]]
+    earlier: tuple[HistoryMessage, ...]
     question_tokens: int
 
     @property
@@ -287,7 +311,7 @@ class TurnCost:
         than left to overflow the window after retrieval has already been clamped to nothing.
         """
         kept = self.earlier[-MINIMUM_HISTORY_MESSAGES:]
-        return sum(estimate_tokens(str(message["content"])) for message in kept)
+        return sum(estimate_tokens(message.content) for message in kept)
 
     @property
     def reserved(self) -> int:
@@ -342,8 +366,8 @@ def _plan_turn_cost(
     """Cost a turn before it is persisted: the budget, the fixed prompt material, and the
     newest history that cannot be trimmed.
 
-    Shared by the preflight that refuses an oversized turn and the preparation that lays out
-    history and retrieval, so a single set of token estimates drives both. Reads only what a
+    Called once by the preflight; the immutable result is then carried into preparation, so
+    a single set of token estimates and fixed prompt inputs drives both. Reads only what a
     turn already reads - the session's class, the profile facts, the pinned step, and the
     prior messages - and touches no settings row, so it never resolves the endpoint a second
     time behind the consent snapshot the caller already took.
@@ -353,11 +377,11 @@ def _plan_turn_cost(
         mode, select_user_facts(conn), select_active_facts(conn, class_id)
     )
     anchor = sessions.anchored_context(conn, session_id)
-    earlier = [
-        message
+    earlier = tuple(
+        HistoryMessage(role=message["role"], content=str(message["content"]))
         for message in sessions.list_messages(conn, session_id)
         if int(message["id"]) not in excluded
-    ]
+    )
     return TurnCost(
         context_window=config.context_window,
         budget=plan_budget(config.context_window),
@@ -468,9 +492,10 @@ async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> Stre
     Once the first frame is out the status line is gone, so every later failure has to
     travel as an `error` frame instead.
     """
-    config, plan = await asyncio.to_thread(_open_turn, conn, session_id, payload)
+    request = TurnInput(content=payload.content, mode=payload.mode, document_id=payload.document_id)
+    config, plan, cost = await asyncio.to_thread(_open_turn, conn, session_id, request)
     return StreamingResponse(
-        _stream_turn(session_id, payload, config, plan),
+        _stream_turn(session_id, request, config, plan, cost),
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )
@@ -488,10 +513,11 @@ async def regenerate_chat(
     opens, so a retry that fails upstream leaves the student with the answer they already
     had instead of nothing at all.
     """
-    config, plan, content = await asyncio.to_thread(_open_regeneration, conn, session_id, payload)
-    request = ChatRequest(content=content, mode=payload.mode, document_id=payload.document_id)
+    config, plan, request, cost = await asyncio.to_thread(
+        _open_regeneration, conn, session_id, payload
+    )
     return StreamingResponse(
-        _stream_turn(session_id, request, config, plan),
+        _stream_turn(session_id, request, config, plan, cost),
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )
@@ -509,8 +535,8 @@ def _refuse_writer_session(session: dict[str, object]) -> None:
 
 
 def _open_turn(
-    conn: sqlite3.Connection, session_id: int, request: ChatRequest
-) -> tuple[TutorConfig, TurnPlan]:
+    conn: sqlite3.Connection, session_id: int, request: TurnInput
+) -> tuple[TutorConfig, TurnPlan, TurnCost]:
     """Validate the turn and persist the user's message before any streaming starts.
 
     Raises:
@@ -536,9 +562,8 @@ def _open_turn(
     # cleanly instead of being persisted and then forcing context to be truncated past the
     # window. The current question is not yet persisted, so `excluded` is empty and the
     # history it costs is exactly the prior conversation.
-    _require_turn_fits(
-        _plan_turn_cost(conn, session_id, request.mode, request.content, frozenset(), config)
-    )
+    cost = _plan_turn_cost(conn, session_id, request.mode, request.content, frozenset(), config)
+    _require_turn_fits(cost)
     # Persisted on the session, not just used for this turn, so the toggle survives a
     # reload and the next turn continues in the mode the student picked.
     sessions.set_session_mode(conn, session_id, request.mode)
@@ -546,12 +571,12 @@ def _open_turn(
     sessions.set_session_title_if_unset(conn, session_id, request.content)
     user_message_id = sessions.add_message(conn, session_id, "user", request.content)
     touch_class(conn, int(session["class_id"]))
-    return config, TurnPlan(user_message_id=user_message_id)
+    return config, TurnPlan(user_message_id=user_message_id), cost
 
 
 def _open_regeneration(
     conn: sqlite3.Connection, session_id: int, request: RegenerateRequest
-) -> tuple[TutorConfig, TurnPlan, str]:
+) -> tuple[TutorConfig, TurnPlan, TurnInput, TurnCost]:
     """Plan a retry of the conversation's last question.
 
     Nothing is deleted here. The reply being retried is only named, so that a turn which
@@ -579,27 +604,37 @@ def _open_regeneration(
         if int(message["id"]) > user_message_id
     )
     plan = TurnPlan(user_message_id=user_message_id, superseded=superseded)
+    turn_input = TurnInput(
+        content=str(question["content"]),
+        mode=request.mode,
+        document_id=request.document_id,
+    )
     # Gated exactly like a fresh turn: the window may have been reconfigured smaller since the
     # question was first asked, and a retry must not send what a first turn would not. Checked
     # before anything is mutated and before any upstream call, and since the reply being
     # retried is deleted only when its replacement is written, a refusal here leaves the
     # existing answer untouched. The question is already persisted, so it and any superseded
     # reply are excluded from the history it is charged against.
-    _require_turn_fits(
-        _plan_turn_cost(
-            conn, session_id, request.mode, str(question["content"]), plan.excluded, config
-        )
+    cost = _plan_turn_cost(
+        conn,
+        session_id,
+        turn_input.mode,
+        turn_input.content,
+        plan.excluded,
+        config,
     )
+    _require_turn_fits(cost)
     sessions.set_session_mode(conn, session_id, request.mode)
     touch_class(conn, int(session["class_id"]))
-    return config, plan, str(question["content"])
+    return config, plan, turn_input, cost
 
 
 async def _stream_turn(
     session_id: int,
-    request: ChatRequest,
+    request: TurnInput,
     config: TutorConfig,
     plan: TurnPlan,
+    cost: TurnCost,
 ) -> AsyncIterator[str]:
     """Stream one turn and persist the assistant's message however the turn ends.
 
@@ -614,9 +649,7 @@ async def _stream_turn(
     try:
         yield _frame(type="start", message_id=plan.user_message_id)
         yield _frame(type="status", stage="prompt_processing")
-        preparation = await asyncio.to_thread(
-            _prepare_turn, conn, session_id, request, config, plan
-        )
+        preparation = await asyncio.to_thread(_prepare_turn, cost)
 
         yield _frame(type="status", stage="reviewing_documents")
         result = await asyncio.to_thread(
@@ -627,6 +660,7 @@ async def _stream_turn(
             preparation.retrieval_budget,
             document_id=request.document_id,
         )
+        result = _fit_retrieval_to_prompt(preparation, result)
         retrieval = result
         turn = _build_turn(preparation, request, result)
         if retrieval.trimmed:
@@ -682,11 +716,7 @@ async def _stream_turn(
 
 
 def _prepare_turn(
-    conn: sqlite3.Connection,
-    session_id: int,
-    request: ChatRequest,
-    config: TutorConfig,
-    plan: TurnPlan,
+    cost: TurnCost,
 ) -> TurnPreparation:
     """Prepare system instructions, history, and the retrieval budget for one turn.
 
@@ -694,7 +724,6 @@ def _prepare_turn(
     prompt provably fits the window: the mandatory pieces already fit (`_require_turn_fits`),
     and everything allocated here is drawn from the room they leave behind.
     """
-    cost = _plan_turn_cost(conn, session_id, request.mode, request.content, plan.excluded, config)
     budget = cost.budget
 
     # History keeps its own share, with the question charged against it first so a long
@@ -704,7 +733,10 @@ def _prepare_turn(
     # holding its full share and pushing the prompt past the window once retrieval has already
     # clamped to nothing.
     history_budget = max(0, min(budget.history - cost.question_tokens, cost.prompt_room))
-    history, history_used = trim_history(cost.earlier, history_budget)
+    history, history_used = trim_history(
+        [{"role": message.role, "content": message.content} for message in cost.earlier],
+        history_budget,
+    )
     # Retrieval spends only what the window still holds once the generation reserve, the
     # system prompt, the pinned step, the question, and the history actually kept are all set
     # aside. Unused history budget is lent to retrieval this way; the reverse never happens,
@@ -731,9 +763,51 @@ def _join_blocks(*blocks: str | None) -> str:
     return "\n\n".join(block for block in blocks if block)
 
 
-def _build_turn(
-    preparation: TurnPreparation, request: ChatRequest, result: RetrievalResult
-) -> Turn:
+def _fit_retrieval_to_prompt(
+    preparation: TurnPreparation, result: RetrievalResult
+) -> RetrievalResult:
+    """Keep the ranked retrieval prefix whose rendered block fits its exact remainder.
+
+    Retrieval ranks and initially trims chunk bodies against `retrieval_budget`. The prompt
+    also labels every kept chunk with its source and adds a context heading, so this final
+    boundary check charges that formatting rather than letting it sit outside the window.
+    Chunks are removed from the end, preserving the same highest-ranked-first policy.
+    """
+    base_system = _join_blocks(preparation.system_prompt, preparation.anchor)
+    base_tokens = estimate_tokens(base_system)
+    chunks = result.chunks
+    kept_count = len(chunks)
+    while kept_count:
+        context_block = format_context_block(
+            [_context_entry(chunk) for chunk in chunks[:kept_count]]
+        )
+        rendered_tokens = estimate_tokens(_join_blocks(base_system, context_block)) - base_tokens
+        if rendered_tokens <= preparation.retrieval_budget:
+            break
+        kept_count -= 1
+
+    if kept_count == len(chunks):
+        return result
+
+    dropped = chunks[kept_count:]
+    newly_omitted = frozenset(chunk.document_id for chunk in dropped)
+    omitted_document_ids = result.omitted_document_ids | newly_omitted
+    if result.omitted_document_ids:
+        omitted_document_count = len(omitted_document_ids)
+    else:
+        # Hand-built results from integrations predating the id set may carry only a count.
+        # `max` avoids inventing duplicates when their identities are unavailable; live
+        # retrieval always supplies the exact set above.
+        omitted_document_count = max(result.omitted_document_count, len(newly_omitted))
+    return RetrievalResult(
+        chunks=chunks[:kept_count],
+        trimmed=result.trimmed or len(dropped) * 2 > len(chunks),
+        omitted_document_count=omitted_document_count,
+        omitted_document_ids=omitted_document_ids,
+    )
+
+
+def _build_turn(preparation: TurnPreparation, request: TurnInput, result: RetrievalResult) -> Turn:
     """Assemble the final prompt after retrieval has returned."""
     context_block = format_context_block([_context_entry(chunk) for chunk in result.chunks])
     # The anchor sits above retrieved material, because it is what the question is about

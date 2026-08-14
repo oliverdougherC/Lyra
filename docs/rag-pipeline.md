@@ -1095,9 +1095,11 @@ Rules:
 - The generation reserve is subtracted first and is never borrowed from.
 - Some prompt material cannot be trimmed: the generation reserve, the system prompt, the pinned
   solution step, the current question, and the most recent exchange history always keeps (see below).
-  Before a turn is persisted, these are charged in full against the window, and the turn is refused if
-  they do not all fit. This is the invariant: for every accepted turn, the estimated prompt plus the
-  generation reserve fits the configured context window.
+  Before a turn is persisted, these are captured in one immutable preflight snapshot, charged in full
+  against the window, and the turn is refused if they do not all fit. Prompt preparation consumes that
+  exact accepted snapshot without rereading history, profile facts, or the pinned step. This is the
+  invariant: for every accepted turn, the fixed prompt state that passed preflight is the state later
+  assembled, and its estimated prompt plus the generation reserve fits the configured context window.
 - The current question is appended verbatim and never trimmed, so it is charged against the budget
   before history and retrieval are allocated. It is drawn from the history share first, and whatever
   it cannot cover there overflows onto retrieval, so a long question shrinks history and then retrieved
@@ -1106,14 +1108,17 @@ Rules:
   reserve, the fixed material, the question, and the history actually kept are set aside. Unused history
   budget is lent to retrieved context this way; the reverse never happens, and neither may touch the
   generation reserve.
-- Retrieved chunks are trimmed lowest-score-first until they fit.
+- Retrieved chunks are trimmed lowest-score-first until the fully rendered context block fits, including
+  its heading and per-chunk source labels rather than only the raw chunk bodies.
 - Conversation history is trimmed oldest-first, always keeping the most recent exchange. Because that
   exchange survives any history budget, its cost is part of the non-trimmable material the fit check
   above accounts for: a turn whose question cannot coexist with the exchange it answers is refused
   rather than sent with the preceding question silently dropped.
-- A single question is capped at 16,000 characters at the API boundary (a sanity limit, not the
-  working one), and refused with a clear message if, together with the reserve, the system prompt, the
-  pinned step, and the exchange history must keep, it cannot fit the window.
+- A new question is capped at 16,000 characters at the API boundary (a sanity limit, not the working
+  one), and refused with a clear message if, together with the reserve, the system prompt, the pinned
+  step, and the exchange history must keep, it cannot fit the window. Regeneration does not reapply
+  that inbound cap to legacy persisted questions; those are accepted or deliberately refused by the
+  context-window fit invariant.
 - If the configured window is below 8192 tokens, Settings shows a warning that quality will suffer.
 - When retrieval is trimmed by more than half, log it **and** surface a quiet indicator in the UI, so
   the user can tell that the model did not see everything.

@@ -461,14 +461,17 @@ async def test_a_disconnect_keeps_the_part_of_the_answer_that_arrived(
 ) -> None:
     """Closing the generator is what Starlette does when the reader goes away."""
     monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Half ", "an ", "answer."))
-    request = routes_chat.ChatRequest(content=QUESTION, mode="guide")
+    request = routes_chat.TurnInput(content=QUESTION, mode="guide")
     config = app_settings.TutorConfig(
         endpoint_url=ENDPOINT, api_key=None, model=None, context_window=8192
     )
     user_message_id = sessions.add_message(db, session_id, "user", QUESTION)
 
     plan = routes_chat.TurnPlan(user_message_id=user_message_id)
-    stream = routes_chat._stream_turn(session_id, request, config, plan)
+    cost = routes_chat._plan_turn_cost(
+        db, session_id, request.mode, request.content, plan.excluded, config
+    )
+    stream = routes_chat._stream_turn(session_id, request, config, plan, cost)
     started = _frames(await anext(stream))
     prompt_status = _frames(await anext(stream))
     retrieval_status = _frames(await anext(stream))
@@ -572,6 +575,54 @@ def test_the_regenerated_turn_does_not_show_the_model_its_discarded_attempt(
     contents = [message["content"] for message in seen[0]]
     assert "First attempt." not in contents
     assert contents[-1] == QUESTION
+
+
+def test_a_legacy_question_over_the_new_character_cap_can_be_regenerated(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The inbound paste cap does not retroactively invalidate persisted conversations."""
+    legacy_question = "q" * (routes_chat.MAX_QUESTION_CHARS + 1)
+    sessions.add_message(db, session_id, "user", legacy_question)
+    sessions.add_message(db, session_id, "assistant", "The answer they already have.")
+    _set_context_window(db, 32_768)
+
+    captured: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Replacement."))
+
+    response = client.post(f"/api/sessions/{session_id}/regenerate", json={"mode": "guide"})
+
+    assert response.status_code == 200
+    assert _frames(response.text)[-1]["type"] == "done"
+    assert captured[0][-1] == {"role": "user", "content": legacy_question}
+    assert [
+        (message["role"], message["content"]) for message in sessions.list_messages(db, session_id)
+    ] == [
+        ("user", legacy_question),
+        ("assistant", "Replacement."),
+    ]
+
+
+def test_a_legacy_question_is_deliberately_refused_when_it_does_not_fit(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_question = "q" * (routes_chat.MAX_QUESTION_CHARS + 1)
+    sessions.add_message(db, session_id, "user", legacy_question)
+    sessions.add_message(db, session_id, "assistant", "The answer they already have.")
+    _set_context_window(db, 2_048)
+    stream_calls: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _spy_stream(stream_calls))
+
+    response = client.post(f"/api/sessions/{session_id}/regenerate", json={"mode": "guide"})
+
+    assert response.status_code == 400
+    assert "too long" in str(response.json()["detail"])
+    assert stream_calls == []
+    assert [
+        (message["role"], message["content"]) for message in sessions.list_messages(db, session_id)
+    ] == [
+        ("user", legacy_question),
+        ("assistant", "The answer they already have."),
+    ]
 
 
 def test_regenerating_an_empty_conversation_is_a_404_with_a_reason(
@@ -1342,6 +1393,117 @@ def test_the_window_used_for_budgeting_is_the_consent_snapshots_window(
     assert "too long" in str(response.json()["detail"])
     assert calls == []
     assert sessions.list_messages(db, session_id) == []
+
+
+def test_an_accepted_turn_uses_the_history_snapshot_that_passed_preflight(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = 2_048
+    _set_context_window(db, window)
+    later_message = "future message " * 1_000
+    original_prepare = routes_chat._prepare_turn
+
+    def mutate_then_prepare(*args: object, **kwargs: object) -> routes_chat.TurnPreparation:
+        mutation_conn = connect()
+        try:
+            sessions.add_message(mutation_conn, session_id, "user", later_message)
+        finally:
+            mutation_conn.close()
+        return original_prepare(*args, **kwargs)
+
+    captured: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "_prepare_turn", mutate_then_prepare)
+    monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Sure."))
+
+    response = client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": QUESTION, "mode": "guide"}
+    )
+
+    assert response.status_code == 200
+    assert _frames(response.text)[-1]["type"] == "done"
+    assert later_message not in [message["content"] for message in captured[0]]
+    assert captured[0][-1] == {"role": "user", "content": QUESTION}
+    prompt_tokens = sum(estimate_tokens(message["content"]) for message in captured[0])
+    assert prompt_tokens + routes_chat.plan_budget(window).generation <= window
+
+
+def test_an_accepted_turn_does_not_reread_profile_facts_before_preparation(
+    client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads = 0
+
+    def read_once(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+        nonlocal reads
+        reads += 1
+        if reads > 1:
+            raise AssertionError("accepted prompt state was read twice")
+        return []
+
+    captured: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "select_user_facts", read_once)
+    monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Sure."))
+
+    response = client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": QUESTION, "mode": "guide"}
+    )
+
+    assert response.status_code == 200
+    assert _frames(response.text)[-1]["type"] == "done"
+    assert reads == 1
+
+
+def test_retrieval_labels_cannot_push_an_accepted_prompt_past_the_window(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = 2_048
+    _set_context_window(db, window)
+    retrieval_budgets: list[int] = []
+
+    def fill_raw_retrieval_budget(
+        conn: sqlite3.Connection,
+        class_id: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        retrieval_budgets.append(budget_tokens)
+        chunk = RetrievedChunk(
+            chunk_id=1,
+            document_id=1,
+            content="r" * (budget_tokens * 4),
+            token_count=budget_tokens,
+            page_number=3,
+            section_title="Derivatives",
+            section_path="Calculus / Derivatives",
+            section_number="3.2",
+            problem_number=None,
+            part_index=None,
+            filename="lecture-2.pdf",
+            similarity=0.82,
+            score=0.86,
+        )
+        assert estimate_tokens(chunk.content) == budget_tokens
+        return RetrievalResult(
+            chunks=[chunk],
+            trimmed=True,
+            omitted_document_count=1,
+            omitted_document_ids=frozenset({chunk.document_id}),
+        )
+
+    captured: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "retrieve", fill_raw_retrieval_budget)
+    monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Sure."))
+
+    response = client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": QUESTION, "mode": "guide"}
+    )
+
+    assert response.status_code == 200
+    assert retrieval_budgets
+    notice = next(frame for frame in _frames(response.text) if frame["type"] == "notice")
+    assert notice["omitted_document_count"] == 1
+    prompt_tokens = sum(estimate_tokens(message["content"]) for message in captured[0])
+    assert prompt_tokens + routes_chat.plan_budget(window).generation <= window
 
 
 @pytest.mark.parametrize(
