@@ -121,12 +121,70 @@ def regular_file_present(path: Path) -> bool:
         info = os.lstat(path)
     except FileNotFoundError:
         return False
-    if stat.S_ISREG(info.st_mode):
-        return True
-    raise PrivacyContractError(
-        f"{path} exists but is not a regular file (it may be a symlink); refusing to trust "
-        f"or overwrite it as Lyra-owned state"
-    )
+    _assert_owned_entry(info, path, is_dir=False)
+    return True
+
+
+def ensure_private_file(path: Path) -> None:
+    """Create or harden a regular Lyra-owned file without truncating or following links.
+
+    New files are created exclusively at `0o600`, so they are private from their first
+    byte. Existing files are opened with `O_NOFOLLOW`, checked through the returned
+    descriptor, and hardened through that same descriptor. This is the preparation an
+    external writer such as SQLite needs *before* it opens a predictable pathname itself.
+    """
+    flags = os.O_RDWR | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK
+    if not _POSIX:
+        _refuse_existing_symlink(path)
+    try:
+        descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, FILE_MODE)
+    except FileExistsError:
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as exc:
+            _raise_unsafe_open(path, exc, operation="secure")
+            raise
+    except OSError as exc:
+        _raise_unsafe_open(path, exc, operation="secure")
+        raise
+
+    try:
+        _assert_owned_entry(os.fstat(descriptor), path, is_dir=False)
+        _fchmod_owned(descriptor, FILE_MODE, path)
+    finally:
+        os.close(descriptor)
+
+
+def assert_safe_external_writer_parent(path: Path) -> None:
+    """Require a POSIX directory where another user cannot swap prepared pathnames.
+
+    Some libraries, notably SQLite, cannot accept an already-secured descriptor and must
+    reopen predictable names themselves. No-follow preparation is only durable across that
+    handoff when another OS user cannot unlink and replace entries in the containing
+    directory. Owner-only or owner-writable `0755`-style directories are safe; a group- or
+    world-writable parent is rejected without chmodding a directory the user owns.
+    """
+    if not _POSIX:
+        return
+    try:
+        descriptor = _open_nofollow(path, is_dir=True)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise PrivacyContractError(
+                f"{path} is a symlink; refusing to hand sensitive pathnames to an external writer"
+            ) from exc
+        raise
+    try:
+        info = os.fstat(descriptor)
+        _assert_owned_entry(info, path, is_dir=True)
+        if stat.S_IMODE(info.st_mode) & 0o022:
+            raise PrivacyContractError(
+                f"the database directory ({path}) is writable by other users; choose a "
+                "current-user-owned directory without group or world write permission so "
+                "SQLite sidecar names cannot be replaced before SQLite opens them"
+            )
+    finally:
+        os.close(descriptor)
 
 
 def secure_mkdir(path: Path, *, root: Path) -> Path:
@@ -259,15 +317,13 @@ def write_private_bytes(path: Path, data: bytes) -> None:
     try:
         descriptor = os.open(path, flags, FILE_MODE)
     except OSError as exc:
-        if exc.errno == errno.ELOOP:
-            raise PrivacyContractError(
-                f"{path} is a symlink; refusing to write Lyra-owned state through it"
-            ) from exc
+        _raise_unsafe_open(path, exc, operation="write")
         raise
     owns_descriptor = False
     try:
         # Tighten an existing file that a prior run left broad, on the descriptor we already
         # hold. O_CREAT's mode applies only to a file this call creates.
+        _assert_owned_entry(os.fstat(descriptor), path, is_dir=False)
         _fchmod_owned(descriptor, FILE_MODE, path)
         with os.fdopen(descriptor, "wb") as handle:
             owns_descriptor = True
@@ -280,6 +336,27 @@ def write_private_bytes(path: Path, data: bytes) -> None:
 def write_private_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
     """Write `text` to `path`, private from the first byte, replacing any existing file."""
     write_private_bytes(path, text.encode(encoding))
+
+
+def read_private_text(path: Path, *, encoding: str = "utf-8") -> str:
+    """Read a private regular file without following a final-component symlink."""
+    if not _POSIX:
+        _refuse_existing_symlink(path)
+    try:
+        descriptor = _open_nofollow(path, is_dir=False)
+    except OSError as exc:
+        _raise_unsafe_open(path, exc, operation="read")
+        raise
+    owns_descriptor = False
+    try:
+        _assert_owned_entry(os.fstat(descriptor), path, is_dir=False)
+        _fchmod_owned(descriptor, FILE_MODE, path)
+        with os.fdopen(descriptor, "r", encoding=encoding) as handle:
+            owns_descriptor = True
+            return handle.read()
+    finally:
+        if not owns_descriptor:
+            os.close(descriptor)
 
 
 def harden_data_tree(root: Path, *, keep_file_modes: Iterable[Path] = ()) -> None:
@@ -344,17 +421,27 @@ def _tighten(path: Path, mode: int) -> None:
         return
     if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
         return
-    if stat.S_IMODE(info.st_mode) & ~mode == 0:
+    is_dir = stat.S_ISDIR(info.st_mode)
+    current_mode = stat.S_IMODE(info.st_mode)
+    # Directories need all owner rwx bits as well as no group/other access. A mode such as
+    # 0o000 is narrower in one sense but unusable: once the sentinel is written Lyra would
+    # otherwise never revisit it. Files may intentionally be owner-read-only, so their
+    # existing owner bits are preserved when group/other access is already absent.
+    if (is_dir and current_mode == mode) or (not is_dir and current_mode & ~mode == 0):
         return
     try:
-        descriptor = _open_nofollow(path, is_dir=stat.S_ISDIR(info.st_mode))
+        descriptor = _open_nofollow(path, is_dir=is_dir)
     except OSError as exc:
         # Raced into a symlink or vanished between the lstat and the open: leave it. The
         # no-follow open is what guarantees we never chmod a link's target here.
         if exc.errno in (errno.ELOOP, errno.ENOENT):
             return
+        if is_dir and exc.errno in (errno.EACCES, errno.EPERM):
+            _chmod_unopenable_dir_nofollow(path, mode)
+            return
         raise
     try:
+        _assert_owned_entry(os.fstat(descriptor), path, is_dir=is_dir)
         _fchmod_owned(descriptor, mode, path)
     finally:
         os.close(descriptor)
@@ -379,6 +466,7 @@ def _harden(path: Path, mode: int, *, is_dir: bool) -> None:
             ) from exc
         raise
     try:
+        _assert_owned_entry(os.fstat(descriptor), path, is_dir=is_dir)
         _fchmod_owned(descriptor, mode, path)
     finally:
         os.close(descriptor)
@@ -405,6 +493,9 @@ def _fchmod_owned(descriptor: int, mode: int, path: Path) -> None:
     filesystem - is a real failure to secure owned state and is surfaced, so a startup never
     reports success while leaving the data broad-readable.
     """
+    if not _POSIX or not hasattr(os, "fchmod"):
+        _chmod_best_effort(path, mode)
+        return
     try:
         os.fchmod(descriptor, mode)
     except OSError as exc:
@@ -417,6 +508,61 @@ def _fchmod_owned(descriptor: int, mode: int, path: Path) -> None:
             return
         raise PrivacyContractError(
             f"could not set mode {mode:#o} on {path}: {exc.strerror}"
+        ) from exc
+
+
+def _assert_owned_entry(info: os.stat_result, path: Path, *, is_dir: bool) -> None:
+    """Require the descriptor/path entry type and, on POSIX, current-user ownership."""
+    expected = stat.S_ISDIR(info.st_mode) if is_dir else stat.S_ISREG(info.st_mode)
+    if not expected:
+        kind = "directory" if is_dir else "regular file"
+        raise PrivacyContractError(
+            f"{path} exists but is not a {kind}; refusing to trust it as Lyra-owned state"
+        )
+    if _POSIX and info.st_uid != os.geteuid():
+        raise PrivacyContractError(
+            f"{path} is not owned by the current user; refusing to trust or modify it as "
+            "Lyra-owned state"
+        )
+
+
+def _raise_unsafe_open(path: Path, exc: OSError, *, operation: str) -> None:
+    """Translate no-follow/special-entry open failures into the contract's error."""
+    if exc.errno == errno.ELOOP:
+        raise PrivacyContractError(
+            f"{path} is a symlink; refusing to {operation} Lyra-owned state through it"
+        ) from exc
+    if exc.errno in (errno.EISDIR, errno.ENXIO, errno.ENODEV):
+        raise PrivacyContractError(
+            f"{path} is not a regular file; refusing to {operation} it as Lyra-owned state"
+        ) from exc
+    if exc.errno in (errno.EACCES, errno.EPERM):
+        raise PrivacyContractError(
+            f"could not {operation} {path} through a private descriptor; check that it is "
+            "owned and writable by the current user"
+        ) from exc
+
+
+def _chmod_unopenable_dir_nofollow(path: Path, mode: int) -> None:
+    """Restore owner access to a mode-000 directory without chmodding through a link.
+
+    Some systems refuse an ordinary directory descriptor when the owner has no read or
+    execute bits. `follow_symlinks=False` keeps the pathname fallback from reaching an
+    outside target if the entry is raced into a symlink; the migration's next walk will
+    either see the real directory at `0o700` or skip the unexpected link.
+    """
+    try:
+        os.chmod(path, mode, follow_symlinks=False)
+    except (NotImplementedError, OSError) as exc:
+        if isinstance(exc, OSError) and exc.errno in _MODE_UNSUPPORTED:
+            logger.warning(
+                "Filesystem for %s does not support POSIX modes; relying on the data "
+                "directory location for privacy",
+                path,
+            )
+            return
+        raise PrivacyContractError(
+            f"could not restore owner access on {path} without following symlinks"
         ) from exc
 
 

@@ -28,9 +28,10 @@ Everything Lyra owns is created private to the user who runs it, independent of 
 | --- | --- | --- |
 | Data directories | `0700` | `data/` and every directory Lyra creates beneath it, including per-class upload and per-document page directories. This is the control that matters: a directory another user cannot enter hides every file inside it. |
 | Uploads, extracted text, page and figure caches | `0600` | The coursework and everything derived from it. |
-| Database and its `-wal` / `-shm` sidecars | `0600` | Re-hardened whenever Lyra opens the database. |
+| Database and its `-wal` / `-shm` sidecars | `0600` | Created or hardened with no-follow descriptors before SQLite opens the database. |
 | Fallback API key (`data/.api_key`) | `0600` | Created private from the first byte. |
 | Backup archive | `0600` | Created private from the first byte, because it lives outside the data tree and has no owner-only directory to hide behind. |
+| Restored data and database | `0700` dirs / `0600` files | Extracted privately and published only after verification; model runtimes retain their owner executable bit. |
 | Model files (`data/models/`) | `0700` dir | The directory is private; the bundled runtime keeps its executable bit, so it is not forced to `0600`. |
 
 The first launch after upgrading tightens an older data tree that a previous version left broader,
@@ -62,11 +63,17 @@ its permissions, or walk into it. The boundary is enforced, not assumed:
   symlinked directory and never changes a link or its target.
 - **A sensitive file is opened without following a link.** Writing the fallback key, extracted text,
   an upload, a rendered cache entry, or the upgrade sentinel refuses if a symlink sits where the file
-  belongs, so it can never truncate or overwrite an unrelated file the link points at.
+  belongs, so it can never truncate or overwrite an unrelated file the link points at. Rendered PNG
+  bytes go through that no-follow writer at their deterministic partial names before an atomic rename;
+  a cache hit is accepted only when the final entry is a real current-user-owned regular file.
 - **An explicit `LYRA_DB_PATH` that is a symlink is refused** rather than opened and chmodded through
   — Lyra will not modify an external file while reporting the configured path as secured. A database
-  placed at a real path outside the data tree is still hardened to `0600`, and Lyra creates (and owns)
-  only the immediate directory it makes for it.
+  placed at a real path outside the data tree is still created or hardened to `0600` before SQLite
+  opens it, without truncating an existing database. Predictable `-wal` and `-shm` entries are likewise
+  required to be real current-user-owned regular files and secured before WAL mode is enabled. Lyra
+  creates (and owns) only the immediate directory it makes for an external database. A pre-existing
+  external parent may remain `0755`, but a group- or world-writable parent is rejected because another
+  user could otherwise replace a prepared sidecar name in the instant before SQLite reopens it.
 
 ### Non-POSIX filesystems
 
@@ -102,6 +109,9 @@ than passed over, so Lyra does not report a private layout it did not actually a
   the active SQLite database. That includes `data/.api_key` when Lyra had to fall back to it, so the
   archive is created `0600` (owner-only) from the first byte. It does not include OS-keychain
   secrets, `.lyra/`, or `logs/`.
+- `./run restore` recreates the data tree with `0700` directories and `0600` sensitive files even
+  under a permissive umask. An external restored database is `0600` without changing the mode of its
+  pre-existing parent directory.
 - Deleting a document removes its upload, extracted text, and rendered pages.
 - Deleting a class removes the uploads and derived text and pages for every document in that class.
 - `./run stop` stops Lyra's owned services only. It does not delete user data.

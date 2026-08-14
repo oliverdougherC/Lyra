@@ -15,8 +15,9 @@ import sqlite_vec
 from backend.config import settings
 from backend.storage import private
 
-# WAL leaves two sidecars beside the database. SQLite creates them with the process umask,
-# so they are re-hardened to `0o600` here alongside the database itself.
+# WAL leaves two predictable sidecars beside the database. They are secured before SQLite
+# opens the database, because post-open hardening is too late for both permissive umasks and
+# a planted symlink at either pathname.
 _DB_SIDECAR_SUFFIXES = ("-wal", "-shm")
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
@@ -46,6 +47,18 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
         settings.data_dir if private.is_within(path.parent, settings.data_dir) else path.parent
     )
     private.secure_mkdir(path.parent, root=owned_root)
+    # SQLite must reopen these names itself, so keep the no-follow preparation below from
+    # becoming a check/use race in an explicit external directory where another OS user
+    # could otherwise unlink and replace an entry. The directory remains at the user's
+    # chosen mode (0755 is fine); only group/world write access is unsafe and rejected.
+    private.assert_safe_external_writer_parent(path.parent)
+    # SQLite cannot be the first process to create or touch any of these predictable names:
+    # its open flags follow symlinks and its creation mode is affected by the process umask.
+    # Pre-create absent files exclusively at 0o600, or harden an existing real current-user
+    # file through a no-follow descriptor. Existing databases are never truncated.
+    private.ensure_private_file(path)
+    for suffix in _DB_SIDECAR_SUFFIXES:
+        private.ensure_private_file(path.with_name(path.name + suffix))
     # check_same_thread=False: FastAPI submits a sync dependency generator and its sync
     # handler as two separate threadpool jobs, which are not guaranteed to land on the
     # same worker. A connection is never shared between concurrent requests, so the
@@ -65,7 +78,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     private.harden_file(path)
     for suffix in _DB_SIDECAR_SUFFIXES:
         sidecar = path.with_name(path.name + suffix)
-        if sidecar.exists():
+        if private.regular_file_present(sidecar):
             private.harden_file(sidecar)
     return conn
 

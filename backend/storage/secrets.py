@@ -57,7 +57,7 @@ def _demote_to_file() -> None:
 def _read_key_file() -> str | None:
     """Read the fallback file, treating an absent or empty file as no key."""
     try:
-        value = _key_file().read_text(encoding="utf-8").strip()
+        value = private.read_private_text(_key_file(), encoding="utf-8").strip()
     except OSError:
         return None
     return value or None

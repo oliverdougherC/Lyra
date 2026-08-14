@@ -166,7 +166,7 @@ def render_page(
         raise NotFoundError(NOT_A_PAGE)
 
     cached = page_path(document_id, page_number, dpi)
-    if cached.exists():
+    if private.regular_file_present(cached):
         # A cached page is served without re-checking the envelope, and that is safe even if
         # the envelope has since tightened: the file exists only because a prior render
         # already allocated its pixmap and completed the atomic write below, so the
@@ -198,11 +198,12 @@ def render_page(
             try:
                 # `output` is named rather than left to the extension: PyMuPDF picks the
                 # format from the filename, and the temporary name does not end in `.png`.
-                pixmap.save(partial, output="png")
-                # A rendered page reveals the document, so the cache entry is `0o600`.
-                # Hardened before the rename, so the visible name is private from the moment
-                # it exists; the `0o700` cache directory covers it either way.
-                private.harden_file(partial)
+                # The raster envelope bounds this encoding's memory: the pixmap already
+                # occupies up to ~525 MB and its PNG bytes are a bounded derivative of that
+                # allocation. Encoding in memory lets the actual pathname write go through
+                # O_NOFOLLOW at 0o600 from its first byte; `Pixmap.save(path)` cannot offer
+                # that guarantee and may follow a planted deterministic partial symlink.
+                private.write_private_bytes(partial, pixmap.tobytes("png"))
                 partial.replace(cached)
             finally:
                 partial.unlink(missing_ok=True)
@@ -258,7 +259,7 @@ def render_figure(
         raise LyraError(NOT_RENDERABLE)
 
     cached = figure_path(document_id, figure_id)
-    if cached.exists():
+    if private.regular_file_present(cached):
         # Served without re-checking the envelope, for the reason `render_page` documents:
         # the crop's pixmap was already allocated when this file was written, so reading it
         # back allocates nothing this bound needs to guard.
@@ -288,9 +289,7 @@ def render_figure(
             private.secure_mkdir(cached.parent, root=settings.data_dir)
             partial = _partial_path(cached)
             try:
-                pixmap.save(partial, output="png")
-                # A cropped figure reveals the document too, so it is `0o600` like a page.
-                private.harden_file(partial)
+                private.write_private_bytes(partial, pixmap.tobytes("png"))
                 partial.replace(cached)
             finally:
                 partial.unlink(missing_ok=True)

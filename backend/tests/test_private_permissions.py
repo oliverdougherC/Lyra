@@ -121,6 +121,17 @@ def test_harden_data_tree_tightens_the_tree_but_keeps_executables(tmp_path: Path
     assert _mode(binary) == 0o755
 
 
+def test_harden_data_tree_restores_owner_access_to_unusable_directories(tmp_path: Path) -> None:
+    root = tmp_path / "old-install"
+    child = root / "uploads"
+    child.mkdir(parents=True)
+    os.chmod(child, 0o000)
+
+    private.harden_data_tree(root)
+
+    assert _mode(child) == 0o700
+
+
 def test_harden_data_tree_does_not_follow_symlinks(tmp_path: Path) -> None:
     # A link pointing at an attached workspace must not become a route to rewrite the
     # user's own files.
@@ -162,6 +173,67 @@ def test_connect_creates_the_database_owner_only(
 
     assert _mode(db_path.parent) == 0o700
     assert _mode(db_path) == 0o600
+
+
+def test_connect_creates_external_database_and_active_sidecars_private(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_open_umask: None
+) -> None:
+    external_parent = tmp_path / "user-chosen-db-dir"
+    external_parent.mkdir(mode=0o755)
+    os.chmod(external_parent, 0o755)  # noqa: S103 - explicit external-parent threat model
+    db_path = external_parent / "lyra.db"
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "separate-data")
+
+    conn = connect(db_path)
+    try:
+        assert conn.execute("pragma journal_mode").fetchone()[0] == "wal"
+        assert _mode(db_path) == 0o600
+        for suffix in ("-wal", "-shm"):
+            sidecar = db_path.with_name(db_path.name + suffix)
+            assert sidecar.is_file()
+            assert _mode(sidecar) == 0o600
+        # An explicit external parent remains user-owned and is not chmodded by Lyra.
+        assert _mode(external_parent) == 0o755
+    finally:
+        conn.close()
+
+
+def test_connect_rejects_an_external_database_in_an_other_writable_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    external_parent = tmp_path / "unsafe-db-dir"
+    external_parent.mkdir()
+    os.chmod(external_parent, 0o777)  # noqa: S103 - unsafe configuration under test
+    db_path = external_parent / "lyra.db"
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "separate-data")
+
+    with pytest.raises(private.PrivacyContractError, match="writable by other users"):
+        connect(db_path)
+
+    assert not db_path.exists()
+    assert _mode(external_parent) == 0o777
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+def test_connect_refuses_planted_sidecar_symlinks_before_sqlite_touches_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wide_open_umask: None,
+    suffix: str,
+) -> None:
+    db_path = tmp_path / "external-db" / "lyra.db"
+    db_path.parent.mkdir()
+    external = tmp_path / f"outside{suffix}"
+    external.write_bytes(b"recognizable external data")
+    os.chmod(external, 0o644)
+    db_path.with_name(db_path.name + suffix).symlink_to(external)
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "separate-data")
+
+    with pytest.raises(private.PrivacyContractError):
+        connect(db_path)
+
+    assert external.read_bytes() == b"recognizable external data"
+    assert _mode(external) == 0o644
 
 
 def test_connect_tightens_a_sidecar_left_broad_by_a_prior_run(
@@ -290,6 +362,20 @@ def test_write_private_bytes_refuses_a_symlink_target(
 
     assert link.is_symlink()
     assert external.read_text() == "original contents"
+    assert _mode(external) == 0o644
+
+
+def test_read_private_text_refuses_a_symlink_target(tmp_path: Path, wide_open_umask: None) -> None:
+    external = tmp_path / "outside-key"
+    external.write_text("not a Lyra secret")
+    os.chmod(external, 0o644)
+    link = tmp_path / ".api_key"
+    link.symlink_to(external)
+
+    with pytest.raises(private.PrivacyContractError):
+        private.read_private_text(link)
+
+    assert external.read_text() == "not a Lyra secret"
     assert _mode(external) == 0o644
 
 

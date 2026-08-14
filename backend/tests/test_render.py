@@ -6,6 +6,8 @@ from. A fake would test neither.
 """
 
 import math
+import os
+import stat
 import struct
 import threading
 import zlib
@@ -16,6 +18,7 @@ import pytest
 
 from backend.core.errors import LyraError, NotFoundError
 from backend.rag import parse, render
+from backend.storage import private
 
 
 def _pdf(path: Path, pages: int = 3) -> Path:
@@ -97,21 +100,21 @@ def test_a_write_that_dies_partway_leaves_nothing_the_cache_will_serve(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = _pdf(tmp_path / "hw4.pdf")
-    whole = pymupdf.Pixmap.save
+    whole = private.write_private_bytes
     failed_once = False
 
-    def die_partway(self: pymupdf.Pixmap, filename: object, **kwargs: object) -> None:
+    def die_partway(path: Path, data: bytes) -> None:
         # Only the first write dies, so the re-render below runs for real. Undoing the
         # patch instead would undo the autouse fixture holding `data_dir` inside tmp_path
         # with it, and point every path in this test at the developer's own data directory.
         nonlocal failed_once
         if not failed_once:
             failed_once = True
-            Path(str(filename)).write_bytes(b"\x89PNG\r\n\x1a\n truncated")
+            whole(path, b"\x89PNG\r\n\x1a\n truncated")
             raise OSError("no space left on device")
-        whole(self, filename, **kwargs)
+        whole(path, data)
 
-    monkeypatch.setattr(pymupdf.Pixmap, "save", die_partway)
+    monkeypatch.setattr(private, "write_private_bytes", die_partway)
     with pytest.raises(LyraError):
         render.render_page(1, source, "application/pdf", 1)
 
@@ -136,14 +139,15 @@ def test_two_threads_rendering_the_same_page_do_not_collide(
     once and the collision is deterministic rather than a race the test might miss.
     """
     source = _pdf(tmp_path / "hw4.pdf")
-    whole = pymupdf.Pixmap.save
+    whole = pymupdf.Pixmap.tobytes
     barrier = threading.Barrier(2, timeout=10)
 
-    def synchronized_save(self: pymupdf.Pixmap, filename: object, **kwargs: object) -> None:
-        whole(self, filename, **kwargs)
+    def synchronized_encode(self: pymupdf.Pixmap, output: str = "png") -> bytes:
+        encoded = whole(self, output)
         barrier.wait()
+        return encoded
 
-    monkeypatch.setattr(pymupdf.Pixmap, "save", synchronized_save)
+    monkeypatch.setattr(pymupdf.Pixmap, "tobytes", synchronized_encode)
     results: list[object] = []
 
     def render_one() -> None:
@@ -161,6 +165,76 @@ def test_two_threads_rendering_the_same_page_do_not_collide(
     assert results == [render.page_path(1, 1), render.page_path(1, 1)]
     assert render.page_path(1, 1).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     assert list(render.pages_dir(1).glob("*.partial")) == []
+
+
+def _plant_link(path: Path, external: Path) -> None:
+    private.secure_mkdir(path.parent, root=render.settings.data_dir)
+    path.symlink_to(external)
+
+
+def _assert_external_unchanged(external: Path) -> None:
+    assert external.read_bytes() == b"outside data"
+    assert stat.S_IMODE(external.stat().st_mode) == 0o644
+
+
+def test_page_render_refuses_a_symlink_at_the_partial_path(tmp_path: Path) -> None:
+    source = _pdf(tmp_path / "page.pdf", pages=1)
+    cached = render.page_path(11, 1)
+    external = tmp_path / "outside-page-partial"
+    external.write_bytes(b"outside data")
+    os.chmod(external, 0o644)
+    _plant_link(render._partial_path(cached), external)
+
+    with pytest.raises(LyraError):
+        render.render_page(11, source, "application/pdf", 1)
+
+    _assert_external_unchanged(external)
+    assert not cached.exists()
+
+
+def test_page_render_refuses_a_symlink_at_the_final_cache_path(tmp_path: Path) -> None:
+    source = _pdf(tmp_path / "page.pdf", pages=1)
+    cached = render.page_path(12, 1)
+    external = tmp_path / "outside-page-cache"
+    external.write_bytes(b"outside data")
+    os.chmod(external, 0o644)
+    _plant_link(cached, external)
+
+    with pytest.raises(private.PrivacyContractError):
+        render.render_page(12, source, "application/pdf", 1)
+
+    _assert_external_unchanged(external)
+    assert cached.is_symlink()
+
+
+def test_figure_render_refuses_a_symlink_at_the_partial_path(tmp_path: Path) -> None:
+    source = _pdf(tmp_path / "figure.pdf", pages=1)
+    cached = render.figure_path(13, 7)
+    external = tmp_path / "outside-figure-partial"
+    external.write_bytes(b"outside data")
+    os.chmod(external, 0o644)
+    _plant_link(render._partial_path(cached), external)
+
+    with pytest.raises(LyraError):
+        render.render_figure(13, source, "application/pdf", 1, 7, (0.1, 0.1, 0.5, 0.5))
+
+    _assert_external_unchanged(external)
+    assert not cached.exists()
+
+
+def test_figure_render_refuses_a_symlink_at_the_final_cache_path(tmp_path: Path) -> None:
+    source = _pdf(tmp_path / "figure.pdf", pages=1)
+    cached = render.figure_path(14, 8)
+    external = tmp_path / "outside-figure-cache"
+    external.write_bytes(b"outside data")
+    os.chmod(external, 0o644)
+    _plant_link(cached, external)
+
+    with pytest.raises(private.PrivacyContractError):
+        render.render_figure(14, source, "application/pdf", 1, 8, (0.1, 0.1, 0.5, 0.5))
+
+    _assert_external_unchanged(external)
+    assert cached.is_symlink()
 
 
 def test_reading_and_recognition_resolutions_cache_separately(tmp_path: Path) -> None:
