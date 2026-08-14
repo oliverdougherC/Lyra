@@ -239,3 +239,126 @@ describe('ChatPane', () => {
     await waitFor(() => expect(screen.getAllByText(QUESTION)).toHaveLength(1))
   })
 })
+
+/**
+ * The handoff contract: a question carried in from another surface transfers exactly
+ * once, or not at all. Nothing here may double-send, send generated words uninvited, or
+ * drop the student's text on the floor when the endpoint cannot answer.
+ */
+describe('ChatPane handoffs', () => {
+  function renderHandoff(props: { initialAsk: string; initialSend: boolean }) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ChatPane
+            classId={1}
+            className="ECE 203"
+            selectedDocumentId={null}
+            onClearSelectedDocument={() => {}}
+            sessionId={null}
+            draft
+            onSessionIdChange={() => {}}
+            {...props}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    )
+  }
+
+  beforeEach(() => {
+    // These tests count calls, so the ledger starts empty rather than carrying totals
+    // over from the describe above.
+    vi.clearAllMocks()
+    vi.mocked(api.listSessions).mockResolvedValue([])
+    vi.mocked(api.listDocuments).mockResolvedValue([])
+    vi.mocked(api.getClassProfile).mockResolvedValue({
+      facts: [],
+      extraction_skipped_reason: null,
+    })
+    vi.mocked(api.getSettings).mockResolvedValue({
+      endpoint_url: 'http://localhost:1234/v1',
+      model: 'local',
+    } as Awaited<ReturnType<typeof api.getSettings>>)
+    vi.mocked(api.createSession).mockResolvedValue({
+      id: 7,
+      class_id: 1,
+      title: null,
+      mode: 'guide',
+      artifact_part_id: null,
+      created_at: '2026-08-04T12:00:00Z',
+    } as Awaited<ReturnType<typeof api.createSession>>)
+    vi.mocked(api.listMessages).mockResolvedValue([])
+  })
+
+  it('prefills a carried question without sending it', async () => {
+    vi.mocked(streamChat).mockImplementation(() => new Promise<void>(() => {}))
+
+    renderHandoff({ initialAsk: 'Why does the Laplace transform exist?', initialSend: false })
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    expect(composer).toHaveValue('Why does the Laplace transform exist?')
+    // Long enough for the auto-send effect to have fired if it were going to.
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(streamChat).not.toHaveBeenCalled()
+    expect(api.createSession).not.toHaveBeenCalled()
+  })
+
+  it('sends a typed handoff exactly once, even as later renders come and go', async () => {
+    vi.mocked(streamChat).mockImplementation(() => new Promise<void>(() => {}))
+
+    const view = renderHandoff({ initialAsk: 'What is due next week?', initialSend: true })
+
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(streamChat).mock.calls[0][1]).toMatchObject({
+      content: 'What is due next week?',
+    })
+
+    // Settings refetching or the parent re-rendering must not re-arm the send.
+    view.rerender(
+      <QueryClientProvider
+        client={
+          new QueryClient({
+            defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+          })
+        }
+      >
+        <TooltipProvider>
+          <ChatPane
+            classId={1}
+            className="ECE 203"
+            selectedDocumentId={null}
+            onClearSelectedDocument={() => {}}
+            sessionId={7}
+            draft={false}
+            onSessionIdChange={() => {}}
+            initialAsk="What is due next week?"
+            initialSend
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    )
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(streamChat).toHaveBeenCalledTimes(1)
+    expect(api.createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not fire a handoff into a pane that cannot answer, and says why instead', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue({
+      endpoint_url: null,
+      model: null,
+    } as unknown as Awaited<ReturnType<typeof api.getSettings>>)
+    vi.mocked(streamChat).mockImplementation(() => new Promise<void>(() => {}))
+
+    renderHandoff({ initialAsk: 'What is due next week?', initialSend: true })
+
+    // The composer's place is taken by the standing explanation, which is the honest
+    // state: the question was not sent, not silently swallowed by a dead endpoint.
+    expect(await screen.findByText(/Lyra needs a tutor endpoint/)).toBeInTheDocument()
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(streamChat).not.toHaveBeenCalled()
+    expect(api.createSession).not.toHaveBeenCalled()
+  })
+})

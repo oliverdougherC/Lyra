@@ -125,6 +125,13 @@ describe('ClassHub', () => {
       '/classes/1/solutions/8',
     )
 
+    // The fixture's syllabus.pdf failed ingestion, and a failure is a continuation item:
+    // it is the thing most worth the student's next click.
+    expect(
+      screen.getByRole('link', { name: /One document could not be processed/ }),
+    ).toHaveAttribute('href', '/classes/1?tab=documents')
+    expect(screen.getByText('Needs attention')).toBeInTheDocument()
+
     // The common starts are verbs, not feature cards, and each goes somewhere real.
     expect(screen.getByRole('button', { name: 'Practice this material' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Solve a problem set' })).toHaveAttribute(
@@ -136,6 +143,50 @@ describe('ClassHub', () => {
       'href',
       '/classes/1?tab=documents',
     )
+  })
+
+  it('distinguishes an empty class from one whose documents are working or broken', async () => {
+    const { wrapper } = createWrapper()
+
+    // Failed-only: the class is not "empty", it is broken, and must say so.
+    vi.spyOn(api, 'listDocuments').mockResolvedValue([
+      { id: 5, class_id: 1, filename: 'syllabus.pdf', state: 'failed' },
+      { id: 6, class_id: 1, filename: 'notes.pdf', state: 'failed' },
+    ] as DocumentRead[])
+    const failedView = render(<ClassHub classId={1} tab="overview" />, { wrapper })
+    expect(
+      await screen.findByRole('link', { name: /2 documents could not be processed/ }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Nothing uploaded yet/)).not.toBeInTheDocument()
+    failedView.unmount()
+
+    // Still processing: working, not empty.
+    vi.spyOn(api, 'listDocuments').mockResolvedValue([
+      { id: 7, class_id: 1, filename: 'slides.pdf', state: 'embedding' },
+    ] as DocumentRead[])
+    const workingView = render(<ClassHub classId={1} tab="overview" />, {
+      wrapper: createWrapper().wrapper,
+    })
+    expect(await screen.findByRole('link', { name: /One document being read/ })).toBeInTheDocument()
+    expect(screen.queryByText(/Nothing uploaded yet/)).not.toBeInTheDocument()
+    workingView.unmount()
+
+    // Truly empty: only now does the empty copy appear.
+    vi.spyOn(api, 'listDocuments').mockResolvedValue([])
+    render(<ClassHub classId={1} tab="overview" />, { wrapper: createWrapper().wrapper })
+    expect(await screen.findByText(/Nothing uploaded yet/)).toBeInTheDocument()
+  })
+
+  it('holds Practice until the document list has loaded', async () => {
+    // A pending query means the ready count is unknown, not zero: the button must not be
+    // clickable into a wrong "nothing ready" answer.
+    vi.spyOn(api, 'listDocuments').mockReturnValue(new Promise(() => {}))
+    const { wrapper } = createWrapper()
+
+    render(<ClassHub classId={1} tab="overview" />, { wrapper })
+
+    const practice = await screen.findByRole('button', { name: 'Practice this material' })
+    expect(practice).toBeDisabled()
   })
 
   it('sends a typed question into a new conversation, words and all', async () => {

@@ -12,7 +12,7 @@ import { useFullBleed } from '@/components/layout/page-chrome'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { CHAT_HANDOFF_PARAMS } from '@/lib/handoff'
+import { readChatHandoff, stripChatHandoff } from '@/lib/handoff'
 import { useClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
@@ -46,20 +46,17 @@ export default function ClassWorkspacePage() {
   // A handoff from another surface: a question carried in from a quiz miss or the class
   // landing, or a document to scope the first question to. Captured once, on the render
   // the page arrives on, then stripped from the URL below so Back and reload never carry
-  // the question in again.
-  const [handoff] = useState(() => ({
-    ask: searchParams.get('ask'),
-    send: searchParams.get('send') === '1',
-    documentId: readSessionId(searchParams.get('document')),
-  }))
+  // the question in again. Capturing once is safe only because every link that carries
+  // these params comes from another route (see readChatHandoff): a same-route link would
+  // change the params under a mounted page and never be applied.
+  const [handoff] = useState(() => readChatHandoff(searchParams))
 
   const [selectedDocumentId, setSelectedDocumentId] = useState<number | null>(handoff.documentId)
 
   useEffect(() => {
-    if (!CHAT_HANDOFF_PARAMS.some((param) => searchParams.has(param))) return
-    const next = new URLSearchParams(searchParams)
-    for (const param of CHAT_HANDOFF_PARAMS) next.delete(param)
-    const query = next.toString()
+    const stripped = stripChatHandoff(searchParams)
+    if (stripped === null) return
+    const query = stripped.toString()
     router.replace(`/classes/${classId}/chat${query ? `?${query}` : ''}`, { scroll: false })
   }, [classId, router, searchParams])
 

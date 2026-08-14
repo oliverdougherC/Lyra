@@ -85,14 +85,34 @@ describe('ClassStudyPanel', () => {
 
   it('leads with practice and keeps both custom creates when there is nothing yet', async () => {
     vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
+    // A class can hold plenty of ready material and still have zero saved study sets, so
+    // the empty state names what is actually empty: the artifacts, never the material.
+    vi.spyOn(api, 'listDocuments').mockResolvedValue([
+      { id: 3, class_id: 1, filename: 'notes.pdf', state: 'ready' },
+    ] as never)
     const { wrapper } = createWrapper()
 
     render(<ClassStudyPanel classId={1} />, { wrapper })
 
-    expect(await screen.findByText('Nothing to study from yet')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Practice now' })).toBeInTheDocument()
+    expect(await screen.findByText('No decks or quizzes yet')).toBeInTheDocument()
+    expect(screen.queryByText(/Nothing to study from/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Practice now' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'New deck' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'New quiz' })).toBeInTheDocument()
+  })
+
+  it('holds Practice now until the document list has answered', async () => {
+    vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
+    // Never resolves: the ready count is unknown, which is not the same as zero.
+    vi.spyOn(api, 'listDocuments').mockReturnValue(new Promise(() => {}))
+    const createQuiz = vi.spyOn(api, 'createQuiz')
+    const { wrapper } = createWrapper()
+
+    render(<ClassStudyPanel classId={1} />, { wrapper })
+
+    const practice = await screen.findByRole('button', { name: 'Practice now' })
+    expect(practice).toBeDisabled()
+    expect(createQuiz).not.toHaveBeenCalled()
   })
 
   it('starts a practice quiz in one click, at the defaults, named after the day', async () => {

@@ -212,15 +212,23 @@ export function DocumentRow({
           <DropdownMenuContent align="end">
             {/* The file's own next actions, ahead of its management: while a student is
                 looking at course material, "do something with this" is the likelier reason
-                to open the menu than "refile this" (contextual handoffs, not more tabs). */}
+                to open the menu than "refile this" (contextual handoffs, not more tabs).
+
+                Ask about this exists only where it changes surfaces (the manage list).
+                Inside the chat workspace, clicking the row already scopes the open
+                conversation, and a handoff link back into the same mounted chat route
+                would change the URL without remounting the page, so its params would be
+                stripped without ever being applied. */}
             {state === 'ready' ? (
               <>
-                <DropdownMenuItem asChild>
-                  <Link href={chatHandoffUrl(document.class_id, { documentId: document.id })}>
-                    <MessageSquare />
-                    Ask about this
-                  </Link>
-                </DropdownMenuItem>
+                {managing ? (
+                  <DropdownMenuItem asChild>
+                    <Link href={chatHandoffUrl(document.class_id, { documentId: document.id })}>
+                      <MessageSquare />
+                      Ask about this
+                    </Link>
+                  </DropdownMenuItem>
+                ) : null}
                 {onPractice ? (
                   <DropdownMenuItem onSelect={() => onPractice(document)}>
                     <ListChecks />

@@ -297,10 +297,15 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
             {/* A miss is the moment the tutor is worth a click: the question, the wrong
                 answer, and the right one travel along, so the conversation opens already
                 knowing what went wrong. The explanation above stays; this is for when it
-                was not enough. */}
+                was not enough.
+
+                Opens in a new tab, and must: an attempt in progress cannot be resumed
+                (the backend keeps unfinished attempts but exposes no way to re-enter
+                one), so navigating this tab away would silently cost the student their
+                place. The quiz stays exactly where it is; the label says so. */}
             {!answer.correct ? (
               <Button variant="ghost" asChild>
-                <Link
+                <a
                   href={chatHandoffUrl(classId, {
                     ask: quizMissQuestion({
                       topic: payload.topic,
@@ -314,10 +319,17 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
                       correct: payload.options[answer.correct_index] ?? '',
                     }),
                   })}
+                  target="_blank"
+                  rel="noopener"
+                  aria-label="Go over this with Lyra in a new tab. Your quiz stays open here."
+                  title="Opens in a new tab; your quiz stays open here"
                 >
                   <MessageSquare aria-hidden className="size-4" />
                   Go over this with Lyra
-                </Link>
+                  <span aria-hidden className="text-text-tertiary text-xs">
+                    new tab
+                  </span>
+                </a>
               </Button>
             ) : null}
           </div>

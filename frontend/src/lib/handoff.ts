@@ -10,6 +10,42 @@
 /** Query parameters the chat page consumes once and then strips from the URL. */
 export const CHAT_HANDOFF_PARAMS = ['ask', 'send', 'document'] as const
 
+/** What one arrival at the chat page carries, read out of its query string. */
+export type ConsumedHandoff = {
+  ask: string | null
+  send: boolean
+  documentId: number | null
+}
+
+/**
+ * Reads a handoff out of the chat page's search params, exactly as the links built by
+ * `chatHandoffUrl` wrote it. The page calls this once, on the render it arrives on: a
+ * handoff is an argument to the navigation, not a live piece of URL state, which is why
+ * the same links must only ever be offered from *other* routes. A link to the chat route
+ * from inside the chat route would change the params without remounting the page, and the
+ * handoff would be stripped without being applied.
+ */
+export function readChatHandoff(params: URLSearchParams): ConsumedHandoff {
+  const rawDocument = Number(params.get('document'))
+  return {
+    ask: params.get('ask'),
+    send: params.get('send') === '1',
+    documentId: Number.isSafeInteger(rawDocument) && rawDocument > 0 ? rawDocument : null,
+  }
+}
+
+/**
+ * The same params with the handoff removed, or null when there was none to strip. What
+ * remains (the session, once it exists) stays; replacing the URL with this is what makes
+ * refresh and Back re-open the conversation instead of re-asking the question.
+ */
+export function stripChatHandoff(params: URLSearchParams): URLSearchParams | null {
+  if (!CHAT_HANDOFF_PARAMS.some((param) => params.has(param))) return null
+  const next = new URLSearchParams(params)
+  for (const param of CHAT_HANDOFF_PARAMS) next.delete(param)
+  return next
+}
+
 type ChatHandoff = {
   /** Text placed in the composer on arrival. */
   ask?: string
@@ -36,23 +72,32 @@ export function chatHandoffUrl(classId: number, handoff: ChatHandoff = {}): stri
   return `/classes/${classId}/chat?${params.toString()}`
 }
 
-/** "Aug 14", for names that only need to say when the thing was made. */
-function shortDate(): string {
-  return new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+/**
+ * "Aug 14, 3:42 PM", for names that only need to say when the thing was made. Minutes
+ * matter: the whole point of a quick create is using it more than once, and three
+ * practice runs before Friday's exam must not become three artifacts with one name.
+ */
+function shortMoment(): string {
+  return new Date().toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
 }
 
 /**
- * The name a study artifact gets when the student did not stop to give it one. Dated so
- * two quick sessions in one week stay tellable apart, and renameable afterwards like
+ * The name a study artifact gets when the student did not stop to give it one. Stamped
+ * to the minute so repeated sessions stay tellable apart, and renameable afterwards like
  * anything else.
  */
 export function quickStudyTitle(kind: 'quiz' | 'deck'): string {
-  return kind === 'quiz' ? `Practice · ${shortDate()}` : `Flashcards · ${shortDate()}`
+  return kind === 'quiz' ? `Practice · ${shortMoment()}` : `Flashcards · ${shortMoment()}`
 }
 
 /** The name a draft gets when writing starts before naming does. */
 export function untitledDraftTitle(): string {
-  return `Untitled · ${shortDate()}`
+  return `Untitled · ${shortMoment()}`
 }
 
 /** A study artifact named after the one document it was built from. */

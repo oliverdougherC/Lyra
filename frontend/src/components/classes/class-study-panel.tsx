@@ -124,17 +124,22 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
   const [renaming, setRenaming] = useState<StudyTarget | null>(null)
   const [deleting, setDeleting] = useState<StudyTarget | null>(null)
 
+  const documentsLoaded = documents.data !== undefined
   const readyCount = (documents.data ?? []).filter((item) => item.state === 'ready').length
 
   /**
-   * The one-click way in: a quiz from everything ready, named after the day, at the
+   * The one-click way in: a quiz from everything ready, named to the minute, at the
    * defaults the dialog would have offered anyway. The dialog remains for anyone who
    * wants to choose sources, counts, or difficulty; nobody has to visit it to start
    * studying.
+   *
+   * Disabled until the document list has loaded: while the query is pending the ready
+   * count is not zero, it is unknown, and a fast click must not be told "nothing is
+   * ready" by a screen that has not found out yet.
    */
   function startPractice() {
     if (readyCount === 0) {
-      toast.error('Nothing has finished processing yet, so there is nothing to practice from.')
+      toast.error('No documents are ready to practice from yet.')
       return
     }
     createQuiz.mutate(
@@ -214,7 +219,11 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            <Button size="sm" onClick={startPractice} disabled={createQuiz.isPending}>
+            <Button
+              size="sm"
+              onClick={startPractice}
+              disabled={createQuiz.isPending || !documentsLoaded}
+            >
               {createQuiz.isPending ? <Spinner /> : null}
               Practice now
             </Button>
@@ -228,14 +237,17 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
             <EmptyMedia variant="icon">
               <Layers className="text-text-tertiary size-8" />
             </EmptyMedia>
-            <EmptyTitle>Nothing to study from yet</EmptyTitle>
+            {/* "No decks or quizzes yet", not "nothing to study from": this state means
+                no saved study artifacts exist, and in a class full of ready documents
+                Practice now works perfectly well from here. */}
+            <EmptyTitle>No decks or quizzes yet</EmptyTitle>
             <EmptyDescription>
               Practice now writes a quiz from everything Lyra has read for this class. Or build a
               deck or quiz your own way, choosing the sources and difficulty yourself.
             </EmptyDescription>
           </EmptyHeader>
           <div className="mt-2 flex flex-wrap justify-center gap-2">
-            <Button onClick={startPractice} disabled={createQuiz.isPending}>
+            <Button onClick={startPractice} disabled={createQuiz.isPending || !documentsLoaded}>
               {createQuiz.isPending ? <Spinner /> : null}
               Practice now
             </Button>

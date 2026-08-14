@@ -70,8 +70,13 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
 
   const [question, setQuestion] = useState('')
 
+  // Distinct facts, kept distinct: no documents at all, documents still being read,
+  // documents that failed, and documents ready to work from can all be true at once,
+  // and the copy below must never collapse them into one guess.
+  const documentsLoaded = documents !== undefined
   const readyCount = documents?.filter((document) => document.state === 'ready').length ?? 0
   const ingestingCount = documents?.filter((document) => !isTerminal(document.state)).length ?? 0
+  const failedCount = documents?.filter((document) => document.state === 'failed').length ?? 0
   const suggestions = useMemo(() => buildSuggestedPrompts(profile?.facts ?? []), [profile?.facts])
 
   const items = useMemo<ContinueItem[]>(() => {
@@ -153,6 +158,22 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
       }
     }
 
+    // Aggregated rather than one row per file: a folder drop that failed wholesale
+    // should be one line saying so, not a screen of red (the Documents tab has the
+    // per-file detail and the retry affordances).
+    if (failedCount > 0) {
+      broken.push({
+        key: 'documents-failed',
+        href: `/classes/${classId}?tab=documents`,
+        title:
+          failedCount === 1
+            ? 'One document could not be processed'
+            : `${failedCount} documents could not be processed`,
+        word: { tone: 'warn', text: 'Needs attention' },
+        time: null,
+      })
+    }
+
     if (ingestingCount > 0) {
       working.push({
         key: 'documents-ingesting',
@@ -208,8 +229,10 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
       })
     }
 
-    // Recent destinations of any kind, most recent first, capped so the list stays a
-    // glance. Rows already listed above (waiting, broken, working, due) do not repeat.
+    // Ways back into existing work, ordered by the timestamps the backend actually
+    // records (a session's creation, an artifact's last change) and capped so the list
+    // stays a glance. Rows already listed above (waiting, broken, working, due) do not
+    // repeat.
     const listed = new Set([...waiting, ...broken, ...working, ...due].map((item) => item.key))
     const candidates: { at: string; item: ContinueItem }[] = []
     const newestSession =
@@ -222,7 +245,10 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
           href: `/classes/${classId}/chat?session=${newestSession.id}`,
           title: newestSession.title || formatSessionFallbackTitle(newestSession.created_at),
           word: null,
-          time: formatRelativeTime(newestSession.created_at),
+          // Sessions carry only a creation time, so that is the only claim made. Saying
+          // when a conversation was last *active* would need data the backend does not
+          // record.
+          time: `Started ${formatRelativeTime(newestSession.created_at)}`,
         },
       })
     }
@@ -234,7 +260,9 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
           href: `/classes/${classId}/solutions/${solution.id}`,
           title: solution.title,
           word: null,
-          time: formatRelativeTime(solution.updated_at),
+          // `updated_at` moves when the work changed, not when the student last looked;
+          // "Updated" is the honest verb for that.
+          time: `Updated ${formatRelativeTime(solution.updated_at)}`,
         },
       })
     }
@@ -246,7 +274,10 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
           href: `/classes/${classId}/drafts/${draft.id}`,
           title: draft.title,
           word: null,
-          time: `Edited ${formatRelativeTime(draft.updated_at)}`,
+          // Also "Updated": a suggestion pass moves a draft's `updated_at` without the
+          // student touching it, so "Edited" would sometimes credit them with work Lyra
+          // did.
+          time: `Updated ${formatRelativeTime(draft.updated_at)}`,
         },
       })
     }
@@ -259,7 +290,7 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
     )
 
     return [...waiting, ...broken, ...working, ...due, ...resume].slice(0, CONTINUE_ROWS)
-  }, [classId, drafts, ingestingCount, profile?.facts, sessions, solutions, study])
+  }, [classId, drafts, failedCount, ingestingCount, profile?.facts, sessions, solutions, study])
 
   function ask(text: string, send: boolean) {
     const trimmed = text.trim()
@@ -271,8 +302,10 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
   }
 
   function startPractice() {
+    // The button is disabled until the document list has loaded, so by the time this can
+    // run, a zero really means zero rather than "the query has not answered yet".
     if (readyCount === 0) {
-      toast.error('Nothing has finished processing yet, so there is nothing to practice from.')
+      toast.error('No documents are ready to practice from yet.')
       return
     }
     createQuiz.mutate(
@@ -380,7 +413,12 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
           <h2 className="text-xs font-medium tracking-[0.14em] uppercase">Start something</h2>
         </div>
         <div className="flex flex-wrap gap-x-1 gap-y-1">
-          <Button variant="ghost" size="sm" onClick={startPractice} disabled={createQuiz.isPending}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={startPractice}
+            disabled={createQuiz.isPending || !documentsLoaded}
+          >
             {createQuiz.isPending ? <Spinner /> : <Layers aria-hidden className="size-4" />}
             Practice this material
           </Button>
@@ -401,7 +439,10 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
             </Link>
           </Button>
         </div>
-        {documents !== undefined && readyCount === 0 && ingestingCount === 0 ? (
+        {/* Only a truly empty class is called empty. A class whose uploads all failed or
+            are still being read is a different situation, and the continue list above
+            already says which. */}
+        {documentsLoaded && documents.length === 0 ? (
           <p className="text-text-tertiary text-sm">
             Nothing uploaded yet. Add a syllabus, lecture notes, or a problem set and every verb
             above has something to work from.

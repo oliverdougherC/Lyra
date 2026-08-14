@@ -51,14 +51,17 @@ const VISIBLE_SESSIONS = 5
 /**
  * How many pieces of work a class shows under its conversations.
  *
- * One list across solution sets, drafts, decks, and quizzes, newest work first. The rail
- * used to list only solutions, which made the solver the one kind of work you could get
- * back to from anywhere; the student's mental model is "the thing I was doing", not
- * "which subsystem owns the thing I was doing".
+ * One list across solution sets, drafts, decks, and quizzes, ordered by each artifact's
+ * `updated_at`. That timestamp moves when the work changed (a pass finished, a body
+ * autosaved), which is close to but not the same as when the student last opened it, so
+ * the group is headed "Work", not "Recent". The rail used to list only solutions, which
+ * made the solver the one kind of work you could get back to from anywhere; the
+ * student's mental model is "the thing I was doing", not "which subsystem owns the thing
+ * I was doing".
  */
 const VISIBLE_WORK = 4
 
-/** One piece of recent work in the rail, whatever subsystem owns it. */
+/** One piece of work in the rail, whatever subsystem owns it. */
 type WorkItem = {
   key: string
   href: string

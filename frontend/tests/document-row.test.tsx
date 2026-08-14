@@ -129,6 +129,62 @@ describe('DocumentRow', () => {
   })
 })
 
+describe('DocumentRow, contextual actions', () => {
+  it('offers Ask about this on the manage surface, where it changes routes', async () => {
+    vi.spyOn(api, 'getDocumentStatus').mockResolvedValue(statusAt('ready'))
+    const { wrapper } = createWrapper()
+
+    render(
+      <DocumentRow
+        document={documentAt('ready')}
+        mode="manage"
+        selected={false}
+        onSelect={noop}
+        onRetry={noop}
+        onRecognize={noop}
+        onDelete={noop}
+        onStatus={noop}
+        onPractice={noop}
+      />,
+      { wrapper },
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for lecture-2.pdf' }))
+
+    const ask = await screen.findByRole('menuitem', { name: 'Ask about this' })
+    expect(ask).toHaveAttribute('href', '/classes/1/chat?session=new&document=7')
+    expect(screen.getByRole('menuitem', { name: 'Make practice questions' })).toBeInTheDocument()
+  })
+
+  it('does not offer the chat handoff inside the chat workspace itself', async () => {
+    // Selecting the row already scopes the open conversation there, and a link back into
+    // the same mounted chat route would change the URL without the handoff ever being
+    // applied. The redundant action must not exist rather than exist and silently fail.
+    vi.spyOn(api, 'getDocumentStatus').mockResolvedValue(statusAt('ready'))
+    const { wrapper } = createWrapper()
+
+    render(
+      <DocumentRow
+        document={documentAt('ready')}
+        mode="ask"
+        selected={false}
+        onSelect={noop}
+        onRetry={noop}
+        onRecognize={noop}
+        onDelete={noop}
+        onStatus={noop}
+        onPractice={noop}
+      />,
+      { wrapper },
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for lecture-2.pdf' }))
+
+    await screen.findByRole('menuitem', { name: 'Make practice questions' })
+    expect(screen.queryByRole('menuitem', { name: 'Ask about this' })).not.toBeInTheDocument()
+  })
+})
+
 describe('DocumentRow, text recognition', () => {
   /**
    * Stubbed at the API rather than seeded into the cache.

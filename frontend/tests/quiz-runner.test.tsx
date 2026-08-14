@@ -135,7 +135,7 @@ describe('QuizRunner', () => {
     expect(screen.getByText('The answer:')).toBeInTheDocument()
   })
 
-  it('offers to take a miss to the tutor, question and answers in hand', async () => {
+  it('offers to take a miss to the tutor without costing the attempt in progress', async () => {
     mockAttemptLifecycle(quizWith([MCQ]))
     const { wrapper } = createWrapper()
     render(<QuizRunner classId={1} quizId={9} />, { wrapper })
@@ -146,7 +146,9 @@ describe('QuizRunner', () => {
 
     // The link opens a fresh conversation with the question prefilled, not sent: the
     // words are generated, so the student sees them in the composer before they go.
-    const link = screen.getByRole('link', { name: 'Go over this with Lyra' })
+    const link = screen.getByRole('link', {
+      name: 'Go over this with Lyra in a new tab. Your quiz stays open here.',
+    })
     const href = link.getAttribute('href') ?? ''
     expect(href).toContain('/classes/1/chat?session=new&ask=')
     expect(href).not.toContain('send=1')
@@ -154,6 +156,14 @@ describe('QuizRunner', () => {
     expect(ask).toContain('What is the determinant of the identity matrix?')
     expect(ask).toContain('"Two"')
     expect(ask).toContain('"One"')
+
+    // Regression: an attempt in progress cannot be resumed once this tab navigates away,
+    // so the handoff must open elsewhere and leave the quiz exactly where it is.
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener')
+
+    // The attempt itself was not restarted or abandoned by rendering the link.
+    expect(api.startAttempt).toHaveBeenCalledTimes(1)
   })
 
   it('maps a matching fill_blank answer to selected_index 0', async () => {
@@ -215,5 +225,10 @@ describe('QuizRunner', () => {
     expect(await screen.findByText('You scored 1 out of 2')).toBeInTheDocument()
     expect(screen.getByLabelText('Algebra: 1 of 1 correct')).toBeInTheDocument()
     expect(screen.getByLabelText('Geography: 0 of 1 correct')).toBeInTheDocument()
+
+    // The weak-topic handoff may navigate this tab: the attempt is finished and scored,
+    // so there is nothing left here to lose.
+    const weakLink = screen.getByRole('link', { name: /Go over this with Lyra/ })
+    expect(weakLink).not.toHaveAttribute('target')
   })
 })
