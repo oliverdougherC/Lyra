@@ -11,7 +11,7 @@ dependencies = [
   "fastapi==0.141.1",
   "uvicorn[standard]==0.52.1",
   "pydantic==2.13.4",
-  "pydantic-settings==2.14.2",
+  "pydantic-settings==2.15.0",
   # Starlette parses multipart uploads through this. FastAPI raises at import time, not
   # at request time, when a route declares an UploadFile without it installed.
   "python-multipart==0.0.32",
