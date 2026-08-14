@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   chatHandoffUrl,
@@ -7,6 +7,7 @@ import {
   quizMissQuestion,
   readChatHandoff,
   stripChatHandoff,
+  uniqueTitle,
   untitledDraftTitle,
   weakTopicQuestion,
 } from '@/lib/handoff'
@@ -43,6 +44,33 @@ describe('quick titles', () => {
 
   it('names a document practice set after the file, extension dropped', () => {
     expect(documentStudyTitle('week_4_notes.pdf')).toBe('week_4_notes · practice')
+  })
+})
+
+describe('uniqueTitle', () => {
+  it('leaves an untaken name alone, whatever its siblings are called', () => {
+    expect(uniqueTitle('Practice · Aug 14, 4:18 PM', [])).toBe('Practice · Aug 14, 4:18 PM')
+    expect(uniqueTitle('A', ['B', 'A · 2'])).toBe('A')
+  })
+
+  it('numbers a collision past every copy already made', () => {
+    expect(uniqueTitle('A', ['A'])).toBe('A · 2')
+    expect(uniqueTitle('A', ['A', 'A · 2', 'A · 3'])).toBe('A · 4')
+  })
+
+  it('keeps quick creates apart inside one minute', () => {
+    // The minute stamp cannot tell apart a start, Back, start-again sequence; the
+    // suffix can. Only Date is faked, so nothing else in the test environment shifts.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date(2026, 7, 14, 16, 18))
+      const takenQuiz = quickStudyTitle('quiz')
+      expect(quickStudyTitle('quiz', [takenQuiz])).toBe(`${takenQuiz} · 2`)
+      const takenDraft = untitledDraftTitle()
+      expect(untitledDraftTitle([takenDraft, `${takenDraft} · 2`])).toBe(`${takenDraft} · 3`)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

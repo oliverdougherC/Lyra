@@ -61,11 +61,12 @@ export function ClassDraftsPanel({ classId }: { classId: number }) {
   /**
    * A draft used to ask for its name before it existed, which is backwards: the name is
    * the hardest thing to know about a piece of writing before any of it is written. New
-   * draft now opens the page immediately, dated so two beginnings stay apart, and the
-   * workspace title edits in place whenever the work has earned its real name.
+   * draft now opens the page immediately, stamped to the minute and numbered past any
+   * sibling with the same stamp, and the workspace title edits in place whenever the
+   * work has earned its real name.
    */
   function startDraft() {
-    createDraft.mutate(untitledDraftTitle(), {
+    createDraft.mutate(untitledDraftTitle((drafts.data ?? []).map((draft) => draft.title)), {
       onSuccess: (artifact) => router.push(`/classes/${classId}/drafts/${artifact.id}`),
       onError: (caught) =>
         toast.error(caught instanceof ApiError ? caught.message : 'Could not start a draft.'),

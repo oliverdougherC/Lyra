@@ -126,6 +126,11 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
 
   const documentsLoaded = documents.data !== undefined
   const readyCount = (documents.data ?? []).filter((item) => item.state === 'ready').length
+  // Every name already taken by a deck or a quiz, so a second quick create inside the
+  // same minute gets numbered instead of a twin.
+  const existingTitles = [...(study.data?.decks ?? []), ...(study.data?.quizzes ?? [])].map(
+    (artifact) => artifact.title,
+  )
 
   /**
    * The one-click way in: a quiz from everything ready, named to the minute, at the
@@ -143,7 +148,7 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
       return
     }
     createQuiz.mutate(
-      { title: quickStudyTitle('quiz') },
+      { title: quickStudyTitle('quiz', existingTitles) },
       {
         onSuccess: (artifact) => router.push(`/classes/${classId}/study/${artifact.id}`),
         onError: (error) =>
@@ -231,6 +236,18 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
         ) : null}
       </div>
 
+      {/* The decks and quizzes above load from their own query; only Practice needs to
+          know which documents are ready. So a failed document query dims exactly one
+          thing, and says so rather than leaving the button dead without a word. */}
+      {documents.isError ? (
+        <p className="text-text-secondary flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <span>The document list did not load, so Practice now cannot tell what is ready.</span>
+          <Button variant="outline" size="sm" onClick={() => void documents.refetch()}>
+            Retry
+          </Button>
+        </p>
+      ) : null}
+
       {empty ? (
         <Empty className="py-12">
           <EmptyHeader>
@@ -299,6 +316,7 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
       <CreateStudyDialog
         classId={classId}
         kind={creating}
+        existingTitles={existingTitles}
         onOpenChange={(open) => {
           if (!open) setCreating(null)
         }}
@@ -479,10 +497,13 @@ function clamp(value: number, min: number, max: number): number {
 function CreateStudyDialog({
   classId,
   kind,
+  existingTitles,
   onOpenChange,
 }: {
   classId: number
   kind: 'deck' | 'quiz' | null
+  /** Names already taken in this class, so the prefilled name never collides. */
+  existingTitles: string[]
   onOpenChange: (open: boolean) => void
 }) {
   const router = useRouter()
@@ -505,16 +526,18 @@ function CreateStudyDialog({
   // Reset during render rather than in an effect, so reopening the dialog never shows the
   // previous attempt's form for a frame. The name arrives already filled in: a workable
   // default is one less decision standing between the student and the first question, and
-  // the field is right there for anyone who wants a better one.
+  // the field is right there for anyone who wants a better one. Options collapses again
+  // too: progressive disclosure is a promise about every opening, not just the first.
   const [kindSeen, setKindSeen] = useState(kind)
   if (kind !== kindSeen) {
     setKindSeen(kind)
-    setTitle(kind === null ? '' : quickStudyTitle(kind))
+    setTitle(kind === null ? '' : quickStudyTitle(kind, existingTitles))
     setSelected(null)
     setCardsPerTopic(4)
     setCount(10)
     setDifficulty('intermediate')
     setTypes(null)
+    setOptionsOpen(false)
     setError(null)
   }
 

@@ -18,6 +18,19 @@ export function isTerminal(state: DocumentState): boolean {
   return TERMINAL_STATES.includes(state)
 }
 
+/**
+ * Terminal, but not usable: waiting will not fix this document, and Lyra cannot study
+ * from it. `failed` broke during ingestion; `unsupported` is a format Lyra cannot read.
+ * The distinction matters on the Documents tab, where the recovery actions differ, but
+ * anywhere the question is "does something here need the student?" the two are one
+ * answer.
+ */
+const ATTENTION_STATES: readonly DocumentState[] = ['failed', 'unsupported']
+
+export function needsAttention(state: DocumentState): boolean {
+  return ATTENTION_STATES.includes(state)
+}
+
 /** How often the list asks again while the server is still working on something in it. */
 const IN_FLIGHT_POLL_MS = 1500
 

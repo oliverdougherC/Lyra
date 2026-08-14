@@ -15,7 +15,7 @@ import { buildSuggestedPrompts } from '@/components/chat/suggested-prompts'
 import { formatRelativeTime, formatSessionFallbackTitle } from '@/lib/format'
 import { chatHandoffUrl, quickStudyTitle, untitledDraftTitle } from '@/lib/handoff'
 import { useSessions } from '@/lib/hooks/use-chat'
-import { isTerminal, useDocuments } from '@/lib/hooks/use-documents'
+import { isTerminal, needsAttention, useDocuments } from '@/lib/hooks/use-documents'
 import { useCreateDraft, useDrafts } from '@/lib/hooks/use-drafts'
 import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useSolutions } from '@/lib/hooks/use-solutions'
@@ -63,7 +63,8 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
   const { data: solutions } = useSolutions(classId)
   const { data: study } = useStudyList(classId)
   const { data: drafts } = useDrafts(classId)
-  const { data: documents } = useDocuments(classId)
+  const documentsQuery = useDocuments(classId)
+  const documents = documentsQuery.data
   const { data: profile } = useClassProfile(classId)
   const createQuiz = useCreateQuiz(classId)
   const createDraft = useCreateDraft(classId)
@@ -71,12 +72,12 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
   const [question, setQuestion] = useState('')
 
   // Distinct facts, kept distinct: no documents at all, documents still being read,
-  // documents that failed, and documents ready to work from can all be true at once,
+  // documents Lyra cannot use, and documents ready to work from can all be true at once,
   // and the copy below must never collapse them into one guess.
   const documentsLoaded = documents !== undefined
   const readyCount = documents?.filter((document) => document.state === 'ready').length ?? 0
   const ingestingCount = documents?.filter((document) => !isTerminal(document.state)).length ?? 0
-  const failedCount = documents?.filter((document) => document.state === 'failed').length ?? 0
+  const attentionCount = documents?.filter((document) => needsAttention(document.state)).length ?? 0
   const suggestions = useMemo(() => buildSuggestedPrompts(profile?.facts ?? []), [profile?.facts])
 
   const items = useMemo<ContinueItem[]>(() => {
@@ -160,15 +161,17 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
 
     // Aggregated rather than one row per file: a folder drop that failed wholesale
     // should be one line saying so, not a screen of red (the Documents tab has the
-    // per-file detail and the retry affordances).
-    if (failedCount > 0) {
+    // per-file detail and the retry affordances). "Could not be used" covers both ways
+    // a document ends up unusable, a failure during ingestion and a format Lyra does
+    // not read; the tab tells them apart.
+    if (attentionCount > 0) {
       broken.push({
-        key: 'documents-failed',
+        key: 'documents-attention',
         href: `/classes/${classId}?tab=documents`,
         title:
-          failedCount === 1
-            ? 'One document could not be processed'
-            : `${failedCount} documents could not be processed`,
+          attentionCount === 1
+            ? 'One document could not be used'
+            : `${attentionCount} documents could not be used`,
         word: { tone: 'warn', text: 'Needs attention' },
         time: null,
       })
@@ -290,7 +293,7 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
     )
 
     return [...waiting, ...broken, ...working, ...due, ...resume].slice(0, CONTINUE_ROWS)
-  }, [classId, drafts, failedCount, ingestingCount, profile?.facts, sessions, solutions, study])
+  }, [classId, drafts, attentionCount, ingestingCount, profile?.facts, sessions, solutions, study])
 
   function ask(text: string, send: boolean) {
     const trimmed = text.trim()
@@ -308,8 +311,11 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
       toast.error('No documents are ready to practice from yet.')
       return
     }
+    const studyTitles = [...(study?.decks ?? []), ...(study?.quizzes ?? [])].map(
+      (artifact) => artifact.title,
+    )
     createQuiz.mutate(
-      { title: quickStudyTitle('quiz') },
+      { title: quickStudyTitle('quiz', studyTitles) },
       {
         onSuccess: (artifact) => router.push(`/classes/${classId}/study/${artifact.id}`),
         onError: (error) =>
@@ -321,7 +327,7 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
   }
 
   function startDraft() {
-    createDraft.mutate(untitledDraftTitle(), {
+    createDraft.mutate(untitledDraftTitle((drafts ?? []).map((draft) => draft.title)), {
       onSuccess: (artifact) => router.push(`/classes/${classId}/drafts/${artifact.id}`),
       onError: (error) =>
         toast.error(error instanceof ApiError ? error.message : 'Could not start a draft.'),
@@ -439,6 +445,17 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
             </Link>
           </Button>
         </div>
+        {/* A failed query is its own state, said out loud: Practice stays held because
+            the ready count is unknown, and a held button with no reason on screen reads
+            as broken. One line and a retry, not an error dashboard. */}
+        {documentsQuery.isError ? (
+          <p className="text-text-secondary flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+            <span>The document list did not load, so Practice cannot tell what is ready.</span>
+            <Button variant="outline" size="sm" onClick={() => void documentsQuery.refetch()}>
+              Retry
+            </Button>
+          </p>
+        ) : null}
         {/* Only a truly empty class is called empty. A class whose uploads all failed or
             are still being read is a different situation, and the continue list above
             already says which. */}

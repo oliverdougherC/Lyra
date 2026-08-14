@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -127,9 +127,10 @@ describe('ClassHub', () => {
 
     // The fixture's syllabus.pdf failed ingestion, and a failure is a continuation item:
     // it is the thing most worth the student's next click.
-    expect(
-      screen.getByRole('link', { name: /One document could not be processed/ }),
-    ).toHaveAttribute('href', '/classes/1?tab=documents')
+    expect(screen.getByRole('link', { name: /One document could not be used/ })).toHaveAttribute(
+      'href',
+      '/classes/1?tab=documents',
+    )
     expect(screen.getByText('Needs attention')).toBeInTheDocument()
 
     // The common starts are verbs, not feature cards, and each goes somewhere real.
@@ -155,10 +156,39 @@ describe('ClassHub', () => {
     ] as DocumentRead[])
     const failedView = render(<ClassHub classId={1} tab="overview" />, { wrapper })
     expect(
-      await screen.findByRole('link', { name: /2 documents could not be processed/ }),
+      await screen.findByRole('link', { name: /2 documents could not be used/ }),
     ).toBeInTheDocument()
     expect(screen.queryByText(/Nothing uploaded yet/)).not.toBeInTheDocument()
     failedView.unmount()
+
+    // Unsupported-only: nothing crashed, nothing is coming, and nothing here is usable.
+    // Terminal-but-unusable is attention, not emptiness, whichever way it got there.
+    vi.spyOn(api, 'listDocuments').mockResolvedValue([
+      { id: 8, class_id: 1, filename: 'lecture.key', state: 'unsupported' },
+    ] as DocumentRead[])
+    const unsupportedView = render(<ClassHub classId={1} tab="overview" />, {
+      wrapper: createWrapper().wrapper,
+    })
+    expect(
+      await screen.findByRole('link', { name: /One document could not be used/ }),
+    ).toHaveAttribute('href', '/classes/1?tab=documents')
+    expect(screen.getByText('Needs attention')).toBeInTheDocument()
+    expect(screen.queryByText(/Nothing uploaded yet/)).not.toBeInTheDocument()
+    unsupportedView.unmount()
+
+    // Mixed: one failed plus one unsupported is one aggregate row counting both, not
+    // two rows or a count that quietly drops the unsupported file.
+    vi.spyOn(api, 'listDocuments').mockResolvedValue([
+      { id: 5, class_id: 1, filename: 'syllabus.pdf', state: 'failed' },
+      { id: 8, class_id: 1, filename: 'lecture.key', state: 'unsupported' },
+    ] as DocumentRead[])
+    const mixedView = render(<ClassHub classId={1} tab="overview" />, {
+      wrapper: createWrapper().wrapper,
+    })
+    expect(
+      await screen.findByRole('link', { name: /2 documents could not be used/ }),
+    ).toBeInTheDocument()
+    mixedView.unmount()
 
     // Still processing: working, not empty.
     vi.spyOn(api, 'listDocuments').mockResolvedValue([
@@ -187,6 +217,31 @@ describe('ClassHub', () => {
 
     const practice = await screen.findByRole('button', { name: 'Practice this material' })
     expect(practice).toBeDisabled()
+  })
+
+  it('says when the document list itself failed, and retries it on request', async () => {
+    // A failed query is not a loading one: Practice stays held either way, but held
+    // forever with no reason on screen would read as a broken button.
+    const listDocuments = vi.spyOn(api, 'listDocuments').mockRejectedValue(new Error('offline'))
+    const { wrapper } = createWrapper()
+
+    render(<ClassHub classId={1} tab="overview" />, { wrapper })
+
+    expect(await screen.findByText(/The document list did not load/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Practice this material' })).toBeDisabled()
+    // Not knowing what is uploaded is not the same as knowing nothing is.
+    expect(screen.queryByText(/Nothing uploaded yet/)).not.toBeInTheDocument()
+
+    // Retry asks again; a recovered backend re-enables Practice and retires the notice.
+    listDocuments.mockResolvedValue([
+      { id: 3, class_id: 1, filename: 'homework_2.pdf', state: 'ready' },
+    ] as DocumentRead[])
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Practice this material' })).toBeEnabled(),
+    )
+    expect(screen.queryByText(/The document list did not load/)).not.toBeInTheDocument()
   })
 
   it('sends a typed question into a new conversation, words and all', async () => {

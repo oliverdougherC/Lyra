@@ -87,17 +87,34 @@ function shortMoment(): string {
 }
 
 /**
- * The name a study artifact gets when the student did not stop to give it one. Stamped
- * to the minute so repeated sessions stay tellable apart, and renameable afterwards like
- * anything else.
+ * The name itself when nothing has taken it, otherwise the first of "name · 2",
+ * "name · 3" that nothing has. A minute stamp is not unique enough on its own: start,
+ * Back, start again fits inside one minute easily, and the second artifact must not
+ * wear the first one's name. The suffix is a plain count rather than seconds or an id,
+ * because these names exist to be recognized, not to be unique forever - a rename
+ * replaces them the moment the work earns a real one.
  */
-export function quickStudyTitle(kind: 'quiz' | 'deck'): string {
-  return kind === 'quiz' ? `Practice · ${shortMoment()}` : `Flashcards · ${shortMoment()}`
+export function uniqueTitle(base: string, existing: Iterable<string>): string {
+  const taken = new Set(existing)
+  if (!taken.has(base)) return base
+  let copy = 2
+  while (taken.has(`${base} · ${copy}`)) copy += 1
+  return `${base} · ${copy}`
+}
+
+/**
+ * The name a study artifact gets when the student did not stop to give it one. Stamped
+ * to the minute so repeated sessions stay tellable apart, numbered past any sibling
+ * already wearing the same minute, and renameable afterwards like anything else.
+ */
+export function quickStudyTitle(kind: 'quiz' | 'deck', existing: Iterable<string> = []): string {
+  const base = kind === 'quiz' ? `Practice · ${shortMoment()}` : `Flashcards · ${shortMoment()}`
+  return uniqueTitle(base, existing)
 }
 
 /** The name a draft gets when writing starts before naming does. */
-export function untitledDraftTitle(): string {
-  return `Untitled · ${shortMoment()}`
+export function untitledDraftTitle(existing: Iterable<string> = []): string {
+  return uniqueTitle(`Untitled · ${shortMoment()}`, existing)
 }
 
 /** A study artifact named after the one document it was built from. */
