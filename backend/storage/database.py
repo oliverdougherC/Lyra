@@ -13,6 +13,12 @@ from pathlib import Path
 import sqlite_vec
 
 from backend.config import settings
+from backend.storage import private
+
+# WAL leaves two predictable sidecars beside the database. They are secured before SQLite
+# opens the database, because post-open hardening is too late for both permissive umasks and
+# a planted symlink at either pathname.
+_DB_SIDECAR_SUFFIXES = ("-wal", "-shm")
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 _MIGRATION_NAME = re.compile(r"^(\d+)_.+\.sql$")
@@ -26,7 +32,33 @@ _SQLITE_BUSY_TIMEOUT_MS = 5_000
 def connect(db_path: Path | None = None) -> sqlite3.Connection:
     """Open a connection with row access by name, cascades on, WAL, and sqlite-vec loaded."""
     path = db_path or settings.db_path
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # A symlinked database path is refused before anything opens it: sqlite would follow the
+    # link to create or open the target, and the hardening below would chmod that outside
+    # file while reporting the configured path as secured. An explicit LYRA_DB_PATH should
+    # name a real file (or a location under a real directory), not a link out of the tree.
+    private.assert_not_symlink(path, "the database path")
+    # Inside the data tree, the database's parent chain is owned by Lyra and created with the
+    # same no-symlink-beneath-root guarantee as the rest of it. An explicit LYRA_DB_PATH may
+    # point outside that tree, into a location the user chose; there Lyra owns only the
+    # immediate directory it creates for the database (created `0o700`, like any Lyra
+    # directory), and treats that as its own root so it neither re-permissions a pre-existing
+    # external directory nor follows a symlink where that directory belongs.
+    owned_root = (
+        settings.data_dir if private.is_within(path.parent, settings.data_dir) else path.parent
+    )
+    private.secure_mkdir(path.parent, root=owned_root)
+    # SQLite must reopen these names itself, so keep the no-follow preparation below from
+    # becoming a check/use race in an explicit external directory where another OS user
+    # could otherwise unlink and replace an entry. The directory remains at the user's
+    # chosen mode (0755 is fine); only group/world write access is unsafe and rejected.
+    private.assert_safe_external_writer_parent(path.parent)
+    # SQLite cannot be the first process to create or touch any of these predictable names:
+    # its open flags follow symlinks and its creation mode is affected by the process umask.
+    # Pre-create absent files exclusively at 0o600, or harden an existing real current-user
+    # file through a no-follow descriptor. Existing databases are never truncated.
+    private.ensure_private_file(path)
+    for suffix in _DB_SIDECAR_SUFFIXES:
+        private.ensure_private_file(path.with_name(path.name + suffix))
     # check_same_thread=False: FastAPI submits a sync dependency generator and its sync
     # handler as two separate threadpool jobs, which are not guaranteed to land on the
     # same worker. A connection is never shared between concurrent requests, so the
@@ -39,6 +71,15 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     conn.execute("pragma foreign_keys = on")
     conn.execute(f"pragma busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
     conn.execute("pragma journal_mode = wal")
+    # The database and its WAL sidecars hold the same private state as the rest of the data
+    # tree. The parent directory is `0o700`, which is what actually keeps other users out;
+    # tightening the files as well is defence in depth for a database placed, by an explicit
+    # `LYRA_DB_PATH`, somewhere the directory contract does not otherwise reach.
+    private.harden_file(path)
+    for suffix in _DB_SIDECAR_SUFFIXES:
+        sidecar = path.with_name(path.name + suffix)
+        if private.regular_file_present(sidecar):
+            private.harden_file(sidecar)
     return conn
 
 

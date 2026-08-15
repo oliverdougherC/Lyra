@@ -19,6 +19,7 @@ import shutil
 import signal
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import tarfile
@@ -327,8 +328,11 @@ def backup_archive_target(path: Path) -> Path:
 
     candidate = rooted_path(path).expanduser()
     parent = ensure_existing_parent(candidate, label="backup target parent")
-    target = (parent / candidate.name).resolve(strict=False)
-    if target.exists():
+    # Resolve only the already-validated parent. Resolving the final component would follow
+    # a dangling symlink and turn `backup --archive link.tgz` into creation at its outside
+    # target before O_EXCL ever got a chance to refuse the link itself.
+    target = parent / candidate.name
+    if target.exists() or target.is_symlink():
         raise LauncherError(f"backup target already exists: {target}")
     return target
 
@@ -453,10 +457,67 @@ def restore_target_file(path: Path) -> Path:
 
     candidate = rooted_path(path).expanduser()
     parent = ensure_existing_parent(candidate, label="restore database parent")
+    assert_safe_external_database_parent(parent)
     target = parent / candidate.name
-    if target.exists():
+    if target.exists() or target.is_symlink():
         raise LauncherError(f"restore database target already exists: {target}")
     return target
+
+
+def assert_safe_external_database_parent(path: Path) -> None:
+    """Match the backend security boundary before staging an external restored database.
+
+    The launcher intentionally stays standard-library-only, so this is the local equivalent
+    of `storage.private.assert_safe_external_writer_parent`. SQLite later reopens predictable
+    WAL/SHM names itself; accepting a directory another OS user can modify would let that
+    user replace a prepared pathname between Lyra securing it and SQLite opening it.
+    """
+    if os.name != "posix":
+        return
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise LauncherError(f"restore database parent must be a real directory: {path}") from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISDIR(info.st_mode):
+            raise LauncherError(f"restore database parent must be a real directory: {path}")
+        if info.st_uid != os.geteuid():
+            raise LauncherError(
+                f"restore database directory must be owned by the current user: {path}"
+            )
+        if stat.S_IMODE(info.st_mode) & 0o022:
+            raise LauncherError(
+                f"restore database directory is writable by other users: {path}. Choose a "
+                "current-user-owned directory without group or world write permission, or "
+                "fix its permissions before restoring."
+            )
+    finally:
+        os.close(descriptor)
+
+
+def private_restore_mkdir(path: Path, *, root: Path) -> None:
+    """Create every restore directory component explicitly owner-only.
+
+    `Path.mkdir(parents=True, mode=...)` applies `mode` only to the leaf. An archive is not
+    required to carry explicit directory members, so relying on it would let implicit
+    intermediate directories inherit a permissive umask and later be published broad.
+    """
+    relative = path.relative_to(root)
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(root, 0o700)
+    current = root
+    for part in relative.parts:
+        current /= part
+        current.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(current, 0o700)
 
 
 def extract_archive_prefix(
@@ -469,7 +530,7 @@ def extract_archive_prefix(
 
     normalized_prefix = prefix.rstrip("/") + "/"
     extracted = False
-    destination.mkdir(parents=True, exist_ok=True)
+    private_restore_mkdir(destination, root=destination)
     for member in bundle.getmembers():
         safe_name = safe_archive_member(member.name)
         if str(safe_name) == BACKUP_MANIFEST:
@@ -483,19 +544,33 @@ def extract_archive_prefix(
             continue
         target = destination.joinpath(*relative.parts)
         if member.isdir():
-            target.mkdir(parents=True, exist_ok=True)
+            private_restore_mkdir(target, root=destination)
             extracted = True
             continue
         if not member.isfile():
             raise LauncherError(f"backup archive contains an unsupported entry: {member.name}")
-        target.parent.mkdir(parents=True, exist_ok=True)
+        private_restore_mkdir(target.parent, root=destination)
         if target.exists():
             raise LauncherError(f"restore would overwrite an existing file: {target}")
         payload = bundle.extractfile(member)
         if payload is None:
             raise LauncherError(f"backup archive entry could not be read: {member.name}")
-        with target.open("xb") as handle:
-            shutil.copyfileobj(payload, handle)
+        mode = 0o700 if relative.parts[0] == "models" and member.mode & 0o111 else 0o600
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(target, flags, mode)
+        owns_descriptor = False
+        try:
+            if os.name == "posix":
+                os.fchmod(descriptor, mode)
+            else:
+                with suppress(OSError):
+                    os.chmod(target, mode)
+            with os.fdopen(descriptor, "wb") as handle:
+                owns_descriptor = True
+                shutil.copyfileobj(payload, handle)
+        finally:
+            if not owns_descriptor:
+                os.close(descriptor)
         extracted = True
     if not extracted:
         raise LauncherError(f"backup archive does not contain the expected {prefix}/ payload")
@@ -517,8 +592,21 @@ def extract_archive_file(bundle: tarfile.TarFile, *, member_name: str, destinati
     payload = bundle.extractfile(member)
     if payload is None:
         raise LauncherError(f"backup archive entry could not be read: {member_name}")
-    with destination.open("xb") as handle:
-        shutil.copyfileobj(payload, handle)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(destination, flags, 0o600)
+    owns_descriptor = False
+    try:
+        if os.name == "posix":
+            os.fchmod(descriptor, 0o600)
+        else:
+            with suppress(OSError):
+                os.chmod(destination, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            owns_descriptor = True
+            shutil.copyfileobj(payload, handle)
+    finally:
+        if not owns_descriptor:
+            os.close(descriptor)
 
 
 class LauncherLock(AbstractContextManager["LauncherLock"]):
@@ -1681,7 +1769,17 @@ def backup(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="lyra-backup-") as temporary:
         stage_root = Path(temporary)
         manifest = stage_backup_tree(stage_root, data_dir, db_path)
-        with tarfile.open(archive, mode="x:gz", format=tarfile.PAX_FORMAT) as bundle:
+        # Created 0o600 from the first byte. The archive holds the whole data tree - and, on
+        # a keychain-less machine, the fallback API key - but lives outside the data
+        # directory, so it has no owner-only parent to hide behind and its own mode is the
+        # only thing keeping it private. Setting the mode after writing would leave the
+        # sensitive bytes briefly world-readable. O_EXCL preserves the refuse-if-exists that
+        # tar mode "x" gave, backing up the earlier existence check.
+        descriptor = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with (
+            os.fdopen(descriptor, "wb") as raw,
+            tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.PAX_FORMAT) as bundle,
+        ):
             bundle.add(stage_root / BACKUP_MANIFEST, arcname=BACKUP_MANIFEST, recursive=False)
             bundle.add(stage_root / BACKUP_DATA_PREFIX, arcname=BACKUP_DATA_PREFIX)
             db_member = str(manifest["db"]["member"])  # type: ignore[index]

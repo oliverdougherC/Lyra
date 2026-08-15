@@ -36,6 +36,7 @@ from backend.rag.embed import BATCH_SIZE as EMBED_BATCH_SIZE
 from backend.rag.embed import EMBEDDING_DIM, EMBEDDING_MODEL, embed_documents
 from backend.rag.figures import extract_figures
 from backend.rag.parse import ParsedDocument, parse_document
+from backend.storage import private
 from backend.storage.database import connect
 
 logger = logging.getLogger("lyra.ingestion")
@@ -432,9 +433,13 @@ def reconcile_interrupted(conn: sqlite3.Connection) -> tuple[int, int]:
 
 
 def _write_extracted_text(document_id: int, text: str) -> None:
-    """Keep the extracted text beside the upload so a re-index never re-parses."""
-    settings.text_dir.mkdir(parents=True, exist_ok=True)
-    (settings.text_dir / f"{document_id}.txt").write_text(text, encoding="utf-8")
+    """Keep the extracted text beside the upload so a re-index never re-parses.
+
+    Extracted text is the coursework in plain form, so it is written `0o600` inside the
+    `0o700` text directory rather than at the mercy of the umask.
+    """
+    private.secure_mkdir(settings.text_dir, root=settings.data_dir)
+    private.write_private_text(settings.text_dir / f"{document_id}.txt", text)
 
 
 def _set_state(

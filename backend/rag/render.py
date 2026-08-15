@@ -22,6 +22,7 @@ import pymupdf
 from backend.config import settings
 from backend.core.errors import LyraError, NotFoundError
 from backend.rag.parse import PAGE_MIMES, unreadable_message
+from backend.storage import private
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +166,7 @@ def render_page(
         raise NotFoundError(NOT_A_PAGE)
 
     cached = page_path(document_id, page_number, dpi)
-    if cached.exists():
+    if private.regular_file_present(cached):
         # A cached page is served without re-checking the envelope, and that is safe even if
         # the envelope has since tightened: the file exists only because a prior render
         # already allocated its pixmap and completed the atomic write below, so the
@@ -186,7 +187,7 @@ def render_page(
             if not _raster_within_bounds(page.rect, dpi):
                 raise LyraError(TOO_LARGE_TO_RENDER)
             pixmap = page.get_pixmap(dpi=dpi)
-            cached.parent.mkdir(parents=True, exist_ok=True)
+            private.secure_mkdir(cached.parent, root=settings.data_dir)
             # Written beside the target and moved into place, because the cache is trusted
             # on the strength of the file existing. A process killed partway through a
             # direct write would leave a truncated PNG that `cached.exists()` then serves
@@ -197,7 +198,12 @@ def render_page(
             try:
                 # `output` is named rather than left to the extension: PyMuPDF picks the
                 # format from the filename, and the temporary name does not end in `.png`.
-                pixmap.save(partial, output="png")
+                # The raster envelope bounds this encoding's memory: the pixmap already
+                # occupies up to ~525 MB and its PNG bytes are a bounded derivative of that
+                # allocation. Encoding in memory lets the actual pathname write go through
+                # O_NOFOLLOW at 0o600 from its first byte; `Pixmap.save(path)` cannot offer
+                # that guarantee and may follow a planted deterministic partial symlink.
+                private.write_private_bytes(partial, pixmap.tobytes("png"))
                 partial.replace(cached)
             finally:
                 partial.unlink(missing_ok=True)
@@ -253,7 +259,7 @@ def render_figure(
         raise LyraError(NOT_RENDERABLE)
 
     cached = figure_path(document_id, figure_id)
-    if cached.exists():
+    if private.regular_file_present(cached):
         # Served without re-checking the envelope, for the reason `render_page` documents:
         # the crop's pixmap was already allocated when this file was written, so reading it
         # back allocates nothing this bound needs to guard.
@@ -280,10 +286,10 @@ def render_figure(
             # the reading column while occupying a fraction of a page: the same pixels
             # stretched over several times the area.
             pixmap = page.get_pixmap(dpi=FIGURE_DPI, clip=clip)
-            cached.parent.mkdir(parents=True, exist_ok=True)
+            private.secure_mkdir(cached.parent, root=settings.data_dir)
             partial = _partial_path(cached)
             try:
-                pixmap.save(partial, output="png")
+                private.write_private_bytes(partial, pixmap.tobytes("png"))
                 partial.replace(cached)
             finally:
                 partial.unlink(missing_ok=True)

@@ -24,6 +24,7 @@ from backend.core.ingestion import PENDING, delete_chunks, enqueue
 from backend.core.profiles import forget_document_evidence
 from backend.rag import render, structure
 from backend.rag.parse import PDF_MIME, UNSUPPORTED_MESSAGE
+from backend.storage import private
 from backend.storage.database import get_db
 
 router = APIRouter(prefix="/api", tags=["documents"])
@@ -214,8 +215,10 @@ def upload_document(
         or 0
     )
     stored_path = settings.uploads_dir / str(class_id) / f"{document_id}-{_safe_filename(filename)}"
-    stored_path.parent.mkdir(parents=True, exist_ok=True)
-    stored_path.write_bytes(payload)
+    # The class upload directory is `0o700` and the stored file `0o600`: an uploaded source
+    # is coursework, private like the rest of the data tree and not left to the umask.
+    private.secure_mkdir(stored_path.parent, root=settings.data_dir)
+    private.write_private_bytes(stored_path, payload)
     conn.execute(
         "update documents set stored_path = ? where id = ?", (str(stored_path), document_id)
     )
@@ -512,7 +515,10 @@ def move_document(document_id: int, payload: DocumentMove, conn: DbConn) -> dict
         / f"{document_id}-{_safe_filename(str(document['filename']))}"
     )
     if stored_path is not None and stored_path.exists():
-        moved_path.parent.mkdir(parents=True, exist_ok=True)
+        # The destination class directory is Lyra-owned like any upload directory, so it is
+        # created `0o700` and never through a symlink - the same contract the initial upload
+        # (above) is held to.
+        private.secure_mkdir(moved_path.parent, root=settings.data_dir)
         stored_path.replace(moved_path)
 
     delete_chunks(conn, document_id)

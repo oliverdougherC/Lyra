@@ -5,6 +5,8 @@ from pathlib import Path
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from backend.storage import private
+
 
 class Settings(BaseSettings):
     """Non-secret configuration, overridable by `LYRA_`-prefixed environment variables.
@@ -81,16 +83,49 @@ class Settings(BaseSettings):
         """Whether the specialist OCR path is available on this machine."""
         return self.ocr_model_path.exists() and self.ocr_mmproj_path.exists()
 
+    @property
+    def _hardened_marker(self) -> Path:
+        """Names the one-time permissions upgrade, so the tree is walked only once."""
+        return self.data_dir / ".permissions-hardened"
+
     def ensure_directories(self) -> None:
-        """Create the data directories. Called once on startup."""
-        for directory in (
-            self.data_dir,
-            self.uploads_dir,
-            self.text_dir,
-            self.pages_dir,
-            self.models_dir,
-        ):
-            directory.mkdir(parents=True, exist_ok=True)
+        """Create the data directories, private to the user, once on startup.
+
+        Every Lyra-owned directory is `0o700` (see `storage.private`), so no other user
+        can read the coursework, derived caches, database, or fallback key beneath it, and
+        this holds whatever umask the process inherited. The top-level directories are
+        re-hardened every startup; the deeper tree is walked once, to bring an installation
+        created before this contract up to it without re-walking on every launch.
+
+        The data directory must be a real directory. A symlinked `LYRA_DATA_DIR` is refused
+        here rather than followed, so Lyra never recursively hardens, walks, or writes into
+        whatever the link points at. The directory's own ancestors may be symlinks - that is
+        the user's home layout, not Lyra's to police - and are left alone.
+        """
+        private.assert_not_symlink(self.data_dir, "LYRA_DATA_DIR")
+        private.secure_mkdir(self.data_dir, root=self.data_dir)
+        for directory in (self.uploads_dir, self.text_dir, self.pages_dir, self.models_dir):
+            private.secure_mkdir(directory, root=self.data_dir)
+            private.harden_dir(directory)
+        private.harden_dir(self.data_dir)
+        self._harden_existing_tree_once()
+
+    def _harden_existing_tree_once(self) -> None:
+        """Tighten a pre-existing data tree to the contract, at most once per installation.
+
+        `models_dir` is kept out of the file pass: it holds a bundled executable, and a
+        `0o600` file cannot be run. Its directory is still made private, and every other
+        Lyra-owned file is brought to `0o600`.
+
+        The sentinel is security-relevant state, so it is read and written with no-follow
+        semantics: a symlink where the marker belongs is refused rather than trusted (it
+        must not let a link claim the migration ran, and the write below must not follow it
+        to overwrite an outside file).
+        """
+        if private.regular_file_present(self._hardened_marker):
+            return
+        private.harden_data_tree(self.data_dir, keep_file_modes=(self.models_dir,))
+        private.write_private_bytes(self._hardened_marker, b"")
 
 
 settings = Settings()
