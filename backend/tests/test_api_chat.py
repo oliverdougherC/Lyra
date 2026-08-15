@@ -20,7 +20,9 @@ from backend.api import routes_chat
 from backend.core import app_settings, sessions
 from backend.core.errors import LyraError, UpstreamError
 from backend.llm.client import StreamDelta
+from backend.llm.prompts import build_system_prompt
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk
+from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect, get_db
 
 StreamFactory = Callable[..., AsyncIterator[StreamDelta]]
@@ -459,14 +461,17 @@ async def test_a_disconnect_keeps_the_part_of_the_answer_that_arrived(
 ) -> None:
     """Closing the generator is what Starlette does when the reader goes away."""
     monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Half ", "an ", "answer."))
-    request = routes_chat.ChatRequest(content=QUESTION, mode="guide")
+    request = routes_chat.TurnInput(content=QUESTION, mode="guide")
     config = app_settings.TutorConfig(
         endpoint_url=ENDPOINT, api_key=None, model=None, context_window=8192
     )
     user_message_id = sessions.add_message(db, session_id, "user", QUESTION)
 
     plan = routes_chat.TurnPlan(user_message_id=user_message_id)
-    stream = routes_chat._stream_turn(session_id, request, config, plan)
+    cost = routes_chat._plan_turn_cost(
+        db, session_id, request.mode, request.content, plan.excluded, config
+    )
+    stream = routes_chat._stream_turn(session_id, request, config, plan, cost)
     started = _frames(await anext(stream))
     prompt_status = _frames(await anext(stream))
     retrieval_status = _frames(await anext(stream))
@@ -570,6 +575,54 @@ def test_the_regenerated_turn_does_not_show_the_model_its_discarded_attempt(
     contents = [message["content"] for message in seen[0]]
     assert "First attempt." not in contents
     assert contents[-1] == QUESTION
+
+
+def test_a_legacy_question_over_the_new_character_cap_can_be_regenerated(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The inbound paste cap does not retroactively invalidate persisted conversations."""
+    legacy_question = "q" * (routes_chat.MAX_QUESTION_CHARS + 1)
+    sessions.add_message(db, session_id, "user", legacy_question)
+    sessions.add_message(db, session_id, "assistant", "The answer they already have.")
+    _set_context_window(db, 32_768)
+
+    captured: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Replacement."))
+
+    response = client.post(f"/api/sessions/{session_id}/regenerate", json={"mode": "guide"})
+
+    assert response.status_code == 200
+    assert _frames(response.text)[-1]["type"] == "done"
+    assert captured[0][-1] == {"role": "user", "content": legacy_question}
+    assert [
+        (message["role"], message["content"]) for message in sessions.list_messages(db, session_id)
+    ] == [
+        ("user", legacy_question),
+        ("assistant", "Replacement."),
+    ]
+
+
+def test_a_legacy_question_is_deliberately_refused_when_it_does_not_fit(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    legacy_question = "q" * (routes_chat.MAX_QUESTION_CHARS + 1)
+    sessions.add_message(db, session_id, "user", legacy_question)
+    sessions.add_message(db, session_id, "assistant", "The answer they already have.")
+    _set_context_window(db, 2_048)
+    stream_calls: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _spy_stream(stream_calls))
+
+    response = client.post(f"/api/sessions/{session_id}/regenerate", json={"mode": "guide"})
+
+    assert response.status_code == 400
+    assert "too long" in str(response.json()["detail"])
+    assert stream_calls == []
+    assert [
+        (message["role"], message["content"]) for message in sessions.list_messages(db, session_id)
+    ] == [
+        ("user", legacy_question),
+        ("assistant", "The answer they already have."),
+    ]
 
 
 def test_regenerating_an_empty_conversation_is_a_404_with_a_reason(
@@ -993,3 +1046,513 @@ def test_a_local_turn_is_not_redirected_by_a_later_flip_to_remote(
     # second read produced.
     assert endpoints == ["http://127.0.0.1:9/v1"]
     assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user", "assistant"]
+
+
+# --- Charging the whole turn against the context budget ------------------------------
+#
+# The current question is appended to every turn and never trimmed, and it does not stand
+# alone: the generation reserve, the system prompt, the pinned solution step, and the newest
+# history `trim_history` always keeps are all non-negotiable too. A turn is accepted only if
+# those mandatory pieces fit the configured window; anything past that would reach the
+# endpoint only by overrunning the window, so it is refused before the question is persisted
+# and before any retrieval or upstream call. These tests pin the invariant PLA-167 claims:
+# for every accepted turn, `estimated_prompt + generation_reserve <= context_window`.
+
+
+def _set_context_window(db: sqlite3.Connection, tokens: int) -> None:
+    """Point the tutor config at a specific window, to exercise the fit boundary."""
+    db.execute("update settings set context_window = ?", (tokens,))
+    db.commit()
+
+
+def _guide_system_tokens() -> int:
+    """The chat system prompt with no facts, the way an empty test profile builds it.
+
+    The token cost the turn cannot trim: 512-token windows cannot even hold this beside the
+    generation reserve, which is exactly why the fit check has to account for it.
+    """
+    return estimate_tokens(build_system_prompt("guide", [], []))
+
+
+def _capture_retrieval_budget(store: list[int]) -> Callable[..., RetrievalResult]:
+    """A `retrieve` stand-in that records the budget it was handed, then returns nothing.
+
+    Doubles as a spy: an empty `store` proves retrieval was never reached, as a preflight
+    refusal must guarantee.
+    """
+
+    def fake(
+        conn: object,
+        class_id: int,
+        content: str,
+        retrieval_budget: int,
+        **kwargs: object,
+    ) -> RetrievalResult:
+        store.append(retrieval_budget)
+        return NOTHING_RETRIEVED
+
+    return fake
+
+
+def _record_prompt(store: list[list[dict[str, str]]], *tokens: str) -> StreamFactory:
+    """A `stream_chat` stand-in that records the assembled prompt, then answers."""
+
+    async def stream(
+        endpoint_url: str,
+        api_key: str | None,
+        model: str | None,
+        messages: list[dict[str, str]],
+        **kwargs: object,
+    ) -> AsyncIterator[StreamDelta]:
+        store.append(messages)
+        for token in tokens:
+            yield StreamDelta("answer", token)
+
+    return stream
+
+
+def _long_anchored_step(db: sqlite3.Connection, class_id: int) -> int:
+    """A pinned step whose content is long enough to carry the system material past its share.
+
+    The anchor is non-trimmable like the system prompt, so a wordy step is what makes the
+    system allocation overrun its nominal 15% at a mid-sized window.
+    """
+    from backend.core import artifacts
+
+    created = artifacts.create_artifact(
+        db,
+        class_id,
+        "Problem set 7",
+        [artifacts.SourceSpec(_solver_document(db, class_id))],
+    )
+    artifact_id = int(created["id"])
+    problem_id = artifacts.create_part(
+        db,
+        artifact_id,
+        artifacts.PROBLEM,
+        0,
+        label="Problem 7",
+        content="Find the Laplace transform of this piecewise ramp, justifying each step. " * 8,
+    )
+    return artifacts.create_part(
+        db,
+        artifact_id,
+        artifacts.STEP,
+        0,
+        label="Integrate by parts",
+        content="Let u = t and dv = e^{-st} dt, then track the boundary term through the limit. "
+        * 24,
+        parent_part_id=problem_id,
+    )
+
+
+def test_a_question_over_the_character_ceiling_is_rejected_before_anything_is_stored(
+    client: TestClient, db: sqlite3.Connection, session_id: int
+) -> None:
+    # One character past the ceiling: a 422 at the request boundary, so an arbitrarily large
+    # paste is never stripped, persisted, or budgeted whatever the window.
+    response = client.post(
+        f"/api/sessions/{session_id}/chat",
+        json={"content": "x" * (routes_chat.MAX_QUESTION_CHARS + 1), "mode": "guide"},
+    )
+
+    assert response.status_code == 422
+    assert sessions.list_messages(db, session_id) == []
+
+
+def test_the_character_ceiling_counts_characters_not_bytes() -> None:
+    # A three-byte character repeated to the ceiling is 48000 bytes but 16000 characters. A
+    # byte limit would reject it; the ceiling is on characters, so it is accepted, and only
+    # one character more is refused. The boundary is unambiguous whatever alphabet is used.
+    at_limit = "汉" * routes_chat.MAX_QUESTION_CHARS
+    over_limit = "汉" * (routes_chat.MAX_QUESTION_CHARS + 1)
+
+    assert routes_chat.ChatRequest(content=at_limit, mode="guide").content == at_limit
+    with pytest.raises(ValueError, match="at most"):
+        routes_chat.ChatRequest(content=over_limit, mode="guide")
+
+
+def test_the_current_question_is_charged_against_the_retrieval_budget(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two fresh sessions with no history, so the only difference between the budgets handed
+    # to retrieval is the length of the question. The longer question must leave retrieval
+    # exactly its own extra tokens smaller: the question is charged before retrieval, not
+    # appended free on top of it.
+    budgets: list[int] = []
+    monkeypatch.setattr(routes_chat, "retrieve", _capture_retrieval_budget(budgets))
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Sure."))
+
+    # Stripped like the request validator strips it, so the token estimate below matches the
+    # content that is actually charged.
+    short = "Chain rule?"
+    long = ("Explain the chain rule in detail. " * 60).strip()  # within an 8192 window
+    short_session = int(sessions.create_session(db, class_id)["id"])
+    long_session = int(sessions.create_session(db, class_id)["id"])
+
+    client.post(f"/api/sessions/{short_session}/chat", json={"content": short, "mode": "guide"})
+    client.post(f"/api/sessions/{long_session}/chat", json={"content": long, "mode": "guide"})
+
+    short_budget, long_budget = budgets
+    assert long_budget < short_budget
+    assert short_budget - long_budget == estimate_tokens(long) - estimate_tokens(short)
+
+
+def test_a_long_question_that_will_not_fit_beside_mandatory_history_is_refused(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The bug PLA-167 leaves behind: a question that clears the old question-only check but,
+    # once the two historical messages `trim_history` always keeps are added beside it, cannot
+    # fit the window. The old code persisted it and then overran the window; the turn is now
+    # refused instead.
+    window = 2048
+    _set_context_window(db, window)
+    budget = routes_chat.plan_budget(window)
+    # A prior exchange Lyra is obliged to retain, whatever the history budget.
+    sessions.add_message(db, session_id, "user", "p" * 600)  # 150 tokens
+    sessions.add_message(db, session_id, "assistant", "a" * 600)  # 150 tokens
+
+    budgets: list[int] = []
+    stream_calls: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "retrieve", _capture_retrieval_budget(budgets))
+    monkeypatch.setattr(routes_chat, "stream_chat", _spy_stream(stream_calls))
+
+    # Passes the old check (question alone <= the history + retrieval share) yet cannot fit
+    # once the reserve, system prompt, and mandatory pair are all counted.
+    question = "q" * 4000  # 1000 tokens; history + retrieval share is 1229
+    assert estimate_tokens(question) <= budget.history + budget.retrieval
+
+    response = client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": question, "mode": "guide"}
+    )
+
+    assert response.status_code == 400
+    assert "too long" in str(response.json()["detail"])
+    # Nothing reached retrieval or the endpoint, and the conversation is exactly as it was:
+    # the refusal left no orphaned question behind.
+    assert budgets == []
+    assert stream_calls == []
+    assert [(m["role"], m["content"]) for m in sessions.list_messages(db, session_id)] == [
+        ("user", "p" * 600),
+        ("assistant", "a" * 600),
+    ]
+
+
+def test_the_largest_question_that_fits_beside_mandatory_history_is_answered(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The boundary from the other side: the largest question that still fits beside the
+    # mandatory pair is answered, and the prompt it assembles fills the window exactly without
+    # crossing it. One character-group more is refused.
+    window = 2048
+    _set_context_window(db, window)
+    budget = routes_chat.plan_budget(window)
+    sessions.add_message(db, session_id, "user", "p" * 600)  # 150 tokens
+    sessions.add_message(db, session_id, "assistant", "a" * 600)  # 150 tokens
+    mandatory = estimate_tokens("p" * 600) + estimate_tokens("a" * 600)
+
+    max_question_tokens = window - budget.generation - _guide_system_tokens() - mandatory
+    assert max_question_tokens > 0
+    at_boundary = "q" * (max_question_tokens * 4)
+    assert estimate_tokens(at_boundary) == max_question_tokens
+
+    captured: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Sure."))
+    response = client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": at_boundary, "mode": "guide"}
+    )
+
+    assert response.status_code == 200
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    # The assembled prompt plus the generation reserve fits the window - here, exactly.
+    prompt_tokens = sum(estimate_tokens(m["content"]) for m in captured[0])
+    assert prompt_tokens + budget.generation <= window
+
+    # One character-group larger cannot fit and is refused before anything is sent.
+    over = "q" * ((max_question_tokens + 1) * 4)
+    stream_calls: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _spy_stream(stream_calls))
+    refused = client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": over, "mode": "guide"}
+    )
+
+    assert refused.status_code == 400
+    assert stream_calls == []
+
+
+def test_a_pinned_anchor_shrinks_the_question_capacity(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A pinned solution step is charged like the system prompt: non-trimmable, and here large
+    # enough to push the system material past its nominal share. The question's room shrinks
+    # by exactly the anchor's cost, and the just-inside/just-outside boundaries move with it.
+    window = 4096
+    budget = routes_chat.plan_budget(window)
+    system_tokens = _guide_system_tokens()
+
+    step_id = _long_anchored_step(db, class_id)
+    session_id = int(
+        client.post(f"/api/classes/{class_id}/sessions", json={"artifact_part_id": step_id}).json()[
+            "id"
+        ]
+    )
+    _set_context_window(db, window)
+    anchor_tokens = estimate_tokens(sessions.anchored_context(db, session_id) or "")
+    # The system prompt alone fits its 15% share; the pinned step is what carries the pair
+    # over it, so the overrun is real and is charged against the turn.
+    assert system_tokens <= budget.system < system_tokens + anchor_tokens
+
+    # Charged on the joined system-plus-anchor string, the way the prompt is actually built.
+    joined_system = estimate_tokens(
+        build_system_prompt("guide", [], [])
+        + "\n\n"
+        + (sessions.anchored_context(db, session_id) or "")
+    )
+    max_question_tokens = window - budget.generation - joined_system
+    at_boundary = "q" * (max_question_tokens * 4)
+    assert estimate_tokens(at_boundary) == max_question_tokens
+
+    captured: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Sure."))
+    ok = client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": at_boundary, "mode": "guide"}
+    )
+
+    assert ok.status_code == 200
+    prompt_tokens = sum(estimate_tokens(m["content"]) for m in captured[0])
+    assert prompt_tokens + budget.generation <= window
+
+    over = "q" * ((max_question_tokens + 1) * 4)
+    stream_calls: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _spy_stream(stream_calls))
+    refused = client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": over, "mode": "guide"}
+    )
+
+    assert refused.status_code == 400
+    assert stream_calls == []
+
+
+def test_regeneration_is_refused_after_the_window_shrinks_below_the_question(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A real conversation - a warm-up exchange, then a large question - answered under a roomy
+    # window, then the window is reconfigured far smaller. The retry is gated exactly like a
+    # first turn: it refuses rather than sending a question that no longer fits beside the
+    # history it is obliged to keep, and it leaves the existing answer untouched.
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Warm-up answer."))
+    client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": "A short warm-up.", "mode": "guide"}
+    )
+    big_question = "a" * 4000  # ~1000 tokens: fits 8192, far past a 512 window
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("The answer they already have."))
+    client.post(f"/api/sessions/{session_id}/chat", json={"content": big_question, "mode": "guide"})
+    before = [(m["role"], m["content"]) for m in sessions.list_messages(db, session_id)]
+
+    _set_context_window(db, 512)
+    budgets: list[int] = []
+    stream_calls: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "retrieve", _capture_retrieval_budget(budgets))
+    monkeypatch.setattr(routes_chat, "stream_chat", _spy_stream(stream_calls))
+
+    response = client.post(f"/api/sessions/{session_id}/regenerate", json={"mode": "guide"})
+
+    assert response.status_code == 400
+    assert "too long" in str(response.json()["detail"])
+    assert budgets == []
+    assert stream_calls == []
+    # No upstream request, and the reply the student already had is left exactly in place -
+    # the retry deletes nothing when it cannot fit.
+    assert [(m["role"], m["content"]) for m in sessions.list_messages(db, session_id)] == before
+
+
+def test_the_window_used_for_budgeting_is_the_consent_snapshots_window(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The window a turn is budgeted against must come from the same settings read the consent
+    # gate authorized, never a second read. The snapshot carries a small window; a later read
+    # would show a large one. A question that fits the large window but not the small one is
+    # refused, proving the fit check used the snapshot's window and resolved nothing twice.
+    calls: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _spy_stream(calls))
+    small = {**_settings_row("http://127.0.0.1:9/v1", remote_ack=0), "context_window": 512}
+    large = {**_settings_row("http://127.0.0.1:9/v1", remote_ack=0), "context_window": 8192}
+    _hand_out(monkeypatch, small, large)
+
+    question = "a" * 4000  # ~1000 tokens: fits 8192, not 512
+    response = client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": question, "mode": "guide"}
+    )
+
+    assert response.status_code == 400
+    assert "too long" in str(response.json()["detail"])
+    assert calls == []
+    assert sessions.list_messages(db, session_id) == []
+
+
+def test_an_accepted_turn_uses_the_history_snapshot_that_passed_preflight(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = 2_048
+    _set_context_window(db, window)
+    later_message = "future message " * 1_000
+    original_prepare = routes_chat._prepare_turn
+
+    def mutate_then_prepare(*args: object, **kwargs: object) -> routes_chat.TurnPreparation:
+        mutation_conn = connect()
+        try:
+            sessions.add_message(mutation_conn, session_id, "user", later_message)
+        finally:
+            mutation_conn.close()
+        return original_prepare(*args, **kwargs)
+
+    captured: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "_prepare_turn", mutate_then_prepare)
+    monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Sure."))
+
+    response = client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": QUESTION, "mode": "guide"}
+    )
+
+    assert response.status_code == 200
+    assert _frames(response.text)[-1]["type"] == "done"
+    assert later_message not in [message["content"] for message in captured[0]]
+    assert captured[0][-1] == {"role": "user", "content": QUESTION}
+    prompt_tokens = sum(estimate_tokens(message["content"]) for message in captured[0])
+    assert prompt_tokens + routes_chat.plan_budget(window).generation <= window
+
+
+def test_an_accepted_turn_does_not_reread_profile_facts_before_preparation(
+    client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads = 0
+
+    def read_once(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+        nonlocal reads
+        reads += 1
+        if reads > 1:
+            raise AssertionError("accepted prompt state was read twice")
+        return []
+
+    captured: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "select_user_facts", read_once)
+    monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Sure."))
+
+    response = client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": QUESTION, "mode": "guide"}
+    )
+
+    assert response.status_code == 200
+    assert _frames(response.text)[-1]["type"] == "done"
+    assert reads == 1
+
+
+def test_retrieval_labels_cannot_push_an_accepted_prompt_past_the_window(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    window = 2_048
+    _set_context_window(db, window)
+    retrieval_budgets: list[int] = []
+
+    def fill_raw_retrieval_budget(
+        conn: sqlite3.Connection,
+        class_id: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        retrieval_budgets.append(budget_tokens)
+        chunk = RetrievedChunk(
+            chunk_id=1,
+            document_id=1,
+            content="r" * (budget_tokens * 4),
+            token_count=budget_tokens,
+            page_number=3,
+            section_title="Derivatives",
+            section_path="Calculus / Derivatives",
+            section_number="3.2",
+            problem_number=None,
+            part_index=None,
+            filename="lecture-2.pdf",
+            similarity=0.82,
+            score=0.86,
+        )
+        assert estimate_tokens(chunk.content) == budget_tokens
+        return RetrievalResult(
+            chunks=[chunk],
+            trimmed=True,
+            omitted_document_count=1,
+            omitted_document_ids=frozenset({chunk.document_id}),
+        )
+
+    captured: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "retrieve", fill_raw_retrieval_budget)
+    monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Sure."))
+
+    response = client.post(
+        f"/api/sessions/{session_id}/chat", json={"content": QUESTION, "mode": "guide"}
+    )
+
+    assert response.status_code == 200
+    assert retrieval_budgets
+    notice = next(frame for frame in _frames(response.text) if frame["type"] == "notice")
+    assert notice["omitted_document_count"] == 1
+    prompt_tokens = sum(estimate_tokens(message["content"]) for message in captured[0])
+    assert prompt_tokens + routes_chat.plan_budget(window).generation <= window
+
+
+@pytest.mark.parametrize(
+    ("window", "with_history", "anchored", "question_chars"),
+    [
+        (8192, False, False, 40),  # no history, ordinary short question
+        (8192, True, False, 40),  # history, short question
+        (8192, False, True, 40),  # anchored, short question
+        (8192, True, True, 4000),  # history and anchor and a long question together
+        (2048, True, False, 3000),  # a tight window with history and a long question
+    ],
+)
+def test_an_accepted_turns_prompt_never_exceeds_the_context_window(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    window: int,
+    with_history: bool,
+    anchored: bool,
+    question_chars: int,
+) -> None:
+    # The invariant, exercised across the combinations that stress it: with and without
+    # history, with and without a pinned anchor, and with questions from trivial to long. Every
+    # accepted turn's assembled prompt, measured the way the budget estimates it, fits the
+    # window beside the generation reserve.
+    if anchored:
+        step_id = _anchored_step(db, class_id)
+        session_id = int(
+            client.post(
+                f"/api/classes/{class_id}/sessions", json={"artifact_part_id": step_id}
+            ).json()["id"]
+        )
+    else:
+        session_id = int(sessions.create_session(db, class_id)["id"])
+    if with_history:
+        sessions.add_message(db, session_id, "user", "an earlier question " * 20)
+        sessions.add_message(db, session_id, "assistant", "an earlier answer " * 20)
+    _set_context_window(db, window)
+
+    captured: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Sure."))
+
+    response = client.post(
+        f"/api/sessions/{session_id}/chat",
+        json={"content": "q" * question_chars, "mode": "guide"},
+    )
+
+    assert response.status_code == 200
+    budget = routes_chat.plan_budget(window)
+    prompt_tokens = sum(estimate_tokens(message["content"]) for message in captured[0])
+    assert prompt_tokens + budget.generation <= window

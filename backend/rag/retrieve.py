@@ -212,11 +212,14 @@ class RetrievalResult:
         chunks: Chunks in prompt order, already inside the budget.
         trimmed: True when the budget dropped more than half of what was retrieved.
         omitted_document_count: Distinct documents among the dropped chunks.
+        omitted_document_ids: The same documents by id, retained so a caller performing
+            another exact-fit pass can union omissions without double-counting them.
     """
 
     chunks: list[RetrievedChunk]
     trimmed: bool
     omitted_document_count: int
+    omitted_document_ids: frozenset[int] = frozenset()
 
 
 def retrieve(
@@ -270,6 +273,7 @@ def retrieve(
         [chunk for chunk in candidates if chunk.chunk_id not in already], remaining
     )
 
+    omitted_document_ids = frozenset(chunk.document_id for chunk in dropped)
     return RetrievalResult(
         chunks=resolved + _expand_problem_parts(conn, kept, remaining),
         # Reported over the similarity ranking alone. A chunk that did not fit beside a
@@ -278,7 +282,8 @@ def retrieve(
         # cites a section. More than half gone means the answer is missing enough material
         # that the user deserves to be told, per Stage 7 of docs/rag-pipeline.md.
         trimmed=bool(candidates) and len(dropped) * 2 > len(candidates),
-        omitted_document_count=len({chunk.document_id for chunk in dropped}),
+        omitted_document_count=len(omitted_document_ids),
+        omitted_document_ids=omitted_document_ids,
     )
 
 
