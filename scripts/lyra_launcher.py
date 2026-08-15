@@ -19,6 +19,7 @@ import shutil
 import signal
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import tarfile
@@ -456,10 +457,50 @@ def restore_target_file(path: Path) -> Path:
 
     candidate = rooted_path(path).expanduser()
     parent = ensure_existing_parent(candidate, label="restore database parent")
+    assert_safe_external_database_parent(parent)
     target = parent / candidate.name
-    if target.exists():
+    if target.exists() or target.is_symlink():
         raise LauncherError(f"restore database target already exists: {target}")
     return target
+
+
+def assert_safe_external_database_parent(path: Path) -> None:
+    """Match the backend security boundary before staging an external restored database.
+
+    The launcher intentionally stays standard-library-only, so this is the local equivalent
+    of `storage.private.assert_safe_external_writer_parent`. SQLite later reopens predictable
+    WAL/SHM names itself; accepting a directory another OS user can modify would let that
+    user replace a prepared pathname between Lyra securing it and SQLite opening it.
+    """
+    if os.name != "posix":
+        return
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise LauncherError(f"restore database parent must be a real directory: {path}") from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISDIR(info.st_mode):
+            raise LauncherError(f"restore database parent must be a real directory: {path}")
+        if info.st_uid != os.geteuid():
+            raise LauncherError(
+                f"restore database directory must be owned by the current user: {path}"
+            )
+        if stat.S_IMODE(info.st_mode) & 0o022:
+            raise LauncherError(
+                f"restore database directory is writable by other users: {path}. Choose a "
+                "current-user-owned directory without group or world write permission, or "
+                "fix its permissions before restoring."
+            )
+    finally:
+        os.close(descriptor)
 
 
 def private_restore_mkdir(path: Path, *, root: Path) -> None:

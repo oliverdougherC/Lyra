@@ -111,7 +111,8 @@ than passed over, so Lyra does not report a private layout it did not actually a
   secrets, `.lyra/`, or `logs/`.
 - `./run restore` recreates the data tree with `0700` directories and `0600` sensitive files even
   under a permissive umask. An external restored database is `0600` without changing the mode of its
-  pre-existing parent directory.
+  pre-existing parent directory. On POSIX, that parent must be owned by the current user and must not
+  be group- or world-writable, matching the safety check used when the backend opens the database.
 - Deleting a document removes its upload, extracted text, and rendered pages.
 - Deleting a class removes the uploads and derived text and pages for every document in that class.
 - `./run stop` stops Lyra's owned services only. It does not delete user data.

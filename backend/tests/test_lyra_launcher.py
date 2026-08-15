@@ -16,6 +16,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from backend.storage import private
 from backend.storage.database import connect, migrate
 
 
@@ -397,8 +398,8 @@ def test_restore_creates_private_data_and_database_regardless_of_umask(
     archive = tmp_path / "lyra-backup.tgz"
     restored_data = tmp_path / "restored-data"
     restored_db = tmp_path / "restored-db" / "lyra.db"
-    restored_db.parent.mkdir(mode=0o777)
-    os.chmod(restored_db.parent, 0o777)  # noqa: S103 - permissive-umask regression
+    restored_db.parent.mkdir(mode=0o755)
+    os.chmod(restored_db.parent, 0o755)  # noqa: S103 - pre-existing user-chosen parent
     monkeypatch.setenv("LYRA_DATA_DIR", str(data_dir))
     if external_db:
         monkeypatch.setenv("LYRA_DB_PATH", str(db_path))
@@ -436,7 +437,72 @@ def test_restore_creates_private_data_and_database_regardless_of_umask(
         assert stat.S_IMODE(file.stat().st_mode) == 0o600
     assert stat.S_IMODE((restored_data / "models" / "llama-server").stat().st_mode) == 0o700
     if external_db:
-        assert stat.S_IMODE(restored_db.parent.stat().st_mode) == 0o777
+        assert stat.S_IMODE(restored_db.parent.stat().st_mode) == 0o755
+        # Successful launcher output must be accepted by the exact parent predicate the
+        # backend applies before its next normal SQLite open.
+        private.assert_safe_external_writer_parent(restored_db.parent)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+@pytest.mark.parametrize("unsafe_mode", [0o777, 0o775])
+def test_restore_refuses_an_external_database_parent_writable_by_other_users(
+    launcher: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    unsafe_mode: int,
+) -> None:
+    data_dir, db_path = seed_workspace(tmp_path, external_db=True)
+    archive = tmp_path / "lyra-backup.tgz"
+    restored_data = tmp_path / "restored-data"
+    restored_db = tmp_path / "unsafe-restored-db" / "lyra.db"
+    restored_db.parent.mkdir()
+    os.chmod(restored_db.parent, unsafe_mode)  # noqa: S103 - unsafe boundary under test
+    monkeypatch.setenv("LYRA_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("LYRA_DB_PATH", str(db_path))
+    monkeypatch.setattr(launcher, "load_runtime", lambda: launcher.empty_runtime())
+    monkeypatch.setattr(launcher, "stop_supervised_stack", lambda _runtime: True)
+    assert launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)])) == 0
+
+    with pytest.raises(launcher.LauncherError, match="writable by other users"):
+        launcher.restore(
+            launcher.parse_args(
+                [
+                    "restore",
+                    "--archive",
+                    str(archive),
+                    "--data-dir",
+                    str(restored_data),
+                    "--db-path",
+                    str(restored_db),
+                ]
+            )
+        )
+
+    assert stat.S_IMODE(restored_db.parent.stat().st_mode) == unsafe_mode
+    assert not restored_db.exists()
+    assert not restored_data.exists()
+    assert list(restored_db.parent.glob(f".{restored_db.name}.restore-*")) == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ownership")
+def test_restore_refuses_an_external_database_parent_not_owned_by_the_current_user(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    parent = tmp_path / "someone-elses-db-dir"
+    parent.mkdir(mode=0o755)
+    target = parent / "lyra.db"
+    real_fstat = os.fstat
+
+    def report_different_owner(descriptor: int) -> SimpleNamespace:
+        info = real_fstat(descriptor)
+        return SimpleNamespace(st_mode=info.st_mode, st_uid=info.st_uid + 1)
+
+    monkeypatch.setattr(launcher.os, "fstat", report_different_owner)
+
+    with pytest.raises(launcher.LauncherError, match="owned by the current user"):
+        launcher.restore_target_file(target)
+
+    assert not target.exists()
 
 
 def test_backup_and_restore_roundtrip_supports_external_database_path(
