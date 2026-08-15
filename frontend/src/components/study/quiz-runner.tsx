@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ListChecks } from 'lucide-react'
+import { ListChecks, MessageSquare } from 'lucide-react'
+import Link from 'next/link'
 import { toast } from 'sonner'
 
 import { MathText } from '@/components/solutions/math-text'
@@ -13,6 +14,7 @@ import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '@/lib/api'
+import { chatHandoffUrl, quizMissQuestion, weakTopicQuestion } from '@/lib/handoff'
 import { useFinishAttempt, useQuiz, useStartAttempt, useSubmitAnswer } from '@/lib/hooks/use-study'
 import { cn } from '@/lib/utils'
 import type {
@@ -38,7 +40,7 @@ const DIFFICULTY_LABELS: Record<QuizDifficulty, string> = {
  * what the server records is what the per-topic breakdown is built from, and a client
  * that kept its own tally could disagree with it.
  */
-export function QuizRunner({ quizId }: { quizId: number }) {
+export function QuizRunner({ classId, quizId }: { classId: number; quizId: number }) {
   const quiz = useQuiz(quizId)
   const { mutate: start, isPending: starting } = useStartAttempt(quizId)
   const [attempt, setAttempt] = useState<AttemptRead | null>(null)
@@ -146,7 +148,7 @@ export function QuizRunner({ quizId }: { quizId: number }) {
   }
 
   if (result !== null) {
-    return <QuizResult result={result} onTryAgain={begin} />
+    return <QuizResult classId={classId} result={result} onTryAgain={begin} />
   }
 
   const current = questions[index]
@@ -287,11 +289,49 @@ export function QuizRunner({ quizId }: { quizId: number }) {
             </div>
           ) : null}
           <MathText className="text-text-secondary text-sm">{answer.explanation}</MathText>
-          <div className="mt-1">
+          <div className="mt-1 flex flex-wrap items-center gap-2">
             <Button onClick={() => void (isLast ? finish() : advance())} disabled={finishing}>
               {finishing ? <Spinner /> : null}
               {isLast ? 'See results' : 'Next'}
             </Button>
+            {/* A miss is the moment the tutor is worth a click: the question, the wrong
+                answer, and the right one travel along, so the conversation opens already
+                knowing what went wrong. The explanation above stays; this is for when it
+                was not enough.
+
+                Opens in a new tab, and must: an attempt in progress cannot be resumed
+                (the backend keeps unfinished attempts but exposes no way to re-enter
+                one), so navigating this tab away would silently cost the student their
+                place. The quiz stays exactly where it is; the label says so. */}
+            {!answer.correct ? (
+              <Button variant="ghost" asChild>
+                <a
+                  href={chatHandoffUrl(classId, {
+                    ask: quizMissQuestion({
+                      topic: payload.topic,
+                      question: payload.question,
+                      chosen:
+                        payload.type === 'fill_blank'
+                          ? fillText
+                          : selected !== null && selected >= 0
+                            ? (payload.options[selected] ?? null)
+                            : null,
+                      correct: payload.options[answer.correct_index] ?? '',
+                    }),
+                  })}
+                  target="_blank"
+                  rel="noopener"
+                  aria-label="Go over this with Lyra in a new tab. Your quiz stays open here."
+                  title="Opens in a new tab; your quiz stays open here"
+                >
+                  <MessageSquare aria-hidden className="size-4" />
+                  Go over this with Lyra
+                  <span aria-hidden className="text-text-tertiary text-xs">
+                    new tab
+                  </span>
+                </a>
+              </Button>
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -300,7 +340,15 @@ export function QuizRunner({ quizId }: { quizId: number }) {
 }
 
 /** The score and the per-topic breakdown, rendered from the finish response alone. */
-function QuizResult({ result, onTryAgain }: { result: AttemptResult; onTryAgain: () => void }) {
+function QuizResult({
+  classId,
+  result,
+  onTryAgain,
+}: {
+  classId: number
+  result: AttemptResult
+  onTryAgain: () => void
+}) {
   return (
     <section aria-label="Quiz results" className="flex flex-col gap-6 py-4">
       <div className="flex flex-col items-center gap-1 text-center">
@@ -334,6 +382,17 @@ function QuizResult({ result, onTryAgain }: { result: AttemptResult; onTryAgain:
                 aria-label={`${entry.topic}: ${entry.correct} of ${entry.total} correct`}
                 className={weak ? '[&_[data-slot=progress-indicator]]:bg-danger-text' : undefined}
               />
+              {/* A weak topic is a question waiting to be asked. The words travel to the
+                  tutor's composer, where the student can still change them before asking. */}
+              {weak ? (
+                <Link
+                  href={chatHandoffUrl(classId, { ask: weakTopicQuestion(entry.topic) })}
+                  className="text-text-secondary hover:text-accent-primary focus-visible:ring-ring inline-flex items-center gap-1.5 self-start rounded-sm text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  <MessageSquare aria-hidden className="size-3" />
+                  Go over this with Lyra
+                </Link>
+              ) : null}
             </li>
           )
         })}

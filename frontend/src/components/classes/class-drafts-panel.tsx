@@ -1,6 +1,6 @@
 'use client'
 
-import { useId, useState } from 'react'
+import { useState } from 'react'
 import { FileWarning, MoreVertical, Pencil, PenLine, Plus, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -19,26 +19,17 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '@/lib/api'
 import { formatRelativeTime } from '@/lib/format'
+import { untitledDraftTitle } from '@/lib/handoff'
 import { useCreateDraft, useDeleteDraft, useDrafts, useRenameDraft } from '@/lib/hooks/use-drafts'
 import type { ArtifactState, DraftRead } from '@/types'
 
@@ -59,12 +50,28 @@ type DraftTarget = { id: number; title: string }
 
 /** Every draft in a class, with the actions the study panel taught. */
 export function ClassDraftsPanel({ classId }: { classId: number }) {
+  const router = useRouter()
   const drafts = useDrafts(classId)
+  const createDraft = useCreateDraft(classId)
   const renameDraft = useRenameDraft(classId)
   const deleteDraft = useDeleteDraft(classId)
-  const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState<DraftTarget | null>(null)
   const [deleting, setDeleting] = useState<DraftTarget | null>(null)
+
+  /**
+   * A draft used to ask for its name before it existed, which is backwards: the name is
+   * the hardest thing to know about a piece of writing before any of it is written. New
+   * draft now opens the page immediately, stamped to the minute and numbered past any
+   * sibling with the same stamp, and the workspace title edits in place whenever the
+   * work has earned its real name.
+   */
+  function startDraft() {
+    createDraft.mutate(untitledDraftTitle((drafts.data ?? []).map((draft) => draft.title)), {
+      onSuccess: (artifact) => router.push(`/classes/${classId}/drafts/${artifact.id}`),
+      onError: (caught) =>
+        toast.error(caught instanceof ApiError ? caught.message : 'Could not start a draft.'),
+    })
+  }
 
   async function onConfirmDelete() {
     if (!deleting) return
@@ -116,8 +123,13 @@ export function ClassDraftsPanel({ classId }: { classId: number }) {
           Documents you write, with Lyra drafting passages and suggesting revisions.
         </p>
         {!empty ? (
-          <Button size="sm" className="shrink-0" onClick={() => setCreating(true)}>
-            <Plus className="size-4" />
+          <Button
+            size="sm"
+            className="shrink-0"
+            onClick={startDraft}
+            disabled={createDraft.isPending}
+          >
+            {createDraft.isPending ? <Spinner /> : <Plus className="size-4" />}
             New draft
           </Button>
         ) : null}
@@ -135,7 +147,10 @@ export function ClassDraftsPanel({ classId }: { classId: number }) {
             </EmptyDescription>
           </EmptyHeader>
           <div className="mt-2">
-            <Button onClick={() => setCreating(true)}>New draft</Button>
+            <Button onClick={startDraft} disabled={createDraft.isPending}>
+              {createDraft.isPending ? <Spinner /> : null}
+              New draft
+            </Button>
           </div>
         </Empty>
       ) : (
@@ -152,8 +167,6 @@ export function ClassDraftsPanel({ classId }: { classId: number }) {
           ))}
         </ul>
       )}
-
-      <CreateDraftDialog classId={classId} open={creating} onOpenChange={setCreating} />
 
       <RenameDialog
         target={renaming ? { id: renaming.id, name: renaming.title } : null}
@@ -266,91 +279,5 @@ function DraftRow({
         </DropdownMenu>
       </div>
     </div>
-  )
-}
-
-/** A draft asks for one decision up front: what it is called. */
-function CreateDraftDialog({
-  classId,
-  open,
-  onOpenChange,
-}: {
-  classId: number
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
-  const router = useRouter()
-  const titleId = useId()
-  const createDraft = useCreateDraft(classId)
-  const [title, setTitle] = useState('')
-  const [error, setError] = useState<string | null>(null)
-
-  // Reset during render rather than in an effect, so reopening the dialog never shows the
-  // previous attempt's title for a frame.
-  const [openSeen, setOpenSeen] = useState(open)
-  if (open !== openSeen) {
-    setOpenSeen(open)
-    setTitle('')
-    setError(null)
-  }
-
-  async function onSubmit() {
-    const trimmed = title.trim()
-    if (!trimmed) return
-    try {
-      const artifact = await createDraft.mutateAsync(trimmed)
-      onOpenChange(false)
-      router.push(`/classes/${classId}/drafts/${artifact.id}`)
-    } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'Could not create this draft.')
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>New draft</DialogTitle>
-          <DialogDescription>
-            A blank page in this class. Lyra can draft passages into it and suggest revisions once
-            there is something on it.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-2">
-          <Label htmlFor={titleId}>Name</Label>
-          <Input
-            id={titleId}
-            value={title}
-            autoFocus
-            autoComplete="off"
-            placeholder="Essay on feedback systems"
-            onChange={(event) => setTitle(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                void onSubmit()
-              }
-            }}
-          />
-        </div>
-        {error ? (
-          <p className="text-danger-text text-sm" role="alert">
-            {error}
-          </p>
-        ) : null}
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            disabled={title.trim().length === 0 || createDraft.isPending}
-            onClick={() => void onSubmit()}
-          >
-            {createDraft.isPending ? <Spinner /> : null}
-            Create draft
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }

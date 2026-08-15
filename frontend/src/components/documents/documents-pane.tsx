@@ -3,6 +3,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { FileText, FolderInput, PanelRightClose, Search, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from 'react'
+import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 
 import { BatchLoader } from '@/components/documents/batch-loader'
@@ -32,6 +33,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '@/lib/api'
 import { formatCount, parseTimestamp } from '@/lib/format'
+import { documentStudyTitle } from '@/lib/handoff'
 import {
   isTerminal,
   documentKeys,
@@ -42,6 +44,7 @@ import {
   useUploadDocument,
 } from '@/lib/hooks/use-documents'
 import { profileKeys } from '@/lib/hooks/use-profile'
+import { useCreateQuiz } from '@/lib/hooks/use-study'
 import { cn } from '@/lib/utils'
 import type { DocumentRead, DocumentState, DocumentStatus } from '@/types'
 
@@ -108,7 +111,9 @@ export function DocumentsPane({
   // for here. Tying it to the upload batch was the bug: the batch clears a couple of
   // seconds after the last byte is sent, and `extracting` - a model pass over the whole
   // document - runs long after that, so the readout sat on "Analyzing" until a reload.
+  const router = useRouter()
   const { data, isPending, isError, error, refetch } = useDocuments(classId)
+  const createQuiz = useCreateQuiz(classId)
   const uploadDocument = useUploadDocument(classId)
   const reingestDocument = useReingestDocument(classId)
   const recognizeDocument = useRecognizeDocument(classId)
@@ -239,6 +244,29 @@ export function DocumentsPane({
       })
     },
     [deleteDocument, onSelectDocument, selectedDocumentId],
+  )
+
+  /**
+   * One document into a practice quiz, named after the file, at the study defaults. The
+   * generation screen it lands on shows the progress; the artifact is renameable there
+   * and listed under Study like any other.
+   */
+  const onPractice = useCallback(
+    (document: DocumentRead) => {
+      createQuiz.mutate(
+        { title: documentStudyTitle(document.filename), document_ids: [document.id] },
+        {
+          onSuccess: (artifact) => router.push(`/classes/${classId}/study/${artifact.id}`),
+          onError: (caught) =>
+            toast.error(
+              caught instanceof ApiError
+                ? caught.message
+                : 'Could not make practice questions from that document.',
+            ),
+        },
+      )
+    },
+    [classId, createQuiz, router],
   )
 
   const onRowSelect = useCallback(
@@ -488,6 +516,7 @@ export function DocumentsPane({
                     onDelete={onDelete}
                     onStatus={onStatus}
                     onMove={managing ? (picked) => setMoving([picked]) : undefined}
+                    onPractice={onPractice}
                   />
                 </li>
               ))}

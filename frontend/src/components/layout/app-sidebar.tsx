@@ -29,11 +29,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { formatSessionFallbackTitle } from '@/lib/format'
 import { useClasses, useUpdateClass } from '@/lib/hooks/use-classes'
 import { useSessions } from '@/lib/hooks/use-chat'
+import { useDrafts } from '@/lib/hooks/use-drafts'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
 import { useSolutions } from '@/lib/hooks/use-solutions'
+import { useStudyList } from '@/lib/hooks/use-study'
 import { useTheme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
-import type { ClassRead, SolutionRead } from '@/types'
+import type { ClassRead, DraftRead, SolutionRead, StudyListRead } from '@/types'
 
 const ARCHIVED_STORAGE_KEY = 'lyra-sidebar-archived-open'
 
@@ -45,6 +47,97 @@ const ARCHIVED_STORAGE_KEY = 'lyra-sidebar-archived-open'
  * becoming the sidebar.
  */
 const VISIBLE_SESSIONS = 5
+
+/**
+ * How many pieces of work a class shows under its conversations.
+ *
+ * One list across solution sets, drafts, decks, and quizzes, ordered by each artifact's
+ * `updated_at`. That timestamp moves when the work changed (a pass finished, a body
+ * autosaved), which is close to but not the same as when the student last opened it, so
+ * the group is headed "Work", not "Recent". The rail used to list only solutions, which
+ * made the solver the one kind of work you could get back to from anywhere; the
+ * student's mental model is "the thing I was doing", not "which subsystem owns the thing
+ * I was doing".
+ */
+const VISIBLE_WORK = 4
+
+/** One piece of work in the rail, whatever subsystem owns it. */
+type WorkItem = {
+  key: string
+  href: string
+  title: string
+  /** A quiet note when the row needs the student or is still moving. */
+  note: string | null
+  noteTone: 'info' | 'nominal'
+  updatedAt: string
+}
+
+function workItems(
+  classHref: string,
+  solutions: SolutionRead[] | undefined,
+  drafts: DraftRead[] | undefined,
+  study: StudyListRead | undefined,
+): WorkItem[] {
+  const items: WorkItem[] = []
+
+  for (const solution of solutions ?? []) {
+    items.push({
+      key: `solution-${solution.id}`,
+      href: `${classHref}/solutions/${solution.id}`,
+      title: solution.title,
+      // `awaiting_review` is neither working nor finished, and the student is the thing
+      // it is blocked on, so the rail says so.
+      note:
+        solution.state === 'awaiting_review'
+          ? 'Waiting for you'
+          : solution.state === 'solving' || solution.state === 'segmenting'
+            ? 'Working'
+            : null,
+      noteTone: solution.state === 'awaiting_review' ? 'info' : 'nominal',
+      updatedAt: solution.updated_at,
+    })
+  }
+
+  for (const draft of drafts ?? []) {
+    items.push({
+      key: `draft-${draft.id}`,
+      href: `${classHref}/drafts/${draft.id}`,
+      title: draft.title,
+      note: draft.state === 'generating' || draft.state === 'pending' ? 'Working' : null,
+      noteTone: 'nominal',
+      updatedAt: draft.updated_at,
+    })
+  }
+
+  for (const deck of study?.decks ?? []) {
+    items.push({
+      key: `study-${deck.id}`,
+      href: `${classHref}/study/${deck.id}`,
+      title: deck.title,
+      note:
+        deck.state === 'ready' && deck.due_count > 0
+          ? `${deck.due_count} due`
+          : deck.state === 'generating' || deck.state === 'pending'
+            ? 'Working'
+            : null,
+      noteTone: deck.state === 'ready' && deck.due_count > 0 ? 'info' : 'nominal',
+      updatedAt: deck.updated_at,
+    })
+  }
+
+  for (const quiz of study?.quizzes ?? []) {
+    items.push({
+      key: `study-${quiz.id}`,
+      href: `${classHref}/study/${quiz.id}`,
+      title: quiz.title,
+      note: quiz.state === 'generating' || quiz.state === 'pending' ? 'Working' : null,
+      noteTone: 'nominal',
+      updatedAt: quiz.updated_at,
+    })
+  }
+
+  return items.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, VISIBLE_WORK)
+}
 
 /**
  * The active marker sits inside the row's rounded surface rather than on its border box.
@@ -106,7 +199,9 @@ function ClassNavItem({
   sessions,
   sessionsPending,
   solutions,
-  activeSolutionId,
+  drafts,
+  study,
+  activeWorkPath,
 }: {
   klass: ClassRead
   selected: boolean
@@ -114,10 +209,14 @@ function ClassNavItem({
   sessions?: SessionSummary[]
   sessionsPending?: boolean
   solutions?: SolutionRead[]
-  activeSolutionId: string | null
+  drafts?: DraftRead[]
+  study?: StudyListRead
+  /** The pathname, for marking the work row currently open. */
+  activeWorkPath: string
 }) {
   const href = `/classes/${klass.id}`
   const [showAllSessions, setShowAllSessions] = useState(false)
+  const recentWork = workItems(href, solutions, drafts, study)
 
   const allSessions = sessions ?? []
   const headSessions = allSessions.slice(0, VISIBLE_SESSIONS)
@@ -204,27 +303,33 @@ function ClassNavItem({
               />
             ))}
 
-            <SidebarMenuSubItem>
-              {/* A link rather than a label. The group heading is the most obvious thing
-                  to click when you are looking for the solver, and a heading that does
-                  nothing sends you back to hunting. */}
-              <Link
-                href={`${href}/solutions`}
-                className="eyebrow hover:text-text-secondary focus-visible:ring-ring mt-2 block rounded-sm px-2 transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none"
-              >
-                Solutions
-              </Link>
-            </SidebarMenuSubItem>
-            {(solutions ?? []).map((solution) => (
-              <SidebarMenuSubItem key={solution.id}>
-                <SidebarMenuSubButton asChild isActive={activeSolutionId === String(solution.id)}>
-                  <Link href={`${href}/solutions/${solution.id}`} title={solution.title}>
-                    <span className="truncate">{solution.title}</span>
-                    {/* `awaiting_review` is neither working nor finished, and the student
-                        is the thing it is blocked on, so the rail says so. */}
-                    {solution.state === 'awaiting_review' ? (
-                      <span className="text-info-text ml-auto shrink-0 text-[0.6875rem]">
-                        Waiting for you
+            {recentWork.length > 0 ? (
+              <SidebarMenuSubItem>
+                {/* A link rather than a label. The group heading is the most obvious thing
+                    to click when you are looking for your work, and a heading that does
+                    nothing sends you back to hunting. It opens the class, which is where
+                    every kind of work is browsed and managed. */}
+                <Link
+                  href={href}
+                  className="eyebrow hover:text-text-secondary focus-visible:ring-ring mt-2 block rounded-sm px-2 transition-colors duration-150 focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  Work
+                </Link>
+              </SidebarMenuSubItem>
+            ) : null}
+            {recentWork.map((item) => (
+              <SidebarMenuSubItem key={item.key}>
+                <SidebarMenuSubButton asChild isActive={activeWorkPath === item.href}>
+                  <Link href={item.href} title={item.title}>
+                    <span className="truncate">{item.title}</span>
+                    {item.note ? (
+                      <span
+                        className={cn(
+                          'ml-auto shrink-0 text-[0.6875rem]',
+                          item.noteTone === 'info' ? 'text-info-text' : 'text-text-tertiary',
+                        )}
+                      >
+                        {item.note}
                       </span>
                     ) : null}
                   </Link>
@@ -278,7 +383,14 @@ export function AppSidebar() {
     selectedClassIsValid ? selectedClassId : Number.NaN,
     selectedClassIsValid,
   )
-  const solutionMatch = /^\/classes\/\d+\/solutions\/(\d+)/.exec(pathname)
+  const { data: drafts } = useDrafts(
+    selectedClassIsValid ? selectedClassId : Number.NaN,
+    selectedClassIsValid,
+  )
+  const { data: study } = useStudyList(
+    selectedClassIsValid ? selectedClassId : Number.NaN,
+    selectedClassIsValid,
+  )
 
   const restoreClass = useCallback(
     (classId: number) => {
@@ -346,7 +458,9 @@ export function AppSidebar() {
                     selected={selectedClassId === item.id}
                     activeSessionId={null}
                     solutions={solutions}
-                    activeSolutionId={solutionMatch ? solutionMatch[1] : null}
+                    drafts={drafts}
+                    study={study}
+                    activeWorkPath={pathname}
                     sessions={sessions}
                     sessionsPending={sessionsPending}
                   />
@@ -361,7 +475,9 @@ export function AppSidebar() {
                         selected={selectedClassId === item.id}
                         activeSessionId={activeSessionId}
                         solutions={solutions}
-                        activeSolutionId={solutionMatch ? solutionMatch[1] : null}
+                        drafts={drafts}
+                        study={study}
+                        activeWorkPath={pathname}
                         sessions={sessions}
                         sessionsPending={sessionsPending}
                       />

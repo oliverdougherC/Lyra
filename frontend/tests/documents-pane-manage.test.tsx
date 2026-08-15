@@ -8,6 +8,13 @@ import { DocumentsPane } from '@/components/documents/documents-pane'
 import { api } from '@/lib/api'
 import type { ClassRead, DocumentRead } from '@/types'
 
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
+  useParams: () => ({ id: '1' }),
+  useSearchParams: () => new URLSearchParams(),
+  usePathname: () => '/classes/1',
+}))
+
 function createWrapper() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

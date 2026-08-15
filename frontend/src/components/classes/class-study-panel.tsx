@@ -1,7 +1,16 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { FileWarning, Layers, ListChecks, MoreVertical, Pencil, Plus, Trash2 } from 'lucide-react'
+import {
+  ChevronRight,
+  FileWarning,
+  Layers,
+  ListChecks,
+  MoreVertical,
+  Pencil,
+  Plus,
+  Trash2,
+} from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
@@ -20,6 +29,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   Dialog,
   DialogContent,
@@ -48,7 +58,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '@/lib/api'
 import { formatCount, formatRelativeTime } from '@/lib/format'
+import { quickStudyTitle } from '@/lib/handoff'
 import { useDocuments } from '@/lib/hooks/use-documents'
+import { cn } from '@/lib/utils'
 import {
   useCreateDeck,
   useCreateQuiz,
@@ -100,7 +112,10 @@ type StudyTarget = { kind: 'deck' | 'quiz'; id: number; title: string }
 
 /** Every deck and quiz in a class, with the actions the solutions panel taught. */
 export function ClassStudyPanel({ classId }: { classId: number }) {
+  const router = useRouter()
   const study = useStudyList(classId)
+  const documents = useDocuments(classId)
+  const createQuiz = useCreateQuiz(classId)
   const renameDeck = useRenameDeck(classId)
   const renameQuiz = useRenameQuiz(classId)
   const deleteDeck = useDeleteDeck(classId)
@@ -108,6 +123,41 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
   const [creating, setCreating] = useState<'deck' | 'quiz' | null>(null)
   const [renaming, setRenaming] = useState<StudyTarget | null>(null)
   const [deleting, setDeleting] = useState<StudyTarget | null>(null)
+
+  const documentsLoaded = documents.data !== undefined
+  const readyCount = (documents.data ?? []).filter((item) => item.state === 'ready').length
+  // Every name already taken by a deck or a quiz, so a second quick create inside the
+  // same minute gets numbered instead of a twin.
+  const existingTitles = [...(study.data?.decks ?? []), ...(study.data?.quizzes ?? [])].map(
+    (artifact) => artifact.title,
+  )
+
+  /**
+   * The one-click way in: a quiz from everything ready, named to the minute, at the
+   * defaults the dialog would have offered anyway. The dialog remains for anyone who
+   * wants to choose sources, counts, or difficulty; nobody has to visit it to start
+   * studying.
+   *
+   * Disabled until the document list has loaded: while the query is pending the ready
+   * count is not zero, it is unknown, and a fast click must not be told "nothing is
+   * ready" by a screen that has not found out yet.
+   */
+  function startPractice() {
+    if (readyCount === 0) {
+      toast.error('No documents are ready to practice from yet.')
+      return
+    }
+    createQuiz.mutate(
+      { title: quickStudyTitle('quiz', existingTitles) },
+      {
+        onSuccess: (artifact) => router.push(`/classes/${classId}/study/${artifact.id}`),
+        onError: (error) =>
+          toast.error(
+            error instanceof ApiError ? error.message : 'Could not start a practice set.',
+          ),
+      },
+    )
+  }
 
   async function onConfirmDelete() {
     if (!deleting) return
@@ -156,17 +206,47 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
         </p>
         {!empty ? (
           <div className="flex shrink-0 gap-2">
-            <Button size="sm" variant="outline" onClick={() => setCreating('deck')}>
-              <Plus className="size-4" />
-              New deck
-            </Button>
-            <Button size="sm" onClick={() => setCreating('quiz')}>
-              <Plus className="size-4" />
-              New quiz
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline">
+                  <Plus className="size-4" />
+                  New
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setCreating('deck')}>
+                  <Layers />
+                  Flashcard deck
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setCreating('quiz')}>
+                  <ListChecks />
+                  Quiz
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button
+              size="sm"
+              onClick={startPractice}
+              disabled={createQuiz.isPending || !documentsLoaded}
+            >
+              {createQuiz.isPending ? <Spinner /> : null}
+              Practice now
             </Button>
           </div>
         ) : null}
       </div>
+
+      {/* The decks and quizzes above load from their own query; only Practice needs to
+          know which documents are ready. So a failed document query dims exactly one
+          thing, and says so rather than leaving the button dead without a word. */}
+      {documents.isError ? (
+        <p className="text-text-secondary flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <span>The document list did not load, so Practice now cannot tell what is ready.</span>
+          <Button variant="outline" size="sm" onClick={() => void documents.refetch()}>
+            Retry
+          </Button>
+        </p>
+      ) : null}
 
       {empty ? (
         <Empty className="py-12">
@@ -174,17 +254,26 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
             <EmptyMedia variant="icon">
               <Layers className="text-text-tertiary size-8" />
             </EmptyMedia>
-            <EmptyTitle>No study tools yet</EmptyTitle>
+            {/* "No decks or quizzes yet", not "nothing to study from": this state means
+                no saved study artifacts exist, and in a class full of ready documents
+                Practice now works perfectly well from here. */}
+            <EmptyTitle>No decks or quizzes yet</EmptyTitle>
             <EmptyDescription>
-              Turn this class&apos;s documents into flashcards and a quiz, and the scheduler keeps
-              track of what is due.
+              Practice now writes a quiz from everything Lyra has read for this class. Or build a
+              deck or quiz your own way, choosing the sources and difficulty yourself.
             </EmptyDescription>
           </EmptyHeader>
-          <div className="mt-2 flex gap-2">
+          <div className="mt-2 flex flex-wrap justify-center gap-2">
+            <Button onClick={startPractice} disabled={createQuiz.isPending || !documentsLoaded}>
+              {createQuiz.isPending ? <Spinner /> : null}
+              Practice now
+            </Button>
             <Button variant="outline" onClick={() => setCreating('deck')}>
               New deck
             </Button>
-            <Button onClick={() => setCreating('quiz')}>New quiz</Button>
+            <Button variant="outline" onClick={() => setCreating('quiz')}>
+              New quiz
+            </Button>
           </div>
         </Empty>
       ) : (
@@ -227,6 +316,7 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
       <CreateStudyDialog
         classId={classId}
         kind={creating}
+        existingTitles={existingTitles}
         onOpenChange={(open) => {
           if (!open) setCreating(null)
         }}
@@ -407,10 +497,13 @@ function clamp(value: number, min: number, max: number): number {
 function CreateStudyDialog({
   classId,
   kind,
+  existingTitles,
   onOpenChange,
 }: {
   classId: number
   kind: 'deck' | 'quiz' | null
+  /** Names already taken in this class, so the prefilled name never collides. */
+  existingTitles: string[]
   onOpenChange: (open: boolean) => void
 }) {
   const router = useRouter()
@@ -427,19 +520,24 @@ function CreateStudyDialog({
   const [difficulty, setDifficulty] = useState<QuizDifficulty>('intermediate')
   /** Null means every question type. */
   const [types, setTypes] = useState<QuizQuestionType[] | null>(null)
+  const [optionsOpen, setOptionsOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // Reset during render rather than in an effect, so reopening the dialog never shows the
-  // previous attempt's form for a frame.
+  // previous attempt's form for a frame. The name arrives already filled in: a workable
+  // default is one less decision standing between the student and the first question, and
+  // the field is right there for anyone who wants a better one. Options collapses again
+  // too: progressive disclosure is a promise about every opening, not just the first.
   const [kindSeen, setKindSeen] = useState(kind)
   if (kind !== kindSeen) {
     setKindSeen(kind)
-    setTitle('')
+    setTitle(kind === null ? '' : quickStudyTitle(kind, existingTitles))
     setSelected(null)
     setCardsPerTopic(4)
     setCount(10)
     setDifficulty('intermediate')
     setTypes(null)
+    setOptionsOpen(false)
     setError(null)
   }
 
@@ -547,71 +645,92 @@ function CreateStudyDialog({
           ) : null}
         </div>
 
-        {kind === 'deck' ? (
-          <div className="grid gap-2">
-            <Label htmlFor="cards-per-topic">Cards per topic</Label>
-            <Input
-              id="cards-per-topic"
-              type="number"
-              min={2}
-              max={6}
-              value={cardsPerTopic}
-              onChange={(event) => setCardsPerTopic(Number(event.target.value))}
-              className="w-24"
+        {/* Every field below has a default the backend would have chosen anyway, so none
+            of them stands between the student and Create. Closed, the dialog is name plus
+            sources; open, the power user keeps every dial they had. */}
+        <Collapsible open={optionsOpen} onOpenChange={setOptionsOpen}>
+          <CollapsibleTrigger className="text-text-secondary hover:text-text-primary focus-visible:ring-ring flex items-center gap-1 rounded-sm text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none">
+            <ChevronRight
+              className={cn('size-3.5 transition-transform', optionsOpen && 'rotate-90')}
+              aria-hidden
             />
-          </div>
-        ) : null}
+            Options
+            <span className="text-text-tertiary text-xs">
+              {kind === 'quiz'
+                ? `${clamp(count, 3, 30)} questions · ${
+                    DIFFICULTY_OPTIONS.find((option) => option.value === difficulty)?.label
+                  }`
+                : `${clamp(cardsPerTopic, 2, 6)} cards per topic`}
+            </span>
+          </CollapsibleTrigger>
+          <CollapsibleContent className="flex flex-col gap-4 pt-3">
+            {kind === 'deck' ? (
+              <div className="grid gap-2">
+                <Label htmlFor="cards-per-topic">Cards per topic</Label>
+                <Input
+                  id="cards-per-topic"
+                  type="number"
+                  min={2}
+                  max={6}
+                  value={cardsPerTopic}
+                  onChange={(event) => setCardsPerTopic(Number(event.target.value))}
+                  className="w-24"
+                />
+              </div>
+            ) : null}
 
-        {kind === 'quiz' ? (
-          <>
-            <div className="grid gap-2">
-              <Label htmlFor="question-count">Questions</Label>
-              <Input
-                id="question-count"
-                type="number"
-                min={3}
-                max={30}
-                value={count}
-                onChange={(event) => setCount(Number(event.target.value))}
-                className="w-24"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="quiz-difficulty">Difficulty</Label>
-              <Select
-                value={difficulty}
-                onValueChange={(value) => setDifficulty(value as QuizDifficulty)}
-              >
-                <SelectTrigger id="quiz-difficulty" className="w-48">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {DIFFICULTY_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {/* No multi-select primitive exists in the codebase, so the types are a
-                checkbox list, the same answer the document picker above gives. */}
-            <fieldset className="grid gap-2">
-              <legend className="text-sm font-medium">Question types</legend>
-              {QUIZ_TYPE_OPTIONS.map((option) => (
-                <label key={option.value} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    className="accent-accent-primary size-4"
-                    checked={effectiveTypes.includes(option.value)}
-                    onChange={() => toggleType(option.value)}
+            {kind === 'quiz' ? (
+              <>
+                <div className="grid gap-2">
+                  <Label htmlFor="question-count">Questions</Label>
+                  <Input
+                    id="question-count"
+                    type="number"
+                    min={3}
+                    max={30}
+                    value={count}
+                    onChange={(event) => setCount(Number(event.target.value))}
+                    className="w-24"
                   />
-                  {option.label}
-                </label>
-              ))}
-            </fieldset>
-          </>
-        ) : null}
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="quiz-difficulty">Difficulty</Label>
+                  <Select
+                    value={difficulty}
+                    onValueChange={(value) => setDifficulty(value as QuizDifficulty)}
+                  >
+                    <SelectTrigger id="quiz-difficulty" className="w-48">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DIFFICULTY_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {/* No multi-select primitive exists in the codebase, so the types are a
+                    checkbox list, the same answer the document picker above gives. */}
+                <fieldset className="grid gap-2">
+                  <legend className="text-sm font-medium">Question types</legend>
+                  {QUIZ_TYPE_OPTIONS.map((option) => (
+                    <label key={option.value} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="accent-accent-primary size-4"
+                        checked={effectiveTypes.includes(option.value)}
+                        onChange={() => toggleType(option.value)}
+                      />
+                      {option.label}
+                    </label>
+                  ))}
+                </fieldset>
+              </>
+            ) : null}
+          </CollapsibleContent>
+        </Collapsible>
 
         {error ? (
           <p className="text-danger-text text-sm" role="alert">

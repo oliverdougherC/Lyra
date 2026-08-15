@@ -10,6 +10,8 @@ import {
   FileType,
   FileWarning,
   FolderInput,
+  ListChecks,
+  MessageSquare,
   MoreVertical,
   RotateCw,
   ScanText,
@@ -29,6 +31,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { formatCount, formatFileSize, truncateMiddle } from '@/lib/format'
+import { chatHandoffUrl } from '@/lib/handoff'
 import { isTerminal, useDocumentOutline, useDocumentStatus } from '@/lib/hooks/use-documents'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { cn } from '@/lib/utils'
@@ -89,6 +92,8 @@ type DocumentRowProps = {
   mode?: DocumentRowMode
   /** Supplied where refiling is on offer, which is the class hub rather than the rail. */
   onMove?: (document: DocumentRead) => void
+  /** Make a practice quiz from this one document. Supplied where the pane can navigate. */
+  onPractice?: (document: DocumentRead) => void
 }
 
 export function DocumentRow({
@@ -101,6 +106,7 @@ export function DocumentRow({
   onStatus,
   mode = 'ask',
   onMove,
+  onPractice,
 }: DocumentRowProps) {
   const polling = !isTerminal(document.state)
   const { data: status } = useDocumentStatus(document.id, polling)
@@ -204,6 +210,33 @@ export function DocumentRow({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {/* The file's own next actions, ahead of its management: while a student is
+                looking at course material, "do something with this" is the likelier reason
+                to open the menu than "refile this" (contextual handoffs, not more tabs).
+
+                Ask about this exists only where it changes surfaces (the manage list).
+                Inside the chat workspace, clicking the row already scopes the open
+                conversation, and a handoff link back into the same mounted chat route
+                would change the URL without remounting the page, so its params would be
+                stripped without ever being applied. */}
+            {state === 'ready' ? (
+              <>
+                {managing ? (
+                  <DropdownMenuItem asChild>
+                    <Link href={chatHandoffUrl(document.class_id, { documentId: document.id })}>
+                      <MessageSquare />
+                      Ask about this
+                    </Link>
+                  </DropdownMenuItem>
+                ) : null}
+                {onPractice ? (
+                  <DropdownMenuItem onSelect={() => onPractice(document)}>
+                    <ListChecks />
+                    Make practice questions
+                  </DropdownMenuItem>
+                ) : null}
+              </>
+            ) : null}
             {state === 'failed' || state === 'ready' ? (
               <DropdownMenuItem onSelect={() => onRetry(document.id)}>
                 <RotateCw />
