@@ -26,7 +26,7 @@ from pathlib import Path
 import sqlite_vec
 
 from backend.config import settings
-from backend.core import recognition, storage_intents
+from backend.core import ownership, recognition, storage_intents
 from backend.core.consolidation import consolidate_class
 from backend.core.errors import LyraError, UpstreamError
 from backend.core.figures import store_figures
@@ -182,7 +182,11 @@ def _ingest(conn: sqlite3.Connection, document_id: int) -> None:
         return
 
     text = parsed.full_text
-    _write_extracted_text(document_id, text)
+    if not _write_extracted_text(document_id, text, started_at):
+        logger.warning(
+            "Ingestion of document %s abandoned: deleted or replaced mid-run", document_id
+        )
+        return
 
     _record_figures(conn, document_id, Path(document["stored_path"]), document["mime"])
 
@@ -432,7 +436,7 @@ def reconcile_interrupted(conn: sqlite3.Connection) -> tuple[int, int]:
     return len(queued), cursor.rowcount
 
 
-def _write_extracted_text(document_id: int, text: str) -> None:
+def _write_extracted_text(document_id: int, text: str, started_at: str) -> bool:
     """Keep the extracted text beside the upload so a re-index never re-parses.
 
     Extracted text is the coursework in plain form, so it is written `0o600` inside the
@@ -440,9 +444,17 @@ def _write_extracted_text(document_id: int, text: str) -> None:
     (staged, then renamed), because readers trust this file on the strength of its
     existence: a crash mid-write must not leave a truncated transcript that a re-index or
     the source pane would silently treat as the whole document.
+
+    Publication is conditional on the document row still carrying the identity this run
+    started from. Parsing can take minutes and deletion is allowed meanwhile; a completed
+    delete must not have this worker resurrect the document's text afterwards
+    (docs/storage-consistency.md). Returns False, with nothing written, when the document
+    is gone or replaced - the caller abandons the run.
     """
     private.secure_mkdir(settings.text_dir, root=settings.data_dir)
-    private.publish_private_text(storage_intents.text_path(document_id), text)
+    return ownership.publish_current_document(
+        document_id, started_at, storage_intents.text_path(document_id), text.encode("utf-8")
+    )
 
 
 def _set_state(

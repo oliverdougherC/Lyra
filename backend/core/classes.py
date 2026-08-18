@@ -8,7 +8,7 @@ plus its `document_count`, since no screen shows a class without it.
 import logging
 import sqlite3
 
-from backend.core import storage_intents
+from backend.core import ownership, storage_intents
 from backend.core.errors import NotFoundError
 from backend.storage import private
 
@@ -103,43 +103,49 @@ def delete_class(conn: sqlite3.Connection, class_id: int) -> None:
     Raises:
         NotFoundError: when no class carries that id.
     """
-    get_class(conn, class_id)
-    # Read before the rows cascade away, because the files below are named after them.
-    document_ids = [
-        int(row[0])
-        for row in conn.execute("select id from documents where class_id = ?", (class_id,))
-    ]
-    # The intent commits with the row deletes, so the cascading rows are never the only
-    # record of the files still to remove: after a crash between this commit and the
-    # cleanup below, startup reconciliation re-runs the cleanup from the intent instead of
-    # leaving the class's coursework orphaned on disk (docs/storage-consistency.md).
-    intent_id = storage_intents.record_intent(
-        conn,
-        storage_intents.DELETE_CLASS,
-        class_id=class_id,
-        payload={"document_ids": document_ids},
-    )
-    # `chunk_embeddings` is a vec0 virtual table, and a virtual table receives no
-    # foreign-key cascade. Its rows have to go explicitly, before the class row does.
-    conn.execute("delete from chunk_embeddings where class_id = ?", (class_id,))
-    # documents, chunks, chat_sessions, messages, and profile_facts cascade from here.
-    conn.execute("delete from classes where id = ?", (class_id,))
-    conn.commit()
-    # The uploads are only what the student handed over. Ingestion also writes the text it
-    # extracted, and the reader the pages it rendered, and neither lives under the upload
-    # directory: a class is every document in it, so all three go. A cleanup that cannot
-    # finish keeps its intent and is retried at the next startup rather than failing a
-    # delete that has already committed.
-    try:
-        storage_intents.run_class_cleanup(class_id, document_ids)
-    except (OSError, private.PrivacyContractError):
-        logger.warning(
-            "Cleanup for deleted class %s is deferred to the next startup",
-            class_id,
-            exc_info=True,
+    # Under the lifecycle mutex, like a document delete and for the same reasons: no
+    # concurrent move may relocate one of this class's documents between the id/path
+    # capture below and the cleanup, and no late publication may recreate a deleted
+    # document's derived files after the cleanup has run.
+    with ownership.lifecycle_mutation():
+        get_class(conn, class_id)
+        # Read before the rows cascade away, because the files below are named after them.
+        document_ids = [
+            int(row[0])
+            for row in conn.execute("select id from documents where class_id = ?", (class_id,))
+        ]
+        # The intent commits with the row deletes, so the cascading rows are never the
+        # only record of the files still to remove: after a crash between this commit and
+        # the cleanup below, startup reconciliation re-runs the cleanup from the intent
+        # instead of leaving the class's coursework orphaned on disk
+        # (docs/storage-consistency.md).
+        intent_id = storage_intents.record_intent(
+            conn,
+            storage_intents.DELETE_CLASS,
+            class_id=class_id,
+            payload={"document_ids": document_ids},
         )
-        return
-    storage_intents.settle_intent(conn, intent_id)
+        # `chunk_embeddings` is a vec0 virtual table, and a virtual table receives no
+        # foreign-key cascade. Its rows have to go explicitly, before the class row does.
+        conn.execute("delete from chunk_embeddings where class_id = ?", (class_id,))
+        # documents, chunks, chat_sessions, messages, and profile_facts cascade from here.
+        conn.execute("delete from classes where id = ?", (class_id,))
+        conn.commit()
+        # The uploads are only what the student handed over. Ingestion also writes the
+        # text it extracted, and the reader the pages it rendered, and neither lives under
+        # the upload directory: a class is every document in it, so all three go. A
+        # cleanup that cannot finish keeps its intent and is retried at the next startup
+        # rather than failing a delete that has already committed.
+        try:
+            storage_intents.run_class_cleanup(class_id, document_ids)
+        except (OSError, private.PrivacyContractError, storage_intents.IntentBlockedError):
+            logger.warning(
+                "Cleanup for deleted class %s is deferred to the next startup",
+                class_id,
+                exc_info=True,
+            )
+            return
+        storage_intents.settle_intent(conn, intent_id)
 
 
 def touch_class(conn: sqlite3.Connection, class_id: int) -> None:

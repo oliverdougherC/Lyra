@@ -452,8 +452,10 @@ agent substrate; scrape remains default-off until the real pinned-Firecrawl redi
   tutor model once inference is bundled in Phase 6
 - Operations that mutate both SQLite and these files (upload, move, delete, class delete)
   follow one crash-consistency contract: atomic final-file publication, durable
-  `storage_intents` recorded with the database mutation, and idempotent startup
-  reconciliation. See [storage-consistency.md](storage-consistency.md).
+  `storage_intents` recorded with the database mutation, idempotent startup
+  reconciliation, and — for live requests — a process-wide lifecycle mutex with
+  conditional (compare-and-swap) transitions and identity-guarded publication of derived
+  files. See [storage-consistency.md](storage-consistency.md).
 
 **Secret storage.** The tutor API key is stored in the **OS keychain** (macOS Keychain via
 `keyring`), not in `lyra.db`. Encrypting a secret inside the database would require keeping the

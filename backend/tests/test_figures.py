@@ -215,8 +215,19 @@ def test_a_figure_renders_as_a_crop_of_its_page(
     figure = store.list_figures(db, document_id)[0]
     bbox = figure["bbox"]
 
+    created_at = str(
+        db.execute("select created_at from documents where id = ?", (document_id,)).fetchone()[
+            "created_at"
+        ]
+    )
     path = render.render_figure(
-        document_id, source, "application/pdf", 1, int(figure["id"]), tuple(bbox)
+        document_id,
+        source,
+        "application/pdf",
+        1,
+        int(figure["id"]),
+        tuple(bbox),
+        created_at=created_at,
     )
 
     assert path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"

@@ -16,6 +16,7 @@ user's unrelated file.
 
 import errno
 import os
+import sqlite3
 import stat
 from collections.abc import Iterator
 from pathlib import Path
@@ -256,12 +257,22 @@ def test_connect_tightens_a_sidecar_left_broad_by_a_prior_run(
 
 
 def test_extracted_text_is_written_owner_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_open_umask: None
+    db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_open_umask: None
 ) -> None:
-    text_root = tmp_path / "data" / "text"
-    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    # A real row behind the write: publication is guarded on the document's identity.
+    db.execute("insert into classes (id, name) values (1, 'Calc')")
+    db.execute(
+        "insert into documents (id, class_id, filename, stored_path, mime, byte_size, state) "
+        "values (7, 1, 'notes.pdf', '', 'application/pdf', 0, 'ready')"
+    )
+    db.commit()
+    created_at = str(
+        db.execute("select created_at from documents where id = 7").fetchone()["created_at"]
+    )
+    text_root = tmp_path / "fresh-data" / "text"
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "fresh-data")
 
-    ingestion._write_extracted_text(7, "extracted coursework")
+    assert ingestion._write_extracted_text(7, "extracted coursework", created_at)
 
     written = text_root / "7.txt"
     assert written.read_text() == "extracted coursework"
@@ -340,7 +351,8 @@ def test_runtime_write_beneath_a_symlinked_owned_dir_creates_nothing_outside(
     monkeypatch.setattr(settings, "data_dir", data)
 
     with pytest.raises(private.PrivacyContractError):
-        ingestion._write_extracted_text(7, "extracted coursework")
+        # The refusal fires in `secure_mkdir`, before any identity check would run.
+        ingestion._write_extracted_text(7, "extracted coursework", "2026-01-01T00:00:00.000Z")
 
     assert list(external.iterdir()) == [external / "someone-elses-notes.txt"]
     assert _mode(external) == 0o755

@@ -13,11 +13,14 @@ viewer a second, and nothing else reads it.
 
 import logging
 import math
+import os
+import stat
 from pathlib import Path
 
 import pymupdf
 
 from backend.config import settings
+from backend.core import ownership
 from backend.core.errors import LyraError, NotFoundError
 from backend.rag.parse import PAGE_MIMES, unreadable_message
 from backend.storage import private
@@ -123,7 +126,13 @@ def page_path(document_id: int, page_number: int, dpi: int = RENDER_DPI) -> Path
 
 
 def render_page(
-    document_id: int, source: Path, mime: str, page_number: int, dpi: int = RENDER_DPI
+    document_id: int,
+    source: Path,
+    mime: str,
+    page_number: int,
+    dpi: int = RENDER_DPI,
+    *,
+    created_at: str,
 ) -> Path:
     """Render one page to PNG, returning the cached file.
 
@@ -135,13 +144,18 @@ def render_page(
         page_number: 1-based page number as the reader sees it.
         dpi: Resolution to rasterize at. `RENDER_DPI` for reading, `RECOGNITION_DPI` for
             transcription. Each resolution caches separately, so the two never collide.
+        created_at: The document row's `created_at` as the caller read it. Rasterization
+            can outlive the document - a delete is allowed mid-render - so the publication
+            is guarded: the cache file appears only if the row still exists with this
+            identity at the moment of the rename (docs/storage-consistency.md).
 
     Returns:
         Path to the PNG on disk.
 
     Raises:
         LyraError: The document has no pages to draw, or the file could not be opened.
-        NotFoundError: The document has no such page.
+        NotFoundError: The document has no such page, or was deleted or replaced while
+            the page was being rendered.
     """
     if mime not in PAGE_MIMES:
         # TXT and MD have no pages to draw. The interface serves their extracted text
@@ -181,7 +195,13 @@ def render_page(
             # byte; `save` cannot offer that guarantee and may follow a planted symlink.
             # The raster envelope bounds this encoding's memory: the pixmap already
             # occupies up to ~525 MB and its PNG bytes are a bounded derivative of it.
-            private.publish_private_bytes(cached, pixmap.tobytes("png"))
+            # Publication is conditional on the document still existing unchanged: the
+            # rasterization above can outlast a delete, and its cache file must not
+            # reappear after the delete's cleanup already ran.
+            if not ownership.publish_current_document(
+                document_id, created_at, cached, pixmap.tobytes("png")
+            ):
+                raise NotFoundError("That document does not exist.")
     except (LyraError, NotFoundError):
         raise
     except Exception as exc:
@@ -205,6 +225,8 @@ def render_figure(
     page_number: int,
     figure_id: int,
     bbox: tuple[float, float, float, float],
+    *,
+    created_at: str,
 ) -> Path:
     """Crop one figure out of its page and cache it as a PNG.
 
@@ -222,13 +244,17 @@ def render_figure(
         page_number: 1-based page the figure sits on.
         figure_id: Row id, which names the cache entry.
         bbox: `(x0, y0, x1, y1)` as fractions of the page box.
+        created_at: The document row's `created_at` as the caller read it; the crop is
+            published only if the row still exists with this identity, exactly as a
+            rendered page is.
 
     Returns:
         Path to the PNG on disk.
 
     Raises:
         LyraError: The document has no pages to draw, or the file could not be opened.
-        NotFoundError: The document has no such page.
+        NotFoundError: The document has no such page, or was deleted or replaced while
+            the figure was being rendered.
     """
     if mime not in PAGE_MIMES:
         raise LyraError(NOT_RENDERABLE)
@@ -262,7 +288,10 @@ def render_figure(
             # stretched over several times the area.
             pixmap = page.get_pixmap(dpi=FIGURE_DPI, clip=clip)
             private.secure_mkdir(cached.parent, root=settings.data_dir)
-            private.publish_private_bytes(cached, pixmap.tobytes("png"))
+            if not ownership.publish_current_document(
+                document_id, created_at, cached, pixmap.tobytes("png")
+            ):
+                raise NotFoundError("That document does not exist.")
     except (LyraError, NotFoundError):
         raise
     except Exception as exc:
@@ -273,25 +302,49 @@ def render_figure(
 
 
 def discard_pages(document_id: int) -> None:
-    """Drop a document's rendered pages.
+    """Drop a document's rendered pages, without ever following a symlink.
 
     Called when the document is deleted or re-ingested. A stale image is worse than a
     missing one: it would show the reader a page from a file that is no longer there.
+
+    This runs from the delete path and from startup recovery, so it is held to the same
+    owned-path/no-follow contract as the rest of private storage: the cache directory is
+    inspected with `lstat`, a symlink planted where the directory belongs is removed as a
+    link - its target is never entered, globbed, or touched - and an entry inside the
+    directory is unlinked only when it is a regular file or a link (which `unlink` removes
+    as a link). Nothing here can be steered at files outside the Lyra data tree.
     """
     directory = pages_dir(document_id)
-    if not directory.exists():
+    try:
+        info = os.lstat(directory)
+    except OSError:
+        # Absent is the goal state; anything else unreadable is left for the next attempt.
+        return
+    if not stat.S_ISDIR(info.st_mode):
+        # A symlink or stray file where Lyra's own cache directory belongs is tampering
+        # or corruption. Remove the entry itself - for a link, that is the link, never
+        # its target - which is all of Lyra's state that exists here.
+        directory.unlink(missing_ok=True)
         return
     # Staged `*.partial` files go too: they are derived from the same file the pages were,
     # and a leftover from a killed writer would otherwise pin the directory forever.
     for pattern in ("*.png", f"*{private.PARTIAL_SUFFIX}"):
         for page in directory.glob(pattern):
-            page.unlink(missing_ok=True)
+            try:
+                entry = os.lstat(page)
+            except OSError:
+                continue
+            # A directory wearing a cache entry's name is skipped rather than recursed
+            # into or errored on; it keeps the parent in place, deliberately visible.
+            if stat.S_ISREG(entry.st_mode) or stat.S_ISLNK(entry.st_mode):
+                page.unlink(missing_ok=True)
     try:
         directory.rmdir()
     except OSError:
-        # Something is still in there: a page being rendered right now, or a partial file
-        # from a write that was interrupted. The pages themselves are gone, which is what
-        # this function is for, and the empty directory costs nothing. Deleting a document
-        # while its source pane is loading a page must not fail the delete, which has
-        # already been committed by the time this runs.
+        # Something is still in there: a page being rendered right now, a partial file
+        # from a write that was interrupted, or an unexpected entry left unremoved above.
+        # The pages themselves are gone, which is what this function is for, and the
+        # empty directory costs nothing. Deleting a document while its source pane is
+        # loading a page must not fail the delete, which has already been committed by
+        # the time this runs.
         logger.debug("Left the page cache directory for document %s in place", document_id)

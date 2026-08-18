@@ -84,15 +84,22 @@ def list_figures(
 
 
 def get_figure(conn: sqlite3.Connection, figure_id: int) -> dict[str, object] | None:
-    """One figure by id, or None. Carries the source document's path and mime for rendering."""
+    """One figure by id, or None. Carries the source document's path, mime, and identity
+    (`created_at`) for rendering, whose publication is guarded on that identity."""
     row = conn.execute(
-        f"select f.{_COLUMNS.replace(', ', ', f.')}, d.stored_path, d.mime "  # noqa: S608
+        f"select f.{_COLUMNS.replace(', ', ', f.')}, d.stored_path, d.mime, "  # noqa: S608
+        "d.created_at as document_created_at "
         "from document_figures f join documents d on d.id = f.document_id where f.id = ?",
         (figure_id,),
     ).fetchone()
     if row is None:
         return None
-    return {**_read(row), "stored_path": row["stored_path"], "mime": row["mime"]}
+    return {
+        **_read(row),
+        "stored_path": row["stored_path"],
+        "mime": row["mime"],
+        "document_created_at": row["document_created_at"],
+    }
 
 
 def figure_name(label: object, page_number: object, index: object) -> str:

@@ -259,7 +259,9 @@ def recognize_pages(
     consecutive = 0
     for page_number in pending:
         try:
-            text = _read_one_page(config, remote_ack, document_id, source, mime, page_number)
+            text = _read_one_page(
+                config, remote_ack, document_id, source, mime, page_number, started_at
+            )
         except Exception as exc:
             state, error = FAILED, _page_error(exc)
             text = None
@@ -347,10 +349,18 @@ def _read_one_page(
     source: Path,
     mime: str,
     page_number: int,
+    started_at: str,
 ) -> str:
-    """Render one page at recognition resolution and transcribe it."""
+    """Render one page at recognition resolution and transcribe it.
+
+    `started_at` is the run's captured row identity: the rendered page publishes to the
+    cache only while the document still exists unchanged, so a delete that lands mid-run
+    cannot have this worker repopulate the cache it just cleaned. The refusal surfaces as
+    this page failing, and the caller's `document_replaced` check then abandons the run
+    before anything is written to the row.
+    """
     image = render.render_page(
-        document_id, source, mime, page_number, render.RECOGNITION_DPI
+        document_id, source, mime, page_number, render.RECOGNITION_DPI, created_at=started_at
     ).read_bytes()
     # `client.complete` is async and the ingestion worker is a plain thread with no event
     # loop, the same situation `extract_facts` is in and handled the same way: own a loop

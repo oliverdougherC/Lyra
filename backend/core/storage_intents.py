@@ -16,12 +16,19 @@ filesystem - and no transaction spans both. The contract that keeps them consist
 3. **Reconciliation.** `reconcile_storage` runs at startup, before the ingestion queue is
    rebuilt: it settles every surviving intent idempotently (rolling a move forward,
    re-running a delete's cleanup), then sweeps crash orphans - staged `*.partial` files
-   and stored files whose document row never committed.
+   and stored files whose document row never committed. An intent that cannot be settled
+   is always kept: retried next startup when the failure is transient, or durably marked
+   blocked (`blocked_reason`) when its recorded work is unsafe to perform at all.
 
 Everything here is idempotent by construction: settling an intent twice, or sweeping
-twice, converges on the same state. Recovery never follows a symlink and never touches a
-path outside the current data tree, so the crash-consistency machinery cannot be turned
-against the private-storage contract it exists to protect.
+twice, converges on the same state. Recovery never follows a symlink and never acts on a
+path outside the current data tree - such an intent is blocked, not obeyed and not
+silently settled - so the crash-consistency machinery cannot be turned against the
+private-storage contract it exists to protect.
+
+The live-request half of the story - the process-wide lifecycle mutex and the
+identity-checked publication barrier that keep two concurrent requests, or a request and
+the ingestion worker, from interleaving destructively - lives in `backend.core.ownership`.
 """
 
 import contextlib
@@ -48,6 +55,23 @@ DELETE_CLASS = "delete_class"
 # `pending` row that would fail cryptically in the parser or a "moved" row pointing at
 # nothing.
 FILE_LOST_MESSAGE = "The stored file went missing while it was being moved. Upload it again."
+
+
+class IntentBlockedError(Exception):
+    """An intent whose recorded work cannot be performed safely, now or by retrying.
+
+    Raised when settling would require acting on a path outside the current data tree,
+    or when the payload cannot be read at all. Distinct from a transient filesystem
+    failure (an `OSError` that a retry can fix): a blocked intent is kept with a durable
+    classification in `blocked_reason` so its evidence - the payload - survives for
+    manual handling, it is re-validated (cheaply, destructively never) at each startup in
+    case the environment changed back, and it is never silently settled with its cleanup
+    skipped.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 def text_path(document_id: int) -> Path:
@@ -118,12 +142,15 @@ def run_document_cleanup(document_id: int, stored_path: object) -> None:
     Idempotent - a missing file is the goal state, not an error - so the request path and
     startup recovery share it and either may run after the other. A real failure (a
     permission error, say) propagates so the caller keeps the intent and the work is
-    retried at the next startup instead of being forgotten.
+    retried at the next startup instead of being forgotten. The derived files go first
+    and the stored upload last: its recorded path is the one part of the payload that
+    could be stale or out-of-root (`IntentBlockedError`), and refusing it must not stop
+    the parts whose locations are derived from settings and the id.
     """
-    if stored_path:
-        _unlink_owned(Path(str(stored_path)))
     text_path(document_id).unlink(missing_ok=True)
     render.discard_pages(document_id)
+    if stored_path:
+        _unlink_owned(Path(str(stored_path)))
 
 
 def run_class_cleanup(class_id: int, document_ids: list[int]) -> None:
@@ -151,9 +178,21 @@ def reconcile_storage(conn: sqlite3.Connection) -> tuple[int, int]:
 
     Runs at startup before the ingestion queue is rebuilt, so a document a recovered move
     rolls forward is re-indexed from the path the recovery settled on. Each intent is
-    settled and deleted in its own transaction; one that cannot be settled (its filesystem
-    work still fails) is kept, logged, and retried at the next startup rather than
-    silently dropped.
+    settled and deleted in its own transaction, and every failure to settle keeps the
+    intent - never the reverse - in one of two durable classifications:
+
+    - A transient filesystem failure (the unlink or rename still fails) is logged and
+      retried at the next startup.
+    - Work that cannot be performed safely at all - an unreadable payload, a recorded
+      path outside the current data tree, an unknown kind - marks the intent blocked
+      (`blocked_reason`), preserving the payload as evidence for manual handling. Blocked
+      intents are re-validated at each startup, which is cheap and never destructive, so
+      an intent blocked by a temporarily relocated data directory settles by itself once
+      the environment is back; a genuinely malformed one stays visibly blocked instead of
+      being retried as if it might start working.
+
+    No single intent, however malformed, can abort reconciliation or startup: each is
+    isolated, and later intents settle regardless of what earlier ones did.
 
     Returns:
         How many intents were settled, and how many orphaned files were swept.
@@ -166,12 +205,30 @@ def reconcile_storage(conn: sqlite3.Connection) -> tuple[int, int]:
         try:
             payload = json.loads(str(row["payload"] or "{}"))
         except ValueError:
-            payload = {}
+            _block_intent(conn, row, "unreadable payload")
+            continue
+        if not isinstance(payload, dict):
+            _block_intent(conn, row, "unreadable payload")
+            continue
         try:
-            _settle_one(conn, row, payload if isinstance(payload, dict) else {})
+            _settle_one(conn, row, payload)
+        except IntentBlockedError as exc:
+            _block_intent(conn, row, exc.reason)
+            continue
         except (OSError, private.PrivacyContractError):
             logger.exception(
                 "Storage intent %s (%s) could not be settled; it will be retried next startup",
+                row["id"],
+                row["kind"],
+            )
+            continue
+        except Exception:
+            # A defect this loop did not anticipate must cost this one intent a retry,
+            # never the startup: everything after reconciliation - the ingestion queue,
+            # the API - still has to come up.
+            logger.exception(
+                "Storage intent %s (%s) failed unexpectedly; it is kept and will be "
+                "retried next startup",
                 row["id"],
                 row["kind"],
             )
@@ -183,18 +240,53 @@ def reconcile_storage(conn: sqlite3.Connection) -> tuple[int, int]:
     return settled, swept
 
 
+def _block_intent(conn: sqlite3.Connection, row: sqlite3.Row, reason: str) -> None:
+    """Durably classify an intent as unsafe to settle, keeping it and its payload.
+
+    The log names the intent and the classification but not the recorded path: an
+    out-of-root path is by definition outside Lyra's tree, and the log should not repeat
+    where it points. The payload row itself remains the durable evidence.
+    """
+    conn.execute("update storage_intents set blocked_reason = ? where id = ?", (reason, row["id"]))
+    conn.commit()
+    logger.error(
+        "Storage intent %s (%s) cannot be settled safely (%s); it is kept for manual "
+        "review and will be re-validated at the next startup",
+        row["id"],
+        row["kind"],
+        reason,
+    )
+
+
 def _settle_one(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict[str, object]) -> None:
-    """Finish one intent's owed filesystem work. Raises OSError when it still cannot."""
+    """Finish one intent's owed filesystem work.
+
+    Raises:
+        OSError: the work still cannot be done; the caller keeps the intent for retry.
+        IntentBlockedError: the recorded work is unsafe to perform; the caller keeps the
+            intent durably classified rather than retrying or - worse - settling it.
+    """
     kind = str(row["kind"])
     if kind == MOVE_DOCUMENT:
+        if row["document_id"] is None:
+            raise IntentBlockedError("missing document id")
         _recover_move(conn, int(row["document_id"]), payload)
     elif kind == DELETE_DOCUMENT:
+        if row["document_id"] is None:
+            raise IntentBlockedError("missing document id")
         run_document_cleanup(int(row["document_id"]), payload.get("stored_path"))
     elif kind == DELETE_CLASS:
+        if row["class_id"] is None:
+            raise IntentBlockedError("missing class id")
         ids = payload.get("document_ids")
-        run_class_cleanup(int(row["class_id"]), list(ids) if isinstance(ids, list) else [])
+        if not isinstance(ids, list) or not all(isinstance(entry, int) for entry in ids):
+            raise IntentBlockedError("unreadable payload")
+        run_class_cleanup(int(row["class_id"]), ids)
     else:
-        logger.warning("Dropping storage intent %s with unknown kind %r", row["id"], kind)
+        # An unknown kind is owed work this build does not know how to perform - a
+        # downgraded install, or corruption. Settling it would discard the work; blocking
+        # keeps it visible for the build that understands it.
+        raise IntentBlockedError(f"unknown intent kind {kind!r}")
 
 
 def _recover_move(conn: sqlite3.Connection, document_id: int, payload: dict[str, object]) -> None:
@@ -206,15 +298,28 @@ def _recover_move(conn: sqlite3.Connection, document_id: int, payload: dict[str,
     the document honestly - the row must not go on claiming an upload that no longer
     exists anywhere.
     """
-    source = Path(str(payload.get("source") or ""))
-    destination = Path(str(payload.get("destination") or ""))
     document = conn.execute(
         "select stored_path from documents where id = ?", (document_id,)
     ).fetchone()
-    if document is None or not payload.get("source") or not payload.get("destination"):
-        # The document was deleted after the move wedged (its own delete intent and the
-        # orphan sweep own the files now), or the payload is unreadable. Nothing to move.
+    if document is None:
+        # The document was deleted after the move wedged: its own delete intent and the
+        # orphan sweep own the files now. Nothing to move.
         return
+    source_recorded = payload.get("source")
+    destination_recorded = payload.get("destination")
+    if not isinstance(source_recorded, str) or not source_recorded:
+        raise IntentBlockedError("unreadable move payload")
+    if not isinstance(destination_recorded, str) or not destination_recorded:
+        raise IntentBlockedError("unreadable move payload")
+    source = Path(source_recorded)
+    destination = Path(destination_recorded)
+    # Validated before anything acts on them: a stale or corrupted payload must not aim a
+    # rename - or the directory creation it implies - outside the uploads tree, and the
+    # `ValueError` the owned-root helper would raise for it must not reach startup.
+    if not private.is_within(source, settings.uploads_dir):
+        raise IntentBlockedError("recorded move source is outside the uploads directory")
+    if not private.is_within(destination, settings.uploads_dir):
+        raise IntentBlockedError("recorded move destination is outside the uploads directory")
     if str(document["stored_path"]) != str(destination):
         # A later committed operation rewrote the row (the compensation path restores the
         # source location and deletes the intent atomically, so this is belt and braces).
@@ -238,13 +343,18 @@ def _unlink_owned(path: Path) -> None:
     """Remove one file recorded by an intent, only ever inside the current data tree.
 
     A payload path outside the tree - a data directory that moved between runs, or a
-    corrupted row - is logged and skipped rather than acted on: recovery must never be the
-    thing that deletes a file outside what Lyra owns. `unlink` operates on the directory
-    entry itself, so a symlink is removed as a link, never followed.
+    corrupted row - is refused, and the refusal is `IntentBlockedError` rather than a
+    logged skip: recovery must never be the thing that deletes a file outside what Lyra
+    owns, but it also must never settle an intent whose recorded cleanup it skipped -
+    that would silently discard the only durable pointer to a file the delete still owes.
+    `unlink` operates on the directory entry itself, so a symlink is removed as a link,
+    never followed.
+
+    Raises:
+        IntentBlockedError: the path is outside the current data directory.
     """
     if not private.is_within(path, settings.data_dir):
-        logger.warning("Skipped removing %s: it is outside the current data directory", path)
-        return
+        raise IntentBlockedError("recorded path is outside the current data directory")
     path.unlink(missing_ok=True)
 
 
