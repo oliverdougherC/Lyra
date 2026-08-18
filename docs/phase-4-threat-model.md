@@ -103,6 +103,20 @@ but the tool registry never exposes the apply or execute operation.
    ceilings report a refusal; truncation is visible and never presented as a complete source.
 8. **Consent is narrow and revocable.** Web access, workspace attachment, file application, and
    command execution are distinct grants. Enabling one never enables another.
+9. **Agent turns honor the tutor-endpoint consent rule.** The class agent's model calls are made by
+   `run_tool_loop` against the configured tutor endpoint, and every round of that loop carries
+   private material: the conversation history and the student's message on the first round, and
+   workspace file contents, fetched-page evidence, and command-planning context as tool results
+   re-enter the context on later rounds. `send_agent_chat` therefore takes the same coherent
+   `resolve_tutor_access` snapshot as tutor chat — endpoint and document-text permission from one
+   settings read — and refuses an unacknowledged non-loopback endpoint before the user turn is
+   persisted, before the tool registry is built, and before any upstream request, re-deriving the
+   consent on every turn. The one deliberate exception is already non-private by construction: the
+   `research` profile's web-search queries go to the loopback Firecrawl service (not the tutor
+   endpoint) and are synthetic, bounded probe strings that the T7 query guard prevents from
+   carrying document text, secrets, or verbatim private context. That distinction is the contract:
+   search queries are minimized instead of gated; everything that enters the model context is
+   gated by the endpoint acknowledgement.
 
 ## Threats and required mitigations
 
