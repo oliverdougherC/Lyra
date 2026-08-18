@@ -34,8 +34,6 @@ the ingestion worker, from interleaving destructively - lives in `backend.core.o
 import contextlib
 import json
 import logging
-import os
-import shutil
 import sqlite3
 import stat
 from pathlib import Path
@@ -55,6 +53,18 @@ DELETE_CLASS = "delete_class"
 # `pending` row that would fail cryptically in the parser or a "moved" row pointing at
 # nothing.
 FILE_LOST_MESSAGE = "The stored file went missing while it was being moved. Upload it again."
+
+
+class CleanupIncompleteError(Exception):
+    """Durable cleanup ran but could not reach its goal state.
+
+    Raised when a delete's filesystem cleanup left something behind: an entry that could
+    not be removed, an unexpected subdirectory that is never recursed into, a directory
+    that would not go away. Retryable by design, exactly like a transient `OSError`: the
+    caller keeps the storage intent so the work is retried at the next startup, instead
+    of settling an intent whose recorded cleanup was silently skipped - which would
+    discard the only durable record that files are still owed removal.
+    """
 
 
 class IntentBlockedError(Exception):
@@ -108,19 +118,24 @@ def settle_intent(conn: sqlite3.Connection, intent_id: int) -> None:
 
 
 def source_file_present(path: Path) -> bool:
-    """Whether a real regular file sits at `path`, without following a symlink.
+    """Whether a real regular file sits at `path`, without following any symlink.
 
     The question a move asks before promising a destination. Anything that is not a plain
     regular file - absent, a symlink, a directory - counts as not present: a move must
     never relocate a link (its target could be anywhere), and converting "the source is a
     symlink" into a successful move would be the same lie as inventing a destination for a
-    missing file.
+    missing file. The file is reached by no-follow descent from the data root, so an
+    intermediate component turned symlink cannot make an outside file answer for the
+    recorded path; callers validate `is_within` before asking.
+
+    Raises:
+        private.PrivacyContractError: a symlink blocks an owned component on the way.
     """
     try:
-        info = os.lstat(path)
+        info = private.stat_in_tree(path, root=settings.data_dir)
     except OSError:
         return False
-    return stat.S_ISREG(info.st_mode)
+    return info is not None and stat.S_ISREG(info.st_mode)
 
 
 def perform_move(source: Path, destination: Path) -> None:
@@ -130,47 +145,61 @@ def perform_move(source: Path, destination: Path) -> None:
     create the destination directory under the same owned-tree, no-symlink contract. The
     rename is atomic within the uploads tree; it either happens or it does not, which is
     what lets the intent protocol treat "did the rename land?" as a question with a
-    trustworthy answer.
+    trustworthy answer. Both ends are reached by no-follow descent from the data root,
+    so a symlinked intermediate directory can neither supply the file being renamed nor
+    receive it outside the tree.
     """
     private.secure_mkdir(destination.parent, root=settings.data_dir)
-    os.replace(source, destination)
+    private.replace_in_tree(source, destination, root=settings.data_dir)
 
 
 def run_document_cleanup(document_id: int, stored_path: object) -> None:
     """Remove one deleted document's files: upload, extracted text, rendered pages.
 
     Idempotent - a missing file is the goal state, not an error - so the request path and
-    startup recovery share it and either may run after the other. A real failure (a
-    permission error, say) propagates so the caller keeps the intent and the work is
-    retried at the next startup instead of being forgotten. The derived files go first
-    and the stored upload last: its recorded path is the one part of the payload that
-    could be stale or out-of-root (`IntentBlockedError`), and refusing it must not stop
-    the parts whose locations are derived from settings and the id.
+    startup recovery share it and either may run after the other. A real failure
+    propagates so the caller keeps the intent and the work is retried at the next
+    startup instead of being forgotten: a permission error as `OSError`, a page cache
+    that could not be fully removed as `CleanupIncompleteError` - completion is only
+    ever declared when every file this delete owes removal is provably gone. The derived
+    files go first and the stored upload last: its recorded path is the one part of the
+    payload that could be stale or out-of-root (`IntentBlockedError`), and refusing it
+    must not stop the parts whose locations are derived from settings and the id.
     """
-    text_path(document_id).unlink(missing_ok=True)
-    render.discard_pages(document_id)
+    private.unlink_in_tree(text_path(document_id), root=settings.data_dir)
+    pages_clean = render.discard_pages(document_id)
     if stored_path:
         _unlink_owned(Path(str(stored_path)))
+    if not pages_clean:
+        raise CleanupIncompleteError(
+            f"the page cache for document {document_id} could not be fully removed"
+        )
 
 
 def run_class_cleanup(class_id: int, document_ids: list[int]) -> None:
     """Remove a deleted class's upload directory and every document's derived files.
 
-    Idempotent for the same reason as `run_document_cleanup`. The class directory is
-    removed with errors surfaced, not swallowed: cleanup that silently failed would settle
-    an intent while leaving coursework on disk, which is exactly the state the intent
-    exists to prevent.
+    Idempotent for the same reason as `run_document_cleanup`, and completion-honest in
+    the same way: the class upload directory and every document's page cache must be
+    provably gone, or `CleanupIncompleteError` keeps the intent for retry. The upload
+    directory is emptied entry by entry through the no-follow tree primitive rather
+    than recursively: Lyra stores uploads flat, so anything nested in there was not
+    Lyra's doing, is never entered, and keeps the cleanup visibly incomplete instead of
+    being force-removed or silently abandoned. A symlink planted where the directory
+    belongs is removed as a link - never its target - which is all of Lyra's state that
+    exists here. Every document's cleanup is attempted before the failure is raised, so
+    one obstruction does not shelter the rest of the class's files.
     """
     directory = settings.uploads_dir / str(class_id)
-    if directory.is_symlink():
-        # Tampering: a link where Lyra's own directory belongs. Remove the link itself -
-        # never its target - which is all of Lyra's state that exists here.
-        directory.unlink(missing_ok=True)
-    elif directory.exists():
-        shutil.rmtree(directory)
+    complete = private.clear_owned_dir(directory, root=settings.data_dir, patterns=("*",))
     for document_id in document_ids:
-        text_path(int(document_id)).unlink(missing_ok=True)
-        render.discard_pages(int(document_id))
+        private.unlink_in_tree(text_path(int(document_id)), root=settings.data_dir)
+        if not render.discard_pages(int(document_id)):
+            complete = False
+    if not complete:
+        raise CleanupIncompleteError(
+            f"the stored files for class {class_id} could not be fully removed"
+        )
 
 
 def reconcile_storage(conn: sqlite3.Connection) -> tuple[int, int]:
@@ -215,7 +244,7 @@ def reconcile_storage(conn: sqlite3.Connection) -> tuple[int, int]:
         except IntentBlockedError as exc:
             _block_intent(conn, row, exc.reason)
             continue
-        except (OSError, private.PrivacyContractError):
+        except (OSError, private.PrivacyContractError, CleanupIncompleteError):
             logger.exception(
                 "Storage intent %s (%s) could not be settled; it will be retried next startup",
                 row["id"],
@@ -274,12 +303,24 @@ def _settle_one(conn: sqlite3.Connection, row: sqlite3.Row, payload: dict[str, o
     elif kind == DELETE_DOCUMENT:
         if row["document_id"] is None:
             raise IntentBlockedError("missing document id")
-        run_document_cleanup(int(row["document_id"]), payload.get("stored_path"))
+        # The stored path is the delete's critical durable pointer, so its shape is
+        # validated, not defaulted: a payload that lost the key - or holds something
+        # other than the route's two legitimate shapes, a non-empty path string or an
+        # explicit null for a document that never had a stored upload - must keep its
+        # evidence as blocked rather than settle as if there were nothing to remove.
+        if "stored_path" not in payload:
+            raise IntentBlockedError("delete payload is missing its stored path")
+        stored_path = payload["stored_path"]
+        if stored_path is not None and (not isinstance(stored_path, str) or not stored_path):
+            raise IntentBlockedError("delete payload records an unusable stored path")
+        run_document_cleanup(int(row["document_id"]), stored_path)
     elif kind == DELETE_CLASS:
         if row["class_id"] is None:
             raise IntentBlockedError("missing class id")
         ids = payload.get("document_ids")
-        if not isinstance(ids, list) or not all(isinstance(entry, int) for entry in ids):
+        if not isinstance(ids, list) or not all(
+            isinstance(entry, int) and not isinstance(entry, bool) for entry in ids
+        ):
             raise IntentBlockedError("unreadable payload")
         run_class_cleanup(int(row["class_id"]), ids)
     else:
@@ -298,13 +339,9 @@ def _recover_move(conn: sqlite3.Connection, document_id: int, payload: dict[str,
     the document honestly - the row must not go on claiming an upload that no longer
     exists anywhere.
     """
-    document = conn.execute(
-        "select stored_path from documents where id = ?", (document_id,)
-    ).fetchone()
-    if document is None:
-        # The document was deleted after the move wedged: its own delete intent and the
-        # orphan sweep own the files now. Nothing to move.
-        return
+    # The payload is validated before any "nothing to do" branch can return: a malformed
+    # intent must surface as blocked evidence even when the work it described is moot,
+    # never be silently dropped by an early exit that happened to come first.
     source_recorded = payload.get("source")
     destination_recorded = payload.get("destination")
     if not isinstance(source_recorded, str) or not source_recorded:
@@ -320,6 +357,13 @@ def _recover_move(conn: sqlite3.Connection, document_id: int, payload: dict[str,
         raise IntentBlockedError("recorded move source is outside the uploads directory")
     if not private.is_within(destination, settings.uploads_dir):
         raise IntentBlockedError("recorded move destination is outside the uploads directory")
+    document = conn.execute(
+        "select stored_path from documents where id = ?", (document_id,)
+    ).fetchone()
+    if document is None:
+        # The document was deleted after the move wedged: its own delete intent and the
+        # orphan sweep own the files now. Nothing to move.
+        return
     if str(document["stored_path"]) != str(destination):
         # A later committed operation rewrote the row (the compensation path restores the
         # source location and deletes the intent atomically, so this is belt and braces).
@@ -347,15 +391,19 @@ def _unlink_owned(path: Path) -> None:
     logged skip: recovery must never be the thing that deletes a file outside what Lyra
     owns, but it also must never settle an intent whose recorded cleanup it skipped -
     that would silently discard the only durable pointer to a file the delete still owes.
-    `unlink` operates on the directory entry itself, so a symlink is removed as a link,
-    never followed.
+    The entry is reached by no-follow descent from the data root and unlinked against
+    the validated directory descriptor, so neither a symlink at the final component (a
+    link is removed as a link) nor one planted in an intermediate directory can steer
+    the unlink at a file outside the tree.
 
     Raises:
         IntentBlockedError: the path is outside the current data directory.
+        private.PrivacyContractError: a symlink blocks an owned component on the way;
+            the intent is kept and retried, and nothing was touched.
     """
     if not private.is_within(path, settings.data_dir):
         raise IntentBlockedError("recorded path is outside the current data directory")
-    path.unlink(missing_ok=True)
+    private.unlink_in_tree(path, root=settings.data_dir)
 
 
 def _sweep_orphans(conn: sqlite3.Connection) -> int:
@@ -382,7 +430,11 @@ def _sweep_orphans(conn: sqlite3.Connection) -> int:
 def _sweep_uploads(known_documents: set[int], known_classes: set[int]) -> int:
     removed = 0
     uploads = settings.uploads_dir
-    if not uploads.is_dir():
+    # A symlink where Lyra's own top-level directory belongs is never iterated: the
+    # sweep below unlinks what it finds, and a followed link would aim that at outside
+    # files. The guard is best-effort (the destructive unlinks themselves go through the
+    # no-follow tree walk); a link is left visible for the operator rather than removed.
+    if uploads.is_symlink() or not uploads.is_dir():
         return 0
     for class_dir in uploads.iterdir():
         if class_dir.is_symlink() or not class_dir.is_dir() or not class_dir.name.isdigit():
@@ -412,7 +464,7 @@ def _sweep_entry(entry: Path, known_documents: set[int]) -> int:
 def _sweep_text(known_documents: set[int]) -> int:
     removed = 0
     directory = settings.text_dir
-    if not directory.is_dir():
+    if directory.is_symlink() or not directory.is_dir():
         return 0
     for entry in directory.iterdir():
         if entry.is_symlink() or not entry.is_file():
@@ -429,7 +481,7 @@ def _sweep_text(known_documents: set[int]) -> int:
 def _sweep_pages(known_documents: set[int]) -> int:
     removed = 0
     directory = settings.pages_dir
-    if not directory.is_dir():
+    if directory.is_symlink() or not directory.is_dir():
         return 0
     for cache_dir in directory.iterdir():
         if cache_dir.is_symlink() or not cache_dir.is_dir() or not cache_dir.name.isdigit():
@@ -439,16 +491,36 @@ def _sweep_pages(known_documents: set[int]) -> int:
             if not entry.is_symlink():
                 removed += _swept(entry)
         if int(cache_dir.name) not in known_documents:
-            render.discard_pages(int(cache_dir.name))
-            removed += 1
+            # Counted only when the cache is provably gone; an obstructed one is logged
+            # and retried at the next startup, like any other orphan the sweep could
+            # not remove. The sweep is best-effort by design - a failure here must not
+            # abort reconciliation or startup - so unlike the delete paths there is no
+            # intent to keep, only the retry the next sweep provides.
+            try:
+                discarded = render.discard_pages(int(cache_dir.name))
+            except (OSError, private.PrivacyContractError):
+                logger.warning(
+                    "Could not remove the orphaned page cache %s; it will be retried next startup",
+                    cache_dir.name,
+                    exc_info=True,
+                )
+                continue
+            if discarded:
+                removed += 1
+            else:
+                logger.warning(
+                    "The orphaned page cache %s could not be fully removed; it will be "
+                    "retried next startup",
+                    cache_dir.name,
+                )
     return removed
 
 
 def _swept(entry: Path) -> int:
-    """Unlink one orphan, tolerating a race with nothing (best-effort, logged)."""
+    """Unlink one orphan through the no-follow tree walk (best-effort, logged)."""
     try:
-        entry.unlink(missing_ok=True)
-    except OSError:
+        private.unlink_in_tree(entry, root=settings.data_dir)
+    except (OSError, private.PrivacyContractError):
         logger.warning("Could not remove orphaned file %s; it will be retried next startup", entry)
         return 0
     return 1

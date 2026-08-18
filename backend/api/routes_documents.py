@@ -345,8 +345,16 @@ def reingest_document(document_id: int, conn: DbConn) -> dict[str, object]:
         # from serving stale results while it waits in the queue.
         delete_chunks(conn, document_id)
         # Same reason for the rendered pages: a stale image would show a page from the
-        # file that used to be there.
-        render.discard_pages(document_id)
+        # file that used to be there. Best-effort by explicit choice, unlike the delete
+        # paths: there is no durable intent to keep here, the file itself is unchanged,
+        # and a page being read this instant must not fail the re-ingest - so an
+        # incomplete discard is logged rather than raised.
+        if not render.discard_pages(document_id):
+            logger.warning(
+                "The page cache for document %s could not be fully cleared before "
+                "re-ingest; leftover entries will be overwritten as pages re-render",
+                document_id,
+            )
         changed = conn.execute(
             "update documents set state = ?, stage_detail = null, error_message = null, "
             "pages_done = 0 where id = ? and state = ?",
@@ -551,10 +559,25 @@ def move_document(document_id: int, payload: DocumentMove, conn: DbConn) -> dict
             raise NotFoundError("That document does not exist.")
         stored = stored_row["stored_path"]
         stored_path = Path(str(stored)) if stored else None
+        # The live move is held to the same owned-path contract as recovery, checked
+        # before this request invalidates a single chunk, commits anything, records an
+        # intent, or touches the filesystem: a corrupted or legacy row pointing outside
+        # the uploads tree, or reachable only through a symlinked intermediate
+        # directory, must not let a move relocate an arbitrary file the current user
+        # happens to own. Either defect refuses exactly like a missing source - for the
+        # student the file is equally unmovable either way.
+        if stored_path is not None and not private.is_within(stored_path, settings.uploads_dir):
+            raise ConflictError(MISSING_SOURCE_MESSAGE.format(filename=document["filename"]))
+        try:
+            source_present = stored_path is not None and storage_intents.source_file_present(
+                stored_path
+            )
+        except private.PrivacyContractError:
+            source_present = False
         # A missing source is an honest, recoverable refusal, never a "successful" move
         # whose destination path is fiction: the row must not be pointed at a file that was
         # never going to exist there.
-        if stored_path is None or not storage_intents.source_file_present(stored_path):
+        if not source_present:
             raise ConflictError(MISSING_SOURCE_MESSAGE.format(filename=document["filename"]))
         moved_path = (
             settings.uploads_dir
@@ -705,7 +728,12 @@ def delete_document(document_id: int, conn: DbConn) -> None:
         # than failing a delete that has already committed.
         try:
             storage_intents.run_document_cleanup(document_id, stored_path)
-        except (OSError, private.PrivacyContractError, storage_intents.IntentBlockedError):
+        except (
+            OSError,
+            private.PrivacyContractError,
+            storage_intents.IntentBlockedError,
+            storage_intents.CleanupIncompleteError,
+        ):
             logger.warning(
                 "Cleanup for deleted document %s is deferred to the next startup",
                 document_id,

@@ -146,7 +146,16 @@ the ingestion queue is rebuilt. It settles every surviving intent, then sweeps o
   longer matches the intent (the document was deleted, or a compensation restored the
   source location) means the rename is no longer owed.
 - **`delete_document` / `delete_class`** re-run their cleanup. Missing files are the goal
-  state, so re-running is idempotent.
+  state, so re-running is idempotent — and completion is explicit, never inferred from
+  "the cleanup returned": a page cache that could not be fully emptied, an entry that
+  could not be inspected or removed, an unexpected subdirectory (skipped, never recursed
+  into), or a cache directory that would not go away raises `CleanupIncompleteError`, so
+  the intent is kept and retried rather than settled with files still on disk. Payloads
+  are validated per kind before any work or any "nothing to do" early exit: a delete
+  intent must carry its `stored_path` key holding a non-empty path or an explicit null
+  (the one legitimate "no stored upload" shape), a class delete its `document_ids` list,
+  a move its `source` and `destination` — anything else is blocked with its evidence
+  kept, never settled as if there were nothing to remove.
 - An intent whose filesystem work *still* fails for an environmental reason (a permission
   error, a symlink planted inside the tree) is kept unclassified, logged, and retried at
   the next startup — never silently dropped.
@@ -168,10 +177,23 @@ the ingestion queue is rebuilt. It settles every surviving intent, then sweeps o
   is never touched by the sweep, which is why intents settle first — a wedged move's
   source file has a live row and gets renamed, not swept.
 
-Reconciliation and cleanup never follow a symlink. That includes the page cache:
-`render.discard_pages` `lstat`s the cache directory, removes a planted symlink as a link
-(never entering its target), skips unexpected subdirectories, and unlinks only regular
-files and links matching its own naming patterns.
+Reconciliation and cleanup never follow a symlink — in *any* path component, not only
+the final one. A lexical "inside the data directory" check cannot see that `uploads/5`
+has been replaced by a link to an outside directory, so every destructive operation
+(unlink, rename, cache clearing) descends from the data root one component at a time
+with `O_NOFOLLOW` and acts through the directory descriptor that descent validated
+(`private.unlink_in_tree`, `private.replace_in_tree`, `private.clear_owned_dir`) — the
+same openat machinery `secure_mkdir` uses for creation, with the same documented
+best-effort `lstat` fallback on platforms without it. A symlink planted where an owned
+component belongs raises `PrivacyContractError`: the intent is kept and retried, and the
+link's target is never entered. That includes the page cache: `render.discard_pages`
+reaches the cache directory through that descent, removes a planted symlink at the
+directory's own name as a link (never entering its target), skips unexpected
+subdirectories, unlinks only regular files and links matching its own naming patterns,
+and reports whether the directory is provably gone. The live move path is held to the
+same contract before it mutates anything: a row whose `stored_path` is outside the
+uploads tree, or reachable only through a planted link, refuses with a clean 409 before
+chunk invalidation, the commit, the intent, or the rename.
 
 ## Per-operation walkthroughs
 

@@ -749,3 +749,41 @@ def test_discarding_pages_leaves_an_unexpected_subdirectory_unentered(
 
     assert not rendered.exists()
     assert (intruder / "keep.txt").read_text() == "kept"
+
+
+def test_discarding_pages_reports_a_survivor_instead_of_success(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
+    """The durable delete path settles its storage intent on this answer, so an
+    obstructed cache must answer False - and True again once the obstruction is gone."""
+    source = _pdf(tmp_path / "hw4.pdf")
+    render.render_page(9, source, "application/pdf", 1, created_at=owned(9))
+    intruder = render.pages_dir(9) / "2@144.png"
+    intruder.mkdir()
+
+    assert render.discard_pages(9) is False
+
+    # Everything Lyra owned is gone; only the foreign entry pins the directory.
+    assert not render.page_path(9, 1).exists()
+    intruder.rmdir()
+    assert render.discard_pages(9) is True
+    assert not render.pages_dir(9).exists()
+    # Absent is the goal state, so asking again still reports clean.
+    assert render.discard_pages(9) is True
+
+
+def test_discarding_pages_refuses_a_symlinked_pages_parent(tmp_path: Path) -> None:
+    """The no-follow contract covers intermediate components, not just the final entry:
+    a planted `pages` link must not let cleanup unlink files outside Lyra."""
+    outside = tmp_path / "outside-pages-parent"
+    (outside / "11").mkdir(parents=True)
+    victim = outside / "11" / "1@144.png"
+    victim.write_bytes(b"outside page")
+    if render.settings.pages_dir.is_dir():
+        render.settings.pages_dir.rmdir()
+    render.settings.pages_dir.symlink_to(outside)
+
+    with pytest.raises(private.PrivacyContractError):
+        render.discard_pages(11)
+
+    assert victim.read_bytes() == b"outside page"

@@ -1161,3 +1161,384 @@ def test_one_bad_intent_does_not_stop_later_valid_intents_from_settling(
     rows = _intent_rows(db)
     assert len(rows) == 1
     assert rows[0]["blocked_reason"] is not None
+
+
+# --- Cleanup completeness: an intent settles only when the work provably finished -----
+#
+# Settling an intent discards the only durable record that files are still owed removal,
+# so "the cleanup ran" is not enough: every path that reaches `settle_intent` must have
+# left the filesystem in the goal state. These tests obstruct the cleanup, prove the
+# intent survives un-blocked, then clear the obstruction and prove reconciliation
+# finishes and settles.
+
+
+def test_a_document_delete_with_an_obstructed_page_cache_keeps_its_intent(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    _derived_files(db, document_id)
+    # A subdirectory wearing a cache entry's name: never entered, never removed, and it
+    # pins the cache directory in place.
+    intruder = render.pages_dir(document_id) / "2@144.png"
+    intruder.mkdir()
+    (intruder / "keep.txt").write_text("kept")
+
+    response = client.delete(f"/api/documents/{document_id}")
+
+    assert response.status_code == 204
+    # The delete committed - the row is gone - but the cleanup did not reach its goal
+    # state, so the intent survives for retry instead of being settled with the cache
+    # still on disk.
+    assert _row(db, document_id) is None
+    rows = _intent_rows(db)
+    assert len(rows) == 1
+    assert rows[0]["kind"] == storage_intents.DELETE_DOCUMENT
+    assert rows[0]["blocked_reason"] is None
+    assert (intruder / "keep.txt").read_text() == "kept"
+
+    # Still obstructed at the next startup: retried, kept, not blocked, not settled.
+    settled, _ = storage_intents.reconcile_storage(db)
+    assert settled == 0
+    assert len(_intent_rows(db)) == 1
+
+    # Once the obstruction is gone, reconciliation finishes the cleanup and settles.
+    (intruder / "keep.txt").unlink()
+    intruder.rmdir()
+    settled, _ = storage_intents.reconcile_storage(db)
+    assert settled == 1
+    assert _intent_rows(db) == []
+    assert not render.pages_dir(document_id).exists()
+    assert not storage_intents.text_path(document_id).exists()
+
+
+def test_a_class_delete_with_an_obstructed_page_cache_keeps_its_intent(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    _derived_files(db, document_id)
+    intruder = render.pages_dir(document_id) / "2@144.png"
+    intruder.mkdir()
+    (intruder / "keep.txt").write_text("kept")
+
+    classes.delete_class(db, class_id)
+
+    rows = _intent_rows(db)
+    assert len(rows) == 1
+    assert rows[0]["kind"] == storage_intents.DELETE_CLASS
+    assert rows[0]["blocked_reason"] is None
+    assert (intruder / "keep.txt").read_text() == "kept"
+    # The rest of the class's files did not shelter behind the obstruction.
+    assert not (settings.uploads_dir / str(class_id)).exists()
+    assert not storage_intents.text_path(document_id).exists()
+
+    (intruder / "keep.txt").unlink()
+    intruder.rmdir()
+    settled, _ = storage_intents.reconcile_storage(db)
+    assert settled == 1
+    assert _intent_rows(db) == []
+    assert not render.pages_dir(document_id).exists()
+
+
+def test_a_class_delete_with_something_nested_in_its_uploads_keeps_its_intent(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """Lyra stores uploads flat, so a nested directory is not Lyra's doing: it is never
+    entered or force-removed, and its presence keeps the durable cleanup incomplete."""
+    document_id = _document(db, class_id)
+    nested = settings.uploads_dir / str(class_id) / "not-lyras"
+    nested.mkdir()
+    (nested / "keep.txt").write_text("kept")
+
+    classes.delete_class(db, class_id)
+
+    rows = _intent_rows(db)
+    assert len(rows) == 1
+    assert rows[0]["blocked_reason"] is None
+    assert (nested / "keep.txt").read_text() == "kept"
+    # The upload itself is gone; only the foreign entry pins the directory.
+    assert not _stored_path_exists(class_id, document_id)
+
+    (nested / "keep.txt").unlink()
+    nested.rmdir()
+    settled, _ = storage_intents.reconcile_storage(db)
+    assert settled == 1
+    assert _intent_rows(db) == []
+    assert not (settings.uploads_dir / str(class_id)).exists()
+
+
+def _stored_path_exists(class_id: int, document_id: int) -> bool:
+    return (settings.uploads_dir / str(class_id) / f"{document_id}-lecture-2.pdf").exists()
+
+
+def test_an_unreadable_page_cache_keeps_the_delete_intent(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """Failure to determine the cache's state must read as incomplete, never as clean."""
+    if os.name != "posix" or os.geteuid() == 0:
+        pytest.skip("permission-based obstruction needs a non-root POSIX user")
+    document_id = _document(db, class_id)
+    _derived_files(db, document_id)
+    stored = _stored_path(db, document_id)
+    cache = render.pages_dir(document_id)
+    cache.chmod(0o000)
+    try:
+        _insert_intent(
+            db,
+            storage_intents.DELETE_DOCUMENT,
+            document_id=document_id,
+            payload=json.dumps({"stored_path": str(stored)}),
+        )
+        db.execute("delete from documents where id = ?", (document_id,))
+        db.commit()
+
+        settled, _ = storage_intents.reconcile_storage(db)
+
+        assert settled == 0
+        rows = _intent_rows(db)
+        assert len(rows) == 1
+        assert rows[0]["blocked_reason"] is None
+    finally:
+        cache.chmod(0o700)
+
+    settled, _ = storage_intents.reconcile_storage(db)
+    assert settled == 1
+    assert not cache.exists()
+
+
+# --- Intent payloads are validated per kind before anything can settle ---------------
+
+
+@pytest.mark.parametrize(
+    ("payload", "reason"),
+    [
+        ("{}", "delete payload is missing its stored path"),
+        ('{"other_key": true}', "delete payload is missing its stored path"),
+        ('{"stored_path": 7}', "delete payload records an unusable stored path"),
+        ('{"stored_path": ""}', "delete payload records an unusable stored path"),
+    ],
+)
+def test_a_delete_intent_without_a_usable_stored_path_is_blocked(
+    db: sqlite3.Connection, class_id: int, payload: str, reason: str
+) -> None:
+    """The stored path is the delete's critical durable pointer. A payload that lost it
+    must not read as "there was no upload" and settle after removing only the derived
+    files - that discards the pointer to the upload still on disk."""
+    document_id = _document(db, class_id)
+    stored = _stored_path(db, document_id)
+    _insert_intent(db, storage_intents.DELETE_DOCUMENT, document_id=document_id, payload=payload)
+
+    settled, _ = storage_intents.reconcile_storage(db)
+
+    assert settled == 0
+    rows = _intent_rows(db)
+    assert len(rows) == 1
+    assert rows[0]["blocked_reason"] == reason
+    # The evidence survives verbatim, and nothing was deleted on its authority.
+    assert rows[0]["payload"] == payload
+    assert stored.exists()
+
+
+def test_a_delete_intent_with_an_explicit_null_stored_path_settles(
+    db: sqlite3.Connection,
+) -> None:
+    """An explicit null is the one legitimate "no stored upload" shape the delete route
+    records; it settles once the derived files are provably gone."""
+    _insert_intent(
+        db,
+        storage_intents.DELETE_DOCUMENT,
+        document_id=424242,
+        payload=json.dumps({"stored_path": None}),
+    )
+
+    settled, _ = storage_intents.reconcile_storage(db)
+
+    assert settled == 1
+    assert _intent_rows(db) == []
+
+
+def test_a_class_delete_intent_without_document_ids_is_blocked(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    _insert_intent(db, storage_intents.DELETE_CLASS, class_id=class_id, payload="{}")
+
+    settled, _ = storage_intents.reconcile_storage(db)
+
+    assert settled == 0
+    assert _intent_rows(db)[0]["blocked_reason"] == "unreadable payload"
+
+
+# --- Intermediate symlinks: the no-follow contract holds for every component ---------
+#
+# `is_within` is lexical: `uploads/5/123-notes.pdf` passes it even when `uploads/5` is a
+# link to an outside directory, and a plain unlink or rename would traverse the link and
+# act on the outside file. Every destructive operation therefore descends from the data
+# root with O_NOFOLLOW and acts on the entry that descent validated. These tests plant
+# the link one level up - an intermediate component, not the final entry - and prove the
+# outside victim is never touched.
+
+
+def _victim_behind_symlinked_class_dir(
+    db: sqlite3.Connection, class_id: int, tmp_path: Path, document_id: int
+) -> Path:
+    """Replace `uploads/<class>` with a link to an outside directory holding a victim
+    file at exactly the name the document's `stored_path` records."""
+    stored = _stored_path(db, document_id)
+    outside = tmp_path / "outside-class-target"
+    outside.mkdir()
+    victim = outside / stored.name
+    victim.write_bytes(b"outside victim")
+    class_dir = stored.parent
+    stored.unlink()
+    class_dir.rmdir()
+    class_dir.symlink_to(outside)
+    return victim
+
+
+def test_a_document_delete_never_unlinks_through_a_symlinked_class_directory(
+    client: TestClient, db: sqlite3.Connection, class_id: int, tmp_path: Path
+) -> None:
+    document_id = _document(db, class_id)
+    victim = _victim_behind_symlinked_class_dir(db, class_id, tmp_path, document_id)
+
+    response = client.delete(f"/api/documents/{document_id}")
+
+    assert response.status_code == 204
+    # The lexical path check passes - the recorded path claims to be inside uploads -
+    # but the no-follow descent refuses the planted link, the victim survives, and the
+    # cleanup stays owed instead of being declared done.
+    assert victim.read_bytes() == b"outside victim"
+    rows = _intent_rows(db)
+    assert len(rows) == 1
+    assert rows[0]["blocked_reason"] is None
+
+    # Recovery refuses the same way, without acting on the outside target.
+    settled, _ = storage_intents.reconcile_storage(db)
+    assert settled == 0
+    assert victim.read_bytes() == b"outside victim"
+    assert len(_intent_rows(db)) == 1
+
+
+def test_a_live_move_never_relocates_through_a_symlinked_class_directory(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    other_class_id: int,
+    tmp_path: Path,
+    no_worker: list[int],
+) -> None:
+    document_id = _document(db, class_id)
+    before = _row(db, document_id)
+    victim = _victim_behind_symlinked_class_dir(db, class_id, tmp_path, document_id)
+
+    response = client.post(f"/api/documents/{document_id}/move", json={"class_id": other_class_id})
+
+    # Refused before any work: no chunk invalidation, no commit, no intent, no rename.
+    assert response.status_code == 409
+    assert victim.read_bytes() == b"outside victim"
+    assert not (settings.uploads_dir / str(other_class_id)).exists()
+    after = _row(db, document_id)
+    assert tuple(after) == tuple(before)
+    assert _intent_rows(db) == []
+    assert no_worker == []
+
+
+def test_move_recovery_through_a_symlinked_source_directory_is_kept_without_acting(
+    db: sqlite3.Connection, class_id: int, other_class_id: int, tmp_path: Path
+) -> None:
+    document_id = _document(db, class_id)
+    victim = _victim_behind_symlinked_class_dir(db, class_id, tmp_path, document_id)
+    source = settings.uploads_dir / str(class_id) / victim.name
+    destination = settings.uploads_dir / str(other_class_id) / victim.name
+    db.execute("update documents set stored_path = ? where id = ?", (str(destination), document_id))
+    db.commit()
+    _insert_intent(
+        db,
+        storage_intents.MOVE_DOCUMENT,
+        document_id=document_id,
+        payload=json.dumps({"source": str(source), "destination": str(destination)}),
+    )
+
+    settled, _ = storage_intents.reconcile_storage(db)
+
+    # Kept for retry - the refusal is environmental tampering, not a malformed record -
+    # and the outside file was neither moved into Lyra nor otherwise touched.
+    assert settled == 0
+    assert victim.read_bytes() == b"outside victim"
+    assert not destination.exists()
+    assert _intent_rows(db)[0]["blocked_reason"] is None
+
+
+def test_delete_cleanup_never_reaches_through_a_symlinked_text_directory(
+    db: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """A symlinked `text/` parent must not let recovery unlink an outside file that
+    happens to wear a document id's name."""
+    outside = tmp_path / "outside-text-target"
+    outside.mkdir()
+    victim = outside / "424242.txt"
+    victim.write_text("outside text")
+    settings.text_dir.rmdir()
+    settings.text_dir.symlink_to(outside)
+    _insert_intent(
+        db,
+        storage_intents.DELETE_DOCUMENT,
+        document_id=424242,
+        payload=json.dumps({"stored_path": None}),
+    )
+
+    settled, _ = storage_intents.reconcile_storage(db)
+
+    assert settled == 0
+    assert victim.read_text() == "outside text"
+    assert _intent_rows(db)[0]["blocked_reason"] is None
+
+
+def test_delete_cleanup_never_reaches_through_a_symlinked_pages_directory(
+    db: sqlite3.Connection, tmp_path: Path
+) -> None:
+    outside = tmp_path / "outside-pages-target"
+    (outside / "424242").mkdir(parents=True)
+    victim = outside / "424242" / "1@144.png"
+    victim.write_bytes(b"outside page")
+    settings.pages_dir.rmdir()
+    settings.pages_dir.symlink_to(outside)
+    _insert_intent(
+        db,
+        storage_intents.DELETE_DOCUMENT,
+        document_id=424242,
+        payload=json.dumps({"stored_path": None}),
+    )
+
+    settled, _ = storage_intents.reconcile_storage(db)
+
+    assert settled == 0
+    assert victim.read_bytes() == b"outside page"
+    assert _intent_rows(db)[0]["blocked_reason"] is None
+
+
+def test_a_move_of_a_row_pointing_outside_the_uploads_tree_is_refused_before_any_work(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    other_class_id: int,
+    tmp_path: Path,
+    no_worker: list[int],
+) -> None:
+    """A corrupted or legacy row must not let a live move relocate an arbitrary file the
+    current user owns: the live path is held to the same owned-path contract as
+    recovery, and refuses before invalidating, committing, or renaming anything."""
+    document_id = _document(db, class_id)
+    outside = tmp_path / "not-lyras.pdf"
+    outside.write_bytes(b"the user's own file")
+    db.execute("update documents set stored_path = ? where id = ?", (str(outside), document_id))
+    db.commit()
+    before = _row(db, document_id)
+
+    response = client.post(f"/api/documents/{document_id}/move", json={"class_id": other_class_id})
+
+    assert response.status_code == 409
+    assert outside.read_bytes() == b"the user's own file"
+    assert not (settings.uploads_dir / str(other_class_id)).exists()
+    assert tuple(_row(db, document_id)) == tuple(before)
+    assert _intent_rows(db) == []
+    assert no_worker == []

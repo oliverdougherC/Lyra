@@ -54,7 +54,9 @@ Attached external workspaces are deliberately out of scope. They are the user's 
 trees: Lyra reads and edits their files but never rewrites their permissions.
 """
 
+import contextlib
 import errno
+import fnmatch
 import logging
 import os
 import stat
@@ -451,6 +453,335 @@ def _is_within(path: Path, ancestor: Path) -> bool:
 def _abspath(path: Path) -> Path:
     """Absolute, lexically normalized path - without resolving symlinks the way `resolve` would."""
     return Path(os.path.abspath(path))
+
+
+# --- Destructive operations through the owned tree ------------------------------------
+#
+# `is_within` answers the *lexical* question - does this recorded path claim to live in
+# the owned tree - but a lexical answer says nothing about symlinks in intermediate
+# components: `uploads/5` can be a link to anywhere, and a plain `unlink`/`replace` on
+# `uploads/5/file` would traverse it and act outside the tree while every string check
+# passes. The operations below close that hole the same way `secure_mkdir` does for
+# creation: descend from the owned root one component at a time with `O_NOFOLLOW`, then
+# perform the final unlink/rename/stat against the directory descriptor that descent
+# validated, so the entry acted on is the entry that was checked. On platforms without
+# openat semantics the same best-effort per-component `lstat` policy as
+# `_secure_mkdir_fallback` stands in.
+#
+# Shared behavior: a symlink (or non-directory) where an owned component should be raises
+# `PrivacyContractError`; an absent component means nothing exists at the path, which for
+# removal is the goal state and for inspection is "not present".
+
+
+def _open_tree_parent(path: Path, *, root: Path) -> int | None:
+    """Open `path`'s parent directory by O_NOFOLLOW descent from `root`.
+
+    Returns an open directory descriptor the caller must close, or None when any
+    component on the way down (including the root) does not exist. Only called on
+    openat platforms.
+
+    Raises:
+        PrivacyContractError: a symlink or non-directory sits where an owned component
+            should be.
+        ValueError: `path` is not strictly inside `root`.
+    """
+    path = _abspath(path)
+    root = _abspath(root)
+    if root not in path.parents:
+        raise ValueError(f"{path} is not within the owned root {root}")
+    components = [root.name, *path.parent.relative_to(root).parts]
+    try:
+        dir_fd = os.open(root.parent, os.O_RDONLY | _O_DIRECTORY | _O_CLOEXEC)
+    except OSError as exc:
+        if exc.errno == errno.ENOENT:
+            return None
+        raise
+    try:
+        for name in components:
+            try:
+                child_fd = os.open(
+                    name, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW | _O_CLOEXEC, dir_fd=dir_fd
+                )
+            except OSError as exc:
+                if exc.errno == errno.ENOENT:
+                    return None
+                if exc.errno == errno.ELOOP:
+                    raise PrivacyContractError(
+                        f"a symlink is on the path to {path}; refusing to touch state "
+                        f"outside the data tree"
+                    ) from exc
+                if exc.errno == errno.ENOTDIR:
+                    raise PrivacyContractError(
+                        f"a non-directory blocks the path to {path} inside the data tree"
+                    ) from exc
+                raise
+            os.close(dir_fd)
+            dir_fd = child_fd
+    except BaseException:
+        os.close(dir_fd)
+        raise
+    return dir_fd
+
+
+def _tree_components_real(path: Path, *, root: Path) -> bool:
+    """Best-effort stand-in for `_open_tree_parent` on platforms without openat.
+
+    Walks the components from `root` down to `path`'s parent with `lstat`, refusing a
+    symlink. Carries the same check/use race as `_secure_mkdir_fallback`, and for the
+    same reason: without O_NOFOLLOW this shape is the best the platform offers, and the
+    per-user data location is the real isolation there.
+
+    Returns False when a component is absent or not a directory (nothing can exist at
+    `path`); True when every component is a real directory.
+
+    Raises:
+        PrivacyContractError: a component is a symlink.
+        ValueError: `path` is not strictly inside `root`.
+    """
+    path = _abspath(path)
+    root = _abspath(root)
+    if root not in path.parents:
+        raise ValueError(f"{path} is not within the owned root {root}")
+    current = root.parent
+    for name in [root.name, *path.parent.relative_to(root).parts]:
+        current = current / name
+        try:
+            info = os.lstat(current)
+        except OSError:
+            return False
+        if stat.S_ISLNK(info.st_mode):
+            raise PrivacyContractError(
+                f"a symlink is on the path to {path}; refusing to touch state outside the data tree"
+            )
+        if not stat.S_ISDIR(info.st_mode):
+            return False
+    return True
+
+
+def stat_in_tree(path: Path, *, root: Path) -> os.stat_result | None:
+    """`lstat` of the entry at `path`, reached without following any symlink.
+
+    Returns None when the entry - or any owned component on the way to it - is absent.
+    The final entry itself is stat'd without following, so a symlink is reported as a
+    symlink, never as its target.
+
+    Raises:
+        PrivacyContractError: a symlink or non-directory blocks an owned component.
+        OSError: the entry exists but cannot be inspected (its presence is unknown).
+    """
+    if not _HAS_OPENAT:
+        if not _tree_components_real(path, root=root):
+            return None
+        try:
+            return os.lstat(path)
+        except FileNotFoundError:
+            return None
+    dir_fd = _open_tree_parent(path, root=root)
+    if dir_fd is None:
+        return None
+    try:
+        return os.stat(_abspath(path).name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    finally:
+        os.close(dir_fd)
+
+
+def unlink_in_tree(path: Path, *, root: Path) -> None:
+    """Remove the entry at `path`, reached without following any symlink; absent is fine.
+
+    `unlink` operates on the directory entry itself, so a symlink at the final component
+    is removed as a link, never followed - and the no-follow descent guarantees the same
+    for every component above it.
+
+    Raises:
+        PrivacyContractError: a symlink or non-directory blocks an owned component.
+        OSError: the entry exists but could not be removed.
+    """
+    if not _HAS_OPENAT:
+        if not _tree_components_real(path, root=root):
+            return
+        path.unlink(missing_ok=True)
+        return
+    dir_fd = _open_tree_parent(path, root=root)
+    if dir_fd is None:
+        return
+    try:
+        os.unlink(_abspath(path).name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        pass
+    finally:
+        os.close(dir_fd)
+
+
+def replace_in_tree(source: Path, destination: Path, *, root: Path) -> None:
+    """`os.replace` between two owned paths, reached without following any symlink.
+
+    The rename acts on the directory entries the two no-follow descents validated, so a
+    symlinked intermediate component can neither supply the file being moved nor receive
+    it somewhere outside the tree.
+
+    Raises:
+        PrivacyContractError: a symlink or non-directory blocks an owned component.
+        FileNotFoundError: the source (or either parent directory) does not exist.
+        OSError: the rename itself failed.
+    """
+    if not _HAS_OPENAT:
+        if not _tree_components_real(source, root=root) or not _tree_components_real(
+            destination, root=root
+        ):
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(source))
+        os.replace(source, destination)
+        return
+    source_fd = _open_tree_parent(source, root=root)
+    if source_fd is None:
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(source))
+    try:
+        destination_fd = _open_tree_parent(destination, root=root)
+        if destination_fd is None:
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(destination))
+        try:
+            os.replace(
+                _abspath(source).name,
+                _abspath(destination).name,
+                src_dir_fd=source_fd,
+                dst_dir_fd=destination_fd,
+            )
+        finally:
+            os.close(destination_fd)
+    finally:
+        os.close(source_fd)
+
+
+def clear_owned_dir(directory: Path, *, root: Path, patterns: tuple[str, ...]) -> bool:
+    """Empty and remove one owned directory of derived files, following no symlink ever.
+
+    The no-recursion cleanup primitive for directories whose contents Lyra generated -
+    a page/figure cache, a class's upload directory. Directly-contained entries whose
+    names match `patterns` are unlinked when they are regular files or symlinks (a link
+    is removed as a link, never followed). Everything else - a non-matching name, an
+    unexpected subdirectory, an entry that cannot be inspected or removed - is left in
+    place, deliberately visible, and never entered. The directory itself is then removed
+    if it is empty.
+
+    Returns True only when the directory is provably gone afterward: it was already
+    absent (as is any path whose intermediate components are absent), its name held a
+    stray non-directory entry that was removed - a symlink planted where the directory
+    belongs is unlinked as a link - or every entry was removed and the final `rmdir`
+    landed. Anything remaining returns False, so a caller settling durable cleanup can
+    keep its record instead of declaring incomplete work done.
+
+    Raises:
+        PrivacyContractError: a symlink or non-directory blocks an owned component on
+            the way to `directory`.
+        ValueError: `directory` is not strictly inside `root`.
+    """
+    directory = _abspath(directory)
+    if not _HAS_OPENAT:
+        return _clear_owned_dir_fallback(directory, root=root, patterns=patterns)
+    parent_fd = _open_tree_parent(directory, root=root)
+    if parent_fd is None:
+        return True
+    try:
+        try:
+            info = os.stat(directory.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        if not stat.S_ISDIR(info.st_mode):
+            # A stray file or planted link wearing the directory's name: remove the
+            # entry itself - for a link, the link, never its target.
+            try:
+                os.unlink(directory.name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return False
+            return True
+        try:
+            dir_fd = os.open(
+                directory.name,
+                os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW | _O_CLOEXEC,
+                dir_fd=parent_fd,
+            )
+        except FileNotFoundError:
+            return True
+        except OSError:
+            # Includes ELOOP from an entry raced into a symlink after the stat above:
+            # nothing is removed, and the survivor keeps the cleanup incomplete.
+            return False
+        try:
+            _clear_dir_entries(dir_fd, patterns)
+        finally:
+            os.close(dir_fd)
+        try:
+            os.rmdir(directory.name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            # Something survived: an entry that did not match, could not be removed, or
+            # arrived while this ran. The caller decides whether that keeps a durable
+            # cleanup record alive.
+            return False
+        return True
+    finally:
+        os.close(parent_fd)
+
+
+def _clear_dir_entries(dir_fd: int, patterns: tuple[str, ...]) -> None:
+    """Unlink the pattern-matching regular files and links directly inside `dir_fd`."""
+    with os.scandir(dir_fd) as entries:
+        for entry in entries:
+            if not any(fnmatch.fnmatch(entry.name, pattern) for pattern in patterns):
+                continue
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if not (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)):
+                # A subdirectory (or stranger) wearing a derived file's name is never
+                # entered and never removed; it stays visible and fails the rmdir.
+                continue
+            try:
+                os.unlink(entry.name, dir_fd=dir_fd)
+            except OSError:
+                continue
+
+
+def _clear_owned_dir_fallback(directory: Path, *, root: Path, patterns: tuple[str, ...]) -> bool:
+    """`clear_owned_dir` for platforms without openat: same shape, lstat-guarded."""
+    if not _tree_components_real(directory, root=root):
+        return True
+    try:
+        info = os.lstat(directory)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if not stat.S_ISDIR(info.st_mode):
+        try:
+            directory.unlink(missing_ok=True)
+        except OSError:
+            return False
+        return True
+    for entry in directory.iterdir():
+        if not any(fnmatch.fnmatch(entry.name, pattern) for pattern in patterns):
+            continue
+        try:
+            entry_info = os.lstat(entry)
+        except OSError:
+            continue
+        if stat.S_ISREG(entry_info.st_mode) or stat.S_ISLNK(entry_info.st_mode):
+            with contextlib.suppress(OSError):
+                entry.unlink(missing_ok=True)
+    try:
+        directory.rmdir()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
 
 
 def _tighten(path: Path, mode: int) -> None:

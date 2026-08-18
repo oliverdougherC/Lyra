@@ -138,7 +138,12 @@ def delete_class(conn: sqlite3.Connection, class_id: int) -> None:
         # rather than failing a delete that has already committed.
         try:
             storage_intents.run_class_cleanup(class_id, document_ids)
-        except (OSError, private.PrivacyContractError, storage_intents.IntentBlockedError):
+        except (
+            OSError,
+            private.PrivacyContractError,
+            storage_intents.IntentBlockedError,
+            storage_intents.CleanupIncompleteError,
+        ):
             logger.warning(
                 "Cleanup for deleted class %s is deferred to the next startup",
                 class_id,
