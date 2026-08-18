@@ -23,6 +23,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from starlette.types import Receive, Scope, Send
 
 from backend.core import artifacts, sessions
 from backend.core.app_settings import (
@@ -442,6 +443,65 @@ class Turn:
     retrieval: RetrievalResult
 
 
+class TurnStreamingResponse(StreamingResponse):
+    """A streaming response that owns the release of its session's turn claim.
+
+    The claim is taken before the route returns, but the stream generator's own `finally`
+    can run only if the body iterator is ever started - and Python closes a never-started
+    generator without executing a single line of it. Between the route returning and the
+    first frame sits a real window: a transport that dies immediately, or a cancellation
+    delivered before the body task first resumes the generator, ends the response with the
+    generator unstarted and would leave the session claimed for the life of the process.
+
+    So release also lives here, in a `finally` around the entire ASGI send cycle, which
+    Starlette enters unconditionally once the route returns: streamed to completion,
+    failed mid-frame, cancelled before the first frame - every ending passes through it.
+    `end_turn` is idempotent and token-owned, so this and the generator's release can
+    never double-free, and neither can free a claim a newer turn has since taken.
+    """
+
+    def __init__(
+        self,
+        session_id: int,
+        turn_token: int,
+        content: AsyncIterator[str],
+        **kwargs: object,
+    ) -> None:
+        super().__init__(content, **kwargs)  # type: ignore[arg-type]
+        self._session_id = session_id
+        self._turn_token = turn_token
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            sessions.end_turn(self._session_id, self._turn_token)
+
+
+def _turn_response(
+    session_id: int,
+    turn_token: int,
+    stream: AsyncIterator[str],
+) -> TurnStreamingResponse:
+    """Wrap a claimed turn's stream so the claim cannot outlive the response.
+
+    If even constructing the response fails, the claim is released here - after
+    `_open_turn`/`_open_regeneration` return, this is the only failure point left between
+    the claim and the response owning it.
+    """
+    try:
+        return TurnStreamingResponse(
+            session_id,
+            turn_token,
+            stream,
+            media_type="text/event-stream",
+            headers=SSE_HEADERS,
+        )
+    except BaseException:
+        sessions.end_turn(session_id, turn_token)
+        raise
+
+
 @router.post(
     "/classes/{class_id}/sessions",
     response_model=SessionRead,
@@ -495,11 +555,21 @@ async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> Stre
     travel as an `error` frame instead.
     """
     request = TurnInput(content=payload.content, mode=payload.mode, document_id=payload.document_id)
-    config, plan, cost, turn_token = await asyncio.to_thread(_open_turn, conn, session_id, request)
-    return StreamingResponse(
-        _stream_turn(session_id, request, config, plan, cost, turn_token),
-        media_type="text/event-stream",
-        headers=SSE_HEADERS,
+    # `claimed` mirrors the claim the worker thread takes, visible to this coroutine even
+    # when the `await` itself is the thing that fails: a cancellation delivered exactly at
+    # this suspension point after `_open_turn` returned would otherwise discard the tuple
+    # carrying the token and wedge the session for the life of the process.
+    claimed: list[int] = []
+    try:
+        config, plan, cost, turn_token = await asyncio.to_thread(
+            _open_turn, conn, session_id, request, claimed
+        )
+    except BaseException:
+        for token in claimed:
+            sessions.end_turn(session_id, token)
+        raise
+    return _turn_response(
+        session_id, turn_token, _stream_turn(session_id, request, config, plan, cost, turn_token)
     )
 
 
@@ -515,13 +585,17 @@ async def regenerate_chat(
     opens, so a retry that fails upstream leaves the student with the answer they already
     had instead of nothing at all.
     """
-    config, plan, request, cost, turn_token = await asyncio.to_thread(
-        _open_regeneration, conn, session_id, payload
-    )
-    return StreamingResponse(
-        _stream_turn(session_id, request, config, plan, cost, turn_token),
-        media_type="text/event-stream",
-        headers=SSE_HEADERS,
+    claimed: list[int] = []
+    try:
+        config, plan, request, cost, turn_token = await asyncio.to_thread(
+            _open_regeneration, conn, session_id, payload, claimed
+        )
+    except BaseException:
+        for token in claimed:
+            sessions.end_turn(session_id, token)
+        raise
+    return _turn_response(
+        session_id, turn_token, _stream_turn(session_id, request, config, plan, cost, turn_token)
     )
 
 
@@ -537,7 +611,7 @@ def _refuse_writer_session(session: dict[str, object]) -> None:
 
 
 def _open_turn(
-    conn: sqlite3.Connection, session_id: int, request: TurnInput
+    conn: sqlite3.Connection, session_id: int, request: TurnInput, claimed: list[int]
 ) -> tuple[TutorConfig, TurnPlan, TurnCost, int]:
     """Validate the turn and persist the user's message before any streaming starts.
 
@@ -545,7 +619,10 @@ def _open_turn(
     regeneration - two tabs, a duplicate submit, a direct API caller - is refused with a
     deterministic 409 before this turn persists anything or either turn's history can
     interleave. A claim taken here is released by `_stream_turn` however the turn ends,
-    or immediately below if opening the turn fails.
+    or immediately below if opening the turn fails. `claimed` receives the token the
+    moment the claim exists: it is the caller's window onto a claim this function took
+    but whose return value never arrived - a cancellation landing on the `await` that
+    ran this in a thread - so the caller can release what it never received.
 
     Raises:
         NotFoundError: no session carries that id.
@@ -555,6 +632,7 @@ def _open_turn(
             the configured context window beside the reserves it may not trim.
     """
     turn_token = sessions.begin_turn(session_id)
+    claimed.append(turn_token)
     try:
         session = sessions.get_session(conn, session_id)
         _refuse_writer_session(session)
@@ -593,7 +671,7 @@ def _open_turn(
 
 
 def _open_regeneration(
-    conn: sqlite3.Connection, session_id: int, request: RegenerateRequest
+    conn: sqlite3.Connection, session_id: int, request: RegenerateRequest, claimed: list[int]
 ) -> tuple[TutorConfig, TurnPlan, TurnInput, TurnCost, int]:
     """Plan a retry of the conversation's last question.
 
@@ -614,6 +692,7 @@ def _open_regeneration(
             reconfigured too small for the question to fit beside the reserves.
     """
     turn_token = sessions.begin_turn(session_id)
+    claimed.append(turn_token)
     try:
         session = sessions.get_session(conn, session_id)
         _refuse_writer_session(session)
@@ -672,17 +751,23 @@ async def _stream_turn(
     """Stream one turn and persist the assistant's message however the turn ends.
 
     The connection is opened here rather than injected, because this generator runs after
-    the request-scoped dependency has already been closed. The turn claim taken when the
-    turn opened is released in the `finally`, so every ending - a complete reply, an
-    upstream failure, an unexpected exception, a client disconnect - frees the session
-    for its next turn; the claim can outlive its turn only as long as the process itself.
+    the request-scoped dependency has already been closed. It is opened *inside* the
+    claim-releasing structure, deliberately: the claim was taken back in `_open_turn` /
+    `_open_regeneration`, so from the first statement here there is nothing left between
+    a failure and a permanently wedged session except the `finally` below. Release is
+    therefore the outermost cleanup of the whole generator - it runs whether the
+    connection failed to open (before any frame), the stream failed or was cancelled
+    mid-reply, or the connection failed to close after the last frame - and it is
+    idempotent alongside `TurnStreamingResponse`'s release, which covers the one ending
+    this generator cannot see: a response whose body is never started at all.
     """
-    conn = connect()
     received: list[str] = []
     thought: list[str] = []
     thinking_ms = 0
     retrieval = RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+    conn: sqlite3.Connection | None = None
     try:
+        conn = connect()
         yield _frame(type="start", message_id=plan.user_message_id)
         yield _frame(type="status", stage="prompt_processing")
         preparation = await asyncio.to_thread(_prepare_turn, cost)
@@ -737,7 +822,7 @@ async def _stream_turn(
         # not left holding a question with no reply, then let the cancellation continue.
         # A turn cut off while still thinking has a thought and no answer, and that is
         # worth keeping too: it is the only record of what the model was doing.
-        if received or thought:
+        if conn is not None and (received or thought):
             _commit_reply(conn, session_id, plan, received, thought, retrieval, thinking_ms)
         raise
     except LyraError as exc:
@@ -748,8 +833,13 @@ async def _stream_turn(
         logger.exception("Chat turn failed for session %s", session_id)
         yield _frame(type="error", message=_UNEXPECTED_ERROR)
     finally:
-        conn.close()
-        sessions.end_turn(session_id, turn_token)
+        # Nested so a connection that fails to close still releases the claim: the close
+        # is bookkeeping, the release is what keeps the session usable.
+        try:
+            if conn is not None:
+                conn.close()
+        finally:
+            sessions.end_turn(session_id, turn_token)
 
 
 def _prepare_turn(

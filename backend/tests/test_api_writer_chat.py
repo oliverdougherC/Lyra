@@ -752,4 +752,5 @@ def test_tutor_routes_refuse_writer_sessions(db: sqlite3.Connection, class_id: i
             db,
             int(session["id"]),
             routes_chat.TurnInput(content="hi", mode="guide"),
+            [],
         )

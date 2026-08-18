@@ -405,3 +405,144 @@ def test_the_claim_carries_the_question_it_answers(
     stored = sessions.list_messages(db, session_id)
     assert observed and observed[0] is not None
     assert observed[0].user_message_id == int(stored[0]["id"])
+
+
+# --- Release must structurally dominate every post-claim failure ---------------------
+
+
+def test_a_connection_failure_after_the_claim_releases_the_session(
+    client: TestClient, db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`connect()` is the first statement of the stream generator and used to run before
+    the releasing `try`: a failure there claimed the session forever. It must now surface
+    as an error frame and free the session for the next request."""
+    real_connect = routes_chat.connect
+
+    def failing_connect() -> sqlite3.Connection:
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(routes_chat, "connect", failing_connect)
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Never streamed."))
+
+    response = _send(client, session_id)
+
+    assert response.status_code == 200
+    assert '"type":"error"' in response.text
+    assert sessions.active_turn(session_id) is None
+
+    # The session is genuinely usable, not just unmarked.
+    monkeypatch.setattr(routes_chat, "connect", real_connect)
+    assert _send(client, session_id).status_code == 200
+
+
+async def test_a_body_that_never_starts_still_releases_the_session(
+    db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The claim crosses the StreamingResponse boundary: taken before the route returns,
+    normally released inside the generator. But Python closes a never-started generator
+    without running any of it, so a transport that dies before the first frame must be
+    caught by the response's own finalizer, not by hoping the generator ran.
+    """
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Unreached."))
+    payload = routes_chat.ChatRequest(content=QUESTION, mode="guide", document_id=None)
+    response = await routes_chat.send_chat(session_id, payload, db)
+    # The route has returned: the claim is held and only the response can end the turn.
+    active = sessions.active_turn(session_id)
+    assert active is not None
+
+    async def dead_send(message: dict[str, object]) -> None:
+        raise RuntimeError("client vanished before the first frame")
+
+    async def receive() -> dict[str, object]:
+        return {"type": "http.disconnect"}
+
+    with pytest.raises(BaseException, match="client vanished"):
+        await response({"type": "http", "method": "POST", "headers": []}, receive, dead_send)
+
+    assert sessions.active_turn(session_id) is None
+
+
+async def test_a_failing_connection_close_cannot_suppress_the_release(
+    db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cleanup must be exception-safe itself: a `conn.close()` that raises after the last
+    frame is bookkeeping noise, not a reason to leave the session claimed."""
+
+    class CloseFails:
+        def __init__(self, real: sqlite3.Connection) -> None:
+            self._real = real
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(self._real, name)
+
+        def close(self) -> None:
+            self._real.close()
+            raise sqlite3.OperationalError("close failed")
+
+    monkeypatch.setattr(routes_chat, "connect", lambda: CloseFails(connect()))
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Full answer."))
+    request = routes_chat.TurnInput(content=QUESTION, mode="guide")
+    config = app_settings.TutorConfig(
+        endpoint_url=ENDPOINT, api_key=None, model=None, context_window=8192
+    )
+    user_message_id = sessions.add_message(db, session_id, "user", QUESTION)
+    plan = routes_chat.TurnPlan(user_message_id=user_message_id)
+    cost = routes_chat._plan_turn_cost(db, session_id, "guide", QUESTION, plan.excluded, config)
+    turn_token = sessions.begin_turn(session_id)
+    stream = routes_chat._stream_turn(session_id, request, config, plan, cost, turn_token)
+
+    with pytest.raises(sqlite3.OperationalError, match="close failed"):
+        async for _ in stream:
+            pass
+
+    # The reply committed before the close, and the failing close did not hold the claim.
+    stored = sessions.list_messages(db, session_id)
+    assert [m["role"] for m in stored] == ["user", "assistant"]
+    assert stored[1]["content"] == "Full answer."
+    assert sessions.active_turn(session_id) is None
+
+
+async def test_a_cancellation_at_the_open_await_releases_the_claim(
+    db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The narrowest window: `_open_turn` completes in its worker thread, and the
+    cancellation lands exactly on the `await` carrying its result back. The tuple with
+    the token is discarded, so the route must be able to release a claim it never
+    received."""
+    import asyncio
+
+    real_to_thread = asyncio.to_thread
+
+    async def cancelled_at_the_boundary(fn: object, *args: object, **kwargs: object) -> object:
+        await real_to_thread(fn, *args, **kwargs)  # the claim is now held
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(asyncio, "to_thread", cancelled_at_the_boundary)
+    payload = routes_chat.ChatRequest(content=QUESTION, mode="guide", document_id=None)
+
+    with pytest.raises(asyncio.CancelledError):
+        await routes_chat.send_chat(session_id, payload, db)
+
+    assert sessions.active_turn(session_id) is None
+
+
+async def test_a_cancellation_at_the_regeneration_open_await_releases_the_claim(
+    db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    sessions.add_message(db, session_id, "user", QUESTION)
+    sessions.add_message(db, session_id, "assistant", "First answer.")
+    real_to_thread = asyncio.to_thread
+
+    async def cancelled_at_the_boundary(fn: object, *args: object, **kwargs: object) -> object:
+        await real_to_thread(fn, *args, **kwargs)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(asyncio, "to_thread", cancelled_at_the_boundary)
+    payload = routes_chat.RegenerateRequest(mode="guide")
+
+    with pytest.raises(asyncio.CancelledError):
+        await routes_chat.regenerate_chat(session_id, payload, db)
+
+    assert sessions.active_turn(session_id) is None
