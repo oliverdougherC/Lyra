@@ -12,11 +12,14 @@ refuse writer sessions and the sidebar does not list them, so the two surfaces s
 storage without sharing a doorway.
 """
 
+import itertools
 import json
 import sqlite3
+import threading
+from dataclasses import dataclass
 from typing import Literal
 
-from backend.core.errors import NotFoundError
+from backend.core.errors import ConflictError, NotFoundError
 from backend.llm.prompts import format_step_context
 
 ChatMode = Literal["guide", "show", "writer"]
@@ -24,6 +27,10 @@ MessageRole = Literal["user", "assistant"]
 
 MODES: tuple[str, ...] = ("guide", "show", "writer")
 WRITER = "writer"
+
+BUSY_MESSAGE = (
+    "This conversation is already answering. Wait for the reply to finish, then try again."
+)
 
 # Title length: long enough to tell two conversations apart in a 260px rail, short enough
 # that most titles survive without an ellipsis.
@@ -40,6 +47,94 @@ order by id
 
 
 _SESSION_COLUMNS = "id, class_id, title, mode, artifact_part_id, created_at"
+
+
+# --- The per-session turn claim ------------------------------------------------------
+#
+# Tutor chat correctness must not depend on the frontend never overlapping requests: two
+# tabs, a duplicate submit, a retry racing a new question, or a direct API caller can all
+# aim two mutating turns at one session at once. The claim below is the server-side rule
+# that makes overlap impossible rather than merely unlikely: at most one mutating or
+# generating turn holds a session at a time, a second one is refused with a deterministic
+# 409 before it persists or sends anything, and the claim is released however the turn
+# ends - completion, upstream failure, cancellation, or client disconnect.
+#
+# The registry is in-memory on purpose. Lyra runs one backend process (the in-memory
+# ingestion queue and the launcher's ownership model already assume it), so process memory
+# is exactly the lifetime an in-flight turn has: a turn cannot outlive the process that is
+# streaming it, and a restart therefore cannot leave a stale claim behind to wedge the
+# session - the failure mode a persisted marker would have to reconcile away at startup.
+#
+# The claim serializes; it does not own the destructive step. Regeneration deletes only
+# the message ids its plan named when the turn opened (`delete_messages`), so even a
+# hypothetical path around the claim could not take a newer turn as collateral damage.
+
+
+@dataclass(frozen=True)
+class TurnClaim:
+    """The identity of the one in-flight turn a session may have.
+
+    `token` is unique for the process lifetime and is what `end_turn` must present, so a
+    stale release can never free a claim it does not own. `user_message_id` is the
+    question this turn answers, bound once it is known: None for a fresh send between
+    claiming and persisting the message, then the persisted id; for a regeneration, the
+    existing question being re-answered.
+    """
+
+    token: int
+    user_message_id: int | None = None
+
+
+_turns_lock = threading.Lock()
+_active_turns: dict[int, TurnClaim] = {}
+_turn_tokens = itertools.count(1)
+
+
+def begin_turn(session_id: int) -> int:
+    """Claim a session's single in-flight turn slot, or refuse deterministically.
+
+    Called before anything is persisted and before any upstream request, so the refused
+    turn leaves no trace: no orphaned question, no title claimed, nothing on the wire.
+
+    Returns:
+        The claim token `bind_turn` and `end_turn` require.
+
+    Raises:
+        ConflictError: another turn already holds this session (409).
+    """
+    with _turns_lock:
+        if session_id in _active_turns:
+            raise ConflictError(BUSY_MESSAGE)
+        token = next(_turn_tokens)
+        _active_turns[session_id] = TurnClaim(token=token)
+        return token
+
+
+def bind_turn(session_id: int, token: int, user_message_id: int) -> None:
+    """Record which question the claimed turn answers, once that id is known."""
+    with _turns_lock:
+        claim = _active_turns.get(session_id)
+        if claim is not None and claim.token == token:
+            _active_turns[session_id] = TurnClaim(token=token, user_message_id=user_message_id)
+
+
+def end_turn(session_id: int, token: int) -> None:
+    """Release a claim, if `token` still owns it.
+
+    Idempotent, and a no-op for a token that does not hold the claim: an error path that
+    releases twice, or a stale release arriving after another turn has claimed the
+    session, can never free a turn it does not own.
+    """
+    with _turns_lock:
+        claim = _active_turns.get(session_id)
+        if claim is not None and claim.token == token:
+            del _active_turns[session_id]
+
+
+def active_turn(session_id: int) -> TurnClaim | None:
+    """The claim currently holding this session, or None. For tests and diagnostics."""
+    with _turns_lock:
+        return _active_turns.get(session_id)
 
 
 def create_session(
@@ -331,14 +426,25 @@ def last_user_message(conn: sqlite3.Connection, session_id: int) -> dict[str, ob
     return dict(row)
 
 
-def delete_messages_after(conn: sqlite3.Connection, session_id: int, message_id: int) -> None:
-    """Drop every message in a conversation newer than `message_id`.
+def delete_messages(
+    conn: sqlite3.Connection, session_id: int, message_ids: tuple[int, ...]
+) -> None:
+    """Drop exactly the named messages from a conversation.
 
-    This is what makes a retry a retry rather than a second question: the previous answer
-    is removed before the new one is generated, so the conversation ends up with one reply
-    to the question rather than two.
+    This is what makes a retry a retry rather than a second question: the reply being
+    replaced is removed before the new one is stored. It deletes by explicit id, never by
+    "everything newer than X": the ids are the messages the regeneration observed when its
+    turn opened, so the destructive step can only ever take what that turn is entitled to
+    replace. A newer independent question or reply - one committed by a turn this plan
+    never saw - is not in the list and is untouchable, whatever the request timing.
     """
-    conn.execute("delete from messages where session_id = ? and id > ?", (session_id, message_id))
+    if not message_ids:
+        return
+    placeholders = ", ".join("?" for _ in message_ids)
+    conn.execute(
+        f"delete from messages where session_id = ? and id in ({placeholders})",  # noqa: S608
+        (session_id, *message_ids),
+    )
     conn.commit()
 
 

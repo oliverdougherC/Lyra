@@ -495,9 +495,9 @@ async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> Stre
     travel as an `error` frame instead.
     """
     request = TurnInput(content=payload.content, mode=payload.mode, document_id=payload.document_id)
-    config, plan, cost = await asyncio.to_thread(_open_turn, conn, session_id, request)
+    config, plan, cost, turn_token = await asyncio.to_thread(_open_turn, conn, session_id, request)
     return StreamingResponse(
-        _stream_turn(session_id, request, config, plan, cost),
+        _stream_turn(session_id, request, config, plan, cost, turn_token),
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )
@@ -515,11 +515,11 @@ async def regenerate_chat(
     opens, so a retry that fails upstream leaves the student with the answer they already
     had instead of nothing at all.
     """
-    config, plan, request, cost = await asyncio.to_thread(
+    config, plan, request, cost, turn_token = await asyncio.to_thread(
         _open_regeneration, conn, session_id, payload
     )
     return StreamingResponse(
-        _stream_turn(session_id, request, config, plan, cost),
+        _stream_turn(session_id, request, config, plan, cost, turn_token),
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )
@@ -538,97 +538,127 @@ def _refuse_writer_session(session: dict[str, object]) -> None:
 
 def _open_turn(
     conn: sqlite3.Connection, session_id: int, request: TurnInput
-) -> tuple[TutorConfig, TurnPlan, TurnCost]:
+) -> tuple[TutorConfig, TurnPlan, TurnCost, int]:
     """Validate the turn and persist the user's message before any streaming starts.
+
+    Claims the session's single in-flight turn slot first, so an overlapping send or
+    regeneration - two tabs, a duplicate submit, a direct API caller - is refused with a
+    deterministic 409 before this turn persists anything or either turn's history can
+    interleave. A claim taken here is released by `_stream_turn` however the turn ends,
+    or immediately below if opening the turn fails.
 
     Raises:
         NotFoundError: no session carries that id.
+        ConflictError: another turn is already answering in this session.
         LyraError: no tutor endpoint is configured, document text may not be sent to the
             configured one (an unacknowledged remote endpoint), or the question cannot fit
             the configured context window beside the reserves it may not trim.
     """
-    session = sessions.get_session(conn, session_id)
-    _refuse_writer_session(session)
-    # One snapshot for the endpoint and its consent, so the endpoint authorized below is the
-    # exact endpoint this turn is later streamed to. Taken before the question is stored and
-    # before any retrieval or upstream call, so an unacknowledged remote endpoint refuses the
-    # turn without persisting an orphaned question and without a byte of course material
-    # leaving the machine.
-    access = resolve_tutor_access(conn)
-    require_document_allowed(access)
-    config = access.config
-    # The privacy gate above proves the endpoint is one document text may reach; this proves
-    # the turn fits it. Both run before the message is stored and before any retrieval or
-    # upstream call, so a question too large for the window - once the generation reserve,
-    # system prompt, pinned step, and the history Lyra always keeps are set aside - refuses
-    # cleanly instead of being persisted and then forcing context to be truncated past the
-    # window. The current question is not yet persisted, so `excluded` is empty and the
-    # history it costs is exactly the prior conversation.
-    cost = _plan_turn_cost(conn, session_id, request.mode, request.content, frozenset(), config)
-    _require_turn_fits(cost)
-    # Persisted on the session, not just used for this turn, so the toggle survives a
-    # reload and the next turn continues in the mode the student picked.
-    sessions.set_session_mode(conn, session_id, request.mode)
-    # Before the message is stored, so "first message" means this one.
-    sessions.set_session_title_if_unset(conn, session_id, request.content)
-    user_message_id = sessions.add_message(conn, session_id, "user", request.content)
-    touch_class(conn, int(session["class_id"]))
-    return config, TurnPlan(user_message_id=user_message_id), cost
+    turn_token = sessions.begin_turn(session_id)
+    try:
+        session = sessions.get_session(conn, session_id)
+        _refuse_writer_session(session)
+        # One snapshot for the endpoint and its consent, so the endpoint authorized below
+        # is the exact endpoint this turn is later streamed to. Taken before the question
+        # is stored and before any retrieval or upstream call, so an unacknowledged remote
+        # endpoint refuses the turn without persisting an orphaned question and without a
+        # byte of course material leaving the machine.
+        access = resolve_tutor_access(conn)
+        require_document_allowed(access)
+        config = access.config
+        # The privacy gate above proves the endpoint is one document text may reach; this
+        # proves the turn fits it. Both run before the message is stored and before any
+        # retrieval or upstream call, so a question too large for the window - once the
+        # generation reserve, system prompt, pinned step, and the history Lyra always
+        # keeps are set aside - refuses cleanly instead of being persisted and then
+        # forcing context to be truncated past the window. The current question is not yet
+        # persisted, so `excluded` is empty and the history it costs is exactly the prior
+        # conversation.
+        cost = _plan_turn_cost(conn, session_id, request.mode, request.content, frozenset(), config)
+        _require_turn_fits(cost)
+        # Persisted on the session, not just used for this turn, so the toggle survives a
+        # reload and the next turn continues in the mode the student picked.
+        sessions.set_session_mode(conn, session_id, request.mode)
+        # Before the message is stored, so "first message" means this one.
+        sessions.set_session_title_if_unset(conn, session_id, request.content)
+        user_message_id = sessions.add_message(conn, session_id, "user", request.content)
+        sessions.bind_turn(session_id, turn_token, user_message_id)
+        touch_class(conn, int(session["class_id"]))
+    except BaseException:
+        # A turn that never starts streaming must not hold the session: the refusal is the
+        # end of this turn, and the next request gets a fresh claim.
+        sessions.end_turn(session_id, turn_token)
+        raise
+    return config, TurnPlan(user_message_id=user_message_id), cost, turn_token
 
 
 def _open_regeneration(
     conn: sqlite3.Connection, session_id: int, request: RegenerateRequest
-) -> tuple[TutorConfig, TurnPlan, TurnInput, TurnCost]:
+) -> tuple[TutorConfig, TurnPlan, TurnInput, TurnCost, int]:
     """Plan a retry of the conversation's last question.
 
     Nothing is deleted here. The reply being retried is only named, so that a turn which
     never produces a replacement leaves the conversation exactly as it found it.
 
+    The claim taken first is what makes that naming trustworthy: the last question and
+    the superseded suffix are read while this turn holds the session, so no concurrent
+    send can slip a newer question in between the read and the eventual replacement. The
+    replacement itself then deletes only the ids named here, so even a path around the
+    claim could not take a newer turn as collateral damage.
+
     Raises:
         NotFoundError: no session carries that id, or it holds no question yet.
+        ConflictError: another turn is already answering in this session.
         LyraError: no tutor endpoint is configured, document text may not be sent to the
             configured one (an unacknowledged remote endpoint), or the window has been
             reconfigured too small for the question to fit beside the reserves.
     """
-    session = sessions.get_session(conn, session_id)
-    _refuse_writer_session(session)
-    # A fresh snapshot, so a retry is gated exactly like a first turn against the endpoint it
-    # will actually use: the endpoint may have gone remote, or the acknowledgement been
-    # revoked, since the question was first asked.
-    access = resolve_tutor_access(conn)
-    require_document_allowed(access)
-    config = access.config
-    question = sessions.last_user_message(conn, session_id)
-    user_message_id = int(question["id"])
-    superseded = tuple(
-        int(message["id"])
-        for message in sessions.list_messages(conn, session_id)
-        if int(message["id"]) > user_message_id
-    )
-    plan = TurnPlan(user_message_id=user_message_id, superseded=superseded)
-    turn_input = TurnInput(
-        content=str(question["content"]),
-        mode=request.mode,
-        document_id=request.document_id,
-    )
-    # Gated exactly like a fresh turn: the window may have been reconfigured smaller since the
-    # question was first asked, and a retry must not send what a first turn would not. Checked
-    # before anything is mutated and before any upstream call, and since the reply being
-    # retried is deleted only when its replacement is written, a refusal here leaves the
-    # existing answer untouched. The question is already persisted, so it and any superseded
-    # reply are excluded from the history it is charged against.
-    cost = _plan_turn_cost(
-        conn,
-        session_id,
-        turn_input.mode,
-        turn_input.content,
-        plan.excluded,
-        config,
-    )
-    _require_turn_fits(cost)
-    sessions.set_session_mode(conn, session_id, request.mode)
-    touch_class(conn, int(session["class_id"]))
-    return config, plan, turn_input, cost
+    turn_token = sessions.begin_turn(session_id)
+    try:
+        session = sessions.get_session(conn, session_id)
+        _refuse_writer_session(session)
+        # A fresh snapshot, so a retry is gated exactly like a first turn against the
+        # endpoint it will actually use: the endpoint may have gone remote, or the
+        # acknowledgement been revoked, since the question was first asked.
+        access = resolve_tutor_access(conn)
+        require_document_allowed(access)
+        config = access.config
+        question = sessions.last_user_message(conn, session_id)
+        user_message_id = int(question["id"])
+        sessions.bind_turn(session_id, turn_token, user_message_id)
+        superseded = tuple(
+            int(message["id"])
+            for message in sessions.list_messages(conn, session_id)
+            if int(message["id"]) > user_message_id
+        )
+        plan = TurnPlan(user_message_id=user_message_id, superseded=superseded)
+        turn_input = TurnInput(
+            content=str(question["content"]),
+            mode=request.mode,
+            document_id=request.document_id,
+        )
+        # Gated exactly like a fresh turn: the window may have been reconfigured smaller
+        # since the question was first asked, and a retry must not send what a first turn
+        # would not. Checked before anything is mutated and before any upstream call, and
+        # since the reply being retried is deleted only when its replacement is written, a
+        # refusal here leaves the existing answer untouched. The question is already
+        # persisted, so it and any superseded reply are excluded from the history it is
+        # charged against.
+        cost = _plan_turn_cost(
+            conn,
+            session_id,
+            turn_input.mode,
+            turn_input.content,
+            plan.excluded,
+            config,
+        )
+        _require_turn_fits(cost)
+        sessions.set_session_mode(conn, session_id, request.mode)
+        touch_class(conn, int(session["class_id"]))
+    except BaseException:
+        sessions.end_turn(session_id, turn_token)
+        raise
+    return config, plan, turn_input, cost, turn_token
 
 
 async def _stream_turn(
@@ -637,11 +667,15 @@ async def _stream_turn(
     config: TutorConfig,
     plan: TurnPlan,
     cost: TurnCost,
+    turn_token: int,
 ) -> AsyncIterator[str]:
     """Stream one turn and persist the assistant's message however the turn ends.
 
     The connection is opened here rather than injected, because this generator runs after
-    the request-scoped dependency has already been closed.
+    the request-scoped dependency has already been closed. The turn claim taken when the
+    turn opened is released in the `finally`, so every ending - a complete reply, an
+    upstream failure, an unexpected exception, a client disconnect - frees the session
+    for its next turn; the claim can outlive its turn only as long as the process itself.
     """
     conn = connect()
     received: list[str] = []
@@ -715,6 +749,7 @@ async def _stream_turn(
         yield _frame(type="error", message=_UNEXPECTED_ERROR)
     finally:
         conn.close()
+        sessions.end_turn(session_id, turn_token)
 
 
 def _prepare_turn(
@@ -871,10 +906,12 @@ def _commit_reply(
 
     The order matters and is the whole point of deferring the delete: a reply the student
     can already read is only removed once there is a new one to take its place, so a retry
-    that dies upstream costs them nothing.
+    that dies upstream costs them nothing. The delete names exact message ids - the ones
+    the plan observed when the turn opened - never "everything after the question", so a
+    newer independent turn can never be collateral damage of a retry, whatever the timing.
     """
     if plan.superseded:
-        sessions.delete_messages_after(conn, session_id, plan.user_message_id)
+        sessions.delete_messages(conn, session_id, plan.superseded)
     return sessions.add_message(
         conn,
         session_id,
