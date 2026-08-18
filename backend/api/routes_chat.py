@@ -544,6 +544,37 @@ def delete_session(session_id: int, conn: DbConn) -> None:
     sessions.delete_session(conn, session_id)
 
 
+def _finish_opening(opener: asyncio.Future, session_id: int, turn_token: int) -> None:
+    """Release an abandoned claim, but never while its opener may still be running.
+
+    Called when the route can no longer use the opener's result: a cancellation landing
+    on the `await`, or the opener itself failing. Cancelling the route does not stop a
+    thread `asyncio.to_thread` has already started, so the claim must stay held until
+    that worker has definitely returned - releasing earlier would let a second request
+    claim the session and overlap the still-running worker's reads and writes. If the
+    opener has already finished, nothing can still be mutating the turn and the claim is
+    released here, before the caller re-raises. Otherwise the release is attached to the
+    opener's completion, the one point at which the worker has provably stopped.
+
+    `end_turn` is token-owned and idempotent, so this can never free a claim a newer
+    turn has since taken, and an opener that failed and already released internally
+    makes this a no-op.
+    """
+
+    def _release(task: asyncio.Future) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            # Retrieved deliberately: an abandoned opener that failed after the caller
+            # stopped listening would otherwise be logged as a never-retrieved task
+            # exception. Its release already ran inside the opener itself.
+            logger.debug("Abandoned turn opener for session %s failed", session_id)
+        sessions.end_turn(session_id, turn_token)
+
+    if opener.done():
+        _release(opener)
+    else:
+        opener.add_done_callback(_release)
+
+
 @router.post("/sessions/{session_id}/chat")
 async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> StreamingResponse:
     """Persist the student's message, then stream the reply as SSE.
@@ -555,18 +586,20 @@ async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> Stre
     travel as an `error` frame instead.
     """
     request = TurnInput(content=payload.content, mode=payload.mode, document_id=payload.document_id)
-    # `claimed` mirrors the claim the worker thread takes, visible to this coroutine even
-    # when the `await` itself is the thing that fails: a cancellation delivered exactly at
-    # this suspension point after `_open_turn` returned would otherwise discard the tuple
-    # carrying the token and wedge the session for the life of the process.
-    claimed: list[int] = []
+    # The claim is taken here, synchronously, before the coroutine's first suspension
+    # point: cancellation can only land on an `await`, so from the moment `begin_turn`
+    # returns this coroutine owns the token with no window in which a worker could hold
+    # a claim nobody knows about. The opener then borrows the claimed session; release
+    # on any failure goes through `_finish_opening`, which never frees the claim while
+    # the worker might still be mutating the turn.
+    turn_token = sessions.begin_turn(session_id)
+    opener = asyncio.ensure_future(
+        asyncio.to_thread(_open_turn, conn, session_id, request, turn_token)
+    )
     try:
-        config, plan, cost, turn_token = await asyncio.to_thread(
-            _open_turn, conn, session_id, request, claimed
-        )
+        config, plan, cost = await asyncio.shield(opener)
     except BaseException:
-        for token in claimed:
-            sessions.end_turn(session_id, token)
+        _finish_opening(opener, session_id, turn_token)
         raise
     return _turn_response(
         session_id, turn_token, _stream_turn(session_id, request, config, plan, cost, turn_token)
@@ -585,14 +618,17 @@ async def regenerate_chat(
     opens, so a retry that fails upstream leaves the student with the answer they already
     had instead of nothing at all.
     """
-    claimed: list[int] = []
+    # Claimed synchronously before the first `await`, exactly as in `send_chat`: the
+    # coroutine owns the token before cancellation can be delivered, and release on
+    # failure waits for the opener worker to stop before freeing the session.
+    turn_token = sessions.begin_turn(session_id)
+    opener = asyncio.ensure_future(
+        asyncio.to_thread(_open_regeneration, conn, session_id, payload, turn_token)
+    )
     try:
-        config, plan, request, cost, turn_token = await asyncio.to_thread(
-            _open_regeneration, conn, session_id, payload, claimed
-        )
+        config, plan, request, cost = await asyncio.shield(opener)
     except BaseException:
-        for token in claimed:
-            sessions.end_turn(session_id, token)
+        _finish_opening(opener, session_id, turn_token)
         raise
     return _turn_response(
         session_id, turn_token, _stream_turn(session_id, request, config, plan, cost, turn_token)
@@ -611,28 +647,25 @@ def _refuse_writer_session(session: dict[str, object]) -> None:
 
 
 def _open_turn(
-    conn: sqlite3.Connection, session_id: int, request: TurnInput, claimed: list[int]
-) -> tuple[TutorConfig, TurnPlan, TurnCost, int]:
+    conn: sqlite3.Connection, session_id: int, request: TurnInput, turn_token: int
+) -> tuple[TutorConfig, TurnPlan, TurnCost]:
     """Validate the turn and persist the user's message before any streaming starts.
 
-    Claims the session's single in-flight turn slot first, so an overlapping send or
-    regeneration - two tabs, a duplicate submit, a direct API caller - is refused with a
-    deterministic 409 before this turn persists anything or either turn's history can
-    interleave. A claim taken here is released by `_stream_turn` however the turn ends,
-    or immediately below if opening the turn fails. `claimed` receives the token the
-    moment the claim exists: it is the caller's window onto a claim this function took
-    but whose return value never arrived - a cancellation landing on the `await` that
-    ran this in a thread - so the caller can release what it never received.
+    Runs in a worker thread against a session the route already claimed: `begin_turn`
+    happens in the route coroutine, before its first suspension point, so an overlapping
+    send or regeneration - two tabs, a duplicate submit, a direct API caller - was
+    already refused with a deterministic 409 before this function starts, and there is
+    no instant at which this worker holds a claim its caller does not know about. The
+    claim is released by `_stream_turn` however the turn ends, immediately below if
+    opening the turn fails, or by `_finish_opening` once this worker has returned if the
+    caller was cancelled while it ran.
 
     Raises:
         NotFoundError: no session carries that id.
-        ConflictError: another turn is already answering in this session.
         LyraError: no tutor endpoint is configured, document text may not be sent to the
             configured one (an unacknowledged remote endpoint), or the question cannot fit
             the configured context window beside the reserves it may not trim.
     """
-    turn_token = sessions.begin_turn(session_id)
-    claimed.append(turn_token)
     try:
         session = sessions.get_session(conn, session_id)
         _refuse_writer_session(session)
@@ -667,32 +700,30 @@ def _open_turn(
         # end of this turn, and the next request gets a fresh claim.
         sessions.end_turn(session_id, turn_token)
         raise
-    return config, TurnPlan(user_message_id=user_message_id), cost, turn_token
+    return config, TurnPlan(user_message_id=user_message_id), cost
 
 
 def _open_regeneration(
-    conn: sqlite3.Connection, session_id: int, request: RegenerateRequest, claimed: list[int]
-) -> tuple[TutorConfig, TurnPlan, TurnInput, TurnCost, int]:
+    conn: sqlite3.Connection, session_id: int, request: RegenerateRequest, turn_token: int
+) -> tuple[TutorConfig, TurnPlan, TurnInput, TurnCost]:
     """Plan a retry of the conversation's last question.
 
     Nothing is deleted here. The reply being retried is only named, so that a turn which
     never produces a replacement leaves the conversation exactly as it found it.
 
-    The claim taken first is what makes that naming trustworthy: the last question and
-    the superseded suffix are read while this turn holds the session, so no concurrent
-    send can slip a newer question in between the read and the eventual replacement. The
+    The claim - taken by the route before this worker starts, exactly as for
+    `_open_turn` - is what makes that naming trustworthy: the last question and the
+    superseded suffix are read while this turn holds the session, so no concurrent send
+    can slip a newer question in between the read and the eventual replacement. The
     replacement itself then deletes only the ids named here, so even a path around the
     claim could not take a newer turn as collateral damage.
 
     Raises:
         NotFoundError: no session carries that id, or it holds no question yet.
-        ConflictError: another turn is already answering in this session.
         LyraError: no tutor endpoint is configured, document text may not be sent to the
             configured one (an unacknowledged remote endpoint), or the window has been
             reconfigured too small for the question to fit beside the reserves.
     """
-    turn_token = sessions.begin_turn(session_id)
-    claimed.append(turn_token)
     try:
         session = sessions.get_session(conn, session_id)
         _refuse_writer_session(session)
@@ -737,7 +768,7 @@ def _open_regeneration(
     except BaseException:
         sessions.end_turn(session_id, turn_token)
         raise
-    return config, plan, turn_input, cost, turn_token
+    return config, plan, turn_input, cost
 
 
 async def _stream_turn(
@@ -752,8 +783,9 @@ async def _stream_turn(
 
     The connection is opened here rather than injected, because this generator runs after
     the request-scoped dependency has already been closed. It is opened *inside* the
-    claim-releasing structure, deliberately: the claim was taken back in `_open_turn` /
-    `_open_regeneration`, so from the first statement here there is nothing left between
+    claim-releasing structure, deliberately: the claim was taken back in the route,
+    before `_open_turn` / `_open_regeneration` ran, so from the first statement here
+    there is nothing left between
     a failure and a permanently wedged session except the `finally` below. Release is
     therefore the outermost cleanup of the whole generator - it runs whether the
     connection failed to open (before any frame), the stream failed or was cancelled

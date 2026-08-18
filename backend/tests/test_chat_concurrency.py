@@ -16,6 +16,7 @@ serialization.
 """
 
 import sqlite3
+import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 
 import httpx
@@ -26,7 +27,7 @@ from fastapi.testclient import TestClient
 
 from backend.api import routes_chat
 from backend.core import app_settings, sessions
-from backend.core.errors import LyraError, UpstreamError
+from backend.core.errors import ConflictError, LyraError, UpstreamError
 from backend.llm.client import StreamDelta
 from backend.rag.retrieve import RetrievalResult
 from backend.storage.database import connect, get_db
@@ -500,6 +501,208 @@ async def test_a_failing_connection_close_cannot_suppress_the_release(
     assert [m["role"] for m in stored] == ["user", "assistant"]
     assert stored[1]["content"] == "Full answer."
     assert sessions.active_turn(session_id) is None
+
+
+async def _eventually(predicate: Callable[[], bool], deadline_s: float = 5.0) -> None:
+    """Wait for a condition owned by a still-running worker thread to become true."""
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + deadline_s
+    while not predicate():
+        assert loop.time() < deadline, "condition never became true"
+        await asyncio.sleep(0.01)
+
+
+class _Barrier:
+    """Pause a worker thread at one chosen statement, visibly and releasably.
+
+    `entered` is set the moment the worker reaches the instrumented call, so the test
+    can cancel the route while the worker is *provably* alive inside `_open_turn` /
+    `_open_regeneration` - not before it started, not after it finished. The worker then
+    blocks until the test calls `release()`, making the interleaving a fact rather than
+    a race.
+    """
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self._release = threading.Event()
+
+    def pause(self) -> None:
+        self.entered.set()
+        assert self._release.wait(timeout=5.0), "test never released the paused worker"
+
+    def release(self) -> None:
+        self._release.set()
+
+    async def entered_wait(self) -> None:
+        import asyncio
+
+        assert await asyncio.to_thread(self.entered.wait, 5.0), "worker never reached the barrier"
+
+
+async def test_cancellation_while_the_opener_is_still_validating_neither_leaks_nor_releases_early(
+    db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation delivered while the worker is alive but has not yet persisted
+    anything. The old shared-list handoff could observe an empty list here and walk
+    away, leaving whatever the worker went on to claim leaked forever. Now the claim is
+    taken by the coroutine before the worker starts, so cancellation must (a) keep the
+    session claimed while the worker runs - a second request may not overlap it - and
+    (b) release it once the worker has definitely stopped."""
+    import asyncio
+
+    barrier = _Barrier()
+    real_access = routes_chat.resolve_tutor_access
+
+    def paused_access(conn: sqlite3.Connection) -> object:
+        barrier.pause()
+        return real_access(conn)
+
+    monkeypatch.setattr(routes_chat, "resolve_tutor_access", paused_access)
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Unreached."))
+    payload = routes_chat.ChatRequest(content=QUESTION, mode="guide", document_id=None)
+    task = asyncio.get_running_loop().create_task(routes_chat.send_chat(session_id, payload, db))
+    await barrier.entered_wait()  # the worker is alive inside _open_turn
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # The worker is still paused: the claim must still be held, and no second turn may
+    # acquire the session and overlap the abandoned worker's reads and writes.
+    assert sessions.active_turn(session_id) is not None
+    with pytest.raises(ConflictError):
+        sessions.begin_turn(session_id)
+    with pytest.raises(ConflictError):
+        await routes_chat.send_chat(session_id, payload, db)
+
+    barrier.release()
+    await _eventually(lambda: sessions.active_turn(session_id) is None)
+    # The session is genuinely usable again, not just unmarked.
+    token = sessions.begin_turn(session_id)
+    sessions.end_turn(session_id, token)
+
+
+async def test_cancellation_after_the_worker_persisted_waits_for_it_before_releasing(
+    db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation delivered after the worker persisted the question but before
+    `_open_turn` returned. Releasing at the moment of cancellation would let a second
+    request claim the session while this worker is still writing to it; the release must
+    instead wait for the worker to stop. The persisted question staying behind matches
+    what a disconnect during the stream already does: the turn's question outlives the
+    reader that asked it."""
+    import asyncio
+
+    barrier = _Barrier()
+    real_touch = routes_chat.touch_class
+
+    def paused_touch(conn: sqlite3.Connection, class_id: int) -> None:
+        barrier.pause()
+        real_touch(conn, class_id)
+
+    monkeypatch.setattr(routes_chat, "touch_class", paused_touch)
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Unreached."))
+    payload = routes_chat.ChatRequest(content=QUESTION, mode="guide", document_id=None)
+    task = asyncio.get_running_loop().create_task(routes_chat.send_chat(session_id, payload, db))
+    await barrier.entered_wait()  # the question is persisted; the worker has not returned
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # While the worker still runs, the session must stay claimed against overlap.
+    active = sessions.active_turn(session_id)
+    assert active is not None
+    with pytest.raises(ConflictError):
+        sessions.begin_turn(session_id)
+
+    barrier.release()
+    await _eventually(lambda: sessions.active_turn(session_id) is None)
+    # The abandoned open left exactly the persisted question - nothing streamed, no
+    # reply - and the session is free for the next turn.
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user"]
+    monkeypatch.setattr(routes_chat, "touch_class", real_touch)
+    token = sessions.begin_turn(session_id)
+    sessions.end_turn(session_id, token)
+
+
+async def test_regeneration_cancellation_mid_validation_neither_leaks_nor_releases_early(
+    db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    sessions.add_message(db, session_id, "user", QUESTION)
+    sessions.add_message(db, session_id, "assistant", "First answer.")
+    barrier = _Barrier()
+    real_access = routes_chat.resolve_tutor_access
+
+    def paused_access(conn: sqlite3.Connection) -> object:
+        barrier.pause()
+        return real_access(conn)
+
+    monkeypatch.setattr(routes_chat, "resolve_tutor_access", paused_access)
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Unreached."))
+    payload = routes_chat.RegenerateRequest(mode="guide")
+    task = asyncio.get_running_loop().create_task(
+        routes_chat.regenerate_chat(session_id, payload, db)
+    )
+    await barrier.entered_wait()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert sessions.active_turn(session_id) is not None
+    with pytest.raises(ConflictError):
+        sessions.begin_turn(session_id)
+
+    barrier.release()
+    await _eventually(lambda: sessions.active_turn(session_id) is None)
+    # A regeneration abandoned at open mutated nothing: the conversation is intact.
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user", "assistant"]
+    token = sessions.begin_turn(session_id)
+    sessions.end_turn(session_id, token)
+
+
+async def test_regeneration_cancellation_late_in_the_opener_waits_for_the_worker(
+    db: sqlite3.Connection, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    sessions.add_message(db, session_id, "user", QUESTION)
+    sessions.add_message(db, session_id, "assistant", "First answer.")
+    barrier = _Barrier()
+    real_touch = routes_chat.touch_class
+
+    def paused_touch(conn: sqlite3.Connection, class_id: int) -> None:
+        barrier.pause()
+        real_touch(conn, class_id)
+
+    monkeypatch.setattr(routes_chat, "touch_class", paused_touch)
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Unreached."))
+    payload = routes_chat.RegenerateRequest(mode="guide")
+    task = asyncio.get_running_loop().create_task(
+        routes_chat.regenerate_chat(session_id, payload, db)
+    )
+    await barrier.entered_wait()
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert sessions.active_turn(session_id) is not None
+    with pytest.raises(ConflictError):
+        sessions.begin_turn(session_id)
+
+    barrier.release()
+    await _eventually(lambda: sessions.active_turn(session_id) is None)
+    # The reply being retried was never deleted: replacement happens at commit, which
+    # this turn never reached.
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user", "assistant"]
+    token = sessions.begin_turn(session_id)
+    sessions.end_turn(session_id, token)
 
 
 async def test_a_cancellation_at_the_open_await_releases_the_claim(

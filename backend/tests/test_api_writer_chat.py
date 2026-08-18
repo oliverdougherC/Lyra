@@ -747,10 +747,13 @@ def test_tutor_routes_refuse_writer_sessions(db: sqlite3.Connection, class_id: i
     part = _draft(db, class_id)
     session = sessions.create_session(db, class_id, artifact_part_id=part[1], mode=sessions.WRITER)
 
+    turn_token = sessions.begin_turn(int(session["id"]))
     with pytest.raises(LyraError, match="belongs to a draft"):
         routes_chat._open_turn(
             db,
             int(session["id"]),
             routes_chat.TurnInput(content="hi", mode="guide"),
-            [],
+            turn_token,
         )
+    # The refusal released the claim the route had taken for it.
+    assert sessions.active_turn(int(session["id"])) is None
