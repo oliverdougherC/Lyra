@@ -58,6 +58,7 @@ import errno
 import logging
 import os
 import stat
+import threading
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -336,6 +337,51 @@ def write_private_bytes(path: Path, data: bytes) -> None:
 def write_private_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
     """Write `text` to `path`, private from the first byte, replacing any existing file."""
     write_private_bytes(path, text.encode(encoding))
+
+
+# The suffix that marks a staged, not-yet-published file. Anything carrying it is garbage
+# the moment its writer is gone: `publish_private_bytes` removes its own on every exit,
+# and startup reconciliation sweeps any a killed process left behind.
+PARTIAL_SUFFIX = ".partial"
+
+
+def partial_path(final: Path) -> Path:
+    """A writer-private staging name beside `final`.
+
+    The pid alone is not private enough: FastAPI serves requests from a threadpool, so two
+    concurrent writers of the same target share a pid, and one request's cleanup would
+    delete the staged file out from under the other's publish. The thread id is what
+    distinguishes two writers in this process, and the pid still keeps two processes (a dev
+    server and a test run, say) out of each other's way.
+    """
+    return final.with_name(f"{final.name}.{os.getpid()}.{threading.get_ident()}{PARTIAL_SUFFIX}")
+
+
+def publish_private_bytes(path: Path, data: bytes) -> None:
+    """Write `data` beside `path` and atomically publish it under the final name.
+
+    The final-file publication contract: a file that exists under its final name is whole.
+    The bytes go to a writer-private staging name through the same no-follow `0o600` writer
+    as any private file, and only a rename - atomic within the directory - puts the final
+    name in place, so a crash at any point leaves either the old file, a clearly-marked
+    `*.partial` leftover, or the complete new file. It can never leave a truncated file
+    under a name readers trust on the strength of its existence.
+
+    A symlink planted at `path` is not followed: `os.replace` swaps the directory entry
+    itself, so the link is replaced rather than its target overwritten, and the staged
+    write refuses a symlink at the staging name outright.
+    """
+    staged = partial_path(path)
+    try:
+        write_private_bytes(staged, data)
+        os.replace(staged, path)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def publish_private_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    """Write `text` beside `path` and atomically publish it under the final name."""
+    publish_private_bytes(path, text.encode(encoding))
 
 
 def read_private_text(path: Path, *, encoding: str = "utf-8") -> str:

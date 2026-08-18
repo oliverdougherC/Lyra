@@ -26,7 +26,7 @@ from pathlib import Path
 import sqlite_vec
 
 from backend.config import settings
-from backend.core import recognition
+from backend.core import recognition, storage_intents
 from backend.core.consolidation import consolidate_class
 from backend.core.errors import LyraError, UpstreamError
 from backend.core.figures import store_figures
@@ -436,10 +436,13 @@ def _write_extracted_text(document_id: int, text: str) -> None:
     """Keep the extracted text beside the upload so a re-index never re-parses.
 
     Extracted text is the coursework in plain form, so it is written `0o600` inside the
-    `0o700` text directory rather than at the mercy of the umask.
+    `0o700` text directory rather than at the mercy of the umask. Published atomically
+    (staged, then renamed), because readers trust this file on the strength of its
+    existence: a crash mid-write must not leave a truncated transcript that a re-index or
+    the source pane would silently treat as the whole document.
     """
     private.secure_mkdir(settings.text_dir, root=settings.data_dir)
-    private.write_private_text(settings.text_dir / f"{document_id}.txt", text)
+    private.publish_private_text(storage_intents.text_path(document_id), text)
 
 
 def _set_state(

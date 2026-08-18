@@ -183,7 +183,7 @@ def test_page_render_refuses_a_symlink_at_the_partial_path(tmp_path: Path) -> No
     external = tmp_path / "outside-page-partial"
     external.write_bytes(b"outside data")
     os.chmod(external, 0o644)
-    _plant_link(render._partial_path(cached), external)
+    _plant_link(private.partial_path(cached), external)
 
     with pytest.raises(LyraError):
         render.render_page(11, source, "application/pdf", 1)
@@ -213,7 +213,7 @@ def test_figure_render_refuses_a_symlink_at_the_partial_path(tmp_path: Path) -> 
     external = tmp_path / "outside-figure-partial"
     external.write_bytes(b"outside data")
     os.chmod(external, 0o644)
-    _plant_link(render._partial_path(cached), external)
+    _plant_link(private.partial_path(cached), external)
 
     with pytest.raises(LyraError):
         render.render_figure(13, source, "application/pdf", 1, 7, (0.1, 0.1, 0.5, 0.5))

@@ -7,6 +7,7 @@ Handlers are sync `def`: `sqlite3` and file writes block, and FastAPI runs sync 
 in a threadpool, which is exactly where blocking work belongs.
 """
 
+import logging
 import re
 import sqlite3
 from pathlib import Path
@@ -17,7 +18,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.config import settings
-from backend.core import figures, recognition
+from backend.core import figures, recognition, storage_intents
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import ConflictError, LyraError, NotFoundError
 from backend.core.ingestion import PENDING, delete_chunks, enqueue
@@ -26,6 +27,8 @@ from backend.rag import render, structure
 from backend.rag.parse import PDF_MIME, UNSUPPORTED_MESSAGE
 from backend.storage import private
 from backend.storage.database import get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["documents"])
 
@@ -67,6 +70,11 @@ IN_USE_MESSAGE = (
     "{filename} is a source for {count} solution set(s) in this class. "
     "Delete those first, or upload the file to the other class instead."
 )
+MISSING_SOURCE_MESSAGE = (
+    "The stored file for {filename} is missing, so it cannot be moved. "
+    "Delete the document and upload the file again."
+)
+MOVE_FAILED_MESSAGE = "{filename} could not be moved. It stays in its current class; try again."
 
 # Counted rather than stored, so it cannot drift from the page rows it describes. A
 # correlated subquery over a table keyed on (document_id, page_number) is an index seek per
@@ -205,7 +213,11 @@ def upload_document(
 
     # The stored name needs the row id to be unique within a class, so the row is
     # inserted first and pointed at the file once it is written. Nothing is committed
-    # until both have happened, so a failed write leaves no orphan row behind.
+    # until the file is fully published, so a committed row always points at a whole
+    # file: a failed or interrupted write leaves no row behind, and the publication is
+    # staged-then-renamed so it can leave no truncated file under the final name either.
+    # What a crash can leave is a whole file with no row - its insert rolled back - and
+    # the startup orphan sweep removes those (docs/storage-consistency.md).
     document_id = int(
         conn.execute(
             "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
@@ -218,7 +230,7 @@ def upload_document(
     # The class upload directory is `0o700` and the stored file `0o600`: an uploaded source
     # is coursework, private like the rest of the data tree and not left to the umask.
     private.secure_mkdir(stored_path.parent, root=settings.data_dir)
-    private.write_private_bytes(stored_path, payload)
+    private.publish_private_bytes(stored_path, payload)
     conn.execute(
         "update documents set stored_path = ? where id = ?", (str(stored_path), document_id)
     )
@@ -509,22 +521,32 @@ def move_document(document_id: int, payload: DocumentMove, conn: DbConn) -> dict
         "select stored_path from documents where id = ?", (document_id,)
     ).fetchone()["stored_path"]
     stored_path = Path(str(stored)) if stored else None
+    # A missing source is an honest, recoverable refusal, never a "successful" move whose
+    # destination path is fiction: the row must not be pointed at a file that was never
+    # going to exist there.
+    if stored_path is None or not storage_intents.source_file_present(stored_path):
+        raise ConflictError(MISSING_SOURCE_MESSAGE.format(filename=document["filename"]))
     moved_path = (
         settings.uploads_dir
         / str(payload.class_id)
         / f"{document_id}-{_safe_filename(str(document['filename']))}"
     )
-    if stored_path is not None and stored_path.exists():
-        # The destination class directory is Lyra-owned like any upload directory, so it is
-        # created `0o700` and never through a symlink - the same contract the initial upload
-        # (above) is held to.
-        private.secure_mkdir(moved_path.parent, root=settings.data_dir)
-        stored_path.replace(moved_path)
 
     delete_chunks(conn, document_id)
     # The old class stops asserting what only this file ever said, exactly as it would
     # have had the student deleted it. The new class learns it from the re-ingest below.
     forget_document_evidence(conn, document_id)
+    # The move intent becomes durable in the same commit as the row update, so after a
+    # crash at any later point the database knows a rename was owed and startup
+    # reconciliation converges: it rolls the rename forward if the file still sits at the
+    # source, recognizes completion if it sits at the destination, and fails the document
+    # honestly if it sits at neither (docs/storage-consistency.md).
+    intent_id = storage_intents.record_intent(
+        conn,
+        storage_intents.MOVE_DOCUMENT,
+        document_id=document_id,
+        payload={"source": str(stored_path), "destination": str(moved_path)},
+    )
     conn.execute(
         "update documents set class_id = ?, stored_path = ?, state = ?, stage_detail = null, "
         "error_message = null, pages_done = 0 where id = ?",
@@ -532,6 +554,33 @@ def move_document(document_id: int, payload: DocumentMove, conn: DbConn) -> dict
     )
     conn.commit()
 
+    try:
+        # The destination class directory is Lyra-owned like any upload directory, so it is
+        # created `0o700` and never through a symlink - the same contract the initial
+        # upload (above) is held to.
+        storage_intents.perform_move(stored_path, moved_path)
+    except (OSError, private.PrivacyContractError):
+        logger.warning(
+            "Move of document %s could not rename its file; restoring it in class %s",
+            document_id,
+            source_class_id,
+            exc_info=True,
+        )
+        # Compensate in one commit: the file never left, so the row returns to where the
+        # file is and the intent is withdrawn together. The chunks and evidence are
+        # already gone, so the document re-indexes in place - state stays `pending` and it
+        # is queued below.
+        conn.execute(
+            "update documents set class_id = ?, stored_path = ? where id = ?",
+            (source_class_id, str(stored_path), document_id),
+        )
+        conn.execute("delete from storage_intents where id = ?", (intent_id,))
+        conn.commit()
+        touch_class(conn, source_class_id)
+        enqueue(document_id)
+        raise LyraError(MOVE_FAILED_MESSAGE.format(filename=document["filename"])) from None
+
+    storage_intents.settle_intent(conn, intent_id)
     touch_class(conn, source_class_id)
     touch_class(conn, payload.class_id)
     enqueue(document_id)
@@ -557,14 +606,32 @@ def delete_document(document_id: int, conn: DbConn) -> None:
     # Before the delete, while the evidence rows are still there to be counted. Their
     # cascade would otherwise leave the class asserting what only this upload ever said.
     forget_document_evidence(conn, document_id)
+    # The intent commits with the row delete, so the row is never the only record of the
+    # files still to remove: after a crash between this commit and the unlinks below,
+    # startup reconciliation re-runs the cleanup from the intent instead of leaving
+    # private coursework orphaned behind a UI that says it is gone.
+    intent_id = storage_intents.record_intent(
+        conn,
+        storage_intents.DELETE_DOCUMENT,
+        document_id=document_id,
+        payload={"stored_path": str(row["stored_path"]) if row["stored_path"] else None},
+    )
     conn.execute("delete from documents where id = ?", (document_id,))
     conn.commit()
 
-    # A file already gone is the state we wanted, not an error.
-    if row["stored_path"]:
-        Path(row["stored_path"]).unlink(missing_ok=True)
-    _text_path(document_id).unlink(missing_ok=True)
-    render.discard_pages(document_id)
+    # A file already gone is the state we wanted, not an error; a file that cannot be
+    # removed right now keeps its intent and is retried at the next startup rather than
+    # failing a delete that has already committed.
+    try:
+        storage_intents.run_document_cleanup(document_id, row["stored_path"])
+    except (OSError, private.PrivacyContractError):
+        logger.warning(
+            "Cleanup for deleted document %s is deferred to the next startup",
+            document_id,
+            exc_info=True,
+        )
+        return
+    storage_intents.settle_intent(conn, intent_id)
 
 
 def _document_row(conn: sqlite3.Connection, document_id: int) -> dict[str, object]:
@@ -617,4 +684,4 @@ def _safe_filename(filename: str) -> str:
 
 def _text_path(document_id: int) -> Path:
     """Where ingestion stores this document's extracted text."""
-    return settings.text_dir / f"{document_id}.txt"
+    return storage_intents.text_path(document_id)

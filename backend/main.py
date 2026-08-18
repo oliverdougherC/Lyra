@@ -28,7 +28,7 @@ from backend.api import (
     routes_writer,
 )
 from backend.config import settings
-from backend.core import agent_store, drafting, sessions, solver, study, tool_audit
+from backend.core import agent_store, drafting, sessions, solver, storage_intents, study, tool_audit
 from backend.core.errors import LyraError
 from backend.core.ingestion import reconcile_interrupted, start_worker
 from backend.core.origins import ALLOWED_BROWSER_ORIGINS, host_is_allowed
@@ -48,6 +48,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     conn = connect()
     try:
         migrate(conn)
+        # Before the ingestion queue is rebuilt, so a document whose interrupted move is
+        # rolled forward here is re-indexed from the path recovery settled on.
+        settled_intents, swept_orphans = storage_intents.reconcile_storage(conn)
+        if settled_intents:
+            logger.warning("Settled %d interrupted storage operation(s)", settled_intents)
+        if swept_orphans:
+            logger.info("Removed %d orphaned storage file(s) left by a crash", swept_orphans)
         requeued, interrupted = reconcile_interrupted(conn)
         if requeued:
             logger.info("Requeued %d ingestion job(s) that had not started", requeued)

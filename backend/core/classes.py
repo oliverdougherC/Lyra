@@ -5,12 +5,14 @@ profile facts are all class-scoped and cascade from here. Every read returns the
 plus its `document_count`, since no screen shows a class without it.
 """
 
-import shutil
+import logging
 import sqlite3
 
-from backend.config import settings
+from backend.core import storage_intents
 from backend.core.errors import NotFoundError
-from backend.rag import render
+from backend.storage import private
+
+logger = logging.getLogger(__name__)
 
 UPDATABLE_FIELDS = frozenset({"name", "code", "semester", "archived"})
 
@@ -107,22 +109,37 @@ def delete_class(conn: sqlite3.Connection, class_id: int) -> None:
         int(row[0])
         for row in conn.execute("select id from documents where class_id = ?", (class_id,))
     ]
+    # The intent commits with the row deletes, so the cascading rows are never the only
+    # record of the files still to remove: after a crash between this commit and the
+    # cleanup below, startup reconciliation re-runs the cleanup from the intent instead of
+    # leaving the class's coursework orphaned on disk (docs/storage-consistency.md).
+    intent_id = storage_intents.record_intent(
+        conn,
+        storage_intents.DELETE_CLASS,
+        class_id=class_id,
+        payload={"document_ids": document_ids},
+    )
     # `chunk_embeddings` is a vec0 virtual table, and a virtual table receives no
     # foreign-key cascade. Its rows have to go explicitly, before the class row does.
     conn.execute("delete from chunk_embeddings where class_id = ?", (class_id,))
     # documents, chunks, chat_sessions, messages, and profile_facts cascade from here.
     conn.execute("delete from classes where id = ?", (class_id,))
     conn.commit()
-    # An upload directory that was never created is not an error worth surfacing.
-    shutil.rmtree(settings.uploads_dir / str(class_id), ignore_errors=True)
     # The uploads are only what the student handed over. Ingestion also writes the text it
-    # extracted, and the reader the pages it rendered, and neither lives under the directory
-    # above: deleting a class removed the files the student gave Lyra and left the text of
-    # every one of them sitting in `data/`. Deleting one document has always cleared both,
-    # and a class is every document in it.
-    for document_id in document_ids:
-        (settings.text_dir / f"{document_id}.txt").unlink(missing_ok=True)
-        render.discard_pages(document_id)
+    # extracted, and the reader the pages it rendered, and neither lives under the upload
+    # directory: a class is every document in it, so all three go. A cleanup that cannot
+    # finish keeps its intent and is retried at the next startup rather than failing a
+    # delete that has already committed.
+    try:
+        storage_intents.run_class_cleanup(class_id, document_ids)
+    except (OSError, private.PrivacyContractError):
+        logger.warning(
+            "Cleanup for deleted class %s is deferred to the next startup",
+            class_id,
+            exc_info=True,
+        )
+        return
+    storage_intents.settle_intent(conn, intent_id)
 
 
 def touch_class(conn: sqlite3.Connection, class_id: int) -> None:

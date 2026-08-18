@@ -115,4 +115,9 @@ than passed over, so Lyra does not report a private layout it did not actually a
   be group- or world-writable, matching the safety check used when the backend opens the database.
 - Deleting a document removes its upload, extracted text, and rendered pages.
 - Deleting a class removes the uploads and derived text and pages for every document in that class.
+- Deletion is durable, not best-effort: the files to remove are recorded in the database in the
+  same transaction that deletes the document or class, so if the process is interrupted before
+  the files are gone, the next start finishes removing them. Files a crash leaves with no
+  database row (a half-finished upload, a staged `*.partial` write) are likewise removed at the
+  next start. See [storage-consistency.md](storage-consistency.md).
 - `./run stop` stops Lyra's owned services only. It does not delete user data.

@@ -13,8 +13,6 @@ viewer a second, and nothing else reads it.
 
 import logging
 import math
-import os
-import threading
 from pathlib import Path
 
 import pymupdf
@@ -114,19 +112,6 @@ def _raster_within_bounds(rect: pymupdf.Rect, dpi: int) -> bool:
     return width * height <= MAX_RASTER_PIXELS
 
 
-def _partial_path(cached: Path) -> Path:
-    """A writer-private name for the bytes on their way to `cached`.
-
-    The pid alone is not private enough: FastAPI serves requests from a threadpool, so
-    two concurrent renders of the same page share a pid, wrote the same partial name, and
-    one request's cleanup deleted the file out from under the other's `replace`, which
-    surfaced as a spurious "could not be opened". The thread id is what actually
-    distinguishes two writers in this process, and the pid still keeps two processes
-    (a dev server and a test run, say) out of each other's way.
-    """
-    return cached.with_name(f"{cached.name}.{os.getpid()}.{threading.get_ident()}.partial")
-
-
 def pages_dir(document_id: int) -> Path:
     """Where one document's rendered pages are cached."""
     return settings.pages_dir / str(document_id)
@@ -188,25 +173,15 @@ def render_page(
                 raise LyraError(TOO_LARGE_TO_RENDER)
             pixmap = page.get_pixmap(dpi=dpi)
             private.secure_mkdir(cached.parent, root=settings.data_dir)
-            # Written beside the target and moved into place, because the cache is trusted
-            # on the strength of the file existing. A process killed partway through a
-            # direct write would leave a truncated PNG that `cached.exists()` then serves
-            # for good, and nothing short of re-ingesting the document would clear it.
-            # `replace` is atomic within a directory, so the name only ever appears once
-            # the bytes are all there.
-            partial = _partial_path(cached)
-            try:
-                # `output` is named rather than left to the extension: PyMuPDF picks the
-                # format from the filename, and the temporary name does not end in `.png`.
-                # The raster envelope bounds this encoding's memory: the pixmap already
-                # occupies up to ~525 MB and its PNG bytes are a bounded derivative of that
-                # allocation. Encoding in memory lets the actual pathname write go through
-                # O_NOFOLLOW at 0o600 from its first byte; `Pixmap.save(path)` cannot offer
-                # that guarantee and may follow a planted deterministic partial symlink.
-                private.write_private_bytes(partial, pixmap.tobytes("png"))
-                partial.replace(cached)
-            finally:
-                partial.unlink(missing_ok=True)
+            # Staged beside the target and moved into place, because the cache is trusted
+            # on the strength of the file existing: a process killed partway through a
+            # direct write would leave a truncated PNG that `exists()` then serves for
+            # good. `tobytes` is used rather than `Pixmap.save(path)` so the actual
+            # pathname write goes through the O_NOFOLLOW `0o600` writer from its first
+            # byte; `save` cannot offer that guarantee and may follow a planted symlink.
+            # The raster envelope bounds this encoding's memory: the pixmap already
+            # occupies up to ~525 MB and its PNG bytes are a bounded derivative of it.
+            private.publish_private_bytes(cached, pixmap.tobytes("png"))
     except (LyraError, NotFoundError):
         raise
     except Exception as exc:
@@ -287,12 +262,7 @@ def render_figure(
             # stretched over several times the area.
             pixmap = page.get_pixmap(dpi=FIGURE_DPI, clip=clip)
             private.secure_mkdir(cached.parent, root=settings.data_dir)
-            partial = _partial_path(cached)
-            try:
-                private.write_private_bytes(partial, pixmap.tobytes("png"))
-                partial.replace(cached)
-            finally:
-                partial.unlink(missing_ok=True)
+            private.publish_private_bytes(cached, pixmap.tobytes("png"))
     except (LyraError, NotFoundError):
         raise
     except Exception as exc:
@@ -311,8 +281,11 @@ def discard_pages(document_id: int) -> None:
     directory = pages_dir(document_id)
     if not directory.exists():
         return
-    for page in directory.glob("*.png"):
-        page.unlink(missing_ok=True)
+    # Staged `*.partial` files go too: they are derived from the same file the pages were,
+    # and a leftover from a killed writer would otherwise pin the directory forever.
+    for pattern in ("*.png", f"*{private.PARTIAL_SUFFIX}"):
+        for page in directory.glob(pattern):
+            page.unlink(missing_ok=True)
     try:
         directory.rmdir()
     except OSError:

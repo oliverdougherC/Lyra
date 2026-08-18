@@ -450,6 +450,10 @@ agent substrate; scrape remains default-off until the real pinned-Firecrawl redi
   reused by Phase 3 for figures and text recognition
 - `data/models/` GGUF weights for embeddings, for text recognition from Phase 3, and for the
   tutor model once inference is bundled in Phase 6
+- Operations that mutate both SQLite and these files (upload, move, delete, class delete)
+  follow one crash-consistency contract: atomic final-file publication, durable
+  `storage_intents` recorded with the database mutation, and idempotent startup
+  reconciliation. See [storage-consistency.md](storage-consistency.md).
 
 **Secret storage.** The tutor API key is stored in the **OS keychain** (macOS Keychain via
 `keyring`), not in `lyra.db`. Encrypting a secret inside the database would require keeping the
