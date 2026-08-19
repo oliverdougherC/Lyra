@@ -128,13 +128,18 @@ def source_file_present(path: Path) -> bool:
     intermediate component turned symlink cannot make an outside file answer for the
     recorded path; callers validate `is_within` before asking.
 
+    The answer is three-way, and the third outcome is the load-bearing one: False means
+    provably not present, True means a real regular file is provably there, and an
+    inspection that fails for any other reason (EACCES, EIO, a transient filesystem
+    fault) raises instead of answering. Recovery settles durable intents and fails
+    documents on this answer, so "could not determine" must never collapse into
+    "absent" - the file may still exist, and the intent must survive for retry.
+
     Raises:
         private.PrivacyContractError: a symlink blocks an owned component on the way.
+        OSError: presence could not be determined; the answer is unknown, not "absent".
     """
-    try:
-        info = private.stat_in_tree(path, root=settings.data_dir)
-    except OSError:
-        return False
+    info = private.stat_in_tree(path, root=settings.data_dir)
     return info is not None and stat.S_ISREG(info.st_mode)
 
 
@@ -337,7 +342,10 @@ def _recover_move(conn: sqlite3.Connection, document_id: int, payload: dict[str,
     open question is whether the rename landed. Roll forward when the source still holds
     the file; recognize completion when the destination does; and when neither does, fail
     the document honestly - the row must not go on claiming an upload that no longer
-    exists anywhere.
+    exists anywhere. "Neither does" means both ends are provably absent: a presence check
+    that cannot be answered (`source_file_present` raising OSError) propagates, so the
+    caller keeps the intent and retries at the next startup instead of declaring a file
+    lost that may merely have been uninspectable for a moment.
     """
     # The payload is validated before any "nothing to do" branch can return: a malformed
     # intent must surface as blocked evidence even when the work it described is moot,

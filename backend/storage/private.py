@@ -476,14 +476,19 @@ def _abspath(path: Path) -> Path:
 def _open_tree_parent(path: Path, *, root: Path) -> int | None:
     """Open `path`'s parent directory by O_NOFOLLOW descent from `root`.
 
-    Returns an open directory descriptor the caller must close, or None when any
-    component on the way down (including the root) does not exist. Only called on
-    openat platforms.
+    Returns an open directory descriptor the caller must close, or None only when a
+    component on the way down (including the root) is provably absent (ENOENT). None is
+    a statement of absence that callers settle durable work on, so no other failure may
+    produce it: anything else raises, with every descriptor this call opened already
+    closed. Exactly one descriptor is ever live here, and exactly one exit - the final
+    `return dir_fd` - hands it to the caller. Only called on openat platforms.
 
     Raises:
         PrivacyContractError: a symlink or non-directory sits where an owned component
             should be.
         ValueError: `path` is not strictly inside `root`.
+        OSError: a component could not be opened for any reason other than absence;
+            nothing about the path's existence is implied.
     """
     path = _abspath(path)
     root = _abspath(root)
@@ -496,6 +501,10 @@ def _open_tree_parent(path: Path, *, root: Path) -> int | None:
         if exc.errno == errno.ENOENT:
             return None
         raise
+    # From here `dir_fd` is the one live descriptor this function owns. The `finally`
+    # closes it on every exit - the "absent" returns included - except the single return
+    # that transfers ownership to the caller.
+    transferred = False
     try:
         for name in components:
             try:
@@ -515,12 +524,15 @@ def _open_tree_parent(path: Path, *, root: Path) -> int | None:
                         f"a non-directory blocks the path to {path} inside the data tree"
                     ) from exc
                 raise
+            # Swap before closing, so if the close itself fails the finally still closes
+            # the live child rather than double-closing the descriptor that just errored.
+            previous_fd, dir_fd = dir_fd, child_fd
+            os.close(previous_fd)
+        transferred = True
+        return dir_fd
+    finally:
+        if not transferred:
             os.close(dir_fd)
-            dir_fd = child_fd
-    except BaseException:
-        os.close(dir_fd)
-        raise
-    return dir_fd
 
 
 def _tree_components_real(path: Path, *, root: Path) -> bool:
@@ -531,12 +543,18 @@ def _tree_components_real(path: Path, *, root: Path) -> bool:
     same reason: without O_NOFOLLOW this shape is the best the platform offers, and the
     per-user data location is the real isolation there.
 
-    Returns False when a component is absent or not a directory (nothing can exist at
-    `path`); True when every component is a real directory.
+    Returns False only when a component is provably absent (nothing can exist at
+    `path`); True when every component is a real directory. False is a statement of
+    absence that callers settle durable work on, so no other failure may produce it: a
+    component whose state cannot be determined raises instead, exactly as the openat
+    descent does.
 
     Raises:
-        PrivacyContractError: a component is a symlink.
+        PrivacyContractError: a component is a symlink, or a real non-directory sits
+            where an owned component should be.
         ValueError: `path` is not strictly inside `root`.
+        OSError: a component could not be inspected for any reason other than absence;
+            nothing about the path's existence is implied.
     """
     path = _abspath(path)
     root = _abspath(root)
@@ -547,27 +565,36 @@ def _tree_components_real(path: Path, *, root: Path) -> bool:
         current = current / name
         try:
             info = os.lstat(current)
-        except OSError:
+        except FileNotFoundError:
             return False
+        except NotADirectoryError as exc:
+            raise PrivacyContractError(
+                f"a non-directory blocks the path to {path} inside the data tree"
+            ) from exc
         if stat.S_ISLNK(info.st_mode):
             raise PrivacyContractError(
                 f"a symlink is on the path to {path}; refusing to touch state outside the data tree"
             )
         if not stat.S_ISDIR(info.st_mode):
-            return False
+            raise PrivacyContractError(
+                f"a non-directory blocks the path to {path} inside the data tree"
+            )
     return True
 
 
 def stat_in_tree(path: Path, *, root: Path) -> os.stat_result | None:
     """`lstat` of the entry at `path`, reached without following any symlink.
 
-    Returns None when the entry - or any owned component on the way to it - is absent.
-    The final entry itself is stat'd without following, so a symlink is reported as a
-    symlink, never as its target.
+    Returns None only when the entry - or an owned component on the way to it - is
+    provably absent. The final entry itself is stat'd without following, so a symlink is
+    reported as a symlink, never as its target. None is a statement of absence that
+    callers settle durable work on, so an entry or component whose state cannot be
+    determined raises instead of answering "absent".
 
     Raises:
         PrivacyContractError: a symlink or non-directory blocks an owned component.
-        OSError: the entry exists but cannot be inspected (its presence is unknown).
+        OSError: the entry or a component could not be inspected for any reason other
+            than absence (its presence is unknown).
     """
     if not _HAS_OPENAT:
         if not _tree_components_real(path, root=root):
@@ -596,7 +623,8 @@ def unlink_in_tree(path: Path, *, root: Path) -> None:
 
     Raises:
         PrivacyContractError: a symlink or non-directory blocks an owned component.
-        OSError: the entry exists but could not be removed.
+        OSError: the entry exists but could not be removed, or the tree down to it
+            could not be inspected (whether anything exists there is unknown).
     """
     if not _HAS_OPENAT:
         if not _tree_components_real(path, root=root):
@@ -675,6 +703,9 @@ def clear_owned_dir(directory: Path, *, root: Path, patterns: tuple[str, ...]) -
         PrivacyContractError: a symlink or non-directory blocks an owned component on
             the way to `directory`.
         ValueError: `directory` is not strictly inside `root`.
+        OSError: the tree down to `directory` could not be inspected for any reason
+            other than absence; whether the directory exists is unknown, and the
+            caller's durable record must survive rather than settle on a guess.
     """
     directory = _abspath(directory)
     if not _HAS_OPENAT:

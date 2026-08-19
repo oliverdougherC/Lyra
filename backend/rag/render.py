@@ -327,6 +327,9 @@ def discard_pages(document_id: int) -> bool:
     Raises:
         PrivacyContractError: a symlink or non-directory blocks the owned path down to
             the cache directory; nothing was touched.
+        OSError: the tree down to the cache directory could not be inspected, so
+            whether the cache exists is unknown; nothing was touched, and a durable
+            caller keeps its intent rather than settling on a guess.
     """
     return private.clear_owned_dir(
         pages_dir(document_id),

@@ -574,6 +574,18 @@ def move_document(document_id: int, payload: DocumentMove, conn: DbConn) -> dict
             )
         except private.PrivacyContractError:
             source_present = False
+        except OSError:
+            # Presence could not be determined - EACCES, EIO, a transient filesystem
+            # fault. That is not the same statement as "the file is missing", and the 409
+            # below would tell the student to re-upload a file that likely still exists.
+            # Nothing has been invalidated or committed yet, so refuse as a failed,
+            # retryable move instead.
+            logger.warning(
+                "Move of document %s could not inspect its stored file; refusing without mutating",
+                document_id,
+                exc_info=True,
+            )
+            raise LyraError(MOVE_FAILED_MESSAGE.format(filename=document["filename"])) from None
         # A missing source is an honest, recoverable refusal, never a "successful" move
         # whose destination path is fiction: the row must not be pointed at a file that was
         # never going to exist there.

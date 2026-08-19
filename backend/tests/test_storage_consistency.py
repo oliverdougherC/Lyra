@@ -12,6 +12,7 @@ real handler runs up to the exact boundary and then stops - the tests exercise t
 production code paths, not hand-written approximations of them.
 """
 
+import errno
 import json
 import os
 import sqlite3
@@ -425,6 +426,164 @@ def test_move_recovery_is_idempotent(
 
 def _crash(*args: object, **kwargs: object) -> None:
     raise SimulatedCrashError("the process died here")
+
+
+# --- Move: "could not determine presence" is never treated as "absent" ----------------
+#
+# Recovery declares a file lost - and settles the move intent - only when both ends are
+# provably absent. A stat that fails with EACCES/EIO answers nothing: the file may still
+# exist, and the durable intent must survive for retry with no blocked classification
+# (the payload is fine; the environment is not).
+
+
+def _wedged_move(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    other_class_id: int,
+    crash_patch: pytest.MonkeyPatch,
+) -> tuple[int, Path, Path]:
+    """A move whose rename never ran: the intent survives and the file sits at the source."""
+    document_id = _document(db, class_id)
+    source = _stored_path(db, document_id)
+    crash_patch.setattr(storage_intents, "perform_move", _crash)
+    client.post(f"/api/documents/{document_id}/move", json={"class_id": other_class_id})
+    crash_patch.undo()
+    destination = _stored_path(db, document_id)
+    assert len(_intents(db)) == 1
+    return document_id, source, destination
+
+
+def _stat_denied_at(target: Path, code: int) -> Callable[..., os.stat_result | None]:
+    """A `stat_in_tree` stand-in that cannot inspect `target` but answers everywhere else."""
+    real_stat = private.stat_in_tree
+
+    def stat_in_tree(path: Path, *, root: Path) -> os.stat_result | None:
+        if Path(path) == target:
+            raise OSError(code, os.strerror(code), str(path))
+        return real_stat(path, root=root)
+
+    return stat_in_tree
+
+
+def test_move_recovery_keeps_the_intent_when_destination_presence_is_unknown(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    other_class_id: int,
+    crash_patch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id, source, destination = _wedged_move(
+        client, db, class_id, other_class_id, crash_patch
+    )
+    real_stat = private.stat_in_tree
+    monkeypatch.setattr(private, "stat_in_tree", _stat_denied_at(destination, errno.EACCES))
+
+    settled, _ = storage_intents.reconcile_storage(db)
+
+    assert settled == 0
+    rows = _intent_rows(db)
+    assert len(rows) == 1
+    assert rows[0]["blocked_reason"] is None
+    row = _row(db, document_id)
+    assert row["state"] == "pending"
+    assert row["error_message"] is None
+    assert source.exists()
+
+    # Once the environment recovers, the same intent settles by rolling the move forward.
+    monkeypatch.setattr(private, "stat_in_tree", real_stat)
+    settled, _ = storage_intents.reconcile_storage(db)
+    assert settled == 1
+    assert _stored_path(db, document_id).read_bytes() == b"pdf!"
+    assert not source.exists()
+    assert _intents(db) == []
+
+
+def test_move_recovery_keeps_the_intent_when_source_presence_is_unknown(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    other_class_id: int,
+    crash_patch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id, source, _ = _wedged_move(client, db, class_id, other_class_id, crash_patch)
+    # The destination genuinely does not exist; only the source is uninspectable. That
+    # is exactly the shape a hasty "False" would turn into a false FILE_LOST verdict.
+    monkeypatch.setattr(private, "stat_in_tree", _stat_denied_at(source, errno.EIO))
+
+    settled, _ = storage_intents.reconcile_storage(db)
+
+    assert settled == 0
+    rows = _intent_rows(db)
+    assert len(rows) == 1
+    assert rows[0]["blocked_reason"] is None
+    row = _row(db, document_id)
+    assert row["state"] == "pending"
+    assert row["error_message"] is None
+    assert source.exists()
+
+
+def test_move_recovery_keeps_the_intent_when_no_presence_can_be_determined(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    other_class_id: int,
+    crash_patch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id, source, _ = _wedged_move(client, db, class_id, other_class_id, crash_patch)
+    real_stat = private.stat_in_tree
+
+    def denied(path: Path, *, root: Path) -> os.stat_result | None:
+        raise OSError(errno.EACCES, os.strerror(errno.EACCES), str(path))
+
+    monkeypatch.setattr(private, "stat_in_tree", denied)
+
+    settled, _ = storage_intents.reconcile_storage(db)
+
+    assert settled == 0
+    rows = _intent_rows(db)
+    assert len(rows) == 1
+    assert rows[0]["blocked_reason"] is None
+    assert _row(db, document_id)["state"] == "pending"
+    assert source.exists()
+
+    monkeypatch.setattr(private, "stat_in_tree", real_stat)
+    settled, _ = storage_intents.reconcile_storage(db)
+    assert settled == 1
+    assert _stored_path(db, document_id).read_bytes() == b"pdf!"
+    assert _intents(db) == []
+
+
+def test_a_move_that_cannot_inspect_its_source_refuses_without_mutating(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    other_class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The live move's answer to an uninspectable source is the retryable "could not be
+    moved", never the 409 that tells the student to upload a file that likely exists."""
+    document_id = _document(db, class_id)
+    source = _stored_path(db, document_id)
+
+    def denied(path: Path) -> bool:
+        raise OSError(errno.EACCES, os.strerror(errno.EACCES), str(path))
+
+    monkeypatch.setattr(storage_intents, "source_file_present", denied)
+
+    response = client.post(f"/api/documents/{document_id}/move", json={"class_id": other_class_id})
+
+    assert response.status_code == 400
+    assert "could not be moved" in response.json()["detail"]
+    row = _row(db, document_id)
+    assert int(row["class_id"]) == class_id
+    assert row["state"] == "ready"
+    assert Path(str(row["stored_path"])) == source
+    assert source.exists()
+    assert _intents(db) == []
 
 
 # --- Delete: cleanup completes, or its intent survives to be retried -----------------
