@@ -7,6 +7,7 @@ Handlers are sync `def`: `sqlite3` and file writes block, and FastAPI runs sync 
 in a threadpool, which is exactly where blocking work belongs.
 """
 
+import logging
 import re
 import sqlite3
 from pathlib import Path
@@ -17,7 +18,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.config import settings
-from backend.core import figures, recognition
+from backend.core import figures, ownership, recognition, storage_intents
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import ConflictError, LyraError, NotFoundError
 from backend.core.ingestion import PENDING, delete_chunks, enqueue
@@ -26,6 +27,8 @@ from backend.rag import render, structure
 from backend.rag.parse import PDF_MIME, UNSUPPORTED_MESSAGE
 from backend.storage import private
 from backend.storage.database import get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["documents"])
 
@@ -66,6 +69,14 @@ STILL_PROCESSING_MESSAGE = "{filename} is still being processed. Move it once it
 IN_USE_MESSAGE = (
     "{filename} is a source for {count} solution set(s) in this class. "
     "Delete those first, or upload the file to the other class instead."
+)
+MISSING_SOURCE_MESSAGE = (
+    "The stored file for {filename} is missing, so it cannot be moved. "
+    "Delete the document and upload the file again."
+)
+MOVE_FAILED_MESSAGE = "{filename} could not be moved. It stays in its current class; try again."
+CHANGED_UNDERNEATH_MESSAGE = (
+    "{filename} was changed by another request while this one was running. Try again."
 )
 
 # Counted rather than stored, so it cannot drift from the page rows it describes. A
@@ -205,7 +216,11 @@ def upload_document(
 
     # The stored name needs the row id to be unique within a class, so the row is
     # inserted first and pointed at the file once it is written. Nothing is committed
-    # until both have happened, so a failed write leaves no orphan row behind.
+    # until the file is fully published, so a committed row always points at a whole
+    # file: a failed or interrupted write leaves no row behind, and the publication is
+    # staged-then-renamed so it can leave no truncated file under the final name either.
+    # What a crash can leave is a whole file with no row - its insert rolled back - and
+    # the startup orphan sweep removes those (docs/storage-consistency.md).
     document_id = int(
         conn.execute(
             "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
@@ -218,7 +233,7 @@ def upload_document(
     # The class upload directory is `0o700` and the stored file `0o600`: an uploaded source
     # is coursework, private like the rest of the data tree and not left to the umask.
     private.secure_mkdir(stored_path.parent, root=settings.data_dir)
-    private.write_private_bytes(stored_path, payload)
+    private.publish_private_bytes(stored_path, payload)
     conn.execute(
         "update documents set stored_path = ? where id = ?", (str(stored_path), document_id)
     )
@@ -264,13 +279,17 @@ def read_document_page(document_id: int, page_number: int, conn: DbConn) -> File
     re-ingesting or deleting the document clears the server-side cache.
     """
     row = conn.execute(
-        "select id, stored_path, mime from documents where id = ?", (document_id,)
+        "select id, stored_path, mime, created_at from documents where id = ?", (document_id,)
     ).fetchone()
     if row is None:
         raise NotFoundError("That document does not exist.")
 
     path = render.render_page(
-        document_id, Path(str(row["stored_path"])), str(row["mime"]), page_number
+        document_id,
+        Path(str(row["stored_path"])),
+        str(row["mime"]),
+        page_number,
+        created_at=str(row["created_at"]),
     )
     return FileResponse(
         path,
@@ -304,35 +323,50 @@ def read_document_text(document_id: int, conn: DbConn) -> dict[str, object]:
     status_code=status.HTTP_202_ACCEPTED,
 )
 def reingest_document(document_id: int, conn: DbConn) -> dict[str, object]:
-    document = _document_row(conn, document_id)
-    # The same guard move and recognize have always had, for the same reason: the worker
-    # is reading this row and about to write its state, so the `pending` written below
-    # would be overwritten by whatever the in-flight run lands in, and the chunk delete
-    # below would race the batches that run is still committing.
-    if document["state"] not in TERMINAL_STATES:
-        raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
+    # Under the lifecycle mutex: this clears the page cache and rewrites the row's state,
+    # and both must happen from the state that was just observed, not from a row a
+    # concurrent move or delete has advanced in the meantime.
+    with ownership.lifecycle_mutation():
+        document = _document_row(conn, document_id)
+        # The same guard move and recognize have always had, for the same reason: the
+        # worker is reading this row and about to write its state, so the `pending`
+        # written below would be overwritten by whatever the in-flight run lands in, and
+        # the chunk delete below would race the batches that run is still committing.
+        if document["state"] not in TERMINAL_STATES:
+            raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
 
-    if document["state"] == "failed":
-        # Retrying a failed document is an explicit retry, so pages that failed go back in
-        # the pending set. A re-index of a `ready` document deliberately does not do this:
-        # that is a chunking pass, and it must not re-pay model time on pages that failed
-        # for good. See `recognition.reset_failed_pages`.
-        recognition.reset_failed_pages(conn, document_id)
-    # Clearing the previous run's chunks here as well as in the job keeps the document
-    # from serving stale results while it waits in the queue.
-    delete_chunks(conn, document_id)
-    # Same reason for the rendered pages: a stale image would show a page from the file
-    # that used to be there.
-    render.discard_pages(document_id)
-    conn.execute(
-        "update documents set state = ?, stage_detail = null, error_message = null, "
-        "pages_done = 0 where id = ?",
-        (PENDING, document_id),
-    )
-    conn.commit()
+        if document["state"] == "failed":
+            # Retrying a failed document is an explicit retry, so pages that failed go
+            # back in the pending set. A re-index of a `ready` document deliberately does
+            # not do this: that is a chunking pass, and it must not re-pay model time on
+            # pages that failed for good. See `recognition.reset_failed_pages`.
+            recognition.reset_failed_pages(conn, document_id)
+        # Clearing the previous run's chunks here as well as in the job keeps the document
+        # from serving stale results while it waits in the queue.
+        delete_chunks(conn, document_id)
+        # Same reason for the rendered pages: a stale image would show a page from the
+        # file that used to be there. Best-effort by explicit choice, unlike the delete
+        # paths: there is no durable intent to keep here, the file itself is unchanged,
+        # and a page being read this instant must not fail the re-ingest - so an
+        # incomplete discard is logged rather than raised.
+        if not render.discard_pages(document_id):
+            logger.warning(
+                "The page cache for document %s could not be fully cleared before "
+                "re-ingest; leftover entries will be overwritten as pages re-render",
+                document_id,
+            )
+        changed = conn.execute(
+            "update documents set state = ?, stage_detail = null, error_message = null, "
+            "pages_done = 0 where id = ? and state = ?",
+            (PENDING, document_id, str(document["state"])),
+        ).rowcount
+        if changed != 1:
+            conn.rollback()
+            raise ConflictError(CHANGED_UNDERNEATH_MESSAGE.format(filename=document["filename"]))
+        conn.commit()
 
-    enqueue(document_id)
-    return _document_row(conn, document_id)
+        enqueue(document_id)
+        return _document_row(conn, document_id)
 
 
 @router.get("/documents/{document_id}/figures", response_model=list[FigureRead])
@@ -367,6 +401,7 @@ def read_figure(figure_id: int, conn: DbConn) -> FileResponse:
         int(figure["page_number"]),  # type: ignore[arg-type]
         figure_id,
         (float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])),  # type: ignore[index]
+        created_at=str(figure["document_created_at"]),
     )
     return FileResponse(
         path,
@@ -439,29 +474,34 @@ def recognize_document(document_id: int, conn: DbConn) -> dict[str, object]:
     The flag stays set afterwards: it is a property of the document, so a later re-index
     keeps reading it the way the student asked for.
     """
-    document = _document_row(conn, document_id)
-    # The worker is reading this row and about to write its state, and the `pending` set
-    # below would be overwritten by whatever it lands in.
-    if document["state"] not in TERMINAL_STATES:
-        raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
+    with ownership.lifecycle_mutation():
+        document = _document_row(conn, document_id)
+        # The worker is reading this row and about to write its state, and the `pending`
+        # set below would be overwritten by whatever it lands in.
+        if document["state"] not in TERMINAL_STATES:
+            raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
 
-    # This is the explicit "attempt them again", so failed pages rejoin the pending set.
-    # An in-flight run never re-attempts `failed` pages on its own - that would make
-    # every plain re-index re-pay for pages that failed for good.
-    recognition.reset_failed_pages(conn, document_id)
-    delete_chunks(conn, document_id)
-    # Deliberately no `render.discard_pages` here, unlike the re-ingest below. The rendered
-    # pages are what recognition reads, they were rendered from bytes that have not changed,
-    # and throwing them away would make every retry pay to rasterize the document again.
-    conn.execute(
-        "update documents set recognize = 1, state = ?, stage_detail = null, "
-        "error_message = null, pages_done = 0 where id = ?",
-        (PENDING, document_id),
-    )
-    conn.commit()
+        # This is the explicit "attempt them again", so failed pages rejoin the pending
+        # set. An in-flight run never re-attempts `failed` pages on its own - that would
+        # make every plain re-index re-pay for pages that failed for good.
+        recognition.reset_failed_pages(conn, document_id)
+        delete_chunks(conn, document_id)
+        # Deliberately no `render.discard_pages` here, unlike the re-ingest below. The
+        # rendered pages are what recognition reads, they were rendered from bytes that
+        # have not changed, and throwing them away would make every retry pay to
+        # rasterize the document again.
+        changed = conn.execute(
+            "update documents set recognize = 1, state = ?, stage_detail = null, "
+            "error_message = null, pages_done = 0 where id = ? and state = ?",
+            (PENDING, document_id, str(document["state"])),
+        ).rowcount
+        if changed != 1:
+            conn.rollback()
+            raise ConflictError(CHANGED_UNDERNEATH_MESSAGE.format(filename=document["filename"]))
+        conn.commit()
 
-    enqueue(document_id)
-    return _document_row(conn, document_id)
+        enqueue(document_id)
+        return _document_row(conn, document_id)
 
 
 @router.post(
@@ -483,59 +523,164 @@ def move_document(document_id: int, payload: DocumentMove, conn: DbConn) -> dict
     same way an upload does: `pending`, and indexed from there. Its rendered pages survive,
     because those depend on the file's bytes rather than on where it is filed.
     """
-    document = _document_row(conn, document_id)
-    source_class_id = int(document["class_id"])
-    # Before any work, so an unknown target is a 404 rather than a half-moved file.
-    get_class(conn, payload.class_id)
-    if payload.class_id == source_class_id:
-        return document
+    # The whole read-decide-commit-rename sequence runs under the lifecycle mutex, so no
+    # other lifecycle operation - a second move, a delete, a class delete - can advance
+    # this document between the reads below and the rename at the end.
+    with ownership.lifecycle_mutation():
+        document = _document_row(conn, document_id)
+        source_class_id = int(document["class_id"])
+        # Before any work, so an unknown target is a 404 rather than a half-moved file.
+        get_class(conn, payload.class_id)
+        if payload.class_id == source_class_id:
+            return document
 
-    # A document mid-ingestion is being read by the worker from the path this would move,
-    # and the state it lands in would overwrite the `pending` written here.
-    if document["state"] not in TERMINAL_STATES:
-        raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
+        # A document mid-ingestion is being read by the worker from the path this would
+        # move, and the state it lands in would overwrite the `pending` written here.
+        if document["state"] not in TERMINAL_STATES:
+            raise ConflictError(STILL_PROCESSING_MESSAGE.format(filename=document["filename"]))
 
-    used_by = int(
-        conn.execute(
-            "select count(*) from artifact_sources where document_id = ?", (document_id,)
-        ).fetchone()[0]
-    )
-    if used_by:
-        raise ConflictError(IN_USE_MESSAGE.format(filename=document["filename"], count=used_by))
+        used_by = int(
+            conn.execute(
+                "select count(*) from artifact_sources where document_id = ?", (document_id,)
+            ).fetchone()[0]
+        )
+        if used_by:
+            raise ConflictError(IN_USE_MESSAGE.format(filename=document["filename"], count=used_by))
 
-    # Read separately: `_DOCUMENT_COLUMNS` deliberately omits the stored path, because it
-    # is the shape the interface receives and the interface never sees a filesystem path.
-    stored = conn.execute(
-        "select stored_path from documents where id = ?", (document_id,)
-    ).fetchone()["stored_path"]
-    stored_path = Path(str(stored)) if stored else None
-    moved_path = (
-        settings.uploads_dir
-        / str(payload.class_id)
-        / f"{document_id}-{_safe_filename(str(document['filename']))}"
-    )
-    if stored_path is not None and stored_path.exists():
-        # The destination class directory is Lyra-owned like any upload directory, so it is
-        # created `0o700` and never through a symlink - the same contract the initial upload
-        # (above) is held to.
-        private.secure_mkdir(moved_path.parent, root=settings.data_dir)
-        stored_path.replace(moved_path)
+        # Read separately: `_DOCUMENT_COLUMNS` deliberately omits the stored path, because
+        # it is the shape the interface receives and the interface never sees a filesystem
+        # path. Checked for absence again, not assumed from the read above: under the
+        # mutex the row cannot vanish in between, and if some future path ever lets it,
+        # the answer is a clean 404 rather than a crash.
+        stored_row = conn.execute(
+            "select stored_path from documents where id = ?", (document_id,)
+        ).fetchone()
+        if stored_row is None:
+            raise NotFoundError("That document does not exist.")
+        stored = stored_row["stored_path"]
+        stored_path = Path(str(stored)) if stored else None
+        # The live move is held to the same owned-path contract as recovery, checked
+        # before this request invalidates a single chunk, commits anything, records an
+        # intent, or touches the filesystem: a corrupted or legacy row pointing outside
+        # the uploads tree, or reachable only through a symlinked intermediate
+        # directory, must not let a move relocate an arbitrary file the current user
+        # happens to own. Either defect refuses exactly like a missing source - for the
+        # student the file is equally unmovable either way.
+        if stored_path is not None and not private.is_within(stored_path, settings.uploads_dir):
+            raise ConflictError(MISSING_SOURCE_MESSAGE.format(filename=document["filename"]))
+        try:
+            source_present = stored_path is not None and storage_intents.source_file_present(
+                stored_path
+            )
+        except private.PrivacyContractError:
+            source_present = False
+        except OSError:
+            # Presence could not be determined - EACCES, EIO, a transient filesystem
+            # fault. That is not the same statement as "the file is missing", and the 409
+            # below would tell the student to re-upload a file that likely still exists.
+            # Nothing has been invalidated or committed yet, so refuse as a failed,
+            # retryable move instead.
+            logger.warning(
+                "Move of document %s could not inspect its stored file; refusing without mutating",
+                document_id,
+                exc_info=True,
+            )
+            raise LyraError(MOVE_FAILED_MESSAGE.format(filename=document["filename"])) from None
+        # A missing source is an honest, recoverable refusal, never a "successful" move
+        # whose destination path is fiction: the row must not be pointed at a file that was
+        # never going to exist there.
+        if not source_present:
+            raise ConflictError(MISSING_SOURCE_MESSAGE.format(filename=document["filename"]))
+        moved_path = (
+            settings.uploads_dir
+            / str(payload.class_id)
+            / f"{document_id}-{_safe_filename(str(document['filename']))}"
+        )
 
-    delete_chunks(conn, document_id)
-    # The old class stops asserting what only this file ever said, exactly as it would
-    # have had the student deleted it. The new class learns it from the re-ingest below.
-    forget_document_evidence(conn, document_id)
-    conn.execute(
-        "update documents set class_id = ?, stored_path = ?, state = ?, stage_detail = null, "
-        "error_message = null, pages_done = 0 where id = ?",
-        (payload.class_id, str(moved_path), PENDING, document_id),
-    )
-    conn.commit()
+        delete_chunks(conn, document_id)
+        # The old class stops asserting what only this file ever said, exactly as it would
+        # have had the student deleted it. The new class learns it from the re-ingest
+        # below.
+        forget_document_evidence(conn, document_id)
+        # The move intent becomes durable in the same commit as the row update, so after a
+        # crash at any later point the database knows a rename was owed and startup
+        # reconciliation converges: it rolls the rename forward if the file still sits at
+        # the source, recognizes completion if it sits at the destination, and fails the
+        # document honestly if it sits at neither (docs/storage-consistency.md).
+        intent_id = storage_intents.record_intent(
+            conn,
+            storage_intents.MOVE_DOCUMENT,
+            document_id=document_id,
+            payload={"source": str(stored_path), "destination": str(moved_path)},
+        )
+        # Compare-and-swap on everything this move decided from. The mutex makes a
+        # concurrent change impossible; the conditional write makes one harmless anyway:
+        # a transition is committed only from the exact state that was observed, so a
+        # request that somehow raced past serialization gets a clean conflict and its
+        # whole transaction - chunk invalidation, evidence, intent - rolls back together.
+        moved = conn.execute(
+            "update documents set class_id = ?, stored_path = ?, state = ?, "
+            "stage_detail = null, error_message = null, pages_done = 0 "
+            "where id = ? and class_id = ? and stored_path = ? and state = ?",
+            (
+                payload.class_id,
+                str(moved_path),
+                PENDING,
+                document_id,
+                source_class_id,
+                str(stored_path),
+                str(document["state"]),
+            ),
+        ).rowcount
+        if moved != 1:
+            conn.rollback()
+            raise ConflictError(CHANGED_UNDERNEATH_MESSAGE.format(filename=document["filename"]))
+        conn.commit()
 
-    touch_class(conn, source_class_id)
-    touch_class(conn, payload.class_id)
-    enqueue(document_id)
-    return _document_row(conn, document_id)
+        try:
+            # The destination class directory is Lyra-owned like any upload directory, so
+            # it is created `0o700` and never through a symlink - the same contract the
+            # initial upload (above) is held to.
+            storage_intents.perform_move(stored_path, moved_path)
+        except (OSError, private.PrivacyContractError):
+            logger.warning(
+                "Move of document %s could not rename its file; restoring it in class %s",
+                document_id,
+                source_class_id,
+                exc_info=True,
+            )
+            # Compensate in one commit: the file never left, so the row returns to where
+            # the file is and the intent is withdrawn together. The chunks and evidence
+            # are already gone, so the document re-indexes in place - state stays
+            # `pending` and it is queued below. The restore is itself conditional on the
+            # row still being exactly what this move committed: compensation must never
+            # overwrite a newer lifecycle mutation with stale state, so if the row has
+            # legitimately advanced (or is gone), only the intent is withdrawn - the
+            # rename it describes never happened, so no filesystem work is owed.
+            restored = conn.execute(
+                "update documents set class_id = ?, stored_path = ? "
+                "where id = ? and class_id = ? and stored_path = ? and state = ?",
+                (
+                    source_class_id,
+                    str(stored_path),
+                    document_id,
+                    payload.class_id,
+                    str(moved_path),
+                    PENDING,
+                ),
+            ).rowcount
+            conn.execute("delete from storage_intents where id = ?", (intent_id,))
+            conn.commit()
+            if restored:
+                touch_class(conn, source_class_id)
+                enqueue(document_id)
+            raise LyraError(MOVE_FAILED_MESSAGE.format(filename=document["filename"])) from None
+
+        storage_intents.settle_intent(conn, intent_id)
+        touch_class(conn, source_class_id)
+        touch_class(conn, payload.class_id)
+        enqueue(document_id)
+        return _document_row(conn, document_id)
 
 
 @router.delete("/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -544,27 +689,70 @@ def delete_document(document_id: int, conn: DbConn) -> None:
     # Deleting is the de facto cancel for a run in flight - a two-hour recognition pass
     # has no other stop button - so refusing it here would trap the student inside the
     # very run they are trying to abandon. The worker defends itself instead: it re-checks
-    # this row's existence and `created_at` between pages and between stages, and aborts
-    # quietly rather than writing onto a row that is gone or has been re-created by a
-    # newer upload.
-    row = conn.execute(
-        "select id, stored_path from documents where id = ?", (document_id,)
-    ).fetchone()
-    if row is None:
-        raise NotFoundError("That document does not exist.")
+    # this row's existence and `created_at` between pages and between stages, publishes
+    # derived files only through the identity-checked barrier, and aborts quietly rather
+    # than writing onto a row that is gone or has been re-created by a newer upload.
+    #
+    # The mutex spans the commit *and* the cleanup, which is what makes the late-writer
+    # barrier airtight: a publication that checks the row after this block starts finds
+    # it gone, and one that published before is removed by the cleanup below.
+    with ownership.lifecycle_mutation():
+        row = conn.execute(
+            "select id, stored_path from documents where id = ?", (document_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError("That document does not exist.")
 
-    delete_chunks(conn, document_id)
-    # Before the delete, while the evidence rows are still there to be counted. Their
-    # cascade would otherwise leave the class asserting what only this upload ever said.
-    forget_document_evidence(conn, document_id)
-    conn.execute("delete from documents where id = ?", (document_id,))
-    conn.commit()
+        delete_chunks(conn, document_id)
+        # `delete_chunks` acquired SQLite's write lock, so no other connection can commit
+        # until this transaction ends. The stored path is re-read under that lock: the
+        # value read above could in principle be stale (a move committing in between
+        # would leave this intent unlinking the file's old location while its new one
+        # survives deletion), and the intent must record where the file actually is.
+        # The mutex already prevents that interleave; the re-read makes the recorded
+        # cleanup correct even for a caller that raced past it.
+        fresh = conn.execute(
+            "select stored_path from documents where id = ?", (document_id,)
+        ).fetchone()
+        if fresh is None:
+            conn.rollback()
+            raise NotFoundError("That document does not exist.")
+        stored_path = fresh["stored_path"]
+        # Before the delete, while the evidence rows are still there to be counted. Their
+        # cascade would otherwise leave the class asserting what only this upload ever
+        # said.
+        forget_document_evidence(conn, document_id)
+        # The intent commits with the row delete, so the row is never the only record of
+        # the files still to remove: after a crash between this commit and the unlinks
+        # below, startup reconciliation re-runs the cleanup from the intent instead of
+        # leaving private coursework orphaned behind a UI that says it is gone.
+        intent_id = storage_intents.record_intent(
+            conn,
+            storage_intents.DELETE_DOCUMENT,
+            document_id=document_id,
+            payload={"stored_path": str(stored_path) if stored_path else None},
+        )
+        conn.execute("delete from documents where id = ?", (document_id,))
+        conn.commit()
 
-    # A file already gone is the state we wanted, not an error.
-    if row["stored_path"]:
-        Path(row["stored_path"]).unlink(missing_ok=True)
-    _text_path(document_id).unlink(missing_ok=True)
-    render.discard_pages(document_id)
+        # A file already gone is the state we wanted, not an error; a file that cannot be
+        # removed right now keeps its intent and is retried at the next startup rather
+        # than failing a delete that has already committed.
+        try:
+            storage_intents.run_document_cleanup(document_id, stored_path)
+        except (
+            OSError,
+            private.PrivacyContractError,
+            storage_intents.IntentBlockedError,
+            storage_intents.CleanupIncompleteError,
+        ):
+            logger.warning(
+                "Cleanup for deleted document %s is deferred to the next startup",
+                document_id,
+                exc_info=True,
+            )
+            return
+        storage_intents.settle_intent(conn, intent_id)
 
 
 def _document_row(conn: sqlite3.Connection, document_id: int) -> dict[str, object]:
@@ -617,4 +805,4 @@ def _safe_filename(filename: str) -> str:
 
 def _text_path(document_id: int) -> Path:
     """Where ingestion stores this document's extracted text."""
-    return settings.text_dir / f"{document_id}.txt"
+    return storage_intents.text_path(document_id)

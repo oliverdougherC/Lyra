@@ -16,6 +16,7 @@ user's unrelated file.
 
 import errno
 import os
+import sqlite3
 import stat
 from collections.abc import Iterator
 from pathlib import Path
@@ -256,12 +257,22 @@ def test_connect_tightens_a_sidecar_left_broad_by_a_prior_run(
 
 
 def test_extracted_text_is_written_owner_only(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_open_umask: None
+    db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_open_umask: None
 ) -> None:
-    text_root = tmp_path / "data" / "text"
-    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    # A real row behind the write: publication is guarded on the document's identity.
+    db.execute("insert into classes (id, name) values (1, 'Calc')")
+    db.execute(
+        "insert into documents (id, class_id, filename, stored_path, mime, byte_size, state) "
+        "values (7, 1, 'notes.pdf', '', 'application/pdf', 0, 'ready')"
+    )
+    db.commit()
+    created_at = str(
+        db.execute("select created_at from documents where id = 7").fetchone()["created_at"]
+    )
+    text_root = tmp_path / "fresh-data" / "text"
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "fresh-data")
 
-    ingestion._write_extracted_text(7, "extracted coursework")
+    assert ingestion._write_extracted_text(7, "extracted coursework", created_at)
 
     written = text_root / "7.txt"
     assert written.read_text() == "extracted coursework"
@@ -340,7 +351,8 @@ def test_runtime_write_beneath_a_symlinked_owned_dir_creates_nothing_outside(
     monkeypatch.setattr(settings, "data_dir", data)
 
     with pytest.raises(private.PrivacyContractError):
-        ingestion._write_extracted_text(7, "extracted coursework")
+        # The refusal fires in `secure_mkdir`, before any identity check would run.
+        ingestion._write_extracted_text(7, "extracted coursework", "2026-01-01T00:00:00.000Z")
 
     assert list(external.iterdir()) == [external / "someone-elses-notes.txt"]
     assert _mode(external) == 0o755
@@ -478,3 +490,172 @@ def test_fchmod_unsupported_filesystem_is_tolerated(
     monkeypatch.setattr(os, "fchmod", unsupported)
 
     private.harden_file(target)  # tolerated: no exception
+
+
+# --- The no-follow tree descent: descriptor ownership and honest absence --------------
+#
+# Idempotent delete and startup reconciliation constantly ask the tree primitives about
+# paths that are already absent, so the "absent" exits are hot paths, not corner cases.
+# Two invariants are pinned here: every descriptor the descent opens is closed exactly
+# once (regression: the early "absent" return used to leak the descriptor it had
+# descended to), and "absent" is only ever answered for a provably missing component -
+# an EACCES/EIO that leaves the state unknowable raises instead, because callers settle
+# durable cleanup records on these answers.
+
+
+@pytest.fixture
+def fd_ledger(monkeypatch: pytest.MonkeyPatch) -> set[int]:
+    """The descriptors opened through `os.open` that `os.close` has not yet balanced.
+
+    Wrapping the pair - rather than counting `/proc/self/fd` - keeps the regression
+    meaningful on macOS, where `/proc` does not exist.
+    """
+    real_open, real_close = os.open, os.close
+    live: set[int] = set()
+
+    def tracking_open(*args: object, **kwargs: object) -> int:
+        descriptor = real_open(*args, **kwargs)  # type: ignore[arg-type]
+        live.add(descriptor)
+        return descriptor
+
+    def tracking_close(descriptor: int) -> None:
+        real_close(descriptor)
+        live.discard(descriptor)
+
+    monkeypatch.setattr(os, "open", tracking_open)
+    monkeypatch.setattr(os, "close", tracking_close)
+    return live
+
+
+@pytest.mark.skipif(not private._HAS_OPENAT, reason="exercises the openat descent")
+def test_tree_descent_closes_every_descriptor_when_components_are_absent(
+    tmp_path: Path, fd_ledger: set[int]
+) -> None:
+    root = tmp_path / "tree"
+    (root / "kept").mkdir(parents=True)
+    cases = [
+        # (path asked about, owned root): absence at every depth, root included.
+        (tmp_path / "absent-root" / "a" / "file", tmp_path / "absent-root"),
+        (root / "missing" / "file", root),
+        (root / "missing" / "deep" / "file", root),
+        (root / "kept" / "missing" / "file", root),
+        (root / "kept" / "file", root),
+    ]
+    # Repetition is the point: one leaked descriptor per question is how reconciliation
+    # over an old install would bleed the process dry.
+    for _ in range(3):
+        for target, tree_root in cases:
+            assert private.stat_in_tree(target, root=tree_root) is None
+            assert not fd_ledger, f"stat_in_tree leaked a descriptor for {target}"
+            private.unlink_in_tree(target, root=tree_root)
+            assert not fd_ledger, f"unlink_in_tree leaked a descriptor for {target}"
+            assert private.clear_owned_dir(target, root=tree_root, patterns=("*",)) is True
+            assert not fd_ledger, f"clear_owned_dir leaked a descriptor for {target}"
+
+
+@pytest.mark.skipif(not private._HAS_OPENAT, reason="exercises the openat descent")
+def test_tree_descent_closes_every_descriptor_when_a_component_is_refused(
+    tmp_path: Path, fd_ledger: set[int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "tree"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "link").symlink_to(outside)
+    (root / "plain").write_bytes(b"not a directory")
+
+    for blocked in (root / "link" / "file", root / "plain" / "file"):
+        with pytest.raises(private.PrivacyContractError):
+            private.stat_in_tree(blocked, root=root)
+        assert not fd_ledger, f"stat_in_tree leaked a descriptor for {blocked}"
+        with pytest.raises(private.PrivacyContractError):
+            private.unlink_in_tree(blocked, root=root)
+        assert not fd_ledger, f"unlink_in_tree leaked a descriptor for {blocked}"
+        with pytest.raises(private.PrivacyContractError):
+            private.clear_owned_dir(blocked, root=root, patterns=("*",))
+        assert not fd_ledger, f"clear_owned_dir leaked a descriptor for {blocked}"
+
+    # An arbitrary OSError propagates - never "absent" - and still closes everything.
+    tracked_open = os.open
+
+    def failing_open(name: object, *args: object, **kwargs: object) -> int:
+        if name == "denied":
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(name))
+        return tracked_open(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "open", failing_open)
+    denied = root / "denied" / "file"
+    with pytest.raises(PermissionError):
+        private.stat_in_tree(denied, root=root)
+    assert not fd_ledger
+    with pytest.raises(PermissionError):
+        private.unlink_in_tree(denied, root=root)
+    assert not fd_ledger
+    with pytest.raises(PermissionError):
+        private.clear_owned_dir(root / "denied" / "cache", root=root, patterns=("*",))
+    assert not fd_ledger
+
+
+def test_fallback_tree_walk_treats_only_a_missing_component_as_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(private, "_HAS_OPENAT", False)
+    root = tmp_path / "tree"
+    (root / "kept").mkdir(parents=True)
+
+    assert private.stat_in_tree(root / "missing" / "file", root=root) is None
+    assert private.stat_in_tree(root / "kept" / "missing" / "file", root=root) is None
+    private.unlink_in_tree(root / "missing" / "file", root=root)  # absent is the goal state
+    assert private.clear_owned_dir(root / "missing" / "cache", root=root, patterns=("*",)) is True
+
+
+@pytest.mark.parametrize("code", [errno.EACCES, errno.EIO])
+def test_fallback_tree_walk_never_reports_an_uninspectable_component_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    monkeypatch.setattr(private, "_HAS_OPENAT", False)
+    root = tmp_path / "tree"
+    cache = root / "kept" / "cache"
+    cache.mkdir(parents=True)
+    (cache / "page.png").write_bytes(b"png")
+    real_lstat = os.lstat
+
+    def failing_lstat(path: object, *args: object, **kwargs: object) -> os.stat_result:
+        if Path(str(path)) == root / "kept":
+            raise OSError(code, os.strerror(code), str(path))
+        return real_lstat(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "lstat", failing_lstat)
+
+    with pytest.raises(OSError) as caught:
+        private.stat_in_tree(cache / "page.png", root=root)
+    assert caught.value.errno == code
+    with pytest.raises(OSError):
+        private.unlink_in_tree(cache / "page.png", root=root)
+    # In particular the cleanup must not answer True ("provably gone") for a directory
+    # it could not even reach.
+    with pytest.raises(OSError):
+        private.clear_owned_dir(cache, root=root, patterns=("*",))
+
+    monkeypatch.setattr(os, "lstat", real_lstat)
+    assert (cache / "page.png").exists()
+
+
+def test_fallback_tree_walk_refuses_symlink_and_non_directory_components(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(private, "_HAS_OPENAT", False)
+    root = tmp_path / "tree"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "link").symlink_to(outside)
+    (root / "plain").write_bytes(b"not a directory")
+
+    for blocked in (root / "link" / "file", root / "plain" / "file"):
+        with pytest.raises(private.PrivacyContractError):
+            private.stat_in_tree(blocked, root=root)
+        with pytest.raises(private.PrivacyContractError):
+            private.unlink_in_tree(blocked, root=root)
+        with pytest.raises(private.PrivacyContractError):
+            private.clear_owned_dir(blocked, root=root, patterns=("*",))

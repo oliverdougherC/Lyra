@@ -7,10 +7,12 @@ from. A fake would test neither.
 
 import math
 import os
+import sqlite3
 import stat
 import struct
 import threading
 import zlib
+from collections.abc import Callable
 from pathlib import Path
 
 import pymupdf
@@ -19,6 +21,34 @@ import pytest
 from backend.core.errors import LyraError, NotFoundError
 from backend.rag import parse, render
 from backend.storage import private
+
+# Registers a document row for a render call and returns its `created_at` identity.
+OwnedDocument = Callable[[int], str]
+
+
+@pytest.fixture
+def owned(db: sqlite3.Connection) -> OwnedDocument:
+    """A real document row behind each rendered id.
+
+    Publication is guarded on the document still existing with the identity the caller
+    read (docs/storage-consistency.md), so a render call needs a row to be current
+    against - the same thing every production caller has in hand.
+    """
+    db.execute("insert into classes (id, name) values (900, 'Render')")
+    db.commit()
+
+    def _owned(document_id: int) -> str:
+        db.execute(
+            "insert or ignore into documents "
+            "(id, class_id, filename, stored_path, mime, byte_size, state) "
+            "values (?, 900, 'source.pdf', '', 'application/pdf', 0, 'ready')",
+            (document_id,),
+        )
+        db.commit()
+        row = db.execute("select created_at from documents where id = ?", (document_id,)).fetchone()
+        return str(row["created_at"])
+
+    return _owned
 
 
 def _pdf(path: Path, pages: int = 3) -> Path:
@@ -31,12 +61,12 @@ def _pdf(path: Path, pages: int = 3) -> Path:
     return path
 
 
-def test_a_page_renders_to_a_png_and_is_cached(tmp_path: Path) -> None:
+def test_a_page_renders_to_a_png_and_is_cached(tmp_path: Path, owned: OwnedDocument) -> None:
     source = _pdf(tmp_path / "hw4.pdf")
 
-    first = render.render_page(1, source, "application/pdf", 2)
+    first = render.render_page(1, source, "application/pdf", 2, created_at=owned(1))
     stamped = first.stat().st_mtime_ns
-    second = render.render_page(1, source, "application/pdf", 2)
+    second = render.render_page(1, source, "application/pdf", 2, created_at=owned(1))
 
     assert first.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     # The second call is served from the cache: rendering is not free and a rendered page
@@ -45,47 +75,51 @@ def test_a_page_renders_to_a_png_and_is_cached(tmp_path: Path) -> None:
     assert second.stat().st_mtime_ns == stamped
 
 
-def test_a_page_past_the_end_is_a_404_rather_than_a_blank_image(tmp_path: Path) -> None:
+def test_a_page_past_the_end_is_a_404_rather_than_a_blank_image(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
     source = _pdf(tmp_path / "hw4.pdf")
 
     with pytest.raises(NotFoundError):
-        render.render_page(1, source, "application/pdf", 9)
+        render.render_page(1, source, "application/pdf", 9, created_at=owned(1))
 
 
-def test_a_text_source_has_no_page_to_draw(tmp_path: Path) -> None:
+def test_a_text_source_has_no_page_to_draw(tmp_path: Path, owned: OwnedDocument) -> None:
     # TXT and MD render as their extracted text instead, which is the same anchor with a
     # different surface.
     with pytest.raises(LyraError):
-        render.render_page(1, tmp_path / "notes.md", "text/markdown", 1)
+        render.render_page(1, tmp_path / "notes.md", "text/markdown", 1, created_at=owned(1))
 
 
-def test_a_damaged_file_reports_without_naming_a_path(tmp_path: Path) -> None:
+def test_a_damaged_file_reports_without_naming_a_path(tmp_path: Path, owned: OwnedDocument) -> None:
     broken = tmp_path / "broken.pdf"
     broken.write_bytes(b"not a pdf")
 
     with pytest.raises(LyraError) as caught:
-        render.render_page(1, broken, "application/pdf", 1)
+        render.render_page(1, broken, "application/pdf", 1, created_at=owned(1))
 
     # PyMuPDF puts the absolute path in every message it raises, and these reach the
     # browser.
     assert str(tmp_path) not in caught.value.message
 
 
-def test_discarding_pages_removes_the_cache(tmp_path: Path) -> None:
+def test_discarding_pages_removes_the_cache(tmp_path: Path, owned: OwnedDocument) -> None:
     source = _pdf(tmp_path / "hw4.pdf")
-    render.render_page(1, source, "application/pdf", 1)
+    render.render_page(1, source, "application/pdf", 1, created_at=owned(1))
 
     render.discard_pages(1)
 
     # A stale image is worse than a missing one: it shows a page from a file that is no
     # longer there.
     assert not render.pages_dir(1).exists()
-    assert render.render_page(1, source, "application/pdf", 1).exists()
+    assert render.render_page(1, source, "application/pdf", 1, created_at=owned(1)).exists()
 
 
-def test_discarding_pages_survives_something_else_in_the_cache(tmp_path: Path) -> None:
+def test_discarding_pages_survives_something_else_in_the_cache(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
     source = _pdf(tmp_path / "hw4.pdf")
-    render.render_page(1, source, "application/pdf", 1)
+    render.render_page(1, source, "application/pdf", 1, created_at=owned(1))
     # A page being rendered right now, or a partial file left by an interrupted write.
     # Deleting a document while its source pane is loading must not fail the delete, which
     # the caller has already committed by the time this runs.
@@ -97,7 +131,7 @@ def test_discarding_pages_survives_something_else_in_the_cache(tmp_path: Path) -
 
 
 def test_a_write_that_dies_partway_leaves_nothing_the_cache_will_serve(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owned: OwnedDocument
 ) -> None:
     source = _pdf(tmp_path / "hw4.pdf")
     whole = private.write_private_bytes
@@ -116,19 +150,19 @@ def test_a_write_that_dies_partway_leaves_nothing_the_cache_will_serve(
 
     monkeypatch.setattr(private, "write_private_bytes", die_partway)
     with pytest.raises(LyraError):
-        render.render_page(1, source, "application/pdf", 1)
+        render.render_page(1, source, "application/pdf", 1, created_at=owned(1))
 
     # The cache is trusted on the strength of the file existing, so a half-written page at
     # the final name would be served as that page for good: nothing re-renders a path that
     # is already there, and only re-ingesting the document would clear it.
     assert not render.page_path(1, 1).exists()
     assert list(render.pages_dir(1).glob("*.partial")) == []
-    redone = render.render_page(1, source, "application/pdf", 1)
+    redone = render.render_page(1, source, "application/pdf", 1, created_at=owned(1))
     assert redone.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
 def test_two_threads_rendering_the_same_page_do_not_collide(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owned: OwnedDocument
 ) -> None:
     """FastAPI serves requests from a threadpool, so two renders of one page share a pid.
 
@@ -148,11 +182,12 @@ def test_two_threads_rendering_the_same_page_do_not_collide(
         return encoded
 
     monkeypatch.setattr(pymupdf.Pixmap, "tobytes", synchronized_encode)
+    identity = owned(1)
     results: list[object] = []
 
     def render_one() -> None:
         try:
-            results.append(render.render_page(1, source, "application/pdf", 1))
+            results.append(render.render_page(1, source, "application/pdf", 1, created_at=identity))
         except Exception as exc:  # noqa: BLE001 - the failure mode under test is an exception
             results.append(exc)
 
@@ -177,22 +212,26 @@ def _assert_external_unchanged(external: Path) -> None:
     assert stat.S_IMODE(external.stat().st_mode) == 0o644
 
 
-def test_page_render_refuses_a_symlink_at_the_partial_path(tmp_path: Path) -> None:
+def test_page_render_refuses_a_symlink_at_the_partial_path(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
     source = _pdf(tmp_path / "page.pdf", pages=1)
     cached = render.page_path(11, 1)
     external = tmp_path / "outside-page-partial"
     external.write_bytes(b"outside data")
     os.chmod(external, 0o644)
-    _plant_link(render._partial_path(cached), external)
+    _plant_link(private.partial_path(cached), external)
 
     with pytest.raises(LyraError):
-        render.render_page(11, source, "application/pdf", 1)
+        render.render_page(11, source, "application/pdf", 1, created_at=owned(11))
 
     _assert_external_unchanged(external)
     assert not cached.exists()
 
 
-def test_page_render_refuses_a_symlink_at_the_final_cache_path(tmp_path: Path) -> None:
+def test_page_render_refuses_a_symlink_at_the_final_cache_path(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
     source = _pdf(tmp_path / "page.pdf", pages=1)
     cached = render.page_path(12, 1)
     external = tmp_path / "outside-page-cache"
@@ -201,28 +240,34 @@ def test_page_render_refuses_a_symlink_at_the_final_cache_path(tmp_path: Path) -
     _plant_link(cached, external)
 
     with pytest.raises(private.PrivacyContractError):
-        render.render_page(12, source, "application/pdf", 1)
+        render.render_page(12, source, "application/pdf", 1, created_at=owned(12))
 
     _assert_external_unchanged(external)
     assert cached.is_symlink()
 
 
-def test_figure_render_refuses_a_symlink_at_the_partial_path(tmp_path: Path) -> None:
+def test_figure_render_refuses_a_symlink_at_the_partial_path(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
     source = _pdf(tmp_path / "figure.pdf", pages=1)
     cached = render.figure_path(13, 7)
     external = tmp_path / "outside-figure-partial"
     external.write_bytes(b"outside data")
     os.chmod(external, 0o644)
-    _plant_link(render._partial_path(cached), external)
+    _plant_link(private.partial_path(cached), external)
 
     with pytest.raises(LyraError):
-        render.render_figure(13, source, "application/pdf", 1, 7, (0.1, 0.1, 0.5, 0.5))
+        render.render_figure(
+            13, source, "application/pdf", 1, 7, (0.1, 0.1, 0.5, 0.5), created_at=owned(13)
+        )
 
     _assert_external_unchanged(external)
     assert not cached.exists()
 
 
-def test_figure_render_refuses_a_symlink_at_the_final_cache_path(tmp_path: Path) -> None:
+def test_figure_render_refuses_a_symlink_at_the_final_cache_path(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
     source = _pdf(tmp_path / "figure.pdf", pages=1)
     cached = render.figure_path(14, 8)
     external = tmp_path / "outside-figure-cache"
@@ -231,13 +276,17 @@ def test_figure_render_refuses_a_symlink_at_the_final_cache_path(tmp_path: Path)
     _plant_link(cached, external)
 
     with pytest.raises(private.PrivacyContractError):
-        render.render_figure(14, source, "application/pdf", 1, 8, (0.1, 0.1, 0.5, 0.5))
+        render.render_figure(
+            14, source, "application/pdf", 1, 8, (0.1, 0.1, 0.5, 0.5), created_at=owned(14)
+        )
 
     _assert_external_unchanged(external)
     assert cached.is_symlink()
 
 
-def test_reading_and_recognition_resolutions_cache_separately(tmp_path: Path) -> None:
+def test_reading_and_recognition_resolutions_cache_separately(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
     """Two different artifacts that must never satisfy each other's request.
 
     A page rendered for the source pane quietly answering a transcription request would
@@ -246,8 +295,12 @@ def test_reading_and_recognition_resolutions_cache_separately(tmp_path: Path) ->
     """
     source = _pdf(tmp_path / "book.pdf")
 
-    reading = render.render_page(1, source, "application/pdf", 1, render.RENDER_DPI)
-    recognition = render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI)
+    reading = render.render_page(
+        1, source, "application/pdf", 1, render.RENDER_DPI, created_at=owned(1)
+    )
+    recognition = render.render_page(
+        1, source, "application/pdf", 1, render.RECOGNITION_DPI, created_at=owned(1)
+    )
 
     assert reading != recognition
     assert reading.exists() and recognition.exists()
@@ -255,17 +308,17 @@ def test_reading_and_recognition_resolutions_cache_separately(tmp_path: Path) ->
     assert recognition.stat().st_size > reading.stat().st_size
 
 
-def test_discarding_pages_clears_every_resolution(tmp_path: Path) -> None:
+def test_discarding_pages_clears_every_resolution(tmp_path: Path, owned: OwnedDocument) -> None:
     source = _pdf(tmp_path / "book.pdf")
-    render.render_page(1, source, "application/pdf", 1, render.RENDER_DPI)
-    render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI)
+    render.render_page(1, source, "application/pdf", 1, render.RENDER_DPI, created_at=owned(1))
+    render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI, created_at=owned(1))
 
     render.discard_pages(1)
 
     assert not list(render.pages_dir(1).glob("*.png"))
 
 
-def test_an_uploaded_image_draws_as_its_only_page(tmp_path: Path) -> None:
+def test_an_uploaded_image_draws_as_its_only_page(tmp_path: Path, owned: OwnedDocument) -> None:
     """A photographed page is a one-page document, and the source pane shows it like one.
 
     PyMuPDF opens a PNG or a JPG directly, so an image upload needs no separate path here
@@ -276,14 +329,16 @@ def test_an_uploaded_image_draws_as_its_only_page(tmp_path: Path) -> None:
     with pymupdf.open(source) as document:
         document[0].get_pixmap(dpi=100).save(image, output="png")
 
-    rendered = render.render_page(1, image, "image/png", 1)
+    rendered = render.render_page(1, image, "image/png", 1, created_at=owned(1))
 
     assert rendered.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     with pytest.raises(NotFoundError):
-        render.render_page(1, image, "image/png", 2)
+        render.render_page(1, image, "image/png", 2, created_at=owned(1))
 
 
-def test_a_damaged_image_says_it_is_an_image_that_would_not_open(tmp_path: Path) -> None:
+def test_a_damaged_image_says_it_is_an_image_that_would_not_open(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
     """Not the PDF message, which offers a password as the likely cause.
 
     An image cannot be password protected, and sending someone to look for one they do not
@@ -293,7 +348,7 @@ def test_a_damaged_image_says_it_is_an_image_that_would_not_open(tmp_path: Path)
     broken.write_bytes(b"not a png")
 
     with pytest.raises(LyraError) as caught:
-        render.render_page(1, broken, "image/png", 1)
+        render.render_page(1, broken, "image/png", 1, created_at=owned(1))
 
     assert caught.value.message == parse.UNREADABLE_IMAGE_MESSAGE
 
@@ -316,16 +371,20 @@ def _sized_pdf(path: Path, width_pt: float, height_pt: float) -> Path:
     [(612, 792), (595, 842)],  # US Letter and A4, the ordinary case at the highest dpi.
 )
 def test_normal_pages_render_at_recognition_dpi(
-    tmp_path: Path, width_pt: float, height_pt: float
+    tmp_path: Path, width_pt: float, height_pt: float, owned: OwnedDocument
 ) -> None:
     source = _sized_pdf(tmp_path / "normal.pdf", width_pt, height_pt)
 
-    rendered = render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI)
+    rendered = render.render_page(
+        1, source, "application/pdf", 1, render.RECOGNITION_DPI, created_at=owned(1)
+    )
 
     assert rendered.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
 
-def test_an_extreme_mediabox_is_refused_and_leaves_no_cache(tmp_path: Path) -> None:
+def test_an_extreme_mediabox_is_refused_and_leaves_no_cache(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
     """The PDF format permits a 14400pt (200in) page, which at 300 dpi is ~3.6 billion px.
 
     That is a multi-gigabyte native allocation from a tiny file: it spikes memory or kills
@@ -335,7 +394,9 @@ def test_an_extreme_mediabox_is_refused_and_leaves_no_cache(tmp_path: Path) -> N
     source = _sized_pdf(tmp_path / "poster.pdf", 14400, 14400)
 
     with pytest.raises(LyraError) as caught:
-        render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI)
+        render.render_page(
+            1, source, "application/pdf", 1, render.RECOGNITION_DPI, created_at=owned(1)
+        )
 
     assert caught.value.message == render.TOO_LARGE_TO_RENDER
     # The message names no path, because it reaches the browser like every other render
@@ -347,7 +408,9 @@ def test_an_extreme_mediabox_is_refused_and_leaves_no_cache(tmp_path: Path) -> N
     assert not render.pages_dir(1).exists()
 
 
-def test_a_needle_thin_page_is_refused_on_its_long_side(tmp_path: Path) -> None:
+def test_a_needle_thin_page_is_refused_on_its_long_side(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
     """A page whose area is modest but whose one dimension is enormous.
 
     200 x 20000 pt is under the pixel-area ceiling at 300 dpi but ~83000 px tall, so it is
@@ -356,12 +419,16 @@ def test_a_needle_thin_page_is_refused_on_its_long_side(tmp_path: Path) -> None:
     source = _sized_pdf(tmp_path / "strip.pdf", 200, 20000)
 
     with pytest.raises(LyraError) as caught:
-        render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI)
+        render.render_page(
+            1, source, "application/pdf", 1, render.RECOGNITION_DPI, created_at=owned(1)
+        )
 
     assert caught.value.message == render.TOO_LARGE_TO_RENDER
 
 
-def test_a_page_far_larger_than_a_poster_is_refused_by_area(tmp_path: Path) -> None:
+def test_a_page_far_larger_than_a_poster_is_refused_by_area(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
     """5000 x 5000 pt is under the per-side cap at 300 dpi but ~434 megapixels.
 
     So this is the area ceiling doing the work that the dimension cap does not.
@@ -369,12 +436,16 @@ def test_a_page_far_larger_than_a_poster_is_refused_by_area(tmp_path: Path) -> N
     source = _sized_pdf(tmp_path / "huge.pdf", 5000, 5000)
 
     with pytest.raises(LyraError) as caught:
-        render.render_page(1, source, "application/pdf", 1, render.RECOGNITION_DPI)
+        render.render_page(
+            1, source, "application/pdf", 1, render.RECOGNITION_DPI, created_at=owned(1)
+        )
 
     assert caught.value.message == render.TOO_LARGE_TO_RENDER
 
 
-def test_a_figure_crop_is_bounded_by_the_crop_not_the_whole_page(tmp_path: Path) -> None:
+def test_a_figure_crop_is_bounded_by_the_crop_not_the_whole_page(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
     """A small crop of a pathological page renders; a full crop of it is refused.
 
     The clipped pixmap allocates only the crop, so the bound is on the clip. A tiny corner
@@ -383,11 +454,15 @@ def test_a_figure_crop_is_bounded_by_the_crop_not_the_whole_page(tmp_path: Path)
     """
     source = _sized_pdf(tmp_path / "huge.pdf", 5000, 5000)
 
-    corner = render.render_figure(1, source, "application/pdf", 1, 1, (0.0, 0.0, 0.1, 0.1))
+    corner = render.render_figure(
+        1, source, "application/pdf", 1, 1, (0.0, 0.0, 0.1, 0.1), created_at=owned(1)
+    )
     assert corner.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
     with pytest.raises(LyraError) as caught:
-        render.render_figure(1, source, "application/pdf", 1, 2, (0.0, 0.0, 1.0, 1.0))
+        render.render_figure(
+            1, source, "application/pdf", 1, 2, (0.0, 0.0, 1.0, 1.0), created_at=owned(1)
+        )
     assert caught.value.message == render.TOO_LARGE_TO_RENDER
 
 
@@ -427,7 +502,7 @@ def _image_of_decoded_size(path: Path, width_px: int, height_px: int, *, gray: i
 
 
 def test_a_pathological_image_document_is_refused_before_get_pixmap(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owned: OwnedDocument
 ) -> None:
     """An image-backed upload cannot bypass the raster bound merely by not being a PDF.
 
@@ -448,7 +523,7 @@ def test_a_pathological_image_document_is_refused_before_get_pixmap(
     monkeypatch.setattr(pymupdf.Page, "get_pixmap", forbidden)
 
     with pytest.raises(LyraError) as caught:
-        render.render_page(1, source, "image/png", 1, render.RECOGNITION_DPI)
+        render.render_page(1, source, "image/png", 1, render.RECOGNITION_DPI, created_at=owned(1))
 
     assert caught.value.message == render.TOO_LARGE_TO_RENDER
     # The refusal names no path and leaves nothing behind, exactly like the PDF case.
@@ -456,7 +531,7 @@ def test_a_pathological_image_document_is_refused_before_get_pixmap(
     assert not render.pages_dir(1).exists()
 
 
-def test_an_ordinary_jpeg_page_still_renders(tmp_path: Path) -> None:
+def test_an_ordinary_jpeg_page_still_renders(tmp_path: Path, owned: OwnedDocument) -> None:
     """The common image upload - a photographed page - is unaffected by the bound.
 
     A JPEG input renders through the same path as a PDF page and lands as a PNG, so the
@@ -467,7 +542,7 @@ def test_an_ordinary_jpeg_page_still_renders(tmp_path: Path) -> None:
     with pymupdf.open(seed) as document:
         document[0].get_pixmap(dpi=110).save(photo, output="jpg")
 
-    rendered = render.render_page(1, photo, "image/jpeg", 1)
+    rendered = render.render_page(1, photo, "image/jpeg", 1, created_at=owned(1))
 
     assert rendered.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
 
@@ -600,3 +675,115 @@ def test_the_common_phone_photo_has_headroom_and_larger_ones_sit_near_the_edge()
     assert (render.MAX_RASTER_PIXELS - sixteen_mp) / render.MAX_RASTER_PIXELS < 0.2
     # A 24MP photo is past it: that is where the envelope draws the line for images.
     assert twenty_four_mp > render.MAX_RASTER_PIXELS
+
+
+def test_discarding_pages_never_follows_a_symlinked_cache_directory(tmp_path: Path) -> None:
+    """A planted `pages/<id>` link must not let cache cleanup unlink files outside Lyra.
+
+    Cleanup runs from the delete path and from startup recovery, both of which promise
+    no-follow behavior; globbing through a symlinked directory would break that promise
+    exactly where it matters most.
+    """
+    outside = tmp_path / "outside-cache-target"
+    outside.mkdir()
+    victims = [outside / "1@144.png", outside / "figure-9.png"]
+    for victim in victims:
+        victim.write_bytes(b"outside data")
+    (outside / f"2.png.1.2{private.PARTIAL_SUFFIX}").write_bytes(b"outside partial")
+    render.settings.pages_dir.mkdir(parents=True, exist_ok=True)
+    link = render.pages_dir(5)
+    link.symlink_to(outside)
+
+    render.discard_pages(5)
+
+    # Every outside file survives unchanged; the planted link itself is removed.
+    for victim in victims:
+        assert victim.read_bytes() == b"outside data"
+    assert (outside / f"2.png.1.2{private.PARTIAL_SUFFIX}").exists()
+    assert not link.is_symlink() and not link.exists()
+
+
+def test_discarding_pages_removes_a_stray_file_where_the_directory_belongs(
+    tmp_path: Path,
+) -> None:
+    render.settings.pages_dir.mkdir(parents=True, exist_ok=True)
+    stray = render.pages_dir(6)
+    stray.write_bytes(b"not a directory")
+
+    render.discard_pages(6)
+
+    assert not stray.exists()
+    # Idempotent: the goal state is absence, and running again is a no-op.
+    render.discard_pages(6)
+
+
+def test_discarding_pages_unlinks_a_planted_entry_link_without_touching_its_target(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
+    source = _pdf(tmp_path / "hw4.pdf")
+    render.render_page(7, source, "application/pdf", 1, created_at=owned(7))
+    outside = tmp_path / "outside-entry"
+    outside.write_bytes(b"outside data")
+    planted = render.pages_dir(7) / "9@144.png"
+    planted.symlink_to(outside)
+
+    render.discard_pages(7)
+
+    assert outside.read_bytes() == b"outside data"
+    assert not planted.exists() and not planted.is_symlink()
+    assert not render.pages_dir(7).exists()
+
+
+def test_discarding_pages_leaves_an_unexpected_subdirectory_unentered(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
+    """A directory wearing a cache entry's name is skipped, not recursed into or crashed
+    on; cleanup still removes what it owns and stays idempotent."""
+    source = _pdf(tmp_path / "hw4.pdf")
+    rendered = render.render_page(8, source, "application/pdf", 1, created_at=owned(8))
+    intruder = render.pages_dir(8) / "2@144.png"
+    intruder.mkdir()
+    (intruder / "keep.txt").write_text("kept")
+
+    render.discard_pages(8)
+
+    assert not rendered.exists()
+    assert (intruder / "keep.txt").read_text() == "kept"
+
+
+def test_discarding_pages_reports_a_survivor_instead_of_success(
+    tmp_path: Path, owned: OwnedDocument
+) -> None:
+    """The durable delete path settles its storage intent on this answer, so an
+    obstructed cache must answer False - and True again once the obstruction is gone."""
+    source = _pdf(tmp_path / "hw4.pdf")
+    render.render_page(9, source, "application/pdf", 1, created_at=owned(9))
+    intruder = render.pages_dir(9) / "2@144.png"
+    intruder.mkdir()
+
+    assert render.discard_pages(9) is False
+
+    # Everything Lyra owned is gone; only the foreign entry pins the directory.
+    assert not render.page_path(9, 1).exists()
+    intruder.rmdir()
+    assert render.discard_pages(9) is True
+    assert not render.pages_dir(9).exists()
+    # Absent is the goal state, so asking again still reports clean.
+    assert render.discard_pages(9) is True
+
+
+def test_discarding_pages_refuses_a_symlinked_pages_parent(tmp_path: Path) -> None:
+    """The no-follow contract covers intermediate components, not just the final entry:
+    a planted `pages` link must not let cleanup unlink files outside Lyra."""
+    outside = tmp_path / "outside-pages-parent"
+    (outside / "11").mkdir(parents=True)
+    victim = outside / "11" / "1@144.png"
+    victim.write_bytes(b"outside page")
+    if render.settings.pages_dir.is_dir():
+        render.settings.pages_dir.rmdir()
+    render.settings.pages_dir.symlink_to(outside)
+
+    with pytest.raises(private.PrivacyContractError):
+        render.discard_pages(11)
+
+    assert victim.read_bytes() == b"outside page"
