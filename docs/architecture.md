@@ -239,6 +239,17 @@ front of a syllabus, so reading further mostly pays to be told nothing.
   protocol. It carries no message body: the question is already stored, which is what makes this a
   retry of the answer rather than a repeat of the question. The reply being replaced is deleted only
   once a new one has been written, so a retry that fails upstream costs the user nothing
+- Sends and regenerations are serialized server-side, one mutating turn per session: an
+  overlapping request (a second tab, a duplicate submit, a direct API caller) receives a
+  deterministic `409` before anything is persisted or sent upstream, and the claim is released
+  however the turn ends - completion, failure, cancellation, or disconnect. Regeneration deletes
+  only the message ids its turn observed when it opened, never "everything after the question",
+  so a newer independent turn can never be collateral damage of a retry. The claim registry is
+  process-memory: a restart starts with no claims, so a crash mid-turn cannot wedge a session.
+  Scope: the claim currently covers tutor send and regeneration (`routes_chat`). The Phase-4
+  agent chat (`routes_agent_chat`) shares the document-context consent gate (PLA-207) and
+  appends to the same `chat_sessions`/`messages` tables, but does not yet take the claim;
+  PLA-279 extends the same `begin_turn`/`end_turn` primitive to agent turns
 - `PATCH /api/sessions/{session_id}` - Rename a conversation. A session is named after its first
   message, which is a guess at what it turned out to be about; this corrects the guess, and a
   session that carries a name is never renamed again by a later message

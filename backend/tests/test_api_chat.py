@@ -471,7 +471,8 @@ async def test_a_disconnect_keeps_the_part_of_the_answer_that_arrived(
     cost = routes_chat._plan_turn_cost(
         db, session_id, request.mode, request.content, plan.excluded, config
     )
-    stream = routes_chat._stream_turn(session_id, request, config, plan, cost)
+    turn_token = sessions.begin_turn(session_id)
+    stream = routes_chat._stream_turn(session_id, request, config, plan, cost, turn_token)
     started = _frames(await anext(stream))
     prompt_status = _frames(await anext(stream))
     retrieval_status = _frames(await anext(stream))

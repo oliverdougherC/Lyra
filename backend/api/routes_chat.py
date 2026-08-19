@@ -23,6 +23,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from starlette.types import Receive, Scope, Send
 
 from backend.core import artifacts, sessions
 from backend.core.app_settings import (
@@ -442,6 +443,65 @@ class Turn:
     retrieval: RetrievalResult
 
 
+class TurnStreamingResponse(StreamingResponse):
+    """A streaming response that owns the release of its session's turn claim.
+
+    The claim is taken before the route returns, but the stream generator's own `finally`
+    can run only if the body iterator is ever started - and Python closes a never-started
+    generator without executing a single line of it. Between the route returning and the
+    first frame sits a real window: a transport that dies immediately, or a cancellation
+    delivered before the body task first resumes the generator, ends the response with the
+    generator unstarted and would leave the session claimed for the life of the process.
+
+    So release also lives here, in a `finally` around the entire ASGI send cycle, which
+    Starlette enters unconditionally once the route returns: streamed to completion,
+    failed mid-frame, cancelled before the first frame - every ending passes through it.
+    `end_turn` is idempotent and token-owned, so this and the generator's release can
+    never double-free, and neither can free a claim a newer turn has since taken.
+    """
+
+    def __init__(
+        self,
+        session_id: int,
+        turn_token: int,
+        content: AsyncIterator[str],
+        **kwargs: object,
+    ) -> None:
+        super().__init__(content, **kwargs)  # type: ignore[arg-type]
+        self._session_id = session_id
+        self._turn_token = turn_token
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            sessions.end_turn(self._session_id, self._turn_token)
+
+
+def _turn_response(
+    session_id: int,
+    turn_token: int,
+    stream: AsyncIterator[str],
+) -> TurnStreamingResponse:
+    """Wrap a claimed turn's stream so the claim cannot outlive the response.
+
+    If even constructing the response fails, the claim is released here - after
+    `_open_turn`/`_open_regeneration` return, this is the only failure point left between
+    the claim and the response owning it.
+    """
+    try:
+        return TurnStreamingResponse(
+            session_id,
+            turn_token,
+            stream,
+            media_type="text/event-stream",
+            headers=SSE_HEADERS,
+        )
+    except BaseException:
+        sessions.end_turn(session_id, turn_token)
+        raise
+
+
 @router.post(
     "/classes/{class_id}/sessions",
     response_model=SessionRead,
@@ -484,6 +544,37 @@ def delete_session(session_id: int, conn: DbConn) -> None:
     sessions.delete_session(conn, session_id)
 
 
+def _finish_opening(opener: asyncio.Future, session_id: int, turn_token: int) -> None:
+    """Release an abandoned claim, but never while its opener may still be running.
+
+    Called when the route can no longer use the opener's result: a cancellation landing
+    on the `await`, or the opener itself failing. Cancelling the route does not stop a
+    thread `asyncio.to_thread` has already started, so the claim must stay held until
+    that worker has definitely returned - releasing earlier would let a second request
+    claim the session and overlap the still-running worker's reads and writes. If the
+    opener has already finished, nothing can still be mutating the turn and the claim is
+    released here, before the caller re-raises. Otherwise the release is attached to the
+    opener's completion, the one point at which the worker has provably stopped.
+
+    `end_turn` is token-owned and idempotent, so this can never free a claim a newer
+    turn has since taken, and an opener that failed and already released internally
+    makes this a no-op.
+    """
+
+    def _release(task: asyncio.Future) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            # Retrieved deliberately: an abandoned opener that failed after the caller
+            # stopped listening would otherwise be logged as a never-retrieved task
+            # exception. Its release already ran inside the opener itself.
+            logger.debug("Abandoned turn opener for session %s failed", session_id)
+        sessions.end_turn(session_id, turn_token)
+
+    if opener.done():
+        _release(opener)
+    else:
+        opener.add_done_callback(_release)
+
+
 @router.post("/sessions/{session_id}/chat")
 async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> StreamingResponse:
     """Persist the student's message, then stream the reply as SSE.
@@ -495,11 +586,23 @@ async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> Stre
     travel as an `error` frame instead.
     """
     request = TurnInput(content=payload.content, mode=payload.mode, document_id=payload.document_id)
-    config, plan, cost = await asyncio.to_thread(_open_turn, conn, session_id, request)
-    return StreamingResponse(
-        _stream_turn(session_id, request, config, plan, cost),
-        media_type="text/event-stream",
-        headers=SSE_HEADERS,
+    # The claim is taken here, synchronously, before the coroutine's first suspension
+    # point: cancellation can only land on an `await`, so from the moment `begin_turn`
+    # returns this coroutine owns the token with no window in which a worker could hold
+    # a claim nobody knows about. The opener then borrows the claimed session; release
+    # on any failure goes through `_finish_opening`, which never frees the claim while
+    # the worker might still be mutating the turn.
+    turn_token = sessions.begin_turn(session_id)
+    opener = asyncio.ensure_future(
+        asyncio.to_thread(_open_turn, conn, session_id, request, turn_token)
+    )
+    try:
+        config, plan, cost = await asyncio.shield(opener)
+    except BaseException:
+        _finish_opening(opener, session_id, turn_token)
+        raise
+    return _turn_response(
+        session_id, turn_token, _stream_turn(session_id, request, config, plan, cost, turn_token)
     )
 
 
@@ -515,13 +618,20 @@ async def regenerate_chat(
     opens, so a retry that fails upstream leaves the student with the answer they already
     had instead of nothing at all.
     """
-    config, plan, request, cost = await asyncio.to_thread(
-        _open_regeneration, conn, session_id, payload
+    # Claimed synchronously before the first `await`, exactly as in `send_chat`: the
+    # coroutine owns the token before cancellation can be delivered, and release on
+    # failure waits for the opener worker to stop before freeing the session.
+    turn_token = sessions.begin_turn(session_id)
+    opener = asyncio.ensure_future(
+        asyncio.to_thread(_open_regeneration, conn, session_id, payload, turn_token)
     )
-    return StreamingResponse(
-        _stream_turn(session_id, request, config, plan, cost),
-        media_type="text/event-stream",
-        headers=SSE_HEADERS,
+    try:
+        config, plan, request, cost = await asyncio.shield(opener)
+    except BaseException:
+        _finish_opening(opener, session_id, turn_token)
+        raise
+    return _turn_response(
+        session_id, turn_token, _stream_turn(session_id, request, config, plan, cost, turn_token)
     )
 
 
@@ -537,9 +647,18 @@ def _refuse_writer_session(session: dict[str, object]) -> None:
 
 
 def _open_turn(
-    conn: sqlite3.Connection, session_id: int, request: TurnInput
+    conn: sqlite3.Connection, session_id: int, request: TurnInput, turn_token: int
 ) -> tuple[TutorConfig, TurnPlan, TurnCost]:
     """Validate the turn and persist the user's message before any streaming starts.
+
+    Runs in a worker thread against a session the route already claimed: `begin_turn`
+    happens in the route coroutine, before its first suspension point, so an overlapping
+    send or regeneration - two tabs, a duplicate submit, a direct API caller - was
+    already refused with a deterministic 409 before this function starts, and there is
+    no instant at which this worker holds a claim its caller does not know about. The
+    claim is released by `_stream_turn` however the turn ends, immediately below if
+    opening the turn fails, or by `_finish_opening` once this worker has returned if the
+    caller was cancelled while it ran.
 
     Raises:
         NotFoundError: no session carries that id.
@@ -547,42 +666,57 @@ def _open_turn(
             configured one (an unacknowledged remote endpoint), or the question cannot fit
             the configured context window beside the reserves it may not trim.
     """
-    session = sessions.get_session(conn, session_id)
-    _refuse_writer_session(session)
-    # One snapshot for the endpoint and its consent, so the endpoint authorized below is the
-    # exact endpoint this turn is later streamed to. Taken before the question is stored and
-    # before any retrieval or upstream call, so an unacknowledged remote endpoint refuses the
-    # turn without persisting an orphaned question and without a byte of course material
-    # leaving the machine.
-    access = resolve_tutor_access(conn)
-    require_document_allowed(access)
-    config = access.config
-    # The privacy gate above proves the endpoint is one document text may reach; this proves
-    # the turn fits it. Both run before the message is stored and before any retrieval or
-    # upstream call, so a question too large for the window - once the generation reserve,
-    # system prompt, pinned step, and the history Lyra always keeps are set aside - refuses
-    # cleanly instead of being persisted and then forcing context to be truncated past the
-    # window. The current question is not yet persisted, so `excluded` is empty and the
-    # history it costs is exactly the prior conversation.
-    cost = _plan_turn_cost(conn, session_id, request.mode, request.content, frozenset(), config)
-    _require_turn_fits(cost)
-    # Persisted on the session, not just used for this turn, so the toggle survives a
-    # reload and the next turn continues in the mode the student picked.
-    sessions.set_session_mode(conn, session_id, request.mode)
-    # Before the message is stored, so "first message" means this one.
-    sessions.set_session_title_if_unset(conn, session_id, request.content)
-    user_message_id = sessions.add_message(conn, session_id, "user", request.content)
-    touch_class(conn, int(session["class_id"]))
+    try:
+        session = sessions.get_session(conn, session_id)
+        _refuse_writer_session(session)
+        # One snapshot for the endpoint and its consent, so the endpoint authorized below
+        # is the exact endpoint this turn is later streamed to. Taken before the question
+        # is stored and before any retrieval or upstream call, so an unacknowledged remote
+        # endpoint refuses the turn without persisting an orphaned question and without a
+        # byte of course material leaving the machine.
+        access = resolve_tutor_access(conn)
+        require_document_allowed(access)
+        config = access.config
+        # The privacy gate above proves the endpoint is one document text may reach; this
+        # proves the turn fits it. Both run before the message is stored and before any
+        # retrieval or upstream call, so a question too large for the window - once the
+        # generation reserve, system prompt, pinned step, and the history Lyra always
+        # keeps are set aside - refuses cleanly instead of being persisted and then
+        # forcing context to be truncated past the window. The current question is not yet
+        # persisted, so `excluded` is empty and the history it costs is exactly the prior
+        # conversation.
+        cost = _plan_turn_cost(conn, session_id, request.mode, request.content, frozenset(), config)
+        _require_turn_fits(cost)
+        # Persisted on the session, not just used for this turn, so the toggle survives a
+        # reload and the next turn continues in the mode the student picked.
+        sessions.set_session_mode(conn, session_id, request.mode)
+        # Before the message is stored, so "first message" means this one.
+        sessions.set_session_title_if_unset(conn, session_id, request.content)
+        user_message_id = sessions.add_message(conn, session_id, "user", request.content)
+        sessions.bind_turn(session_id, turn_token, user_message_id)
+        touch_class(conn, int(session["class_id"]))
+    except BaseException:
+        # A turn that never starts streaming must not hold the session: the refusal is the
+        # end of this turn, and the next request gets a fresh claim.
+        sessions.end_turn(session_id, turn_token)
+        raise
     return config, TurnPlan(user_message_id=user_message_id), cost
 
 
 def _open_regeneration(
-    conn: sqlite3.Connection, session_id: int, request: RegenerateRequest
+    conn: sqlite3.Connection, session_id: int, request: RegenerateRequest, turn_token: int
 ) -> tuple[TutorConfig, TurnPlan, TurnInput, TurnCost]:
     """Plan a retry of the conversation's last question.
 
     Nothing is deleted here. The reply being retried is only named, so that a turn which
     never produces a replacement leaves the conversation exactly as it found it.
+
+    The claim - taken by the route before this worker starts, exactly as for
+    `_open_turn` - is what makes that naming trustworthy: the last question and the
+    superseded suffix are read while this turn holds the session, so no concurrent send
+    can slip a newer question in between the read and the eventual replacement. The
+    replacement itself then deletes only the ids named here, so even a path around the
+    claim could not take a newer turn as collateral damage.
 
     Raises:
         NotFoundError: no session carries that id, or it holds no question yet.
@@ -590,44 +724,50 @@ def _open_regeneration(
             configured one (an unacknowledged remote endpoint), or the window has been
             reconfigured too small for the question to fit beside the reserves.
     """
-    session = sessions.get_session(conn, session_id)
-    _refuse_writer_session(session)
-    # A fresh snapshot, so a retry is gated exactly like a first turn against the endpoint it
-    # will actually use: the endpoint may have gone remote, or the acknowledgement been
-    # revoked, since the question was first asked.
-    access = resolve_tutor_access(conn)
-    require_document_allowed(access)
-    config = access.config
-    question = sessions.last_user_message(conn, session_id)
-    user_message_id = int(question["id"])
-    superseded = tuple(
-        int(message["id"])
-        for message in sessions.list_messages(conn, session_id)
-        if int(message["id"]) > user_message_id
-    )
-    plan = TurnPlan(user_message_id=user_message_id, superseded=superseded)
-    turn_input = TurnInput(
-        content=str(question["content"]),
-        mode=request.mode,
-        document_id=request.document_id,
-    )
-    # Gated exactly like a fresh turn: the window may have been reconfigured smaller since the
-    # question was first asked, and a retry must not send what a first turn would not. Checked
-    # before anything is mutated and before any upstream call, and since the reply being
-    # retried is deleted only when its replacement is written, a refusal here leaves the
-    # existing answer untouched. The question is already persisted, so it and any superseded
-    # reply are excluded from the history it is charged against.
-    cost = _plan_turn_cost(
-        conn,
-        session_id,
-        turn_input.mode,
-        turn_input.content,
-        plan.excluded,
-        config,
-    )
-    _require_turn_fits(cost)
-    sessions.set_session_mode(conn, session_id, request.mode)
-    touch_class(conn, int(session["class_id"]))
+    try:
+        session = sessions.get_session(conn, session_id)
+        _refuse_writer_session(session)
+        # A fresh snapshot, so a retry is gated exactly like a first turn against the
+        # endpoint it will actually use: the endpoint may have gone remote, or the
+        # acknowledgement been revoked, since the question was first asked.
+        access = resolve_tutor_access(conn)
+        require_document_allowed(access)
+        config = access.config
+        question = sessions.last_user_message(conn, session_id)
+        user_message_id = int(question["id"])
+        sessions.bind_turn(session_id, turn_token, user_message_id)
+        superseded = tuple(
+            int(message["id"])
+            for message in sessions.list_messages(conn, session_id)
+            if int(message["id"]) > user_message_id
+        )
+        plan = TurnPlan(user_message_id=user_message_id, superseded=superseded)
+        turn_input = TurnInput(
+            content=str(question["content"]),
+            mode=request.mode,
+            document_id=request.document_id,
+        )
+        # Gated exactly like a fresh turn: the window may have been reconfigured smaller
+        # since the question was first asked, and a retry must not send what a first turn
+        # would not. Checked before anything is mutated and before any upstream call, and
+        # since the reply being retried is deleted only when its replacement is written, a
+        # refusal here leaves the existing answer untouched. The question is already
+        # persisted, so it and any superseded reply are excluded from the history it is
+        # charged against.
+        cost = _plan_turn_cost(
+            conn,
+            session_id,
+            turn_input.mode,
+            turn_input.content,
+            plan.excluded,
+            config,
+        )
+        _require_turn_fits(cost)
+        sessions.set_session_mode(conn, session_id, request.mode)
+        touch_class(conn, int(session["class_id"]))
+    except BaseException:
+        sessions.end_turn(session_id, turn_token)
+        raise
     return config, plan, turn_input, cost
 
 
@@ -637,18 +777,29 @@ async def _stream_turn(
     config: TutorConfig,
     plan: TurnPlan,
     cost: TurnCost,
+    turn_token: int,
 ) -> AsyncIterator[str]:
     """Stream one turn and persist the assistant's message however the turn ends.
 
     The connection is opened here rather than injected, because this generator runs after
-    the request-scoped dependency has already been closed.
+    the request-scoped dependency has already been closed. It is opened *inside* the
+    claim-releasing structure, deliberately: the claim was taken back in the route,
+    before `_open_turn` / `_open_regeneration` ran, so from the first statement here
+    there is nothing left between
+    a failure and a permanently wedged session except the `finally` below. Release is
+    therefore the outermost cleanup of the whole generator - it runs whether the
+    connection failed to open (before any frame), the stream failed or was cancelled
+    mid-reply, or the connection failed to close after the last frame - and it is
+    idempotent alongside `TurnStreamingResponse`'s release, which covers the one ending
+    this generator cannot see: a response whose body is never started at all.
     """
-    conn = connect()
     received: list[str] = []
     thought: list[str] = []
     thinking_ms = 0
     retrieval = RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+    conn: sqlite3.Connection | None = None
     try:
+        conn = connect()
         yield _frame(type="start", message_id=plan.user_message_id)
         yield _frame(type="status", stage="prompt_processing")
         preparation = await asyncio.to_thread(_prepare_turn, cost)
@@ -703,7 +854,7 @@ async def _stream_turn(
         # not left holding a question with no reply, then let the cancellation continue.
         # A turn cut off while still thinking has a thought and no answer, and that is
         # worth keeping too: it is the only record of what the model was doing.
-        if received or thought:
+        if conn is not None and (received or thought):
             _commit_reply(conn, session_id, plan, received, thought, retrieval, thinking_ms)
         raise
     except LyraError as exc:
@@ -714,7 +865,13 @@ async def _stream_turn(
         logger.exception("Chat turn failed for session %s", session_id)
         yield _frame(type="error", message=_UNEXPECTED_ERROR)
     finally:
-        conn.close()
+        # Nested so a connection that fails to close still releases the claim: the close
+        # is bookkeeping, the release is what keeps the session usable.
+        try:
+            if conn is not None:
+                conn.close()
+        finally:
+            sessions.end_turn(session_id, turn_token)
 
 
 def _prepare_turn(
@@ -871,10 +1028,12 @@ def _commit_reply(
 
     The order matters and is the whole point of deferring the delete: a reply the student
     can already read is only removed once there is a new one to take its place, so a retry
-    that dies upstream costs them nothing.
+    that dies upstream costs them nothing. The delete names exact message ids - the ones
+    the plan observed when the turn opened - never "everything after the question", so a
+    newer independent turn can never be collateral damage of a retry, whatever the timing.
     """
     if plan.superseded:
-        sessions.delete_messages_after(conn, session_id, plan.user_message_id)
+        sessions.delete_messages(conn, session_id, plan.superseded)
     return sessions.add_message(
         conn,
         session_id,
