@@ -90,6 +90,11 @@ than passed over, so Lyra does not report a private layout it did not actually a
   explicitly acknowledge it in Settings.
 - When the endpoint is remote and acknowledged, document text may be sent to it for chat,
   extraction, solving, drafting, and related features.
+- The class agent (research, code, and command profiles) is bound by the same rule. An agent turn
+  sends the tutor endpoint your conversation history and question, and on later tool rounds it can
+  send workspace file contents, fetched-page evidence, and command-planning context. If the
+  endpoint is remote and not acknowledged, the turn is refused before anything is stored or sent —
+  the consent is re-checked on every turn against the exact endpoint the turn would use.
 - Firecrawl runs on loopback at `127.0.0.1:3002`, but it can fetch public pages on your behalf
   when web research is enabled.
 - Lyra does not send document text directly to Firecrawl. It sends web requests only through the

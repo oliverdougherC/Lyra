@@ -93,7 +93,7 @@ _BLOCKED_MESSAGES = {
 }
 
 
-def _require_document_allowed(access: TutorAccess) -> None:
+def require_document_allowed(access: TutorAccess) -> None:
     """Refuse the turn when document text may not be sent to the *resolved* endpoint.
 
     Takes the same snapshot the turn will be sent through, so the endpoint this authorizes is
@@ -103,7 +103,9 @@ def _require_document_allowed(access: TutorAccess) -> None:
     A tutor reply is grounded in retrieved course material - ordinary class retrieval, a
     document the question is scoped to, or the solution step a conversation is anchored to -
     so chat is bound by the same locality/acknowledgement rule as solving, writing, and
-    study. Applied when the turn opens, before the student's message is persisted and before
+    study. The class-agent route shares this gate for the same reason: its turns carry the
+    conversation history and, on later tool-loop rounds, workspace file contents and tool
+    results. Applied when the turn opens, before the student's message is persisted and before
     any upstream request, and re-derived on every turn and regeneration: changing the
     endpoint or revoking the acknowledgement takes effect on the very next turn, a refusal
     puts nothing on the wire, and it leaves no orphaned question behind to answer later.
@@ -553,7 +555,7 @@ def _open_turn(
     # turn without persisting an orphaned question and without a byte of course material
     # leaving the machine.
     access = resolve_tutor_access(conn)
-    _require_document_allowed(access)
+    require_document_allowed(access)
     config = access.config
     # The privacy gate above proves the endpoint is one document text may reach; this proves
     # the turn fits it. Both run before the message is stored and before any retrieval or
@@ -594,7 +596,7 @@ def _open_regeneration(
     # will actually use: the endpoint may have gone remote, or the acknowledgement been
     # revoked, since the question was first asked.
     access = resolve_tutor_access(conn)
-    _require_document_allowed(access)
+    require_document_allowed(access)
     config = access.config
     question = sessions.last_user_message(conn, session_id)
     user_message_id = int(question["id"])

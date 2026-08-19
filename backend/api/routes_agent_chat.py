@@ -9,9 +9,9 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from backend.api.routes_chat import plan_budget, trim_history
+from backend.api.routes_chat import plan_budget, require_document_allowed, trim_history
 from backend.core import agent_tools, sessions
-from backend.core.app_settings import resolve_tutor_config
+from backend.core.app_settings import resolve_tutor_access
 from backend.core.classes import touch_class
 from backend.core.errors import LyraError, NotFoundError
 from backend.llm import tools as llm_tools
@@ -137,7 +137,16 @@ async def send_agent_chat(
     conn: DbConn,
 ) -> AgentChatResult | JSONResponse:
     _scoped_session(conn, class_id, session_id)
-    config = resolve_tutor_config(conn)
+    # One snapshot for the endpoint and its document-text consent, exactly like a tutor chat
+    # turn: the endpoint authorized here is the endpoint `run_tool_loop` sends to below. An
+    # agent turn carries the conversation history and the student's message on its first
+    # round, and workspace file contents, fetched-page evidence, and other tool results on
+    # later rounds, so it is bound by the same locality/acknowledgement rule. Re-derived on
+    # every turn, and checked before the title or message is persisted and before the tool
+    # registry is even built: a refusal puts nothing on the wire and stores nothing.
+    access = resolve_tutor_access(conn)
+    require_document_allowed(access)
+    config = access.config
     sessions.set_session_title_if_unset(conn, session_id, payload.content)
     user_message_id = sessions.add_message(conn, session_id, "user", payload.content)
     touch_class(conn, class_id)
