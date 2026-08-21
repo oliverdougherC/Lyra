@@ -159,9 +159,17 @@ class RegenerateRequest(BaseModel):
 
 
 class RestoreRequest(BaseModel):
-    """Body of `POST /api/solutions/{artifact_id}/parts/{part_id}/restore`."""
+    """Body of `POST /api/solutions/{artifact_id}/parts/{part_id}/restore`.
+
+    `expected_version` is the part's `content_version` the caller last saw (PLA-289). When
+    present, the restore writes through the compare-and-swap and is refused if the stored
+    body moved past it, so a stale draft tab cannot silently replace a body that changed
+    elsewhere. Optional so the solution history, which restores without a version token,
+    keeps its existing behavior.
+    """
 
     revision: int = Field(ge=1)
+    expected_version: int | None = Field(default=None, ge=0)
 
 
 class SourceRead(BaseModel):
@@ -461,16 +469,32 @@ def restore_part_revision(
 
     Recorded as a new revision rather than by rewinding the history, so restoring is
     itself undoable and the sheet still shows what was there in between.
+
+    When the caller names an `expected_version`, the content is written through the
+    compare-and-swap (PLA-289): a draft tab that fell behind names a version the body has
+    moved past and is refused with a conflict rather than replacing newer text. Without one,
+    the solution history restores unchanged.
     """
     _require_part(conn, artifact_id, part_id)
     revision = artifacts.get_revision(conn, part_id, payload.revision)
-    artifacts.set_part_content(
-        conn,
-        part_id,
-        str(revision["content"]),
-        artifacts.USER_CORRECTED,
-        RESTORED_NOTE.format(revision=payload.revision),
-    )
+    if payload.expected_version is not None:
+        artifacts.compare_and_set_part_content(
+            conn,
+            part_id,
+            str(revision["content"]),
+            artifacts.USER_CORRECTED,
+            expected_version=payload.expected_version,
+            note=RESTORED_NOTE.format(revision=payload.revision),
+            record_revision=True,
+        )
+    else:
+        artifacts.set_part_content(
+            conn,
+            part_id,
+            str(revision["content"]),
+            artifacts.USER_CORRECTED,
+            RESTORED_NOTE.format(revision=payload.revision),
+        )
     artifacts.set_part_verdict(conn, part_id, artifacts.UNCHECKED, EDITED_SINCE_CHECK)
     artifacts.record_checks(conn, part_id, [])
     return _part_response(conn, part_id)

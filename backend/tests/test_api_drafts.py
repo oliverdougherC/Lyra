@@ -849,6 +849,102 @@ def test_accepting_an_unrelated_hunk_does_not_resolve_the_addressed_section(
     assert comments._get(db, int(root["id"]))["resolved"] == 1
 
 
+def test_accept_with_a_matching_expected_body_version_lands(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft(db, class_id)
+    suggestions.propose(db, part_id, PROPOSED, "Tighten")
+    edit = client.get(f"/api/drafts/{artifact_id}/pending").json()
+    version = client.get(f"/api/drafts/{artifact_id}").json()["body_version"]
+
+    accepted = client.post(
+        f"/api/pending-edits/{edit['id']}/accept",
+        json={"expected_body_version": version},
+    )
+
+    assert accepted.status_code == 200
+    assert accepted.json()["remaining"] == 0
+    assert str(artifacts.get_part(db, part_id)["content"]) == PROPOSED
+    # The accept moved the body version, so a later stale autosave conflicts against it.
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == version + 1
+
+
+def test_accept_racing_a_body_change_conflicts_without_overwriting(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # The student reviewed the suggestion at version 0, but a second tab (or an autosave)
+    # moved the body before the accept landed. The accept must conflict, not clobber.
+    artifact_id, part_id = _draft(db, class_id)
+    suggestions.propose(db, part_id, PROPOSED, "Tighten")
+    edit = client.get(f"/api/drafts/{artifact_id}/pending").json()
+    reviewed_version = client.get(f"/api/drafts/{artifact_id}").json()["body_version"]
+
+    elsewhere = BASE + "\nA line from another tab.\n"
+    artifacts.set_part_content(db, part_id, elsewhere, origin=artifacts.USER_CORRECTED)
+    moved_version = int(artifacts.get_part(db, part_id)["content_version"])
+
+    refused = client.post(
+        f"/api/pending-edits/{edit['id']}/accept",
+        json={"expected_body_version": reviewed_version},
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "stale_body_version"
+    assert refused.json()["current_version"] == moved_version
+    assert refused.json()["server_body"] == elsewhere
+    # Nothing was overwritten: the other tab's body stands, and the edit still pends.
+    assert str(artifacts.get_part(db, part_id)["content"]) == elsewhere
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == moved_version
+    assert client.get(f"/api/drafts/{artifact_id}/pending").json() is not None
+
+
+def test_force_replace_racing_a_body_change_conflicts(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # A force-replace is still relative to the version the student reviewed: a change that
+    # landed after they looked must conflict rather than be silently overwritten.
+    artifact_id, part_id = _draft(db, class_id)
+    suggestions.propose(db, part_id, PROPOSED, "Tighten")
+    edit = client.get(f"/api/drafts/{artifact_id}/pending").json()
+    reviewed_version = client.get(f"/api/drafts/{artifact_id}").json()["body_version"]
+
+    edited = BASE.replace("The delta function is even.\n", "The delta function is symmetric.\n")
+    artifacts.set_part_content(db, part_id, edited, origin=artifacts.USER_CORRECTED)
+    moved_version = int(artifacts.get_part(db, part_id)["content_version"])
+
+    refused = client.post(
+        f"/api/pending-edits/{edit['id']}/accept",
+        json={"force": True, "expected_body_version": reviewed_version},
+    )
+
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "stale_body_version"
+    # The force did not overwrite the version the student never saw.
+    assert str(artifacts.get_part(db, part_id)["content"]) == edited
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == moved_version
+
+
+def test_force_replace_with_the_reviewed_version_lands(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # The suggestion went stale under the student's own edit; forcing against the version
+    # they are looking at (the side-by-side "current") replaces the document as intended.
+    artifact_id, part_id = _draft(db, class_id)
+    suggestions.propose(db, part_id, PROPOSED, "Tighten")
+    edit = client.get(f"/api/drafts/{artifact_id}/pending").json()
+    edited = BASE.replace("The delta function is even.\n", "The delta function is symmetric.\n")
+    artifacts.set_part_content(db, part_id, edited, origin=artifacts.USER_CORRECTED)
+    reviewed_version = int(artifacts.get_part(db, part_id)["content_version"])
+
+    forced = client.post(
+        f"/api/pending-edits/{edit['id']}/accept",
+        json={"force": True, "expected_body_version": reviewed_version},
+    )
+
+    assert forced.status_code == 200
+    assert str(artifacts.get_part(db, part_id)["content"]) == PROPOSED
+
+
 def test_a_hunk_accept_over_http(client: TestClient, db: sqlite3.Connection, class_id: int) -> None:
     two_change = PROPOSED.replace(
         "And one more line for good measure.\n", "And a final line to close with.\n"

@@ -657,10 +657,25 @@ export const api = {
       signal,
     }),
 
-  restorePartRevision: (artifactId: number, partId: number, revision: number) =>
+  /**
+   * Restore an earlier revision. `expectedVersion` is the draft body's `content_version`
+   * the caller last saw; when present the restore writes through the compare-and-swap and
+   * a stale tab is refused with a `DraftBodyConflictError` rather than replacing newer text
+   * (PLA-289). The solution history omits it and restores unchanged.
+   */
+  restorePartRevision: (
+    artifactId: number,
+    partId: number,
+    revision: number,
+    expectedVersion?: number,
+  ) =>
     requestJson<SolutionPart>(`/api/solutions/${artifactId}/parts/${partId}/restore`, {
       method: 'POST',
-      body: { revision },
+      body:
+        expectedVersion === undefined
+          ? { revision }
+          : { revision, expected_version: expectedVersion },
+      errorFactory: draftBodyErrorFactory,
     }),
 
   resegmentSolution: (artifactId: number) =>
@@ -857,13 +872,23 @@ export const api = {
   getPendingEdit: (draftId: number, signal?: AbortSignal) =>
     requestJson<PendingEdit | null>(`/api/drafts/${draftId}/pending`, { signal }),
 
+  /**
+   * Accept a pending edit. `expected_body_version` is the draft body version the student
+   * reviewed against; a body that moved past it is refused with a `DraftBodyConflictError`
+   * so an accept (or a force-replace) never silently overwrites newer text (PLA-289).
+   */
   acceptPendingEdit: (
     editId: number,
-    body: { hunk?: { index: number; hash: string }; force?: boolean } = {},
+    body: {
+      hunk?: { index: number; hash: string }
+      force?: boolean
+      expected_body_version?: number
+    } = {},
   ) =>
     requestJson<AcceptRejectResult>(`/api/pending-edits/${editId}/accept`, {
       method: 'POST',
       body,
+      errorFactory: draftBodyErrorFactory,
     }),
 
   rejectPendingEdit: (editId: number, hunk?: { index: number; hash: string }) =>

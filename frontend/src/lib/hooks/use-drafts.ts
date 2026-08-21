@@ -466,8 +466,19 @@ export type HunkRef = { index: number; hash: string }
 export function useAcceptEdit(draftId: number) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ editId, hunk, force }: { editId: number; hunk?: HunkRef; force?: boolean }) =>
-      api.acceptPendingEdit(editId, { hunk, force }),
+    mutationFn: ({
+      editId,
+      hunk,
+      force,
+      expectedBodyVersion,
+    }: {
+      editId: number
+      hunk?: HunkRef
+      force?: boolean
+      /** The body version the student reviewed against; a stale body conflicts (PLA-289). */
+      expectedBodyVersion?: number
+    }) =>
+      api.acceptPendingEdit(editId, { hunk, force, expected_body_version: expectedBodyVersion }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: draftKeys.detail(draftId) })
       queryClient.invalidateQueries({ queryKey: draftKeys.pending(draftId) })

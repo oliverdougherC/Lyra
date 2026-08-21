@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createSaveEngine,
+  decideServerSync,
   flushOnHidden,
   SAVE_DEBOUNCE_MS,
   type SaveConflict,
@@ -429,6 +430,240 @@ describe('createSaveEngine: two editors against one body (stale tab)', () => {
     expect(names(two.states)).not.toContain('saved')
     // Tab one never learns of a regression; its own state stayed saved.
     expect(names(one.states).at(-1)).toBe('saved')
+  })
+})
+
+describe('createSaveEngine: reverting while a different write is in flight', () => {
+  it('a revert to the last-saved text mid-write still converges and never says saved while they differ', async () => {
+    // The exact interleaving from the review: S is saved, the user types A, autosave A
+    // starts, the user reverts to S before A resolves, then A resolves. The engine must
+    // still owe a corrective write of S, converge editor and server on S, and never once
+    // report saved while the editor shows S and the server holds A.
+    const server = new FakeServer('S', 0)
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('A')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.inFlight()).toBe(1) // A in flight at version 0
+
+    // Undo back to S while A is still in the air.
+    engine.schedule('S')
+
+    await server.settleNext() // A lands: the server now holds 'A' at version 1
+    expect(engine.lastSaved()).toBe('A')
+    // A corrective write of S is owed; the state is dirty, emphatically not saved.
+    expect(names(states).at(-1)).toBe('dirty')
+    expect(names(states)).not.toContain('saved')
+    expect(engine.isDirty('S')).toBe(true)
+
+    // The corrective write of S goes out after A, in order, and converges the two.
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.inFlight()).toBe(1)
+    await server.settleNext()
+
+    expect(server.body).toBe('S') // editor and server converge on S
+    expect(server.version).toBe(2)
+    expect(engine.lastSaved()).toBe('S')
+    expect(engine.isDirty('S')).toBe(false)
+    expect(names(states).at(-1)).toBe('saved')
+    // Saved appeared exactly once, and only at the end when they finally matched.
+    expect(names(states).filter((state) => state === 'saved')).toHaveLength(1)
+  })
+
+  it('typing then reverting to the body already in flight coalesces to nothing owed', async () => {
+    const server = new FakeServer('start', 0)
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('A')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.inFlight()).toBe(1) // A in flight
+
+    engine.schedule('B') // newer text pends
+    engine.schedule('A') // then reverted to exactly the body in flight
+    expect(engine.pending()).toBe(false) // nothing more is owed; the timer was cleared
+
+    await server.settleNext() // A lands
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+
+    expect(server.inFlight()).toBe(0) // no corrective write; B was discarded
+    expect(server.body).toBe('A')
+    expect(server.version).toBe(1)
+    expect(engine.isDirty('A')).toBe(false)
+    expect(names(states).at(-1)).toBe('saved')
+  })
+})
+
+describe('createSaveEngine: an authoritative server op raises a conflict', () => {
+  it('forceConflict while an autosave is pending keeps the local text and reconciles', async () => {
+    // A pass or an accepted suggestion rewrote the body to version 5 while the student had
+    // unsaved local text pending in the debounce.
+    const server = new FakeServer('the server rewrote this', 5)
+    const { engine, states } = makeEngine(server)
+    engine.noteSaved('what the editor read', 1)
+
+    engine.schedule('local edit')
+    expect(engine.pending()).toBe(true)
+
+    engine.forceConflict('the server rewrote this', 5)
+    expect(engine.conflict()).toEqual({ serverVersion: 5, serverBody: 'the server rewrote this' })
+    expect(engine.isDirty('local edit')).toBe(true)
+    expect(names(states).at(-1)).toBe('conflict')
+    expect(names(states)).not.toContain('saved')
+
+    // Keeping the local text rebases onto the server's version and writes it over.
+    engine.keepLocal('local edit')
+    await server.settleNext()
+    expect(server.body).toBe('local edit')
+    expect(server.version).toBe(6)
+    expect(engine.conflict()).toBeNull()
+    expect(names(states).at(-1)).toBe('saved')
+  })
+
+  it('forceConflict while a write is in flight never lets that write report saved', async () => {
+    const server = new FakeServer('base', 3)
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('local edit')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.inFlight()).toBe(1) // 'local edit' in flight, expects version 3
+
+    // The server advances underneath the in-flight write (an authoritative op landed).
+    server.version = 9
+    server.body = 'rewritten elsewhere'
+    engine.forceConflict('rewritten elsewhere', 9)
+    expect(names(states).at(-1)).toBe('conflict')
+
+    await server.settleNext() // the stale write is refused by the CAS too
+    expect(engine.conflict()).toEqual({ serverVersion: 9, serverBody: 'rewritten elsewhere' })
+    expect(engine.isDirty('local edit')).toBe(true)
+    expect(names(states)).not.toContain('saved')
+    expect(server.body).toBe('rewritten elsewhere') // the local write never landed
+  })
+})
+
+describe('createSaveEngine: flush proves the newest body is authoritative', () => {
+  it('resolves ok with the confirmed version when the newest body is saved', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+
+    engine.schedule('newest')
+    const flushed = engine.flush('newest')
+    await server.settleNext()
+
+    await expect(flushed).resolves.toEqual({ ok: true, status: 'saved', version: 1 })
+  })
+
+  it('resolves an error result when the write fails, and stays dirty and retryable', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+
+    engine.schedule('newest')
+    const flushed = engine.flush('newest')
+    await server.failNext('offline')
+    const result = await flushed
+
+    expect(result.ok).toBe(false)
+    expect(result.status).toBe('error')
+    expect(result.detail).toBe('offline')
+    expect(engine.isDirty('newest')).toBe(true)
+  })
+
+  it('resolves a conflict result when the server moved past the version', async () => {
+    const server = new FakeServer('theirs', 2)
+    const { engine } = makeEngine(server)
+    engine.noteSaved('what we read', 1)
+
+    engine.schedule('mine')
+    const flushed = engine.flush('mine')
+    await server.settleNext() // expected 1, server holds 2 -> conflict
+    const result = await flushed
+
+    expect(result.ok).toBe(false)
+    expect(result.status).toBe('conflict')
+    expect(result.conflict).toEqual({ serverVersion: 2, serverBody: 'theirs' })
+  })
+})
+
+describe('createSaveEngine: a lost successful response is adopted, not re-fought', () => {
+  it('adopts the server version when a stale conflict carries the exact body we wrote', async () => {
+    const server = new FakeServer('base', 1)
+    const states: SaveStateName[] = []
+    const engine = createSaveEngine({
+      write: server.write,
+      onState: (state) => states.push(state),
+      isConflict,
+    })
+    engine.noteSaved('base', 1)
+
+    engine.schedule('my edit')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    // The server actually applied 'my edit' at version 2, but the ack was lost; the write
+    // (which expected version 1) comes back as a stale 409 whose server_body is exactly the
+    // body it was carrying.
+    server.version = 2
+    server.body = 'my edit'
+    await server.settleNext()
+
+    expect(engine.conflict()).toBeNull() // no conflict dialog over identical text
+    expect(engine.version()).toBe(2) // the server's version is adopted as confirmed
+    expect(engine.lastSaved()).toBe('my edit')
+    expect(engine.isDirty('my edit')).toBe(false)
+    expect(states.at(-1)).toBe('saved')
+    expect(states).not.toContain('conflict')
+  })
+})
+
+describe('decideServerSync: a settled server op never resets over unresolved local work', () => {
+  it('adopts when the engine is clean and the editor matches the confirmed body', () => {
+    const server = new FakeServer('base', 1)
+    const { engine } = makeEngine(server)
+    expect(decideServerSync(engine, 'base')).toBe('adopt')
+  })
+
+  it('skips while a debounced write is pending: the racing write will conflict on its own', () => {
+    const server = new FakeServer('base', 1)
+    const { engine } = makeEngine(server)
+    engine.schedule('local edit')
+    expect(engine.pending()).toBe(true)
+    expect(decideServerSync(engine, 'local edit')).toBe('skip')
+  })
+
+  it('skips while a write is in flight', async () => {
+    const server = new FakeServer('base', 1)
+    const { engine } = makeEngine(server)
+    engine.schedule('local edit')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(engine.saving()).toBe(true)
+    expect(decideServerSync(engine, 'local edit')).toBe('skip')
+    await server.settleNext()
+  })
+
+  it('skips when a conflict is already open', async () => {
+    const server = new FakeServer('newer text', 2)
+    const { engine } = makeEngine(server)
+    engine.noteSaved('what the editor read', 1)
+    engine.schedule('mine')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    await server.settleNext() // conflict
+    expect(engine.conflict()).not.toBeNull()
+    expect(decideServerSync(engine, 'mine')).toBe('skip')
+  })
+
+  it('raises a conflict when idle unsaved local text exists (a failed flush left it dirty)', async () => {
+    // A pass that settles while the engine holds idle unsaved text (for example an earlier
+    // fire-and-forget flush that failed) must not reset the editor: reconcile instead.
+    const server = new FakeServer('base', 1)
+    const { engine } = makeEngine(server)
+    engine.schedule('local edit')
+    const flushed = engine.flush('local edit')
+    await server.failNext('offline')
+    await flushed
+
+    expect(engine.saving()).toBe(false)
+    expect(engine.pending()).toBe(false)
+    expect(engine.conflict()).toBeNull()
+    expect(engine.isDirty('local edit')).toBe(true)
+    expect(decideServerSync(engine, 'local edit')).toBe('conflict')
   })
 })
 

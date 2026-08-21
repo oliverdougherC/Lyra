@@ -13,7 +13,8 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ApiError } from '@/lib/api'
+import { ApiError, DraftBodyConflictError } from '@/lib/api'
+import type { SaveConflict } from '@/lib/drafts/save-engine'
 import { formatRelativeTime } from '@/lib/format'
 import { usePartRevisions, useRestoreRevision } from '@/lib/hooks/use-solutions'
 import type { PartOrigin, SolutionPart } from '@/types'
@@ -30,6 +31,15 @@ type RevisionHistoryProps = {
   onClose: () => void
   /** What the part belongs to, in the sheet's description. A draft passes 'draft'. */
   noun?: string
+  /**
+   * Draft-only: confirm the current body is on disk before restoring, and report the
+   * version to restore against. Returns `ok: false` to abort - the save failure or conflict
+   * is already surfaced. Flushing first also makes the student's current text its own
+   * revision, so restoring an older one loses nothing (PLA-289).
+   */
+  saveBeforeRestore?: () => Promise<{ ok: boolean; version: number }>
+  /** Draft-only: a stale-version restore was refused; hand the conflict to the save engine. */
+  onBodyConflict?: (conflict: SaveConflict) => void
 }
 
 /**
@@ -43,23 +53,40 @@ export function RevisionHistory({
   part,
   onClose,
   noun = 'solution set',
+  saveBeforeRestore,
+  onBodyConflict,
 }: RevisionHistoryProps) {
   const revisions = usePartRevisions(artifactId, part?.id ?? null)
   const restore = useRestoreRevision(artifactId)
 
-  const handleRestore = (revision: number) => {
+  const handleRestore = async (revision: number) => {
     if (!part) return
+    // Draft bodies restore version-aware: confirm the current text first (so it is itself a
+    // recoverable revision) and carry its version, so a stale tab cannot replace a body that
+    // changed elsewhere. Solutions pass no barrier and restore unchanged.
+    let expectedVersion: number | undefined
+    if (saveBeforeRestore) {
+      const barrier = await saveBeforeRestore()
+      if (!barrier.ok) return
+      expectedVersion = barrier.version
+    }
     restore.mutate(
-      { partId: part.id, revision },
+      { partId: part.id, revision, expectedVersion },
       {
         onSuccess: () => {
           toast.success('Restored that version.')
           onClose()
         },
-        onError: (error) =>
-          toast.error(
-            error instanceof ApiError ? error.message : 'Could not restore that version.',
-          ),
+        onError: (error) => {
+          if (error instanceof DraftBodyConflictError && onBodyConflict) {
+            // The body moved elsewhere since this tab last read it: reconcile rather than
+            // replace. Nothing was written.
+            onBodyConflict({ serverVersion: error.currentVersion, serverBody: error.serverBody })
+            onClose()
+            return
+          }
+          toast.error(error instanceof ApiError ? error.message : 'Could not restore that version.')
+        },
       },
     )
   }
@@ -112,7 +139,7 @@ export function RevisionHistory({
                       variant="outline"
                       size="sm"
                       className="self-start"
-                      onClick={() => handleRestore(revision.revision)}
+                      onClick={() => void handleRestore(revision.revision)}
                       disabled={restore.isPending}
                     >
                       Restore

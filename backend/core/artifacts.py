@@ -678,6 +678,35 @@ def set_part_content(
         NotFoundError: when no part carries that id.
         ValueError: when `origin` is outside the allowed set.
     """
+    revision = apply_part_content(
+        conn, part_id, content, origin, note=note, record_revision=record_revision
+    )
+    conn.commit()
+    return revision
+
+
+def apply_part_content(
+    conn: sqlite3.Connection,
+    part_id: int,
+    content: str,
+    origin: str,
+    note: str | None = None,
+    record_revision: bool = True,
+) -> int:
+    """Write a part's content and bump its version, WITHOUT beginning or committing.
+
+    The body of `set_part_content`, minus the commit, so a caller that already owns a
+    transaction (the CAS write, an accept that first version-checks the part) can write the
+    content and the revision inside its own `begin immediate` rather than in a second one.
+    Standalone callers must use `set_part_content`, which commits.
+
+    The version increment lives here, which is what makes every body-replacing operation -
+    an autosave, an AI pass, an accepted suggestion, a restore - move `content_version`,
+    so a later stale write conflicts instead of clobbering it (PLA-289).
+
+    Returns:
+        The new revision number, or the current revision count when no revision was recorded.
+    """
     part = get_part(conn, part_id)
     _require(origin, ORIGINS, "part origin")
     revision = (
@@ -696,7 +725,6 @@ def set_part_content(
         (content, origin, part_id),
     )
     _touch_artifact(conn, int(part["artifact_id"]))
-    conn.commit()
     return revision
 
 

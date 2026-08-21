@@ -21,7 +21,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from backend.core import artifacts
-from backend.core.errors import ConflictError, NotFoundError
+from backend.core.errors import ConflictError, NotFoundError, StaleContentError
 
 NO_SUCH_EDIT_MESSAGE = "That suggestion does not exist."
 STALE_ACCEPT_MESSAGE = (
@@ -224,7 +224,7 @@ def _get_by_part(conn: sqlite3.Connection, part_id: int) -> PendingEdit | None:
     return _row_to_edit(row) if row is not None else None
 
 
-def _store(conn: sqlite3.Connection, edit: PendingEdit) -> None:
+def _store(conn: sqlite3.Connection, edit: PendingEdit, *, commit: bool = True) -> None:
     conn.execute(
         "update pending_edits set base_content = ?, base_hash = ?, proposed_content = ?, "
         "stale = ?, note = ?, updated_at = datetime('now') where id = ?",
@@ -237,12 +237,14 @@ def _store(conn: sqlite3.Connection, edit: PendingEdit) -> None:
             edit.id,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
-def _delete(conn: sqlite3.Connection, edit_id: int) -> None:
+def _delete(conn: sqlite3.Connection, edit_id: int, *, commit: bool = True) -> None:
     conn.execute("delete from pending_edits where id = ?", (edit_id,))
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def _sha256(text: str) -> str:
@@ -250,7 +252,11 @@ def _sha256(text: str) -> str:
 
 
 def refresh(
-    conn: sqlite3.Connection, edit: PendingEdit, current_content: str
+    conn: sqlite3.Connection,
+    edit: PendingEdit,
+    current_content: str,
+    *,
+    commit: bool = True,
 ) -> PendingEdit | None:
     """Reconcile a stored edit with what the draft body says right now.
 
@@ -262,20 +268,23 @@ def refresh(
     - Otherwise try to rebase the diff onto the edited body. Clean: the base becomes the
       current content and the proposal follows it. The diff no longer applies: the edit
       is stale, its blobs untouched.
+
+    `commit=False` keeps every pending-edit mutation inside the caller's transaction, so
+    `accept` can version-check the body and write it atomically with the refresh.
     """
     if _sha256(current_content) == edit.base_hash:
         return edit
     if current_content == edit.proposed_content:
-        _delete(conn, edit.id)
+        _delete(conn, edit.id, commit=commit)
         return None
     patched = apply_patch(current_content, edit.base_content, edit.proposed_content)
     if patched is None:
         if not edit.stale:
             edit = PendingEdit(**{**vars(edit), "stale": True})
-            _store(conn, edit)
+            _store(conn, edit, commit=commit)
         return edit
     if patched == current_content:
-        _delete(conn, edit.id)
+        _delete(conn, edit.id, commit=commit)
         return None
     rebased = PendingEdit(
         **{
@@ -286,7 +295,7 @@ def refresh(
             "stale": False,
         }
     )
-    _store(conn, rebased)
+    _store(conn, rebased, commit=commit)
     return rebased
 
 
@@ -351,64 +360,93 @@ def accept(
     edit_id: int,
     hunk: dict[str, object] | None = None,
     force: bool = False,
+    expected_version: int | None = None,
 ) -> dict[str, object]:
     """Accept a pending edit: all of it, one hunk, or force-replace on a stale row.
 
-    Every accept writes the draft body through `set_part_content`, so each one is a
+    Every accept writes the draft body through `apply_part_content`, so each one is a
     normal revision with the instruction as its note.
 
+    The whole read-refresh-write runs inside one `begin immediate` transaction, so a body
+    mutation from another connection (a second tab's autosave, a concurrent pass) cannot
+    slip between the refresh and the write. When `expected_version` is given - the draft
+    workspace passes the `content_version` the student reviewed the suggestion against - a
+    body that moved past it is refused with `StaleContentError` and nothing is written, not
+    even a force-replace: a force is a choice to overwrite the version the student *saw*,
+    not whatever landed after they looked (PLA-289).
+
     Raises:
+        StaleContentError: when `expected_version` no longer matches the stored body.
         ConflictError: on a stale edit without force, and on hunk races.
     """
-    edit = _get(conn, edit_id)
-    part = artifacts.get_part(conn, edit.part_id)
-    refreshed = refresh(conn, edit, str(part["content"]))
-    if refreshed is None:
-        return {"remaining": 0}
+    try:
+        conn.execute("begin immediate")
+        edit = _get(conn, edit_id)
+        part = artifacts.get_part(conn, edit.part_id)
+        current_version = int(part["content_version"])
+        if expected_version is not None and current_version != expected_version:
+            current_content = str(part["content"])
+            conn.rollback()
+            raise StaleContentError(current_version, current_content)
 
-    if refreshed.stale and not force:
-        raise ConflictError(STALE_ACCEPT_MESSAGE)
+        refreshed = refresh(conn, edit, str(part["content"]), commit=False)
+        if refreshed is None:
+            conn.commit()
+            return {"remaining": 0}
 
-    if hunk is not None and not refreshed.stale:
-        hunks = compute_hunks(refreshed.base_content, refreshed.proposed_content)
-        index = int(hunk.get("index", -1))
-        target = hunks[index] if 0 <= index < len(hunks) else None
-        if target is None or target.hash != hunk.get("hash"):
-            raise ConflictError(HUNK_RACE_MESSAGE)
-        new_base = apply_hunk(refreshed.base_content, target)
-        if new_base is None:
-            raise ConflictError(HUNK_RACE_MESSAGE)
-        artifacts.set_part_content(
+        if refreshed.stale and not force:
+            conn.rollback()
+            raise ConflictError(STALE_ACCEPT_MESSAGE)
+
+        if hunk is not None and not refreshed.stale:
+            hunks = compute_hunks(refreshed.base_content, refreshed.proposed_content)
+            index = int(hunk.get("index", -1))
+            target = hunks[index] if 0 <= index < len(hunks) else None
+            if target is None or target.hash != hunk.get("hash"):
+                conn.rollback()
+                raise ConflictError(HUNK_RACE_MESSAGE)
+            new_base = apply_hunk(refreshed.base_content, target)
+            if new_base is None:
+                conn.rollback()
+                raise ConflictError(HUNK_RACE_MESSAGE)
+            artifacts.apply_part_content(
+                conn,
+                refreshed.part_id,
+                new_base,
+                origin=artifacts.GENERATED,
+                note=_revision_note(refreshed.note),
+            )
+            remaining = compute_hunks(new_base, refreshed.proposed_content)
+            if not remaining:
+                _delete(conn, refreshed.id, commit=False)
+                conn.commit()
+                return {"remaining": 0}
+            kept = PendingEdit(
+                **{
+                    **vars(refreshed),
+                    "base_content": new_base,
+                    "base_hash": _sha256(new_base),
+                }
+            )
+            _store(conn, kept, commit=False)
+            conn.commit()
+            return {"remaining": len(remaining), "edit": kept.to_dict()}
+
+        # Accept all, including force on a stale row: the proposal becomes the document.
+        artifacts.apply_part_content(
             conn,
             refreshed.part_id,
-            new_base,
+            refreshed.proposed_content,
             origin=artifacts.GENERATED,
             note=_revision_note(refreshed.note),
         )
-        remaining = compute_hunks(new_base, refreshed.proposed_content)
-        if not remaining:
-            _delete(conn, refreshed.id)
-            return {"remaining": 0}
-        kept = PendingEdit(
-            **{
-                **vars(refreshed),
-                "base_content": new_base,
-                "base_hash": _sha256(new_base),
-            }
-        )
-        _store(conn, kept)
-        return {"remaining": len(remaining), "edit": kept.to_dict()}
-
-    # Accept all, including force on a stale row: the proposal becomes the document.
-    artifacts.set_part_content(
-        conn,
-        refreshed.part_id,
-        refreshed.proposed_content,
-        origin=artifacts.GENERATED,
-        note=_revision_note(refreshed.note),
-    )
-    _delete(conn, refreshed.id)
-    return {"remaining": 0}
+        _delete(conn, refreshed.id, commit=False)
+        conn.commit()
+        return {"remaining": 0}
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
 
 
 def reject(

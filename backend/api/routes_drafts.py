@@ -196,10 +196,18 @@ class HunkRef(BaseModel):
 
 
 class AcceptRequest(BaseModel):
-    """Body of `POST /api/pending-edits/{edit_id}/accept`."""
+    """Body of `POST /api/pending-edits/{edit_id}/accept`.
+
+    `expected_body_version` is the draft body `content_version` the student reviewed the
+    suggestion against (PLA-289). When present, the accept is refused if the stored body has
+    moved past it - a second tab, a concurrent pass, or an autosave that landed after the
+    student last looked - rather than silently overwriting the newer body. Optional so the
+    solution surfaces, which have no version token, keep accepting unchanged.
+    """
 
     hunk: HunkRef | None = None
     force: bool = False
+    expected_body_version: int | None = Field(default=None, ge=0)
 
 
 class RejectRequest(BaseModel):
@@ -764,6 +772,7 @@ def accept_edit(edit_id: int, payload: AcceptRequest, conn: DbConn) -> dict[str,
         edit_id,
         hunk=payload.hunk.model_dump() if payload.hunk else None,
         force=payload.force,
+        expected_version=payload.expected_body_version,
     )
     if linked_comments:
         part_id = int(linked_comments[0]["part_id"])

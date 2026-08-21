@@ -36,12 +36,48 @@ that window.
 - At most one write owns the pipeline at a time. A change arriving during a write is
   coalesced into the newest pending body and written next, never as a competing request,
   so an older write can never land after a newer one from the same editor.
-- `flush()` (tab hide, unmount, before a pass/review/export) joins the in-flight write and
-  drives the newest pending body to the server; it does not open a second pipeline.
+- The engine tracks the newest **desired** editor body independently of the body it last
+  confirmed (`lastSaved`) and of the body a write is currently carrying. Reverting the
+  editor to the previously-saved text while a different write is in flight therefore cannot
+  make the engine believe nothing is owed: it still owes a corrective write of the desired
+  body once the in-flight one lands, and it never reports `saved` while editor and server
+  differ. (The old engine cleared its pending work when `schedule(S)` saw `S === lastSaved`,
+  then let an in-flight write of `A` land and report `Saved` over an editor showing `S`.)
+- `flush()` (tab hide, unmount, before a pass/review/export/snapshot) joins the in-flight
+  write and drives the newest pending body to the server; it does not open a second
+  pipeline. It **returns a verdict** - `{ ok, status: 'saved' | 'error' | 'conflict', version }`
+  - so an explicit caller can prove the newest local body is authoritative before it acts on
+  it. A `void`ed flush (tab hide) ignores the verdict; a body-dependent action must not.
 - A failed write leaves the newest body dirty and retryable; a later successful retry does
   not regress state.
 - `saved` is reported only when the server has confirmed the newest known body at its
   version. A refused stale write shows `Changed elsewhere`, never `Saved`.
+- **Lost-response adoption.** A stale `409` whose `server_body` is byte-for-byte the body the
+  write was carrying is treated as a lost successful response: the engine adopts
+  `current_version` as confirmed rather than raising a conflict dialog over identical text.
+  Provably safe - the bytes match, so nothing is lost.
+
+## Body-dependent actions prove the save first
+
+Every action that reads the body server-side - start/continue a pass, start a review, export
+a PDF, take a snapshot - calls `flush()` first and **only proceeds when the verdict is `ok`**.
+A save failure leaves the action unstarted with the actionable save state shown; a conflict
+leaves it unstarted with the reconciliation dialog open. None of them runs against stale
+server text.
+
+## Reconciling the editor after a server operation (`syncEditorFromServer`)
+
+When an AI pass, an accepted suggestion, or a restore settles, the workspace pulls the new
+body back into the editor - but never over unresolved local work. `decideServerSync` chooses:
+
+- **adopt** when there is no unresolved local work: reset the editor to the server body and
+  move the version base forward.
+- **skip** when a write is racing the sync (in flight, or a debounce about to fire): that
+  write carries the pre-operation version, so the server's CAS refuses it and the engine
+  raises the conflict itself. The editor and pipeline are left untouched.
+- **conflict** when the student has unsaved local text the operation moved under: raise a
+  reconciliation and keep their words. `noteSaved`/editor reset is reached only on the safe
+  paths - a settling pass can never discard unresolved local text.
 
 ## Conflict recovery
 
@@ -57,20 +93,36 @@ Neither path silently reloads server text over newer local writing.
 
 ## Causal rules for other body-mutating operations
 
-Every operation that replaces the body goes through `set_part_content`, which increments
-`content_version`. This is what coordinates autosave with the rest of the writer:
+Every operation that replaces the body goes through `set_part_content` /
+`apply_part_content`, which increments `content_version`. That alone makes a *later* stale
+autosave conflict, but it is not enough to coordinate an operation with *unsaved or in-flight*
+editor state - so each body-replacing operation also carries the version it acted on:
 
 - **AI pass** writes sections directly (into empty/untouched sections) and moves the
   version. While a pass runs, the editor is `inert` - the pass owns the document. When the
-  pass settles, the workspace re-seeds the editor and the version from the server, so the
-  editor follows the pass and the next autosave expects the version the pass produced.
-- **Accepted suggestion** and **restore** write the body and move the version. The
-  workspace re-syncs the editor and the version afterward (`syncEditorFromServer`).
+  pass settles, the workspace reconciles via `decideServerSync` above: it follows the pass
+  only when there is no unresolved local work, and otherwise raises a conflict instead of
+  discarding local text.
+- **Accepted suggestion.** The workspace lands and confirms the student's own writing before
+  the suggestion replaces the body (a `flush()` barrier), and the accept carries
+  `expected_body_version` - the version the student reviewed against. `suggestions.accept`
+  runs the whole read-refresh-write inside one `begin immediate` transaction and refuses a
+  body that moved past that version (`StaleContentError` -> `409`) - **including a
+  force-replace**, which is a choice to overwrite the version the student *saw*, not whatever
+  landed after they looked. A stale accept is fed into the same reconciliation dialog.
+- **Restore.** Draft-body restore is version-aware: the endpoint takes an optional
+  `expected_version` and, when present, writes through the compare-and-swap, so a stale tab
+  restoring a revision cannot replace a body that changed elsewhere - it conflicts instead.
+  The current text is flushed first, so it is itself a recoverable revision. Solution-part
+  restore passes no version and is unchanged.
 - **A stale editor tab** that missed one of the above no longer overwrites it: its next
   autosave carries a version the body has moved past, so it conflicts and reconciles
   rather than clobbering the AI result or the restored revision.
-- **Snapshot** flushes the pipeline first, then writes at the current version; a race with
-  another tab surfaces as a truthful "not saved" rather than a silent overwrite.
+- **Snapshot** flushes the pipeline first (and aborts if that flush is not `ok`), then writes
+  at the current version. A race with another tab loses the snapshot's CAS; that conflict is
+  fed into the save engine (`forceConflict`), so the local text is kept, the version saved
+  elsewhere is exposed, and the indicator is never left saying `Saved` - the student
+  reconciles it the same way as any other conflict.
 
 ## Compatibility
 
