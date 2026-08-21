@@ -23,7 +23,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 
-from backend.core.errors import NotFoundError
+from backend.core.errors import NotFoundError, StaleContentError
 
 KIND_SOLUTION_SET = "solution_set"
 KIND_FLASHCARD_DECK = "flashcard_deck"
@@ -129,8 +129,8 @@ _ARTIFACT_COLUMNS = (
 
 _PART_COLUMNS = (
     "id, artifact_id, parent_part_id, kind, ordinal, label, content, content_type, "
-    "status, origin, verdict, verdict_detail, solve_parts, error_message, created_at, "
-    "updated_at"
+    "status, origin, verdict, verdict_detail, solve_parts, error_message, content_version, "
+    "created_at, updated_at"
 )
 
 # Parts are a tree of arbitrary depth, so document order is a walk rather than a sort. The
@@ -140,19 +140,21 @@ _LIST_PARTS_SQL = """
 with recursive ordered as (
   select p.id, p.artifact_id, p.parent_part_id, p.kind, p.ordinal, p.label, p.content,
          p.content_type, p.status, p.origin, p.verdict, p.verdict_detail, p.solve_parts,
-         p.error_message, p.created_at, p.updated_at, printf('%08d', p.ordinal) as path
+         p.error_message, p.content_version, p.created_at, p.updated_at,
+         printf('%08d', p.ordinal) as path
   from artifact_parts p
   where p.artifact_id = ? and p.parent_part_id is null
   union all
   select c.id, c.artifact_id, c.parent_part_id, c.kind, c.ordinal, c.label, c.content,
          c.content_type, c.status, c.origin, c.verdict, c.verdict_detail, c.solve_parts,
-         c.error_message, c.created_at, c.updated_at, o.path || '.' || printf('%08d', c.ordinal)
+         c.error_message, c.content_version, c.created_at, c.updated_at,
+         o.path || '.' || printf('%08d', c.ordinal)
   from artifact_parts c
   join ordered o on c.parent_part_id = o.id
 )
 select id, artifact_id, parent_part_id, kind, ordinal, label, content, content_type,
-       status, origin, verdict, verdict_detail, solve_parts, error_message, created_at,
-       updated_at
+       status, origin, verdict, verdict_detail, solve_parts, error_message, content_version,
+       created_at, updated_at
 from ordered
 order by path, id
 """
@@ -689,13 +691,81 @@ def set_part_content(
         )
     )
     conn.execute(
-        "update artifact_parts set content = ?, origin = ?, updated_at = datetime('now') "
-        "where id = ?",
+        "update artifact_parts set content = ?, origin = ?, "
+        "content_version = content_version + 1, updated_at = datetime('now') where id = ?",
         (content, origin, part_id),
     )
     _touch_artifact(conn, int(part["artifact_id"]))
     conn.commit()
     return revision
+
+
+def part_content_version(conn: sqlite3.Connection, part_id: int) -> int:
+    """The part's current optimistic-concurrency version. 404 when the part is gone."""
+    return int(get_part(conn, part_id)["content_version"])
+
+
+def compare_and_set_part_content(
+    conn: sqlite3.Connection,
+    part_id: int,
+    content: str,
+    origin: str,
+    *,
+    expected_version: int,
+    note: str | None = None,
+    record_revision: bool = False,
+) -> dict[str, object]:
+    """Replace a part's content only when its version still matches `expected_version`.
+
+    This is the optimistic-concurrency write behind the draft autosave (PLA-289). A stale
+    request - an older autosave that lost its race, a second browser tab, an editor whose
+    body the server rewrote out from under it - names a version the part has already moved
+    past, and is refused without touching the content, its revisions, or its timestamps.
+
+    The check and the write share one `begin immediate` transaction, so two connections
+    racing the same part serialize into one winner and one `StaleContentError`; the
+    counter cannot be read stale and then written over. `set_part_content`'s own increment
+    is what makes an AI pass, an accepted suggestion, or a restore move the version too, so
+    a later autosave built on the pre-pass body conflicts here instead of clobbering it.
+
+    Args:
+        expected_version: The `content_version` the caller last saw for this part.
+        record_revision: As in `set_part_content`; the autosave leaves it False and its
+            explicit snapshot sets it True.
+
+    Returns:
+        `{"version": int, "content": str}` for the write that landed.
+
+    Raises:
+        NotFoundError: when no part carries that id.
+        StaleContentError: when `expected_version` no longer matches; carries the current
+            version and stored content so the caller can offer an honest reconciliation.
+        ValueError: when `origin` is outside the allowed set.
+    """
+    _require(origin, ORIGINS, "part origin")
+    try:
+        conn.execute("begin immediate")
+        part = get_part(conn, part_id)
+        current_version = int(part["content_version"])
+        if current_version != expected_version:
+            current_content = str(part["content"])
+            conn.rollback()
+            raise StaleContentError(current_version, current_content)
+        if record_revision:
+            _insert_revision(conn, part_id, content, origin, note)
+        new_version = current_version + 1
+        conn.execute(
+            "update artifact_parts set content = ?, origin = ?, content_version = ?, "
+            "updated_at = datetime('now') where id = ?",
+            (content, origin, new_version, part_id),
+        )
+        _touch_artifact(conn, int(part["artifact_id"]))
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    return {"version": new_version, "content": content}
 
 
 def set_part_position(

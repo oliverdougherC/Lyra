@@ -12,7 +12,7 @@ import pytest
 
 from backend.core import artifacts
 from backend.core.artifacts import ProvenanceEntry, SourceSpec
-from backend.core.errors import NotFoundError
+from backend.core.errors import NotFoundError, StaleContentError
 
 
 def _document(db: sqlite3.Connection, class_id: int, filename: str = "hw4.pdf") -> int:
@@ -241,6 +241,81 @@ def test_set_part_content_keeps_content_and_history_in_step(
         artifacts.GENERATED,
     ]
     assert revisions[1]["note"] == "You dropped a sign."
+
+
+def test_set_part_content_advances_the_content_version(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id = _artifact(db, class_id)
+    part_id = artifacts.create_part(db, artifact_id, artifacts.STEP, 0, content="x = 2")
+
+    # A fresh part starts at 0; every body write moves it by one, whether or not the write
+    # recorded a revision, so the version tracks the body and not the history.
+    assert artifacts.get_part(db, part_id)["content_version"] == 0
+    artifacts.set_part_content(db, part_id, "x = 3", artifacts.USER_CORRECTED)
+    assert artifacts.get_part(db, part_id)["content_version"] == 1
+    artifacts.set_part_content(db, part_id, "x = 4", artifacts.USER_CORRECTED)
+    assert artifacts.get_part(db, part_id)["content_version"] == 2
+    assert artifacts.part_content_version(db, part_id) == 2
+
+
+def test_compare_and_set_lands_on_a_matching_version(db: sqlite3.Connection, class_id: int) -> None:
+    artifact_id = _artifact(db, class_id)
+    part_id = artifacts.create_part(db, artifact_id, artifacts.STEP, 0, content="draft")
+
+    result = artifacts.compare_and_set_part_content(
+        db, part_id, "draft edited", artifacts.USER_CORRECTED, expected_version=0
+    )
+
+    assert result == {"version": 1, "content": "draft edited"}
+    assert artifacts.get_part(db, part_id)["content"] == "draft edited"
+    # The autosave default records no revision, so the history keeps only the seed.
+    assert [r["content"] for r in artifacts.list_revisions(db, part_id)] == ["draft"]
+
+
+def test_compare_and_set_records_a_revision_for_a_snapshot(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id = _artifact(db, class_id)
+    part_id = artifacts.create_part(db, artifact_id, artifacts.STEP, 0, content="draft")
+
+    artifacts.compare_and_set_part_content(
+        db,
+        part_id,
+        "draft snapshot",
+        artifacts.USER_CORRECTED,
+        expected_version=0,
+        note="snapshot",
+        record_revision=True,
+    )
+
+    revisions = artifacts.list_revisions(db, part_id)
+    assert [r["content"] for r in revisions] == ["draft snapshot", "draft"]
+    assert revisions[0]["note"] == "snapshot"
+
+
+def test_compare_and_set_refuses_a_stale_version_and_mutates_nothing(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id = _artifact(db, class_id)
+    part_id = artifacts.create_part(db, artifact_id, artifacts.STEP, 0, content="draft")
+
+    # Something already moved the part to version 1.
+    artifacts.set_part_content(db, part_id, "someone else's edit", artifacts.USER_CORRECTED)
+    revisions_before = artifacts.list_revisions(db, part_id)
+
+    with pytest.raises(StaleContentError) as caught:
+        artifacts.compare_and_set_part_content(
+            db, part_id, "stale overwrite", artifacts.USER_CORRECTED, expected_version=0
+        )
+
+    assert caught.value.current_version == 1
+    assert caught.value.current_content == "someone else's edit"
+    # The refused write left content, version, and history exactly as they were.
+    part = artifacts.get_part(db, part_id)
+    assert part["content"] == "someone else's edit"
+    assert part["content_version"] == 1
+    assert artifacts.list_revisions(db, part_id) == revisions_before
 
 
 def test_set_part_status_clears_a_stale_error(db: sqlite3.Connection, class_id: int) -> None:

@@ -66,7 +66,10 @@ def client(db: sqlite3.Connection) -> Iterator[TestClient]:
 
     @app.exception_handler(LyraError)
     async def handle_lyra_error(request: Request, exc: LyraError) -> JSONResponse:
-        return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+        content: dict[str, object] = {"detail": exc.message}
+        if exc.extra:
+            content.update(exc.extra)
+        return JSONResponse(status_code=exc.status, content=content)
 
     app.include_router(routes_drafts.router)
     app.dependency_overrides[get_db] = _request_db
@@ -135,19 +138,153 @@ def test_autosave_writes_no_revision_but_a_snapshot_does(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:
     artifact_id, part_id = _draft(db, class_id)
+    version = client.get(f"/api/drafts/{artifact_id}").json()["body_version"]
 
-    client.patch(f"/api/drafts/{artifact_id}/body", json={"content": PROPOSED})
+    saved = client.patch(
+        f"/api/drafts/{artifact_id}/body",
+        json={"content": PROPOSED, "expected_version": version},
+    ).json()
+    assert saved["version"] == version + 1
     assert artifacts.list_revisions(db, part_id)[0]["content"] == BASE
     assert str(artifacts.get_part(db, part_id)["content"]) == PROPOSED
 
-    client.patch(
+    snapshot = client.patch(
         f"/api/drafts/{artifact_id}/body",
-        json={"content": PROPOSED + "\nMore.\n", "snapshot": True},
-    )
+        json={
+            "content": PROPOSED + "\nMore.\n",
+            "expected_version": saved["version"],
+            "snapshot": True,
+        },
+    ).json()
+    assert snapshot["version"] == version + 2
     revisions = artifacts.list_revisions(db, part_id)
     assert revisions[0]["content"] == PROPOSED + "\nMore.\n"
     assert revisions[0]["note"] == "snapshot"
     assert revisions[0]["origin"] == artifacts.USER_CORRECTED
+
+
+def test_read_exposes_the_body_version_and_writes_advance_it(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, _ = _draft(db, class_id)
+
+    first = client.get(f"/api/drafts/{artifact_id}").json()
+    assert first["body_version"] == 0
+
+    result = client.patch(
+        f"/api/drafts/{artifact_id}/body",
+        json={"content": PROPOSED, "expected_version": 0},
+    ).json()
+    assert result == {"part_id": first["part_id"], "saved": True, "version": 1}
+    assert client.get(f"/api/drafts/{artifact_id}").json()["body_version"] == 1
+
+
+def test_a_body_write_requires_an_expected_version(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, _ = _draft(db, class_id)
+    # No version to check is precisely the last-writer-wins race this endpoint closes.
+    response = client.patch(f"/api/drafts/{artifact_id}/body", json={"content": PROPOSED})
+    assert response.status_code == 422
+
+
+def test_a_stale_body_write_is_refused_and_mutates_nothing(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft(db, class_id)
+
+    # Newer writer B lands first, moving the version from 0 to 1.
+    newer = client.patch(
+        f"/api/drafts/{artifact_id}/body",
+        json={"content": PROPOSED, "expected_version": 0},
+    ).json()
+    assert newer["version"] == 1
+    revisions_before = artifacts.list_revisions(db, part_id)
+
+    # Older writer A resolves late, still holding version 0. It must not win.
+    stale = client.patch(
+        f"/api/drafts/{artifact_id}/body",
+        json={"content": BASE + "stale tail\n", "expected_version": 0},
+    )
+    assert stale.status_code == 409
+    body = stale.json()
+    assert body["code"] == "stale_body_version"
+    assert body["current_version"] == 1
+    assert body["server_body"] == PROPOSED
+
+    # The stored body, the version, and the revision history are exactly B's landing.
+    assert str(artifacts.get_part(db, part_id)["content"]) == PROPOSED
+    assert artifacts.get_part(db, part_id)["content_version"] == 1
+    assert artifacts.list_revisions(db, part_id) == revisions_before
+
+
+def test_two_concurrent_body_writers_yield_one_winner_and_one_conflict(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft(db, class_id)
+
+    start = threading.Barrier(2)
+
+    def write(tail: str) -> int:
+        start.wait()
+        return client.patch(
+            f"/api/drafts/{artifact_id}/body",
+            json={"content": BASE + tail, "expected_version": 0},
+        ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = sorted(pool.map(write, ["one\n", "two\n"]))
+
+    # Exactly one write landed; the other got the deterministic conflict.
+    assert statuses == [200, 409]
+    assert artifacts.get_part(db, part_id)["content_version"] == 1
+
+
+def test_a_lost_response_retry_is_idempotent_under_the_version(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # The server answered but the client never saw it, so the client retries the same
+    # body on the same expected version. The first landed (0 -> 1); the retry now holds a
+    # stale version and is refused, which is the honest answer: the body is already there.
+    artifact_id, part_id = _draft(db, class_id)
+
+    first = client.patch(
+        f"/api/drafts/{artifact_id}/body",
+        json={"content": PROPOSED, "expected_version": 0},
+    )
+    assert first.status_code == 200
+
+    retry = client.patch(
+        f"/api/drafts/{artifact_id}/body",
+        json={"content": PROPOSED, "expected_version": 0},
+    )
+    assert retry.status_code == 409
+    # Its server_body is the content the retry meant to write, so the client reconciles to
+    # a no-op: nothing was lost, and the body was never written twice.
+    assert retry.json()["server_body"] == PROPOSED
+    assert artifacts.get_part(db, part_id)["content_version"] == 1
+
+
+def test_a_server_body_mutation_makes_a_stale_editor_autosave_conflict(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # The editor read the body at version 0. Then an AI pass / accepted suggestion /
+    # restore rewrote the body through `set_part_content`, which moves the version. The
+    # editor's next autosave still carries version 0, so it must conflict here rather than
+    # silently overwriting the AI's result with the pre-pass text.
+    artifact_id, part_id = _draft(db, class_id)
+    editor_version = client.get(f"/api/drafts/{artifact_id}").json()["body_version"]
+
+    ai_body = BASE + "\nA section the pass drafted.\n"
+    artifacts.set_part_content(db, part_id, ai_body, origin=artifacts.GENERATED, note="pass")
+
+    conflict = client.patch(
+        f"/api/drafts/{artifact_id}/body",
+        json={"content": BASE + "the student's stale edit\n", "expected_version": editor_version},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["server_body"] == ai_body
+    assert str(artifacts.get_part(db, part_id)["content"]) == ai_body
 
 
 def test_a_pass_queues_with_its_lens_and_filter(

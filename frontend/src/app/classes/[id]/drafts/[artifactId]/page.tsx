@@ -54,10 +54,11 @@ import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
-import { api, ApiError } from '@/lib/api'
+import { api, ApiError, DraftBodyConflictError } from '@/lib/api'
+import { SaveStateIndicator } from '@/components/drafts/save-state-indicator'
 import { normalizeMathDelimiters } from '@/lib/drafts/math-delimiters'
 import { createSaveEngine, flushOnHidden } from '@/lib/drafts/save-engine'
-import type { SaveStateName } from '@/lib/drafts/save-engine'
+import type { SaveConflict, SaveStateName } from '@/lib/drafts/save-engine'
 import { useClasses } from '@/lib/hooks/use-classes'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
@@ -225,11 +226,20 @@ export default function DraftWorkspacePage() {
   // `mutateAsync` is stable across renders, so the closure never goes stale.
   const [engine] = useState(() =>
     createSaveEngine({
-      write: (content) => updateBody.mutateAsync({ content }).then(() => undefined),
+      write: (content, expectedVersion) =>
+        updateBody
+          .mutateAsync({ content, expected_version: expectedVersion })
+          .then((result) => ({ version: result.version })),
       onState: (state, detail) => {
         setSaveState(state)
         setSaveDetail(detail ?? null)
       },
+      // A stale-version 409 is not an ordinary failure: it hands the engine the server's
+      // current version and body so the workspace can reconcile without losing either side.
+      isConflict: (error): SaveConflict | null =>
+        error instanceof DraftBodyConflictError
+          ? { serverVersion: error.currentVersion, serverBody: error.serverBody }
+          : null,
     }),
   )
 
@@ -283,6 +293,19 @@ export default function DraftWorkspacePage() {
       queryClient.invalidateQueries({ queryKey: chatKeys.messages(activeWriterSessionId ?? -1) })
     }
   }, [reviewRunning, polledDetail, artifactId, activeWriterSessionId, queryClient])
+
+  // A pass owns the document and writes it section by section, moving the body version on
+  // the server. When one settles, pull the rewritten body and its new version back into
+  // the editor and the engine: the editor follows the pass, and the next autosave expects
+  // the version the pass produced rather than falsely conflicting against it.
+  const wasPassRunningRef = useRef(false)
+  useEffect(() => {
+    const was = wasPassRunningRef.current
+    wasPassRunningRef.current = passRunning
+    if (was && !passRunning) void syncEditorFromServer()
+    // syncEditorFromServer is a stable closure over refs; the transition is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [passRunning])
 
   // Flush on the way out: a hidden tab is the last moment a write can still be sent, and
   // an unmount drops the editor entirely.
@@ -399,14 +422,20 @@ export default function DraftWorkspacePage() {
     }
   }, [loaded])
 
-  /** After any accept: pull the refetched body back into the editor and the engine. */
+  /**
+   * After an accept, restore, or a settled pass: pull the refetched body and its version
+   * back into the editor and the engine. Always re-seeds the version base - the server op
+   * moved it, so the next autosave must expect the new version rather than falsely
+   * conflicting - and only rewrites the editor when the body actually changed under it.
+   */
   async function syncEditorFromServer() {
     if (artifactId === null) return
     await queryClient.invalidateQueries({ queryKey: draftKeys.detail(artifactId) })
     const fresh = queryClient.getQueryData<DraftDetail>(draftKeys.detail(artifactId))
-    if (!fresh || fresh.body === latestMarkdownRef.current) return
+    if (!fresh) return
+    engine.noteSaved(fresh.body, fresh.body_version)
+    if (fresh.body === latestMarkdownRef.current) return
     const seeded = normalizeMathDelimiters(fresh.body)
-    engine.noteSaved(fresh.body)
     latestMarkdownRef.current = seeded
     setLatestMarkdown(seeded)
     editorRef.current?.reset(seeded)
@@ -433,15 +462,49 @@ export default function DraftWorkspacePage() {
   async function onSnapshot() {
     const content = latestMarkdownRef.current
     try {
-      await updateBody.mutateAsync({ content, snapshot: true })
+      // Land the newest words through the same pipeline first so the snapshot writes on
+      // top of a known version rather than as a competing out-of-order request.
+      await engine.flush(content)
+      if (engine.conflict()) return
+      const result = await updateBody.mutateAsync({
+        content,
+        expected_version: engine.version(),
+        snapshot: true,
+      })
       // The snapshot wrote the content too, so nothing is dirty any longer.
-      engine.cancel()
-      engine.noteSaved(content)
+      engine.noteSaved(content, result.version)
       setSaveState('saved')
       toast.success('Snapshot saved to the history.')
     } catch (caught) {
+      if (caught instanceof DraftBodyConflictError) {
+        // The body moved under us between the flush and the snapshot (a second tab). The
+        // student's writing is safe on screen; nothing was overwritten. Tell them plainly
+        // and leave the text intact rather than reloading over it.
+        toast.error(
+          'This draft changed somewhere else, so the snapshot was not saved. Your writing is still here; reopen the draft to catch up.',
+        )
+        return
+      }
       toast.error(caught instanceof ApiError ? caught.message : 'Could not save a snapshot.')
     }
+  }
+
+  // Reconcile a stale-version conflict by keeping the student's own writing: rebase onto
+  // what the server holds now and write the local text over it. Nothing on screen is lost.
+  function onKeepMyVersion() {
+    engine.keepLocal(latestMarkdownRef.current)
+  }
+
+  // Reconcile by taking the version saved elsewhere: adopt it as the base and load it into
+  // the editor. The student chose this, having seen both, so replacing the text is honest.
+  function onUseServerVersion() {
+    const resolved = engine.takeServer()
+    if (!resolved) return
+    const seeded = normalizeMathDelimiters(resolved.serverBody)
+    latestMarkdownRef.current = seeded
+    setLatestMarkdown(seeded)
+    editorRef.current?.reset(seeded)
+    setSaveState('saved')
   }
 
   if (classId === null || artifactId === null) {
@@ -524,8 +587,10 @@ export default function DraftWorkspacePage() {
       {/* `inert` while a pass runs: the pass owns the document and the editor is a
           viewer following it - sections appear as they land. Typing into a body the
           server is rewriting would race the autosave against the pipeline, and the
-          autosave writes whole documents. */}
+          autosave writes whole documents. A review leaves the editor live, so this is a
+          pass alone. */}
       <div
+        inert={generating && !reviewing}
         className={cn(
           // 760px of column meant ~680px of text however wide the window: a fine prose
           // measure and a bad one for the equations and tables a technical draft is full
@@ -562,9 +627,9 @@ export default function DraftWorkspacePage() {
             engine.schedule(markdown)
           }}
           onEditorReady={(view) => {
-            // The engine starts from what the server holds, so the seed document is
-            // not a change waiting to be written back.
-            engine.noteSaved(artifact.body)
+            // The engine starts from what the server holds, at the version it holds it, so
+            // the seed document is not a change waiting to be written back.
+            engine.noteSaved(artifact.body, artifact.body_version)
             latestMarkdownRef.current = seedBody
             setLatestMarkdown(seedBody)
             // A body whose math delimiters needed converting is now one edit ahead
@@ -1009,6 +1074,11 @@ export default function DraftWorkspacePage() {
         />
       ) : null}
 
+      <DraftConflictDialog
+        conflict={saveState === 'conflict' ? engine.conflict() : null}
+        onKeepMine={onKeepMyVersion}
+        onUseServer={onUseServerVersion}
+      />
       <DraftDocumentDialog
         open={draftDialogOpen}
         pending={startPass.isPending}
@@ -1168,38 +1238,52 @@ function DraftTitle({
   )
 }
 
-/** dirty, saving, saved, error: whether the words on screen are the words on disk. */
-function SaveStateIndicator({ state, detail }: { state: SaveStateName; detail: string | null }) {
-  const label =
-    state === 'saved'
-      ? 'Saved'
-      : state === 'saving'
-        ? 'Saving'
-        : state === 'dirty'
-          ? 'Unsaved changes'
-          : 'Could not save'
+/**
+ * The stale-version reconciliation. A second tab, a slow retry, or an AI pass moved the
+ * saved draft past what this editor last knew, so a save was refused rather than allowed to
+ * overwrite newer text. Both versions are intact: the student's writing is still in the
+ * editor, and the version saved elsewhere is shown here. The choice is theirs, and the
+ * dialog stays until they make it - there is no silent reload over their words.
+ */
+function DraftConflictDialog({
+  conflict,
+  onKeepMine,
+  onUseServer,
+}: {
+  conflict: SaveConflict | null
+  onKeepMine: () => void
+  onUseServer: () => void
+}) {
   return (
-    <span
-      role="status"
-      aria-live="polite"
-      title={state === 'error' ? (detail ?? undefined) : undefined}
-      className={cn(
-        'flex items-center gap-1.5 text-xs',
-        state === 'error' ? 'text-danger-text' : 'text-text-tertiary',
-      )}
-    >
-      <span
-        aria-hidden
-        className={cn(
-          'size-1.5 rounded-full',
-          state === 'saved' && 'bg-success-text',
-          state === 'saving' && 'bg-accent-primary animate-pulse',
-          state === 'dirty' && 'bg-text-tertiary',
-          state === 'error' && 'bg-danger-text',
-        )}
-      />
-      {label}
-    </span>
+    <Dialog open={conflict !== null}>
+      <DialogContent className="max-w-xl" showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>This draft was changed somewhere else</DialogTitle>
+          <DialogDescription>
+            Your latest writing was not saved, because a newer version of this draft was saved from
+            another place - likely this draft open in a second tab. Nothing was lost. Your writing
+            is still right here in the editor, and the other version is below. Choose which one to
+            keep.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-2">
+          <p className="text-text-secondary text-sm font-medium">The version saved elsewhere</p>
+          <pre className="border-border bg-muted max-h-64 overflow-auto rounded-md border p-3 text-xs whitespace-pre-wrap">
+            {conflict?.serverBody === '' ? '(empty)' : conflict?.serverBody}
+          </pre>
+          <p className="text-text-tertiary text-xs">
+            Keeping your writing replaces the version above with what is in your editor. Using the
+            other version replaces your editor with the text above.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onUseServer}>
+            Use the other version
+          </Button>
+          <Button onClick={onKeepMine}>Keep what I wrote</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

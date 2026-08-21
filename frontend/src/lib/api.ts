@@ -39,6 +39,8 @@ import type {
   DocumentStatus,
   DocumentText,
   BriefWrite,
+  DraftBodyConflict,
+  DraftBodySaved,
   DraftBodyUpdate,
   DraftBrief,
   DraftComment,
@@ -135,6 +137,41 @@ export class AgentChatError extends ApiError implements AgentChatFailure {
     this.command_request_ids = payload.command_request_ids
     this.profile_fact_ids = payload.profile_fact_ids
   }
+}
+
+/**
+ * A draft body write refused because the stored body moved past the version it named
+ * (PLA-289). Carries the server's authoritative version and body so the workspace can keep
+ * the local text and offer an honest reconciliation instead of silently reloading over it.
+ */
+export class DraftBodyConflictError extends ApiError {
+  readonly currentVersion: number
+  readonly serverBody: string
+
+  constructor(status: number, payload: DraftBodyConflict) {
+    super(status, payload.detail)
+    this.name = 'DraftBodyConflictError'
+    this.currentVersion = payload.current_version
+    this.serverBody = payload.server_body
+  }
+}
+
+function isDraftBodyConflict(payload: unknown): payload is DraftBodyConflict {
+  if (!payload || typeof payload !== 'object') return false
+  const value = payload as Record<string, unknown>
+  return (
+    value.code === 'stale_body_version' &&
+    typeof value.current_version === 'number' &&
+    typeof value.server_body === 'string' &&
+    typeof value.detail === 'string'
+  )
+}
+
+function draftBodyErrorFactory(status: number, payload: unknown | undefined): Error {
+  if (status === 409 && isDraftBodyConflict(payload)) {
+    return new DraftBodyConflictError(status, payload)
+  }
+  return defaultErrorFactory(status, payload)
 }
 
 const UNREACHABLE =
@@ -717,9 +754,11 @@ export const api = {
    * second and a half does not bury the ones the student took on purpose.
    */
   updateDraftBody: (draftId: number, body: DraftBodyUpdate) =>
-    requestJson<{ part_id: number; saved: true }>(`/api/drafts/${draftId}/body`, {
+    requestJson<DraftBodySaved>(`/api/drafts/${draftId}/body`, {
       method: 'PATCH',
       body,
+      // A stale-version 409 becomes a typed conflict the save engine reconciles.
+      errorFactory: draftBodyErrorFactory,
     }),
 
   startDraftPass: (draftId: number, body: PassRequest = {}) =>

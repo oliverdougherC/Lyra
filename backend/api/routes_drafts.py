@@ -128,9 +128,16 @@ class BodyUpdate(BaseModel):
 
     Default writes no revision: a debounced autosave every 1.5 seconds would bury the
     meaningful ones. `snapshot: true` is the explicit history point.
+
+    `expected_version` is the optimistic-concurrency token (PLA-289): the `body_version`
+    the client last read. The write lands only if the stored body still carries it, so a
+    stale autosave or a second tab cannot silently overwrite newer writing. It is required
+    - a body write with no version to check is exactly the last-writer-wins race this
+    endpoint exists to close.
     """
 
     content: str
+    expected_version: int = Field(ge=0)
     snapshot: bool = False
     note: str | None = None
 
@@ -384,6 +391,8 @@ def read_draft(artifact_id: int, conn: DbConn) -> dict[str, object]:
         **artifact,
         "part_id": part["id"],
         "body": part["content"],
+        # The optimistic-concurrency token the workspace echoes back on every autosave.
+        "body_version": part["content_version"],
         "pending": pending is not None,
     }
 
@@ -402,18 +411,25 @@ def delete_draft(artifact_id: int, conn: DbConn) -> None:
 
 @router.patch("/drafts/{artifact_id}/body", response_model=None)
 def update_body(artifact_id: int, payload: BodyUpdate, conn: DbConn) -> dict[str, object]:
-    """The autosave path. See `BodyUpdate` for the revision rule."""
+    """The autosave path. See `BodyUpdate` for the revision and version rules.
+
+    Writes through the compare-and-swap so a stale request cannot overwrite a newer body:
+    a version mismatch raises `StaleContentError`, which the shared handler renders as a
+    409 carrying the current version and stored body for the workspace to reconcile. The
+    successful response returns the new authoritative `version`.
+    """
     _require_draft(conn, artifact_id)
     part = _body_part(conn, artifact_id)
-    artifacts.set_part_content(
+    result = artifacts.compare_and_set_part_content(
         conn,
         int(part["id"]),
         payload.content,
-        origin=artifacts.USER_CORRECTED,
+        artifacts.USER_CORRECTED,
+        expected_version=payload.expected_version,
         note=(payload.note or "snapshot") if payload.snapshot else None,
         record_revision=payload.snapshot,
     )
-    return {"part_id": part["id"], "saved": True}
+    return {"part_id": part["id"], "saved": True, "version": result["version"]}
 
 
 @router.post("/drafts/{artifact_id}/write")
