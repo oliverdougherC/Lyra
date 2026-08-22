@@ -164,7 +164,10 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(LyraError)
     async def handle_lyra_error(request: Request, exc: LyraError) -> JSONResponse:
-        return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+        content: dict[str, object] = {"detail": exc.message}
+        if exc.extra:
+            content.update(exc.extra)
+        return JSONResponse(status_code=exc.status, content=content)
 
     @app.exception_handler(Exception)
     async def handle_unexpected(request: Request, exc: Exception) -> JSONResponse:

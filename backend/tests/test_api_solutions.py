@@ -701,6 +701,178 @@ def test_restoring_an_earlier_version_is_itself_a_revision(
     assert revisions[0]["note"] == "Restored version 1."
 
 
+def _draft_body(db: sqlite3.Connection, class_id: int, content: str) -> tuple[int, int]:
+    """A draft artifact with one body part holding `content`. Returns (artifact_id, part_id).
+
+    The generic restore endpoint is shared with drafts, so a draft body part restores
+    through `/api/solutions/{id}/parts/{part}/restore` too - version-aware when the caller
+    names an `expected_version` (PLA-289).
+    """
+    created = artifacts.create_artifact(db, class_id, "Essay", [], kind=artifacts.KIND_DRAFT)
+    part_id = artifacts.create_part(
+        db,
+        int(created["id"]),
+        artifacts.DRAFT_BODY,
+        1,
+        content=content,
+        status=artifacts.PART_COMPLETE,
+    )
+    return int(created["id"]), part_id
+
+
+def test_draft_restore_with_the_current_version_succeeds(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft_body(db, class_id, "first draft")
+    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
+    version = int(artifacts.get_part(db, part_id)["content_version"])
+
+    restored = client.post(
+        f"/api/solutions/{artifact_id}/parts/{part_id}/restore",
+        json={"revision": 1, "expected_version": version},
+    )
+
+    assert restored.status_code == 200
+    assert str(artifacts.get_part(db, part_id)["content"]) == "first draft"
+    # The restore moved the version too, so a stale autosave conflicts against it.
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == version + 1
+
+
+def test_stale_draft_restore_is_refused_without_mutation(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # A stale tab restores against a version the body has moved past (another tab wrote it
+    # in between). The restore must conflict and leave the newer body untouched.
+    artifact_id, part_id = _draft_body(db, class_id, "first draft")
+    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
+    stale_version = int(artifacts.get_part(db, part_id)["content_version"])
+    artifacts.set_part_content(db, part_id, "third from elsewhere", origin=artifacts.USER_CORRECTED)
+    moved_version = int(artifacts.get_part(db, part_id)["content_version"])
+
+    refused = client.post(
+        f"/api/solutions/{artifact_id}/parts/{part_id}/restore",
+        json={"revision": 1, "expected_version": stale_version},
+    )
+
+    assert refused.status_code == 409
+    # Nothing was written: the other tab's body and version stand.
+    assert str(artifacts.get_part(db, part_id)["content"]) == "third from elsewhere"
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == moved_version
+
+
+def test_versionless_restore_keeps_the_solution_behavior(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # A real *solution* part (not a draft body) restores unconditionally with no version
+    # token, exactly as the solution history has always done - the shared endpoint stays
+    # backward compatible for the kind that has no version to check.
+    artifact_id, _, step_id = _solved(db, class_id, _document(db, class_id))
+    client.patch(f"/api/solutions/{artifact_id}/parts/{step_id}", json={"content": "My version."})
+
+    restored = client.post(
+        f"/api/solutions/{artifact_id}/parts/{step_id}/restore",
+        json={"revision": 1},
+    )
+
+    assert restored.status_code == 200
+    assert str(artifacts.get_part(db, step_id)["content"]) == "Apply the definition."
+
+
+def test_draft_restore_without_a_version_is_refused_without_mutation(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # A draft body must never restore versionlessly: that is the last-writer-wins loophole
+    # PLA-289 closes. The endpoint refuses by part kind, not by trusting the client to send a
+    # token, so a stale bundle or a direct caller is refused with nothing mutated.
+    artifact_id, part_id = _draft_body(db, class_id, "first draft")
+    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
+    before_version = int(artifacts.get_part(db, part_id)["content_version"])
+    before_revisions = artifacts.list_revisions(db, part_id)
+
+    refused = client.post(
+        f"/api/solutions/{artifact_id}/parts/{part_id}/restore",
+        json={"revision": 1},
+    )
+
+    assert refused.status_code == 400
+    # Nothing moved: not the body, not the version, not the history.
+    assert str(artifacts.get_part(db, part_id)["content"]) == "second draft"
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == before_version
+    assert artifacts.list_revisions(db, part_id) == before_revisions
+
+
+def test_draft_restore_preserves_the_pre_restore_autosaved_body_as_history(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # The guarantee PLA-289 makes real: the pre-restore body - which may exist only via the
+    # debounced autosave, which records no revision - must survive a restore as a recoverable
+    # history point, so restoring an older version is itself undoable.
+    # `_draft_body` creates the part with content "revision A body", which is recorded as
+    # revision 1 - the older history point there is to restore back to.
+    artifact_id, part_id = _draft_body(db, class_id, "revision A body")
+    assert [r["content"] for r in artifacts.list_revisions(db, part_id)] == ["revision A body"]
+
+    # The student then manually writes B and it reaches disk only through the autosave, which
+    # records NO revision - the compare-and-swap with record_revision=False.
+    version = int(artifacts.get_part(db, part_id)["content_version"])
+    artifacts.compare_and_set_part_content(
+        db,
+        part_id,
+        "manually autosaved body B",
+        artifacts.USER_CORRECTED,
+        expected_version=version,
+        record_revision=False,
+    )
+    assert [r["content"] for r in artifacts.list_revisions(db, part_id)] == ["revision A body"]
+    restore_version = int(artifacts.get_part(db, part_id)["content_version"])
+
+    # Restore the older revision A. B must first become a history point.
+    restored = client.post(
+        f"/api/solutions/{artifact_id}/parts/{part_id}/restore",
+        json={"revision": 1, "expected_version": restore_version},
+    )
+    assert restored.status_code == 200
+    assert str(artifacts.get_part(db, part_id)["content"]) == "revision A body"
+
+    # B is now recoverable in history (it was preserved before the target was written), and
+    # the restored A sits on top as its own revision - so the restore is itself undoable.
+    contents = [r["content"] for r in artifacts.list_revisions(db, part_id)]
+    assert "manually autosaved body B" in contents
+    # Newest first: restored A, then preserved B, then the original A.
+    assert contents == ["revision A body", "manually autosaved body B", "revision A body"]
+
+    # Prove B can be restored back: it is the second-newest revision (number 2).
+    reopened_version = int(artifacts.get_part(db, part_id)["content_version"])
+    back = client.post(
+        f"/api/solutions/{artifact_id}/parts/{part_id}/restore",
+        json={"revision": 2, "expected_version": reopened_version},
+    )
+    assert back.status_code == 200
+    assert str(artifacts.get_part(db, part_id)["content"]) == "manually autosaved body B"
+
+
+def test_stale_draft_restore_creates_no_phantom_revision(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # A writer moving the body between the caller's read and the restore must make the restore
+    # conflict without leaving a partial history - no preserved body, no restored target.
+    artifact_id, part_id = _draft_body(db, class_id, "first draft")
+    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
+    stale_version = int(artifacts.get_part(db, part_id)["content_version"])
+    artifacts.set_part_content(db, part_id, "third from elsewhere", origin=artifacts.USER_CORRECTED)
+    before_revisions = artifacts.list_revisions(db, part_id)
+
+    refused = client.post(
+        f"/api/solutions/{artifact_id}/parts/{part_id}/restore",
+        json={"revision": 1, "expected_version": stale_version},
+    )
+
+    assert refused.status_code == 409
+    # No phantom revision: the outgoing body was not preserved, the target was not written.
+    assert artifacts.list_revisions(db, part_id) == before_revisions
+    assert str(artifacts.get_part(db, part_id)["content"]) == "third from elsewhere"
+
+
 def test_the_gate_can_say_a_problems_parts_are_separate_questions(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:

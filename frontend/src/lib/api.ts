@@ -39,6 +39,8 @@ import type {
   DocumentStatus,
   DocumentText,
   BriefWrite,
+  DraftBodyConflict,
+  DraftBodySaved,
   DraftBodyUpdate,
   DraftBrief,
   DraftComment,
@@ -135,6 +137,41 @@ export class AgentChatError extends ApiError implements AgentChatFailure {
     this.command_request_ids = payload.command_request_ids
     this.profile_fact_ids = payload.profile_fact_ids
   }
+}
+
+/**
+ * A draft body write refused because the stored body moved past the version it named
+ * (PLA-289). Carries the server's authoritative version and body so the workspace can keep
+ * the local text and offer an honest reconciliation instead of silently reloading over it.
+ */
+export class DraftBodyConflictError extends ApiError {
+  readonly currentVersion: number
+  readonly serverBody: string
+
+  constructor(status: number, payload: DraftBodyConflict) {
+    super(status, payload.detail)
+    this.name = 'DraftBodyConflictError'
+    this.currentVersion = payload.current_version
+    this.serverBody = payload.server_body
+  }
+}
+
+function isDraftBodyConflict(payload: unknown): payload is DraftBodyConflict {
+  if (!payload || typeof payload !== 'object') return false
+  const value = payload as Record<string, unknown>
+  return (
+    value.code === 'stale_body_version' &&
+    typeof value.current_version === 'number' &&
+    typeof value.server_body === 'string' &&
+    typeof value.detail === 'string'
+  )
+}
+
+function draftBodyErrorFactory(status: number, payload: unknown | undefined): Error {
+  if (status === 409 && isDraftBodyConflict(payload)) {
+    return new DraftBodyConflictError(status, payload)
+  }
+  return defaultErrorFactory(status, payload)
 }
 
 const UNREACHABLE =
@@ -620,10 +657,25 @@ export const api = {
       signal,
     }),
 
-  restorePartRevision: (artifactId: number, partId: number, revision: number) =>
+  /**
+   * Restore an earlier revision. `expectedVersion` is the draft body's `content_version`
+   * the caller last saw; when present the restore writes through the compare-and-swap and
+   * a stale tab is refused with a `DraftBodyConflictError` rather than replacing newer text
+   * (PLA-289). The solution history omits it and restores unchanged.
+   */
+  restorePartRevision: (
+    artifactId: number,
+    partId: number,
+    revision: number,
+    expectedVersion?: number,
+  ) =>
     requestJson<SolutionPart>(`/api/solutions/${artifactId}/parts/${partId}/restore`, {
       method: 'POST',
-      body: { revision },
+      body:
+        expectedVersion === undefined
+          ? { revision }
+          : { revision, expected_version: expectedVersion },
+      errorFactory: draftBodyErrorFactory,
     }),
 
   resegmentSolution: (artifactId: number) =>
@@ -717,9 +769,11 @@ export const api = {
    * second and a half does not bury the ones the student took on purpose.
    */
   updateDraftBody: (draftId: number, body: DraftBodyUpdate) =>
-    requestJson<{ part_id: number; saved: true }>(`/api/drafts/${draftId}/body`, {
+    requestJson<DraftBodySaved>(`/api/drafts/${draftId}/body`, {
       method: 'PATCH',
       body,
+      // A stale-version 409 becomes a typed conflict the save engine reconciles.
+      errorFactory: draftBodyErrorFactory,
     }),
 
   startDraftPass: (draftId: number, body: PassRequest = {}) =>
@@ -818,13 +872,23 @@ export const api = {
   getPendingEdit: (draftId: number, signal?: AbortSignal) =>
     requestJson<PendingEdit | null>(`/api/drafts/${draftId}/pending`, { signal }),
 
+  /**
+   * Accept a pending edit. `expected_body_version` is the draft body version the student
+   * reviewed against; a body that moved past it is refused with a `DraftBodyConflictError`
+   * so an accept (or a force-replace) never silently overwrites newer text (PLA-289).
+   */
   acceptPendingEdit: (
     editId: number,
-    body: { hunk?: { index: number; hash: string }; force?: boolean } = {},
+    body: {
+      hunk?: { index: number; hash: string }
+      force?: boolean
+      expected_body_version?: number
+    } = {},
   ) =>
     requestJson<AcceptRejectResult>(`/api/pending-edits/${editId}/accept`, {
       method: 'POST',
       body,
+      errorFactory: draftBodyErrorFactory,
     }),
 
   rejectPendingEdit: (editId: number, hunk?: { index: number; hash: string }) =>

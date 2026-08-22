@@ -10,7 +10,7 @@ import sqlite3
 import pytest
 
 from backend.core import artifacts, suggestions
-from backend.core.errors import ConflictError
+from backend.core.errors import ConflictError, StaleContentError
 
 BASE = (
     "# Notes on the delta function\n"
@@ -209,6 +209,64 @@ def test_an_empty_diff_proposes_nothing(db: sqlite3.Connection, class_id: int) -
 
     assert suggestions.propose(db, part_id, BASE, "Nothing to do") is None
     assert suggestions.pending_for_part(db, part_id) is None
+
+
+def test_accept_with_a_matching_expected_version_lands_and_moves_the_version(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    part_id = _draft(db, class_id)
+    suggestions.propose(db, part_id, PROPOSED, "Tighten")
+    edit = suggestions.pending_for_part(db, part_id)
+    version = artifacts.part_content_version(db, part_id)
+
+    result = suggestions.accept(db, edit["id"], expected_version=version)
+
+    assert result["remaining"] == 0
+    assert _part_content(db, part_id) == PROPOSED
+    assert artifacts.part_content_version(db, part_id) == version + 1
+
+
+def test_accept_racing_a_body_change_is_refused_without_mutation(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    part_id = _draft(db, class_id)
+    suggestions.propose(db, part_id, PROPOSED, "Tighten")
+    edit = suggestions.pending_for_part(db, part_id)
+    reviewed_version = artifacts.part_content_version(db, part_id)
+    # A second tab moves the body past the version the student reviewed the suggestion at.
+    elsewhere = BASE.replace("It commutes, which matters later.\n", "It commutes; note this.\n")
+    artifacts.set_part_content(db, part_id, elsewhere, origin=artifacts.USER_CORRECTED)
+    moved_version = artifacts.part_content_version(db, part_id)
+    assert moved_version != reviewed_version
+
+    with pytest.raises(StaleContentError) as excinfo:
+        suggestions.accept(db, edit["id"], expected_version=reviewed_version)
+
+    assert excinfo.value.current_version == moved_version
+    # Refused without touching the body or the pending edit: nothing was overwritten.
+    assert _part_content(db, part_id) == elsewhere
+    assert artifacts.part_content_version(db, part_id) == moved_version
+    assert suggestions.pending_for_part(db, part_id) is not None
+
+
+def test_force_accept_racing_a_body_change_still_conflicts(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    # A force is relative to the version the student saw: a change that landed after they
+    # looked conflicts rather than being silently overwritten.
+    part_id = _draft(db, class_id)
+    edit = suggestions.propose(db, part_id, PROPOSED, "Tighten")
+    assert edit is not None
+    reviewed_version = artifacts.part_content_version(db, part_id)
+    edited = BASE.replace("The delta function is even.\n", "The delta function is symmetric.\n")
+    artifacts.set_part_content(db, part_id, edited, origin=artifacts.USER_CORRECTED)
+    moved_version = artifacts.part_content_version(db, part_id)
+
+    with pytest.raises(StaleContentError):
+        suggestions.accept(db, edit.id, force=True, expected_version=reviewed_version)
+
+    assert _part_content(db, part_id) == edited
+    assert artifacts.part_content_version(db, part_id) == moved_version
 
 
 def test_every_accept_writes_a_revision_with_the_instruction(

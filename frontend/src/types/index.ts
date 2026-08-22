@@ -802,6 +802,8 @@ export interface DraftRead {
 export interface DraftDetail extends DraftRead {
   part_id: number
   body: string
+  /** The optimistic-concurrency token the autosave echoes back as `expected_version`. */
+  body_version: number
   /** Whether a suggestion is waiting to be reviewed, so the rail can open on it. */
   pending: boolean
 }
@@ -926,8 +928,25 @@ export type WriteEvent =
 /** Body of `PATCH /api/drafts/{id}/body`. Without `snapshot` no revision is written. */
 export interface DraftBodyUpdate {
   content: string
+  /** The `body_version` the client last saw; the write lands only if it still matches. */
+  expected_version: number
   snapshot?: boolean
   note?: string
+}
+
+/** What the autosave endpoint returns: the new authoritative version of the body. */
+export interface DraftBodySaved {
+  part_id: number
+  saved: true
+  version: number
+}
+
+/** The 409 body when a write named a version the server has already moved past. */
+export interface DraftBodyConflict {
+  detail: string
+  code: 'stale_body_version'
+  current_version: number
+  server_body: string
 }
 
 /**

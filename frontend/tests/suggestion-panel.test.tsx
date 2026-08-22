@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SuggestionPanel } from '@/components/drafts/suggestion-panel'
-import { api, ApiError } from '@/lib/api'
+import { api, ApiError, DraftBodyConflictError } from '@/lib/api'
 import type { PendingEdit } from '@/types'
 
 vi.mock('sonner', () => ({
@@ -164,5 +164,85 @@ describe('SuggestionPanel', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Reject' }))
     await waitFor(() => expect(reject).toHaveBeenCalledWith(5, undefined))
+  })
+})
+
+describe('SuggestionPanel: the save barrier before an accept (PLA-289)', () => {
+  function renderWithBarrier(
+    edit: PendingEdit,
+    props: {
+      saveBarrier: () => Promise<{ ok: boolean; version: number }>
+      onBodyConflict?: (conflict: { serverVersion: number; serverBody: string }) => void
+      onApplied?: (result: unknown) => void
+    },
+  ) {
+    const { wrapper } = createWrapper()
+    render(
+      <SuggestionPanel
+        draftId={3}
+        edit={edit}
+        currentBody="The current document."
+        onApplied={props.onApplied ?? vi.fn()}
+        saveBarrier={props.saveBarrier}
+        onBodyConflict={props.onBodyConflict ?? vi.fn()}
+      />,
+      { wrapper },
+    )
+  }
+
+  it('lands the local body first and accepts against the version it confirmed', async () => {
+    const accept = vi.spyOn(api, 'acceptPendingEdit').mockResolvedValue({ remaining: 0 })
+    const saveBarrier = vi.fn().mockResolvedValue({ ok: true, version: 9 })
+    renderWithBarrier(EDIT, { saveBarrier })
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept all' }))
+
+    await waitFor(() => expect(saveBarrier).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(accept).toHaveBeenCalledWith(5, {
+        hunk: undefined,
+        force: false,
+        expected_body_version: 9,
+      }),
+    )
+  })
+
+  it('does not accept when the local body could not be saved first', async () => {
+    // The barrier reports the current text is not on disk (a save failure, or an open
+    // conflict): the suggestion must not be applied over unsaved local writing.
+    const accept = vi.spyOn(api, 'acceptPendingEdit').mockResolvedValue({ remaining: 0 })
+    const saveBarrier = vi.fn().mockResolvedValue({ ok: false, version: 4 })
+    renderWithBarrier(EDIT, { saveBarrier })
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept all' }))
+
+    await waitFor(() => expect(saveBarrier).toHaveBeenCalled())
+    expect(accept).not.toHaveBeenCalled()
+  })
+
+  it('feeds a stale-version accept into the save engine rather than a bare toast', async () => {
+    vi.spyOn(api, 'acceptPendingEdit').mockRejectedValue(
+      new DraftBodyConflictError(409, {
+        detail: 'This draft changed somewhere else.',
+        code: 'stale_body_version',
+        current_version: 12,
+        server_body: 'the version saved elsewhere',
+      }),
+    )
+    const onBodyConflict = vi.fn()
+    const saveBarrier = vi.fn().mockResolvedValue({ ok: true, version: 7 })
+    renderWithBarrier(EDIT, { saveBarrier, onBodyConflict })
+    vi.mocked(toast.error).mockClear()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Accept all' }))
+
+    await waitFor(() =>
+      expect(onBodyConflict).toHaveBeenCalledWith({
+        serverVersion: 12,
+        serverBody: 'the version saved elsewhere',
+      }),
+    )
+    // The conflict opens the reconciliation, so no scary toast over the student's words.
+    expect(toast.error).not.toHaveBeenCalled()
   })
 })
