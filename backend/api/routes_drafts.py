@@ -199,15 +199,20 @@ class AcceptRequest(BaseModel):
     """Body of `POST /api/pending-edits/{edit_id}/accept`.
 
     `expected_body_version` is the draft body `content_version` the student reviewed the
-    suggestion against (PLA-289). When present, the accept is refused if the stored body has
-    moved past it - a second tab, a concurrent pass, or an autosave that landed after the
-    student last looked - rather than silently overwriting the newer body. Optional so the
-    solution surfaces, which have no version token, keep accepting unchanged.
+    suggestion against (PLA-289). The accept is refused if the stored body has moved past it
+    - a second tab, a concurrent pass, or an autosave that landed after the student last
+    looked - rather than silently overwriting the newer body.
+
+    It is **required**. This endpoint only ever accepts a draft body (`_require_draft_edit`
+    rejects everything else), so there is no versionless surface to stay compatible with, and
+    a draft accept with no version to check is exactly the stale-write race PLA-289 closes.
+    A missing token is a 422 before any mutation runs - a stale bundle or a direct caller
+    cannot force-replace a draft body without naming the version it saw.
     """
 
     hunk: HunkRef | None = None
     force: bool = False
-    expected_body_version: int | None = Field(default=None, ge=0)
+    expected_body_version: int = Field(ge=0)
 
 
 class RejectRequest(BaseModel):

@@ -746,8 +746,12 @@ def test_accept_and_reject_over_http(
     artifact_id, part_id = _draft(db, class_id)
     suggestions.propose(db, part_id, PROPOSED, "Tighten")
     edit = client.get(f"/api/drafts/{artifact_id}/pending").json()
+    version = client.get(f"/api/drafts/{artifact_id}").json()["body_version"]
 
-    accepted = client.post(f"/api/pending-edits/{edit['id']}/accept", json={})
+    accepted = client.post(
+        f"/api/pending-edits/{edit['id']}/accept",
+        json={"expected_body_version": version},
+    )
     assert accepted.status_code == 200
     assert accepted.json()["remaining"] == 0
     assert str(artifacts.get_part(db, part_id)["content"]) == PROPOSED
@@ -782,7 +786,11 @@ def test_address_comment_resolves_only_after_its_linked_proposal_lands(
     db.commit()
 
     assert comments._get(db, int(root["id"]))["resolved"] == 0
-    accepted = client.post(f"/api/pending-edits/{edit.id}/accept", json={})
+    version = client.get(f"/api/drafts/{artifact_id}").json()["body_version"]
+    accepted = client.post(
+        f"/api/pending-edits/{edit.id}/accept",
+        json={"expected_body_version": version},
+    )
 
     assert accepted.status_code == 200
     assert comments._get(db, int(root["id"]))["resolved"] == 1
@@ -837,14 +845,23 @@ def test_accepting_an_unrelated_hunk_does_not_resolve_the_addressed_section(
     pending = client.get(f"/api/drafts/{artifact_id}/pending").json()
 
     first = pending["hunks"][0]
+    version = client.get(f"/api/drafts/{artifact_id}").json()["body_version"]
     accepted = client.post(
         f"/api/pending-edits/{edit.id}/accept",
-        json={"hunk": {"index": first["index"], "hash": first["hash"]}},
+        json={
+            "hunk": {"index": first["index"], "hash": first["hash"]},
+            "expected_body_version": version,
+        },
     )
 
     assert accepted.json()["remaining"] == 1
     assert comments._get(db, int(root["id"]))["resolved"] == 0
-    finished = client.post(f"/api/pending-edits/{edit.id}/accept", json={})
+    # The hunk accept moved the body version, so the finishing accept carries the new one.
+    version = client.get(f"/api/drafts/{artifact_id}").json()["body_version"]
+    finished = client.post(
+        f"/api/pending-edits/{edit.id}/accept",
+        json={"expected_body_version": version},
+    )
     assert finished.json()["remaining"] == 0
     assert comments._get(db, int(root["id"]))["resolved"] == 1
 
@@ -867,6 +884,30 @@ def test_accept_with_a_matching_expected_body_version_lands(
     assert str(artifacts.get_part(db, part_id)["content"]) == PROPOSED
     # The accept moved the body version, so a later stale autosave conflicts against it.
     assert int(artifacts.get_part(db, part_id)["content_version"]) == version + 1
+
+
+def test_a_draft_accept_without_a_version_is_refused_and_mutates_nothing(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    # This endpoint is draft-only, so the version token is required: a request without it is
+    # rejected before the handler runs, and no direct/stale client can force-replace a draft
+    # body versionlessly. Nothing is written - not the body, the edit, or the history.
+    artifact_id, part_id = _draft(db, class_id)
+    suggestions.propose(db, part_id, PROPOSED, "Tighten")
+    edit = client.get(f"/api/drafts/{artifact_id}/pending").json()
+    before_content = str(artifacts.get_part(db, part_id)["content"])
+    before_version = int(artifacts.get_part(db, part_id)["content_version"])
+    before_revisions = artifacts.list_revisions(db, part_id)
+
+    for body in ({}, {"force": True}):
+        refused = client.post(f"/api/pending-edits/{edit['id']}/accept", json=body)
+        assert refused.status_code == 422
+
+    # The suggestion still pends and nothing about the body or its history moved.
+    assert client.get(f"/api/drafts/{artifact_id}/pending").json() is not None
+    assert str(artifacts.get_part(db, part_id)["content"]) == before_content
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == before_version
+    assert artifacts.list_revisions(db, part_id) == before_revisions
 
 
 def test_accept_racing_a_body_change_conflicts_without_overwriting(
@@ -955,9 +996,13 @@ def test_a_hunk_accept_over_http(client: TestClient, db: sqlite3.Connection, cla
     assert len(edit["hunks"]) == 2
 
     first = edit["hunks"][0]
+    version = client.get(f"/api/drafts/{artifact_id}").json()["body_version"]
     result = client.post(
         f"/api/pending-edits/{edit['id']}/accept",
-        json={"hunk": {"index": first["index"], "hash": first["hash"]}},
+        json={
+            "hunk": {"index": first["index"], "hash": first["hash"]},
+            "expected_body_version": version,
+        },
     )
 
     assert result.status_code == 200
@@ -983,9 +1028,18 @@ def test_a_stale_edit_rejects_plain_accept_with_409(
     assert edit["stale"] is True
     assert "base_content" in edit
 
-    refused = client.post(f"/api/pending-edits/{edit['id']}/accept", json={})
+    # The edit is stale against its base, but the body version is current: the accept still
+    # carries the token (now required), and the stale-base 409 is what refuses it.
+    version = client.get(f"/api/drafts/{artifact_id}").json()["body_version"]
+    refused = client.post(
+        f"/api/pending-edits/{edit['id']}/accept",
+        json={"expected_body_version": version},
+    )
     assert refused.status_code == 409
-    forced = client.post(f"/api/pending-edits/{edit['id']}/accept", json={"force": True})
+    forced = client.post(
+        f"/api/pending-edits/{edit['id']}/accept",
+        json={"force": True, "expected_body_version": version},
+    )
     assert forced.status_code == 200
     assert str(artifacts.get_part(db, part_id)["content"]) == PROPOSED
 
@@ -1018,7 +1072,15 @@ def test_pending_edits_outside_drafts_are_404(
     db.commit()
     edit_id = int(db.execute("select max(id) from pending_edits").fetchone()[0])
 
-    assert client.post(f"/api/pending-edits/{edit_id}/accept", json={}).status_code == 404
+    # A valid body gets past request validation, so the 404 proves the kind guard itself
+    # refuses a non-draft edit (not merely the now-required version token).
+    assert (
+        client.post(
+            f"/api/pending-edits/{edit_id}/accept",
+            json={"expected_body_version": 0},
+        ).status_code
+        == 404
+    )
     assert client.post(f"/api/pending-edits/{edit_id}/reject", json={}).status_code == 404
 
 

@@ -46,6 +46,11 @@ TOO_MANY_PROBLEMS = f"A solution set can hold at most {MAX_PROBLEMS} problems."
 DEFAULT_TITLE = "Solution set"
 EDITED_SINCE_CHECK = "This was edited after it was checked, so the earlier check no longer applies."
 RESTORED_NOTE = "Restored version {revision}."
+# The note under the outgoing body a draft restore preserves, so the history reads plainly.
+PRE_RESTORE_NOTE = "Your writing before restoring an earlier version."
+DRAFT_RESTORE_NEEDS_VERSION = (
+    "This draft changed somewhere else, so it was not restored. Reopen it and try again."
+)
 
 # States a confirmed problem list may be started from. `cancelled` and `ready` are here on
 # purpose: `Solve the rest` after a stop, and re-running a set whose sources changed, are
@@ -161,11 +166,13 @@ class RegenerateRequest(BaseModel):
 class RestoreRequest(BaseModel):
     """Body of `POST /api/solutions/{artifact_id}/parts/{part_id}/restore`.
 
-    `expected_version` is the part's `content_version` the caller last saw (PLA-289). When
-    present, the restore writes through the compare-and-swap and is refused if the stored
-    body moved past it, so a stale draft tab cannot silently replace a body that changed
-    elsewhere. Optional so the solution history, which restores without a version token,
-    keeps its existing behavior.
+    `expected_version` is the part's `content_version` the caller last saw (PLA-289). For a
+    draft body it is **required** server-side (see the endpoint): the restore writes through
+    the compare-and-swap and is refused if the stored body moved past it, so a stale draft tab
+    cannot silently replace a body that changed elsewhere. It stays optional in the schema
+    because the same endpoint serves solution parts, which have no version token and restore
+    unconditionally; the endpoint enforces the requirement by part kind, not by trusting the
+    caller to send it.
     """
 
     revision: int = Field(ge=1)
@@ -470,22 +477,35 @@ def restore_part_revision(
     Recorded as a new revision rather than by rewinding the history, so restoring is
     itself undoable and the sheet still shows what was there in between.
 
-    When the caller names an `expected_version`, the content is written through the
-    compare-and-swap (PLA-289): a draft tab that fell behind names a version the body has
-    moved past and is refused with a conflict rather than replacing newer text. Without one,
-    the solution history restores unchanged.
+    The behavior is fixed by the part's kind, not by whether the caller happened to send a
+    token (PLA-289):
+
+    - A **draft body** *requires* `expected_version`. A missing one is a deterministic `400`
+      with nothing mutated - a stale bundle or a direct caller cannot restore a draft body
+      without naming the version it saw. The restore runs through
+      `compare_and_restore_part_content`, which refuses a stale version and, before writing
+      the target, preserves the outgoing body as a revision so the student's current writing
+      (which may exist only via the debounced autosave) stays recoverable.
+    - A **solution part** restores unconditionally, exactly as before; it has no version token
+      and every write to it already records a revision.
     """
-    _require_part(conn, artifact_id, part_id)
+    part = _require_part(conn, artifact_id, part_id)
     revision = artifacts.get_revision(conn, part_id, payload.revision)
-    if payload.expected_version is not None:
-        artifacts.compare_and_set_part_content(
+    is_draft_body = part["kind"] == artifacts.DRAFT_BODY
+    if is_draft_body:
+        if payload.expected_version is None:
+            # Never fall back to an unconditional write for a draft: that is the exact
+            # last-writer-wins loophole this ticket closes. Refuse before touching anything.
+            raise LyraError(DRAFT_RESTORE_NEEDS_VERSION)
+        artifacts.compare_and_restore_part_content(
             conn,
             part_id,
             str(revision["content"]),
             artifacts.USER_CORRECTED,
             expected_version=payload.expected_version,
-            note=RESTORED_NOTE.format(revision=payload.revision),
-            record_revision=True,
+            restored_note=RESTORED_NOTE.format(revision=payload.revision),
+            preserved_origin=artifacts.USER_CORRECTED,
+            preserved_note=PRE_RESTORE_NOTE,
         )
     else:
         artifacts.set_part_content(

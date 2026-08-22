@@ -796,6 +796,92 @@ def compare_and_set_part_content(
     return {"version": new_version, "content": content}
 
 
+def compare_and_restore_part_content(
+    conn: sqlite3.Connection,
+    part_id: int,
+    restored_content: str,
+    origin: str,
+    *,
+    expected_version: int,
+    restored_note: str | None = None,
+    preserved_origin: str,
+    preserved_note: str | None = None,
+) -> dict[str, object]:
+    """Restore an earlier body, first preserving the outgoing one as a recoverable revision.
+
+    The draft workspace's autosave records no revision (a debounced write every 1.5 seconds
+    would bury the meaningful ones), so the body on disk can be newer than the newest recorded
+    revision. A plain restore would then replace that outgoing body with an older revision and
+    leave no way back to it. This restore closes that gap (PLA-289): before writing the target
+    it records the *current* body as a revision, so restoring is genuinely undoable.
+
+    One `begin immediate` transaction does all of it:
+
+      1. Refuse unless the part's `content_version` still equals `expected_version`. A stale
+         restore - a tab that fell behind a concurrent write - mutates nothing: no phantom
+         revision, no version bump, and the newer body stands.
+      2. Record the outgoing (pre-restore) body as a revision, unless it is already the newest
+         recorded one, so an autosaved-only body becomes a history point exactly once.
+      3. Record the restored content as a revision and write it as the new body.
+      4. Advance `content_version` once, for the net change to the restored body.
+
+    Steps 2-4 share the transaction, so the outgoing body and the restored target either both
+    land in history or neither does, and a writer racing between the caller's read and this
+    call loses the version check rather than interleaving a partial history.
+
+    Args:
+        restored_content: The historical body being put back.
+        origin: The origin recorded for the restored revision (`user_corrected`).
+        expected_version: The `content_version` the caller last saw for this part.
+        restored_note: Why the restored revision exists (e.g. "Restored version 3.").
+        preserved_origin: The origin recorded for the preserved outgoing body.
+        preserved_note: The note for the preserved outgoing body, or None.
+
+    Returns:
+        `{"version": int, "content": str}` for the restored body that landed.
+
+    Raises:
+        NotFoundError: when no part carries that id.
+        StaleContentError: when `expected_version` no longer matches; carries the current
+            version and stored content so the caller can offer an honest reconciliation.
+        ValueError: when either origin is outside the allowed set.
+    """
+    _require(origin, ORIGINS, "part origin")
+    _require(preserved_origin, ORIGINS, "part origin")
+    try:
+        conn.execute("begin immediate")
+        part = get_part(conn, part_id)
+        current_version = int(part["content_version"])
+        if current_version != expected_version:
+            current_content = str(part["content"])
+            conn.rollback()
+            raise StaleContentError(current_version, current_content)
+        outgoing = str(part["content"])
+        newest = conn.execute(
+            "select content from artifact_part_revisions where part_id = ? "
+            "order by revision desc limit 1",
+            (part_id,),
+        ).fetchone()
+        # Preserve the outgoing body unless history already ends with it, so an autosaved-only
+        # body becomes recoverable without duplicating a body that is already a history point.
+        if newest is None or str(newest["content"]) != outgoing:
+            _insert_revision(conn, part_id, outgoing, preserved_origin, preserved_note)
+        _insert_revision(conn, part_id, restored_content, origin, restored_note)
+        new_version = current_version + 1
+        conn.execute(
+            "update artifact_parts set content = ?, origin = ?, content_version = ?, "
+            "updated_at = datetime('now') where id = ?",
+            (restored_content, origin, new_version, part_id),
+        )
+        _touch_artifact(conn, int(part["artifact_id"]))
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    return {"version": new_version, "content": restored_content}
+
+
 def set_part_position(
     conn: sqlite3.Connection, part_id: int, ordinal: int, label: str | None
 ) -> None:

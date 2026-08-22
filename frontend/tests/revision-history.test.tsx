@@ -173,3 +173,53 @@ describe('RevisionHistory: version-aware draft restore', () => {
     await waitFor(() => expect(restore).toHaveBeenCalledWith(3, 11, 1, undefined))
   })
 })
+
+describe('RevisionHistory: the "shown now" marker is honest for drafts', () => {
+  it('marks the row that matches the live editor body as shown now', async () => {
+    const wrapper = createWrapper()
+
+    render(
+      <RevisionHistory
+        artifactId={3}
+        part={PART}
+        noun="draft"
+        onClose={vi.fn()}
+        saveBeforeRestore={vi.fn().mockResolvedValue({ ok: true, version: 2 })}
+        onBodyConflict={vi.fn()}
+        // The editor is showing the newest recorded revision.
+        currentBody="the newest body"
+      />,
+      { wrapper },
+    )
+
+    // The newest row is current, so it carries the marker and no Restore button; only the
+    // older row can be restored.
+    expect(await screen.findByText('This is what is shown now.')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Restore' })).toHaveLength(1)
+  })
+
+  it('claims no row when the live body is newer than every recorded revision (autosave)', async () => {
+    const wrapper = createWrapper()
+
+    render(
+      <RevisionHistory
+        artifactId={3}
+        part={PART}
+        noun="draft"
+        onClose={vi.fn()}
+        saveBeforeRestore={vi.fn().mockResolvedValue({ ok: true, version: 2 })}
+        onBodyConflict={vi.fn()}
+        // The student typed past the last snapshot; the live body was only autosaved, so it is
+        // not among the recorded revisions.
+        currentBody="a body typed past the last saved revision"
+      />,
+      { wrapper },
+    )
+
+    await screen.findByText('an earlier draft')
+    // No row may claim to be current, because none of them is; every recorded version - the
+    // newest saved one included - is offered for restore instead.
+    expect(screen.queryByText('This is what is shown now.')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'Restore' })).toHaveLength(2)
+  })
+})

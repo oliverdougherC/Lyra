@@ -1129,6 +1129,10 @@ export default function DraftWorkspacePage() {
           artifactId={artifact.id}
           part={historyOpen ? bodyPart : null}
           noun="draft"
+          // A draft's live body can be newer than the newest recorded revision (autosave
+          // records none), so the history marks "shown now" by matching this, not by assuming
+          // the top row is current (PLA-289).
+          currentBody={latestMarkdown}
           // Confirm the current body first (so it is itself a recoverable revision) and
           // restore against its version, so a stale tab restoring cannot replace a body that
           // changed elsewhere - it conflicts and reconciles instead (PLA-289).

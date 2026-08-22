@@ -84,12 +84,20 @@ body back into the editor - but never over unresolved local work. `decideServerS
 On a stale-version `409` the workspace keeps the local editor text and opens a
 reconciliation dialog showing the version saved elsewhere. The student chooses:
 
-- **Keep what I wrote** rebases onto the server's version and writes the local text over
-  it (local wins, deliberately).
+- **Keep what I wrote** adopts the conflict's `serverBody`/`serverVersion` as the
+  authoritative baseline - a conflict is proof the pre-conflict `lastSaved` is *not* what the
+  server holds any more - and then writes the local text over it whenever the two differ. It
+  reports `Saved` only after that compare-and-swap lands; it adopts without a write only when
+  the local bytes already equal `serverBody`. It never decides "nothing to write" by
+  comparing against the stale pre-conflict `lastSaved`, which is what let a resolution clear a
+  conflict and report `Saved` while the server still held the other tab's body.
 - **Use the other version** adopts the server's body and version and loads it into the
   editor (server wins, deliberately).
 
-Neither path silently reloads server text over newer local writing.
+Neither path silently reloads server text over newer local writing. Both bump an internal
+write epoch, so a stale response from a write that was in flight when the conflict was raised
+or resolved is ignored rather than allowed to resurrect the conflict or roll the confirmed
+body backward.
 
 ## Causal rules for other body-mutating operations
 
@@ -105,16 +113,28 @@ editor state - so each body-replacing operation also carries the version it acte
   discarding local text.
 - **Accepted suggestion.** The workspace lands and confirms the student's own writing before
   the suggestion replaces the body (a `flush()` barrier), and the accept carries
-  `expected_body_version` - the version the student reviewed against. `suggestions.accept`
-  runs the whole read-refresh-write inside one `begin immediate` transaction and refuses a
-  body that moved past that version (`StaleContentError` -> `409`) - **including a
-  force-replace**, which is a choice to overwrite the version the student *saw*, not whatever
-  landed after they looked. A stale accept is fed into the same reconciliation dialog.
-- **Restore.** Draft-body restore is version-aware: the endpoint takes an optional
-  `expected_version` and, when present, writes through the compare-and-swap, so a stale tab
-  restoring a revision cannot replace a body that changed elsewhere - it conflicts instead.
-  The current text is flushed first, so it is itself a recoverable revision. Solution-part
-  restore passes no version and is unchanged.
+  `expected_body_version` - the version the student reviewed against. That token is
+  **required** server-side: `POST /api/pending-edits/{id}/accept` only ever touches a draft
+  body (`_require_draft_edit`), so `AcceptRequest.expected_body_version` is a required field
+  and a request without it is a `422` before anything is written - a stale bundle or a direct
+  caller cannot force-replace a draft body versionlessly. `suggestions.accept` runs the whole
+  read-refresh-write inside one `begin immediate` transaction and refuses a body that moved
+  past that version (`StaleContentError` -> `409`) - **including a force-replace**, which is a
+  choice to overwrite the version the student *saw*, not whatever landed after they looked. A
+  stale accept is fed into the same reconciliation dialog.
+- **Restore.** Draft-body restore is version-aware and the version is **required** for a
+  draft. The shared restore endpoint enforces this by part kind, not by trusting the caller:
+  a `DRAFT_BODY` part with no `expected_version` is refused with a deterministic `400` and
+  nothing is mutated, while a solution part (which has no version token) restores
+  unconditionally as before. A draft restore runs through
+  `artifacts.compare_and_restore_part_content`, one `begin immediate` transaction that (1)
+  refuses a stale `expected_version` without mutating anything, (2) records the *outgoing*
+  body as a revision unless it is already the newest recorded one, then (3) records and writes
+  the target and advances the version. The current text is flushed first, so the body the
+  transaction preserves is the student's latest writing. This is what makes the guarantee
+  real: an autosave records **no** revision (`PATCH /drafts/{id}/body` with `snapshot:false`),
+  so without step (2) a manually-autosaved body would be replaced by an older revision and
+  lost. Now it becomes a history point and restoring is genuinely undoable.
 - **A stale editor tab** that missed one of the above no longer overwrites it: its next
   autosave carries a version the body has moved past, so it conflicts and reconciles
   rather than clobbering the AI result or the restored revision.

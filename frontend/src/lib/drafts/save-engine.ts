@@ -137,6 +137,13 @@ export function createSaveEngine(opts: {
   // The body that in-flight write is carrying, so a change arriving mid-write can tell
   // whether the pipeline is already heading where the editor now wants to go.
   let inFlightBody: string | null = null
+  // Bumped whenever the confirmed baseline is reset out from under an in-flight write -
+  // a conflict raised or resolved (`forceConflict`/`keepLocal`/`takeServer`) or a seed
+  // (`noteSaved`). A write captures the epoch when it starts; if it changed by the time the
+  // write settles, the write acted on a superseded baseline and its result is ignored. This
+  // is what stops a late stale response from resurrecting an already-resolved conflict or
+  // rolling the confirmed body/version backward (PLA-289 round 3).
+  let writeEpoch = 0
   let conflict: SaveConflict | null = null
   let errorDetail: string | undefined
   // The state is a stream of transitions, not of keystrokes: the fortieth dirty in a row
@@ -205,44 +212,65 @@ export function createSaveEngine(opts: {
   function beginWrite(): Promise<void> {
     const writing = pendingBody as string
     const base = version
+    const epoch = writeEpoch
     inFlightBody = writing
     const run = (async () => {
+      let outcome: WriteOutcome | undefined
+      let failure: unknown
+      let threw = false
       try {
-        const outcome = await opts.write(writing, base)
+        outcome = await opts.write(writing, base)
+      } catch (error) {
+        threw = true
+        failure = error
+      }
+      // This write always owns the pipeline (a new one cannot start while one is in flight),
+      // so releasing ownership here is unconditional.
+      inFlight = null
+      inFlightBody = null
+      // A conflict raised/resolved or a seed moved the baseline while this write was in the
+      // air. Its outcome is about a version the engine no longer stands on, so applying it
+      // would either resurrect a resolved conflict or roll the confirmed body backward.
+      // Drop it; whatever reset the baseline already set the correct state.
+      if (epoch !== writeEpoch) return
+      if (!threw) {
         lastSaved = writing
-        version = outcome.version
+        version = (outcome as WriteOutcome).version
         errorDetail = undefined
         // Recompute against the newest desired body, not merely the body we just wrote: a
         // revert-while-writing leaves `desired` behind `writing`, and that corrective write
         // is still owed.
         pendingBody = desired !== lastSaved ? desired : null
-      } catch (error) {
-        const detected = opts.isConflict?.(error) ?? null
-        if (detected && detected.serverBody === writing) {
-          // The server already holds exactly the body this write was carrying, one version
-          // on: our successful response was almost certainly lost (a dropped ack, a retry of
-          // an identical write). Adopting `serverVersion` as confirmed is provably safe -
-          // the bytes are identical, so nothing is lost - and it spares the student a
-          // conflict dialog over text that already matches (PLA-289).
-          lastSaved = writing
-          version = detected.serverVersion
-          errorDetail = undefined
-          pendingBody = desired !== lastSaved ? desired : null
-        } else if (detected) {
-          // Keep pendingBody: the local text is not lost, it is waiting to be reconciled.
-          conflict = detected
-        } else {
-          errorDetail = error instanceof Error ? error.message : String(error)
-        }
-      } finally {
-        inFlight = null
-        inFlightBody = null
+        return
+      }
+      const detected = opts.isConflict?.(failure) ?? null
+      if (detected && detected.serverBody === writing) {
+        // The server already holds exactly the body this write was carrying, one version
+        // on: our successful response was almost certainly lost (a dropped ack, a retry of
+        // an identical write). Adopting `serverVersion` as confirmed is provably safe -
+        // the bytes are identical, so nothing is lost - and it spares the student a
+        // conflict dialog over text that already matches (PLA-289).
+        lastSaved = writing
+        version = detected.serverVersion
+        errorDetail = undefined
+        pendingBody = desired !== lastSaved ? desired : null
+      } else if (detected) {
+        // Keep pendingBody: the local text is not lost, it is waiting to be reconciled.
+        conflict = detected
+      } else {
+        errorDetail = failure instanceof Error ? failure.message : String(failure)
       }
     })()
     // Assign before reporting so `settle()` sees the write and reports `saving`.
     inFlight = run
     settle()
     return run
+  }
+
+  /** Start a write if one is owed and the pipeline is free and unblocked by a conflict. */
+  function pump(): void {
+    if (conflict || inFlight || pendingBody === null) return
+    void beginWrite().then(afterAutoWrite)
   }
 
   async function drain(): Promise<void> {
@@ -334,6 +362,8 @@ export function createSaveEngine(opts: {
       pendingBody = null
       conflict = null
       errorDetail = undefined
+      // Seeding is an authoritative baseline reset; a straggler write must not undo it.
+      writeEpoch += 1
       settle()
     },
     forceConflict(serverBody: string, serverVersion: number): void {
@@ -341,6 +371,10 @@ export function createSaveEngine(opts: {
       // Whatever the editor last wanted is the local text to reconcile; keep it pending so
       // a `keepLocal` resolution has it, and never clear it.
       if (pendingBody === null && desired !== lastSaved) pendingBody = desired
+      // Invalidate any write still in flight: it carries the pre-conflict version, and if it
+      // happened to land it would advance `lastSaved`/`version` under the conflict and leave
+      // the engine in an inconsistent state. The server's CAS refuses it in any case.
+      writeEpoch += 1
       report('conflict')
     },
     lastSaved: () => lastSaved,
@@ -353,17 +387,35 @@ export function createSaveEngine(opts: {
     conflict: () => conflict,
     keepLocal(content: string): void {
       if (!conflict) return
-      // Rebase onto what the server now holds so our write matches, then overwrite it with
-      // the local text. This is a deliberate choice, so write it now rather than on a rest.
-      version = conflict.serverVersion
+      // The conflict is proof the server holds `serverBody` at `serverVersion`; that pair is
+      // now the authoritative baseline, NOT the pre-conflict `lastSaved` (which the conflict
+      // just disproved). Adopt it as the base so a write of the local text compare-and-swaps
+      // against the version the server actually holds.
+      const serverBody = conflict.serverBody
+      const serverVersion = conflict.serverVersion
+      lastSaved = serverBody
+      version = serverVersion
       conflict = null
       errorDetail = undefined
       desired = content
-      pendingBody = content === lastSaved ? null : content
+      // A write is owed whenever the chosen local text differs from what the server actually
+      // holds - decided against `serverBody`, never the stale pre-conflict `lastSaved`. When
+      // the bytes already match, adopting without a redundant write is safe and `Saved` is
+      // honest at once; otherwise `Saved` is withheld until the corrective write lands.
+      pendingBody = content === serverBody ? null : content
+      // Invalidate any older write still in flight so its late response cannot resurrect this
+      // conflict or clobber the rebased baseline.
+      writeEpoch += 1
       settle()
-      if (pendingBody !== null && !inFlight) {
-        void beginWrite().then(afterAutoWrite)
+      if (pendingBody === null) return
+      if (inFlight) {
+        // An older write still owns the pipeline; land the corrective write the moment it
+        // releases. `pump` re-checks the state, so a fresh conflict or a write started in the
+        // meantime is respected.
+        void inFlight.catch(() => undefined).then(pump)
+        return
       }
+      pump()
     },
     takeServer(): SaveConflict | null {
       if (!conflict) return null
@@ -374,6 +426,8 @@ export function createSaveEngine(opts: {
       pendingBody = null
       conflict = null
       errorDetail = undefined
+      // Authoritative baseline reset; a straggler write must not undo the adoption.
+      writeEpoch += 1
       settle()
       return resolved
     },

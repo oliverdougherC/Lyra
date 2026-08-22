@@ -541,6 +541,132 @@ describe('createSaveEngine: an authoritative server op raises a conflict', () =>
   })
 })
 
+describe('createSaveEngine: Keep-what-I-wrote adopts the server baseline, not stale lastSaved', () => {
+  // The false-Saved bug (PLA-289 round 3): keepLocal decided whether a write was owed by
+  // comparing the chosen text against the *pre-conflict* lastSaved. A conflict is proof that
+  // value is no longer what the server holds, so when local == old lastSaved but != the
+  // server body, keepLocal enqueued nothing, cleared the conflict, and reported Saved over a
+  // body the server did not hold. The baseline must become the conflict's serverBody.
+
+  function conflictedEngine(serverBody: string, serverVersion: number, seededBody: string) {
+    // The engine believes the last saved body is `seededBody`, but the server actually holds
+    // `serverBody@serverVersion` (another tab wrote it). A snapshot/op raised the conflict.
+    const server = new FakeServer(serverBody, serverVersion)
+    const states: SaveStateName[] = []
+    const engine = createSaveEngine({
+      write: server.write,
+      onState: (state) => states.push(state),
+      isConflict,
+    })
+    engine.noteSaved(seededBody, serverVersion - 1)
+    engine.forceConflict(serverBody, serverVersion)
+    return { server, engine, states }
+  }
+
+  it('writes local over the server when local equals old lastSaved but differs from the server body', async () => {
+    // local S equals the pre-conflict lastSaved S, but the server holds X. Old code owed
+    // nothing; the fix owes a write of S and withholds Saved until it lands.
+    const { server, engine, states } = conflictedEngine('X', 5, 'S')
+
+    engine.keepLocal('S')
+    // A corrective write was actually issued, and Saved is not reported before it lands.
+    expect(server.inFlight()).toBe(1)
+    expect(engine.conflict()).toBeNull()
+    expect(states.at(-1)).not.toBe('saved')
+
+    await server.settleNext()
+    expect(server.body).toBe('S') // the server now holds the student's text
+    expect(server.version).toBe(6)
+    expect(engine.lastSaved()).toBe('S')
+    expect(states.at(-1)).toBe('saved')
+  })
+
+  it('models the snapshot path: a lost CAS at vN feeds forceConflict, Keep writes local over the other tab', async () => {
+    // Local/server are S@4; another tab writes X@5; a snapshot CAS at v4 loses and raises the
+    // conflict while the editor still shows S. Keep must land S on the server, not report a
+    // false Saved.
+    const { server, engine } = conflictedEngine('X', 5, 'S')
+    expect(server.body).toBe('X')
+
+    engine.keepLocal('S')
+    await server.settleNext()
+
+    expect(server.body).toBe('S')
+    expect(server.version).toBe(6)
+    expect(engine.conflict()).toBeNull()
+  })
+
+  it('adopts without a redundant write when the local text already equals the server body', async () => {
+    const { server, engine, states } = conflictedEngine('X', 5, 'S')
+
+    engine.keepLocal('X') // the student chose text that already matches the server
+    expect(server.inFlight()).toBe(0) // no write: bytes already match
+    expect(engine.conflict()).toBeNull()
+    expect(engine.lastSaved()).toBe('X')
+    expect(engine.version()).toBe(5)
+    expect(states.at(-1)).toBe('saved')
+  })
+
+  it('S saved, A in flight, revert to S, another writer moves the body, A conflicts, Keep S lands S', async () => {
+    const server = new FakeServer('S', 0)
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('A')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.inFlight()).toBe(1) // A in flight, expects version 0
+    engine.schedule('S') // revert to the saved text while A is still in the air
+
+    // Another writer moves the server to X@1 before A's response arrives.
+    server.body = 'X'
+    server.version = 1
+    await server.settleNext() // A is refused by the CAS -> conflict {1, 'X'}
+    expect(engine.conflict()).toEqual({ serverVersion: 1, serverBody: 'X' })
+
+    engine.keepLocal('S') // the editor shows S; keep it
+    expect(server.inFlight()).toBe(1)
+    await server.settleNext()
+
+    expect(server.body).toBe('S')
+    expect(server.version).toBe(2)
+    expect(engine.conflict()).toBeNull()
+    expect(names(states).at(-1)).toBe('saved')
+  })
+
+  it('a late stale response from a write in flight when the conflict was raised cannot resurrect it', async () => {
+    // Robustness: forceConflict happens while an older autosave is still in flight, then the
+    // student resolves the conflict, and only then does the old write fail with a stale 409.
+    // That late response must be dropped, not allowed to reopen the resolved conflict.
+    const server = new FakeServer('S', 0)
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('A')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.inFlight()).toBe(1) // A in flight
+
+    // The server moves to X@1 and the workspace raises the conflict (e.g. a lost snapshot CAS)
+    // while A is still unresolved.
+    server.body = 'X'
+    server.version = 1
+    engine.forceConflict('X', 1)
+
+    // The student keeps their text; A is still in flight, so the corrective write is deferred.
+    engine.keepLocal('A')
+    expect(engine.conflict()).toBeNull()
+
+    // Now the old A write finally fails with a stale 409. It must be ignored.
+    await server.settleNext()
+    expect(engine.conflict()).toBeNull() // not resurrected
+    expect(engine.lastSaved()).not.toBe('A') // the dropped write did not confirm A
+
+    // The deferred corrective write then lands A on top of the rebased baseline.
+    await server.settleNext()
+    expect(server.body).toBe('A')
+    expect(server.version).toBe(2)
+    expect(engine.conflict()).toBeNull()
+    expect(names(states).at(-1)).toBe('saved')
+  })
+})
+
 describe('createSaveEngine: flush proves the newest body is authoritative', () => {
   it('resolves ok with the confirmed version when the newest body is saved', async () => {
     const server = new FakeServer('', 0)

@@ -34,12 +34,20 @@ type RevisionHistoryProps = {
   /**
    * Draft-only: confirm the current body is on disk before restoring, and report the
    * version to restore against. Returns `ok: false` to abort - the save failure or conflict
-   * is already surfaced. Flushing first also makes the student's current text its own
-   * revision, so restoring an older one loses nothing (PLA-289).
+   * is already surfaced. Landing the current body first is what lets the restore preserve it:
+   * the server records the pre-restore body as a revision before writing the target, so
+   * restoring an older version loses nothing (PLA-289).
    */
   saveBeforeRestore?: () => Promise<{ ok: boolean; version: number }>
   /** Draft-only: a stale-version restore was refused; hand the conflict to the save engine. */
   onBodyConflict?: (conflict: SaveConflict) => void
+  /**
+   * Draft-only: the body the editor is showing right now. A draft's live body can be newer
+   * than the newest recorded revision (autosave records none), so the "shown now" marker is
+   * placed by matching this rather than by assuming the top row is current. Omitted for
+   * solutions, where every write records a revision and the newest one is always current.
+   */
+  currentBody?: string
 }
 
 /**
@@ -55,6 +63,7 @@ export function RevisionHistory({
   noun = 'solution set',
   saveBeforeRestore,
   onBodyConflict,
+  currentBody,
 }: RevisionHistoryProps) {
   const revisions = usePartRevisions(artifactId, part?.id ?? null)
   const restore = useRestoreRevision(artifactId)
@@ -110,43 +119,52 @@ export function RevisionHistory({
             ) : revisions.data.length === 0 ? (
               <p className="text-text-tertiary text-sm">Nothing has been written here yet.</p>
             ) : (
-              revisions.data.map((revision, index) => (
-                <article
-                  key={revision.revision}
-                  className="border-border bg-card flex flex-col gap-2 rounded-md border p-3"
-                >
-                  <header className="flex flex-wrap items-baseline justify-between gap-2">
-                    <span className="text-text-primary text-sm font-medium">
-                      {ORIGIN_LABELS[revision.origin]}
-                    </span>
-                    <span className="text-text-tertiary text-xs">
-                      {formatRelativeTime(revision.created_at)}
-                    </span>
-                  </header>
-                  {revision.note ? (
-                    // Why this version exists: the student's own correction, or the
-                    // refutation that prompted the re-solve.
-                    <p className="text-text-secondary text-xs">{revision.note}</p>
-                  ) : null}
-                  {/* Typeset and whole. A version is chosen by reading it, and six
+              revisions.data.map((revision, index) => {
+                // Which row is actually on screen. For a solution, every write is a revision,
+                // so the newest row is current. For a draft, the live body can be newer than
+                // any recorded revision (autosave records none), so claim "shown now" only for
+                // the row whose content matches the editor - otherwise the newest saved
+                // version is offered for restore, and no row falsely claims to be current.
+                const shownNow =
+                  currentBody === undefined ? index === 0 : revision.content === currentBody
+                return (
+                  <article
+                    key={revision.revision}
+                    className="border-border bg-card flex flex-col gap-2 rounded-md border p-3"
+                  >
+                    <header className="flex flex-wrap items-baseline justify-between gap-2">
+                      <span className="text-text-primary text-sm font-medium">
+                        {ORIGIN_LABELS[revision.origin]}
+                      </span>
+                      <span className="text-text-tertiary text-xs">
+                        {formatRelativeTime(revision.created_at)}
+                      </span>
+                    </header>
+                    {revision.note ? (
+                      // Why this version exists: the student's own correction, or the
+                      // refutation that prompted the re-solve.
+                      <p className="text-text-secondary text-xs">{revision.note}</p>
+                    ) : null}
+                    {/* Typeset and whole. A version is chosen by reading it, and six
                       clamped lines of raw LaTeX made restoring one a guess. The sheet
                       scrolls, so length costs nothing here. */}
-                  <MathText className="text-text-secondary text-sm">{revision.content}</MathText>
-                  {index === 0 ? (
-                    <span className="text-text-tertiary text-xs">This is what is shown now.</span>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="self-start"
-                      onClick={() => void handleRestore(revision.revision)}
-                      disabled={restore.isPending}
-                    >
-                      Restore
-                    </Button>
-                  )}
-                </article>
-              ))
+                    <MathText className="text-text-secondary text-sm">{revision.content}</MathText>
+                    {shownNow ? (
+                      <span className="text-text-tertiary text-xs">This is what is shown now.</span>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="self-start"
+                        onClick={() => void handleRestore(revision.revision)}
+                        disabled={restore.isPending}
+                      >
+                        Restore
+                      </Button>
+                    )}
+                  </article>
+                )
+              })
             )}
           </div>
         </ScrollArea>
