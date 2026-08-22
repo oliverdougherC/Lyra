@@ -450,15 +450,20 @@ export default function DraftWorkspacePage() {
    * server now holds. A server operation moved the body and its version, and the editor
    * must follow it - but never over unresolved local work.
    *
-   * The order of the checks is the whole point:
+   * One reconciliation decision owns the order, and unresolved-write ownership comes first:
    *
-   * - If the editor already shows the server's body, only the version base moved; adopt it.
-   * - If a write is racing this sync (in flight, or a debounce about to fire), that write
-   *   carries the pre-operation version, so the server's compare-and-swap refuses it and the
-   *   engine raises the conflict itself. Leave the local text and the pipeline untouched.
-   * - If there is no unsaved local divergence, follow the server: reset the editor to it.
-   * - Otherwise the student has unsaved text the operation moved under. Raise a conflict and
-   *   keep their words; never reset over them. `noteSaved` is reached only on the safe paths.
+   * - If a write can still commit (in flight, a debounce about to fire, or a conflict open),
+   *   `skip`: adopt nothing, not even when the freshly-read bytes happen to equal the editor.
+   *   That write carries the pre-operation version, so the server's compare-and-swap refuses
+   *   it and the engine raises the conflict itself once it settles; `noteSaved` here would
+   *   bump the write epoch and could report `saved` while the request is still free to commit
+   *   a different body server-side, which is the exact silent divergence PLA-289 forbids.
+   * - Otherwise no write can move the server: if the editor already shows the server body
+   *   (only the version base moved) or there is no unsaved local divergence, follow the
+   *   server - advance the confirmed baseline and reset the editor to it. The editor is reset
+   *   only when it is not already showing the seeded body, so a matching editor never churns.
+   * - Otherwise the student has unsaved text the operation moved under: raise a conflict and
+   *   keep their words; never reset over them.
    */
   async function syncEditorFromServer() {
     if (artifactId === null) return
@@ -467,27 +472,17 @@ export default function DraftWorkspacePage() {
     if (!fresh) return
     const localBody = latestMarkdownRef.current
     const seeded = normalizeMathDelimiters(fresh.body)
+    const editorShowsServer = localBody === fresh.body || localBody === seeded
 
-    if (localBody === fresh.body || localBody === seeded) {
-      // The editor already holds what the server has; only the version base moved forward.
+    const decision = decideServerSync(engine, localBody, editorShowsServer)
+    if (decision === 'skip') return
+    if (decision === 'adopt') {
       engine.noteSaved(fresh.body, fresh.body_version)
       if (localBody !== seeded) {
         latestMarkdownRef.current = seeded
         setLatestMarkdown(seeded)
         editorRef.current?.reset(seeded)
       }
-      setSaveState('saved')
-      if (seeded !== fresh.body) engine.schedule(seeded)
-      return
-    }
-
-    const decision = decideServerSync(engine, localBody)
-    if (decision === 'skip') return
-    if (decision === 'adopt') {
-      engine.noteSaved(fresh.body, fresh.body_version)
-      latestMarkdownRef.current = seeded
-      setLatestMarkdown(seeded)
-      editorRef.current?.reset(seeded)
       setSaveState('saved')
       if (seeded !== fresh.body) engine.schedule(seeded)
       return

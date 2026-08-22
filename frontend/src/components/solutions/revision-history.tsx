@@ -68,6 +68,17 @@ export function RevisionHistory({
   const revisions = usePartRevisions(artifactId, part?.id ?? null)
   const restore = useRestoreRevision(artifactId)
 
+  // Exactly one row is "shown now". A restore writes a new revision rather than rewinding,
+  // so the history can hold duplicate content (e.g. [A, B, A]); matching every row against
+  // the editor body would let several rows claim to be current and drop their Restore. The
+  // list is newest-first, so the current row is the newest match (the lowest index). For a
+  // solution (no `currentBody`) the newest row is always current; when the live draft body
+  // is newer than every recorded revision, nothing matches and no row is marked.
+  const currentRevisionIndex =
+    currentBody === undefined
+      ? 0
+      : (revisions.data?.findIndex((revision) => revision.content === currentBody) ?? -1)
+
   const handleRestore = async (revision: number) => {
     if (!part) return
     // Draft bodies restore version-aware: confirm the current text first (so it is itself a
@@ -120,13 +131,10 @@ export function RevisionHistory({
               <p className="text-text-tertiary text-sm">Nothing has been written here yet.</p>
             ) : (
               revisions.data.map((revision, index) => {
-                // Which row is actually on screen. For a solution, every write is a revision,
-                // so the newest row is current. For a draft, the live body can be newer than
-                // any recorded revision (autosave records none), so claim "shown now" only for
-                // the row whose content matches the editor - otherwise the newest saved
-                // version is offered for restore, and no row falsely claims to be current.
-                const shownNow =
-                  currentBody === undefined ? index === 0 : revision.content === currentBody
+                // Which row is actually on screen: the single newest revision whose content
+                // matches the editor (see `currentRevisionIndex`). Older identical-content
+                // revisions stay ordinary historical entries and keep their Restore action.
+                const shownNow = index === currentRevisionIndex
                 return (
                   <article
                     key={revision.revision}

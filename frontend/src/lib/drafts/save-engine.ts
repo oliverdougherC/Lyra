@@ -435,27 +435,42 @@ export function createSaveEngine(opts: {
 }
 
 /**
- * What to do when an authoritative server operation (an AI pass, an accepted suggestion, a
- * restore) has moved the body and the editor must be reconciled with it:
+ * The single reconciliation decision for a settled server operation (an AI pass, an accepted
+ * or rejected suggestion, a restore) that may have moved the body and its version:
  *
- * - `adopt`: there is no unresolved local work, so the editor may follow the server - reset
- *   it to the server body and move the version base forward.
- * - `skip`: a write is racing this sync (in flight, or a debounce about to fire). That write
- *   carries the pre-operation version, so the server's compare-and-swap will refuse it and
- *   the engine raises the conflict itself. Leave the editor and the pipeline untouched.
- * - `conflict`: the student has unsaved local text the operation moved under. Raise a
- *   reconciliation and keep their words; never reset over them.
+ * - `skip`: a write can still commit - one is in flight, a debounce is about to fire, or a
+ *   conflict is already open. Adopt *nothing*, not even a freshly-read baseline whose bytes
+ *   currently equal the editor. `noteSaved` would bump the write epoch and could report
+ *   `saved`, but the in-flight request is still free to commit a *different* body
+ *   server-side (its compare-and-swap is still valid): the epoch only suppresses that
+ *   write's stale response, it cannot revoke the server mutation. Adopting here is exactly
+ *   the silent editor/server divergence this ticket exists to eliminate. Leave the editor
+ *   and the pipeline untouched; that write's CAS and the desired-body pipeline reconcile
+ *   once it settles (PLA-289).
+ * - `adopt`: no write can still mutate the server, so the freshly-read body/version is
+ *   authoritative. Either the editor already shows the server body (`editorShowsServer` -
+ *   only the version base moved), or there is no unsaved local divergence; follow the
+ *   server and move the version base forward.
+ * - `conflict`: the student has unsaved local text the operation moved under, and the editor
+ *   is not already showing the server body. Raise a reconciliation and keep their words;
+ *   never reset over them.
+ *
+ * `editorShowsServer` is whether the editor's current bytes already equal the server body
+ * (directly or after math-delimiter normalization). It only ever promotes a would-be
+ * `conflict` to `adopt` once writes have settled; it can never turn a `skip` into an adopt,
+ * because unresolved-write ownership is consulted first. Defaults to false so callers that
+ * only track the engine's state keep the original three-way semantics.
  *
  * Pure and side-effect free so the workspace's reconciliation can be tested against the real
- * engine's state without an editor. The caller has already handled the case where the editor
- * already shows the server's body (only the version base moved); this decides the rest.
+ * engine's state without an editor.
  */
 export function decideServerSync(
   engine: Pick<SaveEngine, 'conflict' | 'saving' | 'pending' | 'isDirty'>,
   localBody: string,
+  editorShowsServer = false,
 ): 'adopt' | 'skip' | 'conflict' {
   if (engine.conflict() || engine.saving() || engine.pending()) return 'skip'
-  if (!engine.isDirty(localBody)) return 'adopt'
+  if (editorShowsServer || !engine.isDirty(localBody)) return 'adopt'
   return 'conflict'
 }
 

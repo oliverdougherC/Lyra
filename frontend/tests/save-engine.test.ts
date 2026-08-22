@@ -791,6 +791,121 @@ describe('decideServerSync: a settled server op never resets over unresolved loc
     expect(engine.isDirty('local edit')).toBe(true)
     expect(decideServerSync(engine, 'local edit')).toBe('conflict')
   })
+
+  it('skips while a write is in flight even when the fetched body equals the editor', async () => {
+    // The equality/in-flight race (PLA-289): a body-neutral op refetches a server body that
+    // happens to equal the editor's bytes while an unrelated write is still in flight. The
+    // `editorShowsServer` flag must never override the skip - that write can still commit a
+    // different body server-side, so adopting a baseline now would be a silent divergence.
+    const server = new FakeServer('S', 0)
+    const { engine } = makeEngine(server)
+    engine.schedule('A')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(engine.saving()).toBe(true)
+    expect(decideServerSync(engine, 'S', /* editorShowsServer */ true)).toBe('skip')
+    await server.settleNext()
+  })
+
+  it('adopts on equality once no write can commit, even if the engine reads dirty', () => {
+    // The contract of `editorShowsServer`: with the pipeline idle (no in-flight/pending write
+    // and no conflict), a freshly-read baseline the editor already shows is authoritative and
+    // is adopted, promoting what a dirtiness check alone would have called a conflict. It can
+    // only ever turn a would-be conflict into adopt, never a skip - skip is decided first.
+    const server = new FakeServer('S', 1)
+    const { engine } = makeEngine(server)
+    // Idle, but a divergent local body reads dirty on its own.
+    expect(engine.saving()).toBe(false)
+    expect(engine.pending()).toBe(false)
+    expect(engine.isDirty('diverged')).toBe(true)
+    expect(decideServerSync(engine, 'diverged', /* editorShowsServer */ false)).toBe('conflict')
+    expect(decideServerSync(engine, 'diverged', /* editorShowsServer */ true)).toBe('adopt')
+  })
+})
+
+describe('reconciliation: an equality sync never invalidates an in-flight save that can still commit', () => {
+  // The exact PLA-289 blocker from review 5000931997. `syncEditorFromServer` used to adopt a
+  // freshly-read baseline whose bytes equalled the editor *before* consulting whether a body
+  // write was still unresolved. That noteSaved bumped the write epoch and could report Saved,
+  // but it could not stop the in-flight request from committing server-side - so the editor
+  // and the server silently diverged. This drives the fixed decision the workspace now uses.
+  function reconcileFromServer(
+    engine: ReturnType<typeof createSaveEngine>,
+    localBody: string,
+    serverBody: string,
+    serverVersion: number,
+    editorShowsServer: boolean,
+  ): 'adopt' | 'skip' | 'conflict' {
+    const decision = decideServerSync(engine, localBody, editorShowsServer)
+    if (decision === 'skip') return decision
+    if (decision === 'adopt') {
+      engine.noteSaved(serverBody, serverVersion)
+      return decision
+    }
+    engine.forceConflict(serverBody, serverVersion)
+    return decision
+  }
+
+  it('S@v0 -> A in flight -> revert S -> body-neutral sync reads S@v0 -> A lands -> corrective S -> Saved', async () => {
+    const server = new FakeServer('S', 0)
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('A')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.inFlight()).toBe(1) // A in flight, expecting version 0
+
+    // Undo back to the saved text while A is still in the air; a corrective S write is owed.
+    engine.schedule('S')
+
+    // A body-neutral op (a rejected suggestion) settles and syncs: the refetch still sees
+    // S@v0, so the editor bytes equal the server bytes. The reconciliation must NOT adopt.
+    const decision = reconcileFromServer(engine, 'S', 'S', 0, /* editorShowsServer */ true)
+    expect(decision).toBe('skip')
+    expect(engine.lastSaved()).toBe('S') // no false noteSaved(S, v0) reset the baseline
+    expect(engine.conflict()).toBeNull() // and it did not spuriously raise a conflict
+    expect(engine.isDirty('S')).toBe(true) // the corrective S write is still owed
+
+    await server.settleNext() // A commits: the server now holds A@v1
+    expect(server.body).toBe('A')
+    expect(server.version).toBe(1)
+    expect(engine.lastSaved()).toBe('A')
+    // Never claimed Saved while the editor showed S and the server held A.
+    expect(names(states)).not.toContain('saved')
+
+    // The corrective write of S goes out after A, in order, and converges the two on S@v2.
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.inFlight()).toBe(1)
+    await server.settleNext()
+
+    expect(server.body).toBe('S')
+    expect(server.version).toBe(2)
+    expect(engine.isDirty('S')).toBe(false)
+    expect(names(states).at(-1)).toBe('saved') // Saved only now, at true convergence
+    expect(names(states).filter((state) => state === 'saved')).toHaveLength(1)
+  })
+
+  it('a no-op external sync whose fetched body equals the editor does not adopt mid-write', async () => {
+    // A generic external/no-op sync (not the revert path): the fetched server body equals the
+    // editor's current bytes while a different write is still in flight. Equality must not
+    // shortcut to adopt, and the in-flight write must be left to settle and confirm on its own.
+    const server = new FakeServer('', 0)
+    const { engine, states } = makeEngine(server)
+
+    engine.schedule('typed')
+    await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS)
+    expect(server.inFlight()).toBe(1) // 'typed' in flight
+
+    // The editor shows exactly what a refetch would report, but the write is unresolved.
+    const decision = reconcileFromServer(engine, 'typed', 'typed', 7, /* editorShowsServer */ true)
+    expect(decision).toBe('skip')
+    expect(engine.version()).toBe(0) // the fetched version 7 was NOT adopted mid-write
+    expect(engine.conflict()).toBeNull()
+
+    await server.settleNext() // the write confirms 'typed' on its own terms
+    expect(server.body).toBe('typed')
+    expect(engine.lastSaved()).toBe('typed')
+    expect(engine.isDirty('typed')).toBe(false)
+    expect(names(states).at(-1)).toBe('saved')
+  })
 })
 
 describe('flushOnHidden', () => {

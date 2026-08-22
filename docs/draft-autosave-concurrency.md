@@ -67,17 +67,31 @@ server text.
 
 ## Reconciling the editor after a server operation (`syncEditorFromServer`)
 
-When an AI pass, an accepted suggestion, or a restore settles, the workspace pulls the new
-body back into the editor - but never over unresolved local work. `decideServerSync` chooses:
+When an AI pass, an accepted or **rejected** suggestion, or a restore settles, the workspace
+pulls the new body back into the editor - but never over unresolved local work. The whole
+decision is `decideServerSync`, and it consults unresolved-write ownership *first*, before any
+equality shortcut:
 
-- **adopt** when there is no unresolved local work: reset the editor to the server body and
-  move the version base forward.
-- **skip** when a write is racing the sync (in flight, or a debounce about to fire): that
-  write carries the pre-operation version, so the server's CAS refuses it and the engine
-  raises the conflict itself. The editor and pipeline are left untouched.
-- **conflict** when the student has unsaved local text the operation moved under: raise a
-  reconciliation and keep their words. `noteSaved`/editor reset is reached only on the safe
-  paths - a settling pass can never discard unresolved local text.
+- **skip** when a write can still commit (in flight, a debounce about to fire, or a conflict
+  already open): adopt *nothing*, not even a freshly-read baseline whose bytes currently equal
+  the editor. That write carries the pre-operation version, so the server's CAS refuses it and
+  the engine raises the conflict itself once it settles; the editor and pipeline are left
+  untouched. Adopting here would bump the write epoch and could report `Saved` while the
+  request is still free to commit a *different* body server-side - the epoch only suppresses
+  that write's stale *response*, it cannot revoke the server *mutation*. That was the exact
+  silent editor/server divergence PLA-289 exists to eliminate; equality is not an exception to
+  it. (Concrete reachable path: `S@v0` → type `A` → autosave `A` in flight → undo to `S` →
+  reject a pending suggestion, which is body-neutral and syncs → refetch still reads `S@v0`
+  and the editor shows `S`, so the bytes are equal → the sync must still skip, let `A` commit
+  `A@v1`, and let the desired-body pipeline write the corrective `S` on top at `v1`.)
+- **adopt** once no write can move the server: either the editor already shows the server body
+  (only the version base moved) or there is no unsaved local divergence. Reset the editor to
+  the server body and move the version base forward. The editor is reset only when it is not
+  already showing that body, so a matching editor never churns.
+- **conflict** when the student has unsaved local text the operation moved under and the
+  editor is not already showing the server body: raise a reconciliation and keep their words.
+  `noteSaved`/editor reset is reached only on the safe paths - a settling operation can never
+  discard unresolved local text, and a body-neutral sync can never falsely confirm one.
 
 ## Conflict recovery
 

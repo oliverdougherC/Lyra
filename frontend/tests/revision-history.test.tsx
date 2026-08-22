@@ -4,7 +4,7 @@
  * text is confirmed on disk first so restoring an older version loses nothing (PLA-289).
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { toast } from 'sonner'
@@ -221,5 +221,61 @@ describe('RevisionHistory: the "shown now" marker is honest for drafts', () => {
     // newest saved one included - is offered for restore instead.
     expect(screen.queryByText('This is what is shown now.')).not.toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: 'Restore' })).toHaveLength(2)
+  })
+
+  it('marks only the newest matching row when restore left duplicate-content history', async () => {
+    // A restore writes a new revision rather than rewinding, so the history can hold the same
+    // content twice, e.g. [A, B, A]. When the editor shows A, exactly one row - the newest A -
+    // is "shown now" and loses Restore; the older, identical A stays an ordinary historical
+    // entry that can be restored. The old `content === currentBody` per-row test marked both.
+    vi.spyOn(api, 'listPartRevisions').mockResolvedValue([
+      {
+        revision: 3,
+        content: 'a repeated body',
+        origin: 'user_corrected',
+        note: null,
+        created_at: '2026-08-21T00:00:00Z',
+      },
+      {
+        revision: 2,
+        content: 'a different body in between',
+        origin: 'generated',
+        note: null,
+        created_at: '2026-08-20T00:00:00Z',
+      },
+      {
+        revision: 1,
+        content: 'a repeated body',
+        origin: 'generated',
+        note: null,
+        created_at: '2026-08-19T00:00:00Z',
+      },
+    ])
+    const wrapper = createWrapper()
+
+    render(
+      <RevisionHistory
+        artifactId={3}
+        part={PART}
+        noun="draft"
+        onClose={vi.fn()}
+        saveBeforeRestore={vi.fn().mockResolvedValue({ ok: true, version: 2 })}
+        onBodyConflict={vi.fn()}
+        currentBody="a repeated body"
+      />,
+      { wrapper },
+    )
+
+    await screen.findByText('a different body in between')
+    // Exactly one row claims to be current, and the other two (including the older identical
+    // body) keep a Restore action.
+    expect(screen.getAllByText('This is what is shown now.')).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: 'Restore' })).toHaveLength(2)
+
+    // It is the newest matching row (revision 3, rendered first) that is current; the older
+    // identical body (revision 1, rendered last) is the one still offered for restore.
+    const rows = screen.getAllByRole('article')
+    expect(within(rows[0]).getByText('This is what is shown now.')).toBeInTheDocument()
+    expect(within(rows[2]).getByRole('button', { name: 'Restore' })).toBeInTheDocument()
   })
 })
