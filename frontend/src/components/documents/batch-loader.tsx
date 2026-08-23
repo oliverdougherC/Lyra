@@ -9,10 +9,14 @@ type BatchLoaderProps = {
   title: string
   /** Secondary detail, e.g. "Reading your syllabus for dates and topics". */
   detail?: string | null
-  /** Documents that reached a terminal state out of the whole batch. */
+  /** Terminal documents Lyra can use, out of the whole batch. */
   processed: number
-  /** Upload or ingestion failures included in the completed count. */
-  failed: number
+  /**
+   * Items that reached a terminal state needing the student: upload-request failures,
+   * ingestion failures, and unsupported input. Any of them turns the summary from
+   * all-success to attention, so the check icon never shows over an unusable batch.
+   */
+  needsAttention: number
   /** Whether the batch has reached its terminal summary. */
   complete: boolean
   total: number
@@ -28,12 +32,12 @@ export function BatchLoader({
   title,
   detail,
   processed,
-  failed,
+  needsAttention,
   total,
   complete,
   className,
 }: BatchLoaderProps) {
-  const completed = processed + failed
+  const completed = processed + needsAttention
   const percent = total > 0 ? Math.min(Math.round((completed / total) * 100), 100) : 0
 
   return (
@@ -50,12 +54,12 @@ export function BatchLoader({
           aria-hidden
           className={cn(
             'flex size-9 shrink-0 items-center justify-center rounded-full border',
-            failed === 0
+            needsAttention === 0
               ? 'border-success-text/30 bg-success-fill text-success-text'
               : 'border-danger-text/30 bg-danger-fill text-danger-text',
           )}
         >
-          {failed === 0 ? <Check className="size-4" /> : <AlertCircle className="size-4" />}
+          {needsAttention === 0 ? <Check className="size-4" /> : <AlertCircle className="size-4" />}
         </span>
       ) : (
         <span className="relative size-9 shrink-0" aria-hidden>

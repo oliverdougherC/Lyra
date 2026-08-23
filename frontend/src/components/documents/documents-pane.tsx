@@ -35,6 +35,8 @@ import { ApiError } from '@/lib/api'
 import { formatCount, parseTimestamp } from '@/lib/format'
 import { documentStudyTitle } from '@/lib/handoff'
 import {
+  batchSummaryTitle,
+  classifyBatch,
   isTerminal,
   documentKeys,
   useDeleteDocument,
@@ -173,9 +175,13 @@ export function DocumentsPane({
     .map((id) => terminalStateById.get(id) ?? documentsById.get(id)?.state)
     .filter((state): state is DocumentState => state !== undefined && isTerminal(state))
   const terminalCount = batchTerminalStates.length
-  const failedDocumentCount = batchTerminalStates.filter((state) => state === 'failed').length
-  const successfulDocumentCount = terminalCount - failedDocumentCount
-  const batchFailureCount = batch.failed + failedDocumentCount
+  // Classified by what each terminal state means, through the same helper the rows use, so
+  // an `unsupported` item is counted as needing attention rather than as a success. Upload
+  // requests that never reached the server (`batch.failed`) never produced a document to
+  // classify, so they are added to the attention total here.
+  const outcome = classifyBatch(batchTerminalStates)
+  const successfulDocumentCount = outcome.ready
+  const batchAttentionCount = batch.failed + outcome.needsAttention
   const batchFinished =
     batchActive && batch.uploaded >= batch.total && terminalCount >= batch.total - batch.failed
   // Once every uploaded document has finished ingesting, let the finished summary linger
@@ -200,11 +206,7 @@ export function DocumentsPane({
     : batchDocument
       ? `${STATE_ACTIONS[batchDocument.state]} ${batchDocument.filename}`
       : batchFinished
-        ? batchFailureCount === 0
-          ? 'All documents processed'
-          : batchFailureCount === 1
-            ? '1 item failed'
-            : `${batchFailureCount} items failed`
+        ? batchSummaryTitle(batchAttentionCount)
         : 'Preparing documents'
 
   const onRetry = useCallback(
@@ -535,7 +537,7 @@ export function DocumentsPane({
             processed={successfulDocumentCount}
             total={batch.total}
             complete={batchFinished}
-            failed={batchFailureCount}
+            needsAttention={batchAttentionCount}
             className="mb-3"
           />
         ) : null}

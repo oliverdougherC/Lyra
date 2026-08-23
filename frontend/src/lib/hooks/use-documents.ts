@@ -31,6 +31,49 @@ export function needsAttention(state: DocumentState): boolean {
   return ATTENTION_STATES.includes(state)
 }
 
+/**
+ * How a finished batch breaks down, classified by what each terminal state actually means.
+ *
+ * `ready` is the only terminal success; `failed` and `unsupported` both need the student,
+ * so both count as needing attention - the same `needsAttention()` line the document rows
+ * use, so the batch summary and the rows can never disagree about whether a document is
+ * usable. Non-terminal states are ignored: this is a summary of what has settled.
+ */
+export type BatchOutcome = {
+  /** Terminal documents Lyra can study from. */
+  ready: number
+  /** Terminal documents that need the student: ingestion failures and unsupported input. */
+  needsAttention: number
+  /** Every document that reached a terminal state. */
+  settled: number
+}
+
+export function classifyBatch(states: readonly DocumentState[]): BatchOutcome {
+  let ready = 0
+  let attention = 0
+  for (const state of states) {
+    if (!isTerminal(state)) continue
+    if (needsAttention(state)) attention += 1
+    else ready += 1
+  }
+  return { ready, needsAttention: attention, settled: ready + attention }
+}
+
+/**
+ * The one-line summary a finished batch shows, given how many of its items need attention.
+ *
+ * `attention` folds together every unusable outcome the batch produced - uploads that
+ * never reached the server, ingestion failures, and unsupported input - because the
+ * summary's job is only to say whether the student has to come back to something. The
+ * per-file distinction between those outcomes, and the recovery each needs, lives on the
+ * rows. A batch with any of them must never claim to be all-success.
+ */
+export function batchSummaryTitle(attention: number): string {
+  if (attention === 0) return 'All documents processed'
+  if (attention === 1) return '1 item needs attention'
+  return `${attention} items need attention`
+}
+
 /** How often the list asks again while the server is still working on something in it. */
 const IN_FLIGHT_POLL_MS = 1500
 
