@@ -83,11 +83,13 @@ def mark_completed(conn: sqlite3.Connection, attempt_id: int, assistant_message_
     running (which a later retry would re-run, double-answering). Only a still-running row
     is settled, so a second settle cannot rewrite a terminal one.
     """
-    conn.execute(
+    cursor = conn.execute(
         "update agent_turn_attempts set state = ?, assistant_message_id = ?, finished_at = ? "
         "where id = ? and state = ?",
         (COMPLETED, assistant_message_id, _timestamp(), attempt_id, RUNNING),
     )
+    if cursor.rowcount != 1:
+        raise RuntimeError("The agent attempt was not running when its reply was completed.")
 
 
 def complete_attempt(conn: sqlite3.Connection, attempt_id: int, assistant_message_id: int) -> None:
@@ -126,6 +128,47 @@ def stop_attempt(conn: sqlite3.Connection, attempt_id: int, *, detail: str) -> N
         (STOPPED, "cancelled", detail[:_MAX_DETAIL_CHARS], _timestamp(), attempt_id, RUNNING),
     )
     conn.commit()
+
+
+def link_target(
+    conn: sqlite3.Connection,
+    attempt_id: int | None,
+    *,
+    target_kind: str,
+    target_id: int,
+) -> int | None:
+    """Atomically bind a newly-created durable target to its producing attempt.
+
+    This helper deliberately does not commit: proposal storage calls it after inserting
+    the target and before committing that same transaction. ``insert or ignore`` preserves
+    the original owner when an idempotent retry encounters an existing source, excerpt, or
+    fact instead of creating a new row.
+
+    Returns the target's durable owner, or ``None`` for non-agent callers.
+    """
+    if attempt_id is None:
+        return None
+    conn.execute(
+        "insert or ignore into agent_attempt_targets (attempt_id, target_kind, target_id) "
+        "values (?, ?, ?)",
+        (attempt_id, target_kind, target_id),
+    )
+    owner = conn.execute(
+        "select attempt_id from agent_attempt_targets where target_kind = ? and target_id = ?",
+        (target_kind, target_id),
+    ).fetchone()
+    if owner is None:  # pragma: no cover - same transaction inserted or found the row.
+        raise RuntimeError("The agent proposal ownership link disappeared.")
+    return int(owner["attempt_id"])
+
+
+def target_owner(conn: sqlite3.Connection, *, target_kind: str, target_id: int) -> int | None:
+    """Return the attempt that originally produced one durable target, if agent-created."""
+    row = conn.execute(
+        "select attempt_id from agent_attempt_targets where target_kind = ? and target_id = ?",
+        (target_kind, target_id),
+    ).fetchone()
+    return int(row["attempt_id"]) if row is not None else None
 
 
 def latest_attempt_for_message(

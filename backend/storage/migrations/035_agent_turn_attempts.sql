@@ -32,6 +32,20 @@ create table agent_turn_attempts (
 create index agent_turn_attempts_message_idx on agent_turn_attempts (user_message_id, id);
 create index agent_turn_attempts_session_idx on agent_turn_attempts (session_id, id);
 
+-- Proposal storage commits independently of the terminal tool-audit update. This compact
+-- ownership ledger is written in the *same transaction* as each proposal/revision row, so
+-- an audit-settlement failure cannot orphan causal attribution. One durable target keeps
+-- its original producer across retries; deduplicated sources, excerpts, and facts are not
+-- silently re-owned by the later attempt that encountered them again.
+create table agent_attempt_targets (
+  attempt_id integer not null references agent_turn_attempts(id) on delete cascade,
+  target_kind text not null,
+  target_id integer not null,
+  created_at text not null default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  primary key (target_kind, target_id)
+);
+create index agent_attempt_targets_attempt_idx on agent_attempt_targets (attempt_id);
+
 -- Every tool audit row an agent turn writes belongs to the attempt that produced it. Null
 -- for the pre-existing host-effect rows (apply/execute) and any pre-migration row.
 alter table tool_audit_events add column attempt_id integer

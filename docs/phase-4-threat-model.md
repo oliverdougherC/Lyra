@@ -219,6 +219,12 @@ persistence fails.
 - record rejected policy decisions and malformed calls as well as successes;
 - store bounded/redacted arguments, target identity, result summary, start/end, caller context,
   policy decision, and failure reason;
+- `agent_attempt_targets` is the canonical proposal-to-attempt join. It is inserted in the same
+  transaction as each new workspace change, command request, source/revision, excerpt, or profile
+  fact, so terminal audit failure cannot orphan ownership. Its target key is unique and
+  insert-only: Retry creates new ownership rows for new records and cannot relabel a deduplicated
+  record that an earlier attempt produced. The audit row's `(target_kind, target_id)` is the normal
+  activity projection, not the sole source of causal truth;
 - the transcript queries durable events, not only a final assistant-message blob;
 - startup reconciliation marks abandoned in-flight events explicitly.
 

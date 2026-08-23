@@ -20,8 +20,10 @@ inside the tool loop.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sqlite3
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI, Request
@@ -29,7 +31,14 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from backend.api import routes_agent_chat, routes_chat
-from backend.core import agent_attempts, sessions
+from backend.core import (
+    agent_attempts,
+    agent_store,
+    profiles,
+    sessions,
+    tool_audit,
+    web_research,
+)
 from backend.core.errors import ConflictError, LyraError
 from backend.llm import tools
 from backend.storage.database import connect, get_db
@@ -102,15 +111,80 @@ def _spy_registry(monkeypatch: pytest.MonkeyPatch) -> list[object]:
     return built
 
 
-def _send(client: TestClient, class_id: int, session_id: int, content: str = "A question"):
+def _send(
+    client: TestClient,
+    class_id: int,
+    session_id: int,
+    content: str = "A question",
+    *,
+    profile: str = "code",
+):
     return client.post(
         f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
-        json={"content": content, "profile": "code"},
+        json={"content": content, "profile": profile},
     )
 
 
 def _retry(client: TestClient, class_id: int, session_id: int):
     return client.post(f"/api/classes/{class_id}/sessions/{session_id}/agent-chat/retry")
+
+
+def _enable_workspace(
+    db: sqlite3.Connection,
+    class_id: int,
+    root: Path,
+    *,
+    changes: bool = False,
+    commands: bool = False,
+) -> None:
+    root.mkdir()
+    agent_store.attach_workspace(db, class_id, root_path=str(root))
+    agent_store.update_workspace_grants(
+        db,
+        class_id,
+        read_enabled=changes,
+        change_proposals_enabled=changes,
+        commands_enabled=commands,
+    )
+
+
+def _target_attempt(
+    conn: sqlite3.Connection,
+    *,
+    target_kind: str,
+    target_id: int,
+) -> int:
+    rows = conn.execute(
+        "select attempt_id from agent_attempt_targets "
+        "where target_kind = ? and target_id = ? order by rowid",
+        (target_kind, str(target_id)),
+    ).fetchall()
+    assert len(rows) == 1
+    return int(rows[0]["attempt_id"])
+
+
+class _FailFinalCommit:
+    """Connection proxy that fails the commit containing reply + completion exactly once."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+        self.failed = False
+
+    def __getattr__(self, name: str):  # noqa: ANN204
+        return getattr(self._conn, name)
+
+    def commit(self) -> None:
+        if not self.failed and self._conn.in_transaction:
+            reply = self._conn.execute(
+                "select count(*) from messages where role = 'assistant'"
+            ).fetchone()[0]
+            attempt = self._conn.execute(
+                "select state from agent_turn_attempts order by id desc limit 1"
+            ).fetchone()
+            if reply and attempt is not None and attempt["state"] == agent_attempts.COMPLETED:
+                self.failed = True
+                raise sqlite3.OperationalError("injected final commit failure")
+        self._conn.commit()
 
 
 # --- Overlap is a deterministic conflict, for every pairing --------------------------
@@ -428,12 +502,152 @@ def test_turn_completion_is_atomic_so_a_crash_cannot_orphan_a_reply(
         _send(client, class_id, session_id, "Answer atomically")
 
     # No orphaned assistant reply: the whole completion rolled back, leaving only the user
-    # turn, and the attempt did not settle as completed.
+    # turn, and the fresh settlement records the persistence failure truthfully.
     assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user"]
     (attempt,) = agent_attempts.latest_attempts_by_message(db, session_id).values()
-    assert attempt["state"] != agent_attempts.COMPLETED
+    assert attempt["state"] == agent_attempts.FAILED
+    assert attempt["stopped_reason"] == "persistence_failed"
     assert attempt["assistant_message_id"] is None
     assert sessions.active_turn(session_id) is None
+
+
+def test_assistant_insert_failure_rolls_back_and_settles_in_a_fresh_transaction(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_loop(monkeypatch, tools.ToolLoopResult(content="Generated but not stored."))
+    original_fail = agent_attempts.fail_attempt
+    settled_after_rollback: list[bool] = []
+
+    original_insert = sessions.insert_message
+
+    def fail_insert(*args: object, **kwargs: object) -> int:
+        if len(args) > 2 and args[2] == "assistant":
+            raise sqlite3.OperationalError("injected assistant insert failure")
+        return original_insert(*args, **kwargs)  # type: ignore[arg-type]
+
+    def capture_settlement(
+        conn: sqlite3.Connection,
+        attempt_id: int,
+        *,
+        stopped_reason: str,
+        detail: str,
+    ) -> None:
+        settled_after_rollback.append(not conn.in_transaction)
+        original_fail(
+            conn,
+            attempt_id,
+            stopped_reason=stopped_reason,
+            detail=detail,
+        )
+
+    monkeypatch.setattr(routes_agent_chat.sessions, "insert_message", fail_insert)
+    monkeypatch.setattr(routes_agent_chat.agent_attempts, "fail_attempt", capture_settlement)
+    with pytest.raises(sqlite3.OperationalError, match="assistant insert"):
+        _send(client, class_id, session_id, "Persist this")
+
+    assert settled_after_rollback == [True]
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user"]
+    (attempt,) = agent_attempts.latest_attempts_by_message(db, session_id).values()
+    assert attempt["state"] == agent_attempts.FAILED
+    assert attempt["stopped_reason"] == "persistence_failed"
+
+
+async def test_final_commit_failure_leaves_no_reply_or_running_attempt(
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_loop(monkeypatch, tools.ToolLoopResult(content="Generated before commit failed."))
+    raw = connect()
+    conn = _FailFinalCommit(raw)
+    try:
+        payload = routes_agent_chat.AgentChatRequest(content="Commit atomically", profile="code")
+        with pytest.raises(sqlite3.OperationalError, match="final commit"):
+            await routes_agent_chat.send_agent_chat(class_id, session_id, payload, conn)  # type: ignore[arg-type]
+    finally:
+        raw.close()
+
+    assert conn.failed is True
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user"]
+    (attempt,) = agent_attempts.latest_attempts_by_message(db, session_id).values()
+    assert attempt["state"] == agent_attempts.FAILED
+    assert attempt["stopped_reason"] == "persistence_failed"
+    assert sessions.active_turn(session_id) is None
+
+
+def test_retry_after_final_persistence_failure_is_causal_and_stores_one_reply(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_loop(monkeypatch, tools.ToolLoopResult(content="The regenerated answer."))
+    original_insert = sessions.insert_message
+    calls = 0
+
+    def fail_once(*args: object, **kwargs: object) -> int:
+        nonlocal calls
+        if len(args) > 2 and args[2] == "assistant":
+            calls += 1
+            if calls == 1:
+                raise sqlite3.OperationalError("injected one-shot insert failure")
+        return original_insert(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(routes_agent_chat.sessions, "insert_message", fail_once)
+    with pytest.raises(sqlite3.OperationalError, match="one-shot"):
+        _send(client, class_id, session_id, "Answer once")
+
+    response = _retry(client, class_id, session_id)
+    assert response.status_code == 200, response.text
+    stored = sessions.list_messages(db, session_id)
+    assert [(m["role"], m["content"]) for m in stored] == [
+        ("user", "Answer once"),
+        ("assistant", "The regenerated answer."),
+    ]
+    attempts = db.execute(
+        "select state, assistant_message_id from agent_turn_attempts order by id"
+    ).fetchall()
+    assert [row["state"] for row in attempts] == ["failed", "completed"]
+    assert attempts[0]["assistant_message_id"] is None
+    assert attempts[1]["assistant_message_id"] == stored[-1]["id"]
+
+
+def test_failed_fallback_settlement_logs_bounded_context_and_leaves_reconciliation_fallback(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _stub_loop(monkeypatch, tools.ToolLoopResult(content="Generated."))
+
+    original_insert = sessions.insert_message
+
+    def fail_insert(*args: object, **kwargs: object) -> int:
+        if len(args) > 2 and args[2] == "assistant":
+            raise sqlite3.OperationalError("secret database path /private/example")
+        return original_insert(*args, **kwargs)  # type: ignore[arg-type]
+
+    def fail_settlement(*args: object, **kwargs: object) -> None:
+        raise sqlite3.OperationalError("second secret database path /private/other")
+
+    monkeypatch.setattr(routes_agent_chat.sessions, "insert_message", fail_insert)
+    monkeypatch.setattr(routes_agent_chat.agent_attempts, "fail_attempt", fail_settlement)
+    with pytest.raises(sqlite3.OperationalError, match="secret database path"):
+        _send(client, class_id, session_id, "Fallback")
+
+    assert "startup reconciliation remains the fallback" in caplog.text
+    assert "/private/example" not in caplog.text
+    assert "/private/other" not in caplog.text
+    (attempt,) = agent_attempts.latest_attempts_by_message(db, session_id).values()
+    assert attempt["state"] == agent_attempts.RUNNING
 
 
 def test_a_retry_with_no_agent_turn_to_retry_is_a_404(
@@ -522,6 +736,412 @@ def test_tool_records_are_tied_to_the_attempt_that_produced_them_across_a_retry(
     assert second_attempt in attempt_ids
     assert attempt_ids.count(first_attempt) == 1
     assert attempt_ids.count(second_attempt) == 1
+
+
+def test_workspace_proposals_keep_attempt_ownership_across_retry_and_restart(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repo"
+    _enable_workspace(db, class_id, root, changes=True)
+    source = root / "answer.txt"
+    source.write_text("original\n")
+    base_hash = hashlib.sha256(b"original\n").hexdigest()
+    run = 0
+    original_finish = tool_audit.finish_event
+
+    def fail_first_audit_finish(
+        conn: sqlite3.Connection, event_id: str, **kwargs: object
+    ) -> object:
+        event = conn.execute(
+            "select tool from tool_audit_events where id = ?", (event_id,)
+        ).fetchone()
+        if run == 1 and event["tool"] == "create_workspace_change":
+            raise sqlite3.OperationalError("injected audit settlement failure")
+        return original_finish(conn, event_id, **kwargs)  # type: ignore[arg-type]
+
+    async def proposal_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        nonlocal run
+        run += 1
+        registry = kwargs["registry"]
+        proposal = registry["create_workspace_change"].handler(  # type: ignore[index]
+            relative_path="answer.txt",
+            observed_base_hash=base_hash,
+            proposed_content=f"proposal {run}\n",
+            rationale=f"attempt {run}",
+        )
+        assert proposal.ok is True
+        if run == 1:
+            return tools.ToolLoopResult(content="", stopped=tools.TIMEOUT, detail="slow")
+        return tools.ToolLoopResult(content="Recovered with a separate proposal.")
+
+    monkeypatch.setattr(tool_audit, "finish_event", fail_first_audit_finish)
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", proposal_loop)
+    failed = _send(client, class_id, session_id, "Propose a change")
+    assert failed.status_code == 504
+    old_id = int(failed.json()["workspace_change_ids"][0])
+
+    retried = _retry(client, class_id, session_id)
+    assert retried.status_code == 200, retried.text
+    new_id = int(retried.json()["workspace_change_ids"][0])
+    assert new_id != old_id
+
+    attempts = db.execute("select id, state from agent_turn_attempts order by id").fetchall()
+    assert [row["state"] for row in attempts] == ["failed", "completed"]
+    first_attempt, second_attempt = (int(row["id"]) for row in attempts)
+
+    # A fresh connection plus the startup reconcilers is the durable reload/restart proof.
+    reloaded = connect()
+    try:
+        assert agent_attempts.reconcile_running(reloaded) == 0
+        assert tool_audit.reconcile_inflight(reloaded) == 1
+        assert (
+            _target_attempt(reloaded, target_kind="workspace_change", target_id=old_id)
+            == first_attempt
+        )
+        assert (
+            _target_attempt(reloaded, target_kind="workspace_change", target_id=new_id)
+            == second_attempt
+        )
+        states = reloaded.execute(
+            "select id, state from workspace_changes where id in (?, ?) order by id",
+            (old_id, new_id),
+        ).fetchall()
+        assert [(row["id"], row["state"]) for row in states] == [
+            (old_id, "pending"),
+            (new_id, "pending"),
+        ]
+    finally:
+        reloaded.close()
+    assert source.read_text() == "original\n"  # Retry never applies either proposal.
+
+
+def test_command_proposals_keep_attempt_ownership_across_retry_and_restart(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "repo"
+    _enable_workspace(db, class_id, root, commands=True)
+    run = 0
+    original_finish = tool_audit.finish_event
+
+    def fail_first_audit_finish(
+        conn: sqlite3.Connection, event_id: str, **kwargs: object
+    ) -> object:
+        event = conn.execute(
+            "select tool from tool_audit_events where id = ?", (event_id,)
+        ).fetchone()
+        if run == 1 and event["tool"] == "create_command_request":
+            raise sqlite3.OperationalError("injected audit settlement failure")
+        return original_finish(conn, event_id, **kwargs)  # type: ignore[arg-type]
+
+    async def proposal_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        nonlocal run
+        run += 1
+        registry = kwargs["registry"]
+        proposal = registry["create_command_request"].handler(  # type: ignore[index]
+            argv=["python", "-V"],
+            relative_cwd=".",
+            reason=f"verify attempt {run}",
+            expected_signal="version",
+            timeout_seconds=30,
+        )
+        assert proposal.ok is True
+        if run == 1:
+            return tools.ToolLoopResult(content="", stopped=tools.UPSTREAM_FAILED, detail="down")
+        return tools.ToolLoopResult(content="Recovered with a separate command request.")
+
+    monkeypatch.setattr(tool_audit, "finish_event", fail_first_audit_finish)
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", proposal_loop)
+    failed = _send(client, class_id, session_id, "Propose a command", profile="command")
+    assert failed.status_code == 502
+    old_id = int(failed.json()["command_request_ids"][0])
+
+    retried = _retry(client, class_id, session_id)
+    assert retried.status_code == 200, retried.text
+    new_id = int(retried.json()["command_request_ids"][0])
+    assert new_id != old_id
+
+    attempts = db.execute("select id, state from agent_turn_attempts order by id").fetchall()
+    first_attempt, second_attempt = (int(row["id"]) for row in attempts)
+    reloaded = connect()
+    try:
+        assert agent_attempts.reconcile_running(reloaded) == 0
+        assert tool_audit.reconcile_inflight(reloaded) == 1
+        assert (
+            _target_attempt(reloaded, target_kind="command_request", target_id=old_id)
+            == first_attempt
+        )
+        assert (
+            _target_attempt(reloaded, target_kind="command_request", target_id=new_id)
+            == second_attempt
+        )
+        states = reloaded.execute(
+            "select id, state, started_at from command_requests where id in (?, ?) order by id",
+            (old_id, new_id),
+        ).fetchall()
+        assert [(row["id"], row["state"], row["started_at"]) for row in states] == [
+            (old_id, "pending", None),
+            (new_id, "pending", None),
+        ]
+    finally:
+        reloaded.close()
+
+
+def test_source_and_profile_proposals_keep_attempt_ownership_across_retry_and_restart(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db.execute(
+        "update settings set allow_web_research = 1, firecrawl_scrape_enabled = 1 where id = 1"
+    )
+    db.commit()
+    run = 0
+    revision_ids: list[int] = []
+    original_finish = tool_audit.finish_event
+
+    def fail_first_proposal_audit_finishes(
+        conn: sqlite3.Connection, event_id: str, **kwargs: object
+    ) -> object:
+        event = conn.execute(
+            "select tool from tool_audit_events where id = ?", (event_id,)
+        ).fetchone()
+        if run == 1 and str(event["tool"]).startswith("propose_"):
+            raise sqlite3.OperationalError("injected audit settlement failure")
+        return original_finish(conn, event_id, **kwargs)  # type: ignore[arg-type]
+
+    def fake_fetch(url: str, **kwargs: object) -> dict[str, object]:
+        return {
+            "url": url,
+            "final_url": url,
+            "title": "Stable source identity",
+            "accessed_at": "2026-08-22T12:00:00+00:00",
+            "content_type": "text/plain",
+            "snapshot": f"Evidence for attempt {run}.",
+            "truncated": False,
+            "warning": None,
+        }
+
+    monkeypatch.setattr(web_research, "fetch_source", fake_fetch)
+
+    async def proposal_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        nonlocal run
+        run += 1
+        registry = kwargs["registry"]
+        fetched = registry["fetch_source"].handler(  # type: ignore[index]
+            url="https://example.com/stable-source"
+        )
+        assert fetched.ok is True
+        source = registry["propose_source_snapshot"].handler(  # type: ignore[index]
+            fetch_id=str(fetched.value["fetch_id"])
+        )
+        assert source.ok is True
+        source_id = int(source.value["source"]["id"])  # type: ignore[index]
+        revision_ids.append(int(source.value["source_revision_id"]))
+        excerpt = registry["propose_source_excerpt"].handler(  # type: ignore[index]
+            source_id=source_id,
+            excerpt=f"Evidence for attempt {run}.",
+        )
+        assert excerpt.ok is True
+        excerpt_id = int(excerpt.value["excerpt"]["id"])  # type: ignore[index]
+        fact = registry["propose_profile_fact"].handler(  # type: ignore[index]
+            kind="note",
+            label=f"Method {run}",
+            value=f"Use evidence {run}",
+            source_id=source_id,
+            excerpt_id=excerpt_id,
+        )
+        assert fact.ok is True
+        if run == 1:
+            return tools.ToolLoopResult(content="", stopped=tools.TIMEOUT, detail="slow")
+        return tools.ToolLoopResult(content="Recovered with separate research proposals.")
+
+    monkeypatch.setattr(tool_audit, "finish_event", fail_first_proposal_audit_finishes)
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", proposal_loop)
+    failed = _send(client, class_id, session_id, "Research and propose", profile="research")
+    assert failed.status_code == 504
+    old_source = int(failed.json()["source_ids"][0])
+    old_fact = int(failed.json()["profile_fact_ids"][0])
+
+    retried = _retry(client, class_id, session_id)
+    assert retried.status_code == 200, retried.text
+    # The retry updated the same stable source row, so it does not report that older id as
+    # newly produced. Its new causal artifact is the source revision in tool activity.
+    assert retried.json()["source_ids"] == []
+    new_fact = int(retried.json()["profile_fact_ids"][0])
+    assert new_fact != old_fact
+    assert any(
+        item["target_kind"] == "source_revision" and int(item["target_id"]) == revision_ids[1]
+        for item in retried.json()["activity"]
+    )
+
+    attempts = db.execute("select id, state from agent_turn_attempts order by id").fetchall()
+    first_attempt, second_attempt = (int(row["id"]) for row in attempts)
+    reloaded = connect()
+    try:
+        assert agent_attempts.reconcile_running(reloaded) == 0
+        assert tool_audit.reconcile_inflight(reloaded) == 3
+        assert (
+            _target_attempt(reloaded, target_kind="source", target_id=old_source) == first_attempt
+        )
+        assert (
+            _target_attempt(reloaded, target_kind="profile_fact", target_id=old_fact)
+            == first_attempt
+        )
+        assert (
+            _target_attempt(reloaded, target_kind="profile_fact", target_id=new_fact)
+            == second_attempt
+        )
+
+        revisions = reloaded.execute(
+            "select attempt_id from agent_attempt_targets "
+            "where target_kind = 'source_revision' order by target_id"
+        ).fetchall()
+        assert [int(row["attempt_id"]) for row in revisions] == [
+            first_attempt,
+            second_attempt,
+        ]
+
+        excerpts = reloaded.execute(
+            "select target_id, attempt_id from agent_attempt_targets "
+            "where target_kind = 'source_excerpt' order by rowid"
+        ).fetchall()
+        assert [int(row["attempt_id"]) for row in excerpts] == [
+            first_attempt,
+            second_attempt,
+        ]
+        facts = reloaded.execute(
+            "select id, confirmed, rejected, confidence from profile_facts "
+            "where id in (?, ?) order by id",
+            (old_fact, new_fact),
+        ).fetchall()
+        assert [(row["confirmed"], row["rejected"], row["confidence"]) for row in facts] == [
+            (0, 0, "low"),
+            (0, 0, "low"),
+        ]
+        assert not {old_fact, new_fact} & {
+            int(row["id"]) for row in profiles.select_active_facts(reloaded, class_id)
+        }
+    finally:
+        reloaded.close()
+
+
+def test_retrying_identical_research_proposals_does_not_reown_deduplicated_records(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db.execute(
+        "update settings set allow_web_research = 1, firecrawl_scrape_enabled = 1 where id = 1"
+    )
+    db.commit()
+    snapshot = "The identical evidence sentence."
+
+    def fake_fetch(url: str, **kwargs: object) -> dict[str, object]:
+        return {
+            "url": url,
+            "final_url": url,
+            "title": "Stable source",
+            "accessed_at": "2026-08-22T12:00:00+00:00",
+            "content_type": "text/plain",
+            "snapshot": snapshot,
+            "truncated": False,
+            "warning": None,
+        }
+
+    monkeypatch.setattr(web_research, "fetch_source", fake_fetch)
+    run = 0
+    produced: list[tuple[int, int, int]] = []
+
+    async def identical_proposal_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        nonlocal run
+        run += 1
+        registry = kwargs["registry"]
+        fetched = registry["fetch_source"].handler(  # type: ignore[index]
+            url="https://example.com/stable"
+        )
+        source = registry["propose_source_snapshot"].handler(  # type: ignore[index]
+            fetch_id=str(fetched.value["fetch_id"])
+        )
+        source_id = int(source.value["source"]["id"])  # type: ignore[index]
+        excerpt = registry["propose_source_excerpt"].handler(  # type: ignore[index]
+            source_id=source_id,
+            excerpt=snapshot,
+        )
+        excerpt_id = int(excerpt.value["excerpt"]["id"])  # type: ignore[index]
+        fact = registry["propose_profile_fact"].handler(  # type: ignore[index]
+            kind="note",
+            label="Stable method",
+            value="Use the stable method",
+            source_id=source_id,
+            excerpt_id=excerpt_id,
+        )
+        fact_id = int(fact.value["fact_id"])
+        produced.append((source_id, excerpt_id, fact_id))
+        if run == 1:
+            return tools.ToolLoopResult(content="", stopped=tools.TIMEOUT, detail="slow")
+        return tools.ToolLoopResult(content="Recovered without adopting old records.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", identical_proposal_loop)
+    assert (
+        _send(client, class_id, session_id, "Repeat research", profile="research").status_code
+        == 504
+    )
+    retried = _retry(client, class_id, session_id)
+    assert retried.status_code == 200
+    assert produced[0] == produced[1]  # all three storage helpers deduplicated the retry
+    assert retried.json()["source_ids"] == []
+    assert retried.json()["profile_fact_ids"] == []
+    assert {
+        item["target_kind"]
+        for item in retried.json()["activity"]
+        if item["tool"].startswith("propose_")
+    } == {
+        "source_revision_reference",
+        "source_excerpt_reference",
+        "profile_fact_reference",
+    }
+
+    attempts = db.execute("select id, state from agent_turn_attempts order by id").fetchall()
+    first_attempt, second_attempt = (int(row["id"]) for row in attempts)
+    source_id, excerpt_id, fact_id = produced[0]
+    assert _target_attempt(db, target_kind="source", target_id=source_id) == first_attempt
+    assert _target_attempt(db, target_kind="source_excerpt", target_id=excerpt_id) == first_attempt
+    assert _target_attempt(db, target_kind="profile_fact", target_id=fact_id) == first_attempt
+    # The identical source revision is likewise still owned by the first attempt, and the
+    # retry has no ownership rows to make the old records look newly produced.
+    revision_id = int(
+        db.execute(
+            "select current_revision_id from writer_sources where id = ?", (source_id,)
+        ).fetchone()["current_revision_id"]
+    )
+    assert (
+        _target_attempt(db, target_kind="source_revision", target_id=revision_id) == first_attempt
+    )
+    assert (
+        db.execute(
+            "select count(*) from agent_attempt_targets where attempt_id = ?",
+            (second_attempt,),
+        ).fetchone()[0]
+        == 0
+    )
+    fact = db.execute(
+        "select confirmed, rejected, confidence from profile_facts where id = ?", (fact_id,)
+    ).fetchone()
+    assert (fact["confirmed"], fact["rejected"], fact["confidence"]) == (0, 0, "low")
 
 
 def test_a_retry_after_reload_still_works_from_the_durable_attempt(

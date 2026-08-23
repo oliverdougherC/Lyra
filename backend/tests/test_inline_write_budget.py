@@ -20,7 +20,7 @@ from backend.core import artifacts
 from backend.core.app_settings import TutorAccess, TutorConfig
 from backend.core.errors import LyraError
 from backend.llm.tools import conversation_tokens
-from backend.llm.turn_budget import TurnBudget
+from backend.llm.turn_budget import TurnBudget, input_ceiling, plan_budget
 from backend.rag.retrieve import RetrievalResult
 
 ENDPOINT = "http://127.0.0.1:8080/v1"
@@ -88,6 +88,15 @@ def _user_content(messages: list[dict[str, str]]) -> str:
     return messages[-1]["content"]
 
 
+def _window_for_input_ceiling(ceiling: int) -> int:
+    """Smallest zero-reserve window whose safety-adjusted input ceiling is ``ceiling``."""
+    window = ceiling
+    while input_ceiling(window, 0) < ceiling:
+        window += 1
+    assert input_ceiling(window, 0) == ceiling
+    return window
+
+
 # --- The normal path still works ----------------------------------------------------
 
 
@@ -114,8 +123,33 @@ def test_a_normal_default_window_assembles_the_full_prompt(
     assert "Write an introduction" in content
     assert "Introduction" in content
     assert "The paragraph that follows." in content
-    # The whole assembled prompt fits the window minus the reply reserve.
-    assert conversation_tokens(messages) <= 8192
+    reserve = plan_budget(config.context_window).generation
+    # Accepted input stays inside the estimator's safety-adjusted room, independently of
+    # the output reserve that is held back for generation.
+    assert conversation_tokens(messages) <= input_ceiling(config.context_window, reserve)
+
+
+async def test_the_stream_sends_the_actual_reserved_output_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = TutorConfig(ENDPOINT, None, "m", 8192)
+    captured: dict[str, object] = {}
+
+    async def fake_stream_chat(*args: object, **kwargs: object):  # noqa: ANN202
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        yield routes_drafts.client.StreamDelta("answer", "Done")
+
+    monkeypatch.setattr(routes_drafts.client, "stream_chat", fake_stream_chat)
+    frames = [
+        frame
+        async for frame in routes_drafts._stream_write(
+            config, [{"role": "user", "content": "Write one sentence."}]
+        )
+    ]
+
+    assert captured["kwargs"] == {"max_tokens": plan_budget(config.context_window).generation}
+    assert any('"text":"Done"' in frame for frame in frames)
 
 
 # --- Impossible mandatory input fails locally, before any upstream call --------------
@@ -133,6 +167,30 @@ def test_an_impossible_instruction_is_refused_before_retrieval(
     assert "http" not in excinfo.value.message and "127.0.0.1" not in excinfo.value.message
     # Refused before any retrieval ran.
     assert budgets == []
+
+
+async def test_impossible_mandatory_material_never_calls_the_endpoint(
+    db: sqlite3.Connection,
+    draft_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_window(monkeypatch, 512)
+    _stub_retrieval(monkeypatch)
+    called = False
+
+    async def unexpected_stream(*args: object, **kwargs: object):  # noqa: ANN202
+        nonlocal called
+        called = True
+        yield routes_drafts.client.StreamDelta("answer", "must not happen")
+
+    monkeypatch.setattr(routes_drafts.client, "stream_chat", unexpected_stream)
+    with pytest.raises(LyraError):
+        await routes_drafts.write_inline(
+            draft_id,
+            WriteRequest(instruction="mandatory. " * 500),
+            db,
+        )
+    assert called is False
 
 
 def test_a_large_selection_is_mandatory_and_fails_locally(
@@ -175,7 +233,8 @@ def test_a_large_nearby_block_is_dropped_but_the_turn_still_runs(
     assert "Continue the argument" in content
     assert "the thesis sentence" in content
     assert "surrounding sentence." not in content
-    assert conversation_tokens(messages) <= 2048
+    reserve = plan_budget(2048).generation
+    assert conversation_tokens(messages) <= input_ceiling(2048, reserve)
 
 
 def test_optional_context_is_trimmed_lowest_priority_first(
@@ -196,18 +255,20 @@ def test_optional_context_is_trimmed_lowest_priority_first(
     brief_only = routes_drafts.prompts.build_write_prompt(
         request.instruction, None, None, None, "", "", "BRIEF " * 20
     )
-    # A window (with no reserve, below) that admits the brief but not the much larger facts.
+    # A safety-adjusted window (with no reserve, below) that admits the brief but not the
+    # much larger facts.
     monkeypatch.setattr(routes_drafts, "plan_budget", lambda window: TurnBudget(0, 0, 0, 0))
-    window = conversation_tokens(brief_only) + 5
-    assert conversation_tokens(brief_only) <= window  # brief fits
+    safe_ceiling = conversation_tokens(brief_only) + 5
+    window = _window_for_input_ceiling(safe_ceiling)
+    assert conversation_tokens(brief_only) <= input_ceiling(window, 0)  # brief fits
     _use_window(monkeypatch, window)
 
     _config, messages = _open_write(db, draft_id, request)
     content = _user_content(messages)
     assert "BRIEF" in content  # higher priority kept
     assert "FACTS" not in content  # lower priority dropped
-    assert conversation_tokens(messages) <= window
-    assert conversation_tokens(mandatory) <= window
+    assert conversation_tokens(messages) <= input_ceiling(window, 0)
+    assert conversation_tokens(mandatory) <= input_ceiling(window, 0)
 
 
 def test_retrieval_is_sized_to_the_room_left_by_local_context(
@@ -242,7 +303,7 @@ def test_the_mandatory_floor_at_exact_fit_and_one_over(
     _no_retrieval(monkeypatch)
     monkeypatch.setattr(routes_drafts.briefs, "get_brief", lambda conn, aid: None)
     monkeypatch.setattr(routes_drafts, "select_active_facts", lambda conn, cid: [])
-    # No reply reserve, so the ceiling is the window itself and the boundary is exact.
+    # No reply reserve, so this isolates the estimator safety boundary exactly.
     monkeypatch.setattr(routes_drafts, "plan_budget", lambda window: TurnBudget(0, 0, 0, 0))
 
     request = WriteRequest(instruction="Say something brief")
@@ -251,11 +312,14 @@ def test_the_mandatory_floor_at_exact_fit_and_one_over(
     )
     exact = conversation_tokens(mandatory)
 
-    _use_window(monkeypatch, exact)  # ceiling == cost: fits (<=)
+    exact_window = _window_for_input_ceiling(exact)
+    _use_window(monkeypatch, exact_window)  # safety-adjusted ceiling == cost: fits (<=)
     _config, messages = _open_write(db, draft_id, request)
     assert conversation_tokens(messages) == exact
+    assert conversation_tokens(messages) == input_ceiling(exact_window, 0)
 
-    _use_window(monkeypatch, exact - 1)  # one token over
+    one_over_window = _window_for_input_ceiling(exact - 1)
+    _use_window(monkeypatch, one_over_window)  # mandatory cost is one over the safe ceiling
     with pytest.raises(LyraError):
         _open_write(db, draft_id, request)
 

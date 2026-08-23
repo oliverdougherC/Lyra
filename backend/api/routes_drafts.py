@@ -60,7 +60,7 @@ from backend.llm.tools import (
     conversation_tokens,
     run_tool_loop,
 )
-from backend.llm.turn_budget import plan_budget, trim_history
+from backend.llm.turn_budget import input_ceiling, plan_budget, trim_history
 from backend.rag.retrieve import retrieve
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect, get_db
@@ -498,11 +498,12 @@ def _open_write(
     config = access.config
     class_id = int(artifact["class_id"])
 
-    # The reply reserve comes off the top and is never lent to the prompt; the rest of the
-    # window is the room the prompt must fit. No safety margin: this path streams one plain
-    # chat turn - no tool loop, no growing transcript - so it budgets against the window
-    # exactly as the tutor's streamed turn does.
-    ceiling = max(0, config.context_window - plan_budget(config.context_window).generation)
+    # The reply reserve comes off the top and is never lent to the prompt. The remaining
+    # input room carries the same PLA-290 safety margin as every guarded request: the
+    # four-characters-per-token estimator is still approximate for a plain streamed turn,
+    # even though this path has no tool schema or growing transcript.
+    generation_reserve = plan_budget(config.context_window).generation
+    ceiling = input_ceiling(config.context_window, generation_reserve)
 
     selection = payload.selection or None
     heading = payload.heading or None
@@ -577,7 +578,11 @@ async def _stream_write(config: TutorConfig, messages: list[dict[str, str]]) -> 
     """Token frames for the answer channel, then done. Errors arrive as frames."""
     try:
         async for delta in client.stream_chat(
-            config.endpoint_url, config.api_key, config.model, messages
+            config.endpoint_url,
+            config.api_key,
+            config.model,
+            messages,
+            max_tokens=plan_budget(config.context_window).generation,
         ):
             if delta.channel == "answer":
                 yield _frame(type="token", text=delta.text)

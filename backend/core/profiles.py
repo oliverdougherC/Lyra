@@ -29,7 +29,7 @@ import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from backend.core import source_ledger
+from backend.core import agent_attempts, source_ledger
 from backend.core.app_settings import (
     EXTRACTION_DISABLED,
     NO_ENDPOINT,
@@ -752,6 +752,7 @@ def propose_ledger_fact(
     value: str,
     source_id: int,
     excerpt_id: int,
+    attempt_id: int | None = None,
 ) -> dict[str, object]:
     """Store one web-evidenced fact as an unconfirmed, inactive proposal."""
     if kind not in _DEFAULT_LABELS:
@@ -779,24 +780,35 @@ def propose_ledger_fact(
         ),
         None,
     )
-    if existing is None:
-        fact_id = int(
-            conn.execute(
-                _INSERT_FACT,
-                (class_id, kind, clean_label, clean_value, _DEFAULT_CONFIDENCE, None),
-            ).lastrowid
-            or 0
+    try:
+        if existing is None:
+            fact_id = int(
+                conn.execute(
+                    _INSERT_FACT,
+                    (class_id, kind, clean_label, clean_value, _DEFAULT_CONFIDENCE, None),
+                ).lastrowid
+                or 0
+            )
+            agent_attempts.link_target(
+                conn,
+                attempt_id,
+                target_kind="profile_fact",
+                target_id=fact_id,
+            )
+        else:
+            fact_id = int(existing["id"])
+            if bool(get_fact(conn, fact_id)["rejected"]):
+                raise ValueError("The student previously rejected that profile fact.")
+        conn.execute(
+            "update profile_facts set source_writer_id = coalesce(source_writer_id, ?), "
+            "source_excerpt_id = coalesce(source_excerpt_id, ?) where id = ?",
+            (source_id, excerpt_id, fact_id),
         )
-    else:
-        fact_id = int(existing["id"])
-        if bool(get_fact(conn, fact_id)["rejected"]):
-            raise ValueError("The student previously rejected that profile fact.")
-    conn.execute(
-        "update profile_facts set source_writer_id = coalesce(source_writer_id, ?), "
-        "source_excerpt_id = coalesce(source_excerpt_id, ?) where id = ?",
-        (source_id, excerpt_id, fact_id),
-    )
-    conn.commit()
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
     fact = dict(get_fact(conn, fact_id))
     fact["active"] = any(int(row["id"]) == fact_id for row in select_active_facts(conn, class_id))
     return fact

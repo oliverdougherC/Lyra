@@ -79,6 +79,10 @@ _TOO_LARGE_MESSAGE = (
     "This turn is too large for the tutor's context window, even after trimming older "
     "messages. Shorten your message or start a new conversation, then try again."
 )
+_PERSISTENCE_STOPPED_DETAIL = (
+    "This turn was interrupted before its reply could be saved. Try it again."
+)
+_PERSISTENCE_FAILED_DETAIL = "The agent reply could not be saved. Try it again."
 
 
 class AgentChatRequest(BaseModel):
@@ -601,9 +605,38 @@ async def _run_agent_turn(
         )
         agent_attempts.mark_completed(conn, attempt_id, message_id)
         conn.commit()
-    except BaseException:
+    except BaseException as exc:
         if conn.in_transaction:
             conn.rollback()
+        # The attempt row was committed before the model ran. If the atomic reply/
+        # completion transaction fails, rolling it back restores that row to `running`.
+        # Settle it in a fresh transaction so a live backend never presents a finished
+        # model run as indefinitely in flight. Conditional terminal writes keep an
+        # ambiguous commit safe: if SQLite committed before surfacing an error, the
+        # already-completed row is left alone and Retry replays its one stored reply.
+        try:
+            if isinstance(exc, asyncio.CancelledError | GeneratorExit):
+                agent_attempts.stop_attempt(
+                    conn,
+                    attempt_id,
+                    detail=_PERSISTENCE_STOPPED_DETAIL,
+                )
+            else:
+                agent_attempts.fail_attempt(
+                    conn,
+                    attempt_id,
+                    stopped_reason="persistence_failed",
+                    detail=_PERSISTENCE_FAILED_DETAIL,
+                )
+        except Exception:
+            # Do not log either database exception: driver messages can include paths or
+            # values, and startup reconciliation remains the bounded final fallback if the
+            # database is not writable even for this small settlement.
+            logger.warning(
+                "Could not settle agent attempt %s after final reply persistence failed; "
+                "startup reconciliation remains the fallback",
+                attempt_id,
+            )
         raise
     return AgentChatResult(
         message_id=message_id,
