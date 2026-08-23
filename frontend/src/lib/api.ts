@@ -19,6 +19,7 @@ import type {
   AnswerRead,
   AttemptRead,
   AttemptResult,
+  CurrentAttemptRead,
   CardStateRead,
   CardUpdate,
   CardUpdateRead,
@@ -715,8 +716,11 @@ export const api = {
   getDeckSession: (deckId: number, limit = 20, signal?: AbortSignal) =>
     requestJson<DeckSession>(`/api/decks/${deckId}/session?limit=${limit}`, { signal }),
 
-  reviewCard: (partId: number, rating: Rating) =>
-    requestJson<CardStateRead>(`/api/cards/${partId}/review`, { method: 'POST', body: { rating } }),
+  reviewCard: (partId: number, rating: Rating, operationId: string) =>
+    requestJson<CardStateRead>(`/api/cards/${partId}/review`, {
+      method: 'POST',
+      body: { rating, operation_id: operationId },
+    }),
 
   updateCard: (partId: number, body: CardUpdate) =>
     requestJson<CardUpdateRead>(`/api/cards/${partId}`, { method: 'PATCH', body }),
@@ -725,8 +729,16 @@ export const api = {
     await send(`/api/cards/${partId}`, { method: 'DELETE' })
   },
 
-  startAttempt: (quizId: number) =>
-    requestJson<AttemptRead>(`/api/quizzes/${quizId}/attempts`, { method: 'POST' }),
+  // A start is idempotent: it returns the resumable attempt when one is active, or opens a
+  // fresh one, so opening a quiz twice never forks the score (PLA-277). `restart` is the
+  // explicit start-over.
+  startAttempt: (quizId: number, restart = false) =>
+    requestJson<AttemptRead>(`/api/quizzes/${quizId}/attempts${restart ? '?restart=true' : ''}`, {
+      method: 'POST',
+    }),
+
+  getCurrentAttempt: (quizId: number, signal?: AbortSignal) =>
+    requestJson<CurrentAttemptRead>(`/api/quizzes/${quizId}/attempts/current`, { signal }),
 
   submitAnswer: (attemptId: number, body: AnswerCreate) =>
     requestJson<AnswerRead>(`/api/attempts/${attemptId}/answers`, { method: 'POST', body }),

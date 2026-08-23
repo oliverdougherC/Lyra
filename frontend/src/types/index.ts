@@ -762,9 +762,28 @@ export interface AnswerCreate {
   selected_index: number
 }
 
+/** One question's already-recorded answer, without the answer key of the question. */
+export interface AttemptAnswer {
+  part_id: number
+  selected_index: number
+  correct: boolean
+}
+
+/**
+ * A started or resumed attempt. `answers` carries what has already been recorded so a
+ * reload or navigation resumes exactly where the student left off (PLA-277).
+ */
 export interface AttemptRead {
   attempt_id: number
   question_part_ids: number[]
+  question_count: number
+  answers: AttemptAnswer[]
+  finished: boolean
+}
+
+/** The resumable attempt for a quiz, or none. */
+export interface CurrentAttemptRead {
+  attempt: AttemptRead | null
 }
 
 export interface AnswerRead {
@@ -777,6 +796,7 @@ export interface AnswerRead {
 export interface AttemptResult {
   score: number
   total: number
+  answered: number
   by_topic: { topic: string; correct: number; total: number }[]
 }
 
