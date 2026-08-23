@@ -36,9 +36,16 @@ from backend.core.app_settings import (
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import LyraError
 from backend.core.profiles import select_active_facts, select_user_facts
-from backend.llm.budget import GENERATION_SHARE
 from backend.llm.client import stream_chat
 from backend.llm.prompts import ChatMode, build_system_prompt, format_context_block
+from backend.llm.turn_budget import (
+    HistoryMessage,
+    TurnBudget,
+    TurnReserve,
+    mandatory_history_tokens,
+    plan_budget,
+    trim_history,
+)
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk, retrieve
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect, get_db
@@ -49,17 +56,10 @@ router = APIRouter(prefix="/api", tags=["chat"])
 
 DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
 
-# The four buckets of the context budget table in docs/rag-pipeline.md. They sum to 1.0,
-# and an 8192 window divides into 2048 generation, 1229 system, 1638 history, and 3277
-# retrieval. The generation share is shared with the background pipelines, which reserve
-# the same quarter without assembling any of the other three.
-SYSTEM_SHARE = 0.15
-HISTORY_SHARE = 0.20
-RETRIEVAL_SHARE = 0.40
-
-# The latest exchange survives any budget. A reply to a question whose question is gone
-# reads as a non sequitur, which is worse than overrunning an estimate by one exchange.
-MINIMUM_HISTORY_MESSAGES = 2
+# The four-bucket context split (`plan_budget`), the newest-first history trim
+# (`trim_history`), and the pair it may never drop (`MINIMUM_HISTORY_MESSAGES`) live in
+# `backend.llm.turn_budget` so the writer and agent routes share one contract with this
+# one. They are imported above.
 
 # An absolute ceiling on one question, measured in Unicode characters (code points, not
 # bytes), so the boundary is the same whatever alphabet the student writes in. It is a
@@ -224,16 +224,6 @@ class TurnInput:
 
 
 @dataclass(frozen=True)
-class TurnBudget:
-    """One turn's context window split into tokens per bucket."""
-
-    generation: int
-    system: int
-    history: int
-    retrieval: int
-
-
-@dataclass(frozen=True)
 class TurnPlan:
     """Which messages this turn answers, and which it is about to replace.
 
@@ -249,14 +239,6 @@ class TurnPlan:
     def excluded(self) -> frozenset[int]:
         """Message ids that must not appear in this turn's history."""
         return frozenset({self.user_message_id, *self.superseded})
-
-
-@dataclass(frozen=True)
-class HistoryMessage:
-    """The immutable part of a persisted message that can enter a prompt."""
-
-    role: Literal["user", "assistant"]
-    content: str
 
 
 @dataclass(frozen=True)
@@ -307,24 +289,30 @@ class TurnCost:
 
     @property
     def mandatory_history_tokens(self) -> int:
-        """The newest messages `trim_history` keeps whatever the budget, charged in full.
+        """The newest messages `trim_history` keeps whatever the budget, charged in full."""
+        return mandatory_history_tokens(self.earlier)
 
-        `trim_history` retains at least `MINIMUM_HISTORY_MESSAGES`, so the newest that many
-        messages are as non-negotiable as the question: their cost is charged up front rather
-        than left to overflow the window after retrieval has already been clamped to nothing.
+    @property
+    def _reserve(self) -> TurnReserve:
+        """This turn's non-trimmable cost, in the shared fit contract's terms.
+
+        The tutor's fixed material is the system message (instruction plus pinned step);
+        it carries no tool definitions. Routing `reserved`, `prompt_room`, and `fits`
+        through `TurnReserve` keeps the inequality the preflight refuses on identical to
+        the one the writer and agent routes obey.
         """
-        kept = self.earlier[-MINIMUM_HISTORY_MESSAGES:]
-        return sum(estimate_tokens(message.content) for message in kept)
+        return TurnReserve(
+            context_window=self.context_window,
+            generation=self.budget.generation,
+            fixed_tokens=self.system_tokens,
+            question_tokens=self.question_tokens,
+            mandatory_history_tokens=self.mandatory_history_tokens,
+        )
 
     @property
     def reserved(self) -> int:
         """Every token the turn cannot avoid spending, measured against the window."""
-        return (
-            self.budget.generation
-            + self.system_tokens
-            + self.mandatory_history_tokens
-            + self.question_tokens
-        )
+        return self._reserve.reserved
 
     @property
     def prompt_room(self) -> int:
@@ -333,29 +321,12 @@ class TurnCost:
         Non-negative exactly when the turn fits, and then it is the room the mandatory
         history and everything optional after it must share.
         """
-        return (
-            self.context_window - self.budget.generation - self.system_tokens - self.question_tokens
-        )
+        return self._reserve.prompt_room
 
     @property
     def fits(self) -> bool:
         """Whether the reserve plus all non-trimmable material fits the window."""
-        return self.reserved <= self.context_window
-
-
-def plan_budget(context_window: int) -> TurnBudget:
-    """Split a context window into the four buckets of the Stage 7 table.
-
-    The generation reserve is taken off the top and never lent out, so the three prompt
-    buckets together are all the prompt can ever occupy. For an 8192 window that is
-    2048 reserved and 6144 for system, history, and retrieval.
-    """
-    return TurnBudget(
-        generation=round(context_window * GENERATION_SHARE),
-        system=round(context_window * SYSTEM_SHARE),
-        history=round(context_window * HISTORY_SHARE),
-        retrieval=round(context_window * RETRIEVAL_SHARE),
-    )
+        return self._reserve.fits
 
 
 def _plan_turn_cost(
@@ -980,26 +951,6 @@ def _build_turn(preparation: TurnPreparation, request: TurnInput, result: Retrie
     ]
     messages.append({"role": "user", "content": request.content})
     return Turn(messages=messages, retrieval=result)
-
-
-def trim_history(
-    messages: list[dict[str, object]], budget_tokens: int
-) -> tuple[list[dict[str, object]], int]:
-    """Keep the newest messages that fit, dropping oldest first.
-
-    Returns:
-        The kept messages in chronological order, and the tokens they cost.
-    """
-    kept: list[dict[str, object]] = []
-    used = 0
-    for message in reversed(messages):
-        cost = estimate_tokens(str(message["content"]))
-        if used + cost > budget_tokens and len(kept) >= MINIMUM_HISTORY_MESSAGES:
-            break
-        used += cost
-        kept.append(message)
-    kept.reverse()
-    return kept, used
 
 
 def _context_entry(chunk: RetrievedChunk) -> dict[str, object]:

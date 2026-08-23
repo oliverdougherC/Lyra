@@ -499,3 +499,94 @@ async def test_a_raising_on_call_is_ignored_and_the_pass_completes() -> None:
     assert result.stopped == tools.COMPLETED
     assert result.content == "Done."
     assert result.calls[0].ok is True
+
+
+# --- The per-round context guard (PLA-290) -------------------------------------------
+#
+# An agent turn's first request is proved to fit by the route's preflight, but each round
+# appends the model's tool calls and their results, so a later request can outgrow the
+# window even though the first one fit. Given a `ContextBudget`, the loop re-measures the
+# conversation before every request after the first and stops with `CONTEXT_OVERFLOW`
+# rather than sending one the transcript has grown too large for.
+
+
+def _big_result_registry(chars: int) -> dict[str, tools.ToolDefinition]:
+    """One tool whose result is large enough to grow the transcript quickly."""
+
+    def bulky(**_: object) -> ToolResult:
+        return success(payload="z" * chars)
+
+    return {
+        "bulky": tools.ToolDefinition(
+            name="bulky",
+            description="Return a large payload.",
+            parameters={"type": "object", "properties": {}, "required": []},
+            handler=bulky,
+        )
+    }
+
+
+async def test_a_growing_transcript_is_stopped_before_it_overflows() -> None:
+    # The model keeps asking for a tool that returns a large payload. The first request fits
+    # and is sent; once the accumulated results push the next request past the ceiling, the
+    # loop stops before sending it rather than letting the endpoint reject it.
+    transport, sent = _scripted(_reply(tool_calls=[_tool_call("bulky", {})]))
+    budget = tools.ContextBudget(context_window=4096, generation_reserve=1024, tool_tokens=50)
+
+    result = await tools.run_tool_loop(
+        _ENDPOINT,
+        None,
+        "local-model",
+        _MESSAGES,
+        registry=_big_result_registry(chars=8000),  # ~2000 tokens per tool result
+        context_budget=budget,
+        transport=transport,
+    )
+
+    assert result.stopped == tools.CONTEXT_OVERFLOW
+    assert result.complete is False
+    assert result.content == ""
+    # Bounded and privacy-safe: it names no endpoint, argument, or transcript.
+    assert result.detail == tools._OVERFLOW_DETAIL
+    # At least one round ran (partial work is real), but the loop stopped short of the
+    # depth ceiling - it was the context guard, not exhaustion, that ended it.
+    assert 0 < len(result.calls) < tools.MAX_DEPTH
+    # The overflowing request was never sent: the guard fires before `complete_with_tools`.
+    assert len(sent) == len(result.calls)
+
+
+async def test_the_first_request_is_never_refused_by_the_context_guard() -> None:
+    # Round zero is the caller's preflight to prove; the guard does not re-check it, so a
+    # budget too small for even the opening request still lets that request go (and here the
+    # model simply answers). Re-checking round zero could only disagree with the preflight.
+    transport, sent = _scripted(_reply(content="Answered on the first try."))
+    budget = tools.ContextBudget(context_window=8, generation_reserve=4, tool_tokens=4)
+
+    result = await tools.run_tool_loop(
+        _ENDPOINT, None, "local-model", _MESSAGES, context_budget=budget, transport=transport
+    )
+
+    assert result.stopped == tools.COMPLETED
+    assert result.content == "Answered on the first try."
+    assert len(sent) == 1
+
+
+async def test_without_a_context_budget_the_loop_does_not_guard() -> None:
+    # The writer chat and the solver's verification pass bound their transcripts by depth and
+    # wall clock, not by a window, so a loop given no budget behaves exactly as before.
+    transport, _ = _scripted(
+        _reply(tool_calls=[_tool_call("bulky", {})]),
+        _reply(content="Done."),
+    )
+
+    result = await tools.run_tool_loop(
+        _ENDPOINT,
+        None,
+        "local-model",
+        _MESSAGES,
+        registry=_big_result_registry(chars=40_000),
+        transport=transport,
+    )
+
+    assert result.stopped == tools.COMPLETED
+    assert result.content == "Done."

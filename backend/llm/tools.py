@@ -29,7 +29,7 @@ lives. Four requirements, in the order they matter:
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 import httpx
@@ -42,6 +42,7 @@ from backend.llm.client import (
     ToolCall,
     complete_with_tools,
 )
+from backend.rag.tokens import estimate_tokens
 from backend.tools import cas, units
 from backend.tools.result import ToolResult, failure
 
@@ -70,10 +71,17 @@ DEPTH = "depth"
 TIMEOUT = "timeout"
 NO_TOOL_SUPPORT = "no_tool_support"
 UPSTREAM_FAILED = "upstream_failed"
+CONTEXT_OVERFLOW = "context_overflow"
 
 # Every reason a loop can end other than the model deciding it is finished. A caller must
 # treat all of these as "the check did not run", never as agreement.
-INCOMPLETE_REASONS: tuple[str, ...] = (DEPTH, TIMEOUT, NO_TOOL_SUPPORT, UPSTREAM_FAILED)
+INCOMPLETE_REASONS: tuple[str, ...] = (
+    DEPTH,
+    TIMEOUT,
+    NO_TOOL_SUPPORT,
+    UPSTREAM_FAILED,
+    CONTEXT_OVERFLOW,
+)
 
 _UNKNOWN_TOOL = "There is no tool called {name}."
 _BAD_ARGUMENTS = "The arguments were not valid JSON."
@@ -86,6 +94,74 @@ _MID_LOOP_DETAIL = (
     "The tutor endpoint rejected a request partway through checking, most likely because "
     "the tool transcript outgrew the model's context window."
 )
+# Said when the local guard stops the loop before a request the transcript has grown too
+# large for. Bounded and generic: it names no endpoint, tool argument, or private text.
+_OVERFLOW_DETAIL = (
+    "The tool transcript filled the model's context window before the turn could finish. "
+    "Try a shorter request or a narrower scope."
+)
+
+
+@dataclass(frozen=True)
+class ContextBudget:
+    """The window a growing tool loop must keep its next request inside.
+
+    An agent turn's first request is proved to fit before it is sent (the route's
+    preflight), but each round appends the model's tool calls and their results, so a
+    later request can outgrow the window even though the first one fit. This carries the
+    numbers the loop re-checks against before every subsequent request: the configured
+    window, the generation reserve held back for the reply, and the constant
+    tool-definition overhead sent on every request (measured once by the caller, from the
+    same registry the loop runs, so the guard and the preflight agree on it).
+
+    A loop given no budget does not guard - the writer chat and the solver's verification
+    pass bound their transcripts by depth and wall clock instead - so this is opt-in and
+    changes nothing for callers that omit it.
+    """
+
+    context_window: int
+    generation_reserve: int
+    tool_tokens: int
+
+    @property
+    def message_ceiling(self) -> int:
+        """The most the conversation itself may cost, once the reply and tools are set aside."""
+        return self.context_window - self.generation_reserve - self.tool_tokens
+
+
+def schema_tokens(tools: list[dict[str, object]]) -> int:
+    """Estimate the tokens a tool-definition list adds to every request.
+
+    Measured on the same JSON shape `complete_with_tools` sends and with the one shared
+    estimator, so the tool overhead a route charges in preflight is the overhead the loop
+    guards against round after round.
+    """
+    return estimate_tokens(json.dumps(tools, separators=(",", ":")))
+
+
+def _message_tokens(message: Mapping[str, object]) -> int:
+    """Estimate one conversation message's cost, content and any tool-call payload alike.
+
+    An assistant turn that asked for tools carries the calls it made, and a tool turn
+    carries the result handed back; both re-enter the model context on the next request,
+    so both are charged here rather than only the visible `content`.
+    """
+    total = 0
+    content = message.get("content")
+    if content:
+        total += estimate_tokens(str(content))
+    tool_calls = message.get("tool_calls")
+    if tool_calls:
+        total += estimate_tokens(json.dumps(tool_calls, separators=(",", ":")))
+    name = message.get("name")
+    if name:
+        total += estimate_tokens(str(name))
+    return total
+
+
+def _conversation_tokens(conversation: list[dict[str, object]]) -> int:
+    """The whole conversation's estimated cost, summed message by message."""
+    return sum(_message_tokens(message) for message in conversation)
 
 
 @dataclass(frozen=True)
@@ -416,6 +492,7 @@ async def run_tool_loop(
     timeout_seconds: float = TIMEOUT_SECONDS,
     registry: dict[str, ToolDefinition] | None = None,
     on_call: Callable[[RecordedCall], None] | None = None,
+    context_budget: ContextBudget | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> ToolLoopResult:
     """Run the model with tools until it stops asking for them, or until a ceiling.
@@ -433,6 +510,11 @@ async def run_tool_loop(
             narrate the loop while it runs. Runs on the event loop thread: keep it
             cheap, and it must not raise - one that does is logged and ignored, because
             a narration bug must not cost the pass.
+        context_budget: When given, the loop re-measures the conversation before every
+            request after the first and stops with `CONTEXT_OVERFLOW` rather than sending
+            one the accumulated transcript has grown too large for. The first request is
+            not re-checked here: its fit is the caller's preflight to prove. Omit it to
+            leave depth and wall clock as the only bounds, as the writer and solver do.
         transport: Test seam. Leave unset in production code.
 
     Returns:
@@ -462,6 +544,7 @@ async def run_tool_loop(
                 max_depth,
                 REGISTRY if registry is None else registry,
                 on_call,
+                context_budget,
                 transport,
             )
     except TimeoutError:
@@ -481,11 +564,29 @@ async def _drive(
     max_depth: int,
     registry: dict[str, ToolDefinition],
     on_call: Callable[[RecordedCall], None] | None,
+    context_budget: ContextBudget | None,
     transport: httpx.AsyncBaseTransport | None,
 ) -> ToolLoopResult:
     """The loop itself. Appends to `calls` as it goes, so a caller can read them on a cut."""
     tools = tool_schemas(registry)
     for round_index in range(max_depth):
+        # After the first request, the appended assistant turns and tool results can have
+        # grown the conversation past the window even though round zero fit. Re-measure the
+        # exact next request and stop before sending one that cannot fit, rather than
+        # letting the endpoint reject it (the `ToolsUnsupportedError` branch below) or,
+        # worse, silently truncate it. Round zero is skipped: proving it fits is the
+        # caller's preflight, and re-checking it here could only disagree with that.
+        if (
+            context_budget is not None
+            and round_index
+            and _conversation_tokens(conversation) > context_budget.message_ceiling
+        ):
+            return ToolLoopResult(
+                content="",
+                calls=tuple(calls),
+                stopped=CONTEXT_OVERFLOW,
+                detail=_OVERFLOW_DETAIL,
+            )
         try:
             answer = await complete_with_tools(
                 endpoint,

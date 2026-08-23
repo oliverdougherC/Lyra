@@ -1123,6 +1123,42 @@ Rules:
 - When retrieval is trimmed by more than half, log it **and** surface a quiet indicator in the UI, so
   the user can tell that the model did not see everything.
 
+**One shared fit contract.** The tutor turn, the writer chat turn, and the Phase-4 agent turn all
+answer the same question before sending anything - does one turn fit the window beside the reply
+reserve? - so the pieces that answer it live in one place, `backend/llm/turn_budget.py`: the
+four-bucket split (`plan_budget`), the newest-first history trim (`trim_history`) and the pair it may
+never drop (`MINIMUM_HISTORY_MESSAGES`), and the fit inequality itself (`TurnReserve`, whose
+`reserved`/`prompt_room`/`fits` the routes delegate to). None of the three keeps a weaker parallel
+approximation.
+
+**Agent-chat turns (PLA-290).** The class agent runs the tool loop rather than a single generation,
+so its budget differs from the tutor's in two ways, both expressed through the same `TurnReserve`:
+
+- *No retrieval block, but real tool overhead.* The agent injects no retrieved context; it fetches
+  through its tools instead. Its non-trimmable fixed material is therefore the system prompt **plus the
+  tool-definition schema, which is sent on every round** (roughly a thousand tokens for the compute
+  registry alone). That overhead is charged in preflight exactly like the tutor's pinned step. A
+  consequence worth stating plainly: a window small enough to matter - 512 or 1024 tokens - cannot host
+  the tool schemas beside the generation reserve at all, so every agent turn there is refused up front.
+  This is honest, not a regression: such a window genuinely cannot run a tool-calling agent.
+- *Re-budgeted every round.* Preflight proves only the first request fits. Each round appends the
+  model's tool calls and their results, so a later request can outgrow the window even though the first
+  one did not. Before every request after the first, the loop re-measures the exact conversation
+  against the window and generation reserve (`llm/tools.py`, `ContextBudget`) and, rather than sending a
+  request the transcript has grown too large for, stops with `context_overflow` - an honest, bounded,
+  non-retryable failure that preserves the audit trail of the tool work that did run and invents no
+  assistant reply. It does not trim or compact the transcript, so no causally required tool call or
+  result is ever silently dropped.
+
+The refusal (initial) and the settlement (later round) both happen before any mutation of the
+conversation title, the user message, class recency, tool audit, or any proposal/source/command row,
+and both carry a bounded, privacy-safe message: no endpoint URL, path, key, upstream body, or
+transcript. The agent charges the reserve as `plan_budget(window).generation` - the same number the
+tutor reserves - and estimates every piece with the one shared `estimate_tokens`, whose 4-chars-a-token
+approximation the 25% reserve absorbs; because the reserve is charged in full and the tool overhead is
+measured from the same registry the loop runs, the margin fails conservatively (a refused turn could
+never have fit) rather than overrunning.
+
 **Prompt structure:**
 ```
 [System prompt: mode, user profile, confirmed class profile facts]
