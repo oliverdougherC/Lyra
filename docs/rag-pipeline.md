@@ -1123,6 +1123,117 @@ Rules:
 - When retrieval is trimmed by more than half, log it **and** surface a quiet indicator in the UI, so
   the user can tell that the model did not see everything.
 
+**One shared fit contract, and what is actually shared.** The tutor turn, the writer chat turn, and
+the Phase-4 agent turn all answer a version of the same question before sending anything - does one
+turn fit the window beside the reply reserve? - so the pieces that answer it live in one place,
+`backend/llm/turn_budget.py`. What every route shares is the four-bucket split (`plan_budget`), the
+newest-first history trim (`trim_history`), and the pair it may never drop
+(`MINIMUM_HISTORY_MESSAGES`). The fit inequality itself (`TurnReserve`, whose
+`reserved`/`prompt_room`/`fits`) is shared by the tutor and, as a coarse pre-check, by the agent; the
+**writer chat does not enforce it** - `routes_drafts.py` imports only `plan_budget` and `trim_history`,
+trims history into its history+retrieval buckets, and bounds its tool loop by depth and wall clock,
+with no preflight fit-refusal. So the honest claim is narrower than "all three delegate to
+`TurnReserve`": the shared pieces are the split and the trim; the fit-refusal is the tutor's and the
+agent's.
+
+**Agent-chat turns (PLA-290).** The class agent runs the tool loop rather than a single generation,
+so its budget differs from the tutor's in several ways:
+
+- *No retrieval block, but real tool overhead.* The agent injects no retrieved context; it fetches
+  through its tools instead. Its non-trimmable fixed material is therefore the system prompt **plus the
+  tool-definition schema, which is sent on every round** (roughly a thousand tokens for the compute
+  registry alone). That overhead is charged in preflight. A consequence worth stating plainly: a window
+  small enough to matter - 512 or 1024 tokens - cannot host the tool schemas beside the generation
+  reserve at all, so every agent turn there is refused up front. This is honest, not a regression: such
+  a window genuinely cannot run a tool-calling agent.
+- *Frozen registry.* Tool exposure follows mutable capability state (web-research and workspace
+  grants). The schema-gating state is read **once**, into a frozen `AgentCapabilitySnapshot`, and the
+  executable registry the loop runs is built from that snapshot - before any mutation - by the same
+  preflight that budgeted its schema. So the schema charged, the availability wording written into the
+  system prompt, and the schema actually sent cannot drift apart when a grant flips mid-turn. Each
+  retained handler still re-reads the live grant at dispatch, so a grant **revoked** after planning
+  fails closed at the tool, while a grant **newly enabled** after planning simply waits for the next
+  turn (its schema was frozen out, so the loop is never handed a tool the preflight did not charge for).
+- *Canonical wire-shape accounting.* The request the preflight charges and the request the loop guards
+  are measured by one path, `conversation_tokens`, which serializes the **whole `messages` array** to
+  compact JSON in a single operation - every message's object framing (`role`, `content`, a `tool_calls`
+  payload, a tool turn's `tool_call_id` and `name`) **and** the `[` `]` and inter-message commas that
+  join them - so it is literally the wire shape of the field, not a per-message sum that quietly drops
+  the array separators. (`message_tokens` still measures one message in isolation, for the fixed
+  system-prompt and current-message costs the assembler sets aside first, and the history-trim loop
+  itself decides what to keep by re-measuring the candidate whole array with `conversation_tokens`, so a
+  trimmed turn it produces is measured the exact way the fit gate then charges it.) The tool schema is
+  charged once, separately, so nothing double-counts it. This is what lets the two measure the same
+  request rather than two different shapes.
+- *Reserved output, actually enforced.* The generation reserve is not only subtracted from the input
+  room; given a `ContextBudget`, the loop sends it as the request's `max_tokens`, so the endpoint is told
+  to cap each round at the exact number of output tokens Lyra held back. A round the endpoint then cuts
+  off at that ceiling (`finish_reason: "length"`) stops the loop with `output_limit`: a truncated reply
+  is not a finished turn, so its prose is never stored as a successful answer and its (possibly
+  half-written) tool calls are never dispatched. `output_limit` is a bounded, non-retryable 503 that
+  keeps the user turn and invents no assistant reply, the same surface as `context_overflow`. An
+  **unguarded** loop (writer chat, solver verification) sets no ceiling and does not reinterpret a
+  server's own truncation, so its behaviour is unchanged.
+- *Re-budgeted as the transcript grows.* Preflight proves only the first request fits. Each round
+  appends the model's tool-call turn and its tool results, so a later request can outgrow the window
+  even though the first did not. Given a `ContextBudget`, the loop re-measures the conversation at
+  every growth boundary - after the assistant tool-call turn is appended, after **each** individual
+  tool result, and before every request after the first - and stops with `context_overflow` the moment
+  the transcript can no longer continue. It runs no further tool merely because it belonged to the same
+  assistant response: an oversized tool-call payload runs zero of its tools, and a tool result that
+  fills the window stops the rest of that response. The stop is a bounded, non-retryable failure that
+  preserves the audit trail of the work that genuinely ran and invents no assistant reply; the loop
+  does not trim or compact the transcript, so it never replays a request with a tool call missing its
+  result - it simply settles there.
+
+**The mutation boundary, stated precisely.** The two failures are not symmetric:
+
+- The **initial** oversized-turn refusal happens in the read-only preflight, before any mutation of the
+  conversation title, the user message, class recency, tool audit, or any proposal/source/command row,
+  and before any request - and before the executable registry is even built, so a failure to construct
+  it cannot leave an orphaned user turn either.
+- A **later-round** failure - `context_overflow`, `output_limit`, or a later-round upstream rejection -
+  necessarily happens **after** the user turn has been persisted, and may happen **after** real tool
+  activity has run and been audited. That already-completed activity stays truthfully recorded; once the
+  failure is detected no further tool effect or model request occurs, and no assistant success reply is
+  invented - a reply the endpoint cut off at the output ceiling is a fragment, not an answer, and is not
+  stored.
+
+Both failures carry a bounded, privacy-safe message: no endpoint URL, path, key, upstream body, or
+transcript.
+
+**Estimator uncertainty, honestly.** The agent charges the reserve as `plan_budget(window).generation`
+- the same number the tutor reserves, and room for the model's **output**, not a cushion for input
+estimation error. Input is estimated with the shared `estimate_tokens`, whose four-characters-a-token
+approximation is close for prose but can undershoot dense JSON, code, equations, or non-ASCII text
+against an unknown endpoint tokenizer. The canonical accounting above already measures message framing
+exactly; what remains uncharged is only the characters-per-token ratio, so a small, explicit
+`CONTEXT_SAFETY_MARGIN` (10%) is charged on the **input** estimate, distinct from the generation
+reserve. What this guarantees is a *conservative* guard: it may refuse a turn that would in fact have
+fit, and it will not accept one whose estimated input already exceeds the margin-reduced room - the
+correct direction for a safety margin. What it does **not** guarantee is safety against an arbitrarily
+dense tokenizer: the endpoint tokenizer is unknown, and text that tokenizes far worse than four
+characters per token (long CJK runs, say) can still defeat a fixed 10% margin. The JSON transport
+escaping of non-ASCII (`\uXXXX`) happens to charge such text several transport characters per source
+character, which pushes in the conservative direction, but that is a property of the wire shape, not of
+the model's tokenizer, and it is not claimed as a guarantee. The margin is a pragmatic bounded
+approximation; the honest fallback for the residual case is the endpoint's own context rejection,
+handled truthfully rather than hidden - never silently truncated.
+
+**The residual first-request rejection, told apart from "no tool support".** An agent turn carries tool
+definitions, and `complete_with_tools` reads a 400 on such a request as "this endpoint does not
+implement tool calling" - the best reading for a genuine refusal. But the same 400 is also how an
+endpoint rejects a prompt its real tokenizer finds too large, which is exactly the residual case the
+margin cannot rule out. So the client classifies the 400 body with the same bounded machinery it uses
+elsewhere (`context`/`n_ctx` markers) and **drops** the body: a recognized context complaint is raised
+as a plain upstream failure, not `ToolsUnsupportedError`, so the loop settles it as `upstream_failed`
+rather than telling the settings screen tools are unsupported over a prompt that was merely too big. A
+400 that does not read as a context complaint still degrades to `no_tool_support` on the first round.
+Mid-loop, a 400 has always meant the transcript went bad rather than a capability verdict, and still
+does (a demonstrated tool call cannot un-happen); whether the body names the context window or not, a
+later-round 400 stays `upstream_failed`. In every branch the endpoint's own prose is classified and
+dropped - it reaches neither the result detail nor any log line.
+
 **Prompt structure:**
 ```
 [System prompt: mode, user profile, confirmed class profile facts]

@@ -29,7 +29,7 @@ lives. Four requirements, in the order they matter:
 import asyncio
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 import httpx
@@ -42,6 +42,8 @@ from backend.llm.client import (
     ToolCall,
     complete_with_tools,
 )
+from backend.llm.turn_budget import input_ceiling
+from backend.rag.tokens import estimate_tokens
 from backend.tools import cas, units
 from backend.tools.result import ToolResult, failure
 
@@ -70,10 +72,19 @@ DEPTH = "depth"
 TIMEOUT = "timeout"
 NO_TOOL_SUPPORT = "no_tool_support"
 UPSTREAM_FAILED = "upstream_failed"
+CONTEXT_OVERFLOW = "context_overflow"
+OUTPUT_LIMIT = "output_limit"
 
 # Every reason a loop can end other than the model deciding it is finished. A caller must
 # treat all of these as "the check did not run", never as agreement.
-INCOMPLETE_REASONS: tuple[str, ...] = (DEPTH, TIMEOUT, NO_TOOL_SUPPORT, UPSTREAM_FAILED)
+INCOMPLETE_REASONS: tuple[str, ...] = (
+    DEPTH,
+    TIMEOUT,
+    NO_TOOL_SUPPORT,
+    UPSTREAM_FAILED,
+    CONTEXT_OVERFLOW,
+    OUTPUT_LIMIT,
+)
 
 _UNKNOWN_TOOL = "There is no tool called {name}."
 _BAD_ARGUMENTS = "The arguments were not valid JSON."
@@ -86,6 +97,111 @@ _MID_LOOP_DETAIL = (
     "The tutor endpoint rejected a request partway through checking, most likely because "
     "the tool transcript outgrew the model's context window."
 )
+# Said when the local guard stops the loop before a request the transcript has grown too
+# large for. Bounded and generic: it names no endpoint, tool argument, or private text.
+_OVERFLOW_DETAIL = (
+    "The tool transcript filled the model's context window before the turn could finish. "
+    "Try a shorter request or a narrower scope."
+)
+# Said when the endpoint cut a guarded round off at the reserved output ceiling. The loop
+# caps each guarded request at the exact generation reserve it budgeted, so a
+# `finish_reason` of "length" means the reply is not finished: partial prose is not an
+# answer, and a half-written tool call must never be dispatched. Bounded and generic: it
+# names no endpoint, tool argument, or private text.
+_OUTPUT_LIMIT_DETAIL = (
+    "The reply reached the space reserved for it before the turn could finish. Try a "
+    "shorter request or a narrower scope."
+)
+
+
+@dataclass(frozen=True)
+class ContextBudget:
+    """The window a growing tool loop must keep its next request inside.
+
+    An agent turn's first request is proved to fit before it is sent (the route's
+    preflight), but each round appends the model's tool calls and their results, so a
+    later request can outgrow the window even though the first one fit. This carries the
+    numbers the loop re-checks against as the transcript grows: the configured window, the
+    generation reserve held back for the reply, the constant tool-definition overhead sent
+    on every request (measured once by the caller, from the same registry the loop runs, so
+    the guard and the preflight agree on it), and the estimator safety margin the preflight
+    accepted the first request under.
+
+    `safety_margin` is carried so the loop guards later requests exactly as conservatively
+    as the preflight admitted the first: both fold it into `input_ceiling`, so a request
+    the preflight would have accepted is not one the loop then rejects for measuring the
+    window differently. It defaults to zero, which reproduces the pre-margin ceiling
+    unchanged, so callers that never set it (the solver's verification pass, and any test
+    that constructs a bare budget) are unaffected.
+
+    A loop given no budget does not guard - the writer chat and the solver's verification
+    pass bound their transcripts by depth and wall clock instead - so this is opt-in and
+    changes nothing for callers that omit it.
+    """
+
+    context_window: int
+    generation_reserve: int
+    tool_tokens: int
+    safety_margin: float = 0.0
+
+    @property
+    def message_ceiling(self) -> int:
+        """The most the conversation itself may cost, once the reply and tools are set aside.
+
+        Folds in the safety margin through the same `input_ceiling` the preflight uses, so
+        the loop and the preflight bound the request the same way. With `safety_margin`
+        left at zero this is `context_window - generation_reserve - tool_tokens`, the ceiling
+        the guard used before the margin existed.
+        """
+        return (
+            input_ceiling(self.context_window, self.generation_reserve, margin=self.safety_margin)
+            - self.tool_tokens
+        )
+
+
+def schema_tokens(tools: list[dict[str, object]]) -> int:
+    """Estimate the tokens a tool-definition list adds to every request.
+
+    Measured on the same JSON shape `complete_with_tools` sends and with the one shared
+    estimator, so the tool overhead a route charges in preflight is the overhead the loop
+    guards against round after round.
+    """
+    return estimate_tokens(json.dumps(tools, separators=(",", ":")))
+
+
+def message_tokens(message: Mapping[str, object]) -> int:
+    """Estimate one conversation message's cost from the exact shape sent to the endpoint.
+
+    `client._chat_body` places each message dict into the request `messages` array
+    verbatim, so the tokens it costs are the tokens of its compact JSON serialization -
+    every field the request carries (`role`, `content`, a `tool_calls` payload, a tool
+    turn's `tool_call_id` and `name`) and the object/array/key/string framing around them,
+    not a hand-picked subset. Measuring the whole serialized shape is what lets the
+    preflight and the loop claim to charge the same request the client will send: an
+    earlier version summed only `content`, `tool_calls`, and `name`, so across many short
+    messages and long tool-call ids the omitted framing accumulated into a real
+    undercount. The tool-definition list is charged once, separately (`schema_tokens` and
+    `ContextBudget.tool_tokens`); it is not part of any message, so nothing here
+    double-counts it.
+    """
+    return estimate_tokens(json.dumps(message, separators=(",", ":"), default=str))
+
+
+def conversation_tokens(conversation: list[dict[str, object]]) -> int:
+    """The whole `messages` array's estimated cost, measured in one serialization.
+
+    The one accounting path the agent preflight and the loop's growth guard both call, so
+    the request one measures is the request the other measures. It measures the compact
+    JSON of the entire array `client._chat_body` places under `messages` - the object
+    framing of every message *and* the `[` `]` and inter-message commas that join them - so
+    it is literally the wire shape of that field, not a per-message sum that quietly drops
+    the separators. (`message_tokens` remains for charging one message in isolation, e.g.
+    the fixed system and current-message costs the assembler sets aside first; it and this
+    helper agree on message framing and differ only by the array's own framing, which this
+    helper is the one that must include.) The tool schema sent alongside `messages` is
+    charged once, separately, by the caller.
+    """
+    return estimate_tokens(json.dumps(conversation, separators=(",", ":"), default=str))
 
 
 @dataclass(frozen=True)
@@ -416,6 +532,7 @@ async def run_tool_loop(
     timeout_seconds: float = TIMEOUT_SECONDS,
     registry: dict[str, ToolDefinition] | None = None,
     on_call: Callable[[RecordedCall], None] | None = None,
+    context_budget: ContextBudget | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> ToolLoopResult:
     """Run the model with tools until it stops asking for them, or until a ceiling.
@@ -433,6 +550,20 @@ async def run_tool_loop(
             narrate the loop while it runs. Runs on the event loop thread: keep it
             cheap, and it must not raise - one that does is logged and ignored, because
             a narration bug must not cost the pass.
+        context_budget: When given, the loop does two things an unguarded loop does not.
+            It caps every request at the budgeted `generation_reserve` output tokens, so the
+            reserve held back in the context arithmetic is the reserve the endpoint is
+            actually told to stay inside; a round the endpoint cuts off at that ceiling
+            (`finish_reason: "length"`) stops the loop with `OUTPUT_LIMIT` rather than being
+            read as a finished answer or dispatched as a half-written tool call. And it
+            re-measures the conversation at every point it grows - after the model's tool-call
+            turn is appended, after each individual tool result is appended, and before every
+            request after the first - and stops with `CONTEXT_OVERFLOW` the moment the
+            transcript can no longer continue, rather than dispatching further tools or
+            sending a request the accumulated transcript has outgrown. The first request
+            itself is not re-checked for fit: that is the caller's preflight to prove. Omit
+            the budget to leave depth and wall clock as the only bounds, and to send no output
+            ceiling, as the writer and solver do.
         transport: Test seam. Leave unset in production code.
 
     Returns:
@@ -462,6 +593,7 @@ async def run_tool_loop(
                 max_depth,
                 REGISTRY if registry is None else registry,
                 on_call,
+                context_budget,
                 transport,
             )
     except TimeoutError:
@@ -481,11 +613,48 @@ async def _drive(
     max_depth: int,
     registry: dict[str, ToolDefinition],
     on_call: Callable[[RecordedCall], None] | None,
+    context_budget: ContextBudget | None,
     transport: httpx.AsyncBaseTransport | None,
 ) -> ToolLoopResult:
     """The loop itself. Appends to `calls` as it goes, so a caller can read them on a cut."""
     tools = tool_schemas(registry)
+
+    # A guarded loop reserves output room in its context arithmetic; that reservation is
+    # only real if the endpoint is actually told to cap the reply at it, so the same reserve
+    # becomes the request's `max_tokens`. Without a budget the reserve does not exist and the
+    # ceiling is left off, so the writer chat and the solver's verification pass keep sending
+    # exactly what they sent before.
+    max_tokens = context_budget.generation_reserve if context_budget is not None else None
+
+    def overflowed() -> bool:
+        """Whether the conversation as it stands can no longer fit the next request.
+
+        Re-read after every growth boundary, not only between rounds: a single assistant
+        response can append its tool-call turn and several tool results, and any one of
+        those can be the append that makes continuation impossible.
+        """
+        return (
+            context_budget is not None
+            and conversation_tokens(conversation) > context_budget.message_ceiling
+        )
+
     for round_index in range(max_depth):
+        # Before every request after the first, the appended assistant turns and tool
+        # results can have grown the conversation past the window even though round zero
+        # fit. Stop before sending one that cannot fit, rather than letting the endpoint
+        # reject it (the `ToolsUnsupportedError` branch below) or, worse, silently truncate
+        # it. Round zero is skipped: proving it fits is the caller's preflight, and
+        # re-checking it here could only disagree with that. The intra-round checks below
+        # already catch growth as it happens, so by the time control reaches here the
+        # transcript is normally known to fit; this stays as the explicit guard at the
+        # request boundary so no future edit can send an unmeasured request.
+        if round_index and overflowed():
+            return ToolLoopResult(
+                content="",
+                calls=tuple(calls),
+                stopped=CONTEXT_OVERFLOW,
+                detail=_OVERFLOW_DETAIL,
+            )
         try:
             answer = await complete_with_tools(
                 endpoint,
@@ -495,10 +664,11 @@ async def _drive(
                 tools,
                 transport=transport,
                 temperature=DETERMINISTIC_TEMPERATURE,
+                max_tokens=max_tokens,
             )
         except ToolsUnsupportedError as exc:
             if round_index:
-                # The client reads every 400 on a tools-carrying request as "no tool
+                # The client reads a non-context 400 on a tools-carrying request as "no tool
                 # support", and on the first request that is the best available reading.
                 # It cannot be the right one here: this endpoint has already answered
                 # tool rounds in this very loop, so a 400 now is the request going bad -
@@ -519,8 +689,14 @@ async def _drive(
             # CancelledError is a BaseException, so the timeout above still passes through.
             # `exception` rather than `warning`: this branch catches real bugs alongside
             # network weather, and a class name with no traceback made the two
-            # indistinguishable in the log.
-            logger.exception("Tool loop could not reach the tutor endpoint")
+            # indistinguishable in the log. It also catches the case PLA-290 must classify
+            # truthfully: a first-request context-window rejection. The client raises that as a
+            # bare `UpstreamError` (never `ToolsUnsupportedError`), so it lands here and settles
+            # as `UPSTREAM_FAILED`, not `NO_TOOL_SUPPORT` - the endpoint plainly processed the
+            # tools field, it just could not fit the prompt. `exc.message` is a Lyra-written
+            # constant; the endpoint's own prose was classified and dropped inside the client,
+            # so nothing private travels out of here, not even in the logged traceback.
+            logger.exception("Tool loop could not complete a tutor endpoint request")
             return ToolLoopResult(
                 content="",
                 calls=tuple(calls),
@@ -528,11 +704,37 @@ async def _drive(
                 detail=getattr(exc, "message", _UPSTREAM_DETAIL),
             )
 
+        if context_budget is not None and answer.truncated:
+            # The endpoint cut this round off at the reserved output ceiling the loop sent as
+            # `max_tokens`. A truncated reply is not a finished turn: its prose is a fragment,
+            # not an answer to store, and its tool calls may be half-written, so none may be
+            # dispatched. Settle honestly rather than treating the fragment as `COMPLETED` or
+            # speculating on an incomplete tool request. Only guarded loops impose the ceiling,
+            # so only they read truncation this way; an unguarded loop that never set a ceiling
+            # keeps its prior behaviour.
+            return ToolLoopResult(
+                content="",
+                calls=tuple(calls),
+                stopped=OUTPUT_LIMIT,
+                detail=_OUTPUT_LIMIT_DETAIL,
+            )
+
         if not answer.tool_calls:
             # The model is finished. This is the only path that returns `completed`.
             return ToolLoopResult(content=answer.content, calls=tuple(calls), stopped=COMPLETED)
 
         conversation.append(_assistant_turn(answer))
+        # The assistant's tool-call payload has now re-entered the transcript, and it can be
+        # large enough on its own to make any continuation impossible. Check before
+        # dispatching a single tool: if the turn cannot continue, none of the tools it asked
+        # for should run, because their results would only be discarded with the transcript.
+        if overflowed():
+            return ToolLoopResult(
+                content="",
+                calls=tuple(calls),
+                stopped=CONTEXT_OVERFLOW,
+                detail=_OVERFLOW_DETAIL,
+            )
         for call in answer.tool_calls:
             # Handlers block on a subprocess, so they run off the event loop. Known cost:
             # `to_thread` cannot be cancelled once the handler is running, so when the
@@ -552,6 +754,19 @@ async def _drive(
                     # Narration is an observer, never a participant: a broken callback
                     # is logged and the pass continues as if it were absent.
                     logger.exception("on_call callback raised; the loop continues")
+            # This result may be the one that fills the window. Stop the moment it does,
+            # before dispatching the next call in this same assistant response: those calls
+            # would run only to have their results discarded with a transcript that can no
+            # longer be sent. The work that genuinely ran stays in `calls`; the loop simply
+            # settles here rather than replaying a half-finished tool set as a request with
+            # missing results.
+            if overflowed():
+                return ToolLoopResult(
+                    content="",
+                    calls=tuple(calls),
+                    stopped=CONTEXT_OVERFLOW,
+                    detail=_OVERFLOW_DETAIL,
+                )
 
     return ToolLoopResult(
         content="",

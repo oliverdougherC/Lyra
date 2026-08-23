@@ -26,7 +26,6 @@ from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from backend.api.routes_chat import plan_budget, trim_history
 from backend.core import (
     artifacts,
     briefs,
@@ -55,6 +54,7 @@ from backend.core.profiles import select_active_facts
 from backend.core.writer_budgets import Depth, validate_depth
 from backend.llm import client, prompts
 from backend.llm.tools import RecordedCall, ToolDefinition, ToolLoopResult, run_tool_loop
+from backend.llm.turn_budget import plan_budget, trim_history
 from backend.rag.retrieve import retrieve
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect, get_db

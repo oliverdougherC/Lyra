@@ -7,11 +7,25 @@ from collections.abc import Callable
 import httpx
 import pytest
 
-from backend.core.errors import UpstreamError
+from backend.core.errors import ToolsUnsupportedError, UpstreamError
 from backend.llm import client
 
 _ENDPOINT = "http://127.0.0.1:8080/v1"
 _API_KEY = "sk-lyra-not-a-real-value"
+
+# One tool definition, the shape `complete_with_tools` carries on every guarded round.
+_SCHEMA_TOOL: dict[str, object] = {
+    "type": "function",
+    "function": {
+        "name": "add",
+        "description": "Add two numbers.",
+        "parameters": {
+            "type": "object",
+            "properties": {"a": {"type": "number"}, "b": {"type": "number"}},
+            "required": ["a", "b"],
+        },
+    },
+}
 
 # Blank lines, a non-data line, and a half-written frame all sit between valid frames,
 # because real servers emit all three and none of them may break the stream.
@@ -357,6 +371,122 @@ async def test_a_truncated_reply_still_reaches_callers_that_did_not_opt_in() -> 
     )
 
     assert result == "78 Matri"
+
+
+# --- complete_with_tools: the output ceiling and the two kinds of 400 (PLA-290) -------
+
+
+async def test_complete_with_tools_sends_the_output_ceiling_and_flags_truncation() -> None:
+    # The guarded loop passes the reserve as `max_tokens`; the client forwards it verbatim and
+    # reports a `finish_reason: "length"` reply as truncated, so the loop can refuse to trust it.
+    sent: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "cut"}, "finish_reason": "length"}]}
+        )
+
+    answer = await client.complete_with_tools(
+        _ENDPOINT,
+        None,
+        "m",
+        [{"role": "user", "content": "hi"}],
+        [_SCHEMA_TOOL],
+        transport=_transport(handler),
+        max_tokens=1024,
+    )
+
+    assert sent[0]["max_tokens"] == 1024
+    assert answer.truncated is True
+
+
+async def test_complete_with_tools_reports_a_normal_reply_as_not_truncated() -> None:
+    payload = {"choices": [{"message": {"content": "done"}, "finish_reason": "stop"}]}
+    transport = _transport(lambda request: httpx.Response(200, json=payload))
+
+    answer = await client.complete_with_tools(
+        _ENDPOINT,
+        None,
+        "m",
+        [{"role": "user", "content": "hi"}],
+        [_SCHEMA_TOOL],
+        transport=transport,
+    )
+
+    assert answer.truncated is False
+    assert answer.content == "done"
+
+
+async def test_a_first_request_context_400_raises_upstream_not_tools_unsupported() -> None:
+    # An unknown endpoint tokenizer can reject a first request the local estimate admitted.
+    # That 400 names the context window; it is an upstream failure, never a capability verdict.
+    transport = _transport(
+        lambda request: httpx.Response(
+            400, json={"error": {"message": "the request exceeds the available context size"}}
+        )
+    )
+
+    with pytest.raises(UpstreamError) as caught:
+        await client.complete_with_tools(
+            _ENDPOINT,
+            None,
+            "m",
+            [{"role": "user", "content": "hi"}],
+            [_SCHEMA_TOOL],
+            transport=transport,
+        )
+
+    assert not isinstance(caught.value, ToolsUnsupportedError)
+    assert getattr(caught.value, "upstream_status", None) == 400
+    # The Lyra-written message stands in for the endpoint's own prose.
+    assert "context size" not in caught.value.message
+
+
+async def test_a_genuine_tools_400_still_raises_tools_unsupported() -> None:
+    transport = _transport(
+        lambda request: httpx.Response(
+            400, json={"error": {"message": "this model does not support the tools parameter"}}
+        )
+    )
+
+    with pytest.raises(ToolsUnsupportedError):
+        await client.complete_with_tools(
+            _ENDPOINT,
+            None,
+            "m",
+            [{"role": "user", "content": "hi"}],
+            [_SCHEMA_TOOL],
+            transport=transport,
+        )
+
+
+async def test_a_context_400_body_is_classified_and_never_logged_or_returned(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    marker = "SECRET_/Users/student/thesis.pdf_sk-lyra-key"
+    transport = _transport(
+        lambda request: httpx.Response(
+            400, json={"error": {"message": f"n_ctx too small; {marker}"}}
+        )
+    )
+
+    with (
+        caplog.at_level(logging.INFO, logger="backend.llm.client"),
+        pytest.raises(UpstreamError) as caught,
+    ):
+        await client.complete_with_tools(
+            _ENDPOINT,
+            None,
+            "m",
+            [{"role": "user", "content": "hi"}],
+            [_SCHEMA_TOOL],
+            transport=transport,
+        )
+
+    assert marker not in caught.value.message
+    log = "\n".join(record.getMessage() for record in caplog.records)
+    assert marker not in log
 
 
 async def test_connection_reports_the_model_count_when_healthy() -> None:

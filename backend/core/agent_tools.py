@@ -49,6 +49,51 @@ FETCH_PREVIEW_CHARS = source_ledger.MAX_RELIED_EXCERPT_CHARS
 
 
 @dataclass(frozen=True, slots=True)
+class AgentCapabilitySnapshot:
+    """The capability state that decides which tool schemas one turn exposes.
+
+    Read once, at the start of the pre-mutation plan, and reused for both the token
+    budgeting and the executable registry, so a settings or grant change that lands between
+    the two cannot make the registry the loop runs larger or different from the one the
+    preflight charged for. It carries only the booleans that gate *schema inclusion* - not
+    the workspace row or the firecrawl endpoint, which each retained handler re-reads live
+    at dispatch time. That separation is deliberate: freezing the snapshot fixes what the
+    model is *offered*, while dispatch-time reauthorization still decides what it may
+    *do*. A grant revoked after the snapshot is taken therefore still fails closed at the
+    handler; a grant newly enabled after it waits until the next turn's snapshot.
+    """
+
+    allow_web_research: bool
+    firecrawl_scrape_enabled: bool
+    workspace_present: bool
+    workspace_read_enabled: bool
+    workspace_change_proposals_enabled: bool
+    workspace_commands_enabled: bool
+
+
+def snapshot_agent_capabilities(conn: sqlite3.Connection, class_id: int) -> AgentCapabilitySnapshot:
+    """Read the schema-gating capability state for one class exactly once.
+
+    Both the web-research grant and the workspace grants are read here so a single frozen
+    value drives every profile's schema selection. The handlers built from this snapshot
+    still re-read the live workspace row and web-research grant when they run, so this read
+    settles only what is exposed, never what is authorized.
+    """
+    capabilities = get_writer_capabilities(conn, class_id)
+    workspace = agent_store.get_workspace_for_class(conn, class_id)
+    return AgentCapabilitySnapshot(
+        allow_web_research=bool(capabilities.allow_web_research),
+        firecrawl_scrape_enabled=bool(capabilities.firecrawl_scrape_enabled),
+        workspace_present=workspace is not None,
+        workspace_read_enabled=bool(workspace["read_enabled"]) if workspace else False,
+        workspace_change_proposals_enabled=(
+            bool(workspace["change_proposals_enabled"]) if workspace else False
+        ),
+        workspace_commands_enabled=bool(workspace["commands_enabled"]) if workspace else False,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class FetchedSource:
     """One bounded page held only for the lifetime of an agent turn."""
 
@@ -373,15 +418,23 @@ def build_agent_registry(
     profile: AgentProfile,
     *,
     private_context: Sequence[str] = (),
+    snapshot: AgentCapabilitySnapshot | None = None,
 ) -> tuple[dict[str, ToolDefinition], AgentRunActivity]:
     """Build the smallest raw registry allowed for one class-agent turn.
 
-    Capability state is checked once to omit disabled schemas and again by each retained
-    handler so a grant revoked during a running turn fails closed.
+    Capability state gates which schemas are exposed, and each retained handler repeats that
+    authorization at dispatch so a grant revoked during a running turn fails closed. When a
+    caller has already frozen the schema-gating state for the turn it passes that
+    `snapshot`, and this build offers exactly the tools the snapshot admits - the agent
+    route does this so the registry the loop runs is provably the one its preflight
+    budgeted. Omitting `snapshot` reads the state live here, which is the behaviour every
+    caller outside the fit-checked agent route relies on.
     """
     if profile not in PROFILES:
         raise ValueError(f"Unknown agent profile: {profile}")
     _session_scope(conn, class_id, session_id)
+    if snapshot is None:
+        snapshot = snapshot_agent_capabilities(conn, class_id)
     activity = AgentRunActivity()
     definitions: list[tool_profiles.AnnotatedToolDefinition] = []
 
@@ -433,11 +486,12 @@ def build_agent_registry(
             definitions,
             activity,
             tuple(private_context),
+            snapshot,
         )
     elif profile == "code":
-        _add_code_tools(conn, class_id, session_id, definitions, activity)
+        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot)
     else:
-        _add_command_tools(conn, class_id, session_id, definitions, activity)
+        _add_command_tools(conn, class_id, session_id, definitions, activity, snapshot)
 
     selected = tool_profiles.build_tool_profile(profile, definitions)
     return {item.name: item.definition for item in selected.definitions}, activity
@@ -450,9 +504,12 @@ def _add_research_tools(
     definitions: list[tool_profiles.AnnotatedToolDefinition],
     activity: AgentRunActivity,
     private_context: tuple[str, ...],
+    snapshot: AgentCapabilitySnapshot,
 ) -> None:
-    capabilities = get_writer_capabilities(conn, class_id)
-    if not capabilities.allow_web_research:
+    # Schema inclusion is decided by the frozen snapshot, not a fresh read, so the tools
+    # offered match what the preflight budgeted. The handlers below still re-read the live
+    # web-research grant (and firecrawl gate) at dispatch through `_research_authorization`.
+    if not snapshot.allow_web_research:
         return
 
     def research_auth() -> object:
@@ -504,7 +561,7 @@ def _add_research_tools(
         )
     )
 
-    if capabilities.firecrawl_scrape_enabled:
+    if snapshot.firecrawl_scrape_enabled:
 
         def fetch_action(capabilities: WriterCapabilities, *, url: str) -> _Outcome:
             url = _text(url, "url", maximum=source_ledger.MAX_URL_CHARS)
@@ -777,9 +834,11 @@ def _add_code_tools(
     session_id: int,
     definitions: list[tool_profiles.AnnotatedToolDefinition],
     activity: AgentRunActivity,
+    snapshot: AgentCapabilitySnapshot,
 ) -> None:
-    workspace = agent_store.get_workspace_for_class(conn, class_id)
-    if workspace is None or not workspace["read_enabled"]:
+    # The frozen snapshot decides which workspace schemas are exposed; each handler still
+    # re-reads the live workspace row and its grants at dispatch via `_workspace_authorization`.
+    if not snapshot.workspace_present or not snapshot.workspace_read_enabled:
         return
 
     def read_auth() -> object:
@@ -914,7 +973,7 @@ def _add_code_tools(
             )
         )
 
-    if not workspace["change_proposals_enabled"]:
+    if not snapshot.workspace_change_proposals_enabled:
         return
 
     def change_auth() -> object:
@@ -1026,9 +1085,11 @@ def _add_command_tools(
     session_id: int,
     definitions: list[tool_profiles.AnnotatedToolDefinition],
     activity: AgentRunActivity,
+    snapshot: AgentCapabilitySnapshot,
 ) -> None:
-    workspace = agent_store.get_workspace_for_class(conn, class_id)
-    if workspace is None or not workspace["commands_enabled"]:
+    # Exposure is decided by the frozen snapshot; the handler re-reads the live command
+    # grant at dispatch via `_workspace_authorization`.
+    if not snapshot.workspace_present or not snapshot.workspace_commands_enabled:
         return
 
     def command_auth() -> object:
