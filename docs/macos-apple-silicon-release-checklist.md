@@ -22,6 +22,12 @@ Use this checklist for a release candidate on a clean Apple Silicon Mac.
 - [ ] While jobs are running, stop the app and start it again with `./run`.
 - [ ] Confirm interrupted work is reconciled on startup instead of being silently lost.
 - [ ] Confirm `./run stop` only stops this checkout's owned services.
+- [ ] With the app stopped, replace `.lyra/runtime.json` with an empty/corrupt file and confirm
+      `./run status` still reports the ports without signaling and `./run` refuses with the
+      documented remediation (nothing is killed, `data/` untouched).
+- [ ] Edit `.lyra/runtime.json` to a `version` higher than the launcher's `STATE_VERSION` and
+      confirm `run`, `status`, `doctor`, and `stop` all refuse safely and tell you to use the
+      newer Lyra. Restore the file (or move it aside) afterward.
 
 ## 4. Offline and degraded use
 

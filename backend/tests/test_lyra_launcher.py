@@ -10,7 +10,10 @@ import signal
 import sqlite3
 import stat
 import subprocess
+import sys
 import tarfile
+import threading
+from contextlib import suppress
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -1764,3 +1767,572 @@ def test_diagnostics_writes_a_launcher_only_note_when_nothing_is_reachable(
     written = json.loads(destination.read_text())
     assert written["backend_reachable"] is False
     assert "Start Lyra" in written["note"]
+
+
+# ---------------------------------------------------------------------------
+# PLA-146: runtime state-version skew recovery.
+#
+# The launcher persists its own ownership state (`.lyra/runtime.json`, keyed by
+# STATE_VERSION) separately from SQLite schema migrations. STATE_VERSION has only ever
+# been 1, so "older" states are represented here as structurally minimal version-1
+# documents (missing the optional fields the current launcher writes), and a
+# "newer" state as a version this checkout does not support. These tests prove that no
+# stale, missing, malformed, truncated, or future runtime state can strand an owned
+# service, signal a process the launcher cannot prove it owns, kill a foreign process
+# after PID reuse, or delete user data - and that when automatic recovery is unsafe the
+# launcher fails with specific remediation instead of guessing.
+# ---------------------------------------------------------------------------
+
+
+def write_runtime_text(launcher: ModuleType, text: str) -> Path:
+    """Write raw bytes to the isolated runtime-state file, creating `.lyra/` as needed."""
+
+    path = launcher.RUNTIME_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def write_runtime(launcher: ModuleType, state: object) -> Path:
+    return write_runtime_text(launcher, json.dumps(state))
+
+
+def legacy_v1_minimal() -> dict[str, object]:
+    """A version-1 state from before the launcher wrote the optional lifecycle fields."""
+
+    return {"version": 1, "processes": {}}
+
+
+def legacy_v1_with_process(record: dict[str, object]) -> dict[str, object]:
+    """A version-1 state that predates `mode`, `desired_state`, and `bundled_services`."""
+
+    return {"version": 1, "processes": {"backend": record}}
+
+
+@pytest.fixture
+def spawn_child() -> object:
+    """Spawn real, session-leading child processes and guarantee their cleanup.
+
+    Real subprocesses let the ownership checks run against genuine OS process identities
+    (birth token and process group), not mocks, which is where PID-reuse safety actually
+    has to hold.
+    """
+
+    children: list[subprocess.Popen[bytes]] = []
+
+    def _spawn() -> subprocess.Popen[bytes]:
+        proc = subprocess.Popen(  # noqa: S603
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        children.append(proc)
+        return proc
+
+    yield _spawn
+
+    for proc in children:
+        with suppress(ProcessLookupError):
+            proc.kill()
+        with suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=5)
+
+
+def genuine_record(launcher: ModuleType, proc: subprocess.Popen[bytes]) -> dict[str, object]:
+    """Build an ownership record from a live process's real birth identity."""
+
+    token = launcher.process_start_token(proc.pid)
+    assert token is not None, "the platform must expose a process birth token for ownership"
+    return {
+        "pid": proc.pid,
+        "pgid": os.getpgid(proc.pid),
+        "start_token": token,
+        "command": [sys.executable, "-c", "sleep"],
+    }
+
+
+def a_distinct_birth_token(live_token: str) -> str:
+    """Derive a birth token guaranteed to differ from a live process's real one.
+
+    ``record_matches_process`` compares the recorded ``start_token`` against the token the
+    OS currently reports for the PID, so any value that cannot equal the live token models
+    PID reuse deterministically. We shift the trailing birth counter (Linux clock ticks or
+    macOS microseconds) away from the live value rather than harvesting a second process's
+    real token: two quick spawns can legitimately share a ``/proc`` start-time tick, which is
+    exactly what made the old dead-then-respawn model flaky on the Linux CI runner.
+    """
+
+    prefix, separator, counter = live_token.rpartition(":")
+    assert separator and counter.isdigit(), f"unexpected birth-token format: {live_token!r}"
+    value = int(counter)
+    shifted = value - 1000 if value >= 1000 else value + 1000
+    token = f"{prefix}:{shifted}"
+    assert token != live_token
+    return token
+
+
+def forbid_signals(launcher: ModuleType, monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    """Record any raw signal the launcher sends so a test can assert it sent none."""
+
+    signaled: list[object] = []
+    monkeypatch.setattr(launcher.os, "kill", lambda *args: signaled.append(args))
+    if hasattr(launcher.os, "killpg"):
+        monkeypatch.setattr(launcher.os, "killpg", lambda *args: signaled.append(args))
+    return signaled
+
+
+# --- load_runtime classification -------------------------------------------------------
+
+
+def test_load_runtime_missing_state_is_a_safe_empty_stopped_state(launcher: ModuleType) -> None:
+    assert not launcher.RUNTIME_FILE.exists()
+
+    state = launcher.load_runtime()
+
+    assert state == launcher.empty_runtime()
+    assert state["version"] == launcher.STATE_VERSION
+    assert state["processes"] == {}
+    assert state["desired_state"] == "stopped"
+
+
+def test_load_runtime_normalizes_an_old_minimal_supported_state(launcher: ModuleType) -> None:
+    write_runtime(launcher, legacy_v1_minimal())
+
+    state = launcher.load_runtime()
+
+    # Absent optional fields are filled with safe defaults instead of rejected.
+    assert state["mode"] is None
+    assert state["desired_state"] == "stopped"
+    assert state["bundled_services"] == []
+    assert state["processes"] == {}
+
+
+def test_load_runtime_preserves_records_from_a_pre_defaults_state(launcher: ModuleType) -> None:
+    write_runtime(launcher, legacy_v1_with_process(owned_record()))
+
+    state = launcher.load_runtime()
+
+    assert state["processes"]["backend"] == owned_record()
+    assert state["desired_state"] == "stopped"
+    assert state["bundled_services"] == []
+
+
+def test_load_runtime_rejects_empty_file_with_actionable_message(launcher: ModuleType) -> None:
+    write_runtime_text(launcher, "")
+
+    with pytest.raises(launcher.RuntimeStateError) as excinfo:
+        launcher.load_runtime()
+
+    message = str(excinfo.value)
+    assert "not valid JSON" in message or "empty" in message
+    assert "status" in message
+    assert "No process is signaled" in message
+
+
+def test_load_runtime_rejects_truncated_json(launcher: ModuleType) -> None:
+    write_runtime_text(launcher, '{"version": 1, "processes": {"backend": {"pid": 4')
+
+    with pytest.raises(launcher.RuntimeStateError, match="not valid JSON"):
+        launcher.load_runtime()
+
+
+def test_load_runtime_rejects_a_non_object_document(launcher: ModuleType) -> None:
+    write_runtime_text(launcher, "[1, 2, 3]")
+
+    with pytest.raises(launcher.RuntimeStateError, match="must contain a JSON object"):
+        launcher.load_runtime()
+
+
+def test_load_runtime_rejects_newer_state_with_downgrade_guidance(launcher: ModuleType) -> None:
+    write_runtime(launcher, {"version": launcher.STATE_VERSION + 1, "processes": {}})
+
+    with pytest.raises(launcher.RuntimeStateError) as excinfo:
+        launcher.load_runtime()
+
+    message = str(excinfo.value)
+    assert "newer Lyra" in message
+    assert "Do not downgrade" in message
+    assert "No process is signaled" in message
+
+
+def test_load_runtime_rejects_unrecognized_older_version(launcher: ModuleType) -> None:
+    write_runtime(launcher, {"version": 0, "processes": {}})
+
+    with pytest.raises(launcher.RuntimeStateError, match="unrecognized state version"):
+        launcher.load_runtime()
+
+
+def test_load_runtime_does_not_accept_boolean_true_as_version_one(launcher: ModuleType) -> None:
+    # bool is an int subclass and True == 1; a corrupted flag must not pass as version 1.
+    write_runtime(launcher, {"version": True, "processes": {}})
+
+    with pytest.raises(launcher.RuntimeStateError, match="unrecognized state version"):
+        launcher.load_runtime()
+
+
+def test_load_runtime_rejects_a_non_object_processes_field(launcher: ModuleType) -> None:
+    write_runtime(launcher, {"version": 1, "processes": ["backend"]})
+
+    with pytest.raises(launcher.RuntimeStateError, match="processes"):
+        launcher.load_runtime()
+
+
+def test_load_runtime_rejects_an_invalid_bundled_services_list(launcher: ModuleType) -> None:
+    write_runtime(launcher, {"version": 1, "processes": {}, "bundled_services": [1, 2]})
+
+    with pytest.raises(launcher.RuntimeStateError, match="bundled_services"):
+        launcher.load_runtime()
+
+
+def test_load_runtime_accepts_but_never_trusts_a_malformed_record(launcher: ModuleType) -> None:
+    # A structurally incomplete record (no birth token) and a non-object record both load,
+    # but neither can ever prove ownership, so neither can trigger a signal.
+    write_runtime(
+        launcher,
+        {
+            "version": 1,
+            "processes": {"backend": {"pid": 1234}, "frontend": "not-a-record"},
+        },
+    )
+
+    state = launcher.load_runtime()
+
+    assert launcher.record_matches_process(state["processes"]["backend"]) is False
+
+
+def test_load_runtime_is_idempotent_on_a_bad_state(launcher: ModuleType) -> None:
+    write_runtime(launcher, {"version": 999, "processes": {"backend": owned_record()}})
+
+    for _ in range(3):
+        with pytest.raises(launcher.RuntimeStateError, match="newer Lyra"):
+            launcher.load_runtime()
+    # The refusal never rewrites or deletes the file it could not trust.
+    assert json.loads(launcher.RUNTIME_FILE.read_text())["version"] == 999
+
+
+# --- command semantics across bad state (run/status/doctor/stop) -----------------------
+
+
+def test_stop_refuses_newer_state_without_signaling(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_runtime(launcher, {"version": 999, "processes": {"backend": owned_record()}})
+    signaled = forbid_signals(launcher, monkeypatch)
+
+    with pytest.raises(launcher.RuntimeStateError, match="newer Lyra"):
+        launcher.stop(launcher.parse_args(["stop"]))
+
+    assert signaled == []
+
+
+def test_stop_refuses_corrupt_state_without_signaling(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_runtime_text(launcher, '{"version": 1, "processes": {"backend": ')
+    signaled = forbid_signals(launcher, monkeypatch)
+
+    with pytest.raises(launcher.RuntimeStateError, match="not valid JSON"):
+        launcher.stop(launcher.parse_args(["stop"]))
+
+    assert signaled == []
+
+
+def test_stop_with_missing_state_is_a_safe_noop(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signaled = forbid_signals(launcher, monkeypatch)
+    monkeypatch.setattr(launcher, "stop_configured_bundled_services", lambda _names: True)
+
+    assert launcher.stop(launcher.parse_args(["stop"])) == 0
+    assert signaled == []
+
+
+def test_main_stop_on_corrupt_state_returns_one_with_remediation(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_runtime_text(launcher, "not json at all")
+    signaled = forbid_signals(launcher, monkeypatch)
+
+    assert launcher.main(["stop"]) == 1
+
+    output = capsys.readouterr().out
+    assert "status" in output
+    assert "move" in output.lower()
+    assert signaled == []
+
+
+def test_main_start_on_newer_state_refuses_before_spawning_or_signaling(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_runtime(launcher, {"version": launcher.STATE_VERSION + 5, "processes": {}})
+    signaled = forbid_signals(launcher, monkeypatch)
+    monkeypatch.setattr(
+        launcher,
+        "spawn_component",
+        lambda *_args, **_kwargs: pytest.fail("start must not spawn on an untrusted state"),
+    )
+
+    assert launcher.main(["--no-browser"]) == 1
+
+    output = capsys.readouterr().out
+    assert "newer Lyra" in output
+    assert signaled == []
+
+
+def test_status_on_corrupt_state_reports_ports_without_signaling(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_runtime_text(launcher, "{ truncated")
+    signaled = forbid_signals(launcher, monkeypatch)
+    monkeypatch.setattr(launcher, "port_is_open", lambda _port: False)
+    monkeypatch.setattr(launcher, "url_ready", lambda _url: False)
+
+    assert launcher.status(launcher.parse_args(["status"])) == 1
+
+    output = capsys.readouterr().out
+    assert "not valid JSON" in output
+    assert "backend: stopped" in output
+    assert "frontend: stopped" in output
+    assert signaled == []
+
+
+def test_status_on_newer_state_reports_a_healthy_unowned_listener_without_adopting(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_runtime(launcher, {"version": 4096, "processes": {"backend": owned_record()}})
+    signaled = forbid_signals(launcher, monkeypatch)
+    monkeypatch.setattr(launcher, "port_is_open", lambda _port: True)
+    monkeypatch.setattr(launcher, "url_ready", lambda _url: True)
+    monkeypatch.setattr(launcher, "listener_description", lambda _port: "pid 4242 other")
+
+    assert launcher.status(launcher.parse_args(["status"])) == 1
+
+    output = capsys.readouterr().out
+    assert "newer Lyra" in output
+    assert "not launcher-owned" in output
+    assert signaled == []
+
+
+def test_doctor_on_corrupt_state_still_checks_the_host_and_reports_remediation(
+    launcher: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    write_runtime_text(launcher, "}{ not json")
+    node_modules = tmp_path / "node_modules"
+    node_modules.mkdir()
+    monkeypatch.setattr(launcher, "FRONTEND", tmp_path)
+    monkeypatch.setattr(launcher, "backend_imports_work", lambda _python: True)
+    monkeypatch.setattr(
+        launcher.shutil,
+        "which",
+        lambda executable: executable if executable in {"pnpm", "node"} else None,
+    )
+    monkeypatch.setattr(launcher, "executable_version", lambda _path: (22, 23, 0))
+    monkeypatch.setattr(launcher, "port_is_open", lambda _port: False)
+    monkeypatch.setattr(launcher, "url_ready", lambda _url: False)
+    signaled = forbid_signals(launcher, monkeypatch)
+
+    assert launcher.doctor(launcher.parse_args(["doctor"])) == 1
+
+    output = capsys.readouterr().out
+    # Host prerequisites are still reported before the runtime-state failure.
+    assert ".venv exists and backend imports pass" in output
+    assert "not valid JSON" in output
+    assert "backend: stopped" in output
+    assert signaled == []
+
+
+def test_doctor_on_bad_state_is_idempotent(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    write_runtime(launcher, {"version": 0, "processes": {}})
+    node_modules = tmp_path / "node_modules"
+    node_modules.mkdir()
+    monkeypatch.setattr(launcher, "FRONTEND", tmp_path)
+    monkeypatch.setattr(launcher, "backend_imports_work", lambda _python: True)
+    monkeypatch.setattr(
+        launcher.shutil,
+        "which",
+        lambda executable: executable if executable in {"pnpm", "node"} else None,
+    )
+    monkeypatch.setattr(launcher, "executable_version", lambda _path: (22, 23, 0))
+    monkeypatch.setattr(launcher, "port_is_open", lambda _port: False)
+    monkeypatch.setattr(launcher, "url_ready", lambda _url: False)
+
+    first = launcher.doctor(launcher.parse_args(["doctor"]))
+    second = launcher.doctor(launcher.parse_args(["doctor"]))
+
+    assert first == second == 1
+    assert json.loads(launcher.RUNTIME_FILE.read_text())["version"] == 0
+
+
+# --- adversarial process ownership with real subprocesses ------------------------------
+
+
+def test_old_state_with_running_owned_service_stops_cleanly(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, spawn_child: object
+) -> None:
+    proc = spawn_child()
+    record = genuine_record(launcher, proc)
+    write_runtime(launcher, legacy_v1_with_process(record))
+
+    state = launcher.load_runtime()
+    assert state["desired_state"] == "stopped"  # normalized from the old shape
+    assert launcher.record_matches_process(record) is True
+
+    monkeypatch.setattr(launcher, "port_is_open", lambda _port: False)
+    # Reap concurrently so the signaled child does not linger as a zombie whose birth token
+    # would still read back and look "alive" to the ownership check. In production the child
+    # is reparented to launchd/init, which reaps it; the thread stands in for that here.
+    reaper = threading.Thread(target=proc.wait, daemon=True)
+    reaper.start()
+
+    assert launcher.stop_owned_component("backend", record, 8000) is True
+
+    reaper.join(timeout=5)
+    assert proc.poll() is not None  # the genuinely-owned process was really stopped
+
+
+def test_old_state_with_dead_service_discards_record_without_signaling(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, spawn_child: object
+) -> None:
+    proc = spawn_child()
+    record = genuine_record(launcher, proc)
+    proc.kill()
+    proc.wait(timeout=5)
+    signaled = forbid_signals(launcher, monkeypatch)
+    monkeypatch.setattr(launcher, "port_is_open", lambda _port: False)
+
+    assert launcher.record_matches_process(record) is False
+    assert launcher.stop_owned_component("backend", record, 8000) is True
+    assert signaled == []
+
+
+def test_reused_pid_never_signals_a_live_foreign_process(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, spawn_child: object
+) -> None:
+    # Model PID reuse without any timing luck: a genuinely live, foreign process occupies the
+    # recorded PID, but the ownership record carries a birth token deterministically shifted
+    # off that process's real token. To record_matches_process this is exactly PID reuse - the
+    # PID resolves to a process whose birth identity is not the one we recorded. No signal
+    # primitive is mocked, so the production refuse-path has to protect the foreign process on
+    # its own.
+    foreign = spawn_child()
+    live_token = launcher.process_start_token(foreign.pid)
+    assert live_token is not None, "the platform must expose a process birth token for ownership"
+    stale_token = a_distinct_birth_token(live_token)
+    record = {
+        "pid": foreign.pid,
+        "pgid": os.getpgid(foreign.pid),
+        "start_token": stale_token,
+        "command": [sys.executable, "-c", "sleep"],
+    }
+
+    # Primary, timing-free correctness check: the PID and process group still resolve to the
+    # live foreign process, yet ownership is refused on the birth-token mismatch alone.
+    assert launcher.process_start_token(foreign.pid) == live_token
+    assert launcher.record_matches_process(record) is False
+
+    monkeypatch.setattr(launcher, "port_is_open", lambda _port: False)
+    # Real, unmocked os.kill/os.killpg: a stale record must be discarded, never signaled.
+    assert launcher.stop_owned_component("backend", record, 8000) is True
+
+    # Positive proof the foreign process outlived the recovery attempt. The bounded wait
+    # confirms the assertions above rather than establishing them: a regression that signaled
+    # the group would terminate this sleeper inside the window instead of timing out.
+    with pytest.raises(subprocess.TimeoutExpired):
+        foreign.wait(timeout=0.5)
+    os.kill(foreign.pid, 0)  # raises ProcessLookupError if it were gone
+
+
+def test_reused_pid_state_reports_stale_record_and_keeps_the_conflict(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, spawn_child: object
+) -> None:
+    impostor = spawn_child()
+    record = {
+        "pid": impostor.pid,
+        "pgid": os.getpgid(impostor.pid),
+        "start_token": "proc:this-token-belongs-to-a-dead-process",
+        "command": [sys.executable, "-c", "sleep"],
+    }
+    write_runtime(launcher, legacy_v1_with_process(record))
+    monkeypatch.setattr(launcher, "port_is_open", lambda _port: True)
+    monkeypatch.setattr(launcher, "url_ready", lambda _url: False)
+    monkeypatch.setattr(launcher, "listener_description", lambda _port: "pid 5 unrelated")
+
+    # component_state has no signaling path at all; the impostor survives being described.
+    description, healthy = launcher.component_state(
+        "backend",
+        launcher.load_runtime()["processes"]["backend"],
+        8000,
+        launcher.BACKEND_URL,
+    )
+
+    assert healthy is False
+    assert "stale ownership record" in description
+    assert impostor.poll() is None
+
+
+def test_stale_record_over_unowned_listener_is_reported_not_killed(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A stale record plus a live listener the launcher cannot prove it owns: stop must warn
+    # and leave the listener alone rather than signal an unverified PID.
+    monkeypatch.setattr(launcher, "record_matches_process", lambda _record: False)
+    monkeypatch.setattr(launcher, "port_is_open", lambda _port: True)
+    monkeypatch.setattr(launcher, "listener_description", lambda _port: "pid 77 other-app")
+    signaled = forbid_signals(launcher, monkeypatch)
+
+    assert launcher.stop_owned_component("backend", owned_record(), 8000) is False
+    assert signaled == []
+
+
+def test_bad_state_recovery_never_deletes_user_data(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    data_dir = tmp_path / "data"
+    (data_dir / "uploads").mkdir(parents=True, exist_ok=True)
+    db_path = data_dir / "lyra.db"
+    db_path.write_bytes(b"sqlite placeholder")
+    sentinel = data_dir / "uploads" / "keep.pdf"
+    sentinel.write_bytes(b"user file")
+    monkeypatch.setenv("LYRA_DATA_DIR", str(data_dir))
+    monkeypatch.setattr(launcher, "port_is_open", lambda _port: False)
+    monkeypatch.setattr(launcher, "url_ready", lambda _url: False)
+    monkeypatch.setattr(launcher, "stop_configured_bundled_services", lambda _names: True)
+
+    # Missing state -> safe stop; corrupt state -> status refuses; newer state -> doctor refuses.
+    assert launcher.stop(launcher.parse_args(["stop"])) == 0
+    write_runtime_text(launcher, "corrupt {")
+    assert launcher.status(launcher.parse_args(["status"])) == 1
+    write_runtime(launcher, {"version": 9001, "processes": {}})
+    with pytest.raises(launcher.RuntimeStateError):
+        launcher.stop(launcher.parse_args(["stop"]))
+
+    assert data_dir.is_dir()
+    assert db_path.is_file()
+    assert sentinel.read_bytes() == b"user file"
+
+
+def test_recovery_then_clean_relaunch_after_stale_state(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, spawn_child: object
+) -> None:
+    # A stale record from a dead process is discarded on stop; a subsequent load then starts
+    # from a clean, empty, stopped state with no manual cleanup required.
+    proc = spawn_child()
+    record = genuine_record(launcher, proc)
+    proc.kill()
+    proc.wait(timeout=5)
+    write_runtime(launcher, legacy_v1_with_process(record))
+    monkeypatch.setattr(launcher, "port_is_open", lambda _port: False)
+    monkeypatch.setattr(launcher, "stop_configured_bundled_services", lambda _names: True)
+
+    assert launcher.stop(launcher.parse_args(["stop"])) == 0
+
+    relaunch_state = launcher.load_runtime()
+    assert "backend" not in relaunch_state["processes"]
+    assert relaunch_state["desired_state"] == "stopped"
+    assert relaunch_state["version"] == launcher.STATE_VERSION

@@ -36,6 +36,20 @@ This guide covers problems a student can usually fix without reading source code
 - If a document or class was deleted while a run was in flight, rerun the action instead of
   waiting for the old job.
 
+## If the launcher reports an unreadable or unsupported runtime state
+
+- This means `.lyra/runtime.json`, the launcher's own ownership file, is corrupt, truncated,
+  or was written by a different version of Lyra. It is not your documents or database, which
+  live under `data/` and are never touched by this recovery.
+- The launcher will not stop or kill any process while it cannot trust that file, so nothing
+  is signaled on your behalf.
+- Run `./run status` first. Even with an unreadable state it still reports what is listening on
+  ports 3000 and 8000 without touching those processes.
+- If an old Lyra is still running, stop it with the launcher that started it. If the message
+  says the state was written by a newer Lyra, use that newer version to stop it; do not
+  downgrade to manage it.
+- Once nothing is running, move `.lyra/runtime.json` aside and run `./run` again.
+
 ## If backup or restore fails
 
 - Run `./run stop` and retry the backup if it reports that the database is still busy. That message

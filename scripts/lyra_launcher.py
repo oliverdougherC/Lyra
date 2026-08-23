@@ -79,6 +79,17 @@ class LauncherError(RuntimeError):
     """An actionable setup or lifecycle failure."""
 
 
+class RuntimeStateError(LauncherError):
+    """The persisted launcher runtime state cannot be trusted, so the launcher refuses to guess.
+
+    Raised only for a state the launcher cannot interpret with confidence (unreadable or
+    truncated JSON, a non-object document, a wrongly typed field, or an unsupported state
+    version). It is a subclass of ``LauncherError`` so existing lifecycle error handling still
+    reports it, but ``status`` and ``doctor`` catch it specifically to degrade into a read-only,
+    signal-free port report instead of aborting.
+    """
+
+
 def say(message: str = "") -> None:
     print(message, flush=True)
 
@@ -200,19 +211,111 @@ def empty_runtime() -> dict[str, Any]:
     }
 
 
+# The launcher persists one on-disk ownership contract, STATE_VERSION. It has only ever been
+# version 1, and every field the launcher writes has been stable since the contract was
+# introduced. See docs/local-deployment.md ("Runtime state versioning and recovery") for the
+# field inventory and the compatibility boundaries that must stay manual.
+SUPPORTED_STATE_VERSIONS: frozenset[int] = frozenset({STATE_VERSION})
+
+
+def _runtime_state_hint() -> str:
+    """Shared, signal-free remediation for a runtime-state file the launcher cannot trust."""
+
+    return (
+        "No process is signaled while the launcher cannot trust this file. Run './run status' "
+        f"to see what is listening on ports {BACKEND_PORT} and {FRONTEND_PORT}, stop any "
+        "still-running Lyra with the launcher that started it, then move "
+        f"{helper_label(RUNTIME_FILE)} aside and run './run' again. Your data directory and "
+        "database are never touched by this recovery."
+    )
+
+
 def load_runtime() -> dict[str, Any]:
-    state = load_json(RUNTIME_FILE, empty_runtime())
-    if state.get("version") != STATE_VERSION or not isinstance(state.get("processes"), dict):
-        raise LauncherError(
-            ".lyra/runtime.json uses an unsupported format. Move it aside and retry; "
-            "running processes will not be stopped automatically."
+    """Return the launcher's persisted ownership state, or fail safely and specifically.
+
+    Automatic recovery is limited to cases that cannot make the launcher act on a process it
+    does not provably own: a missing file, and a supported-version document whose *optional*
+    fields are absent, both become an empty, stopped state. Everything the launcher cannot
+    interpret with confidence - unreadable or truncated JSON, a non-object document, a wrongly
+    typed field, or a state version this checkout does not support - is refused with specific
+    remediation instead of guessed at. A wrong guess here could strand an owned service, signal
+    a reused PID, or silently discard ownership of a live process.
+    """
+
+    if not RUNTIME_FILE.exists():
+        return empty_runtime()
+    try:
+        raw = RUNTIME_FILE.read_text()
+    except OSError as exc:
+        raise RuntimeStateError(
+            f"{helper_label(RUNTIME_FILE)} could not be read ({exc}). {_runtime_state_hint()}"
+        ) from exc
+    try:
+        state = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeStateError(
+            f"{helper_label(RUNTIME_FILE)} is empty or not valid JSON ({exc}). "
+            f"{_runtime_state_hint()}"
+        ) from exc
+    if not isinstance(state, dict):
+        raise RuntimeStateError(
+            f"{helper_label(RUNTIME_FILE)} must contain a JSON object. {_runtime_state_hint()}"
         )
+
+    version = state.get("version")
+    # ``bool`` is an ``int`` subclass and ``True == 1``; exclude it so a corrupted
+    # ``"version": true`` can never masquerade as the supported version 1.
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version not in SUPPORTED_STATE_VERSIONS
+    ):
+        raise _unsupported_state_version_error(version)
+    return _normalize_supported_runtime(state)
+
+
+def _unsupported_state_version_error(version: object) -> RuntimeStateError:
+    """Explain a version skew, distinguishing a newer writer from an unrecognized one."""
+
+    label = helper_label(RUNTIME_FILE)
+    supported = ", ".join(str(value) for value in sorted(SUPPORTED_STATE_VERSIONS))
+    if isinstance(version, int) and not isinstance(version, bool) and version > STATE_VERSION:
+        return RuntimeStateError(
+            f"{label} was written by a newer Lyra (state version {version}; this checkout "
+            f"supports {supported}). Do not downgrade to manage it: stop that app with the "
+            f"newer Lyra that started it. {_runtime_state_hint()}"
+        )
+    return RuntimeStateError(
+        f"{label} uses an unrecognized state version ({version!r}; this checkout supports "
+        f"{supported}). {_runtime_state_hint()}"
+    )
+
+
+def _normalize_supported_runtime(state: dict[str, Any]) -> dict[str, Any]:
+    """Fill absent optional fields on a supported state; refuse a present-but-invalid one.
+
+    Individual process records are intentionally *not* rejected here. A record that no longer
+    proves ownership - a missing or malformed birth token, or a reused PID - is treated as
+    unowned by ``record_matches_process``, so it can never cause a signal. It can only produce
+    an honest "stopped; stale record" report or a port-aware, ownership-checked recovery.
+    """
+
+    label = helper_label(RUNTIME_FILE)
+    processes = state.get("processes", {})
+    if not isinstance(processes, dict):
+        raise RuntimeStateError(
+            f"{label} has a 'processes' entry that is not an object. {_runtime_state_hint()}"
+        )
+    state["processes"] = processes
+    state.setdefault("mode", None)
     state.setdefault("desired_state", "stopped")
     bundled_services = state.setdefault("bundled_services", [])
     if not isinstance(bundled_services, list) or not all(
         isinstance(name, str) for name in bundled_services
     ):
-        raise LauncherError(".lyra/runtime.json has an invalid bundled_services list")
+        raise RuntimeStateError(
+            f"{label} has an invalid 'bundled_services' list. {_runtime_state_hint()}"
+        )
     return state
 
 
@@ -1907,8 +2010,33 @@ def firecrawl_is_intentionally_skipped(runtime: dict[str, Any], args: argparse.N
     return core_stack_is_running(runtime) and not runtime["bundled_services"]
 
 
+def report_core_ports_without_state(*, indent: str = "") -> bool:
+    """Report core-port state when ownership records cannot be trusted, signaling nothing.
+
+    Used by ``status`` and ``doctor`` after the runtime-state file is refused: the launcher can
+    no longer claim ownership of anything, so every listener is reported through the unowned
+    path of ``component_state`` (which never signals or adopts). Returns True when a reported
+    state would block a safe launch.
+    """
+
+    blocking = False
+    for name, port, url in (
+        ("backend", BACKEND_PORT, BACKEND_URL),
+        ("frontend", FRONTEND_PORT, FRONTEND_URL),
+    ):
+        description, _ = component_state(name, None, port, url)
+        say(f"{indent}{description}")
+        blocking = component_state_is_blocking(description) or blocking
+    return blocking
+
+
 def status(args: argparse.Namespace) -> int:
-    runtime = load_runtime()
+    try:
+        runtime = load_runtime()
+    except RuntimeStateError as exc:
+        warn(str(exc))
+        report_core_ports_without_state()
+        return 1
     processes = runtime["processes"]
     healthy = True
     blocking_issue = False
@@ -1988,7 +2116,14 @@ def doctor(args: argparse.Namespace) -> int:
         warn("frontend dependencies are absent; ./run will install them")
         failures += 1
 
-    runtime = load_runtime()
+    try:
+        runtime = load_runtime()
+    except RuntimeStateError as exc:
+        failures += 1
+        warn(str(exc))
+        if report_core_ports_without_state(indent="  "):
+            failures += 1
+        return 1
     for name, port, url in (
         ("backend", BACKEND_PORT, BACKEND_URL),
         ("frontend", FRONTEND_PORT, FRONTEND_URL),
