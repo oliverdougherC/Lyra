@@ -10,6 +10,7 @@ and failure states.
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -130,6 +131,15 @@ def _deck_job(artifact_id: int, document_id: int, **opts: object) -> study._Job:
     return study._Job(artifact_id, source_ids=(document_id,), **opts)
 
 
+def _cards(*fronts: str) -> dict[str, list[dict[str, str]]]:
+    return {
+        "cards": [
+            {"front": front, "back": f"Answer for {front}", "topic": "model topic"}
+            for front in fronts
+        ]
+    }
+
+
 # ---------------------------------------------------------------------------
 # Deck generation and completion (PLA-299)
 # ---------------------------------------------------------------------------
@@ -142,13 +152,13 @@ def test_deck_generation_writes_cards_states_and_provenance(
     artifact_id = _deck(db, class_id, document_id)
     llm.replies = [
         {"topics": ["delta functions", "convolution"]},
-        {"cards": [{"front": "What is sifting?", "back": "It picks x(0).", "topic": "t"}]},
-        {
-            "cards": [
-                {"front": "Define convolution.", "back": "An integral.", "topic": "t"},
-                {"front": "Its commutativity?", "back": "f*g = g*f.", "topic": "t"},
-            ]
-        },
+        _cards("What is sifting?", "What is scaling?", "What is shifting?", "What is delta?"),
+        _cards(
+            "Define convolution.",
+            "What is its integral?",
+            "Is convolution commutative?",
+            "What is convolution's identity?",
+        ),
     ]
 
     study.run_generation(_deck_job(artifact_id, document_id))
@@ -159,12 +169,12 @@ def test_deck_generation_writes_cards_states_and_provenance(
     assert artifact["problems_done"] == 2
 
     parts = artifacts.list_parts(db, artifact_id)
-    assert [part["kind"] for part in parts] == [artifacts.CARD] * 3
-    assert [int(part["ordinal"]) for part in parts] == [1, 2, 3]
+    assert [part["kind"] for part in parts] == [artifacts.CARD] * 8
+    assert [int(part["ordinal"]) for part in parts] == list(range(1, 9))
     payload = json.loads(str(parts[0]["content"]))
     assert payload == {
         "front": "What is sifting?",
-        "back": "It picks x(0).",
+        "back": "Answer for What is sifting?",
         "topic": "delta functions",
     }
     assert parts[0]["label"] == "delta functions"
@@ -185,26 +195,15 @@ def test_deck_generation_writes_cards_states_and_provenance(
     assert provenance[0]["label"] == "delta functions"
 
 
-def test_a_deck_drops_cards_that_repeat_a_front(
+def test_one_card_then_bounded_top_up_reaches_exact_requested_count(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM
 ) -> None:
-    """Duplicate control spans the whole deck, not one topic's call."""
     document_id = _document(db, class_id)
     artifact_id = _deck(db, class_id, document_id)
     llm.replies = [
-        {"topics": ["delta functions", "convolution"]},
-        {
-            "cards": [
-                {"front": "What is sifting?", "back": "It picks x(0).", "topic": "t"},
-                {"front": "what is sifting", "back": "Picks the sample.", "topic": "t"},
-            ]
-        },
-        {
-            "cards": [
-                {"front": "What is sifting?", "back": "Again.", "topic": "t"},
-                {"front": "Define convolution.", "back": "An integral.", "topic": "t"},
-            ]
-        },
+        {"topics": ["delta functions"]},
+        _cards("one"),
+        _cards("two", "three", "four"),
     ]
 
     study.run_generation(_deck_job(artifact_id, document_id))
@@ -213,8 +212,162 @@ def test_a_deck_drops_cards_that_repeat_a_front(
     assert artifact["state"] == artifacts.READY
     parts = artifacts.list_parts(db, artifact_id)
     fronts = [json.loads(str(part["content"]))["front"] for part in parts]
-    assert fronts == ["What is sifting?", "Define convolution."]
-    assert [int(part["ordinal"]) for part in parts] == [1, 2]
+    assert fronts == ["one", "two", "three", "four"]
+    assert "only 1 of 4 required" in str(llm.calls[2]["args"][3])
+
+
+def test_top_up_cards_keep_the_provenance_of_the_attempt_that_proposed_them(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id = _document(db, class_id)
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "doc_type, embedding_model, embedding_dim) values "
+        "(?, ?, 'Second course passage.', 10, 2, 'generic', 'test', 768)",
+        (document_id, class_id),
+    )
+    db.commit()
+    rows = db.execute(
+        "select id, content, page_number from chunks where document_id = ? order by id",
+        (document_id,),
+    ).fetchall()
+    retrieved = [
+        RetrievedChunk(
+            chunk_id=int(row["id"]),
+            document_id=document_id,
+            content=str(row["content"]),
+            token_count=10,
+            page_number=int(row["page_number"]),
+            section_title=None,
+            section_path=None,
+            section_number=None,
+            problem_number=None,
+            part_index=None,
+            filename="notes.pdf",
+            similarity=0.5,
+            score=0.5,
+        )
+        for row in rows
+    ]
+    retrieval_calls = 0
+
+    def retrieve_by_attempt(*_args: object, **_kwargs: object) -> RetrievalResult:
+        nonlocal retrieval_calls
+        chunk = retrieved[retrieval_calls]
+        retrieval_calls += 1
+        return RetrievalResult(chunks=[chunk], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(study, "retrieve", retrieve_by_attempt)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [{"topics": ["delta"]}, _cards("one"), _cards("two", "three", "four")]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    parts = artifacts.list_parts(db, artifact_id)
+    provenance = [artifacts.list_provenance(db, int(part["id"])) for part in parts]
+    assert [entries[0]["chunk_id"] for entries in provenance] == [
+        int(rows[0]["id"]),
+        int(rows[1]["id"]),
+        int(rows[1]["id"]),
+        int(rows[1]["id"]),
+    ]
+
+
+def test_one_card_on_both_attempts_fails_a_four_card_topic(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [{"topics": ["delta"]}, _cards("one"), _cards("one")]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert "required 4 distinct cards" in str(artifact["error_message"])
+    assert artifacts.list_parts(db, artifact_id) == []
+
+
+def test_duplicate_fronts_reduce_effective_count_and_fail_after_retry(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    duplicates = _cards("one?", "ONE", "two", "two.")
+    llm.replies = [{"topics": ["delta"]}, duplicates, duplicates]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert artifacts.list_parts(db, artifact_id) == []
+
+
+def test_cross_topic_duplicates_trigger_top_up_for_the_second_topic(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    """Deck-wide dedupe counts a repeated first-topic front against topic two's target."""
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [
+        {"topics": ["first", "second"]},
+        _cards("a1", "a2", "a3", "a4"),
+        _cards("a1", "b2", "b3", "b4"),
+        _cards("a1", "b2", "b5"),
+    ]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.READY
+    parts = artifacts.list_parts(db, artifact_id)
+    fronts = [json.loads(str(part["content"]))["front"] for part in parts]
+    assert fronts == ["a1", "a2", "a3", "a4", "b2", "b3", "b4", "b5"]
+    assert len(fronts) == len(set(fronts)) == 8
+
+
+def test_cross_topic_duplicates_that_survive_retry_fail_without_partial_output(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [
+        {"topics": ["first", "second"]},
+        _cards("a1", "a2", "a3", "a4"),
+        _cards("a1", "b2", "b3", "b4"),
+        _cards("a2", "b2", "b3", "b4"),
+    ]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert "1 of 2 topics" in str(artifact["error_message"])
+    assert artifacts.list_parts(db, artifact_id) == []
+    assert db.execute("select count(*) from card_states").fetchone()[0] == 0
+
+
+def test_overproduction_is_truncated_deterministically_to_exact_count(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [{"topics": ["delta"]}, _cards("one", "two", "three", "four", "five")]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.READY
+    parts = artifacts.list_parts(db, artifact_id)
+    assert [json.loads(str(part["content"]))["front"] for part in parts] == [
+        "one",
+        "two",
+        "three",
+        "four",
+    ]
 
 
 def test_a_topic_that_fails_after_retry_fails_the_whole_deck(
@@ -230,7 +383,7 @@ def test_a_topic_that_fails_after_retry_fails_the_whole_deck(
     artifact_id = _deck(db, class_id, document_id)
     llm.replies = [
         {"topics": ["good topic", "bad topic"]},
-        {"cards": [{"front": "F", "back": "B", "topic": "good topic"}]},
+        _cards("good one", "good two", "good three", "good four"),
         LyraError("The endpoint fell over."),
         LyraError("The endpoint fell over again."),
     ]
@@ -255,17 +408,17 @@ def test_a_topic_that_returns_zero_cards_is_retried_then_recovers(
     llm.replies = [
         {"topics": ["only topic"]},
         {"cards": []},
-        {"cards": [{"front": "F", "back": "B", "topic": "t"}]},
+        _cards("one", "two", "three", "four"),
     ]
 
     study.run_generation(_deck_job(artifact_id, document_id))
 
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.READY
-    assert len(artifacts.list_parts(db, artifact_id)) == 1
+    assert len(artifacts.list_parts(db, artifact_id)) == 4
     # The retry system prompt carried the corrective hint.
     retry_messages = llm.calls[2]["args"][3]
-    assert "no usable cards" in str(retry_messages)
+    assert "only 0 of 4 required" in str(retry_messages)
 
 
 def test_zero_cards_after_retry_is_a_failed_deck(
@@ -671,6 +824,44 @@ def test_gathering_round_robins_and_caps(db: sqlite3.Connection, class_id: int) 
     assert contributing == [big, small]
 
 
+def test_trim_chunks_skips_an_oversized_first_chunk_and_keeps_later_fits() -> None:
+    too_large = SimpleNamespace(content="x" * 800)
+    first_fit = SimpleNamespace(content="y" * 200)
+    second_fit = SimpleNamespace(content="z" * 160)
+
+    kept = study._trim_chunks([too_large, first_fit, second_fit], budget_tokens=100)
+
+    assert kept == [first_fit, second_fit]
+    assert sum(study.estimate_tokens(chunk.content) for chunk in kept) <= 100
+
+
+def test_no_chunk_fits_fails_locally_without_a_card_request(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [{"topics": ["only topic"]}]
+    oversized = SimpleNamespace(content="x" * 100_000)
+    monkeypatch.setattr(
+        study,
+        "retrieve",
+        lambda *_args, **_kwargs: RetrievalResult(
+            chunks=[oversized], trimmed=False, omitted_document_count=0
+        ),
+    )
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert artifact["error_message"] == study.CONTEXT_TOO_SMALL_MESSAGE
+    assert len(llm.calls) == 1  # topic mapping only; no oversized card prompt was sent
+    assert study._trim_chunks([oversized], budget_tokens=100) == []
+
+
 def test_a_tiny_context_window_fails_locally_without_calling_the_model(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -816,6 +1007,17 @@ def test_reconcile_fails_a_job_whose_intent_cannot_be_reconstructed(
     monkeypatch.setattr(study, "enqueue", enqueued.append)
     document_id = _document(db, class_id)
     orphan = _deck(db, class_id, document_id)  # no persist_job
+    artifacts.set_artifact_state(db, orphan, artifacts.GENERATING, "Writing cards")
+    card_id = artifacts.create_part(
+        db,
+        orphan,
+        artifacts.CARD,
+        1,
+        content=json.dumps({"front": "partial", "back": "must be removed"}),
+        content_type=artifacts.JSON,
+        status=artifacts.PART_COMPLETE,
+    )
+    study._insert_card_state(db, card_id)
 
     requeued, failed = study.reconcile_interrupted(db)
 
@@ -824,6 +1026,8 @@ def test_reconcile_fails_a_job_whose_intent_cannot_be_reconstructed(
     artifact = artifacts.get_artifact(db, orphan)
     assert artifact["state"] == artifacts.FAILED
     assert artifact["error_message"] == study.INTERRUPTED_MESSAGE
+    assert artifacts.list_parts(db, orphan) == []
+    assert db.execute("select count(*) from card_states").fetchone()[0] == 0
 
 
 def test_reconcile_fails_a_job_with_malformed_metadata(
@@ -991,7 +1195,7 @@ def test_new_card_states_are_due_immediately(
     artifact_id = _deck(db, class_id, document_id)
     llm.replies = [
         {"topics": ["only topic"]},
-        {"cards": [{"front": "F", "back": "B", "topic": "t"}]},
+        _cards("one", "two", "three", "four"),
     ]
 
     before = datetime.now(UTC)

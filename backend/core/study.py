@@ -121,6 +121,15 @@ class _Job:
     types: tuple[str, ...] = field(default=prompts.QUIZ_QUESTION_TYPES)
 
 
+@dataclass(frozen=True)
+class _ProposedCard:
+    """One validated card and the exact retrieval context that supported it."""
+
+    front: str
+    back: str
+    chunks: tuple[object, ...]
+
+
 _queue: queue.Queue[_Job] = queue.Queue()
 _worker_lock = threading.Lock()
 _worker_started = False
@@ -247,9 +256,10 @@ def reconcile_interrupted(conn: sqlite3.Connection) -> tuple[int, int]:
             except (ValueError, TypeError, json.JSONDecodeError):
                 logger.warning("Study artifact %s has unparseable job metadata", artifact_id)
         if job is None:
-            artifacts.mark_artifact_failed(
-                conn, artifact_id, str(row["state"]), INTERRUPTED_MESSAGE
-            )
+            # This is terminal: without reconstructable intent there is no safe replay.
+            # Use the ordinary failure path so an interrupted artifact cannot retain
+            # stale partial cards/questions while reporting `failed`.
+            _mark_failed(conn, artifact_id, LyraError(INTERRUPTED_MESSAGE))
             failed += 1
             continue
         if str(row["state"]) == artifacts.GENERATING:
@@ -356,69 +366,92 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
     artifacts.set_problems_total(conn, job.artifact_id, len(topic_names))
     artifacts.set_problems_done(conn, job.artifact_id, 0)
 
-    ordinal = 0
     failed: list[str] = []
+    complete_topics: list[tuple[str, list[_ProposedCard]]] = []
     # Deck-wide, so a card is dropped whether one topic's call repeated itself or two
-    # topics converged on the same front. The set outlives any single topic's call.
+    # topics converged on the same front. The set outlives any single topic's attempts.
     seen_fronts: set[str] = set()
     for topic in topic_names:
         _raise_if_cancelled(conn, job.artifact_id)
         artifacts.set_artifact_state(conn, job.artifact_id, artifacts.GENERATING, topic)
-        written = _write_topic_cards_bounded(
-            conn, job, config, class_id, topic, ordinal, seen_fronts
-        )
-        if written == 0:
+        cards = _collect_topic_cards_bounded(conn, job, config, class_id, topic, seen_fronts)
+        if len(cards) != job.cards_per_topic:
             failed.append(topic)
-        ordinal += written
+        else:
+            complete_topics.append((topic, cards))
         artifacts.increment_problems_done(conn, job.artifact_id)
 
-    # Truthful completion (PLA-299): a deck is `ready` only when every mapped topic
-    # produced at least one usable card after bounded recovery. If any topic could not,
-    # the deck is failed - its partial cards are cleaned up by `_mark_failed` - rather than
-    # promoted to an ordinary `ready` that hides the missing material.
+    # Truthful completion (PLA-299): every mapped topic must reach the exact requested
+    # count after bounded recovery. Nothing has been persisted yet, so an undershoot in
+    # even one topic cannot leave an apparently successful partial deck behind.
     if failed:
-        raise LyraError(_deck_incomplete_message(len(failed), len(topic_names)))
+        raise LyraError(
+            _deck_incomplete_message(len(failed), len(topic_names), job.cards_per_topic)
+        )
+
+    ordinal = 0
+    for topic, cards in complete_topics:
+        _raise_if_cancelled(conn, job.artifact_id)
+        _persist_topic_cards(conn, job, topic, ordinal, cards)
+        ordinal += len(cards)
 
     _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(conn, job.artifact_id, artifacts.READY, None)
 
 
-def _write_topic_cards_bounded(
+def _collect_topic_cards_bounded(
     conn: sqlite3.Connection,
     job: _Job,
     config: TutorConfig,
     class_id: int,
     topic: str,
-    first_ordinal: int,
     seen_fronts: set[str],
-) -> int:
-    """One topic's cards, with one bounded retry when the first attempt yields none.
+) -> list[_ProposedCard]:
+    """Collect exactly one topic's requested cards across at most two model attempts.
 
-    Returns the number of cards written for this topic. A retry only runs when the first
-    attempt produced zero cards (an errored call, or a reply with nothing usable); it
-    varies the prompt with a corrective hint, because a deterministic re-send of the same
-    prompt would return the same empty reply. Zero after every attempt means the topic
-    could not be taught, which the deck-level completion check treats as a failure.
+    Invalid cards, repeats within either reply, and fronts already retained for another
+    topic do not count. The first distinct cards in proposal order win, so overproduction
+    is truncated deterministically. Nothing is persisted here: if bounded recovery still
+    undershoots, the caller can fail the whole deck without cleaning up proposal rows.
     """
+    collected: list[_ProposedCard] = []
+    candidate_fronts = set(seen_fronts)
     for attempt in range(_MAX_ATTEMPTS):
         try:
             proposed, kept_chunks = _propose_topic_cards(
-                conn, job, config, class_id, topic, retry=attempt > 0
+                conn,
+                job,
+                config,
+                class_id,
+                topic,
+                retained=len(collected) if attempt > 0 else None,
             )
         except _GenerationCancelledError:
             raise
-        except Exception:
-            # Only the model proposal is retried, and it writes nothing, so a retry can
-            # never collide with or duplicate cards from a previous attempt.
+        except LyraError as exc:
+            # No retrieval chunk can fit this deterministic context budget. Repeating the
+            # same retrieval cannot change that, so preserve the actionable local error.
+            if exc.message == CONTEXT_TOO_SMALL_MESSAGE:
+                raise
             logger.exception("Card generation failed for topic %r (attempt %d)", topic, attempt + 1)
             continue
-        # A topic that proposed at least one card the deck does not already hold is worth
-        # persisting; one that proposed nothing new gets another attempt.
-        if any(_dedupe_key(card["front"]) not in seen_fronts for card in proposed):
-            return _persist_topic_cards(
-                conn, job, topic, first_ordinal, proposed, kept_chunks, seen_fronts
+        except Exception:
+            logger.exception("Card generation failed for topic %r (attempt %d)", topic, attempt + 1)
+            continue
+        for card in proposed:
+            key = _dedupe_key(card["front"])
+            if not key or key in candidate_fronts:
+                continue
+            candidate_fronts.add(key)
+            collected.append(
+                _ProposedCard(front=card["front"], back=card["back"], chunks=tuple(kept_chunks))
             )
-    return 0
+            if len(collected) == job.cards_per_topic:
+                # A topic only claims its fronts deck-wide once its exact contract is met.
+                # A failed partial topic therefore cannot make later accounting ambiguous.
+                seen_fronts.update(_dedupe_key(card.front) for card in collected)
+                return collected
+    return collected
 
 
 def _propose_topic_cards(
@@ -428,7 +461,7 @@ def _propose_topic_cards(
     class_id: int,
     topic: str,
     *,
-    retry: bool,
+    retained: int | None,
 ) -> tuple[list[dict[str, str]], list[object]]:
     """One topic's retrieval and one model call, returning the cards it proposed.
 
@@ -438,14 +471,19 @@ def _propose_topic_cards(
     fed them, for the caller to persist with provenance.
     """
     system_tokens = _prompt_tokens(prompts.build_flashcards_prompt(topic, "", job.cards_per_topic))
+    retry = retained is not None
     hint_reserve = _RETRY_HINT_RESERVE if retry else 0
     context_budget = max(0, _source_cap(config, system_tokens) - hint_reserve)
     result = retrieve(conn, class_id, topic, min(TOPIC_RETRIEVAL_BUDGET, context_budget))
     kept_chunks = _trim_chunks(list(result.chunks), context_budget)
+    if not kept_chunks:
+        raise LyraError(CONTEXT_TOO_SMALL_MESSAGE)
     context_block = prompts.format_context_block([vars(chunk) for chunk in kept_chunks])
     messages = prompts.build_flashcards_prompt(topic, context_block, job.cards_per_topic)
     if retry:
-        messages = _with_retry_hint(messages, _FLASHCARD_RETRY_HINT)
+        messages = _with_retry_hint(
+            messages, _flashcard_retry_hint(retained or 0, job.cards_per_topic)
+        )
     reply = _call_json(config, messages, prompts.FLASHCARDS_SCHEMA)
     _raise_if_cancelled(conn, job.artifact_id)
 
@@ -465,38 +503,25 @@ def _persist_topic_cards(
     job: _Job,
     topic: str,
     first_ordinal: int,
-    proposed: list[dict[str, str]],
-    kept_chunks: list[object],
-    seen_fronts: set[str],
-) -> int:
-    """Write a topic's proposed cards, skipping fronts the deck already holds. Returns count.
-
-    `seen_fronts` carries the fronts already written to the deck; a card repeating one is
-    dropped and `seen_fronts` grows with each card kept. Not retried: a write failure here
-    propagates and fails the whole deck, whose partial parts `_mark_failed` then deletes, so
-    a half-written topic never survives as ambiguous ordinals.
-    """
-    written = 0
-    for card in proposed:
-        key = _dedupe_key(card["front"])
-        if key in seen_fronts:
-            continue
-        seen_fronts.add(key)
-        payload = json.dumps({"front": card["front"], "back": card["back"], "topic": topic})
+    cards: list[_ProposedCard],
+) -> None:
+    """Persist one already exact, deduplicated topic with per-attempt provenance."""
+    if len(cards) != job.cards_per_topic:
+        raise ValueError("A topic must be complete before it is persisted.")
+    for offset, card in enumerate(cards, start=1):
+        payload = json.dumps({"front": card.front, "back": card.back, "topic": topic})
         part_id = artifacts.create_part(
             conn,
             job.artifact_id,
             artifacts.CARD,
-            first_ordinal + written + 1,
+            first_ordinal + offset,
             label=topic,
             content=payload,
             content_type=artifacts.JSON,
             status=artifacts.PART_COMPLETE,
         )
         _insert_card_state(conn, part_id)
-        _record_card_provenance(conn, part_id, topic, kept_chunks)
-        written += 1
-    return written
+        _record_card_provenance(conn, part_id, topic, list(card.chunks))
 
 
 def _insert_card_state(conn: sqlite3.Connection, part_id: int) -> None:
@@ -753,19 +778,20 @@ def _gather_source_text(
 
 
 def _trim_chunks(chunks: list[object], budget_tokens: int) -> list[object]:
-    """Keep the leading retrieved chunks whose formatted text fits `budget_tokens`.
+    """Keep the best retrieved chunks that fit `budget_tokens`, in retrieval order.
 
     Retrieval is already budgeted, but formatting adds labels and a heading, so the block
-    can run a little over. Trimming from the tail keeps the most relevant chunks (retrieval
-    returns them best-first) and drops the weakest, deterministically, rather than sending
-    an over-budget context block.
+    can run a little over. A chunk that cannot fit is skipped rather than retained or used
+    as a stopping point: a later, smaller chunk may still provide grounded context. Thus
+    the retained raw content never exceeds the budget and an oversized top-ranked chunk
+    cannot force an oversized upstream request.
     """
     kept: list[object] = []
     used = 0
     for chunk in chunks:
         cost = estimate_tokens(str(getattr(chunk, "content", "")))
-        if used + cost > budget_tokens and kept:
-            break
+        if cost <= 0 or used + cost > budget_tokens:
+            continue
         used += cost
         kept.append(chunk)
     return kept
@@ -788,10 +814,15 @@ def _with_retry_hint(messages: list[dict[str, str]], hint: str) -> list[dict[str
     return updated
 
 
-_FLASHCARD_RETRY_HINT = (
-    "The previous attempt produced no usable cards. Write at least one card. Each card must "
-    "have a non-empty front and a non-empty back grounded in the material above."
-)
+def _flashcard_retry_hint(retained: int, requested: int) -> str:
+    """Tell the bounded retry its exact distinct-card deficit."""
+    remaining = max(0, requested - retained)
+    return (
+        f"The previous attempt produced only {retained} of {requested} required distinct, "
+        f"usable cards. Write at least {remaining} new cards with fronts not repeated from "
+        "the previous attempt. Every card must have a non-empty front and back grounded in "
+        "the material above."
+    )
 
 
 def _quiz_retry_hint(failures: list[str]) -> str:
@@ -802,11 +833,11 @@ def _quiz_retry_hint(failures: list[str]) -> str:
     return base + " Problems: " + "; ".join(failures[:5])
 
 
-def _deck_incomplete_message(failed: int, total: int) -> str:
+def _deck_incomplete_message(failed: int, total: int, cards_per_topic: int) -> str:
     """Why a deck was failed rather than shown as an incomplete `ready`."""
     return (
-        f"{failed} of {total} topics could not be turned into cards, so this deck was not "
-        "finished. Please try again."
+        f"{failed} of {total} topics did not reach the required {cards_per_topic} distinct "
+        "cards, so this deck was not finished. Please try again."
     )
 
 
