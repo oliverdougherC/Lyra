@@ -486,6 +486,43 @@ def _mcq(topic: str = "delta") -> dict[str, object]:
     }
 
 
+def _flashcard_chunk(
+    content: str,
+    *,
+    filename: str = "notes.pdf",
+    chunk_id: int = 1,
+    document_id: int = 1,
+    page_number: int = 1,
+    section_title: str | None = None,
+    section_path: str | None = None,
+    section_number: str | None = None,
+    problem_number: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        content=content,
+        filename=filename,
+        page_number=page_number,
+        section_title=section_title,
+        section_path=section_path,
+        section_number=section_number,
+        problem_number=problem_number,
+        chunk_id=chunk_id,
+        document_id=document_id,
+    )
+
+
+def _flashcard_prompt_tokens(
+    topic: str,
+    count: int,
+    chunks: list[SimpleNamespace],
+    *,
+    retry_hint: str | None = None,
+) -> int:
+    return study._prompt_tokens(
+        study._flashcard_messages(topic, count, list(chunks), retry_hint=retry_hint)
+    )
+
+
 def test_quiz_reaches_the_requested_count(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM
 ) -> None:
@@ -824,15 +861,399 @@ def test_gathering_round_robins_and_caps(db: sqlite3.Connection, class_id: int) 
     assert contributing == [big, small]
 
 
-def test_trim_chunks_skips_an_oversized_first_chunk_and_keeps_later_fits() -> None:
-    too_large = SimpleNamespace(content="x" * 800)
-    first_fit = SimpleNamespace(content="y" * 200)
-    second_fit = SimpleNamespace(content="z" * 160)
+def test_trim_chunks_skips_an_oversized_first_chunk_and_keeps_later_fits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192)
+    too_large = _flashcard_chunk("x" * 1200)
+    first_fit = _flashcard_chunk("y" * 200)
+    second_fit = _flashcard_chunk("z" * 160)
+    ceiling = _flashcard_prompt_tokens("delta", 4, [first_fit, second_fit])
+    monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
 
-    kept = study._trim_chunks([too_large, first_fit, second_fit], budget_tokens=100)
+    kept = study._trim_chunks(config, "delta", 4, [too_large, first_fit, second_fit])
 
     assert kept == [first_fit, second_fit]
-    assert sum(study.estimate_tokens(chunk.content) for chunk in kept) <= 100
+    assert _flashcard_prompt_tokens("delta", 4, kept) <= ceiling
+
+
+def test_trim_chunks_skips_an_oversized_middle_chunk_and_considers_later_smaller_ones(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192)
+    first_fit = _flashcard_chunk("x" * 200)
+    too_large = _flashcard_chunk("y" * 1200)
+    later_fit = _flashcard_chunk("z" * 160)
+    ceiling = _flashcard_prompt_tokens("delta", 4, [first_fit, later_fit])
+    monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
+
+    kept = study._trim_chunks(config, "delta", 4, [first_fit, too_large, later_fit])
+
+    assert kept == [first_fit, later_fit]
+    assert _flashcard_prompt_tokens("delta", 4, kept) <= ceiling
+
+
+def test_trim_chunks_admits_an_exact_boundary_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192)
+    exact = _flashcard_chunk("x" * 240)
+    ceiling = _flashcard_prompt_tokens("delta", 4, [exact])
+    monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
+
+    kept = study._trim_chunks(config, "delta", 4, [exact])
+
+    assert kept == [exact]
+    assert _flashcard_prompt_tokens("delta", 4, kept) == ceiling
+
+
+def test_trim_chunks_counts_metadata_heavy_labels_against_the_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192)
+    heavy_label = _flashcard_chunk(
+        "same content",
+        filename="course-notes-" + ("f" * 1200) + ".pdf",
+        section_path="Chapter " + ("s" * 1200),
+        section_number="12.4.5",
+        problem_number="19",
+    )
+    small_label = _flashcard_chunk("same content")
+    ceiling = _flashcard_prompt_tokens("delta", 4, [small_label])
+    monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
+
+    kept = study._trim_chunks(config, "delta", 4, [heavy_label, small_label])
+
+    assert study.estimate_tokens(heavy_label.content) == study.estimate_tokens(small_label.content)
+    assert kept == [small_label]
+    assert _flashcard_prompt_tokens("delta", 4, kept) <= ceiling
+
+
+def test_trim_chunks_counts_the_retry_hint_against_the_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192)
+    retry_hint = study._flashcard_retry_hint(1, 4)
+    pair = next(
+        (
+            _flashcard_chunk("x" * large_size),
+            _flashcard_chunk("x" * small_size),
+        )
+        for large_size in range(80, 4000, 40)
+        for small_size in range(40, large_size, 40)
+        if _flashcard_prompt_tokens(
+            "delta",
+            4,
+            [_flashcard_chunk("x" * large_size)],
+            retry_hint=retry_hint,
+        )
+        > _flashcard_prompt_tokens("delta", 4, [_flashcard_chunk("x" * large_size)])
+        and _flashcard_prompt_tokens(
+            "delta",
+            4,
+            [_flashcard_chunk("x" * small_size)],
+            retry_hint=retry_hint,
+        )
+        <= _flashcard_prompt_tokens("delta", 4, [_flashcard_chunk("x" * large_size)])
+    )
+    large, small = pair
+    ceiling = _flashcard_prompt_tokens("delta", 4, [large])
+    monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
+
+    kept_without_retry = study._trim_chunks(config, "delta", 4, [large])
+    kept_with_retry = study._trim_chunks(config, "delta", 4, [large, small], retry_hint=retry_hint)
+
+    assert kept_without_retry == [large]
+    assert kept_with_retry == [small]
+    assert _flashcard_prompt_tokens("delta", 4, kept_with_retry, retry_hint=retry_hint) <= ceiling
+
+
+def test_trim_chunks_returns_empty_when_no_candidate_fits(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192)
+    too_large = _flashcard_chunk("x" * 240)
+    ceiling = _flashcard_prompt_tokens("delta", 4, [])
+    monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
+
+    assert study._trim_chunks(config, "delta", 4, [too_large]) == []
+
+
+def test_flashcard_request_omits_a_later_chunk_when_the_formatted_pair_would_overflow(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id = _document(db, class_id)
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "doc_type, embedding_model, embedding_dim) values "
+        "(?, ?, 'Later supporting passage.', 10, 2, 'generic', 'test', 768)",
+        (document_id, class_id),
+    )
+    db.commit()
+    rows = db.execute(
+        "select id, page_number from chunks where document_id = ? order by id",
+        (document_id,),
+    ).fetchall()
+    first = _flashcard_chunk(
+        "First supporting passage.",
+        chunk_id=int(rows[0]["id"]),
+        document_id=document_id,
+        page_number=int(rows[0]["page_number"]),
+    )
+    second = _flashcard_chunk(
+        "Later supporting passage.",
+        chunk_id=int(rows[1]["id"]),
+        document_id=document_id,
+        page_number=int(rows[1]["page_number"]),
+    )
+    ceiling = _flashcard_prompt_tokens("only topic", 4, [first])
+    raw_pair_cost = study.estimate_tokens(first.content) + study.estimate_tokens(second.content)
+    fixed = _flashcard_prompt_tokens("only topic", 4, [])
+    assert raw_pair_cost <= ceiling - fixed
+    assert _flashcard_prompt_tokens("only topic", 4, [first, second]) > ceiling
+    monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
+    monkeypatch.setattr(
+        study,
+        "retrieve",
+        lambda *_args, **_kwargs: RetrievalResult(
+            chunks=[first, second], trimmed=False, omitted_document_count=0
+        ),
+    )
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [{"topics": ["only topic"]}, _cards("one", "two", "three", "four")]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.READY
+    flashcard_messages = llm.calls[1]["args"][3]
+    assert "First supporting passage." in str(flashcard_messages[1]["content"])
+    assert "Later supporting passage." not in str(flashcard_messages[1]["content"])
+    assert study._prompt_tokens(flashcard_messages) <= ceiling
+
+
+def test_flashcard_request_skips_a_metadata_heavy_first_chunk_and_uses_a_later_fit(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id = _document(db, class_id)
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "doc_type, embedding_model, embedding_dim) values "
+        "(?, ?, 'Later chunk text.', 10, 2, 'generic', 'test', 768)",
+        (document_id, class_id),
+    )
+    db.commit()
+    rows = db.execute(
+        "select id, page_number from chunks where document_id = ? order by id",
+        (document_id,),
+    ).fetchall()
+    heavy = _flashcard_chunk(
+        "Heavy meta text.",
+        chunk_id=int(rows[0]["id"]),
+        document_id=document_id,
+        page_number=int(rows[0]["page_number"]),
+        filename="notes-" + ("f" * 1200) + ".pdf",
+        section_path="Section " + ("s" * 1200),
+    )
+    later = _flashcard_chunk(
+        "Later chunk text.",
+        chunk_id=int(rows[1]["id"]),
+        document_id=document_id,
+        page_number=int(rows[1]["page_number"]),
+    )
+    ceiling = _flashcard_prompt_tokens("only topic", 4, [later])
+    assert study.estimate_tokens(heavy.content) == study.estimate_tokens(later.content)
+    assert _flashcard_prompt_tokens("only topic", 4, [heavy]) > ceiling
+    monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
+    monkeypatch.setattr(
+        study,
+        "retrieve",
+        lambda *_args, **_kwargs: RetrievalResult(
+            chunks=[heavy, later], trimmed=False, omitted_document_count=0
+        ),
+    )
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [{"topics": ["only topic"]}, _cards("one", "two", "three", "four")]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.READY
+    flashcard_messages = llm.calls[1]["args"][3]
+    assert "Heavy meta text." not in str(flashcard_messages[1]["content"])
+    assert "Later chunk text." in str(flashcard_messages[1]["content"])
+    provenance = artifacts.list_provenance(db, int(artifacts.list_parts(db, artifact_id)[0]["id"]))
+    assert [entry["chunk_id"] for entry in provenance] == [int(rows[1]["id"])]
+
+
+def test_flashcard_request_admits_an_exact_safe_fit(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id = _document(db, class_id)
+    row = db.execute(
+        "select id, page_number from chunks where document_id = ? order by id limit 1",
+        (document_id,),
+    ).fetchone()
+    assert row is not None
+    exact = _flashcard_chunk(
+        "Exact boundary passage.",
+        chunk_id=int(row["id"]),
+        document_id=document_id,
+        page_number=int(row["page_number"]),
+    )
+    ceiling = _flashcard_prompt_tokens("only topic", 4, [exact])
+    monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
+    monkeypatch.setattr(
+        study,
+        "retrieve",
+        lambda *_args, **_kwargs: RetrievalResult(
+            chunks=[exact], trimmed=False, omitted_document_count=0
+        ),
+    )
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [{"topics": ["only topic"]}, _cards("one", "two", "three", "four")]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.READY
+    flashcard_messages = llm.calls[1]["args"][3]
+    assert study._prompt_tokens(flashcard_messages) == ceiling
+
+
+def test_flashcard_request_refuses_a_one_token_over_chunk(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id = _document(db, class_id)
+    row = db.execute(
+        "select id, page_number from chunks where document_id = ? order by id limit 1",
+        (document_id,),
+    ).fetchone()
+    assert row is not None
+    exact, one_over, ceiling = next(
+        (
+            _flashcard_chunk(
+                "x" * size,
+                chunk_id=int(row["id"]),
+                document_id=document_id,
+                page_number=int(row["page_number"]),
+            ),
+            _flashcard_chunk(
+                ("x" * size) + "xxxx",
+                chunk_id=int(row["id"]),
+                document_id=document_id,
+                page_number=int(row["page_number"]),
+            ),
+            _flashcard_prompt_tokens(
+                "only topic",
+                4,
+                [
+                    _flashcard_chunk(
+                        "x" * size,
+                        chunk_id=int(row["id"]),
+                        document_id=document_id,
+                        page_number=int(row["page_number"]),
+                    )
+                ],
+            ),
+        )
+        for size in range(40, 4000, 4)
+        if _flashcard_prompt_tokens(
+            "only topic",
+            4,
+            [
+                _flashcard_chunk(
+                    ("x" * size) + "xxxx",
+                    chunk_id=int(row["id"]),
+                    document_id=document_id,
+                    page_number=int(row["page_number"]),
+                )
+            ],
+        )
+        == _flashcard_prompt_tokens(
+            "only topic",
+            4,
+            [
+                _flashcard_chunk(
+                    "x" * size,
+                    chunk_id=int(row["id"]),
+                    document_id=document_id,
+                    page_number=int(row["page_number"]),
+                )
+            ],
+        )
+        + 1
+    )
+    assert _flashcard_prompt_tokens("only topic", 4, [exact]) == ceiling
+    assert _flashcard_prompt_tokens("only topic", 4, [one_over]) == ceiling + 1
+    monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
+    monkeypatch.setattr(
+        study,
+        "retrieve",
+        lambda *_args, **_kwargs: RetrievalResult(
+            chunks=[one_over], trimmed=False, omitted_document_count=0
+        ),
+    )
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [{"topics": ["only topic"]}]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert artifact["error_message"] == study.CONTEXT_TOO_SMALL_MESSAGE
+    assert len(llm.calls) == 1
+
+
+def test_no_formatted_chunk_fits_due_to_metadata_fails_locally_without_a_card_request(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id = _document(db, class_id)
+    row = db.execute(
+        "select id, page_number from chunks where document_id = ? order by id limit 1",
+        (document_id,),
+    ).fetchone()
+    assert row is not None
+    heavy = _flashcard_chunk(
+        "Tiny text.",
+        chunk_id=int(row["id"]),
+        document_id=document_id,
+        page_number=int(row["page_number"]),
+        filename="notes-" + ("f" * 1200) + ".pdf",
+        section_path="Section " + ("s" * 1200),
+    )
+    normal = _flashcard_chunk("Tiny text.")
+    ceiling = _flashcard_prompt_tokens("only topic", 4, [normal])
+    assert study.estimate_tokens(heavy.content) == study.estimate_tokens(normal.content)
+    assert _flashcard_prompt_tokens("only topic", 4, [heavy]) > ceiling
+    monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
+    monkeypatch.setattr(
+        study,
+        "retrieve",
+        lambda *_args, **_kwargs: RetrievalResult(
+            chunks=[heavy], trimmed=False, omitted_document_count=0
+        ),
+    )
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [{"topics": ["only topic"]}]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert artifact["error_message"] == study.CONTEXT_TOO_SMALL_MESSAGE
+    assert len(llm.calls) == 1
 
 
 def test_no_chunk_fits_fails_locally_without_a_card_request(
@@ -859,7 +1280,15 @@ def test_no_chunk_fits_fails_locally_without_a_card_request(
     assert artifact["state"] == artifacts.FAILED
     assert artifact["error_message"] == study.CONTEXT_TOO_SMALL_MESSAGE
     assert len(llm.calls) == 1  # topic mapping only; no oversized card prompt was sent
-    assert study._trim_chunks([oversized], budget_tokens=100) == []
+    assert (
+        study._trim_chunks(
+            TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+            "only topic",
+            4,
+            [oversized],
+        )
+        == []
+    )
 
 
 def test_a_tiny_context_window_fails_locally_without_calling_the_model(
@@ -941,6 +1370,50 @@ def test_call_json_sends_the_output_reserve_as_max_tokens(monkeypatch: pytest.Mo
 
     assert captured["max_tokens"] == generation_reserve(8192)
     assert captured["fail_on_truncation"] is True
+
+
+def test_all_study_call_shapes_fit_the_input_ceiling_and_send_generation_reserve(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+) -> None:
+    document_id = _document(db, class_id)
+    deck_id = _deck(db, class_id, document_id)
+    llm.replies = [
+        {"topics": ["delta functions"]},
+        _cards("one"),
+        _cards("two", "three", "four"),
+    ]
+    study.run_generation(_deck_job(deck_id, document_id))
+
+    quiz_id = _quiz(db, class_id, document_id)
+    llm.replies = [
+        {"questions": [_mcq("delta")]},
+        {"questions": [_mcq("delta"), _mcq("convolution"), _mcq("sampling")]},
+    ]
+    study.run_generation(_quiz_job(quiz_id, document_id, count=3))
+
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192)
+    reserve = study.generation_reserve(config.context_window)
+    ceiling = study._input_ceiling(config)
+
+    assert len(llm.calls) == 5
+    assert "mapping course material" in str(llm.calls[0]["args"][3][0]["content"])
+    assert 'writing flashcards for the topic "delta functions"' in str(
+        llm.calls[1]["args"][3][0]["content"]
+    )
+    assert "The previous attempt produced only 1 of 4 required distinct" in str(
+        llm.calls[2]["args"][3][0]["content"]
+    )
+    assert "writing a 3-question quiz" in str(llm.calls[3]["args"][3][0]["content"])
+    assert "The previous reply did not produce enough valid questions." in str(
+        llm.calls[4]["args"][3][0]["content"]
+    )
+    for call in llm.calls:
+        messages = call["args"][3]
+        kwargs = call["kwargs"]
+        assert study._prompt_tokens(messages) <= ceiling
+        assert kwargs["max_tokens"] == reserve
 
 
 # ---------------------------------------------------------------------------

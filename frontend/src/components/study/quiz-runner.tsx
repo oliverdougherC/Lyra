@@ -88,17 +88,34 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
           // or the last question when every one has already been answered (PLA-277).
           const answered = new Set(started.answers.map((entry) => entry.part_id))
           const firstUnanswered = started.question_part_ids.findIndex((id) => !answered.has(id))
-          setIndex(
+          const resumeIndex =
             firstUnanswered === -1
               ? Math.max(0, started.question_part_ids.length - 1)
-              : firstUnanswered,
-          )
+              : firstUnanswered
+          setIndex(resumeIndex)
+
+          // A lost finish response can leave every answer durably recorded while the
+          // attempt is still active. Restore the final reveal so the student can retry
+          // finish directly instead of submitting the last answer a second time.
+          if (firstUnanswered === -1) {
+            const partId = started.question_part_ids[resumeIndex]
+            const recorded = started.answers.find((entry) => entry.part_id === partId)
+            const resumed = quiz.data?.questions.find((entry) => entry.part_id === partId)
+            if (recorded && resumed) {
+              setSelected(recorded.selected_index)
+              setAnswer({
+                correct: recorded.correct,
+                correct_index: resumed.question.correct_index,
+                explanation: resumed.question.explanation,
+              })
+            }
+          }
         },
         onError: (error) =>
           setStartError(error instanceof ApiError ? error.message : 'Could not start this quiz.'),
       })
     },
-    [start],
+    [quiz.data, start],
   )
 
   // The attempt starts (or resumes) on entry rather than on the first answer, so a quiz

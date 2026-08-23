@@ -470,20 +470,23 @@ def _propose_topic_cards(
     and no ordinal is reused. Returns the validated front/back pairs and the chunks that
     fed them, for the caller to persist with provenance.
     """
-    system_tokens = _prompt_tokens(prompts.build_flashcards_prompt(topic, "", job.cards_per_topic))
     retry = retained is not None
-    hint_reserve = _RETRY_HINT_RESERVE if retry else 0
-    context_budget = max(0, _source_cap(config, system_tokens) - hint_reserve)
+    retry_hint = _flashcard_retry_hint(retained or 0, job.cards_per_topic) if retry else None
+    context_budget = _source_cap(
+        config,
+        _prompt_tokens(_flashcard_messages(topic, job.cards_per_topic, [], retry_hint=retry_hint)),
+    )
     result = retrieve(conn, class_id, topic, min(TOPIC_RETRIEVAL_BUDGET, context_budget))
-    kept_chunks = _trim_chunks(list(result.chunks), context_budget)
+    kept_chunks = _trim_chunks(
+        config,
+        topic,
+        job.cards_per_topic,
+        list(result.chunks),
+        retry_hint=retry_hint,
+    )
     if not kept_chunks:
         raise LyraError(CONTEXT_TOO_SMALL_MESSAGE)
-    context_block = prompts.format_context_block([vars(chunk) for chunk in kept_chunks])
-    messages = prompts.build_flashcards_prompt(topic, context_block, job.cards_per_topic)
-    if retry:
-        messages = _with_retry_hint(
-            messages, _flashcard_retry_hint(retained or 0, job.cards_per_topic)
-        )
+    messages = _flashcard_messages(topic, job.cards_per_topic, kept_chunks, retry_hint=retry_hint)
     reply = _call_json(config, messages, prompts.FLASHCARDS_SCHEMA)
     _raise_if_cancelled(conn, job.artifact_id)
 
@@ -780,22 +783,53 @@ def _gather_source_text(
     return "\n\n".join(gathered), contributing
 
 
-def _trim_chunks(chunks: list[object], budget_tokens: int) -> list[object]:
-    """Keep the best retrieved chunks that fit `budget_tokens`, in retrieval order.
+def _flashcard_messages(
+    topic: str,
+    cards_per_topic: int,
+    chunks: list[object],
+    *,
+    retry_hint: str | None = None,
+) -> list[dict[str, str]]:
+    """Build one flashcard prompt from the actual kept chunks and optional retry hint."""
+    context_block = prompts.format_context_block([vars(chunk) for chunk in chunks])
+    messages = prompts.build_flashcards_prompt(topic, context_block, cards_per_topic)
+    if retry_hint:
+        return _with_retry_hint(messages, retry_hint)
+    return messages
 
-    Retrieval is already budgeted, but formatting adds labels and a heading, so the block
-    can run a little over. A chunk that cannot fit is skipped rather than retained or used
-    as a stopping point: a later, smaller chunk may still provide grounded context. Thus
-    the retained raw content never exceeds the budget and an oversized top-ranked chunk
-    cannot force an oversized upstream request.
+
+def _trim_chunks(
+    config: TutorConfig,
+    topic: str,
+    cards_per_topic: int,
+    chunks: list[object],
+    *,
+    retry_hint: str | None = None,
+) -> list[object]:
+    """Keep the retrieved chunks whose full flashcard prompt fits the input ceiling.
+
+    The decision is made against the exact prompt that will be sent: formatted chunk
+    labels, the topic/count instruction, and the corrective retry hint when present. A
+    chunk whose addition would overflow the ceiling is skipped and later chunks are still
+    considered, preserving retrieval order among the chunks that fit and refusing the call
+    locally when none do.
     """
     kept: list[object] = []
-    used = 0
+    ceiling = _input_ceiling(config)
     for chunk in chunks:
-        cost = estimate_tokens(str(getattr(chunk, "content", "")))
-        if cost <= 0 or used + cost > budget_tokens:
+        candidate = kept + [chunk]
+        if (
+            _prompt_tokens(
+                _flashcard_messages(
+                    topic,
+                    cards_per_topic,
+                    candidate,
+                    retry_hint=retry_hint,
+                )
+            )
+            > ceiling
+        ):
             continue
-        used += cost
         kept.append(chunk)
     return kept
 

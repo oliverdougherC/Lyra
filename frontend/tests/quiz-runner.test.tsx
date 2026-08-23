@@ -249,6 +249,31 @@ describe('QuizRunner', () => {
     expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
   })
 
+  it('lets a fully answered resumed attempt finish without re-answering the last question', async () => {
+    mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]), [
+      { part_id: 21, selected_index: 1, correct: true },
+      { part_id: 22, selected_index: 0, correct: true },
+    ])
+    vi.spyOn(api, 'finishAttempt').mockResolvedValue({
+      score: 2,
+      total: 2,
+      answered: 2,
+      by_topic: [{ topic: 'Algebra', correct: 2, total: 2 }],
+    })
+    const { wrapper } = createWrapper()
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+
+    expect(await screen.findByText('The capital of France is ...')).toBeInTheDocument()
+    expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
+    expect(await screen.findByText('Correct.')).toBeInTheDocument()
+    expect(api.submitAnswer).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'See results' }))
+
+    await waitFor(() => expect(api.finishAttempt).toHaveBeenCalledWith(10))
+    expect(await screen.findByText('You scored 2 out of 2')).toBeInTheDocument()
+  })
+
   it('starts over explicitly, opening a fresh attempt', async () => {
     mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]))
     const { wrapper } = createWrapper()
