@@ -386,6 +386,118 @@ def publish_private_text(path: Path, text: str, *, encoding: str = "utf-8") -> N
     publish_private_bytes(path, text.encode(encoding))
 
 
+# How much of a stream is pulled into memory at once while it is copied to disk. One
+# mebibyte is large enough that the per-chunk overhead is noise against a lecture deck and
+# small enough that a hostile or accidental oversized upload can never materialize more than
+# this plus one chunk before the size ceiling aborts it.
+STREAM_CHUNK_BYTES = 1024 * 1024
+
+
+class StreamTooLargeError(Exception):
+    """A streamed write crossed the byte ceiling it was given and was aborted.
+
+    Distinct from an `OSError`: nothing failed on disk. The stream simply exceeded the
+    limit the caller set, the staged bytes have been discarded, and no final file was
+    published. The caller turns this into whatever over-limit answer its surface owes the
+    user; `limit` is the ceiling that was crossed so the message can name it.
+    """
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(f"stream exceeded the {limit}-byte ceiling")
+        self.limit = limit
+
+
+def _stream_private_bytes(staged: Path, source: object, *, max_bytes: int, chunk_size: int) -> int:
+    """Copy `source` into the staged file in bounded chunks, enforcing `max_bytes`.
+
+    `source` is any object with a blocking `read(size) -> bytes`, which is exactly the
+    shape of an upload's underlying spooled file. Bytes are pulled one `chunk_size` block
+    at a time and never accumulated into one object, so the peak memory a copy holds is a
+    single chunk regardless of how large the stream is. The running total is checked as
+    each chunk lands: the first chunk that carries the total past `max_bytes` aborts the
+    copy with `StreamTooLargeError` before the remainder is read, so an oversized stream
+    costs at most one chunk beyond the ceiling rather than the whole body.
+
+    The staged file is created exclusively at `0o600` through a no-follow descriptor, the
+    same private-from-the-first-byte writer every other sensitive write here uses, so a
+    symlink planted at the staging name fails closed instead of being followed.
+
+    Returns the number of bytes written, which the caller records as the stored size.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_CLOEXEC
+    if not _POSIX:
+        _refuse_existing_symlink(staged)
+    try:
+        descriptor = os.open(staged, flags, FILE_MODE)
+    except OSError as exc:
+        _raise_unsafe_open(staged, exc, operation="write")
+        raise
+    owns_descriptor = False
+    total = 0
+    try:
+        _assert_owned_entry(os.fstat(descriptor), staged, is_dir=False)
+        _fchmod_owned(descriptor, FILE_MODE, staged)
+        with os.fdopen(descriptor, "wb") as handle:
+            owns_descriptor = True
+            while True:
+                chunk = source.read(chunk_size)  # type: ignore[attr-defined]
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise StreamTooLargeError(max_bytes)
+                handle.write(chunk)
+    finally:
+        if not owns_descriptor:
+            os.close(descriptor)
+    return total
+
+
+def publish_private_stream(
+    path: Path,
+    source: object,
+    *,
+    max_bytes: int,
+    chunk_size: int = STREAM_CHUNK_BYTES,
+) -> int:
+    """Stream `source` into a staged file beside `path` and publish it, enforcing `max_bytes`.
+
+    The streaming twin of `publish_private_bytes`, and it keeps the identical publication
+    contract: the bytes are copied to a writer-private `*.partial` staging name and only an
+    atomic rename puts the final name in place, so a crash at any point leaves either no
+    file, a clearly-marked staging leftover the startup sweep removes, or the whole file -
+    never a truncated file under a name readers trust on sight. What differs is only that
+    the bytes arrive from a stream rather than one `bytes` object, so an upload is never
+    materialized whole in memory to be measured.
+
+    The staging file is removed on every exit that does not publish - an over-limit abort, a
+    disconnect or read error surfacing out of `source`, or a disk error mid-write - so a
+    rejected or interrupted upload leaves nothing behind. The final rename happens only
+    after the complete stream has been accepted under the ceiling.
+
+    Args:
+        path: Final name to publish the stored file under.
+        source: An object with `read(size) -> bytes`; an upload's spooled file.
+        max_bytes: The inclusive size ceiling. A stream of exactly this many bytes is
+            accepted; the first byte past it aborts the copy.
+        chunk_size: How many bytes to pull per read.
+
+    Returns:
+        The number of bytes published, for the caller to record as the stored size.
+
+    Raises:
+        StreamTooLargeError: the stream exceeded `max_bytes`; nothing was published.
+        OSError, PrivacyContractError: the copy or publish failed; nothing was published.
+    """
+    staged = partial_path(path)
+    try:
+        total = _stream_private_bytes(staged, source, max_bytes=max_bytes, chunk_size=chunk_size)
+        os.replace(staged, path)
+    finally:
+        staged.unlink(missing_ok=True)
+    return total
+
+
 def read_private_text(path: Path, *, encoding: str = "utf-8") -> str:
     """Read a private regular file without following a final-component symlink."""
     if not _POSIX:
