@@ -53,6 +53,59 @@ _URL = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 # clears the alphabetic floor anyway.
 _PHOTO_MIN_IMAGE_SHARE = 0.8
 
+# --- Unusable text-layer detection (PLA-148) -----------------------------------------
+#
+# The two gates above catch a page with *no* text and a page that is *a picture* wearing a
+# scrap of text. A third kind slips past both: a page with a technically substantial text
+# layer that is nonetheless unusable - OCR character soup, or a broken extraction that
+# repeats one line or token down the whole page. Indexing that text is worse than dropping
+# the page, because it retrieves words the page does not say. A dropped page joins the
+# scanned flow, where recognition can read the image properly.
+#
+# These heuristics were chosen by measurement, not intuition (scripts/eval_text_layer.py
+# scores them against a labelled corpus), and they are deliberately tuned for precision
+# over recall: the cost of a false positive is re-recognizing a page that was already fine,
+# so a valid sparse title page, a matrix of lone digits, a page of code, and an equation
+# page must all stay readable. Text-layer pathologies these signals do *not* claim to catch
+# - reordered columns, a coherent-but-unrelated invisible overlay, scattered equation
+# glyphs - are reported as known false negatives rather than chased with a rule that would
+# start dropping valid pages. Nothing here needs the rendered page, so it costs a few string
+# passes and runs on every parsed page.
+
+# Bounded, privacy-safe reason codes. A code names *why* a page was flagged and can be
+# logged or surfaced for diagnostics; the page's text, path, and rendered content never can.
+CHARACTER_SOUP = "character_soup"
+REPETITION = "repetition"
+UNUSABLE_TEXT_FLAGS = frozenset({CHARACTER_SOUP, REPETITION})
+
+# The two pre-existing skip reasons, named so `page_skip_reason` can report every drop with
+# one bounded vocabulary. `SPARSE_TEXT` is the scanned-page rule; `PHOTOGRAPHED` is the
+# picture-wearing-a-scrap-of-text rule.
+SPARSE_TEXT = "sparse"
+PHOTOGRAPHED = "photographed"
+PAGE_SKIP_REASONS = frozenset({SPARSE_TEXT, PHOTOGRAPHED, *UNUSABLE_TEXT_FLAGS})
+
+# The character-soup gate only judges a page that has enough alphabetic, word-shaped text to
+# be making a claim to be prose at all. Below these floors a page is either sparse (handled
+# by the scanned gate) or letter-light on purpose (a matrix, an equation), and is left
+# alone. `_MIN_WORD_PLAUSIBILITY` is the fraction of word-shaped tokens that must read as
+# real words; genuine prose sits near 1.0 and OCR soup near 0.0, so the threshold only has
+# to separate those two populations, not grade them.
+_SOUP_MIN_ALPHA = 60
+_SOUP_MIN_WORD_TOKENS = 12
+_MIN_WORD_PLAUSIBILITY = 0.35
+_VOWELS = frozenset("aeiouyAEIOUY")
+
+# The repetition gate fires when one line, or one multi-character token, dominates the page.
+# It works on lines and on tokens of three or more characters, so a sparse matrix of lone
+# digits - where "0" recurs but no word does - can never trip it.
+_REPEAT_MIN_LINES = 6
+_REPEAT_MIN_LINE_COUNT = 4
+_REPEAT_MIN_LINE_SHARE = 0.5
+_REPEAT_MIN_TOKENS = 20
+_REPEAT_MIN_TOKEN_LEN = 3
+_REPEAT_MIN_TOKEN_SHARE = 0.5
+
 PDF_MIME = "application/pdf"
 TEXT_MIMES = frozenset({"text/plain", "text/markdown"})
 
@@ -175,6 +228,90 @@ def is_scanned_page(text: str) -> bool:
     return len("".join(text.split())) < SCANNED_PAGE_MIN_CHARS
 
 
+def classify_text_layer(text: str) -> str | None:
+    """Why a page's substantial text layer is unusable, or None when it reads fine.
+
+    Runs only after `is_scanned_page` has let a page through, so it never re-judges a sparse
+    page. Returns a bounded reason code from `UNUSABLE_TEXT_FLAGS` - never the page's text -
+    so the answer is safe to log. Repetition is checked before character soup only for a
+    stable, deterministic code on a page that is both.
+    """
+    if _is_repetitive(text):
+        return REPETITION
+    if _is_character_soup(text):
+        return CHARACTER_SOUP
+    return None
+
+
+def _is_character_soup(text: str) -> bool:
+    """Whether a page carries plenty of word-shaped text that is not made of real words.
+
+    Only pages with enough alphabetic, word-shaped tokens to be claiming to be prose are
+    judged, so an equation or matrix page - letter-light by nature - is never reached. Among
+    the word-shaped tokens, the fraction that read as plausible words separates prose (near
+    1.0) from OCR soup (near 0.0); a page below the floor is soup.
+    """
+    total_alpha = 0
+    word_tokens = 0
+    plausible = 0
+    for raw in text.split():
+        letters = [character for character in raw if character.isalpha()]
+        total_alpha += len(letters)
+        # A word-shaped token is mostly letters and at least two of them: this excludes
+        # `x_1`, `=`, `3.14`, and lone symbols, so equation and code pages contribute few
+        # word tokens and fall under the floor rather than being graded as prose.
+        if len(letters) >= 2 and len(letters) >= 0.5 * len(raw):
+            word_tokens += 1
+            if _is_plausible_word(letters):
+                plausible += 1
+    if total_alpha < _SOUP_MIN_ALPHA or word_tokens < _SOUP_MIN_WORD_TOKENS:
+        return False
+    return plausible / word_tokens < _MIN_WORD_PLAUSIBILITY
+
+
+def _is_plausible_word(letters: list[str]) -> bool:
+    """Whether a token's letters read like a real word rather than an OCR fragment.
+
+    Deliberately shallow, because the aggregate ratio does the real work and a
+    per-token rule that is too clever starts rejecting real words: a plausible word simply
+    has a vowel (counting `y`) and is not one letter repeated. That is enough to reject the
+    `rn`, `vv`, `lll`, and `qxz` that soup is made of without a dictionary, and it keeps
+    consonant-dense but genuine words like `strengths` and `rhythm` in.
+    """
+    lowered = [character.lower() for character in letters]
+    if len(set(lowered)) == 1:
+        return False
+    return any(character in _VOWELS for character in lowered)
+
+
+def _is_repetitive(text: str) -> bool:
+    """Whether one line or one multi-character token dominates the page.
+
+    Catches a broken extraction that repeats a header, footer, or token down the page. It
+    ignores tokens shorter than three characters, so a matrix where `0` recurs is never
+    flagged; only the repetition of something word-shaped counts.
+    """
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) >= _REPEAT_MIN_LINES:
+        top_line = max(_counts(lines).values())
+        if top_line >= _REPEAT_MIN_LINE_COUNT and top_line >= _REPEAT_MIN_LINE_SHARE * len(lines):
+            return True
+    tokens = [token for token in text.split() if len(token) >= _REPEAT_MIN_TOKEN_LEN]
+    if len(tokens) >= _REPEAT_MIN_TOKENS:
+        top_token = max(_counts(tokens).values())
+        if top_token >= _REPEAT_MIN_TOKEN_SHARE * len(tokens):
+            return True
+    return False
+
+
+def _counts(items: list[str]) -> dict[str, int]:
+    """How many times each item appears. A tiny local Counter to keep imports lean."""
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item] = counts.get(item, 0) + 1
+    return counts
+
+
 def _is_photographed_page(page: "pymupdf.Page", text: str) -> bool:
     """Whether a page is a photograph wearing a junk text layer.
 
@@ -274,24 +411,54 @@ def _read_outline(document: "pymupdf.Document") -> list[OutlineEntry]:
     return entries
 
 
+def page_skip_reason(text: str, photographed: bool) -> str | None:
+    """Why a page is dropped from the index, or None when it carries usable text.
+
+    One place decides page usability, so the three gates cannot drift apart: a page is
+    dropped when it is too sparse to be text (`SPARSE_TEXT`), when it is a picture wearing a
+    scrap of text (`PHOTOGRAPHED`), or when its substantial text layer is unusable
+    (`CHARACTER_SOUP`, `REPETITION`). The return is a bounded code from `PAGE_SKIP_REASONS`,
+    never the page's text, so it is safe to log or surface for diagnostics. A dropped page
+    joins the recognition flow exactly as a scanned page does.
+    """
+    if is_scanned_page(text):
+        return SPARSE_TEXT
+    if photographed:
+        return PHOTOGRAPHED
+    return classify_text_layer(text)
+
+
 def _drop_scanned_pages(
     pages: list[tuple[int, str, bool]], outline: list[OutlineEntry]
 ) -> ParsedDocument:
-    """Keep the pages that carry real text, and count the ones that do not.
+    """Keep the pages that carry usable text, and count the ones that do not.
 
-    A photographed page with a junk text layer is dropped the same way a blank scan is:
-    both are pictures of text, and both belong to the recognition flow rather than to the
-    index. Keeping the junk would be worse than keeping nothing - it embeds and retrieves
-    text the page does not say.
+    A photographed page, an OCR-soup page, or a page that repeats one line is dropped the
+    same way a blank scan is: all of them are pictures of text or junk text, and all belong
+    to the recognition flow rather than to the index. Keeping the junk would be worse than
+    keeping nothing - it embeds and retrieves text the page does not say.
+
+    The bounded skip reasons are logged (page numbers and codes only, never page text), so a
+    document that dropped pages leaves a privacy-safe diagnostic trail for why.
     """
-    kept = [
-        ParsedPage(page_number=number, text=text)
-        for number, text, photographed in pages
-        if not (is_scanned_page(text) or photographed)
-    ]
+    kept: list[ParsedPage] = []
+    dropped: list[tuple[int, str]] = []
+    for number, text, photographed in pages:
+        reason = page_skip_reason(text, photographed)
+        if reason is None:
+            kept.append(ParsedPage(page_number=number, text=text))
+        else:
+            dropped.append((number, reason))
+    if dropped:
+        logger.info(
+            "Parse dropped %d of %d page(s) as unreadable: %s",
+            len(dropped),
+            len(pages),
+            ", ".join(f"page {number} ({reason})" for number, reason in dropped),
+        )
     return ParsedDocument(
         pages=kept,
         pages_total=len(pages),
-        pages_skipped=len(pages) - len(kept),
+        pages_skipped=len(dropped),
         outline=outline,
     )

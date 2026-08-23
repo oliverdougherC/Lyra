@@ -641,3 +641,199 @@ def test_an_uploaded_image_is_a_one_page_scan(
     assert row["state"] == "ready"
     assert (row["pages_total"], row["pages_done"]) == (1, 1)
     assert _chunk_pages(db, document_id) == {1}
+
+
+# --- PLA-148: a page with an unusable text layer joins the recognition flow -----------
+#
+# These pages clear the sparse-page floor, so before PLA-148 they ingested `ready` and
+# indexed text the page does not say. Now the parser drops them the way it drops a
+# photograph, and the same per-page substrate recognizes them - only them - when asked.
+
+# A substantial-but-unusable text layer (OCR character soup) and a broken extraction that
+# repeats one line down the page. `parse.classify_text_layer` flags both.
+_SOUP_TEXT = (
+    "rn cl vv lll tt nn gg hh mn wr qxz bk dd ff kk pq zx cv bn mk lp rnm clm vln bkt "
+    "qws zxc vbn mkl pqr ttn ggn hhr wrs"
+)
+_REPEAT_TEXT = "\n".join(["CONFIDENTIAL DRAFT DO NOT DISTRIBUTE"] * 8)
+_GOOD_TEXT_A = (
+    "The determinant of a triangular matrix is the product of the entries on its diagonal, "
+    "so the matrix is invertible exactly when none of those diagonal entries is zero."
+)
+_GOOD_TEXT_B = (
+    "A sequence converges to a limit when its terms cluster arbitrarily close to a single "
+    "number, and every convergent sequence is therefore bounded above and below."
+)
+
+
+def _all_chunk_content(db: sqlite3.Connection, document_id: int) -> str:
+    return "\n".join(
+        str(row[0])
+        for row in db.execute(
+            "select content from chunks where document_id = ? order by id", (document_id,)
+        )
+    )
+
+
+def _chunk_page_order(db: sqlite3.Connection, document_id: int) -> list[int]:
+    return [
+        int(row[0])
+        for row in db.execute(
+            "select page_number from chunks where document_id = ? order by id", (document_id,)
+        )
+    ]
+
+
+def test_a_bad_text_layer_page_is_selectively_recognized(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The core of PLA-148 end to end: only the newly flagged pages are read.
+
+    Two good text pages and two unusable-text-layer pages, interleaved. The good pages keep
+    their extracted text and are never sent to the model; the junk pages are recognized in
+    place, and the document reads back in page order with the mix invisible downstream.
+    """
+    _configure_endpoint(db)
+    stored = _write_pdf(
+        settings.uploads_dir / "mixed-quality.pdf",
+        [_GOOD_TEXT_A, _SOUP_TEXT, _GOOD_TEXT_B, _REPEAT_TEXT],
+    )
+    document_id = _seed_document(db, class_id, stored, recognize=True)
+    calls = _reader(monkeypatch)
+
+    run_ingestion(document_id)
+
+    # Only the two junk pages were sent; the good pages were never re-read.
+    assert len(calls) == 2
+    assert _page_states(db, document_id) == {1: "text", 2: "recognized", 3: "text", 4: "recognized"}
+    row = _document(db, document_id)
+    assert row["state"] == "ready"
+    assert (row["pages_total"], row["pages_done"], row["pages_skipped"]) == (4, 4, 0)
+    # Page numbers, provenance, and document order survive the mix of extracted and
+    # recognized pages.
+    assert _chunk_pages(db, document_id) == {1, 2, 3, 4}
+    assert _chunk_page_order(db, document_id) == sorted(_chunk_page_order(db, document_id))
+    content = _all_chunk_content(db, document_id)
+    assert "determinant" in content  # good page 1, kept
+    assert "convergent" in content  # good page 3, kept
+    assert content.count("Fourier") >= 2  # the transcript of pages 2 and 4
+    # The junk text never reached the index.
+    assert "CONFIDENTIAL" not in content
+    assert "qxz" not in content
+
+
+def test_a_bad_text_layer_without_recognition_is_ready_but_reports_skipped_pages(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Truthful default: the junk is dropped, the good pages carry the document to ready.
+
+    Recognition is opt-in, so an ordinary ingestion never reads the flagged pages. The
+    document is searchable on its good pages and honestly reports the two it could not use,
+    rather than indexing junk to look complete.
+    """
+    _configure_endpoint(db)
+    stored = _write_pdf(
+        settings.uploads_dir / "mixed-default.pdf",
+        [_GOOD_TEXT_A, _SOUP_TEXT, _GOOD_TEXT_B, _REPEAT_TEXT],
+    )
+    document_id = _seed_document(db, class_id, stored, recognize=False)
+    calls = _reader(monkeypatch)
+
+    run_ingestion(document_id)
+
+    assert calls == []
+    row = _document(db, document_id)
+    assert row["state"] == "ready"
+    assert row["pages_skipped"] == 2
+    assert _page_states(db, document_id) == {1: "text", 2: "scanned", 3: "text", 4: "scanned"}
+    content = _all_chunk_content(db, document_id)
+    assert "determinant" in content and "convergent" in content
+    assert "CONFIDENTIAL" not in content and "qxz" not in content
+
+
+def test_a_document_of_only_bad_text_layers_is_unsupported_not_falsely_ready(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file that is all junk text must not claim to be readable.
+
+    Every page is dropped, so there is nothing to index. The honest outcome is the same
+    `unsupported` a scanned file gets - the file is kept so recognition can be run over it -
+    not a `ready` document whose index is empty or full of junk.
+    """
+    _configure_endpoint(db)
+    stored = _write_pdf(settings.uploads_dir / "all-junk.pdf", [_SOUP_TEXT, _REPEAT_TEXT])
+    document_id = _seed_document(db, class_id, stored, recognize=False)
+
+    run_ingestion(document_id)
+
+    row = _document(db, document_id)
+    assert row["state"] == "unsupported"
+    assert row["error_message"] == SCANNED_MESSAGE
+    assert _page_states(db, document_id) == {1: "scanned", 2: "scanned"}
+
+
+def test_a_bad_text_layer_whose_recognition_fails_stays_recoverable_and_truthful(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When recognition fails a flagged page, the document says so and stays retryable.
+
+    The good pages carry the document to `ready`, but the pages recognition could not read
+    are marked `failed` rather than quietly dropped, so the row reports unreadable pages
+    instead of claiming completeness. An explicit retry puts them back in the pending set.
+    """
+    _configure_endpoint(db)
+    stored = _write_pdf(
+        settings.uploads_dir / "mixed-fail.pdf",
+        [_GOOD_TEXT_A, _SOUP_TEXT, _GOOD_TEXT_B, _REPEAT_TEXT],
+    )
+    document_id = _seed_document(db, class_id, stored, recognize=True)
+    _reader(monkeypatch, replies=lambda _n: RuntimeError("the model could not read this page"))
+
+    run_ingestion(document_id)
+
+    row = _document(db, document_id)
+    assert row["state"] == "ready"
+    assert _page_states(db, document_id) == {1: "text", 2: "failed", 3: "text", 4: "failed"}
+    # Truthful: the document does not claim the failed pages are readable.
+    assert recognition.failed_page_count(db, document_id) == 2
+    # Recoverable: an explicit retry returns the failed pages to the pending set.
+    reset = recognition.reset_failed_pages(db, document_id)
+    db.commit()
+    assert reset == 2
+    assert _page_states(db, document_id) == {1: "text", 2: "scanned", 3: "text", 4: "scanned"}
+
+
+def test_reingesting_a_recognized_bad_text_layer_does_not_reread_or_duplicate(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Restart and reingest are idempotent over selectively recognized pages.
+
+    A page recognized on the first pass is not read again on a reingest, and the document
+    comes back with the same pages in the same order and the same number of chunks - no
+    duplication and no reordering of the extracted/recognized mix.
+    """
+    _configure_endpoint(db)
+    stored = _write_pdf(
+        settings.uploads_dir / "mixed-restart.pdf",
+        [_GOOD_TEXT_A, _SOUP_TEXT, _GOOD_TEXT_B, _REPEAT_TEXT],
+    )
+    document_id = _seed_document(db, class_id, stored, recognize=True)
+    calls = _reader(monkeypatch)
+
+    run_ingestion(document_id)
+    assert len(calls) == 2
+    first_pages = _chunk_page_order(db, document_id)
+    first_count = len(first_pages)
+
+    # A reingest (or a restart that requeues this document) runs the whole pipeline again.
+    db.execute("update documents set state = 'pending' where id = ?", (document_id,))
+    db.commit()
+    run_ingestion(document_id)
+
+    # The already-recognized pages are not sent a second time.
+    assert len(calls) == 2
+    assert _page_states(db, document_id) == {1: "text", 2: "recognized", 3: "text", 4: "recognized"}
+    # Same pages, same order, same count: nothing duplicated or reordered.
+    assert _chunk_pages(db, document_id) == {1, 2, 3, 4}
+    assert _chunk_page_order(db, document_id) == first_pages
+    assert len(_chunk_page_order(db, document_id)) == first_count

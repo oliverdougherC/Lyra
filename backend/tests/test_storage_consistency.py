@@ -211,14 +211,19 @@ def _raise_os_error(*args: object, **kwargs: object) -> None:
 def test_a_failed_upload_write_leaves_no_row_and_no_file(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(private, "publish_private_bytes", _raise_os_error)
+    # The upload streams to disk, so the write that can fail is the streaming publish. A
+    # disk error there is now an honest, retryable refusal rather than an unhandled 500,
+    # and the crash-consistency guarantee is unchanged: the uncommitted row rolls back and
+    # the staged bytes are discarded, so nothing survives the failure.
+    monkeypatch.setattr(private, "publish_private_stream", _raise_os_error)
 
     response = client.post(
         f"/api/classes/{class_id}/documents",
         files={"file": ("notes.pdf", b"%PDF-1.4", "application/pdf")},
     )
 
-    assert response.status_code == 500
+    assert response.status_code == 400
+    assert response.json()["detail"] == routes_documents.UPLOAD_FAILED_MESSAGE
     assert db.execute("select count(*) from documents").fetchone()[0] == 0
     class_dir = settings.uploads_dir / str(class_id)
     assert not class_dir.exists() or list(class_dir.iterdir()) == []

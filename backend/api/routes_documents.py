@@ -34,10 +34,18 @@ router = APIRouter(prefix="/api", tags=["documents"])
 
 DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
 
-# 50 MB. Generous for a lecture deck or a scanned problem set, and small enough that
-# reading one upload into memory to check it stays comfortable.
+# 50 MB. Generous for a lecture deck or a scanned problem set, and the ceiling the upload
+# stream is held to: it is enforced chunk by chunk as the body arrives, never by buffering
+# the whole file and measuring it afterward.
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+# How much of the upload is pulled into memory at a time while it is copied to disk. The
+# peak an upload holds is one chunk, whatever the size of the file, so an oversized body
+# can never spike memory before the ceiling above rejects it.
+UPLOAD_CHUNK_BYTES = private.STREAM_CHUNK_BYTES
 TOO_LARGE_MESSAGE = "That file is larger than 50 MB. Upload a smaller file."
+# A store that failed for a reason the student did not cause and can only retry: a disk
+# error, a dropped connection mid-upload, or a destination Lyra refused to write through.
+UPLOAD_FAILED_MESSAGE = "That file could not be saved. Try uploading it again."
 
 # How much of a text source the reading pane serves. Well past a problem set, and short of
 # anything that would make the pane slow to render.
@@ -206,13 +214,9 @@ def upload_document(
 ) -> dict[str, object]:
     get_class(conn, class_id)
     filename = _display_filename(file.filename or "")
+    # The type gate runs before a single byte touches disk: an unsupported extension is
+    # refused up front, so a rejected type never stages a file or leaves a row to roll back.
     mime = _mime_for(filename)
-
-    # Checked against the bytes actually read. A `content-length` header is whatever the
-    # client chose to send, so it cannot be the thing that enforces the limit.
-    payload = file.file.read()
-    if len(payload) > MAX_UPLOAD_BYTES:
-        raise LyraError(TOO_LARGE_MESSAGE)
 
     # The stored name needs the row id to be unique within a class, so the row is
     # inserted first and pointed at the file once it is written. Nothing is committed
@@ -220,12 +224,14 @@ def upload_document(
     # file: a failed or interrupted write leaves no row behind, and the publication is
     # staged-then-renamed so it can leave no truncated file under the final name either.
     # What a crash can leave is a whole file with no row - its insert rolled back - and
-    # the startup orphan sweep removes those (docs/storage-consistency.md).
+    # the startup orphan sweep removes those (docs/storage-consistency.md). `byte_size` is
+    # a placeholder until the stream lands, because the true size is not known until the
+    # last chunk; the row is not committed until it is corrected below.
     document_id = int(
         conn.execute(
             "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
-            "values (?, ?, '', ?, ?, ?)",
-            (class_id, filename, mime, len(payload), PENDING),
+            "values (?, ?, '', ?, 0, ?)",
+            (class_id, filename, mime, PENDING),
         ).lastrowid
         or 0
     )
@@ -233,9 +239,32 @@ def upload_document(
     # The class upload directory is `0o700` and the stored file `0o600`: an uploaded source
     # is coursework, private like the rest of the data tree and not left to the umask.
     private.secure_mkdir(stored_path.parent, root=settings.data_dir)
-    private.publish_private_bytes(stored_path, payload)
+    # The size limit is enforced while the upload streams, not after it is buffered whole:
+    # the body is copied to the staged file one fixed-size chunk at a time, the running
+    # total is checked as each chunk lands, and the first byte past `MAX_UPLOAD_BYTES`
+    # aborts the copy before the rest of the request body is ever read into memory. A
+    # `content-length` header cannot be the thing that enforces this - it is whatever the
+    # client chose to send - so the ceiling is measured against the bytes that actually
+    # arrive. Only a complete, accepted stream is published under the final name; every
+    # rejection or fault below discards the staged bytes and rolls the row back, so a
+    # refused upload leaves neither a partial file nor a dangling document.
+    try:
+        byte_size = private.publish_private_stream(
+            stored_path, file.file, max_bytes=MAX_UPLOAD_BYTES, chunk_size=UPLOAD_CHUNK_BYTES
+        )
+    except private.StreamTooLargeError:
+        conn.rollback()
+        raise LyraError(TOO_LARGE_MESSAGE) from None
+    except (OSError, private.PrivacyContractError):
+        # A disk error, a disconnect surfacing as a read failure, or a symlink planted at
+        # the destination: the staged file is already gone, and rolling back drops the
+        # uncommitted row so no half-written upload survives the failure.
+        conn.rollback()
+        logger.warning("Upload of %s could not be stored", filename, exc_info=True)
+        raise LyraError(UPLOAD_FAILED_MESSAGE) from None
     conn.execute(
-        "update documents set stored_path = ? where id = ?", (str(stored_path), document_id)
+        "update documents set stored_path = ?, byte_size = ? where id = ?",
+        (str(stored_path), byte_size, document_id),
     )
     conn.commit()
 
