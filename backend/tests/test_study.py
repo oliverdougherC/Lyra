@@ -880,6 +880,35 @@ def test_a_tiny_context_window_fails_locally_without_calling_the_model(
     assert llm.calls == []
 
 
+def test_quiz_with_only_retry_reserve_room_reports_context_failure(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _quiz(db, class_id, document_id)
+    job = _quiz_job(artifact_id, document_id, count=3)
+    fixed = study._prompt_tokens(
+        study.prompts.build_quiz_prompt("", job.count, job.difficulty, list(job.types))
+    )
+    window = next(
+        candidate
+        for candidate in range(256, 8192)
+        if 0
+        < study._input_ceiling(TutorConfig("http://127.0.0.1:9/v1", None, "m", candidate)) - fixed
+        <= study._RETRY_HINT_RESERVE
+    )
+    _use_window(monkeypatch, window)
+
+    study.run_generation(job)
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert artifact["error_message"] == study.CONTEXT_TOO_SMALL_MESSAGE
+    assert llm.calls == []
+
+
 def test_call_json_refuses_a_prompt_over_the_input_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
     """The single call chokepoint enforces the window as a backstop, not merely calculates
     it: an over-ceiling prompt is refused locally before any request is made."""

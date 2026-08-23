@@ -681,6 +681,26 @@ def test_current_attempt_is_none_when_the_quiz_changed(
     assert current["attempt"] is None
 
 
+def test_start_retires_a_stale_attempt_and_snapshots_regenerated_questions(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    old_question = _question(db, quiz_id, 1, "delta")
+    old_attempt = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    artifacts.delete_part(db, old_question)
+    fresh_question = _question(db, quiz_id, 1, "fresh")
+
+    resumed = client.post(f"/api/quizzes/{quiz_id}/attempts").json()
+
+    assert resumed["attempt_id"] != old_attempt
+    assert resumed["question_part_ids"] == [fresh_question]
+    stale = db.execute(
+        "select abandoned, finished_at from quiz_attempts where id = ?", (old_attempt,)
+    ).fetchone()
+    assert stale["abandoned"] == 1
+    assert stale["finished_at"] is not None
+
+
 def test_restart_abandons_the_old_attempt_and_opens_a_fresh_one(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:

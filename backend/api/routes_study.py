@@ -610,24 +610,30 @@ def start_attempt(artifact_id: int, conn: DbConn, restart: bool = False) -> dict
     forks the score. `restart=true` is the explicit start-over - the current attempt is
     retained but marked abandoned, and a fresh attempt is opened.
     """
-    quiz = _require_quiz(conn, artifact_id)
-    part_ids = _quiz_question_part_ids(conn, artifact_id)
-    total = quiz["problems_total"]
-    # Ready-only, and the stored question set must match the requested count: a quiz that
-    # is `ready` but holds fewer questions than it claims must not be attemptable.
-    if quiz["state"] != artifacts.READY or not part_ids:
-        raise ConflictError(QUIZ_NOT_READY_MESSAGE)
-    if total is not None and len(part_ids) != int(total):
-        raise ConflictError(QUIZ_NOT_READY_MESSAGE)
     try:
         conn.execute("begin immediate")
+        quiz = _require_quiz(conn, artifact_id)
+        part_ids = _quiz_question_part_ids(conn, artifact_id)
+        total = quiz["problems_total"]
+        # Validate the live question set under the same write transaction that snapshots
+        # it, so regeneration cannot land between the readiness check and attempt creation.
+        if quiz["state"] != artifacts.READY or not part_ids:
+            raise ConflictError(QUIZ_NOT_READY_MESSAGE)
+        if total is not None and len(part_ids) != int(total):
+            raise ConflictError(QUIZ_NOT_READY_MESSAGE)
         active = conn.execute(
             "select * from quiz_attempts where artifact_id = ? and finished_at is null",
             (artifact_id,),
         ).fetchone()
-        # An explicit restart, or a legacy attempt with no question snapshot, is retired
-        # (kept, but marked abandoned) so a fresh attempt can take the one active slot.
-        if active is not None and (restart or active["question_part_ids"] is None):
+        snapshot = (
+            json.loads(str(active["question_part_ids"]))
+            if active is not None and active["question_part_ids"] is not None
+            else None
+        )
+        # An explicit restart, a legacy attempt with no snapshot, or an attempt against a
+        # previous question set is retired so POST cannot resume answers onto regenerated
+        # questions. Exact list equality protects membership and question order.
+        if active is not None and (restart or snapshot != part_ids):
             conn.execute(
                 "update quiz_attempts set finished_at = datetime('now'), abandoned = 1 "
                 "where id = ?",
@@ -685,8 +691,8 @@ def current_attempt(artifact_id: int, conn: DbConn) -> dict[str, object]:
     if active is None or active["question_part_ids"] is None:
         return {"attempt": None}
     snapshot = json.loads(str(active["question_part_ids"]))
-    current_ids = set(_quiz_question_part_ids(conn, artifact_id))
-    if any(part_id not in current_ids for part_id in snapshot):
+    current_ids = _quiz_question_part_ids(conn, artifact_id)
+    if snapshot != current_ids:
         return {"attempt": None}
     return {"attempt": _attempt_payload(conn, active)}
 

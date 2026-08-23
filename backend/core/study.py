@@ -574,7 +574,10 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     # The source budget leaves room for the retry hint, so the second call fits the window
     # without re-gathering. The quiz prompt's fixed material is its system instruction.
     fixed = _prompt_tokens(prompts.build_quiz_prompt("", job.count, job.difficulty, asked))
-    source_cap = max(0, _source_cap(config, fixed) - _RETRY_HINT_RESERVE)
+    source_room = _source_cap(config, fixed)
+    if source_room <= _RETRY_HINT_RESERVE:
+        raise LyraError(CONTEXT_TOO_SMALL_MESSAGE)
+    source_cap = source_room - _RETRY_HINT_RESERVE
     gathered, source_ids = _gather_source_text(conn, job.source_ids, source_cap)
     if not gathered:
         raise LyraError(NO_QUESTIONS_MESSAGE)
