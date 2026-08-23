@@ -36,6 +36,7 @@ from backend.core import (
     agent_store,
     profiles,
     sessions,
+    source_ledger,
     tool_audit,
     web_research,
 )
@@ -161,6 +162,22 @@ def _target_attempt(
     ).fetchall()
     assert len(rows) == 1
     return int(rows[0]["attempt_id"])
+
+
+def _create_attempt(
+    conn: sqlite3.Connection,
+    *,
+    session_id: int,
+    content: str,
+    profile: str = "code",
+) -> int:
+    user_message_id = sessions.add_message(conn, session_id, "user", content)
+    return agent_attempts.create_attempt(
+        conn,
+        session_id=session_id,
+        user_message_id=user_message_id,
+        profile=profile,
+    )
 
 
 class _FailFinalCommit:
@@ -1142,6 +1159,220 @@ def test_retrying_identical_research_proposals_does_not_reown_deduplicated_recor
         "select confirmed, rejected, confidence from profile_facts where id = ?", (fact_id,)
     ).fetchone()
     assert (fact["confirmed"], fact["rejected"], fact["confidence"]) == (0, 0, "low")
+
+
+def test_deleted_targets_get_new_autoincrement_ids_so_attempt_ownership_cannot_shift(
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+) -> None:
+    attempt_id = _create_attempt(db, session_id=session_id, content="Track source ownership")
+    source = source_ledger.upsert_source(
+        db,
+        class_id=class_id,
+        source_type=source_ledger.WEB,
+        url="https://example.com/original",
+        title="Original source",
+        snapshot="Original evidence",
+        final_url="https://example.com/original",
+        content_type="text/plain",
+        attempt_id=attempt_id,
+    )
+    deleted_source_id = int(source["id"])
+    db.execute("delete from writer_sources where id = ?", (deleted_source_id,))
+    db.commit()
+
+    replacement_source = source_ledger.upsert_source(
+        db,
+        class_id=class_id,
+        source_type=source_ledger.WEB,
+        url="https://example.com/replacement",
+        title="Replacement source",
+        snapshot="Replacement evidence",
+        final_url="https://example.com/replacement",
+        content_type="text/plain",
+    )
+    assert int(replacement_source["id"]) > deleted_source_id
+    assert (
+        agent_attempts.target_owner(
+            db,
+            target_kind="source",
+            target_id=int(replacement_source["id"]),
+        )
+        is None
+    )
+
+    fact_attempt_id = _create_attempt(db, session_id=session_id, content="Track fact ownership")
+    fact_source = source_ledger.upsert_source(
+        db,
+        class_id=class_id,
+        source_type=source_ledger.WEB,
+        url="https://example.com/fact-source",
+        title="Fact source",
+        snapshot="Fact evidence",
+        final_url="https://example.com/fact-source",
+        content_type="text/plain",
+    )
+    excerpt = source_ledger.add_excerpt(db, int(fact_source["id"]), "Fact evidence")
+    fact = profiles.propose_ledger_fact(
+        db,
+        class_id=class_id,
+        kind="note",
+        label="Method",
+        value="Use the durable path",
+        source_id=int(fact_source["id"]),
+        excerpt_id=int(excerpt["id"]),
+        attempt_id=fact_attempt_id,
+    )
+    deleted_fact_id = int(fact["id"])
+    db.execute("delete from profile_facts where id = ?", (deleted_fact_id,))
+    db.commit()
+
+    replacement_fact_id = int(
+        db.execute(
+            "insert into profile_facts (class_id, kind, label, value, confidence) "
+            "values (?, 'note', 'Replacement', 'Fresh fact', 'low')",
+            (class_id,),
+        ).lastrowid
+        or 0
+    )
+    db.commit()
+    assert replacement_fact_id > deleted_fact_id
+    assert (
+        agent_attempts.target_owner(
+            db,
+            target_kind="profile_fact",
+            target_id=replacement_fact_id,
+        )
+        is None
+    )
+
+
+def test_deleting_a_session_cascades_attempts_and_ownership_rows_without_touching_targets(
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+) -> None:
+    attempt_id = _create_attempt(db, session_id=session_id, content="Delete the session")
+    source = source_ledger.upsert_source(
+        db,
+        class_id=class_id,
+        source_type=source_ledger.WEB,
+        url="https://example.com/session-target",
+        title="Session target",
+        snapshot="Session evidence",
+        final_url="https://example.com/session-target",
+        content_type="text/plain",
+        attempt_id=attempt_id,
+    )
+    excerpt = source_ledger.add_excerpt(
+        db,
+        int(source["id"]),
+        "Session evidence",
+        attempt_id=attempt_id,
+    )
+    fact = profiles.propose_ledger_fact(
+        db,
+        class_id=class_id,
+        kind="note",
+        label="Session fact",
+        value="Will outlive the session",
+        source_id=int(source["id"]),
+        excerpt_id=int(excerpt["id"]),
+        attempt_id=attempt_id,
+    )
+
+    db.execute("delete from chat_sessions where id = ?", (session_id,))
+    db.commit()
+
+    assert db.execute("select count(*) from agent_turn_attempts").fetchone()[0] == 0
+    assert db.execute("select count(*) from agent_attempt_targets").fetchone()[0] == 0
+    assert db.execute("select count(*) from messages").fetchone()[0] == 0
+    assert (
+        db.execute(
+            "select count(*) from writer_sources where id = ?",
+            (int(source["id"]),),
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        db.execute(
+            "select count(*) from writer_source_excerpts where id = ?",
+            (int(excerpt["id"]),),
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        db.execute(
+            "select count(*) from profile_facts where id = ?",
+            (int(fact["id"]),),
+        ).fetchone()[0]
+        == 1
+    )
+
+
+def test_deleting_a_class_cascades_attempts_targets_and_agent_owned_rows_without_garbage(
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    _enable_workspace(db, class_id, workspace_root, changes=True, commands=True)
+    workspace_id = int(agent_store.get_workspace_for_class(db, class_id)["id"])
+    attempt_id = _create_attempt(db, session_id=session_id, content="Delete the class")
+
+    change = agent_store.create_workspace_change(
+        db,
+        class_id,
+        workspace_id=workspace_id,
+        session_id=session_id,
+        relative_path="notes.txt",
+        base_hash="base",
+        base_content="before",
+        proposed_content="after",
+        file_device=1,
+        file_inode=1,
+        file_mode=0o100644,
+        newline="\n",
+        rationale="track change",
+        attempt_id=attempt_id,
+    )
+    command = agent_store.create_command_request(
+        db,
+        class_id,
+        workspace_id=workspace_id,
+        session_id=session_id,
+        argv=["python3", "--version"],
+        relative_cwd=".",
+        reason="track command",
+        expected_signal="prints version",
+        attempt_id=attempt_id,
+    )
+
+    db.execute("delete from classes where id = ?", (class_id,))
+    db.commit()
+
+    assert db.execute("select count(*) from agent_turn_attempts").fetchone()[0] == 0
+    assert db.execute("select count(*) from agent_attempt_targets").fetchone()[0] == 0
+    assert db.execute("select count(*) from chat_sessions").fetchone()[0] == 0
+    assert db.execute("select count(*) from class_workspaces").fetchone()[0] == 0
+    assert db.execute("select count(*) from workspace_changes").fetchone()[0] == 0
+    assert db.execute("select count(*) from command_requests").fetchone()[0] == 0
+    assert (
+        db.execute(
+            "select count(*) from workspace_changes where id = ?",
+            (int(change["id"]),),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        db.execute(
+            "select count(*) from command_requests where id = ?",
+            (int(command["id"]),),
+        ).fetchone()[0]
+        == 0
+    )
 
 
 def test_a_retry_after_reload_still_works_from_the_durable_attempt(
