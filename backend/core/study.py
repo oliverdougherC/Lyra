@@ -13,6 +13,20 @@ a proposal, never trusted by construction.
 Generated content is proposed, never asserted: cards and questions land as ordinary
 parts, so the existing revision, provenance, and correction machinery applies to them
 unchanged.
+
+Three reliability contracts hold here, each with its own Linear issue:
+
+- **Durable intent (PLA-169).** A queued generation persists everything the worker needs
+  to reconstruct its job (`study_jobs`, migration 035) before it is enqueued, so a
+  restart requeues pending work and safely restarts interrupted work instead of failing
+  a deck that another job was merely ahead of in the single-worker queue.
+- **Exact sources (PLA-291).** The document set is an exact contract, revalidated at the
+  worker boundary against the accepted snapshot, so a source deleted or made unusable
+  after the request fails generation visibly rather than silently shrinking it.
+- **Budgeted prompts (PLA-298) and truthful completion (PLA-299).** Every model call is
+  budgeted against the configured tutor context window with an explicit output reserve,
+  and an artifact reaches `ready` only when generation fulfilled the requested contract
+  after bounded recovery; incomplete output fails visibly and leaves no partial rows.
 """
 
 import asyncio
@@ -34,21 +48,35 @@ from backend.core.app_settings import (
 from backend.core.errors import LyraError, NotFoundError
 from backend.core.scheduler import new_card_state
 from backend.llm import client, prompts
+from backend.llm.budget import generation_reserve
+from backend.llm.turn_budget import input_ceiling
 from backend.rag.retrieve import retrieve
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect
 
 logger = logging.getLogger(__name__)
 
-# Per-document and whole-class reading caps for the topic-mapping pass, in estimated
+# Per-document and whole-class reading caps for the source-gathering pass, in estimated
 # tokens. The per-document cap is what stops a 600-page textbook from crowding the
-# syllabus out of the mapping; the total keeps the prompt inside the context window.
+# syllabus out of the mapping; the total is the material ceiling before the context-window
+# budget (below) trims it further. The context budget, not this constant, is what keeps a
+# prompt inside the endpoint's window.
 DOCUMENT_TOKEN_CAP = 6_000
 TOTAL_TOKEN_CAP = 12_000
 
 # Retrieval budget per topic, in estimated tokens. A topic's cards are written against
 # what the course says about that topic, not against the whole gathered input.
 TOPIC_RETRIEVAL_BUDGET = 2_500
+
+# Room held back from a call's source budget so the bounded retry, which appends a short
+# corrective hint to the prompt, still fits the window without a second budgeting pass.
+# Also the ceiling the hint itself is truncated to, so the reserve is never overspent.
+_RETRY_HINT_RESERVE = 256
+
+# Each topic and each quiz gets at most one extra attempt. Retries vary the prompt with a
+# corrective hint (deterministic sampling would otherwise return the same reply), and the
+# count is fixed so a bad endpoint cannot multiply model calls without bound.
+_MAX_ATTEMPTS = 2
 
 INTERRUPTED_MESSAGE = "Interrupted, please retry"
 
@@ -65,6 +93,10 @@ BLOCKED_MESSAGES = {
 NO_TOPICS_MESSAGE = "The course material could not be mapped into study topics."
 NO_CARDS_MESSAGE = "No flashcards could be generated from this material."
 NO_QUESTIONS_MESSAGE = "Fewer than three valid questions survived validation."
+CONTEXT_TOO_SMALL_MESSAGE = (
+    "The configured tutor context window is too small to generate this from the chosen "
+    "material. Raise the context window in Settings, or choose less material, then try again."
+)
 
 STUDY_KINDS: tuple[str, ...] = (artifacts.KIND_FLASHCARD_DECK, artifacts.KIND_QUIZ)
 
@@ -75,9 +107,14 @@ class _GenerationCancelledError(Exception):
 
 @dataclass(frozen=True)
 class _Job:
-    """What a queued generation needs. Ids and options only, never rows or handles."""
+    """What a queued generation needs. Ids and options only, never rows or handles.
+
+    `source_ids` is the exact accepted document set, in reading order, so the worker can
+    revalidate it against the live document table before spending a model call (PLA-291).
+    """
 
     artifact_id: int
+    source_ids: tuple[int, ...] = ()
     cards_per_topic: int = 4
     count: int = 10
     difficulty: str = "intermediate"
@@ -87,6 +124,52 @@ class _Job:
 _queue: queue.Queue[_Job] = queue.Queue()
 _worker_lock = threading.Lock()
 _worker_started = False
+
+
+def persist_job(conn: sqlite3.Connection, job: _Job, kind: str) -> None:
+    """Record a generation's full intent so a restart can reconstruct it (PLA-169).
+
+    Written in the request, before the in-memory job is enqueued, so a process that dies
+    with the row present can requeue the exact same job. A study artifact found queued or
+    interrupted with no row here cannot be reconstructed and is failed rather than guessed.
+    """
+    conn.execute(
+        "insert into study_jobs "
+        "(artifact_id, kind, cards_per_topic, count, difficulty, types, source_ids) "
+        "values (?, ?, ?, ?, ?, ?, ?) "
+        "on conflict (artifact_id) do update set "
+        "kind = excluded.kind, cards_per_topic = excluded.cards_per_topic, "
+        "count = excluded.count, difficulty = excluded.difficulty, "
+        "types = excluded.types, source_ids = excluded.source_ids",
+        (
+            job.artifact_id,
+            kind,
+            job.cards_per_topic,
+            job.count,
+            job.difficulty,
+            json.dumps(list(job.types)),
+            json.dumps(list(job.source_ids)),
+        ),
+    )
+    conn.commit()
+
+
+def _job_from_row(row: sqlite3.Row) -> _Job:
+    """Reconstruct a job from its persisted row. Raises on metadata that will not parse."""
+    types = json.loads(str(row["types"]))
+    source_ids = json.loads(str(row["source_ids"]))
+    if not isinstance(types, list) or not all(isinstance(item, str) for item in types):
+        raise ValueError("persisted job types are malformed")
+    if not isinstance(source_ids, list) or not all(isinstance(item, int) for item in source_ids):
+        raise ValueError("persisted job source ids are malformed")
+    return _Job(
+        artifact_id=int(row["artifact_id"]),
+        source_ids=tuple(source_ids),
+        cards_per_topic=int(row["cards_per_topic"]),
+        count=int(row["count"]),
+        difficulty=str(row["difficulty"]),
+        types=tuple(types),
+    )
 
 
 def enqueue(job: _Job) -> None:
@@ -121,28 +204,64 @@ def _drain_queue() -> None:
             _queue.task_done()
 
 
-def reconcile_interrupted(conn: sqlite3.Connection) -> int:
-    """Fail every study artifact the last shutdown caught. Returns how many.
+def reconcile_interrupted(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Recover every study artifact the last shutdown caught (PLA-169).
 
-    Unlike the solver, a study job cannot be requeued: its options (card counts, quiz
-    shape) live only in the in-memory job, so a `pending` row the process never started
-    cannot be resumed either. Both pending and generating are failed with the same
-    wording the solver's reconcile uses; a retry is the student asking again.
+    Returns how many were requeued and how many were failed. The policy mirrors ingestion:
+
+    - A `pending` artifact was queued and never started model work. With its intent
+      persisted (`study_jobs`), it is requeued with the exact original options rather than
+      failed for being behind another job in the single-worker queue.
+    - A `generating` artifact had started. Its partial cards/questions are deleted and it
+      is reset to `pending` and requeued, so recovery restarts cleanly and never appends
+      duplicates to half-written output. There is no durable per-stage progress to resume
+      from, so a safe restart is the deterministic choice.
+    - An artifact whose intent cannot be reconstructed - no `study_jobs` row, or metadata
+      that will not parse - is failed with the interrupted message, because guessing its
+      options would silently change what the student asked for.
+
+    A `cancelled` artifact is never touched here, so a cancelled job is never resurrected.
+    A deleted artifact took its `study_jobs` row with it (cascade) and is not seen.
+
+    Requeue order is by artifact id ascending - creation order - so the queue after a
+    restart is stable and independent of row-scan order.
     """
-    cursor = conn.execute(
-        # `stage_detail` reads the pre-update row, so it keeps the lost stage.
-        "update artifacts set stage_detail = state, state = ?, error_message = ?, "
-        "updated_at = datetime('now') where state in (?, ?) and kind in (?, ?)",
-        (
-            artifacts.FAILED,
-            INTERRUPTED_MESSAGE,
-            artifacts.PENDING,
-            artifacts.GENERATING,
-            *STUDY_KINDS,
-        ),
-    )
-    conn.commit()
-    return cursor.rowcount
+    placeholders = ", ".join("?" for _ in STUDY_KINDS)
+    rows = conn.execute(
+        f"select id, state from artifacts "  # noqa: S608
+        f"where state in (?, ?) and kind in ({placeholders}) order by id",
+        (artifacts.PENDING, artifacts.GENERATING, *STUDY_KINDS),
+    ).fetchall()
+
+    requeued: list[_Job] = []
+    failed = 0
+    for row in rows:
+        artifact_id = int(row["id"])
+        job_row = conn.execute(
+            "select * from study_jobs where artifact_id = ?", (artifact_id,)
+        ).fetchone()
+        job = None
+        if job_row is not None:
+            try:
+                job = _job_from_row(job_row)
+            except (ValueError, TypeError, json.JSONDecodeError):
+                logger.warning("Study artifact %s has unparseable job metadata", artifact_id)
+        if job is None:
+            artifacts.mark_artifact_failed(
+                conn, artifact_id, str(row["state"]), INTERRUPTED_MESSAGE
+            )
+            failed += 1
+            continue
+        if str(row["state"]) == artifacts.GENERATING:
+            # Discard whatever the interrupted run half-wrote before restarting it, so the
+            # fresh run cannot land duplicates beside the old partial output.
+            artifacts.delete_parts(conn, artifact_id)
+            artifacts.set_artifact_state(conn, artifact_id, artifacts.PENDING, None)
+        requeued.append(job)
+
+    for job in requeued:
+        enqueue(job)
+    return len(requeued), failed
 
 
 def run_generation(job: _Job) -> None:
@@ -169,29 +288,53 @@ def run_generation(job: _Job) -> None:
 
 
 def _mark_failed(conn: sqlite3.Connection, artifact_id: int, exc: Exception) -> None:
-    """Record the failure on the artifact row, keeping the stage it died in."""
+    """Record the failure on the artifact row, keeping the stage it died in.
+
+    A failed generation must leave nothing that reads as a finished artifact: any parts a
+    partial run wrote are deleted here (PLA-299), so a failed deck never shows cards and a
+    failed quiz never shows questions. The delete shares the failure commit path below.
+    """
     row = conn.execute("select state from artifacts where id = ?", (artifact_id,)).fetchone()
     if row is None:
         return
+    # Deleting the parts of an artifact that is being failed is safe across retry/restart:
+    # a re-run regenerates from scratch, and reconcile deletes parts before restarting too.
+    try:
+        artifacts.delete_parts(conn, artifact_id)
+    except NotFoundError:
+        return
     message = exc.message if isinstance(exc, LyraError) else str(exc)
     artifacts.mark_artifact_failed(conn, artifact_id, str(row["state"]), message)
+
+
+def _resolve_config(conn: sqlite3.Connection) -> TutorConfig:
+    """The endpoint to generate against, from one snapshot, or a blocked-reason raise.
+
+    One read resolves the endpoint and its document-text permission together, so the
+    endpoint checked for consent is provably the endpoint generation is sent to.
+    """
+    access = resolve_tutor_access(conn)
+    if access.document_block is not None:
+        raise LyraError(BLOCKED_MESSAGES.get(access.document_block, BLOCKED_MESSAGES[NO_ENDPOINT]))
+    if access.config is None:
+        raise LyraError(BLOCKED_MESSAGES[NO_ENDPOINT])
+    return access.config
 
 
 def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
     """Map the sources to topics, then write each topic's cards against retrieval."""
     artifact = artifacts.get_artifact(conn, job.artifact_id)
     class_id = int(artifact["class_id"])
-    # One snapshot: the endpoint checked for consent is the endpoint generation is sent to.
-    access = resolve_tutor_access(conn)
-    if access.document_block is not None:
-        raise LyraError(BLOCKED_MESSAGES.get(access.document_block, BLOCKED_MESSAGES[NO_ENDPOINT]))
-    config = access.config
+    config = _resolve_config(conn)
+    _validate_sources(conn, job)
 
     _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(
         conn, job.artifact_id, artifacts.GENERATING, "Reading the material"
     )
-    gathered, _ = _gather_source_text(conn, job.artifact_id)
+    topics_prompt = prompts.build_topics_prompt("")
+    fixed = _prompt_tokens(topics_prompt)
+    gathered, _ = _gather_source_text(conn, job.source_ids, _source_cap(config, fixed))
     if not gathered:
         raise LyraError(NO_TOPICS_MESSAGE)
 
@@ -208,33 +351,63 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
     artifacts.set_problems_total(conn, job.artifact_id, len(topic_names))
     artifacts.set_problems_done(conn, job.artifact_id, 0)
 
-    cards_written = 0
-    failed: list[str] = []
     ordinal = 0
+    failed: list[str] = []
     # Deck-wide, so a card is dropped whether one topic's call repeated itself or two
     # topics converged on the same front. The set outlives any single topic's call.
     seen_fronts: set[str] = set()
     for topic in topic_names:
         _raise_if_cancelled(conn, job.artifact_id)
         artifacts.set_artifact_state(conn, job.artifact_id, artifacts.GENERATING, topic)
-        try:
-            written = _write_topic_cards(conn, job, config, class_id, topic, ordinal, seen_fronts)
-        except Exception:
-            # One topic's call failing must not sink the deck: the student keeps what
-            # the other topics produced, and the failure count says what was lost.
-            logger.exception("Card generation failed for topic %r", topic)
+        written = _write_topic_cards_bounded(
+            conn, job, config, class_id, topic, ordinal, seen_fronts
+        )
+        if written == 0:
             failed.append(topic)
-        else:
-            ordinal += written
-            cards_written += written
+        ordinal += written
         artifacts.increment_problems_done(conn, job.artifact_id)
 
-    if cards_written == 0:
-        raise LyraError(NO_CARDS_MESSAGE)
+    # Truthful completion (PLA-299): a deck is `ready` only when every mapped topic
+    # produced at least one usable card after bounded recovery. If any topic could not,
+    # the deck is failed - its partial cards are cleaned up by `_mark_failed` - rather than
+    # promoted to an ordinary `ready` that hides the missing material.
+    if failed:
+        raise LyraError(_deck_incomplete_message(len(failed), len(topic_names)))
 
-    detail = f"{len(failed)} of {len(topic_names)} topics failed" if failed else None
     _raise_if_cancelled(conn, job.artifact_id)
-    artifacts.set_artifact_state(conn, job.artifact_id, artifacts.READY, detail)
+    artifacts.set_artifact_state(conn, job.artifact_id, artifacts.READY, None)
+
+
+def _write_topic_cards_bounded(
+    conn: sqlite3.Connection,
+    job: _Job,
+    config: TutorConfig,
+    class_id: int,
+    topic: str,
+    first_ordinal: int,
+    seen_fronts: set[str],
+) -> int:
+    """One topic's cards, with one bounded retry when the first attempt yields none.
+
+    Returns the number of cards written for this topic. A retry only runs when the first
+    attempt produced zero cards (an errored call, or a reply with nothing usable); it
+    varies the prompt with a corrective hint, because a deterministic re-send of the same
+    prompt would return the same empty reply. Zero after every attempt means the topic
+    could not be taught, which the deck-level completion check treats as a failure.
+    """
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            written = _write_topic_cards(
+                conn, job, config, class_id, topic, first_ordinal, seen_fronts, retry=attempt > 0
+            )
+        except _GenerationCancelledError:
+            raise
+        except Exception:
+            logger.exception("Card generation failed for topic %r (attempt %d)", topic, attempt + 1)
+            continue
+        if written > 0:
+            return written
+    return 0
 
 
 def _write_topic_cards(
@@ -245,19 +418,24 @@ def _write_topic_cards(
     topic: str,
     first_ordinal: int,
     seen_fronts: set[str],
+    *,
+    retry: bool,
 ) -> int:
     """One topic's retrieval, one call, and the cards it produced. Returns the count.
 
     `seen_fronts` carries the fronts already written to the deck; a card repeating one is
     dropped and `seen_fronts` grows with each card kept.
     """
-    result = retrieve(conn, class_id, topic, TOPIC_RETRIEVAL_BUDGET)
-    context_block = prompts.format_context_block([vars(chunk) for chunk in result.chunks])
-    reply = _call_json(
-        config,
-        prompts.build_flashcards_prompt(topic, context_block, job.cards_per_topic),
-        prompts.FLASHCARDS_SCHEMA,
-    )
+    system_tokens = _prompt_tokens(prompts.build_flashcards_prompt(topic, "", job.cards_per_topic))
+    hint_reserve = _RETRY_HINT_RESERVE if retry else 0
+    context_budget = max(0, _source_cap(config, system_tokens) - hint_reserve)
+    result = retrieve(conn, class_id, topic, min(TOPIC_RETRIEVAL_BUDGET, context_budget))
+    kept_chunks = _trim_chunks(list(result.chunks), context_budget)
+    context_block = prompts.format_context_block([vars(chunk) for chunk in kept_chunks])
+    messages = prompts.build_flashcards_prompt(topic, context_block, job.cards_per_topic)
+    if retry:
+        messages = _with_retry_hint(messages, _FLASHCARD_RETRY_HINT)
+    reply = _call_json(config, messages, prompts.FLASHCARDS_SCHEMA)
     _raise_if_cancelled(conn, job.artifact_id)
 
     written = 0
@@ -284,7 +462,7 @@ def _write_topic_cards(
             status=artifacts.PART_COMPLETE,
         )
         _insert_card_state(conn, part_id)
-        _record_card_provenance(conn, part_id, topic, result.chunks)
+        _record_card_provenance(conn, part_id, topic, kept_chunks)
         written += 1
     return written
 
@@ -328,23 +506,24 @@ def _record_card_provenance(
 
 def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     """One call for the whole quiz, then code-enforced validation of every question."""
-    # One snapshot: the endpoint checked for consent is the endpoint generation is sent to.
-    access = resolve_tutor_access(conn)
-    if access.document_block is not None:
-        raise LyraError(BLOCKED_MESSAGES.get(access.document_block, BLOCKED_MESSAGES[NO_ENDPOINT]))
-    config = access.config
+    config = _resolve_config(conn)
+    _validate_sources(conn, job)
 
     _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(
         conn, job.artifact_id, artifacts.GENERATING, "Reading the material"
     )
-    gathered, source_ids = _gather_source_text(conn, job.artifact_id)
+    asked = list(job.types)
+    # The source budget leaves room for the retry hint, so the second call fits the window
+    # without re-gathering. The quiz prompt's fixed material is its system instruction.
+    fixed = _prompt_tokens(prompts.build_quiz_prompt("", job.count, job.difficulty, asked))
+    source_cap = max(0, _source_cap(config, fixed) - _RETRY_HINT_RESERVE)
+    gathered, source_ids = _gather_source_text(conn, job.source_ids, source_cap)
     if not gathered:
         raise LyraError(NO_QUESTIONS_MESSAGE)
 
     _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(conn, job.artifact_id, artifacts.GENERATING, "Writing questions")
-    asked = list(job.types)
     reply = _call_json(
         config,
         prompts.build_quiz_prompt(gathered, job.count, job.difficulty, asked),
@@ -352,24 +531,32 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     )
     _raise_if_cancelled(conn, job.artifact_id)
     questions, failures = _validate_questions(_json_list(reply, "questions"))
+    questions = _dedupe_questions(questions)
 
-    # Fewer than half surviving means the reply misunderstood the shape badly enough
-    # that one retry, told exactly what was wrong, is worth a second call.
-    if len(questions) * 2 < job.count and failures:
-        retry_note = "\n\nThe previous reply had these problems: " + "; ".join(failures)
+    # Bounded recovery (PLA-299): one retry when the reply undershoots the requested count,
+    # told exactly what was wrong so the deterministic re-send is not identical.
+    if len(questions) < job.count:
+        hint = _quiz_retry_hint(failures)
         retry = _call_json(
             config,
-            prompts.build_quiz_prompt(gathered + retry_note, job.count, job.difficulty, asked),
+            _with_retry_hint(
+                prompts.build_quiz_prompt(gathered, job.count, job.difficulty, asked), hint
+            ),
             prompts.QUIZ_SCHEMA,
         )
         _raise_if_cancelled(conn, job.artifact_id)
         retried, _ = _validate_questions(_json_list(retry, "questions"))
+        retried = _dedupe_questions(retried)
         if len(retried) > len(questions):
             questions = retried
 
-    questions = _dedupe_questions(questions)
-    if len(questions) < 3:
-        raise LyraError(NO_QUESTIONS_MESSAGE)
+    # Truthful completion (PLA-299): the quiz is `ready` only when it holds the number of
+    # questions the student asked for. A short reply is a failure with an actionable count,
+    # not a smaller quiz quietly presented as the requested one. No parts are written until
+    # the contract is met, so a failed quiz leaves nothing behind.
+    if len(questions) < job.count:
+        raise LyraError(_quiz_incomplete_message(len(questions), job.count))
+    questions = questions[: job.count]
 
     # Every question is grounded at the document level, not the chunk level. The quiz is
     # written by one call over the whole gathered material, so no question honestly traces
@@ -408,6 +595,228 @@ def _raise_if_cancelled(conn: sqlite3.Connection, artifact_id: int) -> None:
     """Turn a cancelled artifact into the control flow that leaves it unchanged."""
     if _cancelled(conn, artifact_id):
         raise _GenerationCancelledError
+
+
+# ---------------------------------------------------------------------------
+# Source revalidation (PLA-291)
+# ---------------------------------------------------------------------------
+
+# The student-facing reason a source cannot be used, by document state. Filesystem paths,
+# document text, and internal stage names never appear; the filename and a plain reason do.
+_UNREADY_REASONS: dict[str, str] = {
+    "failed": "failed to process",
+    "unsupported": "could not be read",
+}
+_UNREADY_DEFAULT = "is still processing"
+
+
+def _validate_sources(conn: sqlite3.Connection, job: _Job) -> None:
+    """Refuse to generate unless every accepted source still exists and is ready (PLA-291).
+
+    The worker boundary re-check, against the exact snapshot the request accepted. A
+    source deleted, moved out of the class, or knocked out of `ready` (a reingest, a
+    failure) after the HTTP request would otherwise be silently skipped, producing an
+    artifact whose title and source choice imply material it never used. Instead
+    generation fails visibly, naming the affected files and what is wrong with them.
+    """
+    if not job.source_ids:
+        return
+    placeholders = ", ".join("?" for _ in job.source_ids)
+    rows = conn.execute(
+        f"select id, filename, state from documents where id in ({placeholders})",  # noqa: S608
+        tuple(job.source_ids),
+    ).fetchall()
+    by_id = {int(row["id"]): row for row in rows}
+    problems: list[str] = []
+    for document_id in job.source_ids:
+        row = by_id.get(document_id)
+        if row is None:
+            problems.append("a chosen document was removed")
+        elif str(row["state"]) != "ready":
+            reason = _UNREADY_REASONS.get(str(row["state"]), _UNREADY_DEFAULT)
+            problems.append(f"{row['filename']} {reason}")
+    if problems:
+        raise LyraError("This can no longer be generated: " + "; ".join(problems) + ".")
+
+
+# ---------------------------------------------------------------------------
+# Context-window budgeting (PLA-298)
+# ---------------------------------------------------------------------------
+
+
+def _prompt_tokens(messages: list[dict[str, str]]) -> int:
+    """The estimated token cost of a prompt, measured as the budget elsewhere measures."""
+    return sum(estimate_tokens(str(message["content"])) for message in messages)
+
+
+def _input_ceiling(config: TutorConfig) -> int:
+    """The most prompt material one call may carry: the window less the output reserve.
+
+    The same reserve the chat turn and the background pipelines take (`generation_reserve`)
+    is set aside for the model's reply and never lent to the prompt; the shared context
+    safety margin then applies to what remains, so the estimate's density error cannot
+    push an accepted prompt past the real window.
+    """
+    return input_ceiling(config.context_window, generation_reserve(config.context_window))
+
+
+def _source_cap(config: TutorConfig, fixed_tokens: int) -> int:
+    """Tokens left for trimmable source material once fixed prompt material is charged.
+
+    Raises when the fixed material (system instruction and the like) does not itself fit
+    the window: with no room even for zero source text, there is nothing to trim toward a
+    fit, so generation fails locally with a bounded message rather than knowingly sending
+    an oversized request (PLA-298).
+    """
+    room = _input_ceiling(config) - fixed_tokens
+    if room <= 0:
+        raise LyraError(CONTEXT_TOO_SMALL_MESSAGE)
+    return room
+
+
+def _gather_source_text(
+    conn: sqlite3.Connection, source_ids: tuple[int, ...], total_cap: int
+) -> tuple[str, list[int]]:
+    """The source documents' chunk text, round-robined and capped to fit the budget.
+
+    One document at a time in turns, so a long textbook cannot spend the whole budget
+    before the syllabus is read once: each document gives at most DOCUMENT_TOKEN_CAP
+    estimated tokens, and the gathering stops once adding the next chunk would exceed
+    `total_cap`. A chunk is added only when it fits both the per-document cap and the total
+    cap (`spent + cost <= cap`), so the ceiling can never be overshot by one chunk - the
+    boundary bug PLA-298 calls out. `total_cap` is the context-window-derived budget, so
+    gathering trims deterministically rather than relying on the endpoint to reject an
+    oversized prompt.
+
+    Returns the joined text and the ids of the documents that actually contributed to it,
+    in source order. The latter is what a quiz question honestly traces to: the whole-
+    material call read this text, so the documents behind it are its provenance.
+    """
+    document_cap = min(DOCUMENT_TOKEN_CAP, total_cap)
+    queues: list[tuple[int, list[sqlite3.Row]]] = []
+    for document_id in source_ids:
+        rows = conn.execute(
+            "select content from chunks where document_id = ? order by id",
+            (document_id,),
+        ).fetchall()
+        if rows:
+            queues.append((document_id, list(rows)))
+
+    gathered: list[str] = []
+    per_document: dict[int, int] = {}
+    total = 0
+    while queues and total < total_cap:
+        document_id, rows = queues.pop(0)
+        row = rows.pop(0)
+        cost = estimate_tokens(str(row["content"]))
+        spent = per_document.get(document_id, 0)
+        if spent + cost <= document_cap and total + cost <= total_cap:
+            gathered.append(str(row["content"]))
+            per_document[document_id] = spent + cost
+            total += cost
+        if rows and per_document.get(document_id, 0) < document_cap:
+            queues.append((document_id, rows))
+    contributing = [document_id for document_id in source_ids if per_document.get(document_id, 0)]
+    return "\n\n".join(gathered), contributing
+
+
+def _trim_chunks(chunks: list[object], budget_tokens: int) -> list[object]:
+    """Keep the leading retrieved chunks whose formatted text fits `budget_tokens`.
+
+    Retrieval is already budgeted, but formatting adds labels and a heading, so the block
+    can run a little over. Trimming from the tail keeps the most relevant chunks (retrieval
+    returns them best-first) and drops the weakest, deterministically, rather than sending
+    an over-budget context block.
+    """
+    kept: list[object] = []
+    used = 0
+    for chunk in chunks:
+        cost = estimate_tokens(str(getattr(chunk, "content", "")))
+        if used + cost > budget_tokens and kept:
+            break
+        used += cost
+        kept.append(chunk)
+    return kept
+
+
+def _with_retry_hint(messages: list[dict[str, str]], hint: str) -> list[dict[str, str]]:
+    """A copy of the prompt with a corrective hint appended to its system instruction.
+
+    A deterministic re-send of the same prompt returns the same reply, so the bounded
+    retry has to vary the prompt to have any recovery value. The hint is capped so it can
+    never overrun the reserve held back for it when the source budget was computed.
+    """
+    capped = hint[: _RETRY_HINT_RESERVE * 4]
+    updated = [dict(message) for message in messages]
+    for message in updated:
+        if message.get("role") == "system":
+            message["content"] = f"{message['content']}\n\n{capped}"
+            return updated
+    updated.insert(0, {"role": "system", "content": capped})
+    return updated
+
+
+_FLASHCARD_RETRY_HINT = (
+    "The previous attempt produced no usable cards. Write at least one card. Each card must "
+    "have a non-empty front and a non-empty back grounded in the material above."
+)
+
+
+def _quiz_retry_hint(failures: list[str]) -> str:
+    """The corrective hint for a quiz retry, naming what the last reply got wrong."""
+    base = "The previous reply did not produce enough valid questions."
+    if not failures:
+        return base
+    return base + " Problems: " + "; ".join(failures[:5])
+
+
+def _deck_incomplete_message(failed: int, total: int) -> str:
+    """Why a deck was failed rather than shown as an incomplete `ready`."""
+    return (
+        f"{failed} of {total} topics could not be turned into cards, so this deck was not "
+        "finished. Please try again."
+    )
+
+
+def _quiz_incomplete_message(produced: int, requested: int) -> str:
+    """Why a quiz was failed rather than shown as a smaller `ready` quiz."""
+    return (
+        f"Only {produced} of the {requested} requested questions could be generated from "
+        "this material. Try fewer questions, or add more material, then generate again."
+    )
+
+
+def _call_json(
+    config: TutorConfig, messages: list[dict[str, str]], schema: client.JsonSchema
+) -> object:
+    """One constrained-JSON call against the tutor endpoint, from a worker thread.
+
+    Every study call funnels through here, which is where the context-window invariant is
+    enforced rather than merely calculated (PLA-298): the output reserve is sent as
+    `max_tokens`, and the prompt is refused locally if it exceeds the input ceiling. The
+    callers trim toward this ceiling first, so the refusal is a backstop against a prompt
+    that slipped past the budget, never the normal path. A reply the endpoint truncates at
+    the ceiling is fatal, because a half-written JSON reply is not a smaller valid one.
+
+    Sync for the same reason the solver's are: the worker is a plain thread with no
+    event loop, and owning one for the call keeps it free of async plumbing.
+    """
+    if _prompt_tokens(messages) > _input_ceiling(config):
+        raise LyraError(CONTEXT_TOO_SMALL_MESSAGE)
+    reply = asyncio.run(
+        client.complete(
+            config.endpoint_url,
+            config.api_key,
+            config.model,
+            messages,
+            temperature=client.DETERMINISTIC_TEMPERATURE,
+            schema=schema,
+            max_tokens=generation_reserve(config.context_window),
+            request_timeout=client.BACKGROUND_TIMEOUT,
+            fail_on_truncation=True,
+        )
+    )
+    return json.loads(reply)
 
 
 def _dedupe_key(text: str) -> str:
@@ -502,68 +911,6 @@ def _question_problem(item: dict[str, object]) -> str | None:
     else:
         return f"unknown type {kind!r}"
     return None
-
-
-def _gather_source_text(conn: sqlite3.Connection, artifact_id: int) -> tuple[str, list[int]]:
-    """The source documents' chunk text, round-robined and capped.
-
-    One document at a time in turns, so a long textbook cannot spend the whole budget
-    before the syllabus is read once: each document gives at most DOCUMENT_TOKEN_CAP
-    estimated tokens, and the gathering stops at TOTAL_TOKEN_CAP across all of them.
-
-    Returns the joined text and the ids of the documents that actually contributed to it,
-    in source order. The latter is what a quiz question honestly traces to: the whole-
-    material call read this text, so the documents behind it are its provenance.
-    """
-    sources = artifacts.list_sources(conn, artifact_id, artifacts.STUDY_SOURCE)
-    source_order = [int(source["document_id"]) for source in sources]
-    queues: list[tuple[int, list[sqlite3.Row]]] = []
-    for document_id in source_order:
-        rows = conn.execute(
-            "select content from chunks where document_id = ? order by id",
-            (document_id,),
-        ).fetchall()
-        if rows:
-            queues.append((document_id, list(rows)))
-
-    gathered: list[str] = []
-    per_document: dict[int, int] = {}
-    total = 0
-    while queues and total < TOTAL_TOKEN_CAP:
-        document_id, rows = queues.pop(0)
-        row = rows.pop(0)
-        cost = estimate_tokens(str(row["content"]))
-        spent = per_document.get(document_id, 0)
-        if spent + cost <= DOCUMENT_TOKEN_CAP:
-            gathered.append(str(row["content"]))
-            per_document[document_id] = spent + cost
-            total += cost
-        if rows and per_document.get(document_id, 0) < DOCUMENT_TOKEN_CAP:
-            queues.append((document_id, rows))
-    contributing = [document_id for document_id in source_order if per_document.get(document_id, 0)]
-    return "\n\n".join(gathered), contributing
-
-
-def _call_json(
-    config: TutorConfig, messages: list[dict[str, str]], schema: client.JsonSchema
-) -> object:
-    """One constrained-JSON call against the tutor endpoint, from a worker thread.
-
-    Sync for the same reason the solver's are: the worker is a plain thread with no
-    event loop, and owning one for the call keeps it free of async plumbing.
-    """
-    reply = asyncio.run(
-        client.complete(
-            config.endpoint_url,
-            config.api_key,
-            config.model,
-            messages,
-            temperature=client.DETERMINISTIC_TEMPERATURE,
-            schema=schema,
-            request_timeout=client.BACKGROUND_TIMEOUT,
-        )
-    )
-    return json.loads(reply)
 
 
 def _json_list(payload: object, key: str) -> list[object]:

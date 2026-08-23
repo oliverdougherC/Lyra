@@ -167,7 +167,9 @@ def test_named_documents_that_are_not_ready_are_a_409(
     )
 
     assert response.status_code == 409
-    assert "finished processing" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert "notes.pdf" in detail
+    assert "still processing" in detail
 
 
 def test_a_named_document_from_another_class_is_a_404(
@@ -266,7 +268,9 @@ def test_a_review_round_trips_through_the_scheduler(
     deck_id = _deck(db, class_id, _document(db, class_id))
     part_id = _card(db, deck_id)
 
-    response = client.post(f"/api/cards/{part_id}/review", json={"rating": "good"})
+    response = client.post(
+        f"/api/cards/{part_id}/review", json={"rating": "good", "operation_id": "op-1"}
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -283,7 +287,9 @@ def test_a_review_on_an_unready_deck_is_a_409(
     deck_id = _deck(db, class_id, _document(db, class_id), state=artifacts.GENERATING)
     part_id = _card(db, deck_id)
 
-    response = client.post(f"/api/cards/{part_id}/review", json={"rating": "good"})
+    response = client.post(
+        f"/api/cards/{part_id}/review", json={"rating": "good", "operation_id": "op-1"}
+    )
 
     assert response.status_code == 409
 
@@ -440,6 +446,7 @@ def test_an_answer_for_another_quizs_question_is_a_404(
 ) -> None:
     document_id = _document(db, class_id)
     quiz_id = _quiz(db, class_id, document_id)
+    _question(db, quiz_id, 1, "delta")
     other_quiz = _quiz(db, class_id, document_id)
     foreign_part = _question(db, other_quiz, 1, "delta")
     attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
@@ -495,3 +502,262 @@ def test_rename_and_delete_round_trip(
 
     assert client.delete(f"/api/decks/{deck_id}").status_code == 204
     assert client.get(f"/api/decks/{deck_id}").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Durable job persistence (PLA-169)
+# ---------------------------------------------------------------------------
+
+
+def test_creating_a_deck_persists_its_durable_job(
+    client: TestClient, db: sqlite3.Connection, class_id: int, no_worker: list
+) -> None:
+    document_id = _document(db, class_id)
+
+    response = client.post(
+        f"/api/classes/{class_id}/decks",
+        json={"title": "Deck", "document_ids": [document_id], "cards_per_topic": 5},
+    )
+
+    assert response.status_code == 202
+    artifact_id = response.json()["id"]
+    row = db.execute("select * from study_jobs where artifact_id = ?", (artifact_id,)).fetchone()
+    assert row is not None
+    assert row["kind"] == artifacts.KIND_FLASHCARD_DECK
+    assert row["cards_per_topic"] == 5
+    assert json.loads(row["source_ids"]) == [document_id]
+
+
+# ---------------------------------------------------------------------------
+# Exact source selection (PLA-291)
+# ---------------------------------------------------------------------------
+
+
+def test_a_mixed_ready_and_unready_selection_is_refused_naming_the_file(
+    client: TestClient, db: sqlite3.Connection, class_id: int, no_worker: list
+) -> None:
+    ready = _document(db, class_id, filename="ready.pdf", state="ready")
+    pending = _document(db, class_id, filename="pending.pdf", state="pending")
+
+    response = client.post(
+        f"/api/classes/{class_id}/quizzes",
+        json={"title": "Quiz", "document_ids": [ready, pending]},
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "pending.pdf" in detail
+    assert "ready.pdf" not in detail
+    # No artifact, no job, nothing queued.
+    assert no_worker == []
+    assert db.execute("select count(*) from artifacts").fetchone()[0] == 0
+
+
+def test_a_failed_source_reason_is_named(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    ready = _document(db, class_id, filename="ready.pdf", state="ready")
+    failed = _document(db, class_id, filename="broken.pdf", state="failed")
+
+    response = client.post(
+        f"/api/classes/{class_id}/decks",
+        json={"title": "Deck", "document_ids": [ready, failed]},
+    )
+
+    assert response.status_code == 409
+    assert "broken.pdf failed to process" in response.json()["detail"]
+
+
+def test_duplicate_source_ids_are_normalized_to_one_source(
+    client: TestClient, db: sqlite3.Connection, class_id: int, no_worker: list
+) -> None:
+    document_id = _document(db, class_id)
+
+    response = client.post(
+        f"/api/classes/{class_id}/decks",
+        json={"title": "Deck", "document_ids": [document_id, document_id]},
+    )
+
+    assert response.status_code == 202
+    artifact_id = response.json()["id"]
+    sources = artifacts.list_sources(db, artifact_id, artifacts.STUDY_SOURCE)
+    assert [source["document_id"] for source in sources] == [document_id]
+    assert no_worker[0].source_ids == (document_id,)
+
+
+# ---------------------------------------------------------------------------
+# Quiz attempt lifecycle (PLA-277)
+# ---------------------------------------------------------------------------
+
+
+def test_starting_an_attempt_on_a_pending_quiz_is_refused(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    quiz_id = _quiz(db, class_id, _document(db, class_id), state=artifacts.GENERATING)
+    response = client.post(f"/api/quizzes/{quiz_id}/attempts")
+    assert response.status_code == 409
+    assert response.json()["detail"] == routes_study.QUIZ_NOT_READY_MESSAGE
+
+
+def test_starting_an_attempt_on_a_ready_quiz_with_no_questions_is_refused(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    quiz_id = _quiz(db, class_id, _document(db, class_id), state=artifacts.READY)
+    response = client.post(f"/api/quizzes/{quiz_id}/attempts")
+    assert response.status_code == 409
+
+
+def test_starting_an_attempt_on_a_partial_quiz_is_refused(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """A quiz that is ready but holds fewer questions than it claims cannot be attempted."""
+    quiz_id = _quiz(db, class_id, _document(db, class_id), state=artifacts.READY)
+    _question(db, quiz_id, 1, "delta")
+    artifacts.set_problems_total(db, quiz_id, 5)  # claims five, holds one
+
+    response = client.post(f"/api/quizzes/{quiz_id}/attempts")
+
+    assert response.status_code == 409
+
+
+def test_starting_an_attempt_is_idempotent_and_resumes(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    first = _question(db, quiz_id, 1, "delta")
+    _question(db, quiz_id, 2, "convolution")
+
+    started = client.post(f"/api/quizzes/{quiz_id}/attempts").json()
+    client.post(
+        f"/api/attempts/{started['attempt_id']}/answers",
+        json={"part_id": first, "selected_index": 0},
+    )
+    # A second start returns the same attempt with the answer already recorded.
+    resumed = client.post(f"/api/quizzes/{quiz_id}/attempts").json()
+    assert resumed["attempt_id"] == started["attempt_id"]
+    assert resumed["question_count"] == 2
+    assert resumed["answers"] == [{"part_id": first, "selected_index": 0, "correct": True}]
+    # Exactly one attempt exists.
+    assert db.execute("select count(*) from quiz_attempts").fetchone()[0] == 1
+
+
+def test_current_attempt_read_surface_hides_unearned_keys(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    first = _question(db, quiz_id, 1, "delta")
+    second = _question(db, quiz_id, 2, "convolution")
+    started = client.post(f"/api/quizzes/{quiz_id}/attempts").json()
+    client.post(
+        f"/api/attempts/{started['attempt_id']}/answers",
+        json={"part_id": first, "selected_index": 0},
+    )
+
+    current = client.get(f"/api/quizzes/{quiz_id}/attempts/current").json()
+
+    assert current["attempt"]["attempt_id"] == started["attempt_id"]
+    assert current["attempt"]["question_part_ids"] == [first, second]
+    # Only the answered question is reported, and no answer key rides along.
+    assert current["attempt"]["answers"] == [
+        {"part_id": first, "selected_index": 0, "correct": True}
+    ]
+    assert "correct_index" not in json.dumps(current["attempt"])
+
+
+def test_current_attempt_is_none_when_the_quiz_changed(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """An attempt whose quiz was regenerated is not offered for resume, so an answer never
+    attaches to a different question set."""
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    first = _question(db, quiz_id, 1, "delta")
+    client.post(f"/api/quizzes/{quiz_id}/attempts")
+    # The quiz's questions are replaced (a regeneration): the snapshot no longer matches.
+    artifacts.delete_part(db, first)
+    _question(db, quiz_id, 1, "fresh")
+
+    current = client.get(f"/api/quizzes/{quiz_id}/attempts/current").json()
+
+    assert current["attempt"] is None
+
+
+def test_restart_abandons_the_old_attempt_and_opens_a_fresh_one(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    _question(db, quiz_id, 1, "delta")
+    first = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+
+    second = client.post(f"/api/quizzes/{quiz_id}/attempts?restart=true").json()["attempt_id"]
+
+    assert second != first
+    old = db.execute(
+        "select abandoned, finished_at from quiz_attempts where id = ?", (first,)
+    ).fetchone()
+    assert old["abandoned"] == 1
+    assert old["finished_at"] is not None
+    # The old attempt is retained, not deleted.
+    assert db.execute("select count(*) from quiz_attempts").fetchone()[0] == 2
+
+
+def test_finish_is_idempotent_and_uses_the_full_question_count(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    quiz_id = _quiz(db, class_id, _document(db, class_id))
+    first = _question(db, quiz_id, 1, "delta")
+    _question(db, quiz_id, 2, "convolution")
+    attempt_id = client.post(f"/api/quizzes/{quiz_id}/attempts").json()["attempt_id"]
+    client.post(f"/api/attempts/{attempt_id}/answers", json={"part_id": first, "selected_index": 0})
+
+    # Only one of two questions answered: the denominator is still the full count.
+    first_finish = client.post(f"/api/attempts/{attempt_id}/finish").json()
+    assert first_finish["score"] == 1
+    assert first_finish["total"] == 2
+    assert first_finish["answered"] == 1
+
+    # A retried finish returns the same stored result without double-counting.
+    second_finish = client.post(f"/api/attempts/{attempt_id}/finish").json()
+    assert second_finish == first_finish
+    finished_rows = db.execute(
+        "select count(*) from quiz_attempts where id = ? and finished_at is not null",
+        (attempt_id,),
+    ).fetchone()[0]
+    assert finished_rows == 1
+
+
+# ---------------------------------------------------------------------------
+# Flashcard review idempotency (PLA-296)
+# ---------------------------------------------------------------------------
+
+
+def test_a_repeated_review_operation_returns_the_stored_result_once(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    deck_id = _deck(db, class_id, _document(db, class_id))
+    part_id = _card(db, deck_id)
+
+    first = client.post(
+        f"/api/cards/{part_id}/review", json={"rating": "good", "operation_id": "op-A"}
+    )
+    second = client.post(
+        f"/api/cards/{part_id}/review", json={"rating": "good", "operation_id": "op-A"}
+    )
+
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    # One logical review: one log row, reps advanced exactly once.
+    assert db.execute("select count(*) from card_review_log").fetchone()[0] == 1
+    assert (
+        db.execute("select reps from card_states where part_id = ?", (part_id,)).fetchone()[0] == 1
+    )
+
+
+def test_a_review_without_an_operation_id_is_rejected(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    deck_id = _deck(db, class_id, _document(db, class_id))
+    part_id = _card(db, deck_id)
+
+    response = client.post(f"/api/cards/{part_id}/review", json={"rating": "good"})
+
+    assert response.status_code == 422

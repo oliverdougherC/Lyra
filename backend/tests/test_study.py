@@ -1,5 +1,5 @@
 """Contract tests for study generation: the two-phase deck pipeline, quiz validation,
-and the restart reconcile.
+context-window budgeting, source revalidation, truthful completion, and durable recovery.
 
 The model is never called: `client.complete` is stubbed with queued JSON replies, the
 locality gate is stubbed open, and `retrieve` is replaced so no embedding server runs.
@@ -41,18 +41,23 @@ def llm(monkeypatch: pytest.MonkeyPatch) -> _StubLLM:
     return stub
 
 
-@pytest.fixture(autouse=True)
-def _open_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Generation is allowed against a fake local endpoint, from one snapshot."""
+def _use_window(monkeypatch: pytest.MonkeyPatch, window: int) -> None:
+    """Point generation at a fake local endpoint with a specific context window."""
     monkeypatch.setattr(
         study,
         "resolve_tutor_access",
         lambda conn, **_kwargs: TutorAccess(
-            config=TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192),
+            config=TutorConfig("http://127.0.0.1:9/v1", None, "m", window),
             document_block=None,
             remote_ack=True,
         ),
     )
+
+
+@pytest.fixture(autouse=True)
+def _open_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Generation is allowed against a fake local endpoint with a generous window."""
+    _use_window(monkeypatch, 8192)
 
 
 @pytest.fixture(autouse=True)
@@ -121,6 +126,15 @@ def _deck(db: sqlite3.Connection, class_id: int, document_id: int) -> int:
     return int(created["id"])
 
 
+def _deck_job(artifact_id: int, document_id: int, **opts: object) -> study._Job:
+    return study._Job(artifact_id, source_ids=(document_id,), **opts)
+
+
+# ---------------------------------------------------------------------------
+# Deck generation and completion (PLA-299)
+# ---------------------------------------------------------------------------
+
+
 def test_deck_generation_writes_cards_states_and_provenance(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM
 ) -> None:
@@ -137,7 +151,7 @@ def test_deck_generation_writes_cards_states_and_provenance(
         },
     ]
 
-    study.run_generation(study._Job(artifact_id))
+    study.run_generation(_deck_job(artifact_id, document_id))
 
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.READY
@@ -148,8 +162,6 @@ def test_deck_generation_writes_cards_states_and_provenance(
     assert [part["kind"] for part in parts] == [artifacts.CARD] * 3
     assert [int(part["ordinal"]) for part in parts] == [1, 2, 3]
     payload = json.loads(str(parts[0]["content"]))
-    # The recorded topic is the pipeline's, not the model's per-card field: the model's
-    # output is a proposal, and which topic a card belongs to is a fact about the run.
     assert payload == {
         "front": "What is sifting?",
         "back": "It picks x(0).",
@@ -176,13 +188,7 @@ def test_deck_generation_writes_cards_states_and_provenance(
 def test_a_deck_drops_cards_that_repeat_a_front(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM
 ) -> None:
-    """Duplicate control spans the whole deck, not one topic's call.
-
-    A front is stored once whether one topic's reply repeated it or two topics converged on
-    it, and a cosmetic difference in wording is not a new card. Review never shows the same
-    front twice, and the ordinals stay contiguous so the deck has no gaps where a duplicate
-    was dropped.
-    """
+    """Duplicate control spans the whole deck, not one topic's call."""
     document_id = _document(db, class_id)
     artifact_id = _deck(db, class_id, document_id)
     llm.replies = [
@@ -190,20 +196,18 @@ def test_a_deck_drops_cards_that_repeat_a_front(
         {
             "cards": [
                 {"front": "What is sifting?", "back": "It picks x(0).", "topic": "t"},
-                # A cosmetic repeat inside the same topic's reply.
                 {"front": "what is sifting", "back": "Picks the sample.", "topic": "t"},
             ]
         },
         {
             "cards": [
-                # The second topic converges on the first topic's front.
                 {"front": "What is sifting?", "back": "Again.", "topic": "t"},
                 {"front": "Define convolution.", "back": "An integral.", "topic": "t"},
             ]
         },
     ]
 
-    study.run_generation(study._Job(artifact_id))
+    study.run_generation(_deck_job(artifact_id, document_id))
 
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.READY
@@ -213,39 +217,74 @@ def test_a_deck_drops_cards_that_repeat_a_front(
     assert [int(part["ordinal"]) for part in parts] == [1, 2]
 
 
-def test_a_topic_failure_is_counted_not_fatal(
+def test_a_topic_that_fails_after_retry_fails_the_whole_deck(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM
 ) -> None:
+    """A deck is `ready` only when every mapped topic produced a card (PLA-299).
+
+    A topic whose call errors on both the initial attempt and the bounded retry fails the
+    whole deck, and the partial cards the other topic wrote are cleaned up so nothing reads
+    as a finished deck missing material.
+    """
     document_id = _document(db, class_id)
     artifact_id = _deck(db, class_id, document_id)
     llm.replies = [
         {"topics": ["good topic", "bad topic"]},
         {"cards": [{"front": "F", "back": "B", "topic": "good topic"}]},
         LyraError("The endpoint fell over."),
+        LyraError("The endpoint fell over again."),
     ]
 
-    study.run_generation(study._Job(artifact_id))
+    study.run_generation(_deck_job(artifact_id, document_id))
 
     artifact = artifacts.get_artifact(db, artifact_id)
-    assert artifact["state"] == artifacts.READY
-    assert artifact["stage_detail"] == "1 of 2 topics failed"
-    assert artifact["problems_done"] == 2
-    assert len(artifacts.list_parts(db, artifact_id)) == 1
+    assert artifact["state"] == artifacts.FAILED
+    assert "1 of 2 topics" in str(artifact["error_message"])
+    # No partial cards masquerade as a finished deck.
+    assert artifacts.list_parts(db, artifact_id) == []
+    assert db.execute("select count(*) from card_states").fetchone()[0] == 0
 
 
-def test_zero_cards_is_a_failed_deck(db: sqlite3.Connection, class_id: int, llm: _StubLLM) -> None:
+def test_a_topic_that_returns_zero_cards_is_retried_then_recovers(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    """A topic returning no usable cards is retried once with a corrective hint, and a good
+    retry lets the deck complete."""
     document_id = _document(db, class_id)
     artifact_id = _deck(db, class_id, document_id)
     llm.replies = [
         {"topics": ["only topic"]},
-        LyraError("The endpoint fell over."),
+        {"cards": []},
+        {"cards": [{"front": "F", "back": "B", "topic": "t"}]},
     ]
 
-    study.run_generation(study._Job(artifact_id))
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.READY
+    assert len(artifacts.list_parts(db, artifact_id)) == 1
+    # The retry system prompt carried the corrective hint.
+    retry_messages = llm.calls[2]["args"][3]
+    assert "no usable cards" in str(retry_messages)
+
+
+def test_zero_cards_after_retry_is_a_failed_deck(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [
+        {"topics": ["only topic"]},
+        {"cards": []},
+        {"cards": []},
+    ]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
 
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.FAILED
-    assert artifact["error_message"] == study.NO_CARDS_MESSAGE
+    assert "1 of 1 topics" in str(artifact["error_message"])
+    assert artifacts.list_parts(db, artifact_id) == []
 
 
 def test_a_deck_with_no_topics_is_failed(
@@ -255,11 +294,16 @@ def test_a_deck_with_no_topics_is_failed(
     artifact_id = _deck(db, class_id, document_id)
     llm.replies = [{"topics": []}]
 
-    study.run_generation(study._Job(artifact_id))
+    study.run_generation(_deck_job(artifact_id, document_id))
 
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.FAILED
     assert artifact["error_message"] == study.NO_TOPICS_MESSAGE
+
+
+# ---------------------------------------------------------------------------
+# Quiz generation and completion (PLA-299)
+# ---------------------------------------------------------------------------
 
 
 def _quiz(db: sqlite3.Connection, class_id: int, document_id: int) -> int:
@@ -273,12 +317,13 @@ def _quiz(db: sqlite3.Connection, class_id: int, document_id: int) -> int:
     return int(created["id"])
 
 
+def _quiz_job(artifact_id: int, document_id: int, **opts: object) -> study._Job:
+    return study._Job(artifact_id, source_ids=(document_id,), **opts)
+
+
 def _mcq(topic: str = "delta") -> dict[str, object]:
     return {
         "type": "mcq",
-        # The stem varies with the topic so distinct topics read as distinct questions:
-        # duplicate control keys on the stem, and a helper that returned one stem for every
-        # call would collapse a whole reply to a single question.
         "question": f"Which property picks x(0) for {topic}?",
         "options": ["sifting", "scaling", "shifting", "sampling"],
         "correct_index": 0,
@@ -288,52 +333,100 @@ def _mcq(topic: str = "delta") -> dict[str, object]:
     }
 
 
+def test_quiz_reaches_the_requested_count(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _quiz(db, class_id, document_id)
+    llm.replies = [{"questions": [_mcq("a"), _mcq("b"), _mcq("c"), _mcq("d")]}]
+
+    study.run_generation(_quiz_job(artifact_id, document_id, count=4))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.READY
+    parts = artifacts.list_parts(db, artifact_id)
+    assert len(parts) == 4
+    assert artifact["problems_total"] == 4
+    assert artifact["problems_done"] == 4
+    assert len(llm.calls) == 1
+
+
+def test_a_quiz_that_undershoots_the_requested_count_fails(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    """A request for four questions that only yields three (after retry) is a failure, not a
+    smaller quiz quietly presented as the requested one (PLA-299)."""
+    document_id = _document(db, class_id)
+    artifact_id = _quiz(db, class_id, document_id)
+    broken = {**_mcq(), "options": ["only", "three", "here"]}
+    llm.replies = [
+        {"questions": [_mcq("a"), broken, _mcq("b"), _mcq("c")]},
+        {"questions": [_mcq("a"), broken, _mcq("b"), _mcq("c")]},
+    ]
+
+    study.run_generation(_quiz_job(artifact_id, document_id, count=4))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert "3 of the 4" in str(artifact["error_message"])
+    # No partial questions survive a failed quiz.
+    assert artifacts.list_parts(db, artifact_id) == []
+
+
+def test_a_quiz_caps_extra_questions_to_the_requested_count(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _quiz(db, class_id, document_id)
+    llm.replies = [{"questions": [_mcq("a"), _mcq("b"), _mcq("c"), _mcq("d"), _mcq("e")]}]
+
+    study.run_generation(_quiz_job(artifact_id, document_id, count=3))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.READY
+    assert len(artifacts.list_parts(db, artifact_id)) == 3
+    assert artifact["problems_total"] == 3
+    assert artifact["problems_done"] == 3
+
+
 def test_quiz_validation_drops_invalid_questions(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM
 ) -> None:
     document_id = _document(db, class_id)
     artifact_id = _quiz(db, class_id, document_id)
     broken = {**_mcq(), "options": ["only", "three", "here"]}
-    llm.replies = [{"questions": [_mcq("a"), broken, _mcq("b"), _mcq("c")]}]
+    # Four valid plus one broken; the request is four, met on the first call.
+    llm.replies = [{"questions": [_mcq("a"), broken, _mcq("b"), _mcq("c"), _mcq("d")]}]
 
-    study.run_generation(study._Job(artifact_id, count=4))
+    study.run_generation(_quiz_job(artifact_id, document_id, count=4))
 
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.READY
-    parts = artifacts.list_parts(db, artifact_id)
-    assert len(parts) == 3
-    assert artifact["problems_total"] == 4
-    assert artifact["problems_done"] == 3
-    assert len(llm.calls) == 1, "three of four surviving is above the retry floor"
+    assert len(artifacts.list_parts(db, artifact_id)) == 4
+    assert len(llm.calls) == 1
 
 
 def test_a_quiz_drops_questions_that_repeat_a_stem(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM
 ) -> None:
-    """Two questions with the same stem are the same question.
-
-    Distinctness is by stem alone, folding cosmetic differences, so a repeated question is
-    stored once. Otherwise a slot is wasted and one attempt would count the same knowledge
-    twice in the weakness report.
-    """
+    """Two questions with the same stem are the same question; a repeat undershoots the
+    count and fails rather than storing a duplicate."""
     document_id = _document(db, class_id)
     artifact_id = _quiz(db, class_id, document_id)
     original = _mcq("delta")
     cosmetic = {**_mcq("delta"), "question": str(original["question"]).upper()}
-    llm.replies = [{"questions": [original, cosmetic, _mcq("convolution"), _mcq("fourier")]}]
+    # Three requested, but the second is a cosmetic repeat of the first, so only two stems
+    # survive; the retry offers the same, so the quiz fails rather than store a duplicate.
+    llm.replies = [
+        {"questions": [original, cosmetic, _mcq("convolution")]},
+        {"questions": [original, cosmetic, _mcq("convolution")]},
+    ]
 
-    study.run_generation(study._Job(artifact_id, count=4))
+    study.run_generation(_quiz_job(artifact_id, document_id, count=3))
 
     artifact = artifacts.get_artifact(db, artifact_id)
-    assert artifact["state"] == artifacts.READY
-    parts = artifacts.list_parts(db, artifact_id)
-    stems = [json.loads(str(part["content"]))["question"] for part in parts]
-    assert stems == [
-        original["question"],
-        _mcq("convolution")["question"],
-        _mcq("fourier")["question"],
-    ]
-    assert artifact["problems_done"] == 3
+    assert artifact["state"] == artifacts.FAILED
+    assert "2 of the 3" in str(artifact["error_message"])
 
 
 @pytest.mark.parametrize(
@@ -346,21 +439,12 @@ def test_a_quiz_drops_questions_that_repeat_a_stem(
     ],
 )
 def test_dedupe_key_folds_only_cosmetic_differences(left: str, right: str, collide: bool) -> None:
-    """The conservative rule: case, whitespace, and trailing punctuation fold; wording does
-    not. Two prompts collide only when the student would not tell them apart."""
     assert (study._dedupe_key(left) == study._dedupe_key(right)) is collide
 
 
 def test_quiz_questions_are_grounded_at_the_document_level(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM
 ) -> None:
-    """A quiz cannot honestly cite a chunk per question - one call reads all the material -
-    but it can name the documents that fed it.
-
-    Each question carries the contributing source documents as provenance, with no chunk and
-    no page: the honest degraded record for a whole-material call, which list_provenance
-    still resolves to a filename the student can open.
-    """
     first = _document(db, class_id, filename="signals.pdf")
     second = _document(db, class_id, filename="notes.pdf")
     created = artifacts.create_artifact(
@@ -376,7 +460,7 @@ def test_quiz_questions_are_grounded_at_the_document_level(
     artifact_id = int(created["id"])
     llm.replies = [{"questions": [_mcq("delta"), _mcq("convolution"), _mcq("fourier")]}]
 
-    study.run_generation(study._Job(artifact_id, count=3))
+    study.run_generation(study._Job(artifact_id, source_ids=(first, second), count=3))
 
     parts = artifacts.list_parts(db, artifact_id)
     assert len(parts) == 3
@@ -389,7 +473,7 @@ def test_quiz_questions_are_grounded_at_the_document_level(
         assert [entry["filename"] for entry in provenance] == ["signals.pdf", "notes.pdf"]
 
 
-def test_a_mostly_broken_reply_is_retried_once_with_the_failures_named(
+def test_a_quiz_undershoot_is_retried_once_with_the_failures_named(
     db: sqlite3.Connection, class_id: int, llm: _StubLLM
 ) -> None:
     document_id = _document(db, class_id)
@@ -400,7 +484,7 @@ def test_a_mostly_broken_reply_is_retried_once_with_the_failures_named(
         {"questions": [_mcq("a"), _mcq("b"), _mcq("c"), _mcq("d"), _mcq("e")]},
     ]
 
-    study.run_generation(study._Job(artifact_id, count=5))
+    study.run_generation(_quiz_job(artifact_id, document_id, count=5))
 
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.READY
@@ -410,24 +494,6 @@ def test_a_mostly_broken_reply_is_retried_once_with_the_failures_named(
     assert "correct_index out of range" in str(retry_messages)
 
 
-def test_a_quiz_with_too_few_survivors_fails(
-    db: sqlite3.Connection, class_id: int, llm: _StubLLM
-) -> None:
-    document_id = _document(db, class_id)
-    artifact_id = _quiz(db, class_id, document_id)
-    broken = {**_mcq(), "options": []}
-    llm.replies = [
-        {"questions": [_mcq("a"), broken, broken, broken]},
-        {"questions": [_mcq("a"), broken, broken, broken]},
-    ]
-
-    study.run_generation(study._Job(artifact_id, count=4))
-
-    artifact = artifacts.get_artifact(db, artifact_id)
-    assert artifact["state"] == artifacts.FAILED
-    assert artifact["error_message"] == study.NO_QUESTIONS_MESSAGE
-
-
 @pytest.mark.parametrize(
     ("question", "problem"),
     [
@@ -435,12 +501,7 @@ def test_a_quiz_with_too_few_survivors_fails(
         ({**_mcq(), "correct_index": 4}, "out of range"),
         ({**_mcq(), "type": "true_false"}, 'exactly ["True", "False"]'),
         (
-            {
-                **_mcq(),
-                "type": "true_false",
-                "options": ["True", "False"],
-                "correct_index": 2,
-            },
+            {**_mcq(), "type": "true_false", "options": ["True", "False"], "correct_index": 2},
             "out of range",
         ),
         ({**_mcq(), "type": "fill_blank", "options": ["x(0)"], "correct_index": 0}, "___"),
@@ -460,7 +521,6 @@ def test_a_quiz_with_too_few_survivors_fails(
     ],
 )
 def test_the_per_type_rules(question: dict[str, object], problem: str) -> None:
-    """Every rule the prompt states is enforced in code when the reply is parsed."""
     assert study._question_problem(question) is not None
     assert problem in str(study._question_problem(question))
 
@@ -469,12 +529,7 @@ def test_the_per_type_rules_accept_good_questions() -> None:
     assert study._question_problem(_mcq()) is None
     assert (
         study._question_problem(
-            {
-                **_mcq(),
-                "type": "true_false",
-                "options": ["True", "False"],
-                "correct_index": 1,
-            }
+            {**_mcq(), "type": "true_false", "options": ["True", "False"], "correct_index": 1}
         )
         is None
     )
@@ -492,58 +547,354 @@ def test_the_per_type_rules_accept_good_questions() -> None:
     )
 
 
-def test_reconcile_fails_interrupted_study_runs(db: sqlite3.Connection, class_id: int) -> None:
-    document_id = _document(db, class_id)
-    pending_deck = _deck(db, class_id, document_id)
-    generating_quiz = _quiz(db, class_id, document_id)
-    artifacts.set_artifact_state(db, generating_quiz, artifacts.GENERATING, "Writing")
-    solution_set = artifacts.create_artifact(
-        db, class_id, "Solver set", [artifacts.SourceSpec(document_id=document_id)]
+# ---------------------------------------------------------------------------
+# Source revalidation at the worker boundary (PLA-291)
+# ---------------------------------------------------------------------------
+
+
+def test_generation_fails_visibly_when_a_source_left_ready(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    """A source that leaves `ready` after the request fails generation, naming the file,
+    rather than being silently skipped."""
+    document_id = _document(db, class_id, filename="lecture.pdf")
+    artifact_id = _quiz(db, class_id, document_id)
+    db.execute("update documents set state = 'failed' where id = ?", (document_id,))
+    db.commit()
+
+    study.run_generation(_quiz_job(artifact_id, document_id, count=3))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert "lecture.pdf" in str(artifact["error_message"])
+    assert "failed to process" in str(artifact["error_message"])
+    assert llm.calls == []
+
+
+def test_generation_fails_visibly_when_a_source_was_deleted(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    keep = _document(db, class_id, filename="keep.pdf")
+    drop = _document(db, class_id, filename="drop.pdf")
+    created = artifacts.create_artifact(
+        db,
+        class_id,
+        "Two-source quiz",
+        [
+            artifacts.SourceSpec(document_id=keep, role=artifacts.STUDY_SOURCE),
+            artifacts.SourceSpec(document_id=drop, role=artifacts.STUDY_SOURCE),
+        ],
+        kind=artifacts.KIND_QUIZ,
+    )
+    artifact_id = int(created["id"])
+    db.execute("delete from documents where id = ?", (drop,))
+    db.commit()
+
+    study.run_generation(study._Job(artifact_id, source_ids=(keep, drop), count=3))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert "removed" in str(artifact["error_message"])
+    assert llm.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Context-window budgeting (PLA-298)
+# ---------------------------------------------------------------------------
+
+
+def test_gathering_never_overshoots_the_total_cap() -> None:
+    """A chunk is added only when it fits; the boundary bug where `total < cap` admitted a
+    chunk that pushed `total` past `cap` is closed."""
+
+    class _Rows:
+        def __init__(self, contents: list[str]) -> None:
+            self._contents = contents
+
+        def fetchall(self) -> list[dict[str, str]]:
+            return [{"content": content} for content in self._contents]
+
+    # Two 400-token chunks fit a 1000 cap exactly-ish; a third 400 would overshoot to 1200.
+    text = "x" * 1600  # 400 estimated tokens each
+    calls: list[int] = []
+
+    class _Conn:
+        def execute(self, sql: str, params: tuple[object, ...]) -> _Rows:
+            calls.append(int(params[0]))
+            return _Rows([text, text, text])
+
+    gathered, contributing = study._gather_source_text(_Conn(), (7,), total_cap=1000)  # type: ignore[arg-type]
+    # 400 + 400 = 800 fits; the third (1200) is refused, so the cap is never exceeded.
+    assert gathered.count(text) == 2
+    assert contributing == [7]
+
+
+def test_gathering_exact_fit_admits_the_boundary_chunk() -> None:
+    class _Rows:
+        def __init__(self, contents: list[str]) -> None:
+            self._contents = contents
+
+        def fetchall(self) -> list[dict[str, str]]:
+            return [{"content": content} for content in self._contents]
+
+    text = "x" * 2000  # exactly 500 estimated tokens
+
+    class _Conn:
+        def execute(self, sql: str, params: tuple[object, ...]) -> _Rows:
+            return _Rows([text, text])
+
+    gathered, _ = study._gather_source_text(_Conn(), (7,), total_cap=1000)  # type: ignore[arg-type]
+    # 500 + 500 == 1000 fits exactly; both chunks are admitted.
+    assert gathered.count(text) == 2
+
+
+def test_gathering_round_robins_and_caps(db: sqlite3.Connection, class_id: int) -> None:
+    """One textbook must not crowd the syllabus out: each document gives at most
+    DOCUMENT_TOKEN_CAP, however many chunks it holds."""
+    big = _document(db, class_id, "textbook.pdf")
+    small = _document(db, class_id, "syllabus.pdf")
+    for index in range(30):
+        db.execute(
+            "insert into chunks (document_id, class_id, content, token_count, "
+            "page_number, doc_type, embedding_model, embedding_dim) values "
+            "(?, ?, ?, 501, ?, 'generic', 'test', 768)",
+            (big, class_id, "x " * 1000 + f"big chunk {index}", index),
+        )
+    db.commit()
+
+    gathered, contributing = study._gather_source_text(
+        db, (big, small), total_cap=study.TOTAL_TOKEN_CAP
     )
 
-    failed = study.reconcile_interrupted(db)
-
-    assert failed == 2
-    for artifact_id in (pending_deck, generating_quiz):
-        artifact = artifacts.get_artifact(db, artifact_id)
-        assert artifact["state"] == artifacts.FAILED
-        assert artifact["error_message"] == study.INTERRUPTED_MESSAGE
-    assert artifacts.get_artifact(db, int(solution_set["id"]))["state"] == artifacts.PENDING
+    assert "Some course text." in gathered  # the syllabus made it in
+    assert gathered.count("big chunk") == 11
+    assert contributing == [big, small]
 
 
-def test_reconcile_keeps_the_cards_a_generating_deck_had_already_written(
-    db: sqlite3.Connection, class_id: int
+def test_a_tiny_context_window_fails_locally_without_calling_the_model(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A crash mid-generation fails the deck but never discards the cards already written.
-
-    The reconcile settles only the artifact row; the parts a `generating` run had already
-    committed stay put. Rollback here means the failed deck the student retries from is
-    honest about what was done rather than quietly dropping half a deck's work.
-    """
+    """A window smaller than the output reserve leaves no room for the prompt, so
+    generation fails with an actionable message and never sends an oversized request."""
+    _use_window(monkeypatch, 256)
     document_id = _document(db, class_id)
-    deck_id = _deck(db, class_id, document_id)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [{"topics": ["only topic"]}]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    artifact = artifacts.get_artifact(db, artifact_id)
+    assert artifact["state"] == artifacts.FAILED
+    assert artifact["error_message"] == study.CONTEXT_TOO_SMALL_MESSAGE
+    assert llm.calls == []
+
+
+def test_call_json_refuses_a_prompt_over_the_input_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The single call chokepoint enforces the window as a backstop, not merely calculates
+    it: an over-ceiling prompt is refused locally before any request is made."""
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 2048)
+    huge = [{"role": "user", "content": "x" * 40_000}]
+    called = False
+
+    async def _fail(*args: object, **kwargs: object) -> str:
+        nonlocal called
+        called = True
+        return "{}"
+
+    monkeypatch.setattr(study.client, "complete", _fail)
+    with pytest.raises(LyraError):
+        study._call_json(config, huge, study.prompts.TOPICS_SCHEMA)
+    assert called is False
+
+
+def test_call_json_sends_the_output_reserve_as_max_tokens(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192)
+    captured: dict[str, object] = {}
+
+    async def _capture(*args: object, **kwargs: object) -> str:
+        captured.update(kwargs)
+        return json.dumps({"topics": []})
+
+    monkeypatch.setattr(study.client, "complete", _capture)
+    study._call_json(config, [{"role": "user", "content": "hi"}], study.prompts.TOPICS_SCHEMA)
+    from backend.llm.budget import generation_reserve
+
+    assert captured["max_tokens"] == generation_reserve(8192)
+    assert captured["fail_on_truncation"] is True
+
+
+# ---------------------------------------------------------------------------
+# Durable recovery (PLA-169)
+# ---------------------------------------------------------------------------
+
+
+def _persist_deck_job(
+    db: sqlite3.Connection, class_id: int, document_id: int, **opts: object
+) -> int:
+    artifact_id = _deck(db, class_id, document_id)
+    study.persist_job(
+        db, _deck_job(artifact_id, document_id, **opts), artifacts.KIND_FLASHCARD_DECK
+    )
+    return artifact_id
+
+
+def _persist_quiz_job(
+    db: sqlite3.Connection, class_id: int, document_id: int, **opts: object
+) -> int:
+    artifact_id = _quiz(db, class_id, document_id)
+    study.persist_job(db, _quiz_job(artifact_id, document_id, **opts), artifacts.KIND_QUIZ)
+    return artifact_id
+
+
+def test_reconcile_requeues_pending_jobs_with_their_exact_options(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A restart before the worker started requeues pending decks/quizzes with the exact
+    original settings rather than failing them (PLA-169)."""
+    enqueued: list[study._Job] = []
+    monkeypatch.setattr(study, "enqueue", enqueued.append)
+    document_id = _document(db, class_id)
+    deck_id = _persist_deck_job(db, class_id, document_id, cards_per_topic=5)
+    quiz_id = _persist_quiz_job(
+        db, class_id, document_id, count=12, difficulty="exam", types=("mcq", "fill_blank")
+    )
+
+    requeued, failed = study.reconcile_interrupted(db)
+
+    assert (requeued, failed) == (2, 0)
+    # Requeued in id-ascending order.
+    assert [job.artifact_id for job in enqueued] == [deck_id, quiz_id]
+    deck_job = next(job for job in enqueued if job.artifact_id == deck_id)
+    assert deck_job.cards_per_topic == 5
+    quiz_job = next(job for job in enqueued if job.artifact_id == quiz_id)
+    assert quiz_job.count == 12
+    assert quiz_job.difficulty == "exam"
+    assert quiz_job.types == ("mcq", "fill_blank")
+    assert quiz_job.source_ids == (document_id,)
+    # Still pending, ready for the worker.
+    assert artifacts.get_artifact(db, deck_id)["state"] == artifacts.PENDING
+
+
+def test_reconcile_restarts_a_generating_deck_without_duplicating_cards(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash mid-generation discards the partial cards and requeues the job, so recovery
+    restarts cleanly and never appends duplicates to half-written output (PLA-169)."""
+    enqueued: list[study._Job] = []
+    monkeypatch.setattr(study, "enqueue", enqueued.append)
+    document_id = _document(db, class_id)
+    deck_id = _persist_deck_job(db, class_id, document_id)
     artifacts.set_artifact_state(db, deck_id, artifacts.GENERATING, "Writing cards")
     card_id = artifacts.create_part(
         db,
         deck_id,
         artifacts.CARD,
         1,
-        content=json.dumps({"front": "What is sifting?", "back": "It picks out x(0)."}),
+        content=json.dumps({"front": "F", "back": "B"}),
         content_type=artifacts.JSON,
         status=artifacts.PART_COMPLETE,
     )
+    study._insert_card_state(db, card_id)
 
-    failed = study.reconcile_interrupted(db)
+    requeued, failed = study.reconcile_interrupted(db)
 
-    assert failed == 1
+    assert (requeued, failed) == (1, 0)
+    assert [job.artifact_id for job in enqueued] == [deck_id]
     deck = artifacts.get_artifact(db, deck_id)
-    assert deck["state"] == artifacts.FAILED
-    assert deck["error_message"] == study.INTERRUPTED_MESSAGE
-    # stage_detail keeps the lost stage: the pre-update row read `generating`.
-    assert deck["stage_detail"] == artifacts.GENERATING
-    parts = artifacts.list_parts(db, deck_id)
-    assert [int(part["id"]) for part in parts] == [card_id]
-    assert json.loads(str(parts[0]["content"]))["front"] == "What is sifting?"
+    assert deck["state"] == artifacts.PENDING
+    # The partial card and its scheduling state are gone: no duplicate on the restart.
+    assert artifacts.list_parts(db, deck_id) == []
+    assert db.execute("select count(*) from card_states").fetchone()[0] == 0
+
+
+def test_reconcile_fails_a_job_whose_intent_cannot_be_reconstructed(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A queued study artifact with no persisted job row cannot be reconstructed, so it is
+    failed rather than guessed."""
+    enqueued: list[study._Job] = []
+    monkeypatch.setattr(study, "enqueue", enqueued.append)
+    document_id = _document(db, class_id)
+    orphan = _deck(db, class_id, document_id)  # no persist_job
+
+    requeued, failed = study.reconcile_interrupted(db)
+
+    assert (requeued, failed) == (0, 1)
+    assert enqueued == []
+    artifact = artifacts.get_artifact(db, orphan)
+    assert artifact["state"] == artifacts.FAILED
+    assert artifact["error_message"] == study.INTERRUPTED_MESSAGE
+
+
+def test_reconcile_fails_a_job_with_malformed_metadata(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    enqueued: list[study._Job] = []
+    monkeypatch.setattr(study, "enqueue", enqueued.append)
+    document_id = _document(db, class_id)
+    deck_id = _persist_deck_job(db, class_id, document_id)
+    db.execute("update study_jobs set types = 'not json' where artifact_id = ?", (deck_id,))
+    db.commit()
+
+    requeued, failed = study.reconcile_interrupted(db)
+
+    assert (requeued, failed) == (0, 1)
+    assert enqueued == []
+    assert artifacts.get_artifact(db, deck_id)["state"] == artifacts.FAILED
+
+
+def test_reconcile_never_resurrects_a_cancelled_job(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    enqueued: list[study._Job] = []
+    monkeypatch.setattr(study, "enqueue", enqueued.append)
+    document_id = _document(db, class_id)
+    deck_id = _persist_deck_job(db, class_id, document_id)
+    artifacts.set_artifact_state(db, deck_id, artifacts.CANCELLED)
+
+    requeued, failed = study.reconcile_interrupted(db)
+
+    assert (requeued, failed) == (0, 0)
+    assert enqueued == []
+    assert artifacts.get_artifact(db, deck_id)["state"] == artifacts.CANCELLED
+
+
+def test_reconcile_ignores_a_deleted_artifact(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deleted artifact took its job row with it (cascade) and is not seen by reconcile."""
+    enqueued: list[study._Job] = []
+    monkeypatch.setattr(study, "enqueue", enqueued.append)
+    document_id = _document(db, class_id)
+    deck_id = _persist_deck_job(db, class_id, document_id)
+    artifacts.delete_artifact(db, deck_id)
+    assert db.execute("select count(*) from study_jobs").fetchone()[0] == 0
+
+    requeued, failed = study.reconcile_interrupted(db)
+
+    assert (requeued, failed) == (0, 0)
+    assert enqueued == []
+
+
+def test_persist_job_round_trips_through_reconstruction(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    quiz_id = _persist_quiz_job(
+        db, class_id, document_id, count=7, difficulty="basic", types=("true_false",)
+    )
+    row = db.execute("select * from study_jobs where artifact_id = ?", (quiz_id,)).fetchone()
+    job = study._job_from_row(row)
+    assert job.artifact_id == quiz_id
+    assert job.count == 7
+    assert job.difficulty == "basic"
+    assert job.types == ("true_false",)
+    assert job.source_ids == (document_id,)
+
+
+# ---------------------------------------------------------------------------
+# Cancellation (unchanged intent, verified against new machinery)
+# ---------------------------------------------------------------------------
 
 
 def test_a_cancelled_deck_is_skipped_before_generation_starts(
@@ -554,49 +905,12 @@ def test_a_cancelled_deck_is_skipped_before_generation_starts(
     artifacts.set_artifact_state(db, artifact_id, artifacts.CANCELLED)
     llm.replies = [{"topics": ["delta functions"]}]
 
-    study.run_generation(study._Job(artifact_id))
+    study.run_generation(_deck_job(artifact_id, document_id))
 
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.CANCELLED
     assert artifacts.list_parts(db, artifact_id) == []
     assert llm.calls == []
-
-
-def test_cancelling_a_deck_mid_run_keeps_finished_cards_and_stops(
-    db: sqlite3.Connection, class_id: int, llm: _StubLLM, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    document_id = _document(db, class_id)
-    artifact_id = _deck(db, class_id, document_id)
-    llm.replies = [
-        {"topics": ["delta functions", "convolution"]},
-        {"cards": [{"front": "What is sifting?", "back": "It picks x(0).", "topic": "t"}]},
-        {"cards": [{"front": "Define convolution.", "back": "An integral.", "topic": "t"}]},
-    ]
-
-    original = study._write_topic_cards
-
-    def cancel_after_first_topic(*args: object, **kwargs: object) -> int:
-        written = original(*args, **kwargs)
-        if not artifacts.list_parts(db, artifact_id):
-            return written
-        from backend.storage.database import connect
-
-        other = connect()
-        try:
-            artifacts.set_artifact_state(other, artifact_id, artifacts.CANCELLED)
-        finally:
-            other.close()
-        return written
-
-    monkeypatch.setattr(study, "_write_topic_cards", cancel_after_first_topic)
-
-    study.run_generation(study._Job(artifact_id))
-
-    artifact = artifacts.get_artifact(db, artifact_id)
-    assert artifact["state"] == artifacts.CANCELLED
-    parts = artifacts.list_parts(db, artifact_id)
-    assert len(parts) == 1
-    assert json.loads(str(parts[0]["content"]))["front"] == "What is sifting?"
 
 
 def test_cancelling_a_quiz_before_writing_questions_keeps_it_empty(
@@ -621,7 +935,7 @@ def test_cancelling_a_quiz_before_writing_questions_keeps_it_empty(
 
     monkeypatch.setattr(study, "_call_json", cancel_before_write)
 
-    study.run_generation(study._Job(artifact_id, count=3))
+    study.run_generation(_quiz_job(artifact_id, document_id, count=3))
 
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.CANCELLED
@@ -631,13 +945,11 @@ def test_cancelling_a_quiz_before_writing_questions_keeps_it_empty(
 def test_the_solver_reconcile_leaves_study_artifacts_alone(
     db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The reconciles own disjoint kinds; a pending deck must never be requeued as a
-    solve job, and a generating one must never read as a stalled solve."""
     enqueued: list[int] = []
     monkeypatch.setattr(solver, "enqueue", enqueued.append)
     document_id = _document(db, class_id)
-    deck_id = _deck(db, class_id, document_id)
-    quiz_id = _quiz(db, class_id, document_id)
+    deck_id = _persist_deck_job(db, class_id, document_id)
+    quiz_id = _persist_quiz_job(db, class_id, document_id)
     artifacts.set_artifact_state(db, quiz_id, artifacts.GENERATING, "Writing questions")
 
     solver.reconcile_interrupted(db)
@@ -645,37 +957,6 @@ def test_the_solver_reconcile_leaves_study_artifacts_alone(
     assert enqueued == []
     assert artifacts.get_artifact(db, deck_id)["state"] == artifacts.PENDING
     assert artifacts.get_artifact(db, quiz_id)["state"] == artifacts.GENERATING
-
-
-def test_gathering_round_robins_and_caps(db: sqlite3.Connection, class_id: int) -> None:
-    """One textbook must not crowd the syllabus out of the mapping pass: each document
-    gives at most DOCUMENT_TOKEN_CAP, however many chunks it holds."""
-    big = _document(db, class_id, "textbook.pdf")
-    small = _document(db, class_id, "syllabus.pdf")
-    # Each of these is 2008 characters, so 501 estimated tokens; the 6000-token
-    # per-document cap admits eleven of them and refuses the twelfth (6012 > 6000).
-    for index in range(30):
-        db.execute(
-            "insert into chunks (document_id, class_id, content, token_count, "
-            "page_number, doc_type, embedding_model, embedding_dim) values "
-            "(?, ?, ?, 501, ?, 'generic', 'test', 768)",
-            (big, class_id, "x " * 1000 + f"big chunk {index}", index),
-        )
-    db.commit()
-    artifact_id = _deck(db, class_id, big)
-    db.execute(
-        "insert into artifact_sources (artifact_id, document_id, role, ordinal) "
-        "values (?, ?, 'study_source', 1)",
-        (artifact_id, small),
-    )
-    db.commit()
-
-    gathered, contributing = study._gather_source_text(db, artifact_id)
-
-    assert "Some course text." in gathered  # the syllabus made it in
-    assert gathered.count("big chunk") == 11
-    # Both documents fed the material, so both are its provenance, in source order.
-    assert contributing == [big, small]
 
 
 def test_new_card_states_are_due_immediately(
@@ -689,7 +970,7 @@ def test_new_card_states_are_due_immediately(
     ]
 
     before = datetime.now(UTC)
-    study.run_generation(study._Job(artifact_id))
+    study.run_generation(_deck_job(artifact_id, document_id))
 
     row = db.execute("select * from card_states").fetchone()
     due = scheduler.from_storage(str(row["due_at"]))

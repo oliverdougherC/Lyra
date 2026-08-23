@@ -65,8 +65,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         stalled = solver.reconcile_interrupted(conn)
         if stalled:
             logger.warning("Marked %d interrupted solve job(s) as failed", stalled)
-        # Study jobs fail rather than requeue: their options lived only in memory.
-        interrupted_study = study.reconcile_interrupted(conn)
+        # Study jobs persist their intent (migration 035), so queued work requeues and
+        # interrupted work restarts cleanly; only work whose intent cannot be reconstructed
+        # is failed.
+        requeued_study, interrupted_study = study.reconcile_interrupted(conn)
+        if requeued_study:
+            logger.info("Requeued %d study generation(s) after restart", requeued_study)
         if interrupted_study:
             logger.warning("Marked %d interrupted study generation(s) as failed", interrupted_study)
         # Drafts caught mid-suggestion go back to ready: the draft was never touched.
