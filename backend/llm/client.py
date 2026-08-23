@@ -162,6 +162,9 @@ _ERROR_NOT_FOUND = "The tutor endpoint path looks wrong. The URL should end in /
 _ERROR_UPSTREAM = "The tutor endpoint returned an error."
 _ERROR_UNREADABLE = "The tutor endpoint returned a response that could not be read."
 _ERROR_NO_TOOLS = "The tutor endpoint does not accept tool calls."
+_ERROR_TOOLS_CONTEXT = (
+    "The tutor endpoint rejected the request because it exceeded the model's context window."
+)
 _ERROR_TRUNCATED = (
     "The tutor endpoint's reply hit the output-token ceiling and was cut off before it finished."
 )
@@ -270,10 +273,17 @@ class AssistantMessage:
 
     Both may be present. A model commonly narrates a sentence and calls a tool in the
     same turn, and dropping either half would lose part of the transcript.
+
+    `truncated` carries the server's `finish_reason: "length"` verdict: the endpoint hit
+    the output-token ceiling before finishing this turn. It matters to the tool loop, which
+    caps each guarded round at the budgeted generation reserve - a cut-off turn's prose is
+    not a finished answer and its tool calls may be half-written, so neither may be trusted.
+    A caller that reads content directly and never imposes a ceiling can ignore it.
     """
 
     content: str
     tool_calls: tuple[ToolCall, ...] = ()
+    truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -934,26 +944,35 @@ async def complete_with_tools(
         messages: OpenAI-shaped messages, including any prior `assistant` turns carrying
             `tool_calls` and the `tool` messages answering them.
         tools: OpenAI-shaped tool definitions.
-        max_tokens: Ceiling on the reply, omitted when the caller has none.
+        max_tokens: Ceiling on the reply, omitted when the caller has none. The guarded
+            agent loop passes the exact generation reserve it budgeted, so the endpoint is
+            told to cap this round at the same number of output tokens Lyra held back for
+            it; a cut-off reply comes back with `truncated` set.
         request_timeout: The httpx timeouts for this call. Defaults to `TOOL_TIMEOUT`,
             which is right for the verification loop and minutes too patient for the
             capability probe, which passes its own.
 
     Returns:
-        The assistant's content and the tool calls it asked for, either of which may be
-        empty.
+        The assistant's content, the tool calls it asked for (either of which may be
+        empty), and whether the endpoint reported cutting the turn off at the output-token
+        ceiling (`truncated`).
 
     Raises:
-        ToolsUnsupportedError: The endpoint refused the request with a 400. That status
-            is the strongest available signal that it does not implement tool calling.
-            It can also mean something else was wrong with the request, and the cost of
-            reading it the wrong way is bounded: verification degrades and reports itself
-            as not run, while solving is unaffected. This function cannot see the loop,
-            so a caller that has already completed tool rounds on this endpoint must
-            reclassify - `tools._drive` does - because a 400 ten rounds in is a
-            transcript outgrowing the context window, not an endpoint that suddenly
-            forgot how to call tools.
-        UpstreamError: Any other transport or status failure.
+        ToolsUnsupportedError: The endpoint refused the request with a 400 that does not
+            read as a context-window complaint. That status is the strongest available
+            signal that it does not implement tool calling. It can also mean something
+            else was wrong with the request, and the cost of reading it the wrong way is
+            bounded: verification degrades and reports itself as not run, while solving is
+            unaffected. This function cannot see the loop, so a caller that has already
+            completed tool rounds on this endpoint must reclassify - `tools._drive` does -
+            because a 400 ten rounds in is a transcript outgrowing the context window, not
+            an endpoint that suddenly forgot how to call tools.
+        UpstreamError: Any other transport or status failure - including a 400 whose body
+            the bounded classifier recognizes as a context-window rejection. That is the
+            residual case an unknown endpoint tokenizer can produce even when Lyra's local
+            estimate admitted the turn, and it must not read as "no tool support": the
+            endpoint plainly processed the tools field, it just could not fit the prompt.
+            The server's own prose is classified and dropped, never carried out.
     """
     url = f"{_base_url(endpoint)}/chat/completions"
     body = _chat_body(
@@ -963,6 +982,17 @@ async def complete_with_tools(
         try:
             response = await client.post(url, json=body)
             if response.status_code == 400:
+                # A 400 is usually "this endpoint does not implement tool calling", but the
+                # same status is also how an endpoint rejects a prompt its real tokenizer
+                # finds too large - the case PLA-290 accepts can slip past the local
+                # estimate. Classify the body (and drop it): a context complaint is an
+                # upstream failure, not a capability verdict, so the loop does not tell the
+                # settings screen tools are unsupported over a prompt that was merely too big.
+                if _classify_upstream(_upstream_message(response)) == _UPSTREAM_CONTEXT:
+                    logger.info("Tutor endpoint rejected a tools request as exceeding its context")
+                    error = UpstreamError(_ERROR_TOOLS_CONTEXT)
+                    error.upstream_status = 400  # type: ignore[attr-defined]
+                    raise error
                 logger.info("Tutor endpoint rejected a request carrying tool definitions")
                 raise ToolsUnsupportedError(_ERROR_NO_TOOLS)
             response.raise_for_status()
@@ -980,10 +1010,13 @@ async def complete_with_tools(
         raise UpstreamError(_ERROR_UNREADABLE)
 
     content = message.get("content")
-    # A turn that only calls tools carries no content at all, which is not an error.
+    # A turn that only calls tools carries no content at all, which is not an error. A
+    # `finish_reason` of "length" is the one field that says the reply was cut off at the
+    # output ceiling; the loop reads it to keep a truncated turn from passing as finished.
     return AssistantMessage(
         content=strip_reasoning(content) if isinstance(content, str) else "",
         tool_calls=_read_tool_calls(message),
+        truncated=choices[0].get("finish_reason") == "length",
     )
 
 

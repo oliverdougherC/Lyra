@@ -20,7 +20,6 @@ from backend.llm.tools import (
     ContextBudget,
     ToolLoopResult,
     conversation_tokens,
-    message_tokens,
     run_tool_loop,
     schema_tokens,
     tool_schemas,
@@ -236,12 +235,18 @@ def _assemble_within_ceiling(
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Assemble the first request, trimming optional history oldest-first to fit.
 
-    Every message is measured with the canonical wire-shape estimator the loop guards with,
-    so what is kept here is measured the same way the request will be. The system prompt and
-    the current message are charged first and never trimmed; older history is added
-    newest-first while it fits, and the newest `MINIMUM_HISTORY_MESSAGES` are kept even when
-    they overrun - the caller's fit gate refuses the turn if that mandatory pair cannot fit,
-    rather than silently dropping the exchange the reply answers.
+    Each trim decision measures the *candidate whole request* with `conversation_tokens` -
+    the same canonical array serialization the caller's fit gate and the loop's growth guard
+    use - rather than summing per-message costs, so what is kept here is measured the exact
+    way the request will be charged. Summing `message_tokens` would drop the array's own
+    framing (the `[` `]` and inter-message commas), letting the assembler keep one message
+    more than the fit gate then accepts and refusing a turn that trimming could have fit.
+
+    The system prompt and the current message are charged first and never trimmed; older
+    history is added newest-first while the whole request still fits, and the newest
+    `MINIMUM_HISTORY_MESSAGES` are kept even when they overrun - the caller's fit gate
+    refuses the turn if that mandatory pair cannot fit, rather than silently dropping the
+    exchange the reply answers.
 
     Returns:
         The assembled messages (`[system, *history, user]`) and the kept history messages,
@@ -250,17 +255,14 @@ def _assemble_within_ceiling(
     """
     system_message: dict[str, object] = {"role": "system", "content": system_prompt}
     user_message: dict[str, object] = {"role": "user", "content": content}
-    room = message_ceiling - message_tokens(system_message) - message_tokens(user_message)
     kept: list[dict[str, object]] = []
-    used = 0
     for message in reversed(earlier):
         rendered: dict[str, object] = {"role": message.role, "content": message.content}
-        cost = message_tokens(rendered)
-        if used + cost > room and len(kept) >= MINIMUM_HISTORY_MESSAGES:
+        candidate = [system_message, rendered, *kept, user_message]
+        overruns = conversation_tokens(candidate) > message_ceiling
+        if overruns and len(kept) >= MINIMUM_HISTORY_MESSAGES:
             break
-        used += cost
-        kept.append(rendered)
-    kept.reverse()
+        kept.insert(0, rendered)
     return [system_message, *kept, user_message], kept
 
 

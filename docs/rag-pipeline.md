@@ -1155,11 +1155,25 @@ so its budget differs from the tutor's in several ways:
   fails closed at the tool, while a grant **newly enabled** after planning simply waits for the next
   turn (its schema was frozen out, so the loop is never handed a tool the preflight did not charge for).
 - *Canonical wire-shape accounting.* The request the preflight charges and the request the loop guards
-  are measured by one path, `conversation_tokens`, which sums each message's exact compact JSON as the
-  client sends it - `role`, `content`, a `tool_calls` payload, a tool turn's `tool_call_id` and `name`,
-  and the object/array framing around them - not a hand-picked subset of fields. The tool schema is
+  are measured by one path, `conversation_tokens`, which serializes the **whole `messages` array** to
+  compact JSON in a single operation - every message's object framing (`role`, `content`, a `tool_calls`
+  payload, a tool turn's `tool_call_id` and `name`) **and** the `[` `]` and inter-message commas that
+  join them - so it is literally the wire shape of the field, not a per-message sum that quietly drops
+  the array separators. (`message_tokens` still measures one message in isolation, for the fixed
+  system-prompt and current-message costs the assembler sets aside first, and the history-trim loop
+  itself decides what to keep by re-measuring the candidate whole array with `conversation_tokens`, so a
+  trimmed turn it produces is measured the exact way the fit gate then charges it.) The tool schema is
   charged once, separately, so nothing double-counts it. This is what lets the two measure the same
   request rather than two different shapes.
+- *Reserved output, actually enforced.* The generation reserve is not only subtracted from the input
+  room; given a `ContextBudget`, the loop sends it as the request's `max_tokens`, so the endpoint is told
+  to cap each round at the exact number of output tokens Lyra held back. A round the endpoint then cuts
+  off at that ceiling (`finish_reason: "length"`) stops the loop with `output_limit`: a truncated reply
+  is not a finished turn, so its prose is never stored as a successful answer and its (possibly
+  half-written) tool calls are never dispatched. `output_limit` is a bounded, non-retryable 503 that
+  keeps the user turn and invents no assistant reply, the same surface as `context_overflow`. An
+  **unguarded** loop (writer chat, solver verification) sets no ceiling and does not reinterpret a
+  server's own truncation, so its behaviour is unchanged.
 - *Re-budgeted as the transcript grows.* Preflight proves only the first request fits. Each round
   appends the model's tool-call turn and its tool results, so a later request can outgrow the window
   even though the first did not. Given a `ContextBudget`, the loop re-measures the conversation at
@@ -1178,10 +1192,12 @@ so its budget differs from the tutor's in several ways:
   conversation title, the user message, class recency, tool audit, or any proposal/source/command row,
   and before any request - and before the executable registry is even built, so a failure to construct
   it cannot leave an orphaned user turn either.
-- A **later-round** `context_overflow` necessarily happens **after** the user turn has been persisted,
-  and may happen **after** real tool activity has run and been audited. That already-completed activity
-  stays truthfully recorded; once overflow is detected no further tool effect or model request occurs,
-  and no assistant success reply is invented.
+- A **later-round** failure - `context_overflow`, `output_limit`, or a later-round upstream rejection -
+  necessarily happens **after** the user turn has been persisted, and may happen **after** real tool
+  activity has run and been audited. That already-completed activity stays truthfully recorded; once the
+  failure is detected no further tool effect or model request occurs, and no assistant success reply is
+  invented - a reply the endpoint cut off at the output ceiling is a fragment, not an answer, and is not
+  stored.
 
 Both failures carry a bounded, privacy-safe message: no endpoint URL, path, key, upstream body, or
 transcript.
@@ -1196,11 +1212,27 @@ exactly; what remains uncharged is only the characters-per-token ratio, so a sma
 reserve. What this guarantees is a *conservative* guard: it may refuse a turn that would in fact have
 fit, and it will not accept one whose estimated input already exceeds the margin-reduced room - the
 correct direction for a safety margin. What it does **not** guarantee is safety against an arbitrarily
-dense tokenizer: text that tokenizes far worse than four characters per token (long CJK runs, say) can
-still defeat a fixed 10% margin. That residual case is bounded and truthfully classified rather than
-hidden - the first request may reach the endpoint and be rejected (reported as an upstream failure),
-and a later request the transcript defeats is caught by the loop's mid-loop reclassification - never
-silently truncated.
+dense tokenizer: the endpoint tokenizer is unknown, and text that tokenizes far worse than four
+characters per token (long CJK runs, say) can still defeat a fixed 10% margin. The JSON transport
+escaping of non-ASCII (`\uXXXX`) happens to charge such text several transport characters per source
+character, which pushes in the conservative direction, but that is a property of the wire shape, not of
+the model's tokenizer, and it is not claimed as a guarantee. The margin is a pragmatic bounded
+approximation; the honest fallback for the residual case is the endpoint's own context rejection,
+handled truthfully rather than hidden - never silently truncated.
+
+**The residual first-request rejection, told apart from "no tool support".** An agent turn carries tool
+definitions, and `complete_with_tools` reads a 400 on such a request as "this endpoint does not
+implement tool calling" - the best reading for a genuine refusal. But the same 400 is also how an
+endpoint rejects a prompt its real tokenizer finds too large, which is exactly the residual case the
+margin cannot rule out. So the client classifies the 400 body with the same bounded machinery it uses
+elsewhere (`context`/`n_ctx` markers) and **drops** the body: a recognized context complaint is raised
+as a plain upstream failure, not `ToolsUnsupportedError`, so the loop settles it as `upstream_failed`
+rather than telling the settings screen tools are unsupported over a prompt that was merely too big. A
+400 that does not read as a context complaint still degrades to `no_tool_support` on the first round.
+Mid-loop, a 400 has always meant the transcript went bad rather than a capability verdict, and still
+does (a demonstrated tool call cannot un-happen); whether the body names the context window or not, a
+later-round 400 stays `upstream_failed`. In every branch the endpoint's own prose is classified and
+dropped - it reaches neither the result detail nor any log line.
 
 **Prompt structure:**
 ```

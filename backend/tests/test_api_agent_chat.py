@@ -561,6 +561,37 @@ def test_the_newest_history_is_charged_even_when_older_history_is_free_to_trim()
     assert not cost.fits
 
 
+def test_the_assembler_and_the_fit_gate_agree_on_the_canonical_accounting() -> None:
+    # The trim loop decides what to keep with `conversation_tokens` on the candidate whole
+    # request - the same array serialization the fit gate then charges - so a trimmed turn it
+    # produces always passes the gate. A per-message sum would drop the array's own framing
+    # (the `[` `]` and the commas), keep one message too many, and be refused a line later.
+    from backend.llm.turn_budget import HistoryMessage
+
+    history = tuple(
+        HistoryMessage(
+            role="user" if index % 2 == 0 else "assistant", content=f"turn {index} " * 30
+        )
+        for index in range(20)
+    )
+    tool_tokens = 200
+    ceiling = 900  # tight enough that older turns must be trimmed
+    messages, kept = routes_agent_chat._assemble_within_ceiling(
+        "You are an agent.",
+        history,
+        "The newest question.",
+        message_ceiling=ceiling - tool_tokens,
+    )
+
+    # Trimming happened but the mandatory recent pair and the newest question survived.
+    assert 0 < len(kept) < len(history)
+    assert messages[-1] == {"role": "user", "content": "The newest question."}
+    # The assembled request, measured the way the gate measures it, fits - so the gate does
+    # not raise on a turn the assembler produced.
+    assert tools.conversation_tokens(messages) + tool_tokens <= ceiling
+    routes_agent_chat._require_request_fits(messages, tool_tokens, ceiling)  # must not raise
+
+
 def test_a_512_token_window_cannot_host_the_tool_definitions(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -770,6 +801,37 @@ def test_a_context_overflow_settles_as_a_bounded_failure_without_an_assistant_re
     assert response.status_code == 503
     body = response.json()
     assert body["stopped"] == "context_overflow"
+    assert body["retryable"] is False
+    assert "http" not in body["detail"] and "127.0.0.1" not in body["detail"]
+    assert [message["role"] for message in sessions.list_messages(db, session_id)] == ["user"]
+
+
+def test_an_output_limit_settles_as_a_bounded_non_retryable_failure_without_a_reply(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The endpoint cut a guarded round off at the reserved output ceiling, so the loop
+    # returns OUTPUT_LIMIT. The route settles it exactly as CONTEXT_OVERFLOW: a bounded,
+    # non-retryable 503 that keeps the user turn, invents no assistant reply, and leaks
+    # nothing. A truncated fragment is never stored as a successful answer.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    _set_window(db, 8192)
+    _stub_loop(
+        monkeypatch,
+        tools.ToolLoopResult(
+            content="",
+            stopped=tools.OUTPUT_LIMIT,
+            detail=tools._OUTPUT_LIMIT_DETAIL,
+        ),
+    )
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Answer at length", "profile": "research"},
+    )
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["stopped"] == "output_limit"
     assert body["retryable"] is False
     assert "http" not in body["detail"] and "127.0.0.1" not in body["detail"]
     assert [message["role"] for message in sessions.list_messages(db, session_id)] == ["user"]

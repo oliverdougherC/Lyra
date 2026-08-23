@@ -33,13 +33,22 @@ def _tool_call(name: str, arguments: object, call_id: str = "call_1") -> dict[st
 
 
 def _reply(
-    content: str = "", tool_calls: list[dict[str, object]] | None = None
+    content: str = "",
+    tool_calls: list[dict[str, object]] | None = None,
+    finish_reason: str | None = None,
 ) -> dict[str, object]:
-    """One chat-completions response body."""
+    """One chat-completions response body.
+
+    `finish_reason` defaults to omitted (the server said nothing, read as a normal stop);
+    pass `"length"` to model an endpoint cutting the reply off at the output-token ceiling.
+    """
     message: dict[str, object] = {"role": "assistant", "content": content}
     if tool_calls is not None:
         message["tool_calls"] = tool_calls
-    return {"choices": [{"message": message}]}
+    choice: dict[str, object] = {"message": message}
+    if finish_reason is not None:
+        choice["finish_reason"] = finish_reason
+    return {"choices": [choice]}
 
 
 def _scripted(*responses: dict[str, object]) -> tuple[httpx.MockTransport, list[dict[str, object]]]:
@@ -726,6 +735,207 @@ async def test_a_first_result_that_overflows_stops_the_rest_of_the_same_response
     assert len(sent) == 1
 
 
+# --- The reserved output ceiling and truncation (PLA-290 blocker 1) ------------------
+#
+# A guarded loop reserves output room in its context arithmetic, so it must also tell the
+# endpoint to cap the reply at that reserve - otherwise the reservation is a fiction the
+# request never enforces. And a reply the endpoint cut off at that ceiling
+# (`finish_reason: "length"`) is not a finished turn: its prose is a fragment, not an
+# answer, and its tool calls may be half-written, so neither may be trusted.
+
+
+async def test_a_guarded_loop_sends_the_generation_reserve_as_the_output_ceiling() -> None:
+    # The reserve the budget holds back is the `max_tokens` the endpoint is told to stay
+    # inside, on the first round and on every later round alike.
+    transport, sent = _scripted(
+        _reply(tool_calls=[_tool_call("cas_evaluate", {"expression": "2 + 2"})]),
+        _reply(content="Confirmed."),
+    )
+    budget = tools.ContextBudget(context_window=8192, generation_reserve=1024, tool_tokens=50)
+
+    result = await _run(transport, context_budget=budget)
+
+    assert result.stopped == tools.COMPLETED
+    # Two requests were sent (round zero, then the round that read the tool result); both
+    # carried the reserve as their output ceiling.
+    assert len(sent) == 2
+    assert sent[0]["max_tokens"] == 1024
+    assert sent[1]["max_tokens"] == 1024
+
+
+async def test_an_unguarded_loop_leaves_the_output_ceiling_unset() -> None:
+    # No budget, no reserve, no ceiling: the writer chat and the solver's verification pass
+    # send exactly what they sent before this existed.
+    transport, sent = _scripted(
+        _reply(tool_calls=[_tool_call("cas_evaluate", {"expression": "2 + 2"})]),
+        _reply(content="Confirmed."),
+    )
+
+    result = await _run(transport)
+
+    assert result.stopped == tools.COMPLETED
+    assert all("max_tokens" not in body for body in sent)
+
+
+async def test_a_truncated_final_prose_reply_is_not_reported_as_completed() -> None:
+    # The model answered in prose but the endpoint cut it off at the reserve. That fragment
+    # must not be stored as a finished answer, so the loop settles on OUTPUT_LIMIT instead of
+    # COMPLETED and returns no content to store.
+    transport, _ = _scripted(
+        _reply(content="The answer is four hundred and", finish_reason="length")
+    )
+    budget = tools.ContextBudget(context_window=8192, generation_reserve=1024, tool_tokens=50)
+
+    result = await _run(transport, context_budget=budget)
+
+    assert result.stopped == tools.OUTPUT_LIMIT
+    assert result.complete is False
+    assert result.content == ""
+    # Bounded and privacy-safe: it names no endpoint, argument, or transcript.
+    assert result.detail == tools._OUTPUT_LIMIT_DETAIL
+
+
+async def test_a_truncated_tool_call_round_dispatches_no_tool() -> None:
+    # The would-be tool-call round was cut off at the ceiling, so its arguments may be
+    # half-written. Not one tool runs - the loop settles before dispatch rather than
+    # speculating on an incomplete request.
+    runs: list[str] = []
+    transport, sent = _scripted(
+        _reply(
+            tool_calls=[_tool_call("work", {"tag": "a"})],
+            content="",
+            finish_reason="length",
+        )
+    )
+    budget = tools.ContextBudget(context_window=8192, generation_reserve=1024, tool_tokens=50)
+
+    result = await tools.run_tool_loop(
+        _ENDPOINT,
+        None,
+        "local-model",
+        _MESSAGES,
+        registry=_counting_registry(chars=10, runs=runs),
+        context_budget=budget,
+        transport=transport,
+    )
+
+    assert result.stopped == tools.OUTPUT_LIMIT
+    assert result.content == ""
+    assert runs == []
+    assert result.calls == ()
+    # The opening request was sent; no request and no dispatch followed the truncation.
+    assert len(sent) == 1
+
+
+async def test_an_unguarded_loop_ignores_truncation_and_keeps_prior_behaviour() -> None:
+    # Without a budget the loop imposes no ceiling and does not reinterpret a server's own
+    # truncation: a prose reply flagged `length` still flows through as it did before, so the
+    # writer/solver loops are untouched. (The endpoint here truncated of its own accord.)
+    transport, _ = _scripted(_reply(content="Partial but usable.", finish_reason="length"))
+
+    result = await _run(transport)
+
+    assert result.stopped == tools.COMPLETED
+    assert result.content == "Partial but usable."
+
+
+async def test_a_normal_stop_still_completes_under_a_budget() -> None:
+    # The control case: a reply with no `length` finish reason completes unchanged even with
+    # a budget in force, so the truncation handling costs the happy path nothing.
+    transport, _ = _scripted(_reply(content="All done.", finish_reason="stop"))
+    budget = tools.ContextBudget(context_window=8192, generation_reserve=1024, tool_tokens=50)
+
+    result = await _run(transport, context_budget=budget)
+
+    assert result.stopped == tools.COMPLETED
+    assert result.content == "All done."
+
+
+# --- First-round context rejection vs genuine tools-unsupported (PLA-290 blocker 2) ---
+#
+# The client reads a 400 on a tools-carrying request as "no tool support" - the best
+# reading for a genuine refusal. But an unknown endpoint tokenizer can reject a first
+# request the local estimate admitted, and that 400 is a context-window complaint, not a
+# capability verdict. The client classifies the body (and drops it), so a context 400
+# settles as an upstream failure while a genuine tools-unsupported 400 still degrades.
+
+
+async def test_a_first_round_context_rejection_is_an_upstream_failure_not_no_tool_support() -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            400, json={"error": {"message": "the request exceeds the available context size"}}
+        )
+    )
+    budget = tools.ContextBudget(context_window=8192, generation_reserve=1024, tool_tokens=50)
+
+    result = await _run(transport, context_budget=budget)
+
+    # Not NO_TOOL_SUPPORT: the endpoint plainly processed the tools field, it just could not
+    # fit the prompt. The settings screen must not claim tools are unsupported over this.
+    assert result.stopped == tools.UPSTREAM_FAILED
+    assert result.stopped != tools.NO_TOOL_SUPPORT
+    assert result.complete is False
+    assert result.detail
+
+
+async def test_a_first_round_genuine_tools_rejection_still_reports_no_tool_support() -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            400, json={"error": {"message": "this model does not support the tools parameter"}}
+        )
+    )
+
+    result = await _run(transport)
+
+    assert result.stopped == tools.NO_TOOL_SUPPORT
+    assert result.complete is False
+
+
+async def test_a_context_rejection_body_never_reaches_the_result_or_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A compromised or noisy endpoint can pack its error body with private-looking text. The
+    # client classifies which kind of failure it is and drops the prose, so the marker must
+    # not surface in the result detail or in any log line.
+    marker = "SECRET_/Users/student/thesis.pdf_sk-lyra-key"
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            400,
+            json={"error": {"message": f"n_ctx too small; {marker}"}},
+        )
+    )
+    budget = tools.ContextBudget(context_window=8192, generation_reserve=1024, tool_tokens=50)
+
+    with caplog.at_level("INFO"):
+        result = await _run(transport, context_budget=budget)
+
+    assert result.stopped == tools.UPSTREAM_FAILED
+    assert marker not in result.detail
+    log = "\n".join(record.getMessage() for record in caplog.records)
+    assert marker not in log
+
+
+async def test_a_mid_loop_400_remains_an_upstream_failure() -> None:
+    # The endpoint answered a tool round, then rejected the next request. Whatever the body,
+    # this is the transcript going bad mid-loop, never a capability verdict - a 400 after a
+    # demonstrated tool call must not read as "no tool support".
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        if any(message["role"] == "tool" for message in payload["messages"]):
+            return httpx.Response(400, json={"error": {"message": "the context window is full"}})
+        return httpx.Response(
+            200, json=_reply(tool_calls=[_tool_call("cas_evaluate", {"expression": "2 + 2"})])
+        )
+
+    budget = tools.ContextBudget(context_window=8192, generation_reserve=1024, tool_tokens=50)
+    result = await _run(httpx.MockTransport(handler), context_budget=budget)
+
+    assert result.stopped == tools.UPSTREAM_FAILED
+    assert result.stopped != tools.NO_TOOL_SUPPORT
+    # The one tool round that ran before the rejection is still reported.
+    assert [call.name for call in result.calls] == ["cas_evaluate"]
+
+
 # --- Canonical wire-shape accounting (PLA-290 blocker 3) -----------------------------
 #
 # `message_tokens` measures the exact compact JSON the client places in the request, not a
@@ -744,6 +954,21 @@ def test_message_tokens_counts_role_and_framing_not_only_content() -> None:
     assert tools.message_tokens(message) == estimate_tokens(
         json.dumps(message, separators=(",", ":"))
     )
+
+
+def test_conversation_tokens_is_the_canonical_array_serialization() -> None:
+    # `conversation_tokens` measures the compact JSON of the whole `messages` array in one
+    # operation, so it charges the `[` `]` and the commas joining messages - the wire framing
+    # a per-message sum silently drops. With many tiny messages that separator/framing cost is
+    # measurable, and the helper equals the one true serialization exactly.
+    conversation = [{"role": "user", "content": "x"} for _ in range(50)]
+    assert tools.conversation_tokens(conversation) == estimate_tokens(
+        json.dumps(conversation, separators=(",", ":"))
+    )
+    # And it is strictly more than summing the messages one at a time: that sum is what the
+    # array framing was missing.
+    per_message_sum = sum(tools.message_tokens(message) for message in conversation)
+    assert tools.conversation_tokens(conversation) > per_message_sum
 
 
 def test_framing_dominates_across_many_short_messages() -> None:
@@ -862,10 +1087,15 @@ def test_the_margin_keeps_a_normal_window_usable() -> None:
     assert ceiling - 1055 > 3000
 
 
-def test_non_ascii_content_is_charged_conservatively_not_optimistically() -> None:
-    # JSON serialization escapes non-ASCII to \uXXXX, so a run of CJK characters is charged
-    # several times its character count - the opposite of the optimistic undercount that
-    # four-characters-per-token would give on raw text. The guard errs high here, not low.
+def test_non_ascii_content_is_measured_from_its_escaped_transport_shape() -> None:
+    # `json.dumps` (default `ensure_ascii=True`) escapes non-ASCII to `\uXXXX`, so the shape
+    # this charges for a run of CJK is several transport characters per source character. That
+    # is a fact about the JSON on the wire, NOT a claim about the endpoint's tokenizer: the
+    # escaping does not, on its own, guarantee the estimate stays above the model's real token
+    # count for such text. The actual safeguards are the 10% input margin (a pragmatic bounded
+    # approximation) and, as the fallback for a tokenizer that still runs denser, the
+    # endpoint's own context rejection handled truthfully as an upstream failure. All this test
+    # fixes is that the measurement reflects the escaped wire shape rather than the raw length.
     message = {"role": "user", "content": "日本語のテキスト"}
     assert tools.message_tokens(message) > len(message["content"])
 
