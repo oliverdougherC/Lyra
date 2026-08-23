@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sqlite3
 from dataclasses import dataclass
 from typing import Annotated, Literal
@@ -11,7 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from backend.api.routes_chat import require_document_allowed
-from backend.core import agent_tools, sessions
+from backend.core import agent_attempts, agent_tools, sessions
 from backend.core.app_settings import TutorConfig, resolve_tutor_access
 from backend.core.classes import touch_class
 from backend.core.errors import LyraError, NotFoundError
@@ -35,6 +37,8 @@ from backend.llm.turn_budget import (
 )
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agent"])
 DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
@@ -75,6 +79,10 @@ _TOO_LARGE_MESSAGE = (
     "This turn is too large for the tutor's context window, even after trimming older "
     "messages. Shorten your message or start a new conversation, then try again."
 )
+_PERSISTENCE_STOPPED_DETAIL = (
+    "This turn was interrupted before its reply could be saved. Try it again."
+)
+_PERSISTENCE_FAILED_DETAIL = "The agent reply could not be saved. Try it again."
 
 
 class AgentChatRequest(BaseModel):
@@ -294,8 +302,15 @@ def _plan_agent_turn(
     session_id: int,
     payload: AgentChatRequest,
     config: TutorConfig,
+    *,
+    exclude_message_ids: frozenset[int] = frozenset(),
 ) -> AgentTurnPlan:
     """Cost, fit-check, and assemble one agent turn without mutating anything.
+
+    `exclude_message_ids` names messages that must not enter this turn's history. It is
+    empty for a fresh send, whose current message is not persisted yet; on a retry it holds
+    the id of the reused user message, so the original prompt appears exactly once - as the
+    current message - and never a second time as history (PLA-295).
 
     Read-only by construction: it inspects the session, the tool definitions the class
     grants, and the prior history, then either raises (an oversized turn, refused before
@@ -329,6 +344,7 @@ def _plan_agent_turn(
     earlier = tuple(
         HistoryMessage(role=message["role"], content=str(message["content"]))
         for message in sessions.list_messages(conn, session_id)
+        if int(message["id"]) not in exclude_message_ids
     )
     cost = AgentTurnCost(
         context_window=config.context_window,
@@ -387,62 +403,9 @@ def _failure_status(stopped: str) -> int:
     return 503
 
 
-@router.post(
-    "/classes/{class_id}/sessions/{session_id}/agent-chat",
-    response_model=AgentChatResult,
-)
-async def send_agent_chat(
-    class_id: int,
-    session_id: int,
-    payload: AgentChatRequest,
-    conn: DbConn,
-) -> AgentChatResult | JSONResponse:
-    _scoped_session(conn, class_id, session_id)
-    # One snapshot for the endpoint and its document-text consent, exactly like a tutor
-    # chat turn: the endpoint authorized here is the endpoint `run_tool_loop` sends to
-    # below. An agent turn carries the conversation history and the student's message on
-    # its first round, and workspace file contents, fetched-page evidence, and other tool
-    # results on later rounds, so it is bound by the same locality/acknowledgement rule.
-    # Re-derived on every turn, and checked before the title or message is persisted and
-    # before the tool registry is even built: a refusal puts nothing on the wire and
-    # stores nothing.
-    access = resolve_tutor_access(conn)
-    require_document_allowed(access)
-    config = access.config
-    # The privacy gate above proves the endpoint is one this turn's private material may
-    # reach; the preflight proves the turn fits the endpoint's window. Both run before any
-    # mutation and before any request, reading only the session, the tool definitions, and
-    # the prior history, so a turn too large for the window - once the generation reserve,
-    # system prompt, tool definitions, current message, and the history Lyra always keeps
-    # are set aside - refuses cleanly here instead of persisting a user turn and then
-    # failing upstream. This is the boundary PLA-279's per-session turn claim will wrap:
-    # the claim goes around the mutations below, after this refusal, without reordering
-    # them or duplicating the budget.
-    plan = _plan_agent_turn(conn, class_id, session_id, payload, config)
-
-    sessions.set_session_title_if_unset(conn, session_id, payload.content)
-    sessions.add_message(conn, session_id, "user", payload.content)
-    touch_class(conn, class_id)
-    # The registry and its audit collector were built by the preflight, from the frozen
-    # capability snapshot the schema budget was measured against, so the tools sent here are
-    # exactly the tools charged for - no second build that a concurrent grant change could
-    # make disagree with the budget. Dispatch-time reauthorization inside each handler still
-    # enforces the live grants.
-    activity = plan.activity
-    result: ToolLoopResult = await run_tool_loop(
-        config.endpoint_url,
-        config.api_key,
-        config.model,
-        plan.messages,
-        registry=plan.registry,
-        context_budget=plan.context_budget,
-    )
-    content = result.content.strip()
-    if not result.complete:
-        content = result.detail or "The agent turn did not complete."
-    if not content:
-        raise LyraError("The agent returned an empty response. Try again.")
-    tool_activity = [
+def _activity_events_payload(activity: agent_tools.AgentRunActivity) -> list[dict[str, object]]:
+    """The audit events one run produced, in the compact shape the API and UI project."""
+    return [
         {
             "audit_id": event.audit_id,
             "tool": event.tool,
@@ -454,11 +417,163 @@ async def send_agent_chat(
         }
         for event in activity.events
     ]
+
+
+def _replay_completed_attempt(
+    conn: sqlite3.Connection, session_id: int, target: agent_attempts.RetryTarget
+) -> AgentChatResult:
+    """Return the reply a completed attempt already committed, without running the model.
+
+    The lost-response case (PLA-295): the turn succeeded and stored an assistant message,
+    but the HTTP response never reached the client, which then pressed Retry. Replaying the
+    stored reply here - rather than starting a new attempt - is what keeps a dropped
+    response from generating a second answer or a second tool run. The durable side-effect
+    rows (sources, proposals, commands) already exist and are read back through their own
+    polling queries, so they are not re-listed here.
+    """
+    assistant_message_id = target.latest["assistant_message_id"]
+    stored = next(
+        (
+            message
+            for message in sessions.list_messages(conn, session_id)
+            if int(message["id"]) == assistant_message_id
+        ),
+        None,
+    )
+    if stored is None:
+        # The completed attempt names a reply that no longer exists (a deleted message).
+        # There is nothing to replay and nothing safe to re-run against a completed turn.
+        raise NotFoundError(agent_attempts.NO_TURN_TO_RETRY)
+    return AgentChatResult(
+        message_id=int(stored["id"]),
+        content=str(stored["content"]),
+        stopped=llm_tools.COMPLETED,
+        detail="",
+        activity=list(stored["tool_activity"] or []),
+        source_ids=[],
+        workspace_change_ids=[],
+        command_request_ids=[],
+        profile_fact_ids=[],
+    )
+
+
+async def _run_agent_turn(
+    conn: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    turn_token: int,
+    *,
+    payload: AgentChatRequest | None,
+) -> AgentChatResult | JSONResponse:
+    """Plan, persist, and run one agent turn (a fresh send, or a retry when payload is None).
+
+    Runs entirely under the per-session turn claim the caller holds (PLA-279): the
+    history-dependent plan, the persistence, and the tool loop all sit inside the one slot,
+    so an accepted turn can never plan from a conversation snapshot older than a turn that
+    completed before it acquired the session. The consent gate and the impossible-context
+    preflight both run before anything is persisted, so a refusal on either path stores and
+    sends nothing.
+    """
+    # One snapshot for the endpoint and its document-text consent, exactly like a tutor
+    # chat turn: the endpoint authorized here is the endpoint `run_tool_loop` sends to
+    # below. An agent turn carries the conversation history and the student's message on its
+    # first round, and workspace file contents, fetched-page evidence, and other tool
+    # results on later rounds, so it is bound by the same locality/acknowledgement rule.
+    # Checked before any title or message is persisted and before the tool registry is even
+    # built: a refusal puts nothing on the wire and stores nothing.
+    access = resolve_tutor_access(conn)
+    require_document_allowed(access)
+    config = access.config
+
+    if payload is None:
+        # A retry reuses the original user message rather than appending a duplicate. The
+        # target is resolved under the claim, so no concurrent turn can move the
+        # conversation between the read and the run.
+        target = agent_attempts.resolve_retry_target(conn, session_id)
+        if target.latest["state"] == agent_attempts.COMPLETED:
+            return _replay_completed_attempt(conn, session_id, target)
+        content = target.content
+        profile = target.profile
+        user_message_id = target.user_message_id
+        # The current message is the reused user message; excluding it from history is what
+        # keeps the original prompt appearing exactly once in model context.
+        plan = _plan_agent_turn(
+            conn,
+            class_id,
+            session_id,
+            AgentChatRequest(content=content, profile=profile),  # type: ignore[arg-type]
+            config,
+            exclude_message_ids=frozenset({user_message_id}),
+        )
+    else:
+        # The privacy gate proved the endpoint may receive this turn's private material; the
+        # preflight proves the turn fits the endpoint's window. Both read only the session,
+        # the tool definitions, and the prior history, so an oversized or refused turn leaves
+        # no persisted title, message, attempt, or tool effect behind.
+        content = payload.content
+        profile = payload.profile
+        plan = _plan_agent_turn(conn, class_id, session_id, payload, config)
+        sessions.set_session_title_if_unset(conn, session_id, content)
+        user_message_id = sessions.add_message(conn, session_id, "user", content)
+
+    sessions.bind_turn(session_id, turn_token, user_message_id)
+    touch_class(conn, class_id)
+    # One durable attempt brackets this run of the model (PLA-295). It is created after the
+    # user message is persisted (fresh) or resolved (retry) and before the loop runs, so
+    # every attempt has a row and a failed run leaves a truthful, retryable record.
+    attempt_id = agent_attempts.create_attempt(
+        conn, session_id=session_id, user_message_id=user_message_id, profile=profile
+    )
+    # The registry and its audit collector were built by the preflight, from the frozen
+    # capability snapshot the schema budget was measured against (PLA-290), so the tools
+    # sent here are exactly the tools charged for. The attempt is bound to that collector
+    # now, after the row exists, so the tool rows this run writes carry this attempt without
+    # the preflight having to know the attempt id before any mutation.
+    activity = plan.activity
+    activity.attempt_id = attempt_id
+    try:
+        result: ToolLoopResult = await run_tool_loop(
+            config.endpoint_url,
+            config.api_key,
+            config.model,
+            plan.messages,
+            registry=plan.registry,
+            context_budget=plan.context_budget,
+        )
+    except BaseException as exc:
+        # `run_tool_loop` reports upstream/timeout/limit failures through its result, not by
+        # raising, so the only things that reach here are cancellation (a client disconnect)
+        # and a genuine bug. Either way the attempt must not be left reading as forever in
+        # flight: settle it truthfully - stopped for a cancellation, failed for an error -
+        # before the exception propagates and the claim is released. Best-effort, since the
+        # request connection may be tearing down alongside the cancellation.
+        cancelled = isinstance(exc, asyncio.CancelledError | GeneratorExit)
+        try:
+            if cancelled:
+                agent_attempts.stop_attempt(
+                    conn,
+                    attempt_id,
+                    detail="This turn was interrupted before it finished. Try it again.",
+                )
+            else:
+                agent_attempts.fail_attempt(
+                    conn,
+                    attempt_id,
+                    stopped_reason="error",
+                    detail="The agent turn did not complete.",
+                )
+        except Exception:
+            logger.debug("Could not settle agent attempt %s after an interrupted run", attempt_id)
+        raise
+    tool_activity = _activity_events_payload(activity)
+    answer = result.content.strip()
     if not result.complete:
+        detail = result.detail or "The agent turn did not complete."
+        agent_attempts.fail_attempt(conn, attempt_id, stopped_reason=result.stopped, detail=detail)
         return JSONResponse(
             status_code=_failure_status(result.stopped),
             content={
-                "detail": content,
+                "detail": detail,
                 "retryable": result.stopped in {llm_tools.TIMEOUT, llm_tools.UPSTREAM_FAILED},
                 "stopped": result.stopped,
                 "activity": tool_activity,
@@ -468,16 +583,64 @@ async def send_agent_chat(
                 "profile_fact_ids": activity.profile_fact_ids,
             },
         )
-    message_id = sessions.add_message(
-        conn,
-        session_id,
-        "assistant",
-        content,
-        tool_activity=tool_activity,
-    )
+    if not answer:
+        # Completed on the model's terms but empty. That is not an answer to store, so the
+        # attempt is failed (retryable) and the turn is refused with a bounded message.
+        agent_attempts.fail_attempt(
+            conn, attempt_id, stopped_reason="empty", detail="The agent returned an empty response."
+        )
+        raise LyraError("The agent returned an empty response. Try again.")
+    # The assistant reply and the attempt's completion are committed together, in one
+    # transaction, so a crash between them cannot leave a stored reply beside an attempt
+    # still reading as running - which a later retry would re-run, producing a second answer
+    # (PLA-295's "replayed, not re-run" guarantee). Either both land or neither does.
+    try:
+        conn.execute("begin immediate")
+        message_id = sessions.insert_message(
+            conn,
+            session_id,
+            "assistant",
+            answer,
+            tool_activity=tool_activity,
+        )
+        agent_attempts.mark_completed(conn, attempt_id, message_id)
+        conn.commit()
+    except BaseException as exc:
+        if conn.in_transaction:
+            conn.rollback()
+        # The attempt row was committed before the model ran. If the atomic reply/
+        # completion transaction fails, rolling it back restores that row to `running`.
+        # Settle it in a fresh transaction so a live backend never presents a finished
+        # model run as indefinitely in flight. Conditional terminal writes keep an
+        # ambiguous commit safe: if SQLite committed before surfacing an error, the
+        # already-completed row is left alone and Retry replays its one stored reply.
+        try:
+            if isinstance(exc, asyncio.CancelledError | GeneratorExit):
+                agent_attempts.stop_attempt(
+                    conn,
+                    attempt_id,
+                    detail=_PERSISTENCE_STOPPED_DETAIL,
+                )
+            else:
+                agent_attempts.fail_attempt(
+                    conn,
+                    attempt_id,
+                    stopped_reason="persistence_failed",
+                    detail=_PERSISTENCE_FAILED_DETAIL,
+                )
+        except Exception:
+            # Do not log either database exception: driver messages can include paths or
+            # values, and startup reconciliation remains the bounded final fallback if the
+            # database is not writable even for this small settlement.
+            logger.warning(
+                "Could not settle agent attempt %s after final reply persistence failed; "
+                "startup reconciliation remains the fallback",
+                attempt_id,
+            )
+        raise
     return AgentChatResult(
         message_id=message_id,
-        content=content,
+        content=answer,
         stopped=result.stopped,
         detail=result.detail,
         activity=tool_activity,
@@ -486,3 +649,56 @@ async def send_agent_chat(
         command_request_ids=activity.command_request_ids,
         profile_fact_ids=activity.profile_fact_ids,
     )
+
+
+@router.post(
+    "/classes/{class_id}/sessions/{session_id}/agent-chat",
+    response_model=AgentChatResult,
+)
+async def send_agent_chat(
+    class_id: int,
+    session_id: int,
+    payload: AgentChatRequest,
+    conn: DbConn,
+) -> AgentChatResult | JSONResponse:
+    _scoped_session(conn, class_id, session_id)
+    # The claim is taken before `_plan_agent_turn` runs, not merely before persistence:
+    # that preflight is read-only but history-dependent (it assembles and trims history,
+    # freezes the capability snapshot, and builds the budget and registry from it), so the
+    # snapshot it plans from must be protected by the claim too (PLA-279). An overlapping
+    # agent or tutor turn on this session is refused here with a deterministic 409 before
+    # this turn reads history, persists, or sends anything.
+    turn_token = sessions.begin_turn(session_id)
+    try:
+        return await _run_agent_turn(conn, class_id, session_id, turn_token, payload=payload)
+    finally:
+        # Release on every ending: a consent or impossible-context refusal, a planning or
+        # registry-build failure, a tool-loop/upstream/timeout failure, a context or output
+        # limit, cancellation or client disconnect (CancelledError propagates through here),
+        # and any unexpected exception. `end_turn` is idempotent and token-owned, so it can
+        # never free a claim a newer turn has since taken.
+        sessions.end_turn(session_id, turn_token)
+
+
+@router.post(
+    "/classes/{class_id}/sessions/{session_id}/agent-chat/retry",
+    response_model=AgentChatResult,
+)
+async def retry_agent_chat(
+    class_id: int,
+    session_id: int,
+    conn: DbConn,
+) -> AgentChatResult | JSONResponse:
+    """Retry the conversation's last failed agent turn, reusing its user message (PLA-295).
+
+    Serialized against a normal new turn and against a second Retry by the same per-session
+    claim: whichever request wins the slot runs, the other is refused with a 409, so at
+    most one retry attempt runs at a time. A retry of a turn that already completed - the
+    lost-response case - replays the stored reply instead of running the model again.
+    """
+    _scoped_session(conn, class_id, session_id)
+    turn_token = sessions.begin_turn(session_id)
+    try:
+        return await _run_agent_turn(conn, class_id, session_id, turn_token, payload=None)
+    finally:
+        sessions.end_turn(session_id, turn_token)

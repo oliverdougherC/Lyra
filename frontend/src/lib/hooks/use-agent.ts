@@ -122,3 +122,31 @@ export function useSendAgentChat(classId: number, sessionId: number | null) {
     },
   })
 }
+
+/**
+ * Retry the conversation's last failed agent turn (PLA-295).
+ *
+ * Reuses the original user message rather than sending a new one, so pressing Retry is
+ * "answer the failed turn again", not "ask twice". Repeated clicks are serialized by the
+ * server's per-session claim - a second one racing the first returns a 409 - so the button
+ * is also disabled while a retry is pending; the two together keep at most one retry in
+ * flight. Both endings refresh the transcript and activity, so the turn's truthful state
+ * (a new reply, or a still-failed attempt) is what the conversation shows next.
+ */
+export function useRetryAgentChat(classId: number, sessionId: number | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => {
+      if (sessionId === null) throw new Error('Start a conversation before using agent tools.')
+      return api.retryAgentChat(classId, sessionId)
+    },
+    onSuccess: async () => {
+      if (sessionId === null) return
+      await invalidateAgentTurnCaches(queryClient, classId, sessionId)
+    },
+    onError: async (error) => {
+      if (sessionId === null || !(error instanceof AgentChatError)) return
+      await invalidateAgentTurnCaches(queryClient, classId, sessionId)
+    },
+  })
+}

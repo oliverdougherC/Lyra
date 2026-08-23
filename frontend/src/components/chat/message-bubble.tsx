@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Check, Copy, RefreshCw, X } from 'lucide-react'
+import { AlertTriangle, Check, Copy, RefreshCw, X } from 'lucide-react'
 
 import { LyraAvatar } from '@/components/chat/lyra-mark'
 import { ReasoningTrace } from '@/components/chat/reasoning-trace'
@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatCount, formatRelativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { WriterActivity } from '@/types'
+import type { AgentAttempt, WriterActivity } from '@/types'
 
 export type ChatMessage = {
   id: number
@@ -28,6 +28,8 @@ export type ChatMessage = {
   /** What a writer turn did on the way to this reply. Empty for tutor messages. */
   tool_activity: WriterActivity[]
   created_at: string
+  /** The latest agent-turn attempt on this message, when it was an agent turn (PLA-295). */
+  agent_attempt?: AgentAttempt | null
 }
 
 type MessageRowProps = {
@@ -73,6 +75,8 @@ export function MessageRow({
   onRetry,
 }: MessageRowProps) {
   if (message.role === 'user') {
+    const attempt = message.agent_attempt
+    const turnFailed = attempt?.state === 'failed' || attempt?.state === 'stopped'
     return (
       <div className={cn('group flex flex-col items-end', className)}>
         {/* The student's note in the margin: warm tan rather than neutral gray, with one
@@ -80,6 +84,10 @@ export function MessageRow({
         <div className="bg-accent-secondary/45 border-accent-secondary/60 max-w-[80%] rounded-2xl rounded-br-md border px-4 py-2.5 text-[0.9375rem] leading-6 whitespace-pre-wrap">
           {message.content}
         </div>
+        {/* A failed or stopped agent turn is shown as what it is - the reply never came -
+            rather than as a question with silence under it. The Retry itself lives in the
+            agent controls, where the turn was sent from. */}
+        {turnFailed ? <AgentTurnFailure detail={attempt?.detail ?? null} /> : null}
         <MessageActions
           align="end"
           content={message.content}
@@ -269,6 +277,25 @@ function CopyButton({ content }: { content: string }) {
     >
       {copied ? <Check className="size-3.5 text-success-text" /> : <Copy className="size-3.5" />}
     </ActionButton>
+  )
+}
+
+/**
+ * A failed or stopped agent turn, shown under the question it answers. Truthful and
+ * bounded: it carries the server's own privacy-safe detail (never an endpoint, path, or
+ * transcript) and points at the agent controls, where the turn was sent from and where
+ * Retry lives. `data-agent-turn-failure` marks it for the tests that assert the state.
+ */
+function AgentTurnFailure({ detail }: { detail: string | null }) {
+  return (
+    <div
+      data-agent-turn-failure
+      className="text-destructive mt-1 flex max-w-[80%] items-start gap-1.5 text-xs"
+      role="status"
+    >
+      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+      <span>{detail?.trim() || 'This turn did not finish. Retry it from the agent controls.'}</span>
+    </div>
   )
 }
 

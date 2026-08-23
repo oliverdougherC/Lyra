@@ -107,6 +107,17 @@ export interface WriterActivity {
   ok: boolean
 }
 
+/**
+ * The latest agent-turn attempt on a user message (PLA-295). Present only on a user
+ * message that was an agent turn; absent on tutor and writer turns and assistant replies.
+ * `failed`/`stopped` are the states the conversation shows as a failed turn with a Retry.
+ */
+export interface AgentAttempt {
+  state: 'running' | 'completed' | 'failed' | 'stopped'
+  stopped_reason: string | null
+  detail: string | null
+}
+
 export interface MessageRead {
   id: number
   session_id: number
@@ -121,6 +132,8 @@ export interface MessageRead {
   /** What a writer turn did on the way to this reply. Empty for tutor messages. */
   tool_activity: WriterActivity[]
   created_at: string
+  /** The latest agent-turn attempt on this message, when it was an agent turn. */
+  agent_attempt?: AgentAttempt | null
 }
 
 export interface FactRead {

@@ -28,7 +28,16 @@ from backend.api import (
     routes_writer,
 )
 from backend.config import settings
-from backend.core import agent_store, drafting, sessions, solver, storage_intents, study, tool_audit
+from backend.core import (
+    agent_attempts,
+    agent_store,
+    drafting,
+    sessions,
+    solver,
+    storage_intents,
+    study,
+    tool_audit,
+)
 from backend.core.errors import LyraError
 from backend.core.ingestion import reconcile_interrupted, start_worker
 from backend.core.origins import ALLOWED_BROWSER_ORIGINS, host_is_allowed
@@ -82,6 +91,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         abandoned_tools = tool_audit.reconcile_inflight(conn)
         if abandoned_tools:
             logger.warning("Marked %d interrupted agent tool call(s) as abandoned", abandoned_tools)
+        # An agent-turn attempt cannot outlive the process that was running it, so one still
+        # `running` at startup is one whose process died mid-turn. Settle it as stopped -
+        # a truthful, retryable terminal state - so it never reads forever as in flight.
+        abandoned_attempts = agent_attempts.reconcile_running(conn)
+        if abandoned_attempts:
+            logger.warning("Marked %d interrupted agent turn(s) as stopped", abandoned_attempts)
         abandoned_commands = agent_store.reconcile_running_commands(conn)
         if abandoned_commands:
             logger.warning(

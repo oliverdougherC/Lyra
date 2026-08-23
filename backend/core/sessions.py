@@ -387,6 +387,43 @@ def add_message(
     Raises:
         NotFoundError: when no session carries that id.
     """
+    message_id = insert_message(
+        conn,
+        session_id,
+        role,
+        content,
+        retrieval_trimmed=retrieval_trimmed,
+        omitted_document_count=omitted_document_count,
+        thinking=thinking,
+        thinking_ms=thinking_ms,
+        tool_activity=tool_activity,
+    )
+    conn.commit()
+    return message_id
+
+
+def insert_message(
+    conn: sqlite3.Connection,
+    session_id: int,
+    role: MessageRole,
+    content: str,
+    retrieval_trimmed: bool = False,
+    omitted_document_count: int = 0,
+    thinking: str = "",
+    thinking_ms: int = 0,
+    tool_activity: list[dict[str, object]] | None = None,
+) -> int:
+    """Append one message without committing, and return its id.
+
+    The body of `add_message` minus the commit, so a caller composing a larger transaction
+    - the agent route committing an assistant reply and its attempt's completion together,
+    so a crash can never leave a stored reply beside an attempt still reading as running -
+    can write the message inside its own `begin`/`commit`. `add_message` remains the
+    committing entry point every other caller uses.
+
+    Raises:
+        NotFoundError: when no session carries that id.
+    """
     get_session(conn, session_id)
     cursor = conn.execute(
         "insert into messages (session_id, role, content, thinking, thinking_ms, "
@@ -403,7 +440,6 @@ def add_message(
             json.dumps(tool_activity or [], separators=(",", ":")),
         ),
     )
-    conn.commit()
     return int(cursor.lastrowid or 0)
 
 

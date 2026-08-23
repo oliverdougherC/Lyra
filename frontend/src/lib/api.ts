@@ -540,6 +540,15 @@ export const api = {
       errorFactory: agentChatErrorFactory,
     }),
 
+  // Retry the conversation's last failed agent turn, reusing its user message (PLA-295).
+  // The server reuses the original message rather than appending a duplicate, and replays a
+  // reply that already committed instead of running the model again.
+  retryAgentChat: (classId: number, sessionId: number) =>
+    requestJson<AgentChatResult>(`/api/classes/${classId}/sessions/${sessionId}/agent-chat/retry`, {
+      method: 'POST',
+      errorFactory: agentChatErrorFactory,
+    }),
+
   listAgentWorkspaceChanges: (classId: number, sessionId: number, signal?: AbortSignal) =>
     requestJson<AgentWorkspaceChangeRead[]>(
       `/api/classes/${classId}/sessions/${sessionId}/workspace/changes`,

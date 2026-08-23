@@ -11,7 +11,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from backend.core import classes, commands, sessions, workspace_paths
+from backend.core import agent_attempts, classes, commands, sessions, workspace_paths
 from backend.core.errors import ConflictError, NotFoundError
 
 READ = "read"
@@ -444,35 +444,48 @@ def create_workspace_change(
     file_mode: int,
     newline: str | None,
     rationale: str | None,
+    attempt_id: int | None = None,
 ) -> dict[str, object]:
     """Persist one inert file-change proposal for later user review."""
     workspace = get_workspace(conn, workspace_id, class_id=class_id)
     _require_session_scope(conn, session_id, class_id)
     if not workspace["change_proposals_enabled"]:
         raise ConflictError("Change proposals are not enabled for this workspace.")
-    cursor = conn.execute(
-        "insert into workspace_changes (workspace_id, session_id, relative_path, base_hash, "
-        "base_content, proposed_content, file_device, file_inode, file_mode, newline, rationale, "
-        "before_hash) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            workspace_id,
-            session_id,
-            _require_text(relative_path, "relative_path"),
-            _require_text(base_hash, "base_hash"),
-            base_content,
-            proposed_content,
-            file_device,
-            file_inode,
-            file_mode,
-            newline,
-            _bounded_optional_text(rationale, "rationale", MAX_REASON_CHARS),
-            base_hash,
-        ),
-    )
-    conn.commit()
+    try:
+        conn.execute("begin immediate")
+        cursor = conn.execute(
+            "insert into workspace_changes (workspace_id, session_id, relative_path, base_hash, "
+            "base_content, proposed_content, file_device, file_inode, file_mode, newline, "
+            "rationale, before_hash) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                workspace_id,
+                session_id,
+                _require_text(relative_path, "relative_path"),
+                _require_text(base_hash, "base_hash"),
+                base_content,
+                proposed_content,
+                file_device,
+                file_inode,
+                file_mode,
+                newline,
+                _bounded_optional_text(rationale, "rationale", MAX_REASON_CHARS),
+                base_hash,
+            ),
+        )
+        change_id = int(cursor.lastrowid or 0)
+        agent_attempts.link_target(
+            conn,
+            attempt_id,
+            target_kind="workspace_change",
+            target_id=change_id,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return get_workspace_change(
         conn,
-        int(cursor.lastrowid or 0),
+        change_id,
         class_id=class_id,
         workspace_id=workspace_id,
         session_id=session_id,
@@ -621,6 +634,7 @@ def create_command_request(
     reason: str,
     expected_signal: str | None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    attempt_id: int | None = None,
 ) -> dict[str, object]:
     """Persist one exact, user-confirmable command request."""
     workspace = get_workspace(conn, workspace_id, class_id=class_id)
@@ -648,13 +662,20 @@ def create_command_request(
                 timeout_seconds,
             ),
         )
+        request_id = int(cursor.lastrowid or 0)
+        agent_attempts.link_target(
+            conn,
+            attempt_id,
+            target_kind="command_request",
+            target_id=request_id,
+        )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
     return get_command_request(
         conn,
-        int(cursor.lastrowid or 0),
+        request_id,
         class_id=class_id,
         workspace_id=workspace_id,
         session_id=session_id,

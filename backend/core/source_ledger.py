@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from urllib.parse import urlsplit, urlunsplit
 
-from backend.core import classes
+from backend.core import agent_attempts, classes
 from backend.core.errors import NotFoundError
 
 COURSE = "course"
@@ -244,6 +244,7 @@ def upsert_source(
     snapshot_hash: str | None = None,
     truncated: bool = False,
     excerpts: Sequence[str | Mapping[str, object]] | None = None,
+    attempt_id: int | None = None,
 ) -> dict[str, object]:
     """Insert or refresh a course/web source and optionally replace its excerpts.
 
@@ -299,6 +300,12 @@ def upsert_source(
                 ),
             )
             source_id = int(cursor.lastrowid or 0)
+            agent_attempts.link_target(
+                conn,
+                attempt_id,
+                target_kind="source",
+                target_id=source_id,
+            )
         else:
             source_id = int(row["id"])
             assignments = "title = ?, updated_at = datetime('now')"
@@ -359,6 +366,12 @@ def upsert_source(
                     ),
                 )
                 revision_id = int(revision_cursor.lastrowid or 0)
+                agent_attempts.link_target(
+                    conn,
+                    attempt_id,
+                    target_kind="source_revision",
+                    target_id=revision_id,
+                )
             conn.execute(
                 "update writer_sources set current_revision_id = ? where id = ?",
                 (revision_id, source_id),
@@ -378,6 +391,7 @@ def add_excerpt(
     excerpt: str,
     *,
     section_ref: str | None = None,
+    attempt_id: int | None = None,
 ) -> dict[str, object]:
     """Record one passage actually relied on and return it."""
     clean_excerpt = _validated_excerpt(conn, source_id, excerpt)
@@ -392,17 +406,29 @@ def add_excerpt(
     ).fetchone()
     if existing is not None:
         return dict(existing)
-    cursor = conn.execute(
-        "insert into writer_source_excerpts "
-        "(source_id, source_revision_id, section_ref, excerpt) "
-        "select id, current_revision_id, ?, ? from writer_sources where id = ?",
-        (clean_ref, clean_excerpt, source_id),
-    )
-    conn.commit()
+    try:
+        conn.execute("begin immediate")
+        cursor = conn.execute(
+            "insert into writer_source_excerpts "
+            "(source_id, source_revision_id, section_ref, excerpt) "
+            "select id, current_revision_id, ?, ? from writer_sources where id = ?",
+            (clean_ref, clean_excerpt, source_id),
+        )
+        excerpt_id = int(cursor.lastrowid or 0)
+        agent_attempts.link_target(
+            conn,
+            attempt_id,
+            target_kind="source_excerpt",
+            target_id=excerpt_id,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     row = conn.execute(
         "select id, source_id, source_revision_id, section_ref, excerpt, created_at "
         "from writer_source_excerpts where id = ?",
-        (int(cursor.lastrowid or 0),),
+        (excerpt_id,),
     ).fetchone()
     if row is None:  # pragma: no cover - same connection, row was inserted above.
         raise RuntimeError("The source excerpt disappeared after insertion.")

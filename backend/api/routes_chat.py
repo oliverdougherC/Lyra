@@ -25,7 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.types import Receive, Scope, Send
 
-from backend.core import artifacts, sessions
+from backend.core import agent_attempts, artifacts, sessions
 from backend.core.app_settings import (
     NO_ENDPOINT,
     REMOTE_UNACKNOWLEDGED,
@@ -159,6 +159,20 @@ class SessionRead(BaseModel):
     created_at: str
 
 
+class AgentAttemptRead(BaseModel):
+    """The latest agent-turn attempt on a user message, for the transcript (PLA-295).
+
+    Present only on a user message that was an agent turn. `state` is running/completed/
+    failed/stopped; `stopped_reason` and `detail` are the bounded, privacy-safe stop
+    reason for a failed or stopped attempt. The interface shows a truthful failed/stopped
+    state and offers Retry from it; a completed attempt carries the reply's id.
+    """
+
+    state: str
+    stopped_reason: str | None = None
+    detail: str | None = None
+
+
 class MessageRead(BaseModel):
     """One persisted message, carrying its reasoning and what retrieval had to leave out."""
 
@@ -172,6 +186,9 @@ class MessageRead(BaseModel):
     omitted_document_count: int
     tool_activity: list[dict[str, object]]
     created_at: str
+    # Present only on a user message that was an agent turn; None for tutor and writer
+    # messages and for assistant replies.
+    agent_attempt: AgentAttemptRead | None = None
 
 
 class ChatRequest(BaseModel):
@@ -496,7 +513,20 @@ def read_sessions(class_id: int, conn: DbConn) -> list[dict[str, object]]:
 
 @router.get("/sessions/{session_id}/messages", response_model=list[MessageRead])
 def read_messages(session_id: int, conn: DbConn) -> list[dict[str, object]]:
-    return sessions.list_messages(conn, session_id)
+    messages = sessions.list_messages(conn, session_id)
+    # Annotate each user turn that was an agent turn with its latest attempt state, so the
+    # transcript can show a truthful failed/stopped state and offer Retry (PLA-295). One
+    # query for the whole conversation; tutor and writer turns simply carry no attempt.
+    attempts = agent_attempts.latest_attempts_by_message(conn, session_id)
+    for message in messages:
+        attempt = attempts.get(int(message["id"]))
+        if attempt is not None:
+            message["agent_attempt"] = {
+                "state": attempt["state"],
+                "stopped_reason": attempt["stopped_reason"],
+                "detail": attempt["detail"],
+            }
+    return messages
 
 
 @router.patch("/sessions/{session_id}", response_model=SessionRead)

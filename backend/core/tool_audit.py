@@ -37,6 +37,7 @@ create table if not exists tool_audit_events (
   class_id integer,
   session_id integer,
   artifact_id integer,
+  attempt_id integer,
   tool text not null,
   capability text not null,
   effect text not null,
@@ -184,6 +185,7 @@ def start_event(
     class_id: int | None = None,
     session_id: int | None = None,
     artifact_id: int | None = None,
+    attempt_id: int | None = None,
     target_kind: str | None = None,
     target_id: str | None = None,
     now: datetime | None = None,
@@ -195,9 +197,10 @@ def start_event(
         conn.execute("begin immediate")
         conn.execute(
             "insert into tool_audit_events ("
-            "id, caller_kind, caller_id, class_id, session_id, artifact_id, tool, capability, "
-            "effect, arguments_json, target_kind, target_id, policy_decision, state, started_at"
-            ") values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "id, caller_kind, caller_id, class_id, session_id, artifact_id, attempt_id, tool, "
+            "capability, effect, arguments_json, target_kind, target_id, policy_decision, state, "
+            "started_at"
+            ") values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record_id,
                 _require_text(caller_kind, "caller_kind"),
@@ -205,6 +208,7 @@ def start_event(
                 class_id,
                 session_id,
                 artifact_id,
+                attempt_id,
                 _require_text(tool, "tool"),
                 _require_text(capability, "capability"),
                 _require_text(effect, "effect"),
@@ -231,9 +235,17 @@ def finish_event(
     result_summary: object | None = None,
     error_message: str | None = None,
     abandonment_reason: str | None = None,
+    target_kind: str | None = None,
+    target_id: str | None = None,
     now: datetime | None = None,
 ) -> FinishedAuditEvent:
-    """Mark a started event terminal exactly once."""
+    """Mark a started event terminal exactly once, attaching any result target.
+
+    Proposal ids are generally allocated by the action, after ``start_event`` has already
+    committed. Persisting the target here gives successful proposal rows one durable join
+    through ``(target_kind, target_id)`` to this event and its agent ``attempt_id``.
+    Existing targets supplied at start are never overwritten.
+    """
     finished_at = _timestamp(now)
     terminal_state = _require_text(state, "state")
     if terminal_state not in TERMINAL_STATES:
@@ -250,12 +262,15 @@ def finish_event(
             raise ValueError("That audit event is already terminal")
         conn.execute(
             "update tool_audit_events set state = ?, result_summary_json = ?, error_message = ?, "
-            "abandonment_reason = ?, finished_at = ?, updated_at = ? where id = ?",
+            "abandonment_reason = ?, target_kind = coalesce(target_kind, ?), "
+            "target_id = coalesce(target_id, ?), finished_at = ?, updated_at = ? where id = ?",
             (
                 terminal_state,
                 None if result_summary is None else _json_text(result_summary),
                 _bounded_message(error_message),
                 _bounded_message(abandonment_reason),
+                target_kind,
+                target_id,
                 finished_at,
                 finished_at,
                 event_id,

@@ -25,6 +25,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from backend.core import (
+    agent_attempts,
     agent_store,
     profiles,
     sessions,
@@ -123,9 +124,18 @@ class AgentActivity:
 
 @dataclass(slots=True)
 class AgentRunActivity:
-    """Run-local consequences and durable audit identifiers produced by a registry."""
+    """Run-local consequences and durable audit identifiers produced by a registry.
+
+    `attempt_id` is the durable agent-turn attempt this run belongs to (PLA-295). It is
+    bound late, after the attempt row exists, precisely so the executable registry can
+    still be built in the read-only preflight before any mutation (a PLA-290 invariant):
+    the handlers read it here at dispatch time, so the audit rows a run writes are tied to
+    the attempt that produced them without the registry having to know the attempt id when
+    it was assembled. None for callers with no attempt (the writer and solver loops).
+    """
 
     events: list[AgentActivity] = field(default_factory=list)
+    attempt_id: int | None = None
     fetched_sources: dict[str, FetchedSource] = field(default_factory=dict, repr=False)
     source_ids: list[int] = field(default_factory=list)
     workspace_change_ids: list[int] = field(default_factory=list)
@@ -322,6 +332,7 @@ def _audited_handler(
                     caller_id=str(session_id),
                     class_id=class_id,
                     session_id=session_id,
+                    attempt_id=activity.attempt_id,
                     tool=name,
                     capability=capability,
                     effect=effect,
@@ -347,6 +358,7 @@ def _audited_handler(
                 caller_id=str(session_id),
                 class_id=class_id,
                 session_id=session_id,
+                attempt_id=activity.attempt_id,
                 tool=name,
                 capability=capability,
                 effect=effect,
@@ -382,6 +394,8 @@ def _audited_handler(
                 started.id,
                 state=terminal_state,
                 result_summary=outcome.summary,
+                target_kind=outcome.target_kind,
+                target_id=outcome.target_id,
             )
         except Exception:
             terminal_state = tool_audit.STARTED
@@ -653,15 +667,43 @@ def _add_research_tools(
             content_type=fetched.content_type,
             snapshot_hash=hashlib.sha256(fetched.snapshot.encode()).hexdigest(),
             truncated=fetched.truncated,
+            attempt_id=activity.attempt_id,
         )
         source_id = int(stored["id"])
-        if source_id not in activity.source_ids:
+        revision_id = int(stored["current_revision_id"])
+        source_owned = (
+            activity.attempt_id is None
+            or agent_attempts.target_owner(conn, target_kind="source", target_id=source_id)
+            == activity.attempt_id
+        )
+        revision_owned = (
+            activity.attempt_id is None
+            or agent_attempts.target_owner(
+                conn, target_kind="source_revision", target_id=revision_id
+            )
+            == activity.attempt_id
+        )
+        if source_owned and source_id not in activity.source_ids:
             activity.source_ids.append(source_id)
+        if activity.attempt_id is None:
+            target_kind, target_id = "source", source_id
+        else:
+            target_kind = "source_revision" if revision_owned else "source_revision_reference"
+            target_id = revision_id
         return _Outcome(
-            success(source=source_ledger.prompt_source(stored)),
-            {"source_id": source_id, "fetch_id": fetch_id},
-            target_kind="source",
-            target_id=str(source_id),
+            success(
+                source=source_ledger.prompt_source(stored),
+                source_revision_id=revision_id,
+                produced=revision_owned,
+            ),
+            {
+                "source_id": source_id,
+                "source_revision_id": revision_id,
+                "fetch_id": fetch_id,
+                "produced": revision_owned,
+            },
+            target_kind=target_kind,
+            target_id=str(target_id),
         )
 
     snapshot_definition = _definition(
@@ -707,13 +749,23 @@ def _add_research_tools(
         )
         source_ledger.get_source(conn, source_id, class_id=class_id)
         stored = source_ledger.add_excerpt(
-            conn, source_id, excerpt, section_ref=section_ref or None
+            conn,
+            source_id,
+            excerpt,
+            section_ref=section_ref or None,
+            attempt_id=activity.attempt_id,
+        )
+        excerpt_id = int(stored["id"])
+        excerpt_owned = (
+            activity.attempt_id is None
+            or agent_attempts.target_owner(conn, target_kind="source_excerpt", target_id=excerpt_id)
+            == activity.attempt_id
         )
         return _Outcome(
-            success(excerpt=stored),
-            {"source_id": source_id, "excerpt_id": int(stored["id"])},
-            target_kind="source_excerpt",
-            target_id=str(stored["id"]),
+            success(excerpt=stored, produced=excerpt_owned),
+            {"source_id": source_id, "excerpt_id": excerpt_id, "produced": excerpt_owned},
+            target_kind="source_excerpt" if excerpt_owned else "source_excerpt_reference",
+            target_id=str(excerpt_id),
         )
 
     excerpt_definition = _definition(
@@ -772,23 +824,35 @@ def _add_research_tools(
             value=value,
             source_id=source_id,
             excerpt_id=excerpt_id,
+            attempt_id=activity.attempt_id,
         )
         fact_id = int(fact["id"])
-        if fact_id not in activity.profile_fact_ids:
+        fact_owned = (
+            activity.attempt_id is None
+            or agent_attempts.target_owner(conn, target_kind="profile_fact", target_id=fact_id)
+            == activity.attempt_id
+        )
+        if fact_owned and fact_id not in activity.profile_fact_ids:
             activity.profile_fact_ids.append(fact_id)
         return _Outcome(
             success(
                 fact_id=fact_id,
                 confirmed=bool(fact["confirmed"]),
                 active=bool(fact["active"]),
+                produced=fact_owned,
                 note=(
                     "This fact already exists in active class context."
                     if fact["active"]
                     else "This fact is not used until the student confirms it."
                 ),
             ),
-            {"fact_id": fact_id, "source_id": source_id, "excerpt_id": excerpt_id},
-            target_kind="profile_fact",
+            {
+                "fact_id": fact_id,
+                "source_id": source_id,
+                "excerpt_id": excerpt_id,
+                "produced": fact_owned,
+            },
+            target_kind="profile_fact" if fact_owned else "profile_fact_reference",
             target_id=str(fact_id),
         )
 
@@ -1024,6 +1088,7 @@ def _add_code_tools(
             file_mode=proposal.file_mode,
             newline=proposal.newline,
             rationale=rationale or None,
+            attempt_id=activity.attempt_id,
         )
         change_id = int(stored["id"])
         activity.workspace_change_ids.append(change_id)
@@ -1129,6 +1194,7 @@ def _add_command_tools(
             reason=reason,
             expected_signal=expected_signal or None,
             timeout_seconds=timeout_seconds,
+            attempt_id=activity.attempt_id,
         )
         request_id = int(stored["id"])
         activity.command_request_ids.append(request_id)
