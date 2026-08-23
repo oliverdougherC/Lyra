@@ -41,3 +41,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# PLA-289 conflict-UI e2e screenshots are regenerated per run; keep them out of git.
+/e2e/artifacts

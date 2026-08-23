@@ -165,7 +165,8 @@ def seed_workspace(root: Path, *, external_db: bool = False) -> tuple[Path, Path
     part_id = int(
         conn.execute(
             "insert into artifact_parts (artifact_id, parent_part_id, kind, ordinal, label, "
-            "content, status, origin, verdict) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "content, status, origin, verdict, content_version) "
+            "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 artifact_id,
                 None,
@@ -176,6 +177,9 @@ def seed_workspace(root: Path, *, external_db: bool = False) -> tuple[Path, Path
                 "complete",
                 "generated",
                 "verified",
+                # A non-zero version so restore preserving it is a real assertion, not a
+                # coincidence with the column default (PLA-289).
+                4,
             ),
         ).lastrowid
         or 0
@@ -245,6 +249,10 @@ def assert_restored_workspace(data_dir: Path, db_path: Path) -> None:
             "select title, state, problems_total, problems_done from artifacts"
         ).fetchone()
         assert artifact == ("Worksheet 1", "ready", 1, 1)
+        # The body and its optimistic-concurrency version both survive the round-trip, so a
+        # restored draft cannot report the wrong version and refuse the student's edits.
+        part = conn.execute("select content, content_version from artifact_parts").fetchone()
+        assert part == ("Apply Faraday's law.", 4)
         revision = conn.execute("select revision, note from artifact_part_revisions").fetchone()
         assert revision == (1, "Initial draft")
     finally:

@@ -145,8 +145,16 @@ export function usePartRevisions(artifactId: number, partId: number | null) {
 export function useRestoreRevision(artifactId: number) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ partId, revision }: { partId: number; revision: number }) =>
-      api.restorePartRevision(artifactId, partId, revision),
+    mutationFn: ({
+      partId,
+      revision,
+      expectedVersion,
+    }: {
+      partId: number
+      revision: number
+      /** The body version the caller last saw; a stale draft tab conflicts (PLA-289). */
+      expectedVersion?: number
+    }) => api.restorePartRevision(artifactId, partId, revision, expectedVersion),
     onSuccess: (_part, { partId }) => {
       queryClient.invalidateQueries({ queryKey: solutionKeys.detail(artifactId) })
       queryClient.invalidateQueries({ queryKey: solutionKeys.revisions(artifactId, partId) })
