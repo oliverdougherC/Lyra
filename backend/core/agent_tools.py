@@ -123,9 +123,18 @@ class AgentActivity:
 
 @dataclass(slots=True)
 class AgentRunActivity:
-    """Run-local consequences and durable audit identifiers produced by a registry."""
+    """Run-local consequences and durable audit identifiers produced by a registry.
+
+    `attempt_id` is the durable agent-turn attempt this run belongs to (PLA-295). It is
+    bound late, after the attempt row exists, precisely so the executable registry can
+    still be built in the read-only preflight before any mutation (a PLA-290 invariant):
+    the handlers read it here at dispatch time, so the audit rows a run writes are tied to
+    the attempt that produced them without the registry having to know the attempt id when
+    it was assembled. None for callers with no attempt (the writer and solver loops).
+    """
 
     events: list[AgentActivity] = field(default_factory=list)
+    attempt_id: int | None = None
     fetched_sources: dict[str, FetchedSource] = field(default_factory=dict, repr=False)
     source_ids: list[int] = field(default_factory=list)
     workspace_change_ids: list[int] = field(default_factory=list)
@@ -322,6 +331,7 @@ def _audited_handler(
                     caller_id=str(session_id),
                     class_id=class_id,
                     session_id=session_id,
+                    attempt_id=activity.attempt_id,
                     tool=name,
                     capability=capability,
                     effect=effect,
@@ -347,6 +357,7 @@ def _audited_handler(
                 caller_id=str(session_id),
                 class_id=class_id,
                 session_id=session_id,
+                attempt_id=activity.attempt_id,
                 tool=name,
                 capability=capability,
                 effect=effect,

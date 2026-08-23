@@ -37,6 +37,7 @@ create table if not exists tool_audit_events (
   class_id integer,
   session_id integer,
   artifact_id integer,
+  attempt_id integer,
   tool text not null,
   capability text not null,
   effect text not null,
@@ -184,6 +185,7 @@ def start_event(
     class_id: int | None = None,
     session_id: int | None = None,
     artifact_id: int | None = None,
+    attempt_id: int | None = None,
     target_kind: str | None = None,
     target_id: str | None = None,
     now: datetime | None = None,
@@ -195,9 +197,10 @@ def start_event(
         conn.execute("begin immediate")
         conn.execute(
             "insert into tool_audit_events ("
-            "id, caller_kind, caller_id, class_id, session_id, artifact_id, tool, capability, "
-            "effect, arguments_json, target_kind, target_id, policy_decision, state, started_at"
-            ") values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "id, caller_kind, caller_id, class_id, session_id, artifact_id, attempt_id, tool, "
+            "capability, effect, arguments_json, target_kind, target_id, policy_decision, state, "
+            "started_at"
+            ") values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 record_id,
                 _require_text(caller_kind, "caller_kind"),
@@ -205,6 +208,7 @@ def start_event(
                 class_id,
                 session_id,
                 artifact_id,
+                attempt_id,
                 _require_text(tool, "tool"),
                 _require_text(capability, "capability"),
                 _require_text(effect, "effect"),

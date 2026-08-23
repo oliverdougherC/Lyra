@@ -30,9 +30,11 @@ import {
   useAttachAgentWorkspace,
   useDetachAgentWorkspace,
   useRefreshAgentSession,
+  useRetryAgentChat,
   useSendAgentChat,
   useUpdateAgentWorkspaceGrants,
 } from '@/lib/hooks/use-agent'
+import { useMessages } from '@/lib/hooks/use-chat'
 import { useClassWriterSettings, useUpdateClassWriterSettings } from '@/lib/hooks/use-settings'
 import type { AgentProfile } from '@/types'
 import type { AgentGrantKey, AgentToolActivity } from './types'
@@ -59,6 +61,18 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
   const commands = useAgentCommands(classId, sessionId, Boolean(workspace.data))
   const refresh = useRefreshAgentSession(classId, sessionId)
   const sendAgentChat = useSendAgentChat(classId, sessionId)
+  const retryAgentChat = useRetryAgentChat(classId, sessionId)
+  const messages = useMessages(sessionId)
+  // The conversation's last turn, when it was an agent turn that failed or stopped. This is
+  // the turn Retry re-answers: it reuses that message rather than sending a new one, so a
+  // failed turn is retried, never duplicated (PLA-295).
+  const lastMessage = messages.data?.[messages.data.length - 1]
+  const failedTurn =
+    lastMessage?.role === 'user' &&
+    (lastMessage.agent_attempt?.state === 'failed' ||
+      lastMessage.agent_attempt?.state === 'stopped')
+      ? lastMessage
+      : null
   const busy =
     attach.isPending || detach.isPending || updateGrants.isPending || updateWriterSettings.isPending
 
@@ -277,6 +291,30 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
               run commands separately below.
             </p>
           </form>
+
+          {failedTurn ? (
+            <Alert data-agent-retry variant="destructive">
+              <AlertTitle>The last agent turn did not finish</AlertTitle>
+              <AlertDescription className="flex flex-col items-start gap-2">
+                <span>
+                  {failedTurn.agent_attempt?.detail?.trim() ||
+                    'The turn stopped before it produced a reply.'}
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={retryAgentChat.isPending}
+                  onClick={() =>
+                    retryAgentChat.mutate(undefined, {
+                      onError: (error) => toast.error(error.message),
+                    })
+                  }
+                >
+                  {retryAgentChat.isPending ? 'Retrying…' : 'Retry this turn'}
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : null}
 
           {!workspace.data ? (
             <form
