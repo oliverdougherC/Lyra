@@ -114,7 +114,7 @@ describe('DeckSession', () => {
     await userEvent.click(screen.getByRole('button', { name: /Press Space to flip/ }))
     await userEvent.click(screen.getByRole('button', { name: /Good/ }))
 
-    await waitFor(() => expect(api.reviewCard).toHaveBeenCalledWith(11, 'good'))
+    await waitFor(() => expect(api.reviewCard).toHaveBeenCalledWith(11, 'good', expect.any(String)))
     expect(await screen.findByText('Card 2 of 2')).toBeInTheDocument()
     expect(screen.getByText('What does linearity require?')).toBeInTheDocument()
     // The next card starts on its front again.
@@ -135,7 +135,32 @@ describe('DeckSession', () => {
     expect(screen.getByRole('button', { name: /Again/ })).toBeInTheDocument()
 
     await userEvent.keyboard('1')
-    await waitFor(() => expect(api.reviewCard).toHaveBeenCalledWith(11, 'again'))
+    await waitFor(() =>
+      expect(api.reviewCard).toHaveBeenCalledWith(11, 'again', expect.any(String)),
+    )
+  })
+
+  it('reuses one operation id when a failed review is retried', async () => {
+    // A lost or failed response keeps the card in place; retrying it must reuse the same
+    // idempotency key so the server records the review once (PLA-296).
+    const review = vi
+      .spyOn(api, 'reviewCard')
+      .mockRejectedValueOnce(new Error('network'))
+      .mockImplementation((_partId, rating) => Promise.resolve(reviewedState(rating)))
+    const { wrapper } = createWrapper()
+    render(<DeckSession deckId={8} />, { wrapper })
+
+    await screen.findByText('What is the Fourier transform of a delta?')
+    await userEvent.click(screen.getByRole('button', { name: /Press Space to flip/ }))
+    await userEvent.click(screen.getByRole('button', { name: /Good/ }))
+    // The first call failed; the card is still here to retry.
+    await waitFor(() => expect(review).toHaveBeenCalledTimes(1))
+    await userEvent.click(screen.getByRole('button', { name: /Good/ }))
+    await waitFor(() => expect(review).toHaveBeenCalledTimes(2))
+
+    const firstOperationId = review.mock.calls[0][2]
+    const secondOperationId = review.mock.calls[1][2]
+    expect(firstOperationId).toBe(secondOperationId)
   })
 
   it('ends the session with the rating counts and the buckets after', async () => {

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Layers, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -60,6 +60,13 @@ export function DeckSession({ deckId }: { deckId: number }) {
   const [states, setStates] = useState<Map<number, CardState>>(new Map())
   /** When the current card came up; the interval labels are measured from it. */
   const [presentedAt, setPresentedAt] = useState(() => new Date())
+  /**
+   * One idempotency key per card review, keyed by part id. A retry after a failed or lost
+   * response reuses the same key, so the server applies the review once whether or not the
+   * first request actually committed (PLA-296). The key represents "the review of this
+   * card"; it is generated on first submit and reused until that card leaves the queue.
+   */
+  const operationIds = useRef<Map<number, string>>(new Map())
 
   // Seeded during render rather than in an effect, so the first card never flashes the
   // end screen for a frame. A finished session leaves the queue empty but not null, so
@@ -77,8 +84,14 @@ export function DeckSession({ deckId }: { deckId: number }) {
     async (rating: Rating) => {
       const current = queue?.[0]
       if (!current || reviewing) return
+      // Reuse this card's key if it already has one (a retry); otherwise mint one.
+      let operationId = operationIds.current.get(current.part_id)
+      if (operationId === undefined) {
+        operationId = crypto.randomUUID()
+        operationIds.current.set(current.part_id, operationId)
+      }
       try {
-        const updated = await submitReview({ partId: current.part_id, rating })
+        const updated = await submitReview({ partId: current.part_id, rating, operationId })
         setRatings((previous) => ({ ...previous, [rating]: previous[rating] + 1 }))
         setStates((previous) => new Map(previous).set(current.part_id, cardStateFromRead(updated)))
         setQueue((previous) => (previous ?? []).slice(1))

@@ -71,24 +71,55 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
       .filter((question): question is QuizQuestionRead => question !== undefined)
   }, [quiz.data, attempt])
 
-  const begin = useCallback(() => {
-    startedRef.current = true
-    setAttempt(null)
-    setStartError(null)
-    setIndex(0)
-    setAnswer(null)
-    setSelected(null)
-    setFillText('')
-    setResult(null)
-    start(undefined, {
-      onSuccess: (started) => setAttempt(started),
-      onError: (error) =>
-        setStartError(error instanceof ApiError ? error.message : 'Could not start this quiz.'),
-    })
-  }, [start])
+  const begin = useCallback(
+    (restart = false) => {
+      startedRef.current = true
+      setAttempt(null)
+      setStartError(null)
+      setIndex(0)
+      setAnswer(null)
+      setSelected(null)
+      setFillText('')
+      setResult(null)
+      start(restart, {
+        onSuccess: (started) => {
+          setAttempt(started)
+          // Resume where the student left off: the first question with no recorded answer,
+          // or the last question when every one has already been answered (PLA-277).
+          const answered = new Set(started.answers.map((entry) => entry.part_id))
+          const firstUnanswered = started.question_part_ids.findIndex((id) => !answered.has(id))
+          const resumeIndex =
+            firstUnanswered === -1
+              ? Math.max(0, started.question_part_ids.length - 1)
+              : firstUnanswered
+          setIndex(resumeIndex)
 
-  // The attempt starts on entry rather than on the first answer, so a quiz abandoned
-  // halfway still records how far it got.
+          // A lost finish response can leave every answer durably recorded while the
+          // attempt is still active. Restore the final reveal so the student can retry
+          // finish directly instead of submitting the last answer a second time.
+          if (firstUnanswered === -1) {
+            const partId = started.question_part_ids[resumeIndex]
+            const recorded = started.answers.find((entry) => entry.part_id === partId)
+            const resumed = quiz.data?.questions.find((entry) => entry.part_id === partId)
+            if (recorded && resumed) {
+              setSelected(recorded.selected_index)
+              setAnswer({
+                correct: recorded.correct,
+                correct_index: resumed.question.correct_index,
+                explanation: resumed.question.explanation,
+              })
+            }
+          }
+        },
+        onError: (error) =>
+          setStartError(error instanceof ApiError ? error.message : 'Could not start this quiz.'),
+      })
+    },
+    [quiz.data, start],
+  )
+
+  // The attempt starts (or resumes) on entry rather than on the first answer, so a quiz
+  // abandoned halfway still records how far it got and reopening it continues that attempt.
   useEffect(() => {
     if (quiz.data && !startedRef.current) begin()
   }, [quiz.data, begin])
@@ -139,7 +170,7 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
         <AlertTitle>Could not start this quiz</AlertTitle>
         <AlertDescription>
           <p>{startError}</p>
-          <Button variant="outline" size="sm" className="mt-3" onClick={begin}>
+          <Button variant="outline" size="sm" className="mt-3" onClick={() => begin()}>
             Retry
           </Button>
         </AlertDescription>
@@ -148,7 +179,7 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
   }
 
   if (result !== null) {
-    return <QuizResult classId={classId} result={result} onTryAgain={begin} />
+    return <QuizResult classId={classId} result={result} onTryAgain={() => begin(true)} />
   }
 
   const current = questions[index]
@@ -209,9 +240,22 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
         <p className="text-text-tertiary text-sm tabular-nums" aria-live="polite">
           Question {index + 1} of {questions.length}
         </p>
-        <p className="text-text-tertiary text-sm">
-          {payload.topic} · {DIFFICULTY_LABELS[payload.difficulty]}
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="text-text-tertiary text-sm">
+            {payload.topic} · {DIFFICULTY_LABELS[payload.difficulty]}
+          </p>
+          {/* An explicit start-over: the current attempt is retained (abandoned) and a
+              fresh one opened, so progress is never discarded implicitly (PLA-277). */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-text-tertiary"
+            onClick={() => begin(true)}
+            disabled={starting}
+          >
+            Start over
+          </Button>
+        </div>
       </div>
 
       <MathText className="text-text-primary text-lg">{payload.question}</MathText>
@@ -299,10 +343,10 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
                 knowing what went wrong. The explanation above stays; this is for when it
                 was not enough.
 
-                Opens in a new tab, and must: an attempt in progress cannot be resumed
-                (the backend keeps unfinished attempts but exposes no way to re-enter
-                one), so navigating this tab away would silently cost the student their
-                place. The quiz stays exactly where it is; the label says so. */}
+                Opens in a new tab. The attempt is now durable and resumable (PLA-277), so
+                leaving and returning would continue it - but the recorded answers resume,
+                not this in-progress reveal, so a new tab still keeps the student's exact
+                place. The quiz stays where it is; the label says so. */}
             {!answer.correct ? (
               <Button variant="ghost" asChild>
                 <a

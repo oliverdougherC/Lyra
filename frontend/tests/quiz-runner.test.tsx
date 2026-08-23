@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { QuizRunner } from '@/components/study/quiz-runner'
 import { api } from '@/lib/api'
-import type { QuizDetail, QuizQuestion, QuizQuestionRead } from '@/types'
+import type { AttemptAnswer, QuizDetail, QuizQuestion, QuizQuestionRead } from '@/types'
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
@@ -78,11 +78,14 @@ const FILL_BLANK = question(22, {
 /** Where the right answer sits for each fixture question, as the server would grade it. */
 const CORRECT_INDEX: Record<number, number> = { 21: 1, 22: 0 }
 
-function mockAttemptLifecycle(quiz: QuizDetail) {
+function mockAttemptLifecycle(quiz: QuizDetail, answers: AttemptAnswer[] = []) {
   vi.spyOn(api, 'getQuiz').mockResolvedValue(quiz)
   vi.spyOn(api, 'startAttempt').mockResolvedValue({
     attempt_id: 10,
     question_part_ids: quiz.questions.map((entry) => entry.part_id),
+    question_count: quiz.questions.length,
+    answers,
+    finished: false,
   })
   vi.spyOn(api, 'submitAnswer').mockImplementation((_attemptId, body) => {
     const correctIndex = CORRECT_INDEX[body.part_id] ?? 0
@@ -200,6 +203,7 @@ describe('QuizRunner', () => {
     vi.spyOn(api, 'finishAttempt').mockResolvedValue({
       score: 1,
       total: 2,
+      answered: 2,
       by_topic: [
         { topic: 'Algebra', correct: 1, total: 1 },
         { topic: 'Geography', correct: 0, total: 1 },
@@ -230,5 +234,54 @@ describe('QuizRunner', () => {
     // so there is nothing left here to lose.
     const weakLink = screen.getByRole('link', { name: /Go over this with Lyra/ })
     expect(weakLink).not.toHaveAttribute('target')
+  })
+
+  it('resumes at the first unanswered question when the attempt already has answers', async () => {
+    // The active attempt already recorded an answer to the first question, so a reload
+    // resumes at the second rather than starting over (PLA-277).
+    mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]), [
+      { part_id: 21, selected_index: 1, correct: true },
+    ])
+    const { wrapper } = createWrapper()
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+
+    expect(await screen.findByText('The capital of France is ...')).toBeInTheDocument()
+    expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
+  })
+
+  it('lets a fully answered resumed attempt finish without re-answering the last question', async () => {
+    mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]), [
+      { part_id: 21, selected_index: 1, correct: true },
+      { part_id: 22, selected_index: 0, correct: true },
+    ])
+    vi.spyOn(api, 'finishAttempt').mockResolvedValue({
+      score: 2,
+      total: 2,
+      answered: 2,
+      by_topic: [{ topic: 'Algebra', correct: 2, total: 2 }],
+    })
+    const { wrapper } = createWrapper()
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+
+    expect(await screen.findByText('The capital of France is ...')).toBeInTheDocument()
+    expect(screen.getByText('Question 2 of 2')).toBeInTheDocument()
+    expect(await screen.findByText('Correct.')).toBeInTheDocument()
+    expect(api.submitAnswer).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('button', { name: 'See results' }))
+
+    await waitFor(() => expect(api.finishAttempt).toHaveBeenCalledWith(10))
+    expect(await screen.findByText('You scored 2 out of 2')).toBeInTheDocument()
+  })
+
+  it('starts over explicitly, opening a fresh attempt', async () => {
+    mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]))
+    const { wrapper } = createWrapper()
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+
+    await screen.findByText('What is the determinant of the identity matrix?')
+    await userEvent.click(screen.getByRole('button', { name: 'Start over' }))
+
+    await waitFor(() => expect(api.startAttempt).toHaveBeenCalledWith(9, true))
   })
 })

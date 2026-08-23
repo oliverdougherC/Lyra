@@ -129,8 +129,18 @@ export function useDeckSession(deckId: number, limit = 20, enabled = true) {
 export function useReviewCard(deckId: number) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ partId, rating }: { partId: number; rating: Rating }) =>
-      api.reviewCard(partId, rating),
+    // `operationId` is the idempotency key: one per card review, reused on a transport
+    // retry so a lost-response retry returns the original result instead of reviewing
+    // twice (PLA-296).
+    mutationFn: ({
+      partId,
+      rating,
+      operationId,
+    }: {
+      partId: number
+      rating: Rating
+      operationId: string
+    }) => api.reviewCard(partId, rating, operationId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: studyKeys.deck(deckId) })
     },
@@ -164,7 +174,9 @@ export function useDeleteCard(deckId: number) {
  */
 export function useStartAttempt(quizId: number) {
   return useMutation({
-    mutationFn: () => api.startAttempt(quizId),
+    // A start is idempotent (PLA-277): a falsy argument resumes the active attempt or
+    // opens a fresh one; `true` explicitly starts over.
+    mutationFn: (restart: boolean) => api.startAttempt(quizId, restart),
   })
 }
 
