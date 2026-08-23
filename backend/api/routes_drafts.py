@@ -53,7 +53,13 @@ from backend.core.errors import ConflictError, LyraError, NotFoundError
 from backend.core.profiles import select_active_facts
 from backend.core.writer_budgets import Depth, validate_depth
 from backend.llm import client, prompts
-from backend.llm.tools import RecordedCall, ToolDefinition, ToolLoopResult, run_tool_loop
+from backend.llm.tools import (
+    RecordedCall,
+    ToolDefinition,
+    ToolLoopResult,
+    conversation_tokens,
+    run_tool_loop,
+)
 from backend.llm.turn_budget import plan_budget, trim_history
 from backend.rag.retrieve import retrieve
 from backend.rag.tokens import estimate_tokens
@@ -91,6 +97,14 @@ BLOCKED_MESSAGES = {
 }
 
 _WRITE_ERROR_MESSAGE = "Something went wrong while writing. Try again."
+
+# Said, and only this, when an inline-writing turn cannot fit the configured window even
+# after every optional block has been trimmed away. Bounded and privacy-safe: it names no
+# endpoint, path, or part of the prompt - the student needs to act, not to see internals.
+_WRITE_TOO_LARGE_MESSAGE = (
+    "This writing request is too large for the tutor's context window, even after trimming "
+    "optional context. Shorten your instruction or the selected text, then try again."
+)
 
 SSE_HEADERS = {"cache-control": "no-cache", "x-accel-buffering": "no"}
 
@@ -459,7 +473,23 @@ async def write_inline(artifact_id: int, payload: WriteRequest, conn: DbConn) ->
 def _open_write(
     conn: sqlite3.Connection, artifact_id: int, payload: WriteRequest
 ) -> tuple[TutorConfig, list[dict[str, str]]]:
-    """Everything fallible, before the first byte: guards, grounding, and the prompt."""
+    """Everything fallible, before the first byte: guards, grounding, and the prompt.
+
+    The prompt is budgeted against the resolved `TutorConfig.context_window` (PLA-300), so
+    an inline write never knowingly sends more than the window holds. The writing system
+    prompt and the student's instruction are mandatory, and so is the selected text when
+    there is any: it is the subject of the operation ("rewrite this", "tighten this"), so
+    dropping it would silently change what was asked. If those mandatory pieces cannot fit
+    beside the reply reserve, the turn is refused here, locally, before retrieval and before
+    any upstream request - the path stays stateless, touching nothing on a refusal.
+
+    The optional context is added in a fixed priority order - current heading, surrounding
+    text, retrieved course material, the draft brief, then class facts - each included only
+    while the whole prompt still fits the window minus the reserve, and otherwise dropped.
+    Retrieval is sized to the room left after the higher-priority local context, rather than
+    to a fixed budget, so a large selection or a large nearby block shrinks what is fetched
+    instead of overrunning the window.
+    """
     artifact = _require_draft(conn, artifact_id)
     # One snapshot: the endpoint checked for consent is the endpoint the turn is sent to.
     access = resolve_tutor_access(conn)
@@ -468,21 +498,79 @@ def _open_write(
     config = access.config
     class_id = int(artifact["class_id"])
 
-    query = payload.instruction + " " + (payload.selection or payload.heading or "")
-    result = retrieve(conn, class_id, query, WRITE_RETRIEVAL_BUDGET)
-    context_block = prompts.format_context_block([vars(chunk) for chunk in result.chunks])
-    facts_block = prompts.format_facts_block(select_active_facts(conn, class_id))
+    # The reply reserve comes off the top and is never lent to the prompt; the rest of the
+    # window is the room the prompt must fit. No safety margin: this path streams one plain
+    # chat turn - no tool loop, no growing transcript - so it budgets against the window
+    # exactly as the tutor's streamed turn does.
+    ceiling = max(0, config.context_window - plan_budget(config.context_window).generation)
+
+    selection = payload.selection or None
+    heading = payload.heading or None
+    nearby = payload.nearby or None
+
+    kept_heading: str | None = None
+    kept_nearby: str | None = None
+
+    def assemble(
+        *, context_block: str = "", facts_block: str = "", brief_block: str = ""
+    ) -> list[dict[str, str]]:
+        return prompts.build_write_prompt(
+            payload.instruction,
+            kept_heading,
+            selection,
+            kept_nearby,
+            context_block,
+            facts_block,
+            brief_block,
+        )
+
+    def fits(messages: list[dict[str, str]]) -> bool:
+        return conversation_tokens(messages) <= ceiling
+
+    # Mandatory floor: system prompt + instruction + selected text. If even this cannot fit
+    # beside the reserve, no trimming of optional context can help, so refuse before any
+    # retrieval or upstream call.
+    if not fits(assemble()):
+        raise LyraError(_WRITE_TOO_LARGE_MESSAGE)
+
+    # Optional local context, highest priority first. Each is kept only if the whole prompt
+    # still fits once it is added; a block that does not fit is dropped and the next, smaller
+    # one is still tried.
+    if heading is not None:
+        kept_heading = heading
+        if not fits(assemble()):
+            kept_heading = None
+    if nearby is not None:
+        kept_nearby = nearby
+        if not fits(assemble()):
+            kept_nearby = None
+
+    # Retrieval is sized to the room left after the mandatory and local context, capped at
+    # the ordinary write budget. A zero budget means there is no room, so the embedding
+    # search is skipped entirely rather than run only to be dropped.
+    used = conversation_tokens(assemble())
+    retrieval_room = max(0, min(WRITE_RETRIEVAL_BUDGET, ceiling - used))
+    context_block = ""
+    if retrieval_room > 0:
+        query = payload.instruction + " " + (selection or heading or "")
+        result = retrieve(conn, class_id, query, retrieval_room)
+        candidate = prompts.format_context_block([vars(chunk) for chunk in result.chunks])
+        if candidate and fits(assemble(context_block=candidate)):
+            context_block = candidate
+
     brief_block = prompts.format_brief_block(briefs.get_brief(conn, artifact_id))
-    messages = prompts.build_write_prompt(
-        payload.instruction,
-        payload.heading,
-        payload.selection,
-        payload.nearby,
-        context_block,
-        facts_block,
-        brief_block,
+    if brief_block and not fits(assemble(context_block=context_block, brief_block=brief_block)):
+        brief_block = ""
+
+    facts_block = prompts.format_facts_block(select_active_facts(conn, class_id))
+    if facts_block and not fits(
+        assemble(context_block=context_block, brief_block=brief_block, facts_block=facts_block)
+    ):
+        facts_block = ""
+
+    return config, assemble(
+        context_block=context_block, brief_block=brief_block, facts_block=facts_block
     )
-    return config, messages
 
 
 async def _stream_write(config: TutorConfig, messages: list[dict[str, str]]) -> AsyncIterator[str]:
