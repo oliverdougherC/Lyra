@@ -466,8 +466,8 @@ def review_card(part_id: int, payload: CardReview, conn: DbConn) -> dict[str, ob
     try:
         conn.execute("begin immediate")
         prior = conn.execute(
-            "select result_state from card_review_log where op_id = ?",
-            (payload.operation_id,),
+            "select result_state from card_review_log where part_id = ? and op_id = ?",
+            (part_id, payload.operation_id),
         ).fetchone()
         if prior is not None:
             conn.rollback()

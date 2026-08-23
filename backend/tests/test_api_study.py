@@ -752,6 +752,29 @@ def test_a_repeated_review_operation_returns_the_stored_result_once(
     )
 
 
+def test_the_same_operation_id_on_two_cards_reviews_both(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """The idempotency key is scoped to its card: reusing one id across two cards must not
+    swallow the second review or return the first card's state."""
+    deck_id = _deck(db, class_id, _document(db, class_id))
+    first = _card(db, deck_id, 1)
+    second = _card(db, deck_id, 2)
+
+    a = client.post(f"/api/cards/{first}/review", json={"rating": "good", "operation_id": "shared"})
+    b = client.post(
+        f"/api/cards/{second}/review", json={"rating": "good", "operation_id": "shared"}
+    )
+
+    assert a.status_code == b.status_code == 200
+    assert db.execute("select count(*) from card_review_log").fetchone()[0] == 2
+    for part_id in (first, second):
+        reps = db.execute("select reps from card_states where part_id = ?", (part_id,)).fetchone()[
+            0
+        ]
+        assert reps == 1
+
+
 def test_a_review_without_an_operation_id_is_rejected(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:

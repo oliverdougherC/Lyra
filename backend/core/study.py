@@ -297,6 +297,11 @@ def _mark_failed(conn: sqlite3.Connection, artifact_id: int, exc: Exception) -> 
     row = conn.execute("select state from artifacts where id = ?", (artifact_id,)).fetchone()
     if row is None:
         return
+    # A cancellation that landed between the worker's cancel checkpoints and this failure
+    # write wins: cancelling keeps whatever was already written, so a late failure must not
+    # overwrite `cancelled` with `failed` or delete the cards the cancel meant to keep.
+    if str(row["state"]) == artifacts.CANCELLED:
+        return
     # Deleting the parts of an artifact that is being failed is safe across retry/restart:
     # a re-run regenerates from scratch, and reconcile deletes parts before restarting too.
     try:
@@ -397,34 +402,40 @@ def _write_topic_cards_bounded(
     """
     for attempt in range(_MAX_ATTEMPTS):
         try:
-            written = _write_topic_cards(
-                conn, job, config, class_id, topic, first_ordinal, seen_fronts, retry=attempt > 0
+            proposed, kept_chunks = _propose_topic_cards(
+                conn, job, config, class_id, topic, retry=attempt > 0
             )
         except _GenerationCancelledError:
             raise
         except Exception:
+            # Only the model proposal is retried, and it writes nothing, so a retry can
+            # never collide with or duplicate cards from a previous attempt.
             logger.exception("Card generation failed for topic %r (attempt %d)", topic, attempt + 1)
             continue
-        if written > 0:
-            return written
+        # A topic that proposed at least one card the deck does not already hold is worth
+        # persisting; one that proposed nothing new gets another attempt.
+        if any(_dedupe_key(card["front"]) not in seen_fronts for card in proposed):
+            return _persist_topic_cards(
+                conn, job, topic, first_ordinal, proposed, kept_chunks, seen_fronts
+            )
     return 0
 
 
-def _write_topic_cards(
+def _propose_topic_cards(
     conn: sqlite3.Connection,
     job: _Job,
     config: TutorConfig,
     class_id: int,
     topic: str,
-    first_ordinal: int,
-    seen_fronts: set[str],
     *,
     retry: bool,
-) -> int:
-    """One topic's retrieval, one call, and the cards it produced. Returns the count.
+) -> tuple[list[dict[str, str]], list[object]]:
+    """One topic's retrieval and one model call, returning the cards it proposed.
 
-    `seen_fronts` carries the fronts already written to the deck; a card repeating one is
-    dropped and `seen_fronts` grows with each card kept.
+    Writes nothing. Separating the proposal (the flaky model call) from persistence is what
+    makes the bounded retry safe: a retry re-runs only this, so no card is committed twice
+    and no ordinal is reused. Returns the validated front/back pairs and the chunks that
+    fed them, for the caller to persist with provenance.
     """
     system_tokens = _prompt_tokens(prompts.build_flashcards_prompt(topic, "", job.cards_per_topic))
     hint_reserve = _RETRY_HINT_RESERVE if retry else 0
@@ -438,19 +449,40 @@ def _write_topic_cards(
     reply = _call_json(config, messages, prompts.FLASHCARDS_SCHEMA)
     _raise_if_cancelled(conn, job.artifact_id)
 
-    written = 0
+    proposed: list[dict[str, str]] = []
     for card in _json_list(reply, "cards"):
         if not isinstance(card, dict):
             continue
         front = str(card.get("front") or "").strip()
         back = str(card.get("back") or "").strip()
-        if not front or not back:
-            continue
-        key = _dedupe_key(front)
+        if front and back:
+            proposed.append({"front": front, "back": back})
+    return proposed, kept_chunks
+
+
+def _persist_topic_cards(
+    conn: sqlite3.Connection,
+    job: _Job,
+    topic: str,
+    first_ordinal: int,
+    proposed: list[dict[str, str]],
+    kept_chunks: list[object],
+    seen_fronts: set[str],
+) -> int:
+    """Write a topic's proposed cards, skipping fronts the deck already holds. Returns count.
+
+    `seen_fronts` carries the fronts already written to the deck; a card repeating one is
+    dropped and `seen_fronts` grows with each card kept. Not retried: a write failure here
+    propagates and fails the whole deck, whose partial parts `_mark_failed` then deletes, so
+    a half-written topic never survives as ambiguous ordinals.
+    """
+    written = 0
+    for card in proposed:
+        key = _dedupe_key(card["front"])
         if key in seen_fronts:
             continue
         seen_fronts.add(key)
-        payload = json.dumps({"front": front, "back": back, "topic": topic})
+        payload = json.dumps({"front": card["front"], "back": card["back"], "topic": topic})
         part_id = artifacts.create_part(
             conn,
             job.artifact_id,

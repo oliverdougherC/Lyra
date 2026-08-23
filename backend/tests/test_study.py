@@ -942,6 +942,31 @@ def test_cancelling_a_quiz_before_writing_questions_keeps_it_empty(
     assert artifacts.list_parts(db, artifact_id) == []
 
 
+def test_mark_failed_does_not_clobber_a_concurrent_cancellation(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """A cancellation that landed keeps the artifact cancelled and its cards, even if a
+    late failure write arrives (fix for a mark-failed vs cancel race)."""
+    document_id = _document(db, class_id)
+    deck_id = _deck(db, class_id, document_id)
+    card_id = artifacts.create_part(
+        db,
+        deck_id,
+        artifacts.CARD,
+        1,
+        content=json.dumps({"front": "F", "back": "B"}),
+        content_type=artifacts.JSON,
+        status=artifacts.PART_COMPLETE,
+    )
+    artifacts.set_artifact_state(db, deck_id, artifacts.CANCELLED)
+
+    study._mark_failed(db, deck_id, LyraError("too late"))
+
+    deck = artifacts.get_artifact(db, deck_id)
+    assert deck["state"] == artifacts.CANCELLED
+    assert [int(part["id"]) for part in artifacts.list_parts(db, deck_id)] == [card_id]
+
+
 def test_the_solver_reconcile_leaves_study_artifacts_alone(
     db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -32,7 +32,9 @@ create table study_jobs (
 -- deck already logged (which had no operation id) survive; the unique index ignores them.
 alter table card_review_log add column op_id text;
 alter table card_review_log add column result_state text;
-create unique index idx_review_log_op on card_review_log(op_id) where op_id is not null;
+-- Scoped to (part_id, op_id): an operation id is idempotent for the card it reviews, so a
+-- reused id can never swallow a different card's review and return the wrong state.
+create unique index idx_review_log_op on card_review_log(part_id, op_id) where op_id is not null;
 
 -- PLA-277: durable, resumable, causally correct quiz attempts.
 --   question_count    - the quiz's real question count when the attempt began, the honest
