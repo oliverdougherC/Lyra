@@ -119,6 +119,87 @@ and exits. `stop` is ownership-aware and leaves both user data and built images 
 artifacts, but it must not delete `data/`, model weights, source evidence, or Docker volumes that hold
 Firecrawl state. A destructive data reset is intentionally not part of the one-command launcher.
 
+## Runtime state versioning and recovery
+
+The launcher keeps its own ownership state in `.lyra/runtime.json`, keyed by `STATE_VERSION`.
+This is separate from the SQLite schema (`pragma user_version` and the checked-in migrations):
+the database contract governs user data, while the runtime-state contract governs which host
+processes this checkout started. They version independently and must never be confused for one
+another.
+
+`STATE_VERSION` has been `1` since the launcher was introduced, and every field it writes has
+been stable since then, so there has been no runtime-state migration to date. When one becomes
+necessary, bump `STATE_VERSION`, add the new version to `SUPPORTED_STATE_VERSIONS`, and add a
+forward reader for the older shape rather than editing what a shipped launcher already wrote.
+
+### Persisted fields
+
+Top-level object:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `version` | int | The runtime-state contract version. Must equal `STATE_VERSION`. |
+| `mode` | `"production"` \| `"development"` \| `null` | The lifecycle mode of the running stack. |
+| `desired_state` | `"running"` \| `"stopped"` | What the supervisor should converge the stack to. |
+| `processes` | object | Map of component name (`backend`, `frontend`, `supervisor`) to its ownership record. |
+| `bundled_services` | list of str | Bundled services (for example `firecrawl`) under the supervisor's lifecycle. |
+
+Each ownership record:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `pid` | int | Process id. Never trusted on its own. |
+| `pgid` | int \| null | Process group id, used to signal the whole group. |
+| `start_token` | str | OS process **birth identity** (`proc:<starttime>` on Linux, `darwin:<sec>:<usec>` on macOS). This is what makes ownership survive PID reuse. |
+| `command` | list of str | The exact argv the launcher started, used to recognize this checkout's own command during recovery. |
+| `log` | str | Repo-relative log path (spawned records). |
+| `started_at` / `recovered_at` | str | Timestamps (a `recovered` record also carries `recovered: true`). |
+
+Ownership is only ever proven by re-reading the live process's birth token (and process group)
+and comparing it to `start_token`. A matching `pid` alone is never sufficient, so a reused PID
+can never be mistaken for an owned process.
+
+### Recovery contract
+
+Automatic recovery is allowed only where it cannot make the launcher act on a process it does
+not provably own. A missing file, and a supported-version document whose *optional* fields are
+absent, become an empty, stopped state. Everything the launcher cannot interpret with
+confidence is refused with specific remediation instead of guessed at, because a wrong guess
+could strand an owned service, signal a reused PID, or discard ownership of a live process.
+In every refusal the launcher signals nothing and never touches `data/` or the database.
+
+| Runtime-state condition | `./run` (start) | `status` | `doctor` | `stop` |
+| --- | --- | --- | --- | --- |
+| Missing `runtime.json` | Treated as empty/stopped; provisions and starts normally | Reports ports from a clean empty state | Runs full diagnostics | No-op success (nothing owned) |
+| Old supported v1, optional fields absent | Defaults filled; starts normally | Normal report | Normal report | Stops any still-owned records, else no-op |
+| v1 with a live owned process | Reuses the healthy owned stack | Reports owned/healthy | Reports owned/healthy | Stops the verified owned process group |
+| v1 with a stale record (dead PID or PID reuse) | Discards the stale record; re-provisions; adopts only a provably-this-checkout listener | Reports "stale ownership record"; foreign listener untouched | Same, counted as a blocking issue | Discards the stale record; signals nothing |
+| Empty / truncated / corrupt JSON | Refuses with remediation; spawns nothing | Prints remediation, then a signal-free port probe; exit 1 | Prints host diagnostics + remediation + port probe; exit 1 | Refuses with remediation; signals nothing; exit 1 |
+| Non-object JSON | Same as corrupt | Same as corrupt | Same as corrupt | Same as corrupt |
+| Structurally invalid field (`processes` not an object, bad `bundled_services`) | Refuses with remediation | Refuses gracefully + port probe | Refuses gracefully + port probe | Refuses with remediation |
+| Newer-than-supported `version` | Refuses; tells you to manage it with the newer Lyra and not to downgrade | Same guidance + port probe | Same guidance + port probe | Same guidance; signals nothing |
+| Unrecognized / older `version` | Refuses with "unrecognized state version" remediation | Same + port probe | Same + port probe | Same; signals nothing |
+
+Malformed *individual* records (a missing/wrong-typed birth token, or a non-object record) are
+loaded without error but can never prove ownership, so they can only ever produce an honest
+"stopped; stale record" report or a port-aware, ownership-checked recovery -- never a signal.
+
+### Compatibility boundaries that stay manual
+
+These cannot be recovered automatically without violating the ownership contract, so the
+launcher fails with actionable remediation instead of guessing:
+
+- **A `runtime.json` written by a newer Lyra.** Its record shape cannot be assumed, so this
+  checkout will not signal, adopt, or rewrite it. Stop that app with the launcher that started
+  it, then move the file aside.
+- **Unreadable, truncated, or corrupt `runtime.json` while an app is still running.** With no
+  trustworthy record, the launcher cannot prove which processes are its own. Use `./run status`
+  (which still probes the fixed ports without signaling) to identify the listeners, stop them
+  with the launcher that started them, then move the file aside and run `./run` again.
+
+In both cases the recovery step is "move `.lyra/runtime.json` aside"; the data directory and
+database are never part of runtime-state recovery.
+
 ## Backup and restore
 
 Lyra's supported local backup surface is the launcher itself:

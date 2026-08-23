@@ -74,6 +74,24 @@ After a schema change, run the database and readiness tests plus the feature
 tests that cover the new tables or columns. If the change affects startup,
 also run `./run doctor`.
 
+## Launcher runtime state
+
+The launcher's `.lyra/runtime.json` is a **separate** versioned contract from the SQLite
+schema, keyed by `STATE_VERSION` in `scripts/lyra_launcher.py`. Do not conflate it with
+`pragma user_version`: the schema governs user data, the runtime state governs process
+ownership. See
+[Local deployment: Runtime state versioning and recovery](local-deployment.md#runtime-state-versioning-and-recovery)
+for the field inventory, the recovery contract, and the compatibility boundaries that must
+stay manual.
+
+- `STATE_VERSION` has only ever been `1`. Never edit the shape a shipped launcher already wrote.
+- To evolve it, bump `STATE_VERSION`, extend `SUPPORTED_STATE_VERSIONS`, and add a forward reader
+  for the older shape. Loading a version this checkout does not support must keep refusing
+  safely (no process is ever signaled from an untrusted state).
+- Cover any new field or version transition in
+  `backend/tests/test_lyra_launcher.py` (the PLA-146 "runtime state-version skew" section), and
+  never weaken an ownership check to make recovery more automatic.
+
 ## Release verification
 
 Before you call a change done, verify the behavior at the level the change touched.
