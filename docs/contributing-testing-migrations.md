@@ -7,6 +7,11 @@ This guide is for code and schema changes.
 - Read [Architecture](architecture.md) and [Code conventions](conventions.md).
 - If you are changing startup or recovery behavior, also read
   [Local deployment](local-deployment.md).
+- Know the merge gate: `main` is protected by a repository ruleset and every change lands
+  through a PR whose **`CI Gate` check is green**. That aggregate requires backend
+  format/lint/tests, frontend format/lint/typecheck/unit/build, the frontend production
+  audit, the browser/E2E lane, and the Python production vulnerability gate. See
+  [Security and CI gates](security-and-ci-gates.md).
 
 ## Test matrix
 
@@ -33,6 +38,17 @@ Frontend formatting:
 cd frontend
 pnpm run format:check
 ```
+
+Python production dependency security (mandatory before release; same command CI runs):
+
+```bash
+uv run --extra security python scripts/python_security_gate.py
+```
+
+This audits the exact locked production graph from `uv.lock` and fails on known
+High/Critical advisories. It fails closed if the scanner or advisory feed is unavailable —
+an outage is never reported as clean. See [Security and CI gates](security-and-ci-gates.md)
+for the policy and the temporary-exception process.
 
 Launcher or readiness logic:
 

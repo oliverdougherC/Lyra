@@ -80,3 +80,62 @@ jobs:
 
       - name: Run frontend smoke tests
         run: pnpm test:e2e
+
+  python-security:
+    # Locked Python production-dependency vulnerability gate (PLA-297). Audits the exact
+    # pinned production graph from uv.lock with the same command developers run locally:
+    #   uv run --extra security python scripts/python_security_gate.py
+    name: Python production dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install security tooling
+        run: uv sync --extra security
+
+      - name: Scan locked production dependencies
+        run: uv run --extra security python scripts/python_security_gate.py --json-report python-audit-evidence.json
+
+      - name: Upload audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-audit-evidence
+          path: python-audit-evidence.json
+          if-no-files-found: warn
+
+  # Single, stable aggregate gate. This is the ONLY status check required to merge into
+  # main (see docs/security-and-ci-gates.md). It depends on every real lane and fails
+  # unless all of them succeeded, so the internal jobs above can be split or renamed
+  # without silently dropping protection: the required check context stays "CI Gate".
+  # When PLA-292's bounded full-stack acceptance job lands, add it to `needs` below.
+  ci-gate:
+    name: CI Gate
+    if: ${{ always() }}
+    needs: [backend, frontend, python-security]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all required lanes succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ',') }}
+        run: |
+          echo "Upstream lane results: ${RESULTS}"
+          IFS=',' read -ra outcomes <<< "${RESULTS}"
+          failed=0
+          for result in "${outcomes[@]}"; do
+            if [ "${result}" != "success" ]; then
+              echo "::error::A required CI lane did not succeed (result: ${result})."
+              failed=1
+            fi
+          done
+          if [ "${failed}" -ne 0 ]; then
+            echo "CI Gate: FAIL — not every required lane passed."
+            exit 1
+          fi
+          echo "CI Gate: PASS — backend, frontend, and Python security all succeeded."

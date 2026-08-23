@@ -46,3 +46,19 @@ Use this checklist for a release candidate on a clean Apple Silicon Mac.
 - [ ] Confirm deleting a document removes its upload, extracted text, and rendered pages.
 - [ ] Confirm deleting a class removes only that class's uploads and derived files.
 - [ ] Confirm a stop-start cycle preserves the workspace without manual cleanup.
+
+## 6. Release CI and security evidence
+
+See [Security and CI gates](security-and-ci-gates.md) for the full policy.
+
+- [ ] Confirm the release commit landed on `main` through a PR with a green `CI Gate`
+      (the required aggregate check), not a bypass.
+- [ ] Run the Python production vulnerability gate and record its evidence:
+      `uv run --extra security python scripts/python_security_gate.py --json-report python-audit-evidence.json`
+- [ ] Record the scanner version, the advisory-feed timestamp (when present), the exact
+      command, the result, and the commit SHA from that evidence in the release notes.
+- [ ] Confirm no `[[allowlist]]` exception in `security/python-audit-policy.toml` is
+      expired or newly due for review.
+- [ ] Confirm `pnpm audit --prod` (frontend production graph) passed in the same run.
+- [ ] Re-check the live `main` ruleset still requires `CI Gate` and still blocks deletion
+      and force-push: `gh api repos/oliverdougherC/Lyra/rulesets/20537110`.

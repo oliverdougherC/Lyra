@@ -59,3 +59,7 @@ Thumbs.db
 # Local agent tooling state (machine-specific, not project config)
 .codex/
 .openclaude-profile.json
+
+# Python security gate work dir (exported requirements + evidence; regenerated per run)
+.security-audit/
+python-audit-evidence.json

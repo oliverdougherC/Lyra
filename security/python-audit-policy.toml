@@ -1,0 +1,37 @@
+# Policy for the locked Python production-dependency vulnerability gate (PLA-297).
+#
+# The gate audits the exact pinned production graph exported from `uv.lock` (see
+# scripts/python_security_gate.py) and is run identically locally and in CI:
+#
+#     uv run --extra security python scripts/python_security_gate.py
+#
+# See docs/security-and-ci-gates.md for the full rationale and the exception process.
+
+schema_version = 1
+
+[policy]
+# Advisories at or above this severity FAIL the gate. High and Critical production
+# vulnerabilities are hard failures; Low/Medium are reported but informational.
+fail_threshold = "high"
+
+# An advisory whose severity cannot be established is treated as blocking. Combined with
+# the scanner's own fail-closed behaviour, this guarantees an outage or an unrated CVE is
+# never silently passed as "clean".
+fail_on_unknown_severity = true
+
+# --- Temporary exceptions -------------------------------------------------------------
+#
+# Each entry accepts ONE advisory against the production graph for a bounded period. An
+# entry must name the advisory (its OSV/GHSA/CVE/PYSEC id or a recorded alias), the reason
+# Lyra is not currently exploitable or has no safe upgrade, an owner, and a review/expiry
+# date. An expired entry FAILS the gate so it cannot rot unnoticed. `package` is optional
+# and narrows the match to a single distribution.
+#
+# [[allowlist]]
+# advisory = "GHSA-xxxx-xxxx-xxxx"
+# package  = "example"
+# reason   = "Not reachable: the vulnerable code path is never invoked by Lyra."
+# owner    = "Oliver Dougherty"
+# expires  = 2026-12-01
+
+# No active exceptions.
