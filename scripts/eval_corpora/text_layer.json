@@ -1,0 +1,186 @@
+{
+  "version": 1,
+  "about": [
+    "Labelled page-level corpus for the unusable-text-layer detector (PLA-148).",
+    "",
+    "Each case is one page's extracted text, labelled by whether Lyra should treat that",
+    "text layer as usable. `usable` means the extracted text is worth indexing; `unusable`",
+    "means the page should be dropped and sent to the recognition flow instead, because",
+    "indexing its text would retrieve words the page does not say.",
+    "",
+    "`category` groups cases by the failure (or non-failure) they exercise. `detectable`",
+    "records whether the shipped signals claim to catch the category from text alone: the",
+    "detector is tuned for precision, so a few genuinely hard pathologies - reordered",
+    "columns, a coherent unrelated overlay, scattered equation glyphs - are labelled",
+    "unusable but marked `detectable: false`, and the harness reports them as known false",
+    "negatives rather than chasing them with a rule that would drop valid pages.",
+    "",
+    "The text is written rather than scraped: a corpus of a student's own documents cannot",
+    "be committed, and tuning to one course's real files would overfit the thresholds to",
+    "that course's formatting. `photographed` pages are covered by a separate rendered",
+    "fixture in backend/tests/test_parse.py, because that gate needs the page image."
+  ],
+  "cases": [
+    {
+      "name": "prose-linear-algebra",
+      "category": "good_prose",
+      "label": "usable",
+      "detectable": true,
+      "text": "The determinant of a triangular matrix is the product of the entries on its main diagonal. This follows from the cofactor expansion along the first column, where every term below the diagonal contributes a zero. As a consequence, a triangular matrix is invertible exactly when none of its diagonal entries is zero, and its inverse is again triangular of the same kind."
+    },
+    {
+      "name": "prose-lecture-note",
+      "category": "good_prose",
+      "label": "usable",
+      "detectable": true,
+      "text": "Today we introduce the notion of a limit. Intuitively, a function approaches a limit as its input approaches some value when the outputs cluster arbitrarily close to a single number. We will make this precise using the epsilon-delta definition, and then use it to prove that continuous functions are closed under addition and composition."
+    },
+    {
+      "name": "prose-definition-theorem",
+      "category": "good_prose",
+      "label": "usable",
+      "detectable": true,
+      "text": "Definition. A sequence converges to a limit L if for every positive epsilon there exists an index beyond which every term lies within epsilon of L. Theorem. Every convergent sequence is bounded. The proof takes epsilon equal to one and observes that all but finitely many terms lie in a bounded interval, while the finitely many remaining terms are bounded on their own."
+    },
+    {
+      "name": "title-page-with-author-and-date",
+      "category": "sparse_title",
+      "label": "usable",
+      "detectable": true,
+      "text": "Introduction to Real Analysis\nLecture Notes, Fall 2026\nProfessor A. Turing\nDepartment of Mathematics"
+    },
+    {
+      "name": "course-title-page",
+      "category": "sparse_title",
+      "label": "usable",
+      "detectable": true,
+      "text": "MATH 201 2026-08-06 10:30 Rm 4-163 v2.1.3 syllabus draft"
+    },
+    {
+      "name": "matrix-of-lone-digits",
+      "category": "sparse_equation",
+      "label": "usable",
+      "detectable": true,
+      "text": "1 0 0 2\n0 1 0 3\n0 0 1 4\n2 3 4 1\n5 6 7 8\n9 8 7 6\n1 2 3 4\n4 3 2 1"
+    },
+    {
+      "name": "equation-page-few-words",
+      "category": "sparse_equation",
+      "label": "usable",
+      "detectable": true,
+      "text": "f(x) = x^2 + 3x - 5\nf'(x) = 2x + 3\n∫ f(x) dx = x^3/3 + 3x^2/2 - 5x + C\nlim_{x->0} sin(x)/x = 1\n∑_{k=1}^{n} k = n(n+1)/2"
+    },
+    {
+      "name": "theorem-with-formulas",
+      "category": "sparse_equation",
+      "label": "usable",
+      "detectable": true,
+      "text": "Theorem 3.1. Let A be an n by n matrix. Then det(AB) = det(A) det(B). Proof. Both sides are multilinear alternating functions of the columns of B, and they agree on the identity, so they agree everywhere. QED. Corollary. det(A^{-1}) = 1/det(A) whenever A is invertible."
+    },
+    {
+      "name": "python-code-listing",
+      "category": "code_listing",
+      "label": "usable",
+      "detectable": true,
+      "text": "def binary_search(items, target):\n    low, high = 0, len(items) - 1\n    while low <= high:\n        mid = (low + high) // 2\n        if items[mid] == target:\n            return mid\n        elif items[mid] < target:\n            low = mid + 1\n        else:\n            high = mid - 1\n    return -1"
+    },
+    {
+      "name": "table-of-numbers",
+      "category": "number_table",
+      "label": "usable",
+      "detectable": true,
+      "text": "Year Enrollment Passing\n2019 118 0.81\n2020 124 0.79\n2021 131 0.84\n2022 140 0.86\n2023 152 0.88\n2024 149 0.85"
+    },
+    {
+      "name": "bulleted-study-notes",
+      "category": "good_prose",
+      "label": "usable",
+      "detectable": true,
+      "text": "Key ideas for the midterm:\n- The chain rule differentiates a composition of functions.\n- Implicit differentiation treats y as a function of x.\n- Related rates connect the derivatives of two changing quantities.\n- Always check the endpoints when optimizing on a closed interval."
+    },
+    {
+      "name": "empty-scan",
+      "category": "image_only",
+      "label": "unusable",
+      "detectable": true,
+      "text": ""
+    },
+    {
+      "name": "whitespace-only-scan",
+      "category": "image_only",
+      "label": "unusable",
+      "detectable": true,
+      "text": "   \n\n \t \n   "
+    },
+    {
+      "name": "ocr-soup-consonant-fragments",
+      "category": "character_soup",
+      "label": "unusable",
+      "detectable": true,
+      "text": "rn cl vv lll tt nn gg hh mn wr qxz bk dd ff kk pq zx cv bn mk lp rnm clm vln bkt qws zxc vbn mkl pqr ttn ggn hhr wrs"
+    },
+    {
+      "name": "ocr-soup-ligature-confusion",
+      "category": "ligature_soup",
+      "label": "unusable",
+      "detectable": false,
+      "text": "tlie arid witli tliat wliicli tlien liave frorn nrany rnust liowever tliis wlien wliile tliese tliose sucli rnuch rnodern liigli liand rnind rnore tlian"
+    },
+    {
+      "name": "ocr-soup-symbol-mangled",
+      "category": "character_soup",
+      "label": "unusable",
+      "detectable": true,
+      "text": "l1 |] rn cl 0O vvv lll ll1 rnm clm vln bkt qxz zxc cvb nmk lpq wrs ttn ggh hhr ddf ffk kkp pqz zxm mkl vln bkt qxz"
+    },
+    {
+      "name": "repeated-header-line",
+      "category": "repetition",
+      "label": "unusable",
+      "detectable": true,
+      "text": "CONFIDENTIAL DRAFT DO NOT DISTRIBUTE\nCONFIDENTIAL DRAFT DO NOT DISTRIBUTE\nCONFIDENTIAL DRAFT DO NOT DISTRIBUTE\nCONFIDENTIAL DRAFT DO NOT DISTRIBUTE\nCONFIDENTIAL DRAFT DO NOT DISTRIBUTE\nCONFIDENTIAL DRAFT DO NOT DISTRIBUTE\nCONFIDENTIAL DRAFT DO NOT DISTRIBUTE\nCONFIDENTIAL DRAFT DO NOT DISTRIBUTE"
+    },
+    {
+      "name": "repeated-footer-line",
+      "category": "repetition",
+      "label": "unusable",
+      "detectable": true,
+      "text": "Page footer sample text\nchapter one introduction\nPage footer sample text\nPage footer sample text\nPage footer sample text\nPage footer sample text\nPage footer sample text\nPage footer sample text\nPage footer sample text"
+    },
+    {
+      "name": "repeated-single-token",
+      "category": "repetition",
+      "label": "unusable",
+      "detectable": true,
+      "text": "watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark watermark"
+    },
+    {
+      "name": "invisible-overlay-repeated-string",
+      "category": "repetition",
+      "label": "unusable",
+      "detectable": true,
+      "text": "sample sample sample sample sample sample sample sample sample sample sample sample sample sample sample sample sample sample sample sample sample sample sample sample"
+    },
+    {
+      "name": "reordered-two-column-interleave",
+      "category": "reordered_columns",
+      "label": "unusable",
+      "detectable": false,
+      "text": "The convergence integral of establishes the that sequence the is partial monotone sums and are bounded uniformly so bounded it and converges therefore by tend the to monotone a convergence finite theorem limit value"
+    },
+    {
+      "name": "scattered-equation-glyphs",
+      "category": "glyph_fragments",
+      "label": "unusable",
+      "detectable": false,
+      "text": "f ( x ) = x 2 + 3 x − 5 ∑ ∫ α β γ ≤ ≥ ∂ ∇ x i j k = 0 1 2 n a b c λ μ σ"
+    },
+    {
+      "name": "coherent-unrelated-overlay",
+      "category": "overlay_coherent",
+      "label": "unusable",
+      "detectable": false,
+      "text": "This document was generated by an automated export tool and the following boilerplate notice applies to every page regardless of its actual content and should not be treated as part of the source material under discussion here."
+    }
+  ]
+}
