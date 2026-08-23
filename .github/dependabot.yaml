@@ -1,4 +1,16 @@
 # https://docs.github.com/en/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+#
+# `open-pull-requests-limit: 0` deliberately suppresses ROUTINE VERSION-UPDATE pull
+# requests during the prototype/stabilization period so version churn does not displace
+# product work. This is intentional and must stay (PLA-297).
+#
+# It does NOT govern security signals. This file only controls version-update PRs; it says
+# nothing about GitHub Dependabot *alerts* or *security updates*, which are separate
+# repository settings tracked in docs/security-and-ci-gates.md. Known High/Critical
+# vulnerabilities in the Python production graph are caught independently and
+# deterministically by the "Python production dependency audit" CI lane, and the frontend
+# graph by `pnpm audit --prod`. Do not raise these limits to "re-enable security"; that is
+# already covered without the churn.
 version: 2
 updates:
   - package-ecosystem: 'pip'

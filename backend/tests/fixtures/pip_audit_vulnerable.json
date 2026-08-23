@@ -1,0 +1,22 @@
+{
+  "dependencies": [
+    {
+      "name": "fastapi",
+      "version": "0.141.1",
+      "vulns": []
+    },
+    {
+      "name": "acme-vulnerable-widget",
+      "version": "1.2.3",
+      "vulns": [
+        {
+          "id": "PYSEC-2099-0001",
+          "fix_versions": ["1.2.4"],
+          "aliases": ["CVE-2099-0001", "GHSA-aaaa-bbbb-cccc"],
+          "description": "Synthetic High-severity advisory used to prove the gate fails closed. Not a real package."
+        }
+      ]
+    }
+  ],
+  "fixes": []
+}

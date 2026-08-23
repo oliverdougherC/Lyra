@@ -29,6 +29,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "ruff==0.16.1"]
+# Pinned and locked so the security gate is reproducible: the same scanner build runs
+# locally and in CI. Kept out of the audited production graph (scripts/python_security_gate.py
+# exports without extras), so we never scan the scanner. See docs/security-and-ci-gates.md.
+security = ["pip-audit==2.9.0"]
 
 [tool.ruff]
 line-length = 100
