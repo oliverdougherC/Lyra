@@ -16,6 +16,7 @@ from backend.api.routes_agent_chat import AgentTurnCost
 from backend.core import app_settings, sessions
 from backend.core.app_settings import TutorAccess, TutorConfig
 from backend.core.errors import LyraError
+from backend.core.writer_budgets import WriterCapabilities
 from backend.llm import tools
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect, get_db
@@ -116,9 +117,12 @@ def test_agent_turn_uses_budgeted_history_and_aligns_private_context(
     class_id: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A 2048-token window is roomy enough to host the tool definitions and the newest few
+    # A 3072-token window is roomy enough to host the tool definitions and the newest few
     # exchanges, but not the whole conversation: older turns are trimmed, and the private
     # context the web-query guard sees is exactly the history that survives into the prompt.
+    # The window has to leave room for the estimator safety margin the preflight now charges
+    # on top of the exact wire-shape accounting; a 2048 window would refuse this whole turn
+    # once the margin, the message framing, and the ~1,055-token tool schema are all charged.
     # (A 256-token window, the smallest Settings allows, cannot host the tool schemas at all
     # and is refused up front - see test_a_512_token_window_cannot_host_the_tool_definitions.)
     session_id = int(sessions.create_session(db, class_id)["id"])
@@ -137,7 +141,7 @@ def test_agent_turn_uses_budgeted_history_and_aligns_private_context(
         routes_agent_chat,
         "resolve_tutor_access",
         lambda conn: TutorAccess(
-            config=TutorConfig("http://127.0.0.1:8080/v1", None, "m", 2048),
+            config=TutorConfig("http://127.0.0.1:8080/v1", None, "m", 3072),
             document_block=None,
             remote_ack=False,
         ),
@@ -769,3 +773,263 @@ def test_a_context_overflow_settles_as_a_bounded_failure_without_an_assistant_re
     assert body["retryable"] is False
     assert "http" not in body["detail"] and "127.0.0.1" not in body["detail"]
     assert [message["role"] for message in sessions.list_messages(db, session_id)] == ["user"]
+
+
+# --- Freezing the executable registry to the budgeted one (PLA-290 blocker 2) --------
+#
+# Tool exposure follows mutable capability state (web-research and workspace grants). The
+# preflight budgets one registry and the loop must run that same registry, or the schema
+# it charged, the availability wording it wrote, and the schema it sends can drift apart
+# when a grant flips mid-turn. The schema-gating state is now read once into a frozen
+# snapshot and the executable registry is built from it before any mutation; dispatch-time
+# reauthorization still reads the live grant, so a grant revoked after planning fails
+# closed and a grant enabled after planning simply waits for the next turn.
+
+
+def _enable_web_research(db: sqlite3.Connection) -> None:
+    db.execute("update settings set allow_web_research = 1 where id = 1")
+    db.commit()
+
+
+def _caps(*, web: bool) -> WriterCapabilities:
+    return WriterCapabilities(
+        allow_web_research=web,
+        parallel_requests=False,
+        parallel_concurrency=1,
+        firecrawl_base_url="http://127.0.0.1:9999",
+        firecrawl_scrape_enabled=False,
+    )
+
+
+def _fake_workspace(root: object, *, read: bool, change: bool = False, commands: bool = False):
+    """A workspace row shaped like the sqlite row the store returns, over a real directory."""
+    import os
+
+    details = os.lstat(str(root))
+    return {
+        "root_path": str(root),
+        "root_device": details.st_dev,
+        "root_inode": details.st_ino,
+        "read_enabled": read,
+        "change_proposals_enabled": change,
+        "commands_enabled": commands,
+    }
+
+
+def test_the_tool_schemas_sent_are_exactly_the_schemas_budgeted(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The registry the loop is handed is charged, to the token, by the same preflight that
+    # decided the turn fits: `schema_tokens` of the schemas actually sent equals the
+    # `tool_tokens` the loop was budgeted, and the availability copy matches that registry.
+    _enable_web_research(db)
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Find public sources", "profile": "research"},
+    )
+
+    assert response.status_code == 200, response.text
+    registry = captured["registry"]
+    budget = captured["context_budget"]
+    assert "search_web" in registry
+    assert tools.schema_tokens(tools.tool_schemas(registry)) == budget.tool_tokens
+    # Availability copy agrees with the frozen registry: the tool is present, so nothing is
+    # said about it being disabled.
+    assert "disabled" not in str(captured["messages"][0]["content"])
+
+
+def test_availability_copy_matches_a_disabled_frozen_registry(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Web research off (the default): the schema is absent, the budget charges only what is
+    # sent, and the system prompt says the capability is disabled - all from one snapshot.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Find public sources", "profile": "research"},
+    )
+
+    assert response.status_code == 200, response.text
+    registry = captured["registry"]
+    budget = captured["context_budget"]
+    assert "search_web" not in registry
+    assert tools.schema_tokens(tools.tool_schemas(registry)) == budget.tool_tokens
+    assert "disabled" in str(captured["messages"][0]["content"])
+
+
+def test_web_enabled_at_planning_then_disabled_before_execution_fails_closed(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Grant on when the turn is planned, revoked before the tool runs. The schema was frozen
+    # on, so the tool is offered and budgeted; dispatch-time reauthorization reads the live
+    # (now revoked) grant and refuses, so the revocation still fails closed.
+    holder = {"web": True}
+    monkeypatch.setattr(
+        routes_agent_chat.agent_tools,
+        "get_writer_capabilities",
+        lambda conn, cid: _caps(web=holder["web"]),
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        registry = kwargs["registry"]
+        captured["registry"] = registry
+        holder["web"] = False  # revoked after planning, before the tool is dispatched
+        captured["dispatch"] = registry["search_web"].handler(query="a neutral public query")
+        return tools.ToolLoopResult(content="done")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", fake_loop)
+    session_id = int(sessions.create_session(db, class_id)["id"])
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Find public sources", "profile": "research"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert "search_web" in captured["registry"]  # frozen on: offered and budgeted
+    dispatch = captured["dispatch"]
+    assert dispatch.ok is False  # dispatch-time reauthorization fails closed
+    assert "disabled" in str(dispatch.error)
+
+
+def test_web_disabled_at_planning_then_enabled_waits_for_the_next_turn(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Grant off when planned, enabled before the loop runs. The schema selection was frozen
+    # off, so the tool is not offered this turn - a newly enabled grant waits, rather than
+    # letting the loop run a tool the preflight never charged for.
+    holder = {"web": False}
+    monkeypatch.setattr(
+        routes_agent_chat.agent_tools,
+        "get_writer_capabilities",
+        lambda conn, cid: _caps(web=holder["web"]),
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        captured["registry"] = kwargs["registry"]
+        captured["messages"] = args[3]
+        holder["web"] = True  # enabled after planning
+        return tools.ToolLoopResult(content="done")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", fake_loop)
+    session_id = int(sessions.create_session(db, class_id)["id"])
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Find public sources", "profile": "research"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert "search_web" not in captured["registry"]
+    assert "disabled" in str(captured["messages"][0]["content"])
+
+
+def test_workspace_grant_added_after_planning_waits_for_the_next_turn(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: object,
+) -> None:
+    # No workspace read grant when planned; added before the loop runs. The code profile's
+    # workspace schemas were frozen out, so they are not offered this turn.
+    holder: dict[str, object] = {"ws": _fake_workspace(tmp_path, read=False)}
+    monkeypatch.setattr(
+        routes_agent_chat.agent_tools.agent_store,
+        "get_workspace_for_class",
+        lambda conn, cid: holder["ws"],
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        captured["registry"] = kwargs["registry"]
+        holder["ws"] = _fake_workspace(tmp_path, read=True)  # granted after planning
+        return tools.ToolLoopResult(content="done")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", fake_loop)
+    session_id = int(sessions.create_session(db, class_id)["id"])
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Read the repository", "profile": "code"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert "read_workspace_file" not in captured["registry"]
+
+
+def test_workspace_grant_removed_after_planning_fails_closed(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: object,
+) -> None:
+    # Read grant present when planned, revoked before the tool runs. The schema was frozen
+    # on and budgeted; dispatch-time reauthorization reads the live (now revoked) grant and
+    # refuses, so the revocation fails closed.
+    holder: dict[str, object] = {"ws": _fake_workspace(tmp_path, read=True)}
+    monkeypatch.setattr(
+        routes_agent_chat.agent_tools.agent_store,
+        "get_workspace_for_class",
+        lambda conn, cid: holder["ws"],
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        registry = kwargs["registry"]
+        captured["registry"] = registry
+        holder["ws"] = _fake_workspace(tmp_path, read=False)  # revoked after planning
+        captured["dispatch"] = registry["read_workspace_file"].handler(relative_path="notes.txt")
+        return tools.ToolLoopResult(content="done")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", fake_loop)
+    session_id = int(sessions.create_session(db, class_id)["id"])
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Read the repository", "profile": "code"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert "read_workspace_file" in captured["registry"]  # frozen on: offered and budgeted
+    dispatch = captured["dispatch"]
+    assert dispatch.ok is False  # dispatch-time reauthorization fails closed
+    assert "disabled" in str(dispatch.error)
+
+
+def test_a_failure_building_the_runtime_registry_persists_no_user_turn(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The executable registry is constructed inside the read-only preflight, before the title,
+    # the user message, class recency, or any ledger is touched. A failure to build it
+    # therefore cannot leave an orphaned user turn behind.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    calls = _spy_loop(monkeypatch)
+    original = routes_agent_chat.agent_tools.build_agent_registry
+
+    def maybe_raise(*args: object, **kwargs: object):  # noqa: ANN002, ANN003, ANN202
+        # The probe build carries an empty private context; the executable build carries the
+        # student's own words. Fail only the executable build.
+        if kwargs.get("private_context"):
+            raise RuntimeError("registry construction failed")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(routes_agent_chat.agent_tools, "build_agent_registry", maybe_raise)
+
+    with pytest.raises(RuntimeError):
+        client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+            json={"content": "Explain the repository", "profile": "code"},
+        )
+
+    assert calls == []
+    assert sessions.list_messages(db, session_id) == []
+    assert sessions.get_session(db, session_id)["title"] is None

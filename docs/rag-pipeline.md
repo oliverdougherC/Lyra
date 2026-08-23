@@ -1123,41 +1123,84 @@ Rules:
 - When retrieval is trimmed by more than half, log it **and** surface a quiet indicator in the UI, so
   the user can tell that the model did not see everything.
 
-**One shared fit contract.** The tutor turn, the writer chat turn, and the Phase-4 agent turn all
-answer the same question before sending anything - does one turn fit the window beside the reply
-reserve? - so the pieces that answer it live in one place, `backend/llm/turn_budget.py`: the
-four-bucket split (`plan_budget`), the newest-first history trim (`trim_history`) and the pair it may
-never drop (`MINIMUM_HISTORY_MESSAGES`), and the fit inequality itself (`TurnReserve`, whose
-`reserved`/`prompt_room`/`fits` the routes delegate to). None of the three keeps a weaker parallel
-approximation.
+**One shared fit contract, and what is actually shared.** The tutor turn, the writer chat turn, and
+the Phase-4 agent turn all answer a version of the same question before sending anything - does one
+turn fit the window beside the reply reserve? - so the pieces that answer it live in one place,
+`backend/llm/turn_budget.py`. What every route shares is the four-bucket split (`plan_budget`), the
+newest-first history trim (`trim_history`), and the pair it may never drop
+(`MINIMUM_HISTORY_MESSAGES`). The fit inequality itself (`TurnReserve`, whose
+`reserved`/`prompt_room`/`fits`) is shared by the tutor and, as a coarse pre-check, by the agent; the
+**writer chat does not enforce it** - `routes_drafts.py` imports only `plan_budget` and `trim_history`,
+trims history into its history+retrieval buckets, and bounds its tool loop by depth and wall clock,
+with no preflight fit-refusal. So the honest claim is narrower than "all three delegate to
+`TurnReserve`": the shared pieces are the split and the trim; the fit-refusal is the tutor's and the
+agent's.
 
 **Agent-chat turns (PLA-290).** The class agent runs the tool loop rather than a single generation,
-so its budget differs from the tutor's in two ways, both expressed through the same `TurnReserve`:
+so its budget differs from the tutor's in several ways:
 
 - *No retrieval block, but real tool overhead.* The agent injects no retrieved context; it fetches
   through its tools instead. Its non-trimmable fixed material is therefore the system prompt **plus the
   tool-definition schema, which is sent on every round** (roughly a thousand tokens for the compute
-  registry alone). That overhead is charged in preflight exactly like the tutor's pinned step. A
-  consequence worth stating plainly: a window small enough to matter - 512 or 1024 tokens - cannot host
-  the tool schemas beside the generation reserve at all, so every agent turn there is refused up front.
-  This is honest, not a regression: such a window genuinely cannot run a tool-calling agent.
-- *Re-budgeted every round.* Preflight proves only the first request fits. Each round appends the
-  model's tool calls and their results, so a later request can outgrow the window even though the first
-  one did not. Before every request after the first, the loop re-measures the exact conversation
-  against the window and generation reserve (`llm/tools.py`, `ContextBudget`) and, rather than sending a
-  request the transcript has grown too large for, stops with `context_overflow` - an honest, bounded,
-  non-retryable failure that preserves the audit trail of the tool work that did run and invents no
-  assistant reply. It does not trim or compact the transcript, so no causally required tool call or
-  result is ever silently dropped.
+  registry alone). That overhead is charged in preflight. A consequence worth stating plainly: a window
+  small enough to matter - 512 or 1024 tokens - cannot host the tool schemas beside the generation
+  reserve at all, so every agent turn there is refused up front. This is honest, not a regression: such
+  a window genuinely cannot run a tool-calling agent.
+- *Frozen registry.* Tool exposure follows mutable capability state (web-research and workspace
+  grants). The schema-gating state is read **once**, into a frozen `AgentCapabilitySnapshot`, and the
+  executable registry the loop runs is built from that snapshot - before any mutation - by the same
+  preflight that budgeted its schema. So the schema charged, the availability wording written into the
+  system prompt, and the schema actually sent cannot drift apart when a grant flips mid-turn. Each
+  retained handler still re-reads the live grant at dispatch, so a grant **revoked** after planning
+  fails closed at the tool, while a grant **newly enabled** after planning simply waits for the next
+  turn (its schema was frozen out, so the loop is never handed a tool the preflight did not charge for).
+- *Canonical wire-shape accounting.* The request the preflight charges and the request the loop guards
+  are measured by one path, `conversation_tokens`, which sums each message's exact compact JSON as the
+  client sends it - `role`, `content`, a `tool_calls` payload, a tool turn's `tool_call_id` and `name`,
+  and the object/array framing around them - not a hand-picked subset of fields. The tool schema is
+  charged once, separately, so nothing double-counts it. This is what lets the two measure the same
+  request rather than two different shapes.
+- *Re-budgeted as the transcript grows.* Preflight proves only the first request fits. Each round
+  appends the model's tool-call turn and its tool results, so a later request can outgrow the window
+  even though the first did not. Given a `ContextBudget`, the loop re-measures the conversation at
+  every growth boundary - after the assistant tool-call turn is appended, after **each** individual
+  tool result, and before every request after the first - and stops with `context_overflow` the moment
+  the transcript can no longer continue. It runs no further tool merely because it belonged to the same
+  assistant response: an oversized tool-call payload runs zero of its tools, and a tool result that
+  fills the window stops the rest of that response. The stop is a bounded, non-retryable failure that
+  preserves the audit trail of the work that genuinely ran and invents no assistant reply; the loop
+  does not trim or compact the transcript, so it never replays a request with a tool call missing its
+  result - it simply settles there.
 
-The refusal (initial) and the settlement (later round) both happen before any mutation of the
-conversation title, the user message, class recency, tool audit, or any proposal/source/command row,
-and both carry a bounded, privacy-safe message: no endpoint URL, path, key, upstream body, or
-transcript. The agent charges the reserve as `plan_budget(window).generation` - the same number the
-tutor reserves - and estimates every piece with the one shared `estimate_tokens`, whose 4-chars-a-token
-approximation the 25% reserve absorbs; because the reserve is charged in full and the tool overhead is
-measured from the same registry the loop runs, the margin fails conservatively (a refused turn could
-never have fit) rather than overrunning.
+**The mutation boundary, stated precisely.** The two failures are not symmetric:
+
+- The **initial** oversized-turn refusal happens in the read-only preflight, before any mutation of the
+  conversation title, the user message, class recency, tool audit, or any proposal/source/command row,
+  and before any request - and before the executable registry is even built, so a failure to construct
+  it cannot leave an orphaned user turn either.
+- A **later-round** `context_overflow` necessarily happens **after** the user turn has been persisted,
+  and may happen **after** real tool activity has run and been audited. That already-completed activity
+  stays truthfully recorded; once overflow is detected no further tool effect or model request occurs,
+  and no assistant success reply is invented.
+
+Both failures carry a bounded, privacy-safe message: no endpoint URL, path, key, upstream body, or
+transcript.
+
+**Estimator uncertainty, honestly.** The agent charges the reserve as `plan_budget(window).generation`
+- the same number the tutor reserves, and room for the model's **output**, not a cushion for input
+estimation error. Input is estimated with the shared `estimate_tokens`, whose four-characters-a-token
+approximation is close for prose but can undershoot dense JSON, code, equations, or non-ASCII text
+against an unknown endpoint tokenizer. The canonical accounting above already measures message framing
+exactly; what remains uncharged is only the characters-per-token ratio, so a small, explicit
+`CONTEXT_SAFETY_MARGIN` (10%) is charged on the **input** estimate, distinct from the generation
+reserve. What this guarantees is a *conservative* guard: it may refuse a turn that would in fact have
+fit, and it will not accept one whose estimated input already exceeds the margin-reduced room - the
+correct direction for a safety margin. What it does **not** guarantee is safety against an arbitrarily
+dense tokenizer: text that tokenizes far worse than four characters per token (long CJK runs, say) can
+still defeat a fixed 10% margin. That residual case is bounded and truthfully classified rather than
+hidden - the first request may reach the endpoint and be rejected (reported as an upstream failure),
+and a later request the transcript defeats is caught by the loop's mid-loop reclassification - never
+silently truncated.
 
 **Prompt structure:**
 ```

@@ -39,6 +39,53 @@ RETRIEVAL_SHARE = 0.40
 # reads as a non sequitur, which is worse than overrunning an estimate by one exchange.
 MINIMUM_HISTORY_MESSAGES = 2
 
+# Estimator/framing safety margin for the agent's context guard.
+#
+# `estimate_tokens` counts four characters per token against a tutor endpoint whose real
+# tokenizer is unknown at build time (docs/rag-pipeline.md, Stage 7). Four characters per
+# token is close for ordinary English prose; dense JSON, source code, equations, and
+# non-ASCII text tokenize more densely, so the estimate can undershoot the true count. The
+# canonical wire-shape accounting in `llm/tools.py` already measures message framing
+# exactly (in characters), so what remains uncharged is only the characters-per-token
+# ratio being worse than four - not the shape of the request.
+#
+# This margin is charged on the agent's *input* estimate (messages plus tool schema) so a
+# turn the preflight accepts stays inside the window even when the endpoint's tokenizer
+# runs a little denser than the estimate assumes. It is deliberately NOT the generation
+# reserve: that reserve (`GENERATION_SHARE`) is room for the model's OUTPUT and is spent
+# whether or not the input estimate was exact. Conflating the two would let one number
+# stand in for two unrelated guarantees.
+#
+# What it guarantees: a conservative guard. It may refuse a turn that would in fact have
+# fit (an acceptable failure), and it will not accept a turn whose estimated input already
+# exceeds the margin-reduced room. What it does NOT guarantee: safety against an
+# arbitrarily dense tokenizer. Text that tokenizes far worse than four characters per token
+# - long runs of CJK, for instance - can still defeat a fixed 10 percent margin. That
+# residual case is bounded and truthfully classified rather than hidden: the first request
+# may reach the endpoint and be rejected (reported as an upstream failure), and a later
+# request the growing transcript defeats is caught by the loop's mid-loop reclassification
+# in `llm/tools.py`, never silently truncated. The margin is 10 percent because that keeps
+# a normal 8,192-token turn comfortably usable (measured: an ordinary code-profile turn
+# loses roughly 90 tokens of headroom) while covering the common JSON/code density gap.
+CONTEXT_SAFETY_MARGIN = 0.10
+
+
+def input_ceiling(
+    context_window: int, generation: int, *, margin: float = CONTEXT_SAFETY_MARGIN
+) -> int:
+    """Tokens available for prompt material (messages plus tool schema) under the margin.
+
+    The generation reserve is taken off the window first and never lent to the prompt; the
+    margin is then applied to what remains, so the inequality the agent enforces is
+    `(messages + tools) * (1 + margin) <= context_window - generation`. Rearranged, the
+    prompt material must fit `(context_window - generation) / (1 + margin)`, which is what
+    this returns. A `margin` of zero returns `context_window - generation` unchanged, which
+    is why a `ContextBudget` with no margin behaves exactly as it did before the margin
+    existed.
+    """
+    room = max(0, context_window - generation)
+    return int(room / (1.0 + margin))
+
 
 @dataclass(frozen=True)
 class TurnBudget:

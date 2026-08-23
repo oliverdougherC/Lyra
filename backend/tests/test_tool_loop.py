@@ -13,6 +13,7 @@ import pytest
 
 from backend.core.errors import ToolsUnsupportedError
 from backend.llm import client, tools
+from backend.rag.tokens import estimate_tokens
 from backend.tools.result import ToolResult, success
 
 _ENDPOINT = "http://127.0.0.1:8080/v1"
@@ -590,3 +591,290 @@ async def test_without_a_context_budget_the_loop_does_not_guard() -> None:
 
     assert result.stopped == tools.COMPLETED
     assert result.content == "Done."
+
+
+# --- The intra-round context guard (PLA-290 blocker 1) -------------------------------
+#
+# A model's single response can ask for several tools at once, and re-checking the budget
+# only between rounds let the whole set execute even once the transcript could no longer be
+# continued: the assistant tool-call payload, or an early tool result, could make the next
+# request impossible while later tools still ran. The guard is re-evaluated at every growth
+# boundary now - after the assistant turn is appended, and after each individual result -
+# so no tool runs merely because it was part of the same response, and no request is sent
+# once overflow is known.
+
+
+def _counting_registry(chars: int, runs: list[str]) -> dict[str, tools.ToolDefinition]:
+    """One tool that records each execution and returns a payload of a chosen size."""
+
+    def work(tag: str = "") -> ToolResult:
+        runs.append(tag)
+        return success(payload="z" * chars)
+
+    return {
+        "work": tools.ToolDefinition(
+            name="work",
+            description="Do a unit of work.",
+            parameters={
+                "type": "object",
+                "properties": {"tag": {"type": "string"}},
+                "required": [],
+            },
+            handler=work,
+        )
+    }
+
+
+async def test_several_tool_calls_in_one_response_all_run_when_they_fit() -> None:
+    # The baseline the guard must not disturb: one assistant turn asking for three tools,
+    # comfortably under the window, runs all three in order and continues.
+    runs: list[str] = []
+    transport, _sent = _scripted(
+        _reply(
+            tool_calls=[
+                _tool_call("work", {"tag": "a"}, call_id="c1"),
+                _tool_call("work", {"tag": "b"}, call_id="c2"),
+                _tool_call("work", {"tag": "c"}, call_id="c3"),
+            ]
+        ),
+        _reply(content="All three done."),
+    )
+    budget = tools.ContextBudget(context_window=8192, generation_reserve=1024, tool_tokens=50)
+
+    result = await tools.run_tool_loop(
+        _ENDPOINT,
+        None,
+        "local-model",
+        _MESSAGES,
+        registry=_counting_registry(chars=10, runs=runs),
+        context_budget=budget,
+        transport=transport,
+    )
+
+    assert result.stopped == tools.COMPLETED
+    assert runs == ["a", "b", "c"]
+    assert [call.arguments.get("tag") for call in result.calls] == ["a", "b", "c"]
+
+
+async def test_an_oversized_assistant_tool_call_payload_runs_zero_tools() -> None:
+    # The assistant's tool-call payload itself can be the append that makes continuation
+    # impossible - a model can emit a huge arguments blob. The turn is stopped after that
+    # payload re-enters the transcript and before a single requested tool is dispatched, so
+    # no tool runs only to have its result discarded with a transcript that cannot be sent.
+    runs: list[str] = []
+    huge_arguments = {"tag": "q" * 8000}  # ~2000 tokens of arguments on the assistant turn
+    transport, sent = _scripted(
+        _reply(
+            tool_calls=[
+                _tool_call("work", huge_arguments, call_id="c1"),
+                _tool_call("work", {"tag": "b"}, call_id="c2"),
+            ]
+        )
+    )
+    budget = tools.ContextBudget(context_window=2048, generation_reserve=512, tool_tokens=50)
+
+    result = await tools.run_tool_loop(
+        _ENDPOINT,
+        None,
+        "local-model",
+        _MESSAGES,
+        registry=_counting_registry(chars=10, runs=runs),
+        context_budget=budget,
+        transport=transport,
+    )
+
+    assert result.stopped == tools.CONTEXT_OVERFLOW
+    assert result.content == ""
+    # Not one of the requested tools ran, and none was recorded.
+    assert runs == []
+    assert result.calls == ()
+    # The opening request was sent (the preflight's to prove); no request followed it.
+    assert len(sent) == 1
+
+
+async def test_a_first_result_that_overflows_stops_the_rest_of_the_same_response() -> None:
+    # One assistant response asks for three tools. The first result is large enough to fill
+    # the window; the loop stops the moment it is appended, so the second and third tools of
+    # that same response never run - exactly the calls that ran, and no more, are recorded.
+    runs: list[str] = []
+    transport, sent = _scripted(
+        _reply(
+            tool_calls=[
+                _tool_call("work", {"tag": "a"}, call_id="c1"),
+                _tool_call("work", {"tag": "b"}, call_id="c2"),
+                _tool_call("work", {"tag": "c"}, call_id="c3"),
+            ]
+        )
+    )
+    budget = tools.ContextBudget(context_window=4096, generation_reserve=1024, tool_tokens=50)
+
+    result = await tools.run_tool_loop(
+        _ENDPOINT,
+        None,
+        "local-model",
+        _MESSAGES,
+        registry=_counting_registry(chars=12000, runs=runs),  # ~3000 tokens per result
+        context_budget=budget,
+        transport=transport,
+    )
+
+    assert result.stopped == tools.CONTEXT_OVERFLOW
+    # Only the first of the three requested tools ran; the later two were abandoned.
+    assert runs == ["a"]
+    assert [call.arguments.get("tag") for call in result.calls] == ["a"]
+    # The transcript stopped there rather than sending a request missing tool results.
+    assert len(sent) == 1
+
+
+# --- Canonical wire-shape accounting (PLA-290 blocker 3) -----------------------------
+#
+# `message_tokens` measures the exact compact JSON the client places in the request, not a
+# hand-picked subset of fields. An earlier version summed only content, tool_calls, and
+# name, so role, tool_call_id, and the object/array/key/string framing went uncharged and
+# accumulated across many messages and long ids into a real undercount. The preflight and
+# the loop both route through this one path so the request one measures is the request the
+# other measures.
+
+
+def test_message_tokens_counts_role_and_framing_not_only_content() -> None:
+    message = {"role": "user", "content": "hi"}
+    # The framing (role, keys, quotes, braces) dwarfs a two-character body, so the whole
+    # serialized shape costs strictly more than the content estimate alone.
+    assert tools.message_tokens(message) > estimate_tokens("hi")
+    assert tools.message_tokens(message) == estimate_tokens(
+        json.dumps(message, separators=(",", ":"))
+    )
+
+
+def test_framing_dominates_across_many_short_messages() -> None:
+    # Twenty one-character messages: the content is twenty tokens, but the request also
+    # carries twenty role/framing envelopes. Charging only content would undercount the
+    # request severalfold; the canonical path does not.
+    conversation = [{"role": "user", "content": "x"} for _ in range(20)]
+    content_only = sum(estimate_tokens("x") for _ in range(20))
+    assert tools.conversation_tokens(conversation) > content_only * 3
+
+
+def test_a_long_tool_call_id_is_charged() -> None:
+    # A tool turn carries its tool_call_id back to the model, and real ids are long. The old
+    # accounting ignored the field entirely; the canonical path charges it, so a long id
+    # costs more than a short one.
+    short = {"role": "tool", "tool_call_id": "c1", "name": "x", "content": "{}"}
+    long = {"role": "tool", "tool_call_id": "call_" + "x" * 40, "name": "x", "content": "{}"}
+    assert tools.message_tokens(long) > tools.message_tokens(short)
+
+
+def test_multiple_tool_calls_and_json_heavy_payloads_are_charged() -> None:
+    # An assistant turn asking for several tools, and a tool turn returning nested JSON, both
+    # re-enter the model context; both are measured from their full serialized shape.
+    assistant = tools._assistant_turn(
+        client.AssistantMessage(
+            content="",
+            tool_calls=[
+                client.ToolCall(id="c1", name="cas_evaluate", arguments='{"expression":"2+2"}'),
+                client.ToolCall(id="c2", name="cas_solve", arguments='{"equations":["x=1"]}'),
+            ],
+        )
+    )
+    one_call = tools._assistant_turn(
+        client.AssistantMessage(
+            content="",
+            tool_calls=[
+                client.ToolCall(id="c1", name="cas_evaluate", arguments='{"expression":"2+2"}')
+            ],
+        )
+    )
+    assert tools.message_tokens(assistant) > tools.message_tokens(one_call)
+
+    nested = {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "name": "x",
+        "content": json.dumps({"ok": True, "value": {"rows": [[1, 2], [3, 4]], "note": "n" * 200}}),
+    }
+    assert tools.message_tokens(nested) == estimate_tokens(
+        json.dumps(nested, separators=(",", ":"))
+    )
+
+
+def test_the_ceiling_boundary_is_exact_under_and_over() -> None:
+    # The guard compares canonical conversation tokens against the ceiling with a strict
+    # greater-than, so a conversation whose cost equals the ceiling still fits and one token
+    # more does not. Both the preflight and the loop read the boundary this way.
+    conversation = [{"role": "user", "content": "x"} for _ in range(20)]
+    cost = tools.conversation_tokens(conversation)
+
+    at_ceiling = tools.ContextBudget(
+        context_window=cost + 100, generation_reserve=100, tool_tokens=0
+    )
+    assert at_ceiling.message_ceiling == cost
+    assert not cost > at_ceiling.message_ceiling  # exactly under: fits
+
+    one_smaller = tools.ContextBudget(
+        context_window=cost + 99, generation_reserve=100, tool_tokens=0
+    )
+    assert cost > one_smaller.message_ceiling  # one token over: refused
+
+
+# --- Estimator uncertainty and the context safety margin (PLA-290 blocker 4) ---------
+#
+# `estimate_tokens` is four characters per token against an unknown endpoint tokenizer.
+# The canonical accounting above measures the request's shape exactly (in characters); the
+# safety margin covers the residual - the characters-per-token ratio running denser than
+# four for JSON, code, or non-ASCII text. The margin is charged on the input estimate and
+# is explicitly NOT the generation reserve (which is room for output). It makes the guard
+# conservative: it may refuse a turn that would have fit, and it does not accept one whose
+# estimated input already exceeds the margin-reduced room.
+
+
+def test_the_margin_shrinks_input_room_and_is_not_the_generation_reserve() -> None:
+    from backend.llm import turn_budget
+
+    window, generation = 8192, 2048
+    # With no margin the input room is the whole window less the generation reserve.
+    assert turn_budget.input_ceiling(window, generation, margin=0.0) == window - generation
+    # The margin shrinks the input room strictly, without touching the generation reserve:
+    # the reserve is subtracted first and is the same number either way.
+    with_margin = turn_budget.input_ceiling(
+        window, generation, margin=turn_budget.CONTEXT_SAFETY_MARGIN
+    )
+    assert with_margin < window - generation
+
+
+def test_the_margin_is_genuinely_conservative() -> None:
+    from backend.llm import turn_budget
+
+    window, generation = 8192, 2048
+    margin = turn_budget.CONTEXT_SAFETY_MARGIN
+    ceiling = turn_budget.input_ceiling(window, generation, margin=margin)
+    # A request filling the margin-reduced ceiling still leaves the margin's worth of slack
+    # against the real input room, so a denser-than-estimated tokenizer has headroom.
+    assert ceiling * (1 + margin) <= window - generation
+
+
+def test_the_margin_keeps_a_normal_window_usable() -> None:
+    from backend.llm import turn_budget
+
+    # The measured cost of an ordinary turn: the ~1,055-token compute schema plus a few
+    # short messages leaves most of an 8,192 window free even after the margin, so a normal
+    # turn is not made unusable by the conservative accounting.
+    ceiling = turn_budget.input_ceiling(8192, 2048, margin=turn_budget.CONTEXT_SAFETY_MARGIN)
+    assert ceiling - 1055 > 3000
+
+
+def test_non_ascii_content_is_charged_conservatively_not_optimistically() -> None:
+    # JSON serialization escapes non-ASCII to \uXXXX, so a run of CJK characters is charged
+    # several times its character count - the opposite of the optimistic undercount that
+    # four-characters-per-token would give on raw text. The guard errs high here, not low.
+    message = {"role": "user", "content": "日本語のテキスト"}
+    assert tools.message_tokens(message) > len(message["content"])
+
+
+def test_code_and_json_heavy_content_is_charged_in_full() -> None:
+    # Punctuation-dense source and JSON are measured from their whole serialized length; no
+    # field is dropped and nothing is optimistically discounted.
+    code = "def f(x):\n    return {'a': [1, 2, 3], 'b': (x ** 2) % 7}\n"
+    message = {"role": "assistant", "content": code}
+    assert tools.message_tokens(message) == estimate_tokens(
+        json.dumps(message, separators=(",", ":"))
+    )
