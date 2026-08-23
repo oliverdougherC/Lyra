@@ -371,7 +371,10 @@ def test_overproduction_is_truncated_deterministically_to_exact_count(
 
 
 def test_a_topic_that_fails_after_retry_fails_the_whole_deck(
-    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A deck is `ready` only when every mapped topic produced a card (PLA-299).
 
@@ -382,7 +385,7 @@ def test_a_topic_that_fails_after_retry_fails_the_whole_deck(
     document_id = _document(db, class_id)
     artifact_id = _deck(db, class_id, document_id)
     llm.replies = [
-        {"topics": ["good topic", "bad topic"]},
+        {"topics": ["good topic", "private-course-topic"]},
         _cards("good one", "good two", "good three", "good four"),
         LyraError("The endpoint fell over."),
         LyraError("The endpoint fell over again."),
@@ -396,6 +399,7 @@ def test_a_topic_that_fails_after_retry_fails_the_whole_deck(
     # No partial cards masquerade as a finished deck.
     assert artifacts.list_parts(db, artifact_id) == []
     assert db.execute("select count(*) from card_states").fetchone()[0] == 0
+    assert "private-course-topic" not in caplog.text
 
 
 def test_a_topic_that_returns_zero_cards_is_retried_then_recovers(

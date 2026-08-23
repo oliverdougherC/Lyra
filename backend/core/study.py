@@ -433,10 +433,10 @@ def _collect_topic_cards_bounded(
             # same retrieval cannot change that, so preserve the actionable local error.
             if exc.message == CONTEXT_TOO_SMALL_MESSAGE:
                 raise
-            logger.exception("Card generation failed for topic %r (attempt %d)", topic, attempt + 1)
+            logger.exception("Card generation failed on attempt %d", attempt + 1)
             continue
         except Exception:
-            logger.exception("Card generation failed for topic %r (attempt %d)", topic, attempt + 1)
+            logger.exception("Card generation failed on attempt %d", attempt + 1)
             continue
         for card in proposed:
             key = _dedupe_key(card["front"])
