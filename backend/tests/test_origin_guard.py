@@ -247,3 +247,243 @@ class TestErrorResponseDoesNotReflectOrigin:
         body = r.text
         assert "evil.example" not in body
         assert "<script>" not in body
+
+
+# -- Integration: content-type and method coverage --------------------------------
+#
+# The middleware is method-and-path-agnostic (it fires for every request), but the
+# browser's CORS simple-request rules mean certain content types and body shapes bypass
+# preflight entirely.  The tests below prove the guard catches every browser-simple
+# attack vector and representative routes from every module.
+
+
+class TestMultipartUploadWithHostileOrigin:
+    """multipart/form-data is a browser-simple content type that skips CORS preflight.
+
+    An attacker can construct an invisible <form enctype="multipart/form-data"> targeting
+    the document upload endpoint. The origin guard must reject it before any file is read.
+    """
+
+    def test_multipart_upload_blocked(self) -> None:
+        r = _client().post(
+            "/api/classes/1/documents",
+            files={"file": ("evil.pdf", b"%PDF-fake", "application/pdf")},
+            headers=_headers(origin="https://evil.example"),
+        )
+        assert r.status_code == 403
+        assert "origin" in r.json()["detail"].lower()
+
+    def test_multipart_upload_allowed_with_trusted_origin(self) -> None:
+        r = _client().post(
+            "/api/classes/1/documents",
+            files={"file": ("test.pdf", b"%PDF-fake", "application/pdf")},
+            headers=_headers(origin=TRUSTED_ORIGIN),
+        )
+        assert r.status_code != 403
+
+
+class TestFormUrlencodedWithHostileOrigin:
+    """application/x-www-form-urlencoded is the default <form method=POST> content type.
+
+    Like multipart, it is browser-simple and skips CORS preflight.
+    """
+
+    def test_form_urlencoded_blocked(self) -> None:
+        r = _client().post(
+            "/api/classes",
+            data={"name": "Evil", "code": "EVIL 101"},
+            headers=_headers(origin="https://evil.example"),
+        )
+        assert r.status_code == 403
+
+
+class TestNoBodyPostWithHostileOrigin:
+    """POST with no body is browser-simple. Routes like /cancel and /start accept no body."""
+
+    def test_empty_post_blocked(self) -> None:
+        r = _client().post(
+            "/api/documents/999/reingest",
+            headers=_headers(origin="https://evil.example"),
+        )
+        assert r.status_code == 403
+
+    def test_empty_post_allowed_with_client_header(self) -> None:
+        r = _client().post(
+            "/api/documents/999/reingest",
+            headers=_headers(client_header="cli"),
+        )
+        assert r.status_code != 403
+
+
+class TestStreamingPostWithHostileOrigin:
+    """SSE streaming endpoints (chat, regenerate, write) are still POST mutations.
+
+    The origin guard must reject before any streaming response begins.
+    """
+
+    def test_chat_stream_blocked(self) -> None:
+        r = _client().post(
+            "/api/sessions/999/chat",
+            json={"content": "hello"},
+            headers=_headers(origin="https://evil.example"),
+        )
+        assert r.status_code == 403
+
+    def test_regenerate_stream_blocked(self) -> None:
+        r = _client().post(
+            "/api/sessions/999/regenerate",
+            json={},
+            headers=_headers(origin="https://evil.example"),
+        )
+        assert r.status_code == 403
+
+    def test_draft_write_stream_blocked(self) -> None:
+        r = _client().post(
+            "/api/drafts/999/write",
+            json={},
+            headers=_headers(origin="https://evil.example"),
+        )
+        assert r.status_code == 403
+
+    def test_writer_chat_stream_blocked(self) -> None:
+        r = _client().post(
+            "/api/drafts/999/chat/999",
+            json={"content": "hello"},
+            headers=_headers(origin="https://evil.example"),
+        )
+        assert r.status_code == 403
+
+
+class TestHeadAndOptionsIntegration:
+    """HEAD and OPTIONS must pass through the origin guard regardless of Origin."""
+
+    def test_head_with_hostile_origin_is_allowed(self) -> None:
+        r = _client().head(
+            "/api/health/live",
+            headers=_headers(origin="https://evil.example"),
+        )
+        assert r.status_code != 403
+
+    def test_options_preflight_with_hostile_origin_is_allowed(self) -> None:
+        r = _client().options(
+            "/api/classes",
+            headers=_headers(origin="https://evil.example"),
+        )
+        assert r.status_code != 403
+
+
+class TestRepresentativeRoutesFromEachModule:
+    """At least one state-changing route per module is tested against the guard."""
+
+    _HOSTILE = "https://evil.example"
+
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("POST", "/api/classes/1/sessions/1/agent-chat"),
+            ("POST", "/api/classes/1/sessions/1/agent-chat/retry"),
+            ("PUT", "/api/classes/1/workspace"),
+            ("PATCH", "/api/classes/1/workspace/grants"),
+            ("POST", "/api/classes/1/sessions/1/workspace/changes/1/reject"),
+        ],
+    )
+    def test_agent_routes_blocked(self, method: str, path: str) -> None:
+        r = _client().request(method, path, json={}, headers=_headers(origin=self._HOSTILE))
+        assert r.status_code == 403
+
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("PATCH", "/api/drafts/999"),
+            ("DELETE", "/api/drafts/999"),
+            ("POST", "/api/drafts/999/cancel"),
+            ("POST", "/api/drafts/999/parts/999/restore"),
+        ],
+    )
+    def test_draft_routes_blocked(self, method: str, path: str) -> None:
+        r = _client().request(method, path, json={}, headers=_headers(origin=self._HOSTILE))
+        assert r.status_code == 403
+
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("POST", "/api/classes/1/decks"),
+            ("POST", "/api/classes/1/quizzes"),
+            ("POST", "/api/quizzes/999/attempts"),
+            ("POST", "/api/attempts/999/answers"),
+            ("POST", "/api/attempts/999/finish"),
+            ("POST", "/api/cards/999/review"),
+        ],
+    )
+    def test_study_routes_blocked(self, method: str, path: str) -> None:
+        r = _client().request(method, path, json={}, headers=_headers(origin=self._HOSTILE))
+        assert r.status_code == 403
+
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("PATCH", "/api/classes/1/profile"),
+            ("POST", "/api/classes/1/profile/confirm"),
+        ],
+    )
+    def test_profile_routes_blocked(self, method: str, path: str) -> None:
+        r = _client().request(method, path, json={}, headers=_headers(origin=self._HOSTILE))
+        assert r.status_code == 403
+
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("PUT", "/api/drafts/999/plan"),
+            ("PUT", "/api/classes/1/writer-settings"),
+        ],
+    )
+    def test_writer_routes_blocked(self, method: str, path: str) -> None:
+        r = _client().request(method, path, json={}, headers=_headers(origin=self._HOSTILE))
+        assert r.status_code == 403
+
+    @pytest.mark.parametrize(
+        "method,path",
+        [
+            ("POST", "/api/classes/1/solutions"),
+            ("POST", "/api/solutions/999/start"),
+            ("POST", "/api/solutions/999/cancel"),
+        ],
+    )
+    def test_solution_routes_blocked(self, method: str, path: str) -> None:
+        r = _client().request(method, path, json={}, headers=_headers(origin=self._HOSTILE))
+        assert r.status_code == 403
+
+
+class TestPreflightCorsInteraction:
+    """CORS preflight (OPTIONS with Access-Control-Request-Method) behaviour.
+
+    The CORSMiddleware handles preflights and only allows listed origins. This verifies
+    the interaction between the CORS middleware and the origin guard: the CORS middleware
+    processes OPTIONS first (since it wraps everything), and the origin guard exempts
+    OPTIONS as a safe method, so a hostile preflight gets a CORS denial, not a 403.
+    """
+
+    def test_preflight_from_trusted_origin_gets_cors_headers(self) -> None:
+        r = _client().options(
+            "/api/classes",
+            headers={
+                "host": TRUSTED_HOST,
+                "Origin": TRUSTED_ORIGIN,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert r.status_code == 200
+        assert r.headers.get("access-control-allow-origin") == TRUSTED_ORIGIN
+
+    def test_preflight_from_hostile_origin_lacks_allow_header(self) -> None:
+        r = _client().options(
+            "/api/classes",
+            headers={
+                "host": TRUSTED_HOST,
+                "Origin": "https://evil.example",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        assert "access-control-allow-origin" not in r.headers

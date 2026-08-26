@@ -138,6 +138,20 @@ where a page stays same-origin to a name it controls while that name is rebound 
 browser cannot forge the `Host` value, so refusing an unrecognized one fails the rebinding request
 even when `Origin` is absent or looks acceptable.
 
+**Origin guard (CSRF boundary):** Every state-changing request (POST, PUT, PATCH, DELETE) must carry
+either a trusted browser `Origin` (`http://localhost:3000` or `http://127.0.0.1:3000`) or the
+`X-Lyra-Client` header. Requests that carry neither are rejected with 403 before any handler runs.
+Safe methods (GET, HEAD, OPTIONS) are exempt. This closes the gap CORS leaves open: CORS withholds
+response-read permission from hostile pages but does not prevent a simple cross-origin POST (form or
+no-CORS fetch) from being dispatched and executed.
+
+**`X-Lyra-Client` policy:** Non-browser loopback clients (the launcher health probe, CLI scripts,
+test harnesses) cannot send a browser `Origin` header. Rather than silently allowing a missing
+`Origin` on unsafe methods, these callers must send `X-Lyra-Client: <any-value>`. The header's
+presence is the signal: a cross-origin browser request carrying a non-safelisted header triggers a
+CORS preflight, and the CORS middleware rejects preflights from untrusted origins. The value is not
+checked; any non-empty string is accepted.
+
 **Core modules:**
 
 | Module | Responsibility |

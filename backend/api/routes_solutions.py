@@ -277,7 +277,7 @@ def create_solution(class_id: int, payload: SolutionCreate, conn: DbConn) -> dic
     """
     get_class(conn, class_id)
     for source in payload.sources:
-        _require_ready(conn, source.document_id)
+        _require_ready(conn, source.document_id, class_id=class_id)
 
     created = artifacts.create_artifact(
         conn,
@@ -514,18 +514,23 @@ def delete_solution(artifact_id: int, conn: DbConn) -> None:
     artifacts.delete_artifact(conn, artifact_id)
 
 
-def _require_ready(conn: sqlite3.Connection, document_id: int) -> sqlite3.Row:
-    """A document that can actually be read, or a message naming the one that cannot.
+def _require_ready(conn: sqlite3.Connection, document_id: int, *, class_id: int) -> sqlite3.Row:
+    """A document that exists, is ready, and belongs to `class_id`.
 
     Segmentation reads the text ingestion extracted, so a document that has not finished
     ingesting has nothing to read. Refusing here beats accepting the run and failing it a
     second later, which would look like Lyra broke rather than like the upload is not done.
+
+    The class check closes the cross-class source gap: without it a caller knowing a
+    document ID from another class could attach it as a source, and the downstream
+    `create_artifact` check -- while present -- would report a less specific error after
+    the ready/pending distinction was already lost.
     """
     row = conn.execute(
-        "select id, filename, state from documents where id = ?", (document_id,)
+        "select id, class_id, filename, state from documents where id = ?", (document_id,)
     ).fetchone()
-    if row is None:
-        raise LyraError("That document does not exist.")
+    if row is None or int(row["class_id"]) != class_id:
+        raise NotFoundError("That document does not exist in this class.")
     if row["state"] != "ready":
         raise LyraError(NOT_READY_MESSAGE.format(filename=row["filename"]))
     return row

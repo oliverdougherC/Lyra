@@ -734,7 +734,7 @@ def _draft(db: sqlite3.Connection, class_id: int) -> int:
 
 
 def _deck(db: sqlite3.Connection, class_id: int, document_id: int) -> int:
-    """A flashcard deck artifact. Returns its artifact_id."""
+    """A flashcard deck artifact with a real card part. Returns its artifact_id."""
     created = artifacts.create_artifact(
         db,
         class_id,
@@ -742,11 +742,20 @@ def _deck(db: sqlite3.Connection, class_id: int, document_id: int) -> int:
         [artifacts.SourceSpec(document_id=document_id, role=artifacts.STUDY_SOURCE)],
         kind=artifacts.KIND_FLASHCARD_DECK,
     )
-    return int(created["id"])
+    artifact_id = int(created["id"])
+    artifacts.create_part(
+        db,
+        artifact_id,
+        artifacts.CARD,
+        1,
+        content='{"front":"Q","back":"A"}',
+        status=artifacts.PART_COMPLETE,
+    )
+    return artifact_id
 
 
 def _quiz(db: sqlite3.Connection, class_id: int, document_id: int) -> int:
-    """A quiz artifact. Returns its artifact_id."""
+    """A quiz artifact with a real question part. Returns its artifact_id."""
     created = artifacts.create_artifact(
         db,
         class_id,
@@ -754,7 +763,16 @@ def _quiz(db: sqlite3.Connection, class_id: int, document_id: int) -> int:
         [artifacts.SourceSpec(document_id=document_id, role=artifacts.STUDY_SOURCE)],
         kind=artifacts.KIND_QUIZ,
     )
-    return int(created["id"])
+    artifact_id = int(created["id"])
+    artifacts.create_part(
+        db,
+        artifact_id,
+        artifacts.QUIZ_QUESTION,
+        1,
+        content='{"prompt":"What?","choices":["A","B"],"answer":0}',
+        status=artifacts.PART_COMPLETE,
+    )
+    return artifact_id
 
 
 @pytest.mark.parametrize("make_wrong", [_draft, _deck, _quiz], ids=["draft", "deck", "quiz"])
@@ -832,12 +850,13 @@ class TestWrongKindIsRefused:
         doc = _document(db, class_id)
         wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
         parts = artifacts.list_parts(db, wrong)
-        if not parts:
-            return
+        assert parts, f"{make_wrong.__name__} must create a real part for the kind guard to fire"
+        before = str(parts[0]["content"])
         response = client.patch(
             f"/api/solutions/{wrong}/parts/{parts[0]['id']}", json={"content": "Hijacked."}
         )
         assert response.status_code == 404
+        assert str(artifacts.get_part(db, int(parts[0]["id"]))["content"]) == before
 
     def test_cross_kind_regenerate(
         self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
@@ -845,8 +864,7 @@ class TestWrongKindIsRefused:
         doc = _document(db, class_id)
         wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
         parts = artifacts.list_parts(db, wrong)
-        if not parts:
-            return
+        assert parts, f"{make_wrong.__name__} must create a real part for the kind guard to fire"
         response = client.post(
             f"/api/solutions/{wrong}/parts/{parts[0]['id']}/regenerate",
             json={"correction": ""},
@@ -859,8 +877,7 @@ class TestWrongKindIsRefused:
         doc = _document(db, class_id)
         wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
         parts = artifacts.list_parts(db, wrong)
-        if not parts:
-            return
+        assert parts, f"{make_wrong.__name__} must create a real part for the kind guard to fire"
         response = client.get(f"/api/solutions/{wrong}/parts/{parts[0]['id']}/revisions")
         assert response.status_code == 404
 
@@ -870,8 +887,7 @@ class TestWrongKindIsRefused:
         doc = _document(db, class_id)
         wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
         parts = artifacts.list_parts(db, wrong)
-        if not parts:
-            return
+        assert parts, f"{make_wrong.__name__} must create a real part for the kind guard to fire"
         response = client.post(
             f"/api/solutions/{wrong}/parts/{parts[0]['id']}/restore", json={"revision": 1}
         )
@@ -979,3 +995,147 @@ def test_a_sub_part_of_a_problem_solved_as_a_whole_cannot_be_re_solved_alone(
     )
 
     assert response.status_code == 400
+
+
+# --- PLA-311: cross-class source rejection ---
+
+
+def test_cross_class_source_is_rejected_atomically(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """A document from another class must never become a source, even if it is ready."""
+    other_class = int(
+        db.execute("insert into classes (name, code) values ('Physics', 'PHYS 101')").lastrowid or 0
+    )
+    db.commit()
+    other_doc = _document(db, other_class, "other.pdf")
+
+    response = client.post(
+        f"/api/classes/{class_id}/solutions",
+        json={"sources": [{"document_id": other_doc}]},
+    )
+
+    assert response.status_code == 404
+    listed = client.get(f"/api/classes/{class_id}/solutions").json()
+    assert listed == []
+
+
+def test_mixed_own_and_cross_class_sources_are_rejected(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """If ANY source violates the class contract, the whole creation is refused."""
+    own_doc = _document(db, class_id, "own.pdf")
+    other_class = int(
+        db.execute("insert into classes (name, code) values ('Biology', 'BIO 101')").lastrowid or 0
+    )
+    db.commit()
+    cross_doc = _document(db, other_class, "foreign.pdf")
+
+    response = client.post(
+        f"/api/classes/{class_id}/solutions",
+        json={
+            "sources": [
+                {"document_id": own_doc},
+                {"document_id": cross_doc},
+            ]
+        },
+    )
+
+    assert response.status_code == 404
+    assert client.get(f"/api/classes/{class_id}/solutions").json() == []
+
+
+def test_pending_source_is_rejected(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """A document still ingesting cannot be used as a source."""
+    pending_doc = _document(db, class_id, "pending.pdf", state="pending")
+
+    response = client.post(
+        f"/api/classes/{class_id}/solutions",
+        json={"sources": [{"document_id": pending_doc}]},
+    )
+
+    assert response.status_code == 400
+
+
+def test_failed_source_is_rejected(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """A document that failed ingestion cannot be used as a source."""
+    failed_doc = _document(db, class_id, "bad.pdf", state="failed")
+
+    response = client.post(
+        f"/api/classes/{class_id}/solutions",
+        json={"sources": [{"document_id": failed_doc}]},
+    )
+
+    assert response.status_code == 400
+
+
+def test_deleted_document_is_rejected_as_source(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """A document ID that once existed but was deleted must be refused."""
+    doc = _document(db, class_id, "gone.pdf")
+    db.execute("delete from documents where id = ?", (doc,))
+    db.commit()
+
+    response = client.post(
+        f"/api/classes/{class_id}/solutions",
+        json={"sources": [{"document_id": doc}]},
+    )
+
+    assert response.status_code == 404
+
+
+def test_nonexistent_document_is_rejected_as_source(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """A completely fabricated document ID is refused."""
+    response = client.post(
+        f"/api/classes/{class_id}/solutions",
+        json={"sources": [{"document_id": 999999}]},
+    )
+
+    assert response.status_code == 404
+
+
+# --- PLA-311: part ownership boundary ---
+
+
+def test_part_from_another_solution_set_is_refused(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """A part belonging to solution set A cannot be edited through solution set B's route."""
+    doc = _document(db, class_id)
+    artifact_a = _at_the_gate(db, class_id, doc)
+    parts_a = artifacts.list_parts(db, artifact_a)
+    assert parts_a
+
+    doc_b = _document(db, class_id, "hw5.pdf")
+    artifact_b = _at_the_gate(db, class_id, doc_b)
+
+    response = client.patch(
+        f"/api/solutions/{artifact_b}/parts/{parts_a[0]['id']}",
+        json={"content": "Hijacked through another set."},
+    )
+    assert response.status_code == 404
+
+
+# --- PLA-311: destructive wrong-kind requests produce no mutation ---
+
+
+def test_destructive_wrong_kind_requests_produce_no_mutation(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    """DELETE on a wrong-kind artifact must not delete it."""
+    doc = _document(db, class_id)
+    deck_id = _deck(db, class_id, doc)
+    draft_id = _draft(db, class_id)
+
+    assert client.delete(f"/api/solutions/{deck_id}").status_code == 404
+    assert artifacts.get_artifact(db, deck_id) is not None
+
+    assert client.delete(f"/api/solutions/{draft_id}").status_code == 404
+    assert artifacts.get_artifact(db, draft_id) is not None

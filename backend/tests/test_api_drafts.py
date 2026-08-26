@@ -1174,7 +1174,7 @@ def test_draft_restore_with_the_current_version_succeeds(
 
     assert restored.status_code == 200
     assert str(artifacts.get_part(db, part_id)["content"]) == "first draft"
-    assert int(artifacts.get_part(db, part_id)["content_version"]) == version + 2
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == version + 1
 
 
 def test_stale_draft_restore_is_refused_without_mutation(
@@ -1192,6 +1192,10 @@ def test_stale_draft_restore_is_refused_without_mutation(
     )
 
     assert refused.status_code == 409
+    body = refused.json()
+    assert body["code"] == "stale_body_version"
+    assert body["current_version"] == moved_version
+    assert body["server_body"] == "third from elsewhere"
     assert str(artifacts.get_part(db, part_id)["content"]) == "third from elsewhere"
     assert int(artifacts.get_part(db, part_id)["content_version"]) == moved_version
 
@@ -1255,6 +1259,245 @@ def test_stale_draft_restore_creates_no_phantom_revision(
     assert refused.status_code == 409
     assert artifacts.list_revisions(db, part_id) == before_revisions
     assert str(artifacts.get_part(db, part_id)["content"]) == "third from elsewhere"
+
+
+def test_concurrent_autosave_between_read_and_restore_cannot_be_overwritten(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """Adversarial: a concurrent autosave lands between the caller's read and its restore.
+
+    The restore must conflict: the autosave moved the version, so the caller's
+    expected_version is stale. The autosaved body must not be silently clobbered.
+    """
+    artifact_id, part_id = _draft(db, class_id, "original")
+    artifacts.set_part_content(db, part_id, "edited", origin=artifacts.USER_CORRECTED)
+    caller_version = int(artifacts.get_part(db, part_id)["content_version"])
+    revision = artifacts.get_revision(db, part_id, 1)
+
+    conn2 = connect()
+    try:
+        artifacts.compare_and_set_part_content(
+            conn2,
+            part_id,
+            "autosaved body",
+            artifacts.USER_CORRECTED,
+            expected_version=caller_version,
+            record_revision=False,
+        )
+    finally:
+        conn2.close()
+
+    from backend.core.errors import StaleContentError
+
+    with pytest.raises(StaleContentError) as exc_info:
+        artifacts.compare_and_restore_part_content(
+            db,
+            part_id,
+            str(revision["content"]),
+            artifacts.USER_CORRECTED,
+            expected_version=caller_version,
+            restored_note="Restored version 1.",
+            preserved_origin=artifacts.USER_CORRECTED,
+            preserved_note="Pre-restore body.",
+        )
+    assert exc_info.value.current_content == "autosaved body"
+    assert str(artifacts.get_part(db, part_id)["content"]) == "autosaved body"
+
+
+def test_one_concurrent_writer_wins_and_the_stale_restore_conflicts(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """Adversarial: two threads race to restore vs autosave; exactly one wins."""
+    artifact_id, part_id = _draft(db, class_id, "body A")
+    artifacts.set_part_content(db, part_id, "body B", origin=artifacts.USER_CORRECTED)
+    shared_version = int(artifacts.get_part(db, part_id)["content_version"])
+
+    barrier = threading.Barrier(2)
+    results: list[str] = []
+
+    def do_restore() -> None:
+        conn = connect()
+        try:
+            barrier.wait(timeout=2)
+            artifacts.compare_and_restore_part_content(
+                conn,
+                part_id,
+                "body A",
+                artifacts.USER_CORRECTED,
+                expected_version=shared_version,
+                restored_note="Restored.",
+                preserved_origin=artifacts.USER_CORRECTED,
+                preserved_note="Before restore.",
+            )
+            results.append("restored")
+        except Exception:
+            results.append("conflict")
+        finally:
+            conn.close()
+
+    def do_autosave() -> None:
+        conn = connect()
+        try:
+            barrier.wait(timeout=2)
+            artifacts.compare_and_set_part_content(
+                conn,
+                part_id,
+                "body C autosave",
+                artifacts.USER_CORRECTED,
+                expected_version=shared_version,
+                record_revision=False,
+            )
+            results.append("saved")
+        except Exception:
+            results.append("conflict")
+        finally:
+            conn.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pool.submit(do_restore)
+        pool.submit(do_autosave)
+        pool.shutdown(wait=True)
+
+    assert sorted(results) == ["conflict", sorted(["restored", "saved"])[1]] or sorted(results) in [
+        ["conflict", "restored"],
+        ["conflict", "saved"],
+    ]
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == shared_version + 1
+
+
+def test_stale_restore_creates_no_phantom_revisions_under_concurrent_pressure(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """Adversarial: a stale restore must leave zero new revisions behind."""
+    artifact_id, part_id = _draft(db, class_id, "alpha")
+    artifacts.set_part_content(db, part_id, "beta", origin=artifacts.USER_CORRECTED)
+    stale_version = int(artifacts.get_part(db, part_id)["content_version"])
+    artifacts.set_part_content(db, part_id, "gamma", origin=artifacts.USER_CORRECTED)
+    before_revisions = [dict(r) for r in artifacts.list_revisions(db, part_id)]
+    before_count = len(before_revisions)
+
+    from backend.core.errors import StaleContentError
+
+    with pytest.raises(StaleContentError):
+        artifacts.compare_and_restore_part_content(
+            db,
+            part_id,
+            "alpha",
+            artifacts.USER_CORRECTED,
+            expected_version=stale_version,
+            restored_note="Restored.",
+            preserved_origin=artifacts.USER_CORRECTED,
+            preserved_note="Pre-restore.",
+        )
+
+    after_revisions = artifacts.list_revisions(db, part_id)
+    assert len(after_revisions) == before_count
+    assert str(artifacts.get_part(db, part_id)["content"]) == "gamma"
+
+
+def test_outgoing_autosaved_body_remains_recoverable_after_restore(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """The autosaved-only body (no recorded revision) must appear in history after restore."""
+    artifact_id, part_id = _draft(db, class_id, "recorded body")
+    v0 = int(artifacts.get_part(db, part_id)["content_version"])
+    artifacts.compare_and_set_part_content(
+        db,
+        part_id,
+        "autosaved-only body",
+        artifacts.USER_CORRECTED,
+        expected_version=v0,
+        record_revision=False,
+    )
+    v1 = int(artifacts.get_part(db, part_id)["content_version"])
+
+    artifacts.compare_and_restore_part_content(
+        db,
+        part_id,
+        "recorded body",
+        artifacts.USER_CORRECTED,
+        expected_version=v1,
+        restored_note="Restored version 1.",
+        preserved_origin=artifacts.USER_CORRECTED,
+        preserved_note="Before restore.",
+    )
+
+    contents = [r["content"] for r in artifacts.list_revisions(db, part_id)]
+    assert "autosaved-only body" in contents
+    assert str(artifacts.get_part(db, part_id)["content"]) == "recorded body"
+
+
+def test_restore_and_history_publication_are_atomic(db: sqlite3.Connection, class_id: int) -> None:
+    """The restored body and its history entries either both land or neither does."""
+    artifact_id, part_id = _draft(db, class_id, "body 1")
+    artifacts.set_part_content(db, part_id, "body 2", origin=artifacts.USER_CORRECTED)
+    v = int(artifacts.get_part(db, part_id)["content_version"])
+    revisions_before = len(artifacts.list_revisions(db, part_id))
+
+    result = artifacts.compare_and_restore_part_content(
+        db,
+        part_id,
+        "body 1",
+        artifacts.USER_CORRECTED,
+        expected_version=v,
+        restored_note="Restored version 1.",
+        preserved_origin=artifacts.USER_CORRECTED,
+        preserved_note="Before restore.",
+    )
+
+    assert result["version"] == v + 1
+    assert result["content"] == "body 1"
+    revisions_after = artifacts.list_revisions(db, part_id)
+    assert len(revisions_after) > revisions_before
+    assert revisions_after[0]["content"] == "body 1"
+    assert revisions_after[0]["note"] == "Restored version 1."
+
+
+def test_injected_failure_cannot_leave_only_preserved_body_committed(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the restore write fails after the outgoing body is preserved, both are rolled back."""
+    artifact_id, part_id = _draft(db, class_id, "safe body")
+    artifacts.set_part_content(db, part_id, "recorded body", origin=artifacts.USER_CORRECTED)
+    v0 = int(artifacts.get_part(db, part_id)["content_version"])
+    artifacts.compare_and_set_part_content(
+        db,
+        part_id,
+        "autosaved-only body",
+        artifacts.USER_CORRECTED,
+        expected_version=v0,
+        record_revision=False,
+    )
+    v = int(artifacts.get_part(db, part_id)["content_version"])
+    revisions_before = artifacts.list_revisions(db, part_id)
+
+    call_count = 0
+    original_insert = artifacts._insert_revision
+
+    def failing_insert(conn, pid, content, origin, note=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RuntimeError("injected failure on second revision insert")
+        return original_insert(conn, pid, content, origin, note)
+
+    monkeypatch.setattr(artifacts, "_insert_revision", failing_insert)
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        artifacts.compare_and_restore_part_content(
+            db,
+            part_id,
+            "safe body",
+            artifacts.USER_CORRECTED,
+            expected_version=v,
+            restored_note="Restored version 1.",
+            preserved_origin=artifacts.USER_CORRECTED,
+            preserved_note="Before restore.",
+        )
+
+    assert str(artifacts.get_part(db, part_id)["content"]) == "autosaved-only body"
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == v
+    assert artifacts.list_revisions(db, part_id) == revisions_before
 
 
 def _solution_set(db: sqlite3.Connection, class_id: int) -> dict[str, object]:

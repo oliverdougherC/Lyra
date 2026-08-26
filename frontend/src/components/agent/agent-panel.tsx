@@ -37,6 +37,7 @@ import {
 import { useMessages } from '@/lib/hooks/use-chat'
 import { useClassWriterSettings, useUpdateClassWriterSettings } from '@/lib/hooks/use-settings'
 import type { AgentProfile } from '@/types'
+import { hunksAreStale } from './types'
 import type { AgentGrantKey, AgentToolActivity } from './types'
 
 type AgentPanelProps = {
@@ -97,6 +98,16 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
     if (sessionId === null) return
     setEffectBusy(true)
     try {
+      const reviewed = await api.reviewAgentWorkspaceChange(classId, sessionId, changeId)
+      const displayedCount =
+        changes.data?.find((c) => c.id === changeId)?.hunks.length ?? hunks.length
+
+      if (hunksAreStale(hunks, reviewed.hunks, displayedCount)) {
+        refresh()
+        toast.error('The proposal changed since you reviewed it. Please review the updated diff.')
+        return
+      }
+
       const confirmation = await api.confirmAgentWorkspaceChange(
         classId,
         sessionId,

@@ -817,28 +817,21 @@ def restore_draft_revision(
     part = artifacts.get_part(conn, part_id)
     if int(part["artifact_id"]) != artifact_id or part["kind"] != artifacts.DRAFT_BODY:
         raise NotFoundError(NO_DOCUMENT_MESSAGE)
-    current_version = int(part["content_version"])
-    if payload.expected_version != current_version:
-        raise ConflictError(EDITED_SINCE_CHECK)
     revision = artifacts.get_revision(conn, part_id, payload.revision)
-    artifacts.set_part_content(
-        conn,
-        part_id,
-        str(part["content"]),
-        artifacts.USER_CORRECTED,
-        PRE_RESTORE_NOTE.format(revision=payload.revision),
-    )
-    artifacts.set_part_content(
+    result = artifacts.compare_and_restore_part_content(
         conn,
         part_id,
         str(revision["content"]),
         artifacts.USER_CORRECTED,
-        RESTORED_NOTE.format(revision=payload.revision),
+        expected_version=payload.expected_version,
+        restored_note=RESTORED_NOTE.format(revision=payload.revision),
+        preserved_origin=artifacts.USER_CORRECTED,
+        preserved_note=PRE_RESTORE_NOTE.format(revision=payload.revision),
     )
     restored_part = artifacts.get_part(conn, part_id)
     return {
         **restored_part,
-        "body_version": restored_part["content_version"],
+        "body_version": result["version"],
     }
 
 

@@ -2,7 +2,12 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
-import { WorkspaceChangeReviewRail, type WorkspaceChangeReview } from '@/components/agent'
+import {
+  WorkspaceChangeReviewRail,
+  hunksAreStale,
+  type WorkspaceChangeReview,
+  type HunkRef,
+} from '@/components/agent'
 
 const CHANGE: WorkspaceChangeReview = {
   id: 9,
@@ -68,5 +73,57 @@ describe('WorkspaceChangeReviewRail', () => {
     expect(screen.getByRole('region', { name: 'Proposed file' })).toHaveTextContent(
       'print(helper(4))',
     )
+  })
+})
+
+describe('hunksAreStale (PLA-303)', () => {
+  const h = (index: number, hash: string): HunkRef => ({ index, hash })
+
+  it('returns false when selected hunks match the fresh set exactly', () => {
+    const selected = [h(0, 'aaa'), h(1, 'bbb')]
+    const fresh = [h(0, 'aaa'), h(1, 'bbb')]
+    expect(hunksAreStale(selected, fresh, 2)).toBe(false)
+  })
+
+  it('detects same-index changed content (hash differs)', () => {
+    const selected = [h(0, 'aaa')]
+    const fresh = [h(0, 'CHANGED')]
+    expect(hunksAreStale(selected, fresh, 1)).toBe(true)
+  })
+
+  it('detects a hunk that disappeared (index no longer in fresh set)', () => {
+    const selected = [h(0, 'aaa'), h(1, 'bbb')]
+    const fresh = [h(0, 'aaa')]
+    expect(hunksAreStale(selected, fresh, 2)).toBe(true)
+  })
+
+  it('detects insertion/reordering (fresh set has more hunks than displayed)', () => {
+    const selected = [h(0, 'aaa')]
+    const fresh = [h(0, 'aaa'), h(1, 'new')]
+    expect(hunksAreStale(selected, fresh, 1)).toBe(true)
+  })
+
+  it('returns false for an unchanged partial accept (subset of hunks)', () => {
+    const selected = [h(1, 'bbb')]
+    const fresh = [h(0, 'aaa'), h(1, 'bbb')]
+    expect(hunksAreStale(selected, fresh, 2)).toBe(false)
+  })
+
+  it('returns false for an unchanged retry of an already-accepted accept-all', () => {
+    const selected = [h(0, 'aaa'), h(1, 'bbb')]
+    const fresh = [h(0, 'aaa'), h(1, 'bbb')]
+    expect(hunksAreStale(selected, fresh, 2)).toBe(false)
+  })
+
+  it('detects accept-all when displayed set no longer represents the refreshed set', () => {
+    const selected = [h(0, 'aaa'), h(1, 'bbb')]
+    const fresh = [h(0, 'aaa'), h(1, 'bbb'), h(2, 'ccc')]
+    expect(hunksAreStale(selected, fresh, 2)).toBe(true)
+  })
+
+  it('detects deletion causing the fresh set to shrink', () => {
+    const selected = [h(0, 'aaa')]
+    const fresh = [h(0, 'aaa')]
+    expect(hunksAreStale(selected, fresh, 3)).toBe(true)
   })
 })
