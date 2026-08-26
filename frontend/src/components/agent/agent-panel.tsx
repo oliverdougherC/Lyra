@@ -97,20 +97,13 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
     if (sessionId === null) return
     setEffectBusy(true)
     try {
-      const reviewed = await api.reviewAgentWorkspaceChange(classId, sessionId, changeId)
-      const available = new Map(reviewed.hunks.map((hunk) => [hunk.index, hunk.hash]))
-      const exact = hunks.map((hunk) => ({
-        index: hunk.index,
-        hash: available.get(hunk.index) ?? '',
-      }))
-      if (exact.some((hunk) => !hunk.hash)) throw new Error('That change is no longer current.')
       const confirmation = await api.confirmAgentWorkspaceChange(
         classId,
         sessionId,
         changeId,
-        exact,
+        hunks,
       )
-      await api.applyAgentWorkspaceChange(classId, sessionId, changeId, exact, confirmation.token)
+      await api.applyAgentWorkspaceChange(classId, sessionId, changeId, hunks, confirmation.token)
       refresh()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not apply that change.')
