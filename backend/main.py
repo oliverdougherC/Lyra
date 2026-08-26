@@ -40,7 +40,12 @@ from backend.core import (
 )
 from backend.core.errors import LyraError
 from backend.core.ingestion import reconcile_interrupted, start_worker
-from backend.core.origins import ALLOWED_BROWSER_ORIGINS, host_is_allowed
+from backend.core.origins import (
+    ALLOWED_BROWSER_ORIGINS,
+    LOOPBACK_CLIENT_HEADER,
+    host_is_allowed,
+    mutation_origin_is_acceptable,
+)
 from backend.llm.embed_server import embedding_server
 from backend.llm.ocr_server import ocr_server
 from backend.llm.rerank_server import rerank_server
@@ -49,6 +54,10 @@ from backend.storage.database import connect, migrate
 logger = logging.getLogger("lyra")
 
 _INVALID_HOST = "Request rejected: the Host header is not a recognized Lyra loopback host."
+_INVALID_ORIGIN = (
+    "Request rejected: state-changing requests require a trusted browser origin"
+    " or a non-browser client header."
+)
 
 
 @asynccontextmanager
@@ -166,13 +175,37 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Registered after CORS so it wraps it: a request whose `Host` is not a Lyra loopback
-    # host is refused here before CORS, routing, or any route body runs. CORS alone does
-    # not close DNS rebinding - a page can stay same-origin to a name it controls while
-    # that name is rebound to 127.0.0.1 - and this API is unauthenticated with
-    # state-changing and, when granted, workspace/command routes, so the Host check is
-    # part of the loopback-only boundary rather than an optimization. The refusal does not
-    # depend on `Origin`: a missing or acceptable-looking `Origin` cannot rescue a bad Host.
+    # CORS withholds *response-read* permission from a hostile page, but does not prevent
+    # a simple cross-origin request from being *dispatched*. A malicious page can therefore
+    # submit form/no-CORS POSTs to loopback Lyra with a trusted Host and an untrusted
+    # Origin. This middleware closes that gap by requiring every state-changing request to
+    # carry either a trusted browser Origin or a non-browser client header before the body
+    # is parsed or any handler runs. Safe methods are exempt.
+    #
+    # Registered before the Host guard so the Host guard wraps it: Host is checked first
+    # (LIFO), then Origin. A rebinding attack is refused on its Host before Origin is even
+    # evaluated, and a legitimate-Host + hostile-Origin CSRF is caught here.
+    @app.middleware("http")
+    async def enforce_mutation_origin(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        verdict = mutation_origin_is_acceptable(
+            request.method,
+            request.headers.get("origin"),
+            LOOPBACK_CLIENT_HEADER in request.headers,
+        )
+        if verdict is False:
+            return JSONResponse(status_code=403, content={"detail": _INVALID_ORIGIN})
+        return await call_next(request)
+
+    # Registered after the Origin guard so it wraps it (LIFO): a request whose `Host` is
+    # not a Lyra loopback host is refused here before Origin, CORS, routing, or any route
+    # body runs. CORS alone does not close DNS rebinding - a page can stay same-origin to
+    # a name it controls while that name is rebound to 127.0.0.1 - and this API is
+    # unauthenticated with state-changing and, when granted, workspace/command routes, so
+    # the Host check is part of the loopback-only boundary rather than an optimization.
+    # The refusal does not depend on `Origin`: a missing or acceptable-looking `Origin`
+    # cannot rescue a bad Host.
     @app.middleware("http")
     async def enforce_trusted_host(
         request: Request, call_next: Callable[[Request], Awaitable[Response]]
