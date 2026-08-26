@@ -243,12 +243,15 @@ def add_comment(
     hint: int | None = None,
     section_ref: str | None = None,
     orphaned: bool = False,
+    commit: bool = True,
 ) -> dict[str, object]:
     """File one thread root and return it.
 
     The anchor fields are stored as given: the caller resolves the quote against the
     text it read and passes the canonical matched text plus its offset. A caller may
     also keep a hopeless mismatch with no hint; it remains a useful unanchored finding.
+
+    When ``commit=False`` the caller owns the transaction boundary (PLA-310 atomicity).
 
     Raises:
         ValueError: on an author or severity outside the sets. A caller bug - model
@@ -273,12 +276,22 @@ def add_comment(
             "values (?, ?, ?, ?, ?, ?, ?)",
             (part_id, author, severity, quote, hint, body, int(orphaned)),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
     return _get(conn, int(cursor.lastrowid or 0))
 
 
-def add_reply(conn: sqlite3.Connection, root_id: int, author: str, body: str) -> dict[str, object]:
+def add_reply(
+    conn: sqlite3.Connection,
+    root_id: int,
+    author: str,
+    body: str,
+    *,
+    commit: bool = True,
+) -> dict[str, object]:
     """Append one reply to a thread root and return it.
+
+    When ``commit=False`` the caller owns the transaction boundary (PLA-310 atomicity).
 
     Raises:
         NotFoundError: when the root does not exist, or names a reply - threads are one
@@ -294,7 +307,8 @@ def add_reply(conn: sqlite3.Connection, root_id: int, author: str, body: str) ->
         "insert into draft_comments (part_id, parent_id, author, body) values (?, ?, ?, ?)",
         (root["part_id"], root_id, author, body),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return _get(conn, int(cursor.lastrowid or 0))
 
 

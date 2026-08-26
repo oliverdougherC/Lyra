@@ -36,7 +36,12 @@ from backend.core import (
     writer_plans,
 )
 from backend.core.errors import LyraError
-from backend.core.writer_budgets import DEPTHS, get_writer_capabilities, validate_depth
+from backend.core.writer_budgets import (
+    DEPTHS,
+    WriterCapabilities,
+    get_writer_capabilities,
+    validate_depth,
+)
 from backend.llm.tools import RecordedCall, ToolDefinition
 from backend.rag.retrieve import retrieve
 from backend.tools.result import ToolResult, failure, success
@@ -113,14 +118,25 @@ class RunEffects:
     def note_confirmed(self, comment_id: int) -> None:
         self.confirmed_comment_ids = [*(self.confirmed_comment_ids or []), comment_id]
 
-    def link(self, conn: sqlite3.Connection, target_kind: str, target_id: int) -> None:
-        """Bind a durable target to this attempt, if one is active."""
+    def link(
+        self,
+        conn: sqlite3.Connection,
+        target_kind: str,
+        target_id: int,
+        *,
+        commit: bool = True,
+    ) -> None:
+        """Bind a durable target to this attempt, if one is active.
+
+        When ``commit=False`` the caller owns the transaction boundary.
+        """
         if self.attempt_id is not None:
             writer_attempts.link_target(
                 conn,
                 self.attempt_id,
                 target_kind=target_kind,
                 target_id=target_id,
+                commit=commit,
             )
 
 
@@ -211,8 +227,14 @@ def build_registry(
     profile: str,
     *,
     private_context: tuple[str, ...] = (),
+    capabilities: WriterCapabilities | None = None,
 ) -> tuple[dict[str, ToolDefinition], RunEffects]:
     """The tools one profile may use on one draft, plus the effects record they share.
+
+    When ``capabilities`` is provided the registry is built from that frozen snapshot
+    instead of re-reading class/global settings. This is the mechanism that lets the
+    chat route freeze the policy at preflight and guarantee the execution registry
+    matches the budgeted one (PLA-309).
 
     Raises:
         ValueError: on a profile outside the set. A caller bug, not model input.
@@ -222,7 +244,8 @@ def build_registry(
 
     artifact = artifacts.get_artifact(conn, artifact_id)
     class_id = int(artifact["class_id"])
-    capabilities = get_writer_capabilities(conn, class_id)
+    if capabilities is None:
+        capabilities = get_writer_capabilities(conn, class_id)
     effects = RunEffects()
     exposed_private = _PrivateContextLedger(
         *_seed_private_context(conn, artifact_id, artifact), *private_context
@@ -335,7 +358,10 @@ def build_registry(
                 final_url=str(fetched["final_url"]),
                 content_type=(str(fetched["content_type"]) if fetched["content_type"] else None),
                 truncated=bool(fetched["truncated"]),
+                commit=False,
             )
+            effects.link(conn, "source", int(source["id"]), commit=False)
+            conn.commit()
             return success(
                 source_id=source["id"],
                 title=source["title"],
@@ -348,6 +374,10 @@ def build_registry(
             )
         except (ValueError, web_research.WebResearchError) as exc:
             return failure(str(exc))
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
 
     def record_source_excerpt(source_id: int, excerpt: str, section_ref: str = "") -> ToolResult:
         try:
@@ -357,7 +387,11 @@ def build_registry(
                 source_id,
                 excerpt,
                 section_ref=section_ref.strip() or None,
+                commit=False,
             )
+            if conn.in_transaction:
+                effects.link(conn, "source_excerpt", int(recorded["id"]), commit=False)
+                conn.commit()
             return success(
                 recorded=True,
                 excerpt_id=recorded["id"],
@@ -365,6 +399,10 @@ def build_registry(
             )
         except (ValueError, LyraError) as exc:
             return failure(exc.message if isinstance(exc, LyraError) else str(exc))
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
 
     def list_class_documents() -> ToolResult:
         # A document's kind lives on its chunks (assigned at ingestion, one kind per
@@ -436,8 +474,14 @@ def build_registry(
             )
         if row["parent_id"] is not None:
             return failure("Replies attach to the thread root, not to another reply.")
-        reply = comments.add_reply(conn, comment_id, comments.WRITER, body)
-        effects.link(conn, "reply", int(reply["id"]))
+        try:
+            conn.execute("begin immediate")
+            reply = comments.add_reply(conn, comment_id, comments.WRITER, body, commit=False)
+            effects.link(conn, "reply", int(reply["id"]), commit=False)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         effects.replied_to_comments = True
         return success(replied=True, comment_id=comment_id)
 
@@ -479,18 +523,25 @@ def build_registry(
             if duplicate is not None:
                 effects.note_confirmed(int(duplicate["id"]))
                 return failure(_ALREADY_FILED)
-        filed = comments.add_comment(
-            conn,
-            int(part["id"]),
-            comments.REVIEWER,
-            body,
-            severity=severity,
-            quote=canonical_quote,
-            hint=hint,
-            section_ref=ref or None,
-            orphaned=bool(cleaned and hint is None),
-        )
-        effects.link(conn, "comment", int(filed["id"]))
+        try:
+            conn.execute("begin immediate")
+            filed = comments.add_comment(
+                conn,
+                int(part["id"]),
+                comments.REVIEWER,
+                body,
+                severity=severity,
+                quote=canonical_quote,
+                hint=hint,
+                section_ref=ref or None,
+                orphaned=bool(cleaned and hint is None),
+                commit=False,
+            )
+            effects.link(conn, "comment", int(filed["id"]), commit=False)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         effects.note_comment(int(filed["id"]))
         return success(filed=True, anchored=hint is not None, comment_id=filed["id"])
 
@@ -500,15 +551,22 @@ def build_registry(
         audience: str = "",
         length_target: str = "",
     ) -> ToolResult:
-        brief = briefs.save_brief(
-            conn,
-            artifact_id,
-            assignment_type=assignment_type,
-            summary=summary,
-            audience=audience,
-            length_target=length_target,
-        )
-        effects.link(conn, "brief", int(brief["artifact_id"]))
+        try:
+            conn.execute("begin immediate")
+            brief = briefs.save_brief(
+                conn,
+                artifact_id,
+                assignment_type=assignment_type,
+                summary=summary,
+                audience=audience,
+                length_target=length_target,
+                commit=False,
+            )
+            effects.link(conn, "brief", int(brief["artifact_id"]), commit=False)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         effects.brief_saved = True
         return success(
             saved=True,
@@ -522,25 +580,29 @@ def build_registry(
     def propose_revision(section: str, replacement: str) -> ToolResult:
         part = _body_part(conn, artifact_id)
         current = str(part["content"])
-        # Model-written text, so its math delimiters are normalized before it becomes
-        # part of the document, same as every other AI landing.
         replacement = mathnorm.normalize(replacement)
-        # Splice against what is already proposed, when something is: two proposals in
-        # one conversation must arrive as one reviewable diff, not a second edit row
-        # the storage layer would refuse anyway.
         pending = suggestions.pending_for_part(conn, int(part["id"]))
         base_text = str(pending["proposed_content"]) if pending else current
         target = sections.extract(base_text, section)
         if target is None:
             return failure(_NO_SECTION.format(ref=section))
         proposed = sections.splice(base_text, target, replacement)
-        edit = suggestions.propose(conn, int(part["id"]), proposed, f"revise {section}")
-        if edit is None:
-            return success(
-                proposed=False,
-                note="That replacement reads exactly as the document already does.",
+        try:
+            conn.execute("begin immediate")
+            edit = suggestions.propose(
+                conn, int(part["id"]), proposed, f"revise {section}", commit=False
             )
-        effects.link(conn, "proposal", edit.id)
+            if edit is None:
+                conn.commit()
+                return success(
+                    proposed=False,
+                    note="That replacement reads exactly as the document already does.",
+                )
+            effects.link(conn, "proposal", edit.id, commit=False)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         effects.proposed_edit_id = edit.id
         return success(
             proposed=True,
@@ -556,9 +618,6 @@ def build_registry(
         depth: str = "quick",
         pause_at_plan: bool = False,
     ) -> ToolResult:
-        # Imported here rather than at module top: the pipeline registers itself with
-        # the drafting worker on import, and this module is imported by tests that
-        # have no worker. The cost is one lookup per call on a tool used rarely.
         from backend.api import routes_drafts
         from backend.core import writer_pipeline
 
@@ -575,12 +634,18 @@ def build_registry(
                     "section_refs": [*refs],
                     "pause_at_plan": pause_at_plan,
                 },
+                commit=False,
             )
             run = routes_drafts.writer_runs.active_run(conn, artifact_id)
+            if run is not None:
+                effects.link(conn, "pass", int(run["id"]), commit=False)
+            conn.commit()
         except (LyraError, ValueError) as exc:
             return failure(exc.message if isinstance(exc, LyraError) else str(exc))
-        if run is not None:
-            effects.link(conn, "pass", int(run["id"]))
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
         writer_pipeline.enqueue(
             _compatible_job(
                 writer_pipeline.PassJob,
@@ -603,8 +668,6 @@ def build_registry(
         )
 
     def start_review(depth: str = "quick") -> ToolResult:
-        # Deferred import for the same reason as the draft pass above: the pipeline
-        # registers its runner on import, and tests import this module without a worker.
         from backend.api import routes_drafts
         from backend.core import review_pipeline
 
@@ -616,12 +679,18 @@ def build_registry(
                 routes_drafts.REVIEW_JOB_KIND,
                 chosen_depth,
                 request_payload={},
+                commit=False,
             )
             run = routes_drafts.writer_runs.active_run(conn, artifact_id)
+            if run is not None:
+                effects.link(conn, "review", int(run["id"]), commit=False)
+            conn.commit()
         except (LyraError, ValueError) as exc:
             return failure(exc.message if isinstance(exc, LyraError) else str(exc))
-        if run is not None:
-            effects.link(conn, "review", int(run["id"]))
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
         review_pipeline.enqueue(
             _compatible_job(
                 review_pipeline.ReviewJob,
@@ -649,15 +718,21 @@ def build_registry(
         if not target.is_empty:
             return failure(_OCCUPIED.format(ref=section))
         part_id = int(part["id"])
-        artifacts.set_part_content(
-            conn,
-            part_id,
-            sections.splice(body, target, mathnorm.normalize(content)),
-            origin=artifacts.GENERATED,
-            note=f"drafted {target.number} {target.title}".strip(),
-            record_revision=True,
-        )
-        effects.link(conn, "section_write", part_id)
+        try:
+            conn.execute("begin immediate")
+            artifacts.apply_part_content(
+                conn,
+                part_id,
+                sections.splice(body, target, mathnorm.normalize(content)),
+                origin=artifacts.GENERATED,
+                note=f"drafted {target.number} {target.title}".strip(),
+                record_revision=True,
+            )
+            effects.link(conn, "section_write", part_id, commit=False)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         effects.note_write(target.number)
         return success(written=True, section=target.number)
 

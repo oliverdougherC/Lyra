@@ -564,7 +564,13 @@ export function ChatPane({
             }
           }
         } else if (caught instanceof ApiError && caught.status === 409) {
-          toast.error('Another turn is still in progress on this conversation.')
+          if (caught.code === 'writer_retry_has_effects') {
+            toast.error(
+              'The previous attempt made changes before it failed. Review what landed, then send a new message.',
+            )
+          } else {
+            toast.error('Another turn is still in progress on this conversation.')
+          }
           setDraft(content)
           setOutcome('failed')
         } else {
@@ -919,7 +925,14 @@ export function ChatPane({
               onRevealComplete={isStreamingReply ? handleRevealComplete : undefined}
               canRetry={!optimisticTurn && index === lastAssistantIndex && !writer}
               onRetry={
-                writer && !optimisticTurn && index === lastUserIndex ? retryWriterTurn : regenerate
+                writer
+                  ? !optimisticTurn &&
+                    index === lastUserIndex &&
+                    (message.writer_attempt?.state === 'failed' ||
+                      message.writer_attempt?.state === 'stopped')
+                    ? retryWriterTurn
+                    : undefined
+                  : regenerate
               }
             />
           )

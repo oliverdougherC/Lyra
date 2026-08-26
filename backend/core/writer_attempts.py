@@ -162,12 +162,16 @@ def link_target(
     *,
     target_kind: str,
     target_id: int,
+    commit: bool = True,
 ) -> None:
-    """Bind a durable target to its producing attempt and commit.
+    """Bind a durable target to its producing attempt.
 
     ``INSERT OR IGNORE`` deduplicates within the same attempt (idempotent retry).
     Multiple attempts may each link the same ``(target_kind, target_id)`` — the PK
     includes ``attempt_id`` so each attempt's claim is independent.
+
+    When ``commit=False`` the caller owns the transaction and will commit both the
+    target row and this ownership row together (PLA-310 atomicity).
     """
     if attempt_id is None:
         return
@@ -176,7 +180,8 @@ def link_target(
         "values (?, ?, ?)",
         (attempt_id, target_kind, target_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def target_owner(conn: sqlite3.Connection, *, target_kind: str, target_id: int) -> int | None:

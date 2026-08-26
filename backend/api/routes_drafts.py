@@ -53,12 +53,16 @@ from backend.core.app_settings import (
 from backend.core.classes import get_class, touch_class
 from backend.core.errors import ConflictError, LyraError, NotFoundError
 from backend.core.profiles import select_active_facts
-from backend.core.writer_budgets import Depth, validate_depth
+from backend.core.writer_budgets import (
+    Depth,
+    WriterCapabilities,
+    get_writer_capabilities,
+    validate_depth,
+)
 from backend.llm import client, prompts
 from backend.llm.tools import (
     ContextBudget,
     RecordedCall,
-    ToolDefinition,
     ToolLoopResult,
     conversation_tokens,
     run_tool_loop,
@@ -72,7 +76,6 @@ from backend.llm.turn_budget import (
     input_ceiling,
     mandatory_history_tokens,
     plan_budget,
-    trim_history,
 )
 from backend.rag.retrieve import retrieve
 from backend.rag.tokens import estimate_tokens
@@ -302,6 +305,8 @@ def _begin_run(
     depth: Depth,
     started_at: str,
     request_payload: dict[str, object] | None = None,
+    *,
+    commit: bool = True,
 ) -> dict[str, object]:
     """Mark a queued draft job pending *here*, in the request, before it is enqueued.
 
@@ -316,6 +321,8 @@ def _begin_run(
     Marking here also makes the wait visible: both residents share one worker thread, so
     a job queued behind another sits in `pending` with its own stage detail rather than
     looking like nothing happened.
+
+    When ``commit=False`` the caller owns the transaction boundary (PLA-310 atomicity).
 
     Raises:
         ConflictError: when a run is already in flight on this draft.
@@ -360,7 +367,8 @@ def _begin_run(
             request=request_payload,
             started_at=started_at,
         )
-        conn.commit()
+        if commit:
+            conn.commit()
     except Exception:
         if conn.in_transaction:
             conn.rollback()
@@ -375,6 +383,7 @@ def begin_writer_run(
     depth: str,
     *,
     request_payload: dict[str, object] | None = None,
+    commit: bool = True,
 ) -> dict[str, object]:
     """Atomically expose a queued writer job before either HTTP or chat enqueues it.
 
@@ -397,6 +406,7 @@ def begin_writer_run(
         chosen_depth,
         started_at,
         request_payload=request_payload,
+        commit=commit,
     )
 
 
@@ -1206,9 +1216,8 @@ class WriterTurnPlan:
 
     The preflight proves the first request fits the margin-reduced window with the
     exact tool schemas, the complete system prompt (intent contract included), and
-    the generation reserve. A probe registry is built to measure schema tokens; the
-    stream rebuilds the real registry with its own connection so tool handlers close
-    over a connection that outlives the request.
+    the generation reserve. The capability snapshot is frozen here so the execution
+    registry is built from the same policy that was budgeted (PLA-309).
     """
 
     config: TutorConfig
@@ -1219,6 +1228,7 @@ class WriterTurnPlan:
     private_context: tuple[str, ...]
     context_budget: ContextBudget
     tool_tokens: int
+    capabilities: WriterCapabilities
 
 
 def _plan_writer_turn(
@@ -1253,6 +1263,8 @@ def _plan_writer_turn(
     class_id = int(artifact["class_id"])
     intent = writer_intent.classify(content)
 
+    capabilities = get_writer_capabilities(conn, class_id)
+
     system_prompt = prompts.build_writer_chat_prompt(
         str(artifact["title"]),
         prompts.format_brief_block(briefs.get_brief(conn, artifact_id)),
@@ -1266,6 +1278,7 @@ def _plan_writer_turn(
         artifact_id,
         writer_tools.CHAT,
         private_context=(),
+        capabilities=capabilities,
     )
     tool_tokens = schema_tokens(tool_schemas(probe_registry))
 
@@ -1325,6 +1338,7 @@ def _plan_writer_turn(
         private_context=private_context,
         context_budget=context_budget,
         tool_tokens=tool_tokens,
+        capabilities=capabilities,
     )
 
 
@@ -1599,6 +1613,13 @@ def _open_writer_retry(
                                 tool_tokens=0,
                             ),
                             tool_tokens=0,
+                            capabilities=WriterCapabilities(
+                                allow_web_research=False,
+                                parallel_requests=False,
+                                parallel_concurrency=1,
+                                firecrawl_base_url="",
+                                firecrawl_scrape_enabled=False,
+                            ),
                         ),
                         content=target.content,
                         replay_content=str(row["content"]),
@@ -1609,6 +1630,7 @@ def _open_writer_retry(
             raise ConflictError(
                 "The previous attempt made changes (a proposal, comment, or brief) before "
                 "it failed. Review what landed, then send a new message.",
+                extra={"code": "writer_retry_has_effects"},
             )
 
         plan = _plan_writer_turn(
@@ -1689,6 +1711,7 @@ async def _stream_writer_turn(
             artifact_id,
             writer_tools.CHAT,
             private_context=plan.private_context,
+            capabilities=plan.capabilities,
         )
         effects.attempt_id = attempt_id
 

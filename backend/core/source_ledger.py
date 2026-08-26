@@ -245,12 +245,15 @@ def upsert_source(
     truncated: bool = False,
     excerpts: Sequence[str | Mapping[str, object]] | None = None,
     attempt_id: int | None = None,
+    commit: bool = True,
 ) -> dict[str, object]:
     """Insert or refresh a course/web source and optionally replace its excerpts.
 
     Course identity is ``document_id``; web identity is the normalized URL. Passing
     ``snapshot=None`` preserves an existing snapshot while an explicit empty string
     clears it.
+
+    When ``commit=False`` the caller owns the transaction boundary (PLA-310 atomicity).
     """
     classes.get_class(conn, class_id)
     if source_type not in SOURCE_TYPES:
@@ -378,7 +381,8 @@ def upsert_source(
             )
         if excerpts is not None:
             _replace_excerpts(conn, source_id, excerpts)
-        conn.commit()
+        if commit:
+            conn.commit()
     except Exception:
         conn.rollback()
         raise
@@ -392,8 +396,12 @@ def add_excerpt(
     *,
     section_ref: str | None = None,
     attempt_id: int | None = None,
+    commit: bool = True,
 ) -> dict[str, object]:
-    """Record one passage actually relied on and return it."""
+    """Record one passage actually relied on and return it.
+
+    When ``commit=False`` the caller owns the transaction boundary (PLA-310 atomicity).
+    """
     clean_excerpt = _validated_excerpt(conn, source_id, excerpt)
     clean_ref = section_ref.strip() if section_ref else None
     if clean_ref and len(clean_ref) > MAX_SECTION_REF_CHARS:
@@ -421,7 +429,8 @@ def add_excerpt(
             target_kind="source_excerpt",
             target_id=excerpt_id,
         )
-        conn.commit()
+        if commit:
+            conn.commit()
     except Exception:
         conn.rollback()
         raise
