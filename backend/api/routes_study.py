@@ -13,6 +13,7 @@ and these are the study tools' view of it.
 """
 
 import json
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from typing import Annotated, Literal
@@ -21,10 +22,12 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, Field, field_validator
 
 from backend.core import artifacts, scheduler, study
-from backend.core.classes import get_class, touch_class
+from backend.core.classes import get_class
 from backend.core.errors import ConflictError, NotFoundError
 from backend.llm.prompts import QUIZ_QUESTION_TYPES
 from backend.storage.database import get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["study"])
 
@@ -37,6 +40,12 @@ NOT_AN_ATTEMPT_MESSAGE = "That attempt does not exist."
 NOTHING_READY_MESSAGE = "There are no processed documents to study from yet."
 NOT_RUNNING_MESSAGE = "This study run is not running."
 DECK_NOT_READY_MESSAGE = "This deck is still being generated."
+NOT_READY_MESSAGES: dict[str, str] = {
+    artifacts.PENDING: "is still queued for generation.",
+    artifacts.GENERATING: "is still being generated.",
+    artifacts.FAILED: "failed to generate.",
+    artifacts.CANCELLED: "was cancelled.",
+}
 DECK_CHANGED_MESSAGE = "This deck changed while you were reviewing. Reopen it and try again."
 ATTEMPT_FINISHED_MESSAGE = "This attempt has already been finished."
 NOT_THIS_QUIZ_MESSAGE = "That question does not belong to this quiz's attempt."
@@ -238,32 +247,83 @@ def _unready_message(rows: list[sqlite3.Row]) -> str:
     return "Some chosen documents are not ready: " + "; ".join(parts) + "."
 
 
+def _study_source_specs(ready: list[int]) -> list[artifacts.SourceSpec]:
+    """SourceSpec list from accepted document ids, in reading order."""
+    return [
+        artifacts.SourceSpec(document_id=document_id, role=artifacts.STUDY_SOURCE)
+        for document_id in ready
+    ]
+
+
 def _create_study_artifact(
     conn: sqlite3.Connection,
     class_id: int,
     kind: str,
     title: str,
     document_ids: list[int] | None,
-) -> tuple[dict[str, object], list[int]]:
-    """The artifact row and its sources, which is all creation does before queueing.
+    *,
+    job: study._Job | None = None,
+) -> tuple[dict[str, object], list[int], study._Job | None]:
+    """Artifact row + sources + optional job in one atomic commit (PLA-169).
 
-    Returns the artifact and the exact accepted source ids, so the caller can persist the
-    same set into the durable job (PLA-169) the worker revalidates against (PLA-291).
+    When ``job`` is provided the caller has already built a proto-job whose
+    ``artifact_id`` and ``source_ids`` are placeholders (0 and ()). This function
+    fills them in from the newly created artifact and persists the job in the same
+    transaction, so a crash can never leave an artifact whose generation intent is
+    unrecoverable.
+
+    Returns the artifact, the accepted source ids, and the real job (or None).
     """
     get_class(conn, class_id)
     ready = _study_sources(conn, class_id, document_ids)
-    created = artifacts.create_artifact(
-        conn,
-        class_id,
-        title,
-        [
-            artifacts.SourceSpec(document_id=document_id, role=artifacts.STUDY_SOURCE)
-            for document_id in ready
-        ],
-        kind=kind,
-    )
-    touch_class(conn, class_id)
-    return created, ready
+    try:
+        created = artifacts.create_artifact(
+            conn,
+            class_id,
+            title,
+            _study_source_specs(ready),
+            kind=kind,
+            commit=False,
+        )
+        conn.execute(
+            "update classes set last_active_at = datetime('now') where id = ?",
+            (class_id,),
+        )
+        if job is not None:
+            real_job = study._Job(
+                int(created["id"]),
+                source_ids=tuple(ready),
+                cards_per_topic=job.cards_per_topic,
+                count=job.count,
+                difficulty=job.difficulty,
+                types=job.types,
+            )
+            study.persist_job(conn, real_job, kind, commit=False)
+        else:
+            real_job = None
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return created, ready, real_job
+
+
+def _enqueue_after_commit(job: study._Job) -> None:
+    """Best-effort in-memory enqueue after the durable commit (PLA-169).
+
+    The durable intent is already committed, so the reconciler will pick up the
+    job on next startup if this enqueue fails. Swallowing the exception here
+    means the route still returns the created artifact to the client, preventing
+    duplicate creation on a client retry.
+    """
+    try:
+        study.enqueue(job)
+    except Exception:
+        logger.warning(
+            "In-memory enqueue failed for artifact %s; the reconciler will "
+            "recover the durable intent on next startup",
+            job.artifact_id,
+        )
 
 
 @router.post(
@@ -272,18 +332,17 @@ def _create_study_artifact(
     status_code=status.HTTP_202_ACCEPTED,
 )
 def create_deck(class_id: int, payload: DeckCreate, conn: DbConn) -> dict[str, object]:
-    created, source_ids = _create_study_artifact(
-        conn, class_id, artifacts.KIND_FLASHCARD_DECK, payload.title, payload.document_ids
+    proto = study._Job(0, source_ids=(), cards_per_topic=payload.cards_per_topic)
+    created, _source_ids, job = _create_study_artifact(
+        conn,
+        class_id,
+        artifacts.KIND_FLASHCARD_DECK,
+        payload.title,
+        payload.document_ids,
+        job=proto,
     )
-    job = study._Job(
-        int(created["id"]),
-        source_ids=tuple(source_ids),
-        cards_per_topic=payload.cards_per_topic,
-    )
-    # Persist the job's full intent before enqueueing, so a restart between here and the
-    # worker picking it up requeues the exact same job rather than failing it (PLA-169).
-    study.persist_job(conn, job, artifacts.KIND_FLASHCARD_DECK)
-    study.enqueue(job)
+    if job is not None:
+        _enqueue_after_commit(job)
     return created
 
 
@@ -293,18 +352,23 @@ def create_deck(class_id: int, payload: DeckCreate, conn: DbConn) -> dict[str, o
     status_code=status.HTTP_202_ACCEPTED,
 )
 def create_quiz(class_id: int, payload: QuizCreate, conn: DbConn) -> dict[str, object]:
-    created, source_ids = _create_study_artifact(
-        conn, class_id, artifacts.KIND_QUIZ, payload.title, payload.document_ids
-    )
-    job = study._Job(
-        int(created["id"]),
-        source_ids=tuple(source_ids),
+    proto = study._Job(
+        0,
+        source_ids=(),
         count=payload.count,
         difficulty=payload.difficulty,
         types=tuple(payload.types) if payload.types else QUIZ_QUESTION_TYPES,
     )
-    study.persist_job(conn, job, artifacts.KIND_QUIZ)
-    study.enqueue(job)
+    created, _source_ids, job = _create_study_artifact(
+        conn,
+        class_id,
+        artifacts.KIND_QUIZ,
+        payload.title,
+        payload.document_ids,
+        job=proto,
+    )
+    if job is not None:
+        _enqueue_after_commit(job)
     return created
 
 
@@ -401,9 +465,18 @@ def _state_json_from_state(state: scheduler.CardState) -> dict[str, object]:
     }
 
 
+def _require_ready(artifact: dict[str, object], label: str) -> None:
+    """409 when the artifact is not ready for content reads (PLA-312)."""
+    state = str(artifact["state"])
+    if state != artifacts.READY:
+        reason = NOT_READY_MESSAGES.get(state, "is not ready.")
+        raise ConflictError(f"This {label} {reason}")
+
+
 @router.get("/decks/{artifact_id}", response_model=None)
 def read_deck(artifact_id: int, conn: DbConn) -> dict[str, object]:
     artifact = _require_deck(conn, artifact_id)
+    _require_ready(artifact, "deck")
     parts = [
         part for part in artifacts.list_parts(conn, artifact_id) if part["kind"] == artifacts.CARD
     ]
@@ -424,7 +497,8 @@ def read_deck(artifact_id: int, conn: DbConn) -> dict[str, object]:
 @router.get("/decks/{artifact_id}/session", response_model=None)
 def read_deck_session(artifact_id: int, conn: DbConn, limit: int = 20) -> dict[str, object]:
     """Cards in study order, each flagged due, capped at `limit`."""
-    _require_deck(conn, artifact_id)
+    artifact = _require_deck(conn, artifact_id)
+    _require_ready(artifact, "deck")
     rows = conn.execute(
         "select p.id, p.label, p.content, cs.* from card_states cs "
         "join artifact_parts p on p.id = cs.part_id where p.artifact_id = ?",
@@ -546,6 +620,7 @@ def _question_json(part: dict[str, object]) -> dict[str, object]:
 @router.get("/quizzes/{artifact_id}", response_model=None)
 def read_quiz(artifact_id: int, conn: DbConn) -> dict[str, object]:
     artifact = _require_quiz(conn, artifact_id)
+    _require_ready(artifact, "quiz")
     parts = [
         part
         for part in artifacts.list_parts(conn, artifact_id)

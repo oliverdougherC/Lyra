@@ -181,4 +181,107 @@ describe('DeckSession', () => {
     // Both cards lapsed into or stayed in learning, recomputed from the server's answers.
     expect(screen.getByText(/learning 2/)).toBeInTheDocument()
   })
+
+  it('successful review retires the operation ID so Study Again mints a fresh one', async () => {
+    const review = vi.spyOn(api, 'reviewCard')
+    const { wrapper } = createWrapper()
+    render(<DeckSession deckId={8} />, { wrapper })
+
+    // Rate card 1 (part_id 11) successfully.
+    await screen.findByText('What is the Fourier transform of a delta?')
+    await userEvent.keyboard(' ')
+    await userEvent.keyboard('3')
+
+    // Rate card 2 (part_id 12) to complete the session.
+    await screen.findByText('What does linearity require?')
+    await userEvent.keyboard(' ')
+    await userEvent.keyboard('3')
+
+    await screen.findByText('Session complete')
+
+    // Restart the session. This calls operationIds.current.clear() and refetches.
+    await userEvent.click(screen.getByRole('button', { name: /Study again/ }))
+
+    // Card 1 reappears. Rate it again.
+    await screen.findByText('What is the Fourier transform of a delta?')
+    await userEvent.keyboard(' ')
+    await userEvent.keyboard('3')
+
+    // The first rating of card 1 (call 0) and the post-restart rating (call 2) must
+    // carry different operation IDs: the first was retired on success, and clear()
+    // removed any residual, so the second round mints a fresh UUID.
+    const firstId = review.mock.calls[0][2]
+    const restartId = review.mock.calls[2][2]
+    expect(firstId).toBeTypeOf('string')
+    expect(restartId).toBeTypeOf('string')
+    expect(restartId).not.toBe(firstId)
+  })
+
+  it('each card in a session gets its own distinct operation ID', async () => {
+    const review = vi.spyOn(api, 'reviewCard')
+    const { wrapper } = createWrapper()
+    render(<DeckSession deckId={8} />, { wrapper })
+
+    // Rate card 1.
+    await screen.findByText('What is the Fourier transform of a delta?')
+    await userEvent.keyboard(' ')
+    await userEvent.keyboard('3')
+
+    // Rate card 2.
+    await screen.findByText('What does linearity require?')
+    await userEvent.keyboard(' ')
+    await userEvent.keyboard('3')
+
+    await waitFor(() => expect(review).toHaveBeenCalledTimes(2))
+
+    const idCard1 = review.mock.calls[0][2]
+    const idCard2 = review.mock.calls[1][2]
+    expect(idCard1).toBeTypeOf('string')
+    expect(idCard2).toBeTypeOf('string')
+    expect(idCard1).not.toBe(idCard2)
+  })
+
+  it('after a failed-then-successful retry, Study Again still mints a fresh ID', async () => {
+    // Fail card 1 once, succeed on retry (same ID), finish the session, restart,
+    // and rate card 1 again. The post-restart ID must be new.
+    const review = vi
+      .spyOn(api, 'reviewCard')
+      .mockRejectedValueOnce(new Error('network'))
+      .mockImplementation((_partId, rating) => Promise.resolve(reviewedState(rating)))
+    const { wrapper } = createWrapper()
+    render(<DeckSession deckId={8} />, { wrapper })
+
+    // First attempt at card 1 fails.
+    await screen.findByText('What is the Fourier transform of a delta?')
+    await userEvent.keyboard(' ')
+    await userEvent.keyboard('3')
+    await waitFor(() => expect(review).toHaveBeenCalledTimes(1))
+
+    // Retry succeeds, reusing the same operation ID.
+    await userEvent.keyboard('3')
+    await waitFor(() => expect(review).toHaveBeenCalledTimes(2))
+    expect(review.mock.calls[0][2]).toBe(review.mock.calls[1][2])
+
+    // Rate card 2 to complete the session.
+    await screen.findByText('What does linearity require?')
+    await userEvent.keyboard(' ')
+    await userEvent.keyboard('3')
+    await waitFor(() => expect(review).toHaveBeenCalledTimes(3))
+
+    await screen.findByText('Session complete')
+
+    // Restart and rate card 1 again.
+    await userEvent.click(screen.getByRole('button', { name: /Study again/ }))
+    await screen.findByText('What is the Fourier transform of a delta?')
+    await userEvent.keyboard(' ')
+    await userEvent.keyboard('3')
+    await waitFor(() => expect(review).toHaveBeenCalledTimes(4))
+
+    // The retry pair (calls 0 and 1) shared one ID; the post-restart rating (call 3)
+    // must carry a completely new ID.
+    const retryId = review.mock.calls[0][2]
+    const freshId = review.mock.calls[3][2]
+    expect(freshId).toBeTypeOf('string')
+    expect(freshId).not.toBe(retryId)
+  })
 })

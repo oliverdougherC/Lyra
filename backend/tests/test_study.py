@@ -788,7 +788,7 @@ def test_generation_fails_visibly_when_a_source_was_deleted(
 
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.FAILED
-    assert "removed" in str(artifact["error_message"])
+    assert "no longer matches" in str(artifact["error_message"])
     assert llm.calls == []
 
 

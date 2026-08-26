@@ -135,12 +135,15 @@ _worker_lock = threading.Lock()
 _worker_started = False
 
 
-def persist_job(conn: sqlite3.Connection, job: _Job, kind: str) -> None:
+def persist_job(conn: sqlite3.Connection, job: _Job, kind: str, *, commit: bool = True) -> None:
     """Record a generation's full intent so a restart can reconstruct it (PLA-169).
 
     Written in the request, before the in-memory job is enqueued, so a process that dies
     with the row present can requeue the exact same job. A study artifact found queued or
     interrupted with no row here cannot be reconstructed and is failed rather than guessed.
+
+    When ``commit`` is False the caller is responsible for committing the transaction,
+    allowing artifact + sources + job to land in one atomic write (PLA-169).
     """
     conn.execute(
         "insert into study_jobs "
@@ -160,7 +163,8 @@ def persist_job(conn: sqlite3.Connection, job: _Job, kind: str) -> None:
             json.dumps(list(job.source_ids)),
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def _job_from_row(row: sqlite3.Row) -> _Job:
@@ -341,7 +345,7 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
     artifact = artifacts.get_artifact(conn, job.artifact_id)
     class_id = int(artifact["class_id"])
     config = _resolve_config(conn)
-    _validate_sources(conn, job)
+    _validate_sources(conn, job, class_id)
 
     _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(
@@ -566,8 +570,10 @@ def _record_card_provenance(
 
 def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     """One call for the whole quiz, then code-enforced validation of every question."""
+    artifact = artifacts.get_artifact(conn, job.artifact_id)
+    class_id = int(artifact["class_id"])
     config = _resolve_config(conn)
-    _validate_sources(conn, job)
+    _validate_sources(conn, job, class_id)
 
     _raise_if_cancelled(conn, job.artifact_id)
     artifacts.set_artifact_state(
@@ -673,20 +679,43 @@ _UNREADY_REASONS: dict[str, str] = {
 _UNREADY_DEFAULT = "is still processing"
 
 
-def _validate_sources(conn: sqlite3.Connection, job: _Job) -> None:
-    """Refuse to generate unless every accepted source still exists and is ready (PLA-291).
+def _validate_sources(conn: sqlite3.Connection, job: _Job, class_id: int) -> None:
+    """Refuse to generate unless every accepted source still exists, belongs to the
+    artifact's class, is ready, and still matches the durable artifact-source snapshot
+    (PLA-291).
 
     The worker boundary re-check, against the exact snapshot the request accepted. A
-    source deleted, moved out of the class, or knocked out of `ready` (a reingest, a
+    source deleted, moved out of the class, or knocked out of ``ready`` (a reingest, a
     failure) after the HTTP request would otherwise be silently skipped, producing an
     artifact whose title and source choice imply material it never used. Instead
     generation fails visibly, naming the affected files and what is wrong with them.
+
+    ``class_id`` is derived from the artifact row, not from caller-supplied input, so the
+    membership check is authoritative even if a source was moved to a different class
+    between request acceptance and worker execution.
+
+    The ``artifact_sources`` rows are the durable record of what the request accepted.
+    ``job.source_ids`` must match them exactly in membership and order; a divergence
+    means the durable snapshot was tampered with or a migration rewrote it, and
+    generation from the wrong set must not proceed.
     """
     if not job.source_ids:
         return
+
+    artifact_source_rows = conn.execute(
+        "select document_id from artifact_sources where artifact_id = ? order by ordinal",
+        (job.artifact_id,),
+    ).fetchall()
+    artifact_source_ids = tuple(int(r["document_id"]) for r in artifact_source_rows)
+    if artifact_source_ids != job.source_ids:
+        raise LyraError(
+            "The accepted source set no longer matches the durable artifact sources. "
+            "This generation cannot proceed."
+        )
+
     placeholders = ", ".join("?" for _ in job.source_ids)
     rows = conn.execute(
-        f"select id, filename, state from documents where id in ({placeholders})",  # noqa: S608
+        f"select id, class_id, filename, state from documents where id in ({placeholders})",  # noqa: S608
         tuple(job.source_ids),
     ).fetchall()
     by_id = {int(row["id"]): row for row in rows}
@@ -695,6 +724,8 @@ def _validate_sources(conn: sqlite3.Connection, job: _Job) -> None:
         row = by_id.get(document_id)
         if row is None:
             problems.append("a chosen document was removed")
+        elif int(row["class_id"]) != class_id:
+            problems.append(f"{row['filename']} was moved to a different class")
         elif str(row["state"]) != "ready":
             reason = _UNREADY_REASONS.get(str(row["state"]), _UNREADY_DEFAULT)
             problems.append(f"{row['filename']} {reason}")

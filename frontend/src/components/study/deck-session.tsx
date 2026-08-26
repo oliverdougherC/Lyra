@@ -92,6 +92,7 @@ export function DeckSession({ deckId }: { deckId: number }) {
       }
       try {
         const updated = await submitReview({ partId: current.part_id, rating, operationId })
+        operationIds.current.delete(current.part_id)
         setRatings((previous) => ({ ...previous, [rating]: previous[rating] + 1 }))
         setStates((previous) => new Map(previous).set(current.part_id, cardStateFromRead(updated)))
         setQueue((previous) => (previous ?? []).slice(1))
@@ -130,6 +131,7 @@ export function DeckSession({ deckId }: { deckId: number }) {
   }, [flipped, flip, rate])
 
   async function restart() {
+    operationIds.current.clear()
     const fresh = await session.refetch()
     const next = fresh.data?.cards
     if (!next) return
