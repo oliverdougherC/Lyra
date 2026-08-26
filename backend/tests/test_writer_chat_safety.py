@@ -553,6 +553,7 @@ class TestPreflightBudgeting:
         _send_chat(client, artifact_id, writer_session, "Help me revise this")
         system_msg = next(m for m in received_messages if m["role"] == "system")
         from backend.core import writer_intent
+
         contract = writer_intent.prompt_contract(writer_intent.classify("Help me revise this"))
         assert contract in str(system_msg["content"])
 
@@ -572,6 +573,7 @@ class TestPreflightBudgeting:
         messages = received_args["messages"]
         budget = received_args["budget"]
         from backend.llm.tools import conversation_tokens
+
         msg_tokens = conversation_tokens(messages)
         assert msg_tokens <= budget.message_ceiling
 
@@ -629,6 +631,7 @@ class TestPreflightBudgeting:
         registry = received["registry"]
         budget = received["budget"]
         from backend.llm.tools import schema_tokens, tool_schemas
+
         actual_tool_tokens = schema_tokens(tool_schemas(registry))
         assert actual_tool_tokens == budget.tool_tokens
 
@@ -690,8 +693,7 @@ class TestAtomicPublication:
         _send_chat(client, artifact_id, writer_session, "Hello")
         assert "running" in states_seen
         attempt = db.execute(
-            "select state from writer_turn_attempts where session_id = ? "
-            "order by id desc limit 1",
+            "select state from writer_turn_attempts where session_id = ? order by id desc limit 1",
             (writer_session,),
         ).fetchone()
         assert attempt["state"] == "completed"
@@ -709,6 +711,7 @@ class TestDurableTargets:
         self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
     ):
         """propose_revision links the pending edit to the attempt."""
+
         async def proposing_loop(*args, **kwargs):
             registry = kwargs.get("registry", {})
             if "propose_revision" in registry:
@@ -730,6 +733,7 @@ class TestDurableTargets:
         self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
     ):
         """save_brief links the brief to the attempt."""
+
         async def brief_loop(*args, **kwargs):
             registry = kwargs.get("registry", {})
             if "save_brief" in registry:
@@ -754,8 +758,12 @@ class TestDurableTargets:
             (artifact_id, artifacts.DRAFT_BODY),
         ).fetchone()
         comment = comments.add_comment(
-            db, int(part["id"]), comments.REVIEWER,
-            "Needs work", severity="minor", quote="Introduction.",
+            db,
+            int(part["id"]),
+            comments.REVIEWER,
+            "Needs work",
+            severity="minor",
+            quote="Introduction.",
         )
 
         async def reply_loop(*args, **kwargs):
@@ -779,6 +787,7 @@ class TestDurableTargets:
         self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
     ):
         """has_durable_effects returns True when a target was linked."""
+
         async def proposing_loop(*args, **kwargs):
             registry = kwargs.get("registry", {})
             if "propose_revision" in registry:
@@ -820,6 +829,7 @@ class TestRetryDurableEffects:
         self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
     ):
         """Retry of a failed attempt that produced a proposal is refused with 409."""
+
         async def fail_after_proposal(*args, **kwargs):
             registry = kwargs.get("registry", {})
             if "propose_revision" in registry:

@@ -122,8 +122,15 @@ def fail_attempt(
     conn.execute(
         "update writer_turn_attempts set state = ?, stopped_reason = ?, detail = ?, "
         "finished_at = ? where id = ? and state in (?, ?)",
-        (FAILED, stopped_reason, detail[:_MAX_DETAIL_CHARS], _timestamp(),
-         attempt_id, PLANNED, RUNNING),
+        (
+            FAILED,
+            stopped_reason,
+            detail[:_MAX_DETAIL_CHARS],
+            _timestamp(),
+            attempt_id,
+            PLANNED,
+            RUNNING,
+        ),
     )
     conn.commit()
 
@@ -136,8 +143,15 @@ def stop_attempt(conn: sqlite3.Connection, attempt_id: int, *, detail: str) -> N
     conn.execute(
         "update writer_turn_attempts set state = ?, stopped_reason = ?, detail = ?, "
         "finished_at = ? where id = ? and state in (?, ?)",
-        (STOPPED, "cancelled", detail[:_MAX_DETAIL_CHARS], _timestamp(),
-         attempt_id, PLANNED, RUNNING),
+        (
+            STOPPED,
+            "cancelled",
+            detail[:_MAX_DETAIL_CHARS],
+            _timestamp(),
+            attempt_id,
+            PLANNED,
+            RUNNING,
+        ),
     )
     conn.commit()
 

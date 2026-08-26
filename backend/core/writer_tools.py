@@ -117,7 +117,10 @@ class RunEffects:
         """Bind a durable target to this attempt, if one is active."""
         if self.attempt_id is not None:
             writer_attempts.link_target(
-                conn, self.attempt_id, target_kind=target_kind, target_id=target_id,
+                conn,
+                self.attempt_id,
+                target_kind=target_kind,
+                target_id=target_id,
             )
 
 

@@ -1260,7 +1260,10 @@ def _plan_writer_turn(
     system_prompt = "\n\n".join((system_prompt, writer_intent.prompt_contract(intent)))
 
     probe_registry, probe_effects = writer_tools.build_registry(
-        conn, artifact_id, writer_tools.CHAT, private_context=(),
+        conn,
+        artifact_id,
+        writer_tools.CHAT,
+        private_context=(),
     )
     tool_tokens = schema_tokens(tool_schemas(probe_registry))
 
@@ -1291,8 +1294,7 @@ def _plan_writer_turn(
     for msg in reversed(earlier):
         rendered: dict[str, object] = {"role": msg.role, "content": msg.content}
         candidate = [system_message, rendered, *kept, user_message]
-        if (conversation_tokens(candidate) > message_ceiling
-                and len(kept) >= 2):
+        if conversation_tokens(candidate) > message_ceiling and len(kept) >= 2:
             break
         kept.insert(0, rendered)
     messages = [system_message, *kept, user_message]
@@ -1300,9 +1302,11 @@ def _plan_writer_turn(
     if conversation_tokens(messages) + tool_tokens > ceiling:
         raise LyraError(_WRITER_TOO_LARGE)
 
-    private_context = tuple(
-        str(msg.content) for msg in earlier[-len(kept):]
-    ) + (content,) if kept else (content,)
+    private_context = (
+        tuple(str(msg.content) for msg in earlier[-len(kept) :]) + (content,)
+        if kept
+        else (content,)
+    )
 
     context_budget = ContextBudget(
         context_window=config.context_window,
@@ -1520,9 +1524,7 @@ def _open_writer_turn(
 
         sessions.set_session_title_if_unset(conn, session_id, payload.content)
         conn.execute("begin immediate")
-        user_message_id = sessions.insert_message(
-            conn, session_id, "user", payload.content
-        )
+        user_message_id = sessions.insert_message(conn, session_id, "user", payload.content)
         attempt_id = writer_attempts.create_attempt(
             conn,
             session_id=session_id,
@@ -1583,10 +1585,16 @@ def _open_writer_retry(
                         user_message_id=target.user_message_id,
                         attempt_id=int(target.latest["id"]),
                         plan=WriterTurnPlan(
-                            config=config, content=target.content, intent=target.intent,
-                            system_prompt="", messages=[], private_context=(),
+                            config=config,
+                            content=target.content,
+                            intent=target.intent,
+                            system_prompt="",
+                            messages=[],
+                            private_context=(),
                             context_budget=ContextBudget(
-                                context_window=0, generation_reserve=0, tool_tokens=0,
+                                context_window=0,
+                                generation_reserve=0,
+                                tool_tokens=0,
                             ),
                             tool_tokens=0,
                         ),
@@ -1602,7 +1610,11 @@ def _open_writer_retry(
             )
 
         plan = _plan_writer_turn(
-            conn, artifact_id, session_id, config, target.content,
+            conn,
+            artifact_id,
+            session_id,
+            config,
+            target.content,
             exclude_message_ids=frozenset({target.user_message_id}),
         )
 
@@ -1671,7 +1683,9 @@ async def _stream_writer_turn(
         writer_attempts.promote_to_running(conn, attempt_id)
 
         registry, effects = writer_tools.build_registry(
-            conn, artifact_id, writer_tools.CHAT,
+            conn,
+            artifact_id,
+            writer_tools.CHAT,
             private_context=plan.private_context,
         )
         effects.attempt_id = attempt_id
@@ -1772,11 +1786,14 @@ async def _stream_writer_turn(
             try:
                 if isinstance(exc, asyncio.CancelledError | GeneratorExit):
                     writer_attempts.stop_attempt(
-                        conn, attempt_id, detail=_WRITER_PERSISTENCE_STOPPED,
+                        conn,
+                        attempt_id,
+                        detail=_WRITER_PERSISTENCE_STOPPED,
                     )
                 else:
                     writer_attempts.fail_attempt(
-                        conn, attempt_id,
+                        conn,
+                        attempt_id,
                         stopped_reason="persistence_failed",
                         detail=_WRITER_PERSISTENCE_FAILED,
                     )
