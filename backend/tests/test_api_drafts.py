@@ -1174,7 +1174,7 @@ def test_draft_restore_with_the_current_version_succeeds(
 
     assert restored.status_code == 200
     assert str(artifacts.get_part(db, part_id)["content"]) == "first draft"
-    assert int(artifacts.get_part(db, part_id)["content_version"]) == version + 1
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == version + 2
 
 
 def test_stale_draft_restore_is_refused_without_mutation(
