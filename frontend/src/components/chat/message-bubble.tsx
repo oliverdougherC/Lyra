@@ -301,13 +301,7 @@ function AgentTurnFailure({ detail }: { detail: string | null }) {
   )
 }
 
-function WriterTurnFailure({
-  detail,
-  onRetry,
-}: {
-  detail: string | null
-  onRetry?: () => void
-}) {
+function WriterTurnFailure({ detail, onRetry }: { detail: string | null; onRetry?: () => void }) {
   return (
     <div
       data-writer-turn-failure

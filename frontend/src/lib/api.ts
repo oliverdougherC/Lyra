@@ -999,7 +999,12 @@ export function streamWriterChatRetry(
   onEvent: (event: ChatEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  return streamTurn(`/api/drafts/${draftId}/chat/${sessionId}/retry`, {} as Record<string, never>, onEvent, signal)
+  return streamTurn(
+    `/api/drafts/${draftId}/chat/${sessionId}/retry`,
+    {} as Record<string, never>,
+    onEvent,
+    signal,
+  )
 }
 
 async function streamTurn<StreamEvent>(

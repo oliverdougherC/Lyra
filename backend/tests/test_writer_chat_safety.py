@@ -8,6 +8,7 @@ PLA-310: durable attempt lifecycle with causal retry.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sqlite3
 from collections.abc import Iterator
@@ -19,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from backend.api import routes_chat, routes_drafts
 from backend.core import artifacts, sessions, writer_attempts
-from backend.core.errors import ConflictError, LyraError
+from backend.core.errors import LyraError
 from backend.llm import tools
 from backend.storage.database import connect, get_db
 
@@ -73,7 +74,10 @@ def _draft(db: sqlite3.Connection, class_id: int) -> int:
     created = artifacts.create_artifact(db, class_id, "Essay", [], kind=artifacts.KIND_DRAFT)
     artifact_id = int(created["id"])
     artifacts.create_part(
-        db, artifact_id, artifacts.DRAFT_BODY, 1,
+        db,
+        artifact_id,
+        artifacts.DRAFT_BODY,
+        1,
         content="Introduction.\n\nBody.\n\nConclusion.",
         status=artifacts.PART_COMPLETE,
     )
@@ -119,9 +123,7 @@ def _stub_blocking_loop(
     return gate
 
 
-def _send_chat(
-    client: TestClient, artifact_id: int, session_id: int, content: str = "Help"
-):
+def _send_chat(client: TestClient, artifact_id: int, session_id: int, content: str = "Help"):
     return client.post(
         f"/api/drafts/{artifact_id}/chat/{session_id}",
         json={"content": content},
@@ -137,10 +139,8 @@ def _parse_frames(response) -> list[dict]:
     for line in response.text.split("\n"):
         line = line.strip()
         if line.startswith("data:"):
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 frames.append(json.loads(line[5:].strip()))
-            except json.JSONDecodeError:
-                pass
     return frames
 
 
@@ -154,9 +154,7 @@ class TestTurnSerialization:
         self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch
     ):
         """Two writer turns on the same session: the second is refused with 409."""
-        gate = _stub_blocking_loop(
-            monkeypatch, tools.ToolLoopResult(content="Answer", calls=())
-        )
+        _stub_blocking_loop(monkeypatch, tools.ToolLoopResult(content="Answer", calls=()))
         # Hold the claim manually to simulate an in-flight turn
         token = sessions.begin_turn(writer_session)
         resp = _send_chat(client, artifact_id, writer_session)
@@ -194,7 +192,11 @@ class TestTurnSerialization:
         assert resp2.status_code == 200
 
     def test_wrong_session_returns_404(
-        self, client: TestClient, artifact_id: int, class_id: int, db: sqlite3.Connection,
+        self,
+        client: TestClient,
+        artifact_id: int,
+        class_id: int,
+        db: sqlite3.Connection,
         monkeypatch,
     ):
         """A session that doesn't belong to this draft is refused."""
@@ -351,7 +353,9 @@ class TestRetry:
         assert attempt2["state"] == "completed"
         assert attempt2["id"] != attempt1["id"]
         # No duplicate user message
-        user_messages = [m for m in sessions.list_messages(db, writer_session) if m["role"] == "user"]
+        user_messages = [
+            m for m in sessions.list_messages(db, writer_session) if m["role"] == "user"
+        ]
         assert len(user_messages) == 1
 
     def test_retry_completed_replays(
@@ -360,8 +364,6 @@ class TestRetry:
         """Retry of a completed turn replays the stored reply (lost-response case)."""
         _stub_loop(monkeypatch, tools.ToolLoopResult(content="Original", calls=()))
         _send_chat(client, artifact_id, writer_session, "Help me")
-        messages = sessions.list_messages(db, writer_session)
-        assistant_msg = next(m for m in messages if m["role"] == "assistant")
         # Retry should replay, not re-run
         loop_called = []
 
@@ -412,7 +414,7 @@ class TestReconciliation:
     def test_reconcile_running_attempts(self, db: sqlite3.Connection, writer_session: int):
         """Startup reconciliation settles running writer attempts as stopped."""
         msg_id = sessions.add_message(db, writer_session, "user", "Q")
-        attempt_id = writer_attempts.create_attempt(
+        writer_attempts.create_attempt(
             db, session_id=writer_session, user_message_id=msg_id, intent="general"
         )
         count = writer_attempts.reconcile_running(db)
@@ -460,9 +462,7 @@ class TestMessageAnnotation:
         """A failed writer attempt is visible in the message list."""
         _stub_loop(
             monkeypatch,
-            tools.ToolLoopResult(
-                content="", calls=(), stopped=tools.TIMEOUT, detail="Too slow"
-            ),
+            tools.ToolLoopResult(content="", calls=(), stopped=tools.TIMEOUT, detail="Too slow"),
         )
         _send_chat(client, artifact_id, writer_session)
         resp = client.get(f"/api/sessions/{writer_session}/messages")

@@ -530,12 +530,7 @@ export function ChatPane({
       try {
         const documentId = scopedDocument?.id ?? null
         await (kind === 'writer-retry' && writer
-          ? streamWriterChatRetry(
-              writer.artifactId,
-              turnSessionId,
-              onEvent,
-              controller.signal,
-            )
+          ? streamWriterChatRetry(writer.artifactId, turnSessionId, onEvent, controller.signal)
           : writer
             ? streamWriterChat(
                 writer.artifactId,
@@ -924,9 +919,7 @@ export function ChatPane({
               onRevealComplete={isStreamingReply ? handleRevealComplete : undefined}
               canRetry={!optimisticTurn && index === lastAssistantIndex && !writer}
               onRetry={
-                writer && !optimisticTurn && index === lastUserIndex
-                  ? retryWriterTurn
-                  : regenerate
+                writer && !optimisticTurn && index === lastUserIndex ? retryWriterTurn : regenerate
               }
             />
           )
