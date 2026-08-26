@@ -16,7 +16,14 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { ApiError, api, streamChat, streamRegenerate, streamWriterChat } from '@/lib/api'
+import {
+  ApiError,
+  api,
+  streamChat,
+  streamRegenerate,
+  streamWriterChat,
+  streamWriterChatRetry,
+} from '@/lib/api'
 import { formatCount, parseTimestamp } from '@/lib/format'
 import { chatKeys, useCreateSession, useMessages, useSessions } from '@/lib/hooks/use-chat'
 import { useDocuments } from '@/lib/hooks/use-documents'
@@ -132,8 +139,8 @@ function startsTimeGap(messages: ChatMessage[], index: number): boolean {
 
 type TurnOutcome = 'active' | 'completed' | 'stopped' | 'failed'
 
-/** A new question, or a second attempt at the one already asked. */
-type TurnKind = 'send' | 'regenerate'
+/** A new question, a tutor regeneration, or a writer retry (PLA-310). */
+type TurnKind = 'send' | 'regenerate' | 'writer-retry'
 
 export function ChatPane({
   classId,
@@ -259,7 +266,7 @@ export function ChatPane({
     // A retry answers the question already on screen, so its optimistic reply stands where
     // the previous one did rather than below it. The server holds the old reply until the
     // new one is written, which is why a failed retry falls back to `live` intact.
-    if (turnKind === 'regenerate') {
+    if (turnKind === 'regenerate' || turnKind === 'writer-retry') {
       const withoutLastReply =
         base.length > 0 && base[base.length - 1].role === 'assistant' ? base.slice(0, -1) : base
       return [...withoutLastReply, ...pendingTurn]
@@ -442,7 +449,7 @@ export function ChatPane({
       // which is exactly what this turn is being appended to.
       setTurnBase(persisted ?? [])
       setPendingTurn(
-        kind === 'regenerate'
+        kind === 'regenerate' || kind === 'writer-retry'
           ? [placeholderReply(now)]
           : [
               {
@@ -522,27 +529,34 @@ export function ChatPane({
 
       try {
         const documentId = scopedDocument?.id ?? null
-        await (writer
-          ? streamWriterChat(
+        await (kind === 'writer-retry' && writer
+          ? streamWriterChatRetry(
               writer.artifactId,
               turnSessionId,
-              { content },
               onEvent,
               controller.signal,
             )
-          : kind === 'regenerate'
-            ? streamRegenerate(
+          : writer
+            ? streamWriterChat(
+                writer.artifactId,
                 turnSessionId,
-                { mode: activeMode, document_id: documentId },
+                { content },
                 onEvent,
                 controller.signal,
               )
-            : streamChat(
-                turnSessionId,
-                { content, mode: activeMode, document_id: documentId },
-                onEvent,
-                controller.signal,
-              ))
+            : kind === 'regenerate'
+              ? streamRegenerate(
+                  turnSessionId,
+                  { mode: activeMode, document_id: documentId },
+                  onEvent,
+                  controller.signal,
+                )
+              : streamChat(
+                  turnSessionId,
+                  { content, mode: activeMode, document_id: documentId },
+                  onEvent,
+                  controller.signal,
+                ))
       } catch (caught) {
         if (!owns()) {
           // Nothing to report and nobody to report it to: this turn's rows are gone.
@@ -554,6 +568,10 @@ export function ChatPane({
               setRevealDrained(true)
             }
           }
+        } else if (caught instanceof ApiError && caught.status === 409) {
+          toast.error('Another turn is still in progress on this conversation.')
+          setDraft(content)
+          setOutcome('failed')
         } else {
           toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
           setOutcome('failed')
@@ -630,11 +648,13 @@ export function ChatPane({
    * it because the answer was wrong, not because they forgot they had asked.
    */
   const regenerate = useCallback(() => {
-    // Reachable only from an answer that is already on screen, so the conversation exists.
-    // Not offered on writer turns: a retried turn could re-run tools whose first effects
-    // (a proposal, a saved brief) are already rows, and "again" would mean "on top of".
     if (activeSessionId === null || writer) return
     void runTurn('regenerate', '', activeSessionId)
+  }, [activeSessionId, runTurn, writer])
+
+  const retryWriterTurn = useCallback(() => {
+    if (activeSessionId === null || !writer) return
+    void runTurn('writer-retry', '', activeSessionId)
   }, [activeSessionId, runTurn, writer])
 
   const stop = useCallback(() => {
@@ -671,6 +691,10 @@ export function ChatPane({
     : messages
   const lastAssistantIndex = rendered.reduce(
     (found, message, index) => (message.role === 'assistant' ? index : found),
+    -1,
+  )
+  const lastUserIndex = rendered.reduce(
+    (found, message, index) => (message.role === 'user' ? index : found),
     -1,
   )
 
@@ -899,7 +923,11 @@ export function ChatPane({
               }
               onRevealComplete={isStreamingReply ? handleRevealComplete : undefined}
               canRetry={!optimisticTurn && index === lastAssistantIndex && !writer}
-              onRetry={regenerate}
+              onRetry={
+                writer && !optimisticTurn && index === lastUserIndex
+                  ? retryWriterTurn
+                  : regenerate
+              }
             />
           )
         })

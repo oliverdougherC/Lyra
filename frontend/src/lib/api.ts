@@ -993,9 +993,18 @@ export function streamWriterChat(
   return streamTurn(`/api/drafts/${draftId}/chat/${sessionId}`, body, onEvent, signal)
 }
 
+export function streamWriterChatRetry(
+  draftId: number,
+  sessionId: number,
+  onEvent: (event: ChatEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamTurn(`/api/drafts/${draftId}/chat/${sessionId}/retry`, {} as Record<string, never>, onEvent, signal)
+}
+
 async function streamTurn<StreamEvent>(
   path: string,
-  body: ChatRequest | RegenerateRequest | WriteRequest | WriterChatRequest,
+  body: ChatRequest | RegenerateRequest | WriteRequest | WriterChatRequest | Record<string, never>,
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {

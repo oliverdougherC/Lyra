@@ -37,6 +37,7 @@ from backend.core import (
     storage_intents,
     study,
     tool_audit,
+    writer_attempts,
 )
 from backend.core.errors import LyraError
 from backend.core.ingestion import reconcile_interrupted, start_worker
@@ -106,6 +107,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         abandoned_attempts = agent_attempts.reconcile_running(conn)
         if abandoned_attempts:
             logger.warning("Marked %d interrupted agent turn(s) as stopped", abandoned_attempts)
+        abandoned_writer = writer_attempts.reconcile_running(conn)
+        if abandoned_writer:
+            logger.warning("Marked %d interrupted writer turn(s) as stopped", abandoned_writer)
         abandoned_commands = agent_store.reconcile_running_commands(conn)
         if abandoned_commands:
             logger.warning(

@@ -25,7 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.types import Receive, Scope, Send
 
-from backend.core import agent_attempts, artifacts, sessions
+from backend.core import agent_attempts, artifacts, sessions, writer_attempts
 from backend.core.app_settings import (
     NO_ENDPOINT,
     REMOTE_UNACKNOWLEDGED,
@@ -186,9 +186,8 @@ class MessageRead(BaseModel):
     omitted_document_count: int
     tool_activity: list[dict[str, object]]
     created_at: str
-    # Present only on a user message that was an agent turn; None for tutor and writer
-    # messages and for assistant replies.
     agent_attempt: AgentAttemptRead | None = None
+    writer_attempt: AgentAttemptRead | None = None
 
 
 class ChatRequest(BaseModel):
@@ -514,17 +513,23 @@ def read_sessions(class_id: int, conn: DbConn) -> list[dict[str, object]]:
 @router.get("/sessions/{session_id}/messages", response_model=list[MessageRead])
 def read_messages(session_id: int, conn: DbConn) -> list[dict[str, object]]:
     messages = sessions.list_messages(conn, session_id)
-    # Annotate each user turn that was an agent turn with its latest attempt state, so the
-    # transcript can show a truthful failed/stopped state and offer Retry (PLA-295). One
-    # query for the whole conversation; tutor and writer turns simply carry no attempt.
-    attempts = agent_attempts.latest_attempts_by_message(conn, session_id)
+    agent_att = agent_attempts.latest_attempts_by_message(conn, session_id)
+    writer_att = writer_attempts.latest_attempts_by_message(conn, session_id)
     for message in messages:
-        attempt = attempts.get(int(message["id"]))
-        if attempt is not None:
+        mid = int(message["id"])
+        aa = agent_att.get(mid)
+        if aa is not None:
             message["agent_attempt"] = {
-                "state": attempt["state"],
-                "stopped_reason": attempt["stopped_reason"],
-                "detail": attempt["detail"],
+                "state": aa["state"],
+                "stopped_reason": aa["stopped_reason"],
+                "detail": aa["detail"],
+            }
+        wa = writer_att.get(mid)
+        if wa is not None:
+            message["writer_attempt"] = {
+                "state": wa["state"],
+                "stopped_reason": wa["stopped_reason"],
+                "detail": wa["detail"],
             }
     return messages
 
