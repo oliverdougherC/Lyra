@@ -162,32 +162,28 @@ def link_target(
     *,
     target_kind: str,
     target_id: int,
-) -> int | None:
-    """Atomically bind a newly-created durable target to its producing attempt.
+) -> None:
+    """Bind a durable target to its producing attempt and commit.
 
-    Does not commit: the caller commits with the target insert. ``insert or ignore``
-    preserves the original owner on an idempotent retry.
+    ``INSERT OR IGNORE`` deduplicates within the same attempt (idempotent retry).
+    Multiple attempts may each link the same ``(target_kind, target_id)`` — the PK
+    includes ``attempt_id`` so each attempt's claim is independent.
     """
     if attempt_id is None:
-        return None
+        return
     conn.execute(
         "insert or ignore into writer_attempt_targets (attempt_id, target_kind, target_id) "
         "values (?, ?, ?)",
         (attempt_id, target_kind, target_id),
     )
-    owner = conn.execute(
-        "select attempt_id from writer_attempt_targets where target_kind = ? and target_id = ?",
-        (target_kind, target_id),
-    ).fetchone()
-    if owner is None:  # pragma: no cover
-        raise RuntimeError("The writer proposal ownership link disappeared.")
-    return int(owner["attempt_id"])
+    conn.commit()
 
 
 def target_owner(conn: sqlite3.Connection, *, target_kind: str, target_id: int) -> int | None:
-    """Return the attempt that originally produced one durable target, if writer-created."""
+    """Return the most recent attempt that produced one durable target, if any."""
     row = conn.execute(
-        "select attempt_id from writer_attempt_targets where target_kind = ? and target_id = ?",
+        "select attempt_id from writer_attempt_targets "
+        "where target_kind = ? and target_id = ? order by attempt_id desc limit 1",
         (target_kind, target_id),
     ).fetchone()
     return int(row["attempt_id"]) if row is not None else None

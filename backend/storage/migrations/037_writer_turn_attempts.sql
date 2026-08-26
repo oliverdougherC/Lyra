@@ -23,12 +23,13 @@ create index writer_turn_attempts_message_idx on writer_turn_attempts (user_mess
 create index writer_turn_attempts_session_idx on writer_turn_attempts (session_id, id);
 
 -- Ownership ledger for durable writer targets (proposals, briefs, comments).
--- INSERT OR IGNORE preserves the original producer on idempotent retries.
+-- PK includes attempt_id so each attempt independently claims its targets;
+-- INSERT OR IGNORE deduplicates within a single attempt's idempotent retry.
 create table writer_attempt_targets (
   attempt_id integer not null references writer_turn_attempts(id) on delete cascade,
   target_kind text not null,
   target_id integer not null,
   created_at text not null default (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  primary key (target_kind, target_id)
+  primary key (attempt_id, target_kind, target_id)
 );
 create index writer_attempt_targets_attempt_idx on writer_attempt_targets (attempt_id);

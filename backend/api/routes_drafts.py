@@ -324,6 +324,8 @@ def _begin_run(
         # A reserved write lock plus the conditional update makes ready -> pending a
         # single claim. A concurrent HTTP request or chat tool waits for this commit,
         # then observes rowcount zero instead of enqueueing a second job.
+        if conn.in_transaction:
+            conn.commit()
         conn.execute("begin immediate")
         cursor = conn.execute(
             "update artifacts set state = ?, stage_detail = ?, error_message = null, "

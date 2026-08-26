@@ -816,6 +816,69 @@ class TestDurableTargets:
         assert attempt is not None
         assert not writer_attempts.has_durable_effects(db, int(attempt["id"]))
 
+    def test_two_effectful_tools_in_one_turn(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """Two effectful tools in one turn both link their targets without crashing."""
+        part = db.execute(
+            "select id from artifact_parts where artifact_id = ? and kind = ?",
+            (artifact_id, artifacts.DRAFT_BODY),
+        ).fetchone()
+        comment = comments.add_comment(
+            db,
+            int(part["id"]),
+            comments.REVIEWER,
+            "Fix this",
+            severity="minor",
+            quote="Introduction.",
+        )
+
+        async def two_tools_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            registry["save_brief"].handler(summary="A guessed brief.")
+            registry["reply_to_comment"].handler(comment_id=int(comment["id"]), body="Will do.")
+            return tools.ToolLoopResult(content="Done both.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", two_tools_loop)
+        _send_chat(client, artifact_id, writer_session, "Save brief and reply")
+        messages = sessions.list_messages(db, writer_session)
+        user_msg = next(m for m in messages if m["role"] == "user")
+        attempt = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt is not None
+        assert attempt["state"] == "completed"
+        targets = writer_attempts.targets_for_attempt(db, int(attempt["id"]))
+        kinds = {t["target_kind"] for t in targets}
+        assert "brief" in kinds
+        assert "reply" in kinds
+
+    def test_singleton_target_tracked_across_attempts(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """Two turns both saving the same brief each register has_durable_effects."""
+
+        async def brief_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            if "save_brief" in registry:
+                registry["save_brief"].handler(summary="A guessed brief.")
+            return tools.ToolLoopResult(content="Saved.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", brief_loop)
+        _send_chat(client, artifact_id, writer_session, "Save brief")
+        messages = sessions.list_messages(db, writer_session)
+        user_msg1 = [m for m in messages if m["role"] == "user"][0]
+        attempt1 = writer_attempts.latest_attempt_for_message(db, int(user_msg1["id"]))
+        assert attempt1 is not None
+        assert writer_attempts.has_durable_effects(db, int(attempt1["id"]))
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", brief_loop)
+        _send_chat(client, artifact_id, writer_session, "Update brief")
+        messages = sessions.list_messages(db, writer_session)
+        user_msg2 = [m for m in messages if m["role"] == "user"][1]
+        attempt2 = writer_attempts.latest_attempt_for_message(db, int(user_msg2["id"]))
+        assert attempt2 is not None
+        assert attempt2["id"] != attempt1["id"]
+        assert writer_attempts.has_durable_effects(db, int(attempt2["id"]))
+
 
 # ---------------------------------------------------------------------------
 # PLA-310: Retry with durable effects
