@@ -135,9 +135,7 @@ _worker_lock = threading.Lock()
 _worker_started = False
 
 
-def persist_job(
-    conn: sqlite3.Connection, job: _Job, kind: str, *, commit: bool = True
-) -> None:
+def persist_job(conn: sqlite3.Connection, job: _Job, kind: str, *, commit: bool = True) -> None:
     """Record a generation's full intent so a restart can reconstruct it (PLA-169).
 
     Written in the request, before the in-memory job is enqueued, so a process that dies
@@ -683,7 +681,8 @@ _UNREADY_DEFAULT = "is still processing"
 
 def _validate_sources(conn: sqlite3.Connection, job: _Job, class_id: int) -> None:
     """Refuse to generate unless every accepted source still exists, belongs to the
-    artifact's class, and is ready (PLA-291).
+    artifact's class, is ready, and still matches the durable artifact-source snapshot
+    (PLA-291).
 
     The worker boundary re-check, against the exact snapshot the request accepted. A
     source deleted, moved out of the class, or knocked out of ``ready`` (a reingest, a
@@ -694,9 +693,26 @@ def _validate_sources(conn: sqlite3.Connection, job: _Job, class_id: int) -> Non
     ``class_id`` is derived from the artifact row, not from caller-supplied input, so the
     membership check is authoritative even if a source was moved to a different class
     between request acceptance and worker execution.
+
+    The ``artifact_sources`` rows are the durable record of what the request accepted.
+    ``job.source_ids`` must match them exactly in membership and order; a divergence
+    means the durable snapshot was tampered with or a migration rewrote it, and
+    generation from the wrong set must not proceed.
     """
     if not job.source_ids:
         return
+
+    artifact_source_rows = conn.execute(
+        "select document_id from artifact_sources where artifact_id = ? order by ordinal",
+        (job.artifact_id,),
+    ).fetchall()
+    artifact_source_ids = tuple(int(r["document_id"]) for r in artifact_source_rows)
+    if artifact_source_ids != job.source_ids:
+        raise LyraError(
+            "The accepted source set no longer matches the durable artifact sources. "
+            "This generation cannot proceed."
+        )
+
     placeholders = ", ".join("?" for _ in job.source_ids)
     rows = conn.execute(
         f"select id, class_id, filename, state from documents where id in ({placeholders})",  # noqa: S608

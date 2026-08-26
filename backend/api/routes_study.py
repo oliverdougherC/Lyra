@@ -13,6 +13,7 @@ and these are the study tools' view of it.
 """
 
 import json
+import logging
 import sqlite3
 from datetime import UTC, datetime
 from typing import Annotated, Literal
@@ -25,6 +26,8 @@ from backend.core.classes import get_class
 from backend.core.errors import ConflictError, NotFoundError
 from backend.llm.prompts import QUIZ_QUESTION_TYPES
 from backend.storage.database import get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["study"])
 
@@ -301,6 +304,24 @@ def _create_study_artifact(
     return created, ready, real_job
 
 
+def _enqueue_after_commit(job: study._Job) -> None:
+    """Best-effort in-memory enqueue after the durable commit (PLA-169).
+
+    The durable intent is already committed, so the reconciler will pick up the
+    job on next startup if this enqueue fails. Swallowing the exception here
+    means the route still returns the created artifact to the client, preventing
+    duplicate creation on a client retry.
+    """
+    try:
+        study.enqueue(job)
+    except Exception:
+        logger.warning(
+            "In-memory enqueue failed for artifact %s; the reconciler will "
+            "recover the durable intent on next startup",
+            job.artifact_id,
+        )
+
+
 @router.post(
     "/classes/{class_id}/decks",
     response_model=None,
@@ -316,8 +337,8 @@ def create_deck(class_id: int, payload: DeckCreate, conn: DbConn) -> dict[str, o
         payload.document_ids,
         job=proto,
     )
-    assert job is not None
-    study.enqueue(job)
+    if job is not None:
+        _enqueue_after_commit(job)
     return created
 
 
@@ -342,8 +363,8 @@ def create_quiz(class_id: int, payload: QuizCreate, conn: DbConn) -> dict[str, o
         payload.document_ids,
         job=proto,
     )
-    assert job is not None
-    study.enqueue(job)
+    if job is not None:
+        _enqueue_after_commit(job)
     return created
 
 
