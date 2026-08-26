@@ -276,31 +276,35 @@ def _create_study_artifact(
     """
     get_class(conn, class_id)
     ready = _study_sources(conn, class_id, document_ids)
-    created = artifacts.create_artifact(
-        conn,
-        class_id,
-        title,
-        _study_source_specs(ready),
-        kind=kind,
-        commit=False,
-    )
-    conn.execute(
-        "update classes set last_active_at = datetime('now') where id = ?",
-        (class_id,),
-    )
-    if job is not None:
-        real_job = study._Job(
-            int(created["id"]),
-            source_ids=tuple(ready),
-            cards_per_topic=job.cards_per_topic,
-            count=job.count,
-            difficulty=job.difficulty,
-            types=job.types,
+    try:
+        created = artifacts.create_artifact(
+            conn,
+            class_id,
+            title,
+            _study_source_specs(ready),
+            kind=kind,
+            commit=False,
         )
-        study.persist_job(conn, real_job, kind, commit=False)
-    else:
-        real_job = None
-    conn.commit()
+        conn.execute(
+            "update classes set last_active_at = datetime('now') where id = ?",
+            (class_id,),
+        )
+        if job is not None:
+            real_job = study._Job(
+                int(created["id"]),
+                source_ids=tuple(ready),
+                cards_per_topic=job.cards_per_topic,
+                count=job.count,
+                difficulty=job.difficulty,
+                types=job.types,
+            )
+            study.persist_job(conn, real_job, kind, commit=False)
+        else:
+            real_job = None
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     return created, ready, real_job
 
 

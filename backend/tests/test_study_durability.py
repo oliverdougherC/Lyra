@@ -400,6 +400,103 @@ class TestReadyStateEnforcement:
 
 
 # ---------------------------------------------------------------------------
+# PLA-169: Crash-consistency infrastructure
+# ---------------------------------------------------------------------------
+
+
+class _SimulatedCrash(Exception):
+    """Controlled process crash at a transaction boundary."""
+
+
+class _FailAtBoundary:
+    """Connection proxy that injects _SimulatedCrash at a chosen write boundary.
+
+    Delegates every operation to a real sqlite3.Connection. Reads pass through
+    untouched. Writes are intercepted by SQL pattern so the crash lands at the
+    exact point in _create_study_artifact's write sequence.
+    """
+
+    BEFORE_ANY_WRITE = "before_any_write"
+    AFTER_ARTIFACT_INSERT = "after_artifact_insert"
+    AFTER_FIRST_SOURCE = "after_first_source"
+    AFTER_LATER_SOURCE = "after_later_source"
+    BEFORE_STUDY_JOBS = "before_study_jobs"
+    AFTER_STUDY_JOBS = "after_study_jobs"
+    ON_COMMIT = "on_commit"
+    AFTER_COMMIT = "after_commit"
+
+    def __init__(self, real_conn: sqlite3.Connection, boundary: str) -> None:
+        self._conn = real_conn
+        self._boundary = boundary
+        self._fired = False
+
+    def _crash(self, label: str) -> None:
+        self._fired = True
+        raise _SimulatedCrash(label)
+
+    def execute(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
+        lower = sql.lower()
+        is_write = lower.lstrip().startswith(("insert", "update"))
+        if not self._fired and is_write:
+            if self._boundary == self.BEFORE_ANY_WRITE:
+                self._crash(f"before write: {sql[:50]}")
+            if self._boundary == self.BEFORE_STUDY_JOBS and "study_jobs" in lower:
+                self._crash("before study_jobs insert")
+        result = self._conn.execute(sql, parameters)
+        if not self._fired:
+            if self._boundary == self.AFTER_ARTIFACT_INSERT and "insert into artifacts" in lower:
+                self._crash("after artifact insert")
+            if self._boundary == self.AFTER_STUDY_JOBS and "study_jobs" in lower:
+                self._crash("after study_jobs insert")
+        return result
+
+    def executemany(self, sql: str, params_seq: object) -> sqlite3.Cursor:
+        lower = sql.lower()
+        if (
+            not self._fired
+            and "artifact_sources" in lower
+            and self._boundary in (self.AFTER_FIRST_SOURCE, self.AFTER_LATER_SOURCE)
+        ):
+            params_list = list(params_seq)
+            target = 0 if self._boundary == self.AFTER_FIRST_SOURCE else 1
+            cursor = self._conn.cursor()
+            for i, params in enumerate(params_list):
+                cursor.execute(sql, params)
+                if i == target:
+                    self._crash(f"after source ordinal {i}")
+            return cursor
+        return self._conn.executemany(sql, params_seq)
+
+    def commit(self) -> None:
+        if not self._fired and self._boundary == self.ON_COMMIT:
+            self._crash("on commit")
+        self._conn.commit()
+        if not self._fired and self._boundary == self.AFTER_COMMIT:
+            self._crash("after successful commit")
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._conn, name)
+
+
+def _assert_no_phantom_state(db: sqlite3.Connection, class_id: int) -> None:
+    """Verify a crashed creation left no partial rows visible to a separate connection."""
+    assert (
+        db.execute(
+            "select count(*) as n from artifacts where class_id = ?", (class_id,)
+        ).fetchone()["n"]
+        == 0
+    )
+    assert db.execute("select count(*) as n from artifact_sources").fetchone()["n"] == 0
+    assert db.execute("select count(*) as n from study_jobs").fetchone()["n"] == 0
+
+
+# ---------------------------------------------------------------------------
 # PLA-169: Failure injection at every boundary of atomic creation
 # ---------------------------------------------------------------------------
 
@@ -465,16 +562,16 @@ class TestAtomicCreationFailureInjection:
         ).fetchone()
         assert source_row is not None
 
-    def test_enqueue_failure_does_not_create_duplicate_on_client_retry(
+    def test_separate_requests_after_enqueue_failure_are_independent(
         self,
         client: TestClient,
         db: sqlite3.Connection,
         class_id: int,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """After an enqueue failure the client retries and gets a new artifact
-        (not the same one, since the client got the first one back). Each
-        creation produces exactly one durable artifact+job pair."""
+        """Two POST requests each produce their own artifact+job pair, even
+        when the first request's in-memory enqueue fails. No request
+        idempotency contract exists: each accepted request is independent."""
         doc_id = _document(db, class_id)
         call_count = 0
 
@@ -522,6 +619,221 @@ class TestAtomicCreationFailureInjection:
         assert job_row is not None
         assert job_row["kind"] == "quiz"
         assert int(job_row["count"]) == 5
+
+
+# ---------------------------------------------------------------------------
+# PLA-169: Crash consistency — deterministic failure injection at every
+#          write boundary of _create_study_artifact
+# ---------------------------------------------------------------------------
+
+
+class TestCrashConsistency:
+    """PLA-169 crash-consistency evidence.
+
+    Each test wraps a real connection in _FailAtBoundary, calls
+    _create_study_artifact with a proto-job, and verifies:
+
+    - Pre-commit crash (cases 1-7): no artifact, no sources, no study_jobs
+      row visible to the independent ``db`` fixture connection.
+    - Post-commit crash (cases 8-9): artifact + sources + study_jobs are all
+      committed and intact; reconciliation re-enqueues with the exact
+      original options and source ordering.
+    """
+
+    def _crash_create(
+        self,
+        db: sqlite3.Connection,
+        class_id: int,
+        boundary: str,
+        doc_ids: list[int],
+        kind: str = artifacts.KIND_FLASHCARD_DECK,
+        proto: study._Job | None = None,
+    ) -> _FailAtBoundary:
+        if proto is None:
+            proto = study._Job(0, source_ids=(), cards_per_topic=4)
+        real_conn = connect()
+        proxy = _FailAtBoundary(real_conn, boundary)
+        try:
+            with pytest.raises(_SimulatedCrash):
+                routes_study._create_study_artifact(
+                    proxy, class_id, kind, "Crash test", doc_ids, job=proto,
+                )
+        finally:
+            real_conn.close()
+        return proxy
+
+    # -- Pre-commit failures (cases 1-7): nothing committed ----------------
+
+    def test_crash_before_any_write(
+        self, db: sqlite3.Connection, class_id: int
+    ) -> None:
+        """1. Failure before any write leaves a clean database."""
+        doc_id = _document(db, class_id)
+        proxy = self._crash_create(
+            db, class_id, _FailAtBoundary.BEFORE_ANY_WRITE, [doc_id]
+        )
+        assert proxy._fired
+        _assert_no_phantom_state(db, class_id)
+
+    def test_crash_after_artifact_insert(
+        self, db: sqlite3.Connection, class_id: int
+    ) -> None:
+        """2. Failure after artifact INSERT but before sources."""
+        doc_id = _document(db, class_id)
+        proxy = self._crash_create(
+            db, class_id, _FailAtBoundary.AFTER_ARTIFACT_INSERT, [doc_id]
+        )
+        assert proxy._fired
+        _assert_no_phantom_state(db, class_id)
+
+    def test_crash_after_first_source_row(
+        self, db: sqlite3.Connection, class_id: int
+    ) -> None:
+        """3. Failure after the first artifact_sources row in a two-source request."""
+        d1 = _document(db, class_id, "a.pdf")
+        d2 = _document(db, class_id, "b.pdf")
+        proxy = self._crash_create(
+            db, class_id, _FailAtBoundary.AFTER_FIRST_SOURCE, [d1, d2]
+        )
+        assert proxy._fired
+        _assert_no_phantom_state(db, class_id)
+
+    def test_crash_after_later_source_row(
+        self, db: sqlite3.Connection, class_id: int
+    ) -> None:
+        """4. Failure after the second source row in a three-source request."""
+        d1 = _document(db, class_id, "a.pdf")
+        d2 = _document(db, class_id, "b.pdf")
+        d3 = _document(db, class_id, "c.pdf")
+        proxy = self._crash_create(
+            db, class_id, _FailAtBoundary.AFTER_LATER_SOURCE, [d1, d2, d3]
+        )
+        assert proxy._fired
+        _assert_no_phantom_state(db, class_id)
+
+    def test_crash_after_sources_before_study_jobs(
+        self, db: sqlite3.Connection, class_id: int
+    ) -> None:
+        """5. Failure after all sources and class touch but before study_jobs INSERT."""
+        doc_id = _document(db, class_id)
+        proxy = self._crash_create(
+            db, class_id, _FailAtBoundary.BEFORE_STUDY_JOBS, [doc_id]
+        )
+        assert proxy._fired
+        _assert_no_phantom_state(db, class_id)
+
+    def test_crash_after_study_jobs_before_commit(
+        self, db: sqlite3.Connection, class_id: int
+    ) -> None:
+        """6. Failure after study_jobs INSERT but before commit."""
+        doc_id = _document(db, class_id)
+        proxy = self._crash_create(
+            db, class_id, _FailAtBoundary.AFTER_STUDY_JOBS, [doc_id]
+        )
+        assert proxy._fired
+        _assert_no_phantom_state(db, class_id)
+
+    def test_crash_on_commit(
+        self, db: sqlite3.Connection, class_id: int
+    ) -> None:
+        """7. Commit itself fails (raised before the real commit executes)."""
+        doc_id = _document(db, class_id)
+        proxy = self._crash_create(
+            db, class_id, _FailAtBoundary.ON_COMMIT, [doc_id]
+        )
+        assert proxy._fired
+        _assert_no_phantom_state(db, class_id)
+
+    # -- Post-commit failures (cases 8-9): durable state is complete -------
+
+    def test_crash_after_commit_leaves_complete_durable_state(
+        self, db: sqlite3.Connection, class_id: int
+    ) -> None:
+        """8. Commit succeeded, process crashed before enqueue. The durable
+        intent (artifact + sources + job) must be fully committed."""
+        d1 = _document(db, class_id, "a.pdf")
+        d2 = _document(db, class_id, "b.pdf")
+        real_conn = connect()
+        proxy = _FailAtBoundary(real_conn, _FailAtBoundary.AFTER_COMMIT)
+        proto = study._Job(0, source_ids=(), cards_per_topic=7)
+        try:
+            with pytest.raises(_SimulatedCrash):
+                routes_study._create_study_artifact(
+                    proxy,
+                    class_id,
+                    artifacts.KIND_FLASHCARD_DECK,
+                    "Durable test",
+                    [d1, d2],
+                    job=proto,
+                )
+        finally:
+            real_conn.close()
+
+        artifact = db.execute(
+            "select * from artifacts where class_id = ?", (class_id,)
+        ).fetchone()
+        assert artifact is not None
+        assert artifact["kind"] == "flashcard_deck"
+        assert artifact["state"] == "pending"
+        artifact_id = int(artifact["id"])
+
+        sources = db.execute(
+            "select document_id from artifact_sources "
+            "where artifact_id = ? order by ordinal",
+            (artifact_id,),
+        ).fetchall()
+        assert [int(r["document_id"]) for r in sources] == [d1, d2]
+
+        job_row = db.execute(
+            "select * from study_jobs where artifact_id = ?", (artifact_id,)
+        ).fetchone()
+        assert job_row is not None
+        assert job_row["kind"] == "flashcard_deck"
+        assert int(job_row["cards_per_topic"]) == 7
+        assert json.loads(job_row["source_ids"]) == [d1, d2]
+
+    def test_reconciliation_recovers_post_commit_crash(
+        self, db: sqlite3.Connection, class_id: int
+    ) -> None:
+        """9. Restart reconciliation from complete post-commit durable state
+        re-enqueues the job exactly once with the original options."""
+        d1 = _document(db, class_id, "x.pdf")
+        d2 = _document(db, class_id, "y.pdf")
+        real_conn = connect()
+        proxy = _FailAtBoundary(real_conn, _FailAtBoundary.AFTER_COMMIT)
+        proto = study._Job(
+            0,
+            source_ids=(),
+            cards_per_topic=5,
+            count=12,
+            difficulty="exam",
+            types=("mcq", "true_false"),
+        )
+        try:
+            with pytest.raises(_SimulatedCrash):
+                routes_study._create_study_artifact(
+                    proxy,
+                    class_id,
+                    artifacts.KIND_QUIZ,
+                    "Recover test",
+                    [d1, d2],
+                    job=proto,
+                )
+        finally:
+            real_conn.close()
+
+        queued: list[study._Job] = []
+        with unittest.mock.patch.object(study, "enqueue", queued.append):
+            requeued, failed = study.reconcile_interrupted(db)
+        assert requeued == 1
+        assert failed == 0
+        assert len(queued) == 1
+        recovered = queued[0]
+        assert recovered.source_ids == (d1, d2)
+        assert recovered.cards_per_topic == 5
+        assert recovered.count == 12
+        assert recovered.difficulty == "exam"
+        assert recovered.types == ("mcq", "true_false")
 
 
 # ---------------------------------------------------------------------------
