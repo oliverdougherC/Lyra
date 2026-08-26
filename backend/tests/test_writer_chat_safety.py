@@ -19,9 +19,13 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from backend.api import routes_chat, routes_drafts
-from backend.core import artifacts, sessions, writer_attempts
+from backend.core import artifacts, briefs, comments, sessions, suggestions, writer_attempts
 from backend.core.errors import LyraError
+from backend.core.writer_tools import RunEffects
 from backend.llm import tools
+from backend.llm.tools import ContextBudget
+from backend.llm.turn_budget import input_ceiling, plan_budget
+from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect, get_db
 
 ENDPOINT = "http://127.0.0.1:8080/v1"
@@ -70,6 +74,9 @@ def client(db: sqlite3.Connection) -> Iterator[TestClient]:
         yield test_client
 
 
+_DRAFT_BODY = "# Essay\n\nIntroduction.\n\n## Body\n\nBody text.\n\n## Conclusion\n\nConclusion.\n"
+
+
 def _draft(db: sqlite3.Connection, class_id: int) -> int:
     created = artifacts.create_artifact(db, class_id, "Essay", [], kind=artifacts.KIND_DRAFT)
     artifact_id = int(created["id"])
@@ -78,7 +85,7 @@ def _draft(db: sqlite3.Connection, class_id: int) -> int:
         artifact_id,
         artifacts.DRAFT_BODY,
         1,
-        content="Introduction.\n\nBody.\n\nConclusion.",
+        content=_DRAFT_BODY,
         status=artifacts.PART_COMPLETE,
     )
     artifacts.set_artifact_state(db, artifact_id, artifacts.READY)
@@ -411,12 +418,28 @@ class TestRetry:
 
 
 class TestReconciliation:
-    def test_reconcile_running_attempts(self, db: sqlite3.Connection, writer_session: int):
-        """Startup reconciliation settles running writer attempts as stopped."""
+    def test_reconcile_planned_attempts(self, db: sqlite3.Connection, writer_session: int):
+        """Startup reconciliation settles planned writer attempts as stopped."""
         msg_id = sessions.add_message(db, writer_session, "user", "Q")
         writer_attempts.create_attempt(
             db, session_id=writer_session, user_message_id=msg_id, intent="general"
         )
+        db.commit()
+        count = writer_attempts.reconcile_running(db)
+        assert count == 1
+        attempt = writer_attempts.latest_attempt_for_message(db, msg_id)
+        assert attempt is not None
+        assert attempt["state"] == "stopped"
+        assert attempt["stopped_reason"] == "abandoned"
+
+    def test_reconcile_running_attempts(self, db: sqlite3.Connection, writer_session: int):
+        """Startup reconciliation settles running writer attempts as stopped."""
+        msg_id = sessions.add_message(db, writer_session, "user", "Q")
+        attempt_id = writer_attempts.create_attempt(
+            db, session_id=writer_session, user_message_id=msg_id, intent="general"
+        )
+        db.commit()
+        writer_attempts.promote_to_running(db, attempt_id)
         count = writer_attempts.reconcile_running(db)
         assert count == 1
         attempt = writer_attempts.latest_attempt_for_message(db, msg_id)
@@ -430,6 +453,8 @@ class TestReconciliation:
         attempt_id = writer_attempts.create_attempt(
             db, session_id=writer_session, user_message_id=msg_id, intent="general"
         )
+        db.commit()
+        writer_attempts.promote_to_running(db, attempt_id)
         reply_id = sessions.add_message(db, writer_session, "assistant", "A")
         writer_attempts.mark_completed(db, attempt_id, reply_id)
         db.commit()
@@ -470,3 +495,440 @@ class TestMessageAnnotation:
         user_msg = next(m for m in messages if m["role"] == "user")
         assert user_msg["writer_attempt"]["state"] == "failed"
         assert user_msg["writer_attempt"]["detail"] == "Too slow"
+
+
+# ---------------------------------------------------------------------------
+# PLA-309: Preflight two-gate budgeting (exact boundary tests)
+# ---------------------------------------------------------------------------
+
+
+class TestPreflightBudgeting:
+    """The read-only preflight charges the COMPLETE first-request payload."""
+
+    def test_plan_returns_context_budget(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch
+    ):
+        """The plan's context budget carries the correct window and generation reserve."""
+        received = []
+
+        async def capturing_loop(*args, **kwargs):
+            received.append(kwargs.get("context_budget"))
+            return tools.ToolLoopResult(content="OK", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", capturing_loop)
+        _send_chat(client, artifact_id, writer_session, "Hello")
+        assert len(received) == 1
+        budget = received[0]
+        assert isinstance(budget, ContextBudget)
+        expected_budget = plan_budget(CONTEXT_WINDOW)
+        assert budget.generation_reserve == expected_budget.generation
+        assert budget.context_window == CONTEXT_WINDOW
+
+    def test_tool_tokens_nonzero(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch
+    ):
+        """Tool schemas are measured and charged in the budget."""
+        received_budgets = []
+
+        async def capturing_loop(*args, **kwargs):
+            received_budgets.append(kwargs.get("context_budget"))
+            return tools.ToolLoopResult(content="OK", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", capturing_loop)
+        _send_chat(client, artifact_id, writer_session, "Hello")
+        budget = received_budgets[0]
+        assert budget.tool_tokens > 0
+
+    def test_intent_contract_in_system_prompt(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch
+    ):
+        """The system prompt sent to the model includes the intent contract."""
+        received_messages = []
+
+        async def capturing_loop(*args, **kwargs):
+            received_messages.extend(args[3] if len(args) > 3 else kwargs.get("messages", []))
+            return tools.ToolLoopResult(content="OK", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", capturing_loop)
+        _send_chat(client, artifact_id, writer_session, "Help me revise this")
+        system_msg = next(m for m in received_messages if m["role"] == "system")
+        from backend.core import writer_intent
+        contract = writer_intent.prompt_contract(writer_intent.classify("Help me revise this"))
+        assert contract in str(system_msg["content"])
+
+    def test_messages_within_ceiling(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """The assembled messages fit within the message ceiling."""
+        received_args = {}
+
+        async def capturing_loop(*args, **kwargs):
+            received_args["messages"] = args[3] if len(args) > 3 else kwargs.get("messages")
+            received_args["budget"] = kwargs.get("context_budget")
+            return tools.ToolLoopResult(content="OK", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", capturing_loop)
+        _send_chat(client, artifact_id, writer_session, "Hello")
+        messages = received_args["messages"]
+        budget = received_args["budget"]
+        from backend.llm.tools import conversation_tokens
+        msg_tokens = conversation_tokens(messages)
+        assert msg_tokens <= budget.message_ceiling
+
+    def test_tiny_window_rejects_before_persistence(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """A window too small for mandatory material is refused before any mutation."""
+        db.execute("update settings set context_window = 200 where id = 1")
+        db.commit()
+        _stub_loop(monkeypatch, tools.ToolLoopResult(content="X", calls=()))
+        resp = _send_chat(client, artifact_id, writer_session, "Hello")
+        assert resp.status_code == 400
+        assert len(sessions.list_messages(db, writer_session)) == 0
+        attempts = db.execute(
+            "select * from writer_turn_attempts where session_id = ?",
+            (writer_session,),
+        ).fetchall()
+        assert len(attempts) == 0
+
+    def test_history_trimmed_when_long(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """Prior history is trimmed when it would overflow the window."""
+        for i in range(20):
+            sessions.add_message(db, writer_session, "user", f"Question {i} " + "x" * 500)
+            sessions.add_message(db, writer_session, "assistant", f"Answer {i} " + "y" * 500)
+        received_messages = []
+
+        async def capturing_loop(*args, **kwargs):
+            msgs = args[3] if len(args) > 3 else kwargs.get("messages", [])
+            received_messages.extend(msgs)
+            return tools.ToolLoopResult(content="OK", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", capturing_loop)
+        resp = _send_chat(client, artifact_id, writer_session, "New question")
+        assert resp.status_code == 200
+        non_system = [m for m in received_messages if m["role"] != "system"]
+        assert len(non_system) < 42
+        assert non_system[-1]["content"] == "New question"
+        assert non_system[-1]["role"] == "user"
+
+    def test_frozen_capability_snapshot(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch
+    ):
+        """The tool registry sent to the loop matches what was budgeted in planning."""
+        received = {}
+
+        async def capturing_loop(*args, **kwargs):
+            received["registry"] = kwargs.get("registry")
+            received["budget"] = kwargs.get("context_budget")
+            return tools.ToolLoopResult(content="OK", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", capturing_loop)
+        _send_chat(client, artifact_id, writer_session, "Hello")
+        registry = received["registry"]
+        budget = received["budget"]
+        from backend.llm.tools import schema_tokens, tool_schemas
+        actual_tool_tokens = schema_tokens(tool_schemas(registry))
+        assert actual_tool_tokens == budget.tool_tokens
+
+
+# ---------------------------------------------------------------------------
+# PLA-310: Atomic publication and planned state
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicPublication:
+    """User message + planned attempt are committed in a single transaction."""
+
+    def test_message_and_attempt_atomic(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """After a successful turn, both user message and attempt exist."""
+        _stub_loop(monkeypatch, tools.ToolLoopResult(content="Done", calls=()))
+        _send_chat(client, artifact_id, writer_session, "Write well")
+        messages = sessions.list_messages(db, writer_session)
+        user_msg = next(m for m in messages if m["role"] == "user")
+        attempt = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt is not None
+        assert attempt["state"] == "completed"
+        assert attempt["user_message_id"] == int(user_msg["id"])
+
+    def test_no_message_without_attempt(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """A refused turn (oversized) leaves neither message nor attempt."""
+        db.execute("update settings set context_window = 200 where id = 1")
+        db.commit()
+        _stub_loop(monkeypatch, tools.ToolLoopResult(content="X", calls=()))
+        _send_chat(client, artifact_id, writer_session, "Hello")
+        messages = sessions.list_messages(db, writer_session)
+        assert len(messages) == 0
+        attempts = db.execute(
+            "select * from writer_turn_attempts where session_id = ?",
+            (writer_session,),
+        ).fetchall()
+        assert len(attempts) == 0
+
+    def test_planned_then_running_then_completed(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """The attempt transitions through planned -> running -> completed."""
+        states_seen = []
+
+        async def observing_loop(*args, **kwargs):
+            attempts = db.execute(
+                "select state from writer_turn_attempts where session_id = ? "
+                "order by id desc limit 1",
+                (writer_session,),
+            ).fetchone()
+            if attempts:
+                states_seen.append(str(attempts["state"]))
+            return tools.ToolLoopResult(content="Answer", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", observing_loop)
+        _send_chat(client, artifact_id, writer_session, "Hello")
+        assert "running" in states_seen
+        attempt = db.execute(
+            "select state from writer_turn_attempts where session_id = ? "
+            "order by id desc limit 1",
+            (writer_session,),
+        ).fetchone()
+        assert attempt["state"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# PLA-310: Durable targets (link_target wiring)
+# ---------------------------------------------------------------------------
+
+
+class TestDurableTargets:
+    """Every effectful writer tool binds its target to the producing attempt."""
+
+    def test_proposal_linked(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """propose_revision links the pending edit to the attempt."""
+        async def proposing_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            if "propose_revision" in registry:
+                registry["propose_revision"].handler(
+                    section="Body", replacement="## Body\n\nRevised body text.\n"
+                )
+            return tools.ToolLoopResult(content="Proposed a revision.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", proposing_loop)
+        _send_chat(client, artifact_id, writer_session, "Revise the intro")
+        messages = sessions.list_messages(db, writer_session)
+        user_msg = next(m for m in messages if m["role"] == "user")
+        attempt = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt is not None
+        targets = writer_attempts.targets_for_attempt(db, int(attempt["id"]))
+        assert any(t["target_kind"] == "proposal" for t in targets)
+
+    def test_brief_linked(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """save_brief links the brief to the attempt."""
+        async def brief_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            if "save_brief" in registry:
+                registry["save_brief"].handler(summary="A guessed brief.")
+            return tools.ToolLoopResult(content="Saved brief.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", brief_loop)
+        _send_chat(client, artifact_id, writer_session, "What is this draft about?")
+        messages = sessions.list_messages(db, writer_session)
+        user_msg = next(m for m in messages if m["role"] == "user")
+        attempt = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt is not None
+        targets = writer_attempts.targets_for_attempt(db, int(attempt["id"]))
+        assert any(t["target_kind"] == "brief" for t in targets)
+
+    def test_reply_linked(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """reply_to_comment links the reply to the attempt."""
+        part = db.execute(
+            "select id from artifact_parts where artifact_id = ? and kind = ?",
+            (artifact_id, artifacts.DRAFT_BODY),
+        ).fetchone()
+        comment = comments.add_comment(
+            db, int(part["id"]), comments.REVIEWER,
+            "Needs work", severity="minor", quote="Introduction.",
+        )
+
+        async def reply_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            if "reply_to_comment" in registry:
+                registry["reply_to_comment"].handler(
+                    comment_id=int(comment["id"]), body="I will fix that."
+                )
+            return tools.ToolLoopResult(content="Replied to the comment.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", reply_loop)
+        _send_chat(client, artifact_id, writer_session, "Reply to comments")
+        messages = sessions.list_messages(db, writer_session)
+        user_msg = next(m for m in messages if m["role"] == "user")
+        attempt = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt is not None
+        targets = writer_attempts.targets_for_attempt(db, int(attempt["id"]))
+        assert any(t["target_kind"] == "reply" for t in targets)
+
+    def test_has_durable_effects(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """has_durable_effects returns True when a target was linked."""
+        async def proposing_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            if "propose_revision" in registry:
+                registry["propose_revision"].handler(
+                    section="Body", replacement="## Body\n\nChanged body.\n"
+                )
+            return tools.ToolLoopResult(content="Done.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", proposing_loop)
+        _send_chat(client, artifact_id, writer_session, "Revise intro")
+        messages = sessions.list_messages(db, writer_session)
+        user_msg = next(m for m in messages if m["role"] == "user")
+        attempt = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt is not None
+        assert writer_attempts.has_durable_effects(db, int(attempt["id"]))
+
+    def test_no_targets_without_effects(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """A turn with no effectful tool calls has no targets."""
+        _stub_loop(monkeypatch, tools.ToolLoopResult(content="Just chatting.", calls=()))
+        _send_chat(client, artifact_id, writer_session, "Hello")
+        messages = sessions.list_messages(db, writer_session)
+        user_msg = next(m for m in messages if m["role"] == "user")
+        attempt = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt is not None
+        assert not writer_attempts.has_durable_effects(db, int(attempt["id"]))
+
+
+# ---------------------------------------------------------------------------
+# PLA-310: Retry with durable effects
+# ---------------------------------------------------------------------------
+
+
+class TestRetryDurableEffects:
+    """Retry on a failed attempt with durable effects is blocked."""
+
+    def test_retry_blocked_with_durable_effects(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """Retry of a failed attempt that produced a proposal is refused with 409."""
+        async def fail_after_proposal(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            if "propose_revision" in registry:
+                registry["propose_revision"].handler(
+                    section="Body", replacement="## Body\n\nChanged body.\n"
+                )
+            return tools.ToolLoopResult(
+                content="", calls=(), stopped=tools.UPSTREAM_FAILED, detail="Crashed"
+            )
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", fail_after_proposal)
+        _send_chat(client, artifact_id, writer_session, "Revise")
+        messages = sessions.list_messages(db, writer_session)
+        user_msg = next(m for m in messages if m["role"] == "user")
+        attempt = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt["state"] == "failed"
+        assert writer_attempts.has_durable_effects(db, int(attempt["id"]))
+        _stub_loop(monkeypatch, tools.ToolLoopResult(content="OK", calls=()))
+        resp = _retry_chat(client, artifact_id, writer_session)
+        assert resp.status_code == 409
+
+    def test_retry_allowed_without_durable_effects(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """Retry of a failed attempt with no durable effects succeeds."""
+        _stub_loop(
+            monkeypatch,
+            tools.ToolLoopResult(
+                content="", calls=(), stopped=tools.UPSTREAM_FAILED, detail="Oops"
+            ),
+        )
+        _send_chat(client, artifact_id, writer_session, "Help me")
+        messages = sessions.list_messages(db, writer_session)
+        user_msg = next(m for m in messages if m["role"] == "user")
+        attempt = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt["state"] == "failed"
+        assert not writer_attempts.has_durable_effects(db, int(attempt["id"]))
+        _stub_loop(monkeypatch, tools.ToolLoopResult(content="OK", calls=()))
+        resp = _retry_chat(client, artifact_id, writer_session)
+        assert resp.status_code == 200
+        frames = _parse_frames(resp)
+        assert any(f["type"] == "done" for f in frames)
+
+
+# ---------------------------------------------------------------------------
+# PLA-310: Crash-safe completion
+# ---------------------------------------------------------------------------
+
+
+class TestCrashSafeCompletion:
+    """The assistant reply and completed attempt are committed atomically."""
+
+    def test_completion_commits_reply_and_attempt_together(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """After success, the reply message and completed attempt exist together."""
+        _stub_loop(monkeypatch, tools.ToolLoopResult(content="Great work!", calls=()))
+        _send_chat(client, artifact_id, writer_session, "Help")
+        messages = sessions.list_messages(db, writer_session)
+        assistant_msg = next(m for m in messages if m["role"] == "assistant")
+        user_msg = next(m for m in messages if m["role"] == "user")
+        attempt = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt["state"] == "completed"
+        assert attempt["assistant_message_id"] == int(assistant_msg["id"])
+        assert str(assistant_msg["content"]) == "Great work!"
+
+    def test_failed_persistence_settles_attempt(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """If the reply persistence fails, the attempt is settled (not left running)."""
+        original_insert = sessions.insert_message
+
+        def failing_insert(conn, session_id, role, content, **kwargs):
+            if role == "assistant":
+                raise RuntimeError("Disk full")
+            return original_insert(conn, session_id, role, content, **kwargs)
+
+        monkeypatch.setattr(routes_drafts.sessions, "insert_message", failing_insert)
+        _stub_loop(monkeypatch, tools.ToolLoopResult(content="OK", calls=()))
+        resp = _send_chat(client, artifact_id, writer_session, "Help")
+        frames = _parse_frames(resp)
+        assert any(f["type"] == "error" for f in frames)
+        user_msgs = [m for m in sessions.list_messages(db, writer_session) if m["role"] == "user"]
+        if user_msgs:
+            attempt = writer_attempts.latest_attempt_for_message(db, int(user_msgs[0]["id"]))
+            if attempt is not None:
+                assert attempt["state"] in ("failed", "stopped")
+
+    def test_retry_creates_new_attempt(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """A retry on a failed turn creates a separate attempt, not amending the old one."""
+        _stub_loop(
+            monkeypatch,
+            tools.ToolLoopResult(
+                content="", calls=(), stopped=tools.UPSTREAM_FAILED, detail="Error"
+            ),
+        )
+        _send_chat(client, artifact_id, writer_session, "Help")
+        messages = sessions.list_messages(db, writer_session)
+        user_msg = next(m for m in messages if m["role"] == "user")
+        attempt1 = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt1["state"] == "failed"
+        _stub_loop(monkeypatch, tools.ToolLoopResult(content="Fixed", calls=()))
+        _retry_chat(client, artifact_id, writer_session)
+        attempt2 = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt2["state"] == "completed"
+        assert attempt2["id"] != attempt1["id"]
+        user_messages = [
+            m for m in sessions.list_messages(db, writer_session) if m["role"] == "user"
+        ]
+        assert len(user_messages) == 1

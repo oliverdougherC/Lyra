@@ -32,6 +32,7 @@ from backend.core import (
     source_ledger,
     suggestions,
     web_research,
+    writer_attempts,
     writer_plans,
 )
 from backend.core.errors import LyraError
@@ -85,8 +86,15 @@ class RunEffects:
     The tools append; the route reads. This exists because a proposal made three rounds
     deep inside the loop still has to reach the interface as its own event, and the
     loop's transcript records calls, not consequences.
+
+    ``attempt_id`` is set by the route after planning but before the loop starts, so
+    every effectful handler can bind its target to the producing attempt via
+    ``link_target``. It is ``None`` during the probe registry (planning only) and for
+    non-chat callers (pipeline workers). The handlers check it on each call rather than
+    at build time, so the same registry instance works across the plan-then-run boundary.
     """
 
+    attempt_id: int | None = None
     proposed_edit_id: int | None = None
     brief_saved: bool = False
     pass_started: bool = False
@@ -94,9 +102,6 @@ class RunEffects:
     replied_to_comments: bool = False
     wrote_sections: list[str] | None = None
     filed_comment_ids: list[int] | None = None
-    # Findings the reviewer reached again that were already open. Not filed a second
-    # time, but found: a review that re-derives every open finding and reports "no
-    # findings" because each one deduped is telling the student the opposite of the truth.
     confirmed_comment_ids: list[int] | None = None
 
     def note_write(self, ref: str) -> None:
@@ -107,6 +112,13 @@ class RunEffects:
 
     def note_confirmed(self, comment_id: int) -> None:
         self.confirmed_comment_ids = [*(self.confirmed_comment_ids or []), comment_id]
+
+    def link(self, conn: sqlite3.Connection, target_kind: str, target_id: int) -> None:
+        """Bind a durable target to this attempt, if one is active."""
+        if self.attempt_id is not None:
+            writer_attempts.link_target(
+                conn, self.attempt_id, target_kind=target_kind, target_id=target_id,
+            )
 
 
 def _compatible_job(job_type: type, artifact_id: int, **options: object) -> object:
@@ -421,7 +433,8 @@ def build_registry(
             )
         if row["parent_id"] is not None:
             return failure("Replies attach to the thread root, not to another reply.")
-        comments.add_reply(conn, comment_id, comments.WRITER, body)
+        reply = comments.add_reply(conn, comment_id, comments.WRITER, body)
+        effects.link(conn, "reply", int(reply["id"]))
         effects.replied_to_comments = True
         return success(replied=True, comment_id=comment_id)
 
@@ -474,6 +487,7 @@ def build_registry(
             section_ref=ref or None,
             orphaned=bool(cleaned and hint is None),
         )
+        effects.link(conn, "comment", int(filed["id"]))
         effects.note_comment(int(filed["id"]))
         return success(filed=True, anchored=hint is not None, comment_id=filed["id"])
 
@@ -483,7 +497,7 @@ def build_registry(
         audience: str = "",
         length_target: str = "",
     ) -> ToolResult:
-        briefs.save_brief(
+        brief = briefs.save_brief(
             conn,
             artifact_id,
             assignment_type=assignment_type,
@@ -491,6 +505,7 @@ def build_registry(
             audience=audience,
             length_target=length_target,
         )
+        effects.link(conn, "brief", int(brief["artifact_id"]))
         effects.brief_saved = True
         return success(
             saved=True,
@@ -522,6 +537,7 @@ def build_registry(
                 proposed=False,
                 note="That replacement reads exactly as the document already does.",
             )
+        effects.link(conn, "proposal", edit.id)
         effects.proposed_edit_id = edit.id
         return success(
             proposed=True,
@@ -560,6 +576,8 @@ def build_registry(
             run = routes_drafts.writer_runs.active_run(conn, artifact_id)
         except (LyraError, ValueError) as exc:
             return failure(exc.message if isinstance(exc, LyraError) else str(exc))
+        if run is not None:
+            effects.link(conn, "pass", int(run["id"]))
         writer_pipeline.enqueue(
             _compatible_job(
                 writer_pipeline.PassJob,
@@ -599,6 +617,8 @@ def build_registry(
             run = routes_drafts.writer_runs.active_run(conn, artifact_id)
         except (LyraError, ValueError) as exc:
             return failure(exc.message if isinstance(exc, LyraError) else str(exc))
+        if run is not None:
+            effects.link(conn, "review", int(run["id"]))
         review_pipeline.enqueue(
             _compatible_job(
                 review_pipeline.ReviewJob,
@@ -625,14 +645,16 @@ def build_registry(
             return failure(_NO_SECTION.format(ref=section))
         if not target.is_empty:
             return failure(_OCCUPIED.format(ref=section))
+        part_id = int(part["id"])
         artifacts.set_part_content(
             conn,
-            int(part["id"]),
+            part_id,
             sections.splice(body, target, mathnorm.normalize(content)),
             origin=artifacts.GENERATED,
             note=f"drafted {target.number} {target.title}".strip(),
             record_revision=True,
         )
+        effects.link(conn, "section_write", part_id)
         effects.note_write(target.number)
         return success(written=True, section=target.number)
 

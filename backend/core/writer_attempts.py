@@ -10,6 +10,15 @@ committed reply instead of running the model a second time.
 Writer turns carry an `intent` (the writer-intent classifier's label) instead of
 the agent turn's `profile`, and their durable targets are proposals, briefs, and
 comments rather than sources and facts.
+
+State machine::
+
+    planned -> running -> completed
+                       -> failed
+                       -> stopped
+
+A crash before model execution (`planned`) is distinguishable from one that
+actually started (`running`). Both are retryable.
 """
 
 from __future__ import annotations
@@ -20,6 +29,7 @@ from datetime import UTC, datetime
 
 from backend.core.errors import NotFoundError
 
+PLANNED = "planned"
 RUNNING = "running"
 COMPLETED = "completed"
 FAILED = "failed"
@@ -56,18 +66,33 @@ def create_attempt(
     user_message_id: int,
     intent: str,
 ) -> int:
-    """Record a running attempt on one user message and return its id.
+    """Record a planned attempt on one user message and return its id.
 
-    Called after the user message is persisted (or, on a retry, resolved) and before
-    the tool loop runs, so every run of the model is bracketed by a durable row.
+    Created in the `planned` state *atomically with the user message* (the caller
+    commits them together), before preparation or the tool loop runs. This closes
+    the window where a persisted user message could exist without a corresponding
+    attempt.
     """
     cursor = conn.execute(
         "insert into writer_turn_attempts (session_id, user_message_id, intent, state) "
         "values (?, ?, ?, ?)",
-        (session_id, user_message_id, intent, RUNNING),
+        (session_id, user_message_id, intent, PLANNED),
+    )
+    return int(cursor.lastrowid or 0)
+
+
+def promote_to_running(conn: sqlite3.Connection, attempt_id: int) -> None:
+    """Advance a planned attempt to running, just before the tool loop starts.
+
+    Committed immediately so a crash during the loop is distinguishable from one
+    during preparation. Only a `planned` row is promoted; the conditional predicate
+    makes a race with settlement a no-op.
+    """
+    conn.execute(
+        "update writer_turn_attempts set state = ? where id = ? and state = ?",
+        (RUNNING, attempt_id, PLANNED),
     )
     conn.commit()
-    return int(cursor.lastrowid or 0)
 
 
 def mark_completed(conn: sqlite3.Connection, attempt_id: int, assistant_message_id: int) -> None:
@@ -93,24 +118,26 @@ def fail_attempt(
     stopped_reason: str,
     detail: str,
 ) -> None:
-    """Settle a still-running attempt as failed, with a bounded stop reason and detail."""
+    """Settle a still-running or planned attempt as failed, with a bounded detail."""
     conn.execute(
         "update writer_turn_attempts set state = ?, stopped_reason = ?, detail = ?, "
-        "finished_at = ? where id = ? and state = ?",
-        (FAILED, stopped_reason, detail[:_MAX_DETAIL_CHARS], _timestamp(), attempt_id, RUNNING),
+        "finished_at = ? where id = ? and state in (?, ?)",
+        (FAILED, stopped_reason, detail[:_MAX_DETAIL_CHARS], _timestamp(),
+         attempt_id, PLANNED, RUNNING),
     )
     conn.commit()
 
 
 def stop_attempt(conn: sqlite3.Connection, attempt_id: int, *, detail: str) -> None:
-    """Settle a still-running attempt as stopped (abandoned).
+    """Settle a still-running or planned attempt as stopped (abandoned).
 
     Used when a turn is cancelled or the client disconnects mid-run.
     """
     conn.execute(
         "update writer_turn_attempts set state = ?, stopped_reason = ?, detail = ?, "
-        "finished_at = ? where id = ? and state = ?",
-        (STOPPED, "cancelled", detail[:_MAX_DETAIL_CHARS], _timestamp(), attempt_id, RUNNING),
+        "finished_at = ? where id = ? and state in (?, ?)",
+        (STOPPED, "cancelled", detail[:_MAX_DETAIL_CHARS], _timestamp(),
+         attempt_id, PLANNED, RUNNING),
     )
     conn.commit()
 
@@ -141,6 +168,33 @@ def link_target(
     if owner is None:  # pragma: no cover
         raise RuntimeError("The writer proposal ownership link disappeared.")
     return int(owner["attempt_id"])
+
+
+def target_owner(conn: sqlite3.Connection, *, target_kind: str, target_id: int) -> int | None:
+    """Return the attempt that originally produced one durable target, if writer-created."""
+    row = conn.execute(
+        "select attempt_id from writer_attempt_targets where target_kind = ? and target_id = ?",
+        (target_kind, target_id),
+    ).fetchone()
+    return int(row["attempt_id"]) if row is not None else None
+
+
+def targets_for_attempt(conn: sqlite3.Connection, attempt_id: int) -> list[dict[str, object]]:
+    """All durable targets produced by one attempt."""
+    rows = conn.execute(
+        "select target_kind, target_id from writer_attempt_targets where attempt_id = ?",
+        (attempt_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def has_durable_effects(conn: sqlite3.Connection, attempt_id: int) -> bool:
+    """Whether an attempt produced any durable targets that landed in the database."""
+    row = conn.execute(
+        "select 1 from writer_attempt_targets where attempt_id = ? limit 1",
+        (attempt_id,),
+    ).fetchone()
+    return row is not None
 
 
 def latest_attempt_for_message(
@@ -201,16 +255,17 @@ def resolve_retry_target(conn: sqlite3.Connection, session_id: int) -> RetryTarg
 
 
 def reconcile_running(conn: sqlite3.Connection) -> int:
-    """Settle writer attempts left running by a crash as stopped, after restart."""
+    """Settle writer attempts left planned or running by a crash as stopped, after restart."""
     finished_at = _timestamp()
     cursor = conn.execute(
         "update writer_turn_attempts set state = ?, stopped_reason = ?, detail = ?, "
-        "finished_at = ? where state = ?",
+        "finished_at = ? where state in (?, ?)",
         (
             STOPPED,
             "abandoned",
             "This turn was interrupted before it finished. Try it again.",
             finished_at,
+            PLANNED,
             RUNNING,
         ),
     )

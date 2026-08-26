@@ -11,8 +11,8 @@ create table writer_turn_attempts (
   session_id integer not null references chat_sessions(id) on delete cascade,
   user_message_id integer not null references messages(id) on delete cascade,
   intent text not null,
-  state text not null default 'running'
-    check (state in ('running', 'completed', 'failed', 'stopped')),
+  state text not null default 'planned'
+    check (state in ('planned', 'running', 'completed', 'failed', 'stopped')),
   stopped_reason text,
   detail text,
   assistant_message_id integer references messages(id) on delete set null,
