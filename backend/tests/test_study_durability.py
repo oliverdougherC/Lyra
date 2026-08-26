@@ -656,7 +656,12 @@ class TestCrashConsistency:
         try:
             with pytest.raises(_SimulatedCrash):
                 routes_study._create_study_artifact(
-                    proxy, class_id, kind, "Crash test", doc_ids, job=proto,
+                    proxy,
+                    class_id,
+                    kind,
+                    "Crash test",
+                    doc_ids,
+                    job=proto,
                 )
         finally:
             real_conn.close()
@@ -664,50 +669,34 @@ class TestCrashConsistency:
 
     # -- Pre-commit failures (cases 1-7): nothing committed ----------------
 
-    def test_crash_before_any_write(
-        self, db: sqlite3.Connection, class_id: int
-    ) -> None:
+    def test_crash_before_any_write(self, db: sqlite3.Connection, class_id: int) -> None:
         """1. Failure before any write leaves a clean database."""
         doc_id = _document(db, class_id)
-        proxy = self._crash_create(
-            db, class_id, _FailAtBoundary.BEFORE_ANY_WRITE, [doc_id]
-        )
+        proxy = self._crash_create(db, class_id, _FailAtBoundary.BEFORE_ANY_WRITE, [doc_id])
         assert proxy._fired
         _assert_no_phantom_state(db, class_id)
 
-    def test_crash_after_artifact_insert(
-        self, db: sqlite3.Connection, class_id: int
-    ) -> None:
+    def test_crash_after_artifact_insert(self, db: sqlite3.Connection, class_id: int) -> None:
         """2. Failure after artifact INSERT but before sources."""
         doc_id = _document(db, class_id)
-        proxy = self._crash_create(
-            db, class_id, _FailAtBoundary.AFTER_ARTIFACT_INSERT, [doc_id]
-        )
+        proxy = self._crash_create(db, class_id, _FailAtBoundary.AFTER_ARTIFACT_INSERT, [doc_id])
         assert proxy._fired
         _assert_no_phantom_state(db, class_id)
 
-    def test_crash_after_first_source_row(
-        self, db: sqlite3.Connection, class_id: int
-    ) -> None:
+    def test_crash_after_first_source_row(self, db: sqlite3.Connection, class_id: int) -> None:
         """3. Failure after the first artifact_sources row in a two-source request."""
         d1 = _document(db, class_id, "a.pdf")
         d2 = _document(db, class_id, "b.pdf")
-        proxy = self._crash_create(
-            db, class_id, _FailAtBoundary.AFTER_FIRST_SOURCE, [d1, d2]
-        )
+        proxy = self._crash_create(db, class_id, _FailAtBoundary.AFTER_FIRST_SOURCE, [d1, d2])
         assert proxy._fired
         _assert_no_phantom_state(db, class_id)
 
-    def test_crash_after_later_source_row(
-        self, db: sqlite3.Connection, class_id: int
-    ) -> None:
+    def test_crash_after_later_source_row(self, db: sqlite3.Connection, class_id: int) -> None:
         """4. Failure after the second source row in a three-source request."""
         d1 = _document(db, class_id, "a.pdf")
         d2 = _document(db, class_id, "b.pdf")
         d3 = _document(db, class_id, "c.pdf")
-        proxy = self._crash_create(
-            db, class_id, _FailAtBoundary.AFTER_LATER_SOURCE, [d1, d2, d3]
-        )
+        proxy = self._crash_create(db, class_id, _FailAtBoundary.AFTER_LATER_SOURCE, [d1, d2, d3])
         assert proxy._fired
         _assert_no_phantom_state(db, class_id)
 
@@ -716,9 +705,7 @@ class TestCrashConsistency:
     ) -> None:
         """5. Failure after all sources and class touch but before study_jobs INSERT."""
         doc_id = _document(db, class_id)
-        proxy = self._crash_create(
-            db, class_id, _FailAtBoundary.BEFORE_STUDY_JOBS, [doc_id]
-        )
+        proxy = self._crash_create(db, class_id, _FailAtBoundary.BEFORE_STUDY_JOBS, [doc_id])
         assert proxy._fired
         _assert_no_phantom_state(db, class_id)
 
@@ -727,20 +714,14 @@ class TestCrashConsistency:
     ) -> None:
         """6. Failure after study_jobs INSERT but before commit."""
         doc_id = _document(db, class_id)
-        proxy = self._crash_create(
-            db, class_id, _FailAtBoundary.AFTER_STUDY_JOBS, [doc_id]
-        )
+        proxy = self._crash_create(db, class_id, _FailAtBoundary.AFTER_STUDY_JOBS, [doc_id])
         assert proxy._fired
         _assert_no_phantom_state(db, class_id)
 
-    def test_crash_on_commit(
-        self, db: sqlite3.Connection, class_id: int
-    ) -> None:
+    def test_crash_on_commit(self, db: sqlite3.Connection, class_id: int) -> None:
         """7. Commit itself fails (raised before the real commit executes)."""
         doc_id = _document(db, class_id)
-        proxy = self._crash_create(
-            db, class_id, _FailAtBoundary.ON_COMMIT, [doc_id]
-        )
+        proxy = self._crash_create(db, class_id, _FailAtBoundary.ON_COMMIT, [doc_id])
         assert proxy._fired
         _assert_no_phantom_state(db, class_id)
 
@@ -769,17 +750,14 @@ class TestCrashConsistency:
         finally:
             real_conn.close()
 
-        artifact = db.execute(
-            "select * from artifacts where class_id = ?", (class_id,)
-        ).fetchone()
+        artifact = db.execute("select * from artifacts where class_id = ?", (class_id,)).fetchone()
         assert artifact is not None
         assert artifact["kind"] == "flashcard_deck"
         assert artifact["state"] == "pending"
         artifact_id = int(artifact["id"])
 
         sources = db.execute(
-            "select document_id from artifact_sources "
-            "where artifact_id = ? order by ordinal",
+            "select document_id from artifact_sources where artifact_id = ? order by ordinal",
             (artifact_id,),
         ).fetchall()
         assert [int(r["document_id"]) for r in sources] == [d1, d2]
