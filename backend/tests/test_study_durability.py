@@ -404,12 +404,12 @@ class TestReadyStateEnforcement:
 # ---------------------------------------------------------------------------
 
 
-class _SimulatedCrash(Exception):
+class _SimulatedCrashError(Exception):
     """Controlled process crash at a transaction boundary."""
 
 
 class _FailAtBoundary:
-    """Connection proxy that injects _SimulatedCrash at a chosen write boundary.
+    """Connection proxy that injects _SimulatedCrashError at a chosen write boundary.
 
     Delegates every operation to a real sqlite3.Connection. Reads pass through
     untouched. Writes are intercepted by SQL pattern so the crash lands at the
@@ -432,7 +432,7 @@ class _FailAtBoundary:
 
     def _crash(self, label: str) -> None:
         self._fired = True
-        raise _SimulatedCrash(label)
+        raise _SimulatedCrashError(label)
 
     def execute(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
         lower = sql.lower()
@@ -654,7 +654,7 @@ class TestCrashConsistency:
         real_conn = connect()
         proxy = _FailAtBoundary(real_conn, boundary)
         try:
-            with pytest.raises(_SimulatedCrash):
+            with pytest.raises(_SimulatedCrashError):
                 routes_study._create_study_artifact(
                     proxy,
                     class_id,
@@ -738,7 +738,7 @@ class TestCrashConsistency:
         proxy = _FailAtBoundary(real_conn, _FailAtBoundary.AFTER_COMMIT)
         proto = study._Job(0, source_ids=(), cards_per_topic=7)
         try:
-            with pytest.raises(_SimulatedCrash):
+            with pytest.raises(_SimulatedCrashError):
                 routes_study._create_study_artifact(
                     proxy,
                     class_id,
@@ -788,7 +788,7 @@ class TestCrashConsistency:
             types=("mcq", "true_false"),
         )
         try:
-            with pytest.raises(_SimulatedCrash):
+            with pytest.raises(_SimulatedCrashError):
                 routes_study._create_study_artifact(
                     proxy,
                     class_id,
