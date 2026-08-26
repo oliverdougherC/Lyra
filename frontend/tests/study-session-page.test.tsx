@@ -232,11 +232,14 @@ describe('StudySessionPage', () => {
     const getDeckStatus = vi
       .spyOn(api, 'getDeckStatus')
       .mockResolvedValueOnce(
-        status({ state: 'generating', stage_detail: 'Working', problems_total: 5, problems_done: 1 }),
+        status({
+          state: 'generating',
+          stage_detail: 'Working',
+          problems_total: 5,
+          problems_done: 1,
+        }),
       )
-      .mockResolvedValue(
-        status({ state: 'failed', error_message: 'Out of context' }),
-      )
+      .mockResolvedValue(status({ state: 'failed', error_message: 'Out of context' }))
     vi.spyOn(api, 'listStudy').mockResolvedValue({
       decks: [
         deck({
@@ -271,9 +274,7 @@ describe('StudySessionPage', () => {
 
     render(<StudySessionPage />, { wrapper })
 
-    expect(
-      await screen.findByText('That study tool is not in this class'),
-    ).toBeInTheDocument()
+    expect(await screen.findByText('That study tool is not in this class')).toBeInTheDocument()
     const backLink = screen.getByRole('link', { name: /Back to study tools/ })
     expect(backLink).toHaveAttribute('href', '/classes/1?tab=study')
   })
