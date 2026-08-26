@@ -134,15 +134,22 @@ export function useRegeneratePart(artifactId: number) {
   })
 }
 
-export function usePartRevisions(artifactId: number, partId: number | null) {
+export type ArtifactKind = 'solution' | 'draft'
+
+export function usePartRevisions(
+  artifactId: number,
+  partId: number | null,
+  kind: ArtifactKind = 'solution',
+) {
+  const listFn = kind === 'draft' ? api.listDraftRevisions : api.listPartRevisions
   return useQuery({
-    queryKey: solutionKeys.revisions(artifactId, partId ?? -1),
-    queryFn: ({ signal }) => api.listPartRevisions(artifactId, partId as number, signal),
+    queryKey: [...solutionKeys.revisions(artifactId, partId ?? -1), kind],
+    queryFn: ({ signal }) => listFn(artifactId, partId as number, signal),
     enabled: partId !== null && Number.isFinite(artifactId),
   })
 }
 
-export function useRestoreRevision(artifactId: number) {
+export function useRestoreRevision(artifactId: number, kind: ArtifactKind = 'solution') {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: ({
@@ -152,9 +159,11 @@ export function useRestoreRevision(artifactId: number) {
     }: {
       partId: number
       revision: number
-      /** The body version the caller last saw; a stale draft tab conflicts (PLA-289). */
       expectedVersion?: number
-    }) => api.restorePartRevision(artifactId, partId, revision, expectedVersion),
+    }) =>
+      kind === 'draft'
+        ? api.restoreDraftRevision(artifactId, partId, revision, expectedVersion!)
+        : api.restorePartRevision(artifactId, partId, revision, expectedVersion),
     onSuccess: (_part, { partId }) => {
       queryClient.invalidateQueries({ queryKey: solutionKeys.detail(artifactId) })
       queryClient.invalidateQueries({ queryKey: solutionKeys.revisions(artifactId, partId) })

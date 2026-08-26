@@ -24,6 +24,17 @@ ALLOWED_BROWSER_ORIGIN_SET = frozenset(ALLOWED_BROWSER_ORIGINS)
 # loopback literal costs nothing because it can never be an attacker's rebind target.
 ALLOWED_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
+# Non-browser loopback clients (the launcher health probe, CLI scripts, test harnesses)
+# cannot send a browser Origin header. Rather than silently allowing a missing Origin on
+# unsafe methods -- which would leave the CSRF boundary open to any HTTP client on the
+# machine -- we require these callers to send a custom header that a browser simple
+# request cannot carry. Any value in `X-Lyra-Client` is accepted; the header's presence
+# is the signal, because a cross-origin browser request carrying a non-safelisted header
+# triggers a CORS preflight that the CORS middleware will reject for untrusted origins.
+LOOPBACK_CLIENT_HEADER = "X-Lyra-Client"
+
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
 
 def host_is_allowed(host_header: str | None) -> bool:
     """Whether an incoming `Host` header names a Lyra loopback host.
@@ -55,3 +66,23 @@ def host_is_allowed(host_header: str | None) -> bool:
     else:
         hostname = host
     return hostname.lower() in ALLOWED_HOSTS
+
+
+def mutation_origin_is_acceptable(
+    method: str, origin: str | None, has_client_header: bool
+) -> bool | None:
+    """Whether a request's origin credentials satisfy the mutation boundary.
+
+    Returns ``True`` for acceptable requests, ``False`` for rejected ones, and
+    ``None`` for safe methods that are not subject to origin enforcement.
+    """
+    if method.upper() in _SAFE_METHODS:
+        return None
+
+    if origin is not None:
+        return origin.strip() in ALLOWED_BROWSER_ORIGIN_SET
+
+    # No Origin header: the request did not come from a browser (browsers always
+    # send Origin on cross-origin requests and on same-origin POSTs). Accept only
+    # if the caller proved non-browser intent with the client header.
+    return has_client_header

@@ -37,6 +37,7 @@ import {
 import { useMessages } from '@/lib/hooks/use-chat'
 import { useClassWriterSettings, useUpdateClassWriterSettings } from '@/lib/hooks/use-settings'
 import type { AgentProfile } from '@/types'
+import { hunksAreStale } from './types'
 import type { AgentGrantKey, AgentToolActivity } from './types'
 
 type AgentPanelProps = {
@@ -98,19 +99,22 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
     setEffectBusy(true)
     try {
       const reviewed = await api.reviewAgentWorkspaceChange(classId, sessionId, changeId)
-      const available = new Map(reviewed.hunks.map((hunk) => [hunk.index, hunk.hash]))
-      const exact = hunks.map((hunk) => ({
-        index: hunk.index,
-        hash: available.get(hunk.index) ?? '',
-      }))
-      if (exact.some((hunk) => !hunk.hash)) throw new Error('That change is no longer current.')
+      const displayedCount =
+        changes.data?.find((c) => c.id === changeId)?.hunks.length ?? hunks.length
+
+      if (hunksAreStale(hunks, reviewed.hunks, displayedCount)) {
+        refresh()
+        toast.error('The proposal changed since you reviewed it. Please review the updated diff.')
+        return
+      }
+
       const confirmation = await api.confirmAgentWorkspaceChange(
         classId,
         sessionId,
         changeId,
-        exact,
+        hunks,
       )
-      await api.applyAgentWorkspaceChange(classId, sessionId, changeId, exact, confirmation.token)
+      await api.applyAgentWorkspaceChange(classId, sessionId, changeId, hunks, confirmation.token)
       refresh()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not apply that change.')

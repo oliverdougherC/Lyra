@@ -69,6 +69,26 @@ export type WorkspaceChangeReview = {
   hunks: WorkspaceChangeHunk[]
 }
 
+export type HunkRef = { index: number; hash: string }
+
+/**
+ * Whether the displayed hunks are stale against the freshly reviewed set.
+ *
+ * Returns true when any selected hunk disappeared, changed content (different
+ * hash at the same index), or the overall hunk count shifted (insertion or
+ * deletion in the fresh set).
+ */
+export function hunksAreStale(
+  selected: HunkRef[],
+  freshHunks: HunkRef[],
+  displayedCount: number,
+): boolean {
+  const freshByIndex = new Map(freshHunks.map((h) => [h.index, h.hash]))
+  if (selected.some((h) => freshByIndex.get(h.index) !== h.hash)) return true
+  if (freshHunks.length !== displayedCount) return true
+  return false
+}
+
 export type AgentCommandRequest = {
   id: string | number
   argv: string[]

@@ -859,6 +859,23 @@ export const api = {
   confirmBrief: (draftId: number) =>
     requestJson<DraftBrief>(`/api/drafts/${draftId}/brief/confirm`, { method: 'POST' }),
 
+  listDraftRevisions: (draftId: number, partId: number, signal?: AbortSignal) =>
+    requestJson<SolutionRevision[]>(`/api/drafts/${draftId}/parts/${partId}/revisions`, {
+      signal,
+    }),
+
+  restoreDraftRevision: (
+    draftId: number,
+    partId: number,
+    revision: number,
+    expectedVersion: number,
+  ) =>
+    requestJson<SolutionPart>(`/api/drafts/${draftId}/parts/${partId}/restore`, {
+      method: 'POST',
+      body: { revision, expected_version: expectedVersion },
+      errorFactory: draftBodyErrorFactory,
+    }),
+
   listWriterSessions: (draftId: number, signal?: AbortSignal) =>
     requestJson<SessionRead[]>(`/api/drafts/${draftId}/sessions`, { signal }),
 

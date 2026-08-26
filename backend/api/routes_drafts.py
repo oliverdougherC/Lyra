@@ -86,6 +86,13 @@ QUEUED_REVIEW_DETAIL = "Reviewing (queued)"
 PASS_JOB_KIND = "pass"  # noqa: S105 - a job kind, not a credential.
 REVIEW_JOB_KIND = "review"
 
+EDITED_SINCE_CHECK = "This was edited after it was checked, so the earlier check no longer applies."
+RESTORED_NOTE = "Restored version {revision}."
+PRE_RESTORE_NOTE = "Body before restore to version {revision}."
+DRAFT_RESTORE_NEEDS_VERSION = (
+    "A draft restore requires expected_version to guarantee you are restoring what you see."
+)
+
 WRITE_RETRIEVAL_BUDGET = 2_000
 
 BLOCKED_MESSAGES = {
@@ -207,6 +214,13 @@ class HunkRef(BaseModel):
 
     index: int
     hash: str
+
+
+class DraftRestoreRequest(BaseModel):
+    """Body of `POST /api/drafts/{artifact_id}/parts/{part_id}/restore`."""
+
+    revision: int = Field(ge=1)
+    expected_version: int = Field(ge=0)
 
 
 class AcceptRequest(BaseModel):
@@ -783,6 +797,42 @@ def resolve_comment(comment_id: int, payload: ResolveWrite, conn: DbConn) -> dic
     """Resolve or reopen one thread. Root only; resolution is the student's gesture."""
     _require_draft_comment(conn, comment_id)
     return comments.set_resolved(conn, comment_id, payload.resolved)
+
+
+@router.get("/drafts/{artifact_id}/parts/{part_id}/revisions", response_model=None)
+def read_draft_revisions(artifact_id: int, part_id: int, conn: DbConn) -> list[dict[str, object]]:
+    _require_draft(conn, artifact_id)
+    part = artifacts.get_part(conn, part_id)
+    if int(part["artifact_id"]) != artifact_id or part["kind"] != artifacts.DRAFT_BODY:
+        raise NotFoundError(NO_DOCUMENT_MESSAGE)
+    return artifacts.list_revisions(conn, part_id)
+
+
+@router.post("/drafts/{artifact_id}/parts/{part_id}/restore", response_model=None)
+def restore_draft_revision(
+    artifact_id: int, part_id: int, payload: DraftRestoreRequest, conn: DbConn
+) -> dict[str, object]:
+    """Put an earlier version of a draft body back, with CAS on expected_version."""
+    _require_draft(conn, artifact_id)
+    part = artifacts.get_part(conn, part_id)
+    if int(part["artifact_id"]) != artifact_id or part["kind"] != artifacts.DRAFT_BODY:
+        raise NotFoundError(NO_DOCUMENT_MESSAGE)
+    revision = artifacts.get_revision(conn, part_id, payload.revision)
+    result = artifacts.compare_and_restore_part_content(
+        conn,
+        part_id,
+        str(revision["content"]),
+        artifacts.USER_CORRECTED,
+        expected_version=payload.expected_version,
+        restored_note=RESTORED_NOTE.format(revision=payload.revision),
+        preserved_origin=artifacts.USER_CORRECTED,
+        preserved_note=PRE_RESTORE_NOTE.format(revision=payload.revision),
+    )
+    restored_part = artifacts.get_part(conn, part_id)
+    return {
+        **restored_part,
+        "body_version": result["version"],
+    }
 
 
 @router.get("/drafts/{artifact_id}/pending", response_model=None)

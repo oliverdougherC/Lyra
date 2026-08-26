@@ -16,7 +16,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError, DraftBodyConflictError } from '@/lib/api'
 import type { SaveConflict } from '@/lib/drafts/save-engine'
 import { formatRelativeTime } from '@/lib/format'
-import { usePartRevisions, useRestoreRevision } from '@/lib/hooks/use-solutions'
+import { type ArtifactKind, usePartRevisions, useRestoreRevision } from '@/lib/hooks/use-solutions'
 import type { PartOrigin, SolutionPart } from '@/types'
 
 const ORIGIN_LABELS: Record<PartOrigin, string> = {
@@ -31,6 +31,8 @@ type RevisionHistoryProps = {
   onClose: () => void
   /** What the part belongs to, in the sheet's description. A draft passes 'draft'. */
   noun?: string
+  /** Which API surface to call: 'solution' (default) or 'draft'. */
+  kind?: ArtifactKind
   /**
    * Draft-only: confirm the current body is on disk before restoring, and report the
    * version to restore against. Returns `ok: false` to abort - the save failure or conflict
@@ -61,12 +63,13 @@ export function RevisionHistory({
   part,
   onClose,
   noun = 'solution set',
+  kind = 'solution',
   saveBeforeRestore,
   onBodyConflict,
   currentBody,
 }: RevisionHistoryProps) {
-  const revisions = usePartRevisions(artifactId, part?.id ?? null)
-  const restore = useRestoreRevision(artifactId)
+  const revisions = usePartRevisions(artifactId, part?.id ?? null, kind)
+  const restore = useRestoreRevision(artifactId, kind)
 
   // Exactly one row is "shown now". A restore writes a new revision rather than rewinding,
   // so the history can hold duplicate content (e.g. [A, B, A]); matching every row against
