@@ -182,6 +182,18 @@ export default function StudySessionPage() {
         </Alert>
       ) : null}
 
+      {state === 'cancelled' ? (
+        <Alert>
+          <AlertTitle>This was cancelled</AlertTitle>
+          <AlertDescription>
+            <p>Generation was stopped before it finished.</p>
+            <Button asChild variant="outline" size="sm" className="mt-3">
+              <Link href={`/classes/${classId}?tab=study`}>Back to study tools</Link>
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {state === 'ready' && kind === 'flashcard_deck' ? <DeckSession deckId={artifactId} /> : null}
       {state === 'ready' && kind === 'quiz' ? (
         <QuizRunner classId={classId} quizId={artifactId} />

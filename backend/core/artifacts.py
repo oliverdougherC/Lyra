@@ -286,6 +286,8 @@ def create_artifact(
     title: str,
     sources: list[SourceSpec],
     kind: str = KIND_SOLUTION_SET,
+    *,
+    commit: bool = True,
 ) -> dict[str, object]:
     """Create an artifact in state `pending` with its source documents attached.
 
@@ -298,6 +300,8 @@ def create_artifact(
             (`problem_set` for solution sets, `study_source` for decks and quizzes): an
             artifact with only reference material has nothing to work on.
         kind: Artifact kind.
+        commit: When False the caller is responsible for committing, allowing the artifact
+            and its sources to be persisted atomically with other rows (PLA-169).
 
     Returns:
         The new artifact row.
@@ -350,7 +354,8 @@ def create_artifact(
             for ordinal, spec in enumerate(sources)
         ],
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return get_artifact(conn, artifact_id)
 
 

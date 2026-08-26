@@ -130,6 +130,7 @@ export function DeckSession({ deckId }: { deckId: number }) {
   }, [flipped, flip, rate])
 
   async function restart() {
+    operationIds.current.clear()
     const fresh = await session.refetch()
     const next = fresh.data?.cards
     if (!next) return
