@@ -701,71 +701,9 @@ def test_restoring_an_earlier_version_is_itself_a_revision(
     assert revisions[0]["note"] == "Restored version 1."
 
 
-def _draft_body(db: sqlite3.Connection, class_id: int, content: str) -> tuple[int, int]:
-    """A draft artifact with one body part holding `content`. Returns (artifact_id, part_id).
-
-    The generic restore endpoint is shared with drafts, so a draft body part restores
-    through `/api/solutions/{id}/parts/{part}/restore` too - version-aware when the caller
-    names an `expected_version` (PLA-289).
-    """
-    created = artifacts.create_artifact(db, class_id, "Essay", [], kind=artifacts.KIND_DRAFT)
-    part_id = artifacts.create_part(
-        db,
-        int(created["id"]),
-        artifacts.DRAFT_BODY,
-        1,
-        content=content,
-        status=artifacts.PART_COMPLETE,
-    )
-    return int(created["id"]), part_id
-
-
-def test_draft_restore_with_the_current_version_succeeds(
-    client: TestClient, db: sqlite3.Connection, class_id: int
-) -> None:
-    artifact_id, part_id = _draft_body(db, class_id, "first draft")
-    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
-    version = int(artifacts.get_part(db, part_id)["content_version"])
-
-    restored = client.post(
-        f"/api/solutions/{artifact_id}/parts/{part_id}/restore",
-        json={"revision": 1, "expected_version": version},
-    )
-
-    assert restored.status_code == 200
-    assert str(artifacts.get_part(db, part_id)["content"]) == "first draft"
-    # The restore moved the version too, so a stale autosave conflicts against it.
-    assert int(artifacts.get_part(db, part_id)["content_version"]) == version + 1
-
-
-def test_stale_draft_restore_is_refused_without_mutation(
-    client: TestClient, db: sqlite3.Connection, class_id: int
-) -> None:
-    # A stale tab restores against a version the body has moved past (another tab wrote it
-    # in between). The restore must conflict and leave the newer body untouched.
-    artifact_id, part_id = _draft_body(db, class_id, "first draft")
-    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
-    stale_version = int(artifacts.get_part(db, part_id)["content_version"])
-    artifacts.set_part_content(db, part_id, "third from elsewhere", origin=artifacts.USER_CORRECTED)
-    moved_version = int(artifacts.get_part(db, part_id)["content_version"])
-
-    refused = client.post(
-        f"/api/solutions/{artifact_id}/parts/{part_id}/restore",
-        json={"revision": 1, "expected_version": stale_version},
-    )
-
-    assert refused.status_code == 409
-    # Nothing was written: the other tab's body and version stand.
-    assert str(artifacts.get_part(db, part_id)["content"]) == "third from elsewhere"
-    assert int(artifacts.get_part(db, part_id)["content_version"]) == moved_version
-
-
 def test_versionless_restore_keeps_the_solution_behavior(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:
-    # A real *solution* part (not a draft body) restores unconditionally with no version
-    # token, exactly as the solution history has always done - the shared endpoint stays
-    # backward compatible for the kind that has no version to check.
     artifact_id, _, step_id = _solved(db, class_id, _document(db, class_id))
     client.patch(f"/api/solutions/{artifact_id}/parts/{step_id}", json={"content": "My version."})
 
@@ -778,99 +716,176 @@ def test_versionless_restore_keeps_the_solution_behavior(
     assert str(artifacts.get_part(db, step_id)["content"]) == "Apply the definition."
 
 
-def test_draft_restore_without_a_version_is_refused_without_mutation(
-    client: TestClient, db: sqlite3.Connection, class_id: int
-) -> None:
-    # A draft body must never restore versionlessly: that is the last-writer-wins loophole
-    # PLA-289 closes. The endpoint refuses by part kind, not by trusting the client to send a
-    # token, so a stale bundle or a direct caller is refused with nothing mutated.
-    artifact_id, part_id = _draft_body(db, class_id, "first draft")
-    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
-    before_version = int(artifacts.get_part(db, part_id)["content_version"])
-    before_revisions = artifacts.list_revisions(db, part_id)
-
-    refused = client.post(
-        f"/api/solutions/{artifact_id}/parts/{part_id}/restore",
-        json={"revision": 1},
-    )
-
-    assert refused.status_code == 400
-    # Nothing moved: not the body, not the version, not the history.
-    assert str(artifacts.get_part(db, part_id)["content"]) == "second draft"
-    assert int(artifacts.get_part(db, part_id)["content_version"]) == before_version
-    assert artifacts.list_revisions(db, part_id) == before_revisions
+# --- Wrong-kind enforcement (PLA-311) -------------------------------------------
 
 
-def test_draft_restore_preserves_the_pre_restore_autosaved_body_as_history(
-    client: TestClient, db: sqlite3.Connection, class_id: int
-) -> None:
-    # The guarantee PLA-289 makes real: the pre-restore body - which may exist only via the
-    # debounced autosave, which records no revision - must survive a restore as a recoverable
-    # history point, so restoring an older version is itself undoable.
-    # `_draft_body` creates the part with content "revision A body", which is recorded as
-    # revision 1 - the older history point there is to restore back to.
-    artifact_id, part_id = _draft_body(db, class_id, "revision A body")
-    assert [r["content"] for r in artifacts.list_revisions(db, part_id)] == ["revision A body"]
-
-    # The student then manually writes B and it reaches disk only through the autosave, which
-    # records NO revision - the compare-and-swap with record_revision=False.
-    version = int(artifacts.get_part(db, part_id)["content_version"])
-    artifacts.compare_and_set_part_content(
+def _draft(db: sqlite3.Connection, class_id: int) -> int:
+    """A draft artifact. Returns its artifact_id."""
+    created = artifacts.create_artifact(db, class_id, "Essay", [], kind=artifacts.KIND_DRAFT)
+    artifacts.create_part(
         db,
-        part_id,
-        "manually autosaved body B",
-        artifacts.USER_CORRECTED,
-        expected_version=version,
-        record_revision=False,
+        int(created["id"]),
+        artifacts.DRAFT_BODY,
+        1,
+        content="",
+        status=artifacts.PART_COMPLETE,
     )
-    assert [r["content"] for r in artifacts.list_revisions(db, part_id)] == ["revision A body"]
-    restore_version = int(artifacts.get_part(db, part_id)["content_version"])
+    return int(created["id"])
 
-    # Restore the older revision A. B must first become a history point.
-    restored = client.post(
-        f"/api/solutions/{artifact_id}/parts/{part_id}/restore",
-        json={"revision": 1, "expected_version": restore_version},
+
+def _deck(db: sqlite3.Connection, class_id: int, document_id: int) -> int:
+    """A flashcard deck artifact. Returns its artifact_id."""
+    created = artifacts.create_artifact(
+        db,
+        class_id,
+        "Deck",
+        [artifacts.SourceSpec(document_id=document_id, role=artifacts.STUDY_SOURCE)],
+        kind=artifacts.KIND_FLASHCARD_DECK,
     )
-    assert restored.status_code == 200
-    assert str(artifacts.get_part(db, part_id)["content"]) == "revision A body"
+    return int(created["id"])
 
-    # B is now recoverable in history (it was preserved before the target was written), and
-    # the restored A sits on top as its own revision - so the restore is itself undoable.
-    contents = [r["content"] for r in artifacts.list_revisions(db, part_id)]
-    assert "manually autosaved body B" in contents
-    # Newest first: restored A, then preserved B, then the original A.
-    assert contents == ["revision A body", "manually autosaved body B", "revision A body"]
 
-    # Prove B can be restored back: it is the second-newest revision (number 2).
-    reopened_version = int(artifacts.get_part(db, part_id)["content_version"])
-    back = client.post(
-        f"/api/solutions/{artifact_id}/parts/{part_id}/restore",
-        json={"revision": 2, "expected_version": reopened_version},
+def _quiz(db: sqlite3.Connection, class_id: int, document_id: int) -> int:
+    """A quiz artifact. Returns its artifact_id."""
+    created = artifacts.create_artifact(
+        db,
+        class_id,
+        "Quiz",
+        [artifacts.SourceSpec(document_id=document_id, role=artifacts.STUDY_SOURCE)],
+        kind=artifacts.KIND_QUIZ,
     )
-    assert back.status_code == 200
-    assert str(artifacts.get_part(db, part_id)["content"]) == "manually autosaved body B"
+    return int(created["id"])
 
 
-def test_stale_draft_restore_creates_no_phantom_revision(
+@pytest.mark.parametrize("make_wrong", [_draft, _deck, _quiz], ids=["draft", "deck", "quiz"])
+class TestWrongKindIsRefused:
+    """Every solution route must refuse artifacts that are not solution sets (PLA-311)."""
+
+    def test_read(
+        self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
+    ) -> None:
+        doc = _document(db, class_id)
+        wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
+        assert client.get(f"/api/solutions/{wrong}").status_code == 404
+
+    def test_status(
+        self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
+    ) -> None:
+        doc = _document(db, class_id)
+        wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
+        assert client.get(f"/api/solutions/{wrong}/status").status_code == 404
+
+    def test_rename(
+        self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
+    ) -> None:
+        doc = _document(db, class_id)
+        wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
+        before = artifacts.get_artifact(db, wrong)["title"]
+        response = client.patch(f"/api/solutions/{wrong}", json={"title": "Hijacked"})
+        assert response.status_code == 404
+        assert artifacts.get_artifact(db, wrong)["title"] == before
+
+    def test_delete(
+        self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
+    ) -> None:
+        doc = _document(db, class_id)
+        wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
+        response = client.delete(f"/api/solutions/{wrong}")
+        assert response.status_code == 404
+        assert artifacts.get_artifact(db, wrong) is not None
+
+    def test_start(
+        self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
+    ) -> None:
+        doc = _document(db, class_id)
+        wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
+        assert client.post(f"/api/solutions/{wrong}/start").status_code == 404
+
+    def test_cancel(
+        self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
+    ) -> None:
+        doc = _document(db, class_id)
+        wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
+        assert client.post(f"/api/solutions/{wrong}/cancel").status_code == 404
+
+    def test_resegment(
+        self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
+    ) -> None:
+        doc = _document(db, class_id)
+        wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
+        assert client.post(f"/api/solutions/{wrong}/resegment").status_code == 404
+
+    def test_segmentation(
+        self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
+    ) -> None:
+        doc = _document(db, class_id)
+        wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
+        response = client.patch(
+            f"/api/solutions/{wrong}/segmentation",
+            json={"problems": [{"statement": "Hijacked."}]},
+        )
+        assert response.status_code == 404
+
+    def test_cross_kind_part_edit(
+        self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
+    ) -> None:
+        doc = _document(db, class_id)
+        wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
+        parts = artifacts.list_parts(db, wrong)
+        if not parts:
+            return
+        response = client.patch(
+            f"/api/solutions/{wrong}/parts/{parts[0]['id']}", json={"content": "Hijacked."}
+        )
+        assert response.status_code == 404
+
+    def test_cross_kind_regenerate(
+        self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
+    ) -> None:
+        doc = _document(db, class_id)
+        wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
+        parts = artifacts.list_parts(db, wrong)
+        if not parts:
+            return
+        response = client.post(
+            f"/api/solutions/{wrong}/parts/{parts[0]['id']}/regenerate",
+            json={"correction": ""},
+        )
+        assert response.status_code == 404
+
+    def test_cross_kind_revisions(
+        self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
+    ) -> None:
+        doc = _document(db, class_id)
+        wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
+        parts = artifacts.list_parts(db, wrong)
+        if not parts:
+            return
+        response = client.get(f"/api/solutions/{wrong}/parts/{parts[0]['id']}/revisions")
+        assert response.status_code == 404
+
+    def test_cross_kind_restore(
+        self, client: TestClient, db: sqlite3.Connection, class_id: int, make_wrong
+    ) -> None:
+        doc = _document(db, class_id)
+        wrong = make_wrong(db, class_id) if make_wrong is _draft else make_wrong(db, class_id, doc)
+        parts = artifacts.list_parts(db, wrong)
+        if not parts:
+            return
+        response = client.post(
+            f"/api/solutions/{wrong}/parts/{parts[0]['id']}/restore", json={"revision": 1}
+        )
+        assert response.status_code == 404
+
+
+def test_real_solution_set_passes_kind_guard(
     client: TestClient, db: sqlite3.Connection, class_id: int
 ) -> None:
-    # A writer moving the body between the caller's read and the restore must make the restore
-    # conflict without leaving a partial history - no preserved body, no restored target.
-    artifact_id, part_id = _draft_body(db, class_id, "first draft")
-    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
-    stale_version = int(artifacts.get_part(db, part_id)["content_version"])
-    artifacts.set_part_content(db, part_id, "third from elsewhere", origin=artifacts.USER_CORRECTED)
-    before_revisions = artifacts.list_revisions(db, part_id)
-
-    refused = client.post(
-        f"/api/solutions/{artifact_id}/parts/{part_id}/restore",
-        json={"revision": 1, "expected_version": stale_version},
-    )
-
-    assert refused.status_code == 409
-    # No phantom revision: the outgoing body was not preserved, the target was not written.
-    assert artifacts.list_revisions(db, part_id) == before_revisions
-    assert str(artifacts.get_part(db, part_id)["content"]) == "third from elsewhere"
+    """A genuine solution set still works after the kind guard is in place."""
+    document_id = _document(db, class_id)
+    artifact_id = _at_the_gate(db, class_id, document_id)
+    assert client.get(f"/api/solutions/{artifact_id}").status_code == 200
+    assert client.get(f"/api/solutions/{artifact_id}/status").status_code == 200
 
 
 def test_the_gate_can_say_a_problems_parts_are_separate_questions(

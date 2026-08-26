@@ -31,8 +31,6 @@ DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
 
 MAX_PROBLEMS = 200
 
-# Long enough for a paragraph of "here is what is wrong with step 3", short enough that
-# nothing pathological reaches the prompt builder.
 MAX_CORRECTION_CHARS = 4000
 
 NOT_READY_MESSAGE = "{filename} has not finished processing yet."
@@ -40,21 +38,14 @@ NOT_AT_GATE_MESSAGE = "This solution set is not waiting for review."
 NOT_RUNNING_MESSAGE = "This solution set is not running."
 ALREADY_RUNNING_MESSAGE = "This solution set is already running."
 NO_PROBLEMS_MESSAGE = "There are no problems to solve. Add one first."
+NOT_A_SOLUTION_SET_MESSAGE = "That solution set does not exist."
 NOT_THIS_SET_MESSAGE = "That part does not belong to this solution set."
 NOT_A_PROBLEM_MESSAGE = "Only a problem, or a part solved on its own, can be solved again."
 TOO_MANY_PROBLEMS = f"A solution set can hold at most {MAX_PROBLEMS} problems."
 DEFAULT_TITLE = "Solution set"
 EDITED_SINCE_CHECK = "This was edited after it was checked, so the earlier check no longer applies."
 RESTORED_NOTE = "Restored version {revision}."
-# The note under the outgoing body a draft restore preserves, so the history reads plainly.
-PRE_RESTORE_NOTE = "Your writing before restoring an earlier version."
-DRAFT_RESTORE_NEEDS_VERSION = (
-    "This draft changed somewhere else, so it was not restored. Reopen it and try again."
-)
 
-# States a confirmed problem list may be started from. `cancelled` and `ready` are here on
-# purpose: `Solve the rest` after a stop, and re-running a set whose sources changed, are
-# the same act as starting it, and solving skips problems that are already complete.
 STARTABLE_STATES = (
     artifacts.AWAITING_REVIEW,
     artifacts.READY,
@@ -164,19 +155,9 @@ class RegenerateRequest(BaseModel):
 
 
 class RestoreRequest(BaseModel):
-    """Body of `POST /api/solutions/{artifact_id}/parts/{part_id}/restore`.
-
-    `expected_version` is the part's `content_version` the caller last saw (PLA-289). For a
-    draft body it is **required** server-side (see the endpoint): the restore writes through
-    the compare-and-swap and is refused if the stored body moved past it, so a stale draft tab
-    cannot silently replace a body that changed elsewhere. It stays optional in the schema
-    because the same endpoint serves solution parts, which have no version token and restore
-    unconditionally; the endpoint enforces the requirement by part kind, not by trusting the
-    caller to send it.
-    """
+    """Body of `POST /api/solutions/{artifact_id}/parts/{part_id}/restore`."""
 
     revision: int = Field(ge=1)
-    expected_version: int | None = Field(default=None, ge=0)
 
 
 class SourceRead(BaseModel):
@@ -196,12 +177,7 @@ class ProvenanceRead(BaseModel):
     page_number: int | None
     label: str | None
     filename: str | None
-    # The section this came from, titles joined, read live off the chunk. Null for a
-    # document with no structure and for one indexed before sections existed, so the chip
-    # degrades to filename and page rather than to an empty line.
     section_path: str | None = None
-    # Where on the page this starts, as `[x0, y0, x1, y1]` fractions of the page box.
-    # Null when nothing looked, or when the marker was not found.
     bbox: list[float] | None = None
 
 
@@ -239,9 +215,6 @@ class PartRead(BaseModel):
     origin: str
     verdict: str
     verdict_detail: str | None
-    # `separately` on a problem means its sub-parts each carry their own steps, answer,
-    # and verdict, and the problem itself carries none. Always `together` on a step, an
-    # answer, and on a sub-part, none of which have parts of their own.
     solve_parts: str
     error_message: str | None
     provenance: list[ProvenanceRead]
@@ -322,11 +295,7 @@ def create_solution(class_id: int, payload: SolutionCreate, conn: DbConn) -> dic
 
 @router.get("/classes/{class_id}/solutions", response_model=list[SolutionRead])
 def list_solutions(class_id: int, conn: DbConn) -> list[dict[str, object]]:
-    # An unknown class is a 404 rather than an empty list, so a stale link is obvious.
     get_class(conn, class_id)
-    # Filtered by kind, because `artifacts` is one table for four things. Without it this
-    # route answered with the class's drafts, decks and quizzes as well, and each arrived
-    # as a solution set with no problems in it.
     return [
         _with_sources(conn, artifact)
         for artifact in artifacts.list_artifacts(conn, class_id, artifacts.KIND_SOLUTION_SET)
@@ -335,7 +304,7 @@ def list_solutions(class_id: int, conn: DbConn) -> list[dict[str, object]]:
 
 @router.get("/solutions/{artifact_id}", response_model=SolutionDetail)
 def read_solution(artifact_id: int, conn: DbConn) -> dict[str, object]:
-    artifact = artifacts.get_artifact(conn, artifact_id)
+    artifact = _require_solution_set(conn, artifact_id)
     parts = [
         {
             **part,
@@ -354,7 +323,7 @@ def read_solution_status(artifact_id: int, conn: DbConn) -> dict[str, object]:
     Deliberately excludes part content. This is polled every second or two while a set
     solves, and shipping every solution body on each poll would grow with the work.
     """
-    artifact = artifacts.get_artifact(conn, artifact_id)
+    artifact = _require_solution_set(conn, artifact_id)
     return {
         **artifact,
         "parts": [
@@ -375,7 +344,7 @@ def update_segmentation(
     to, and rewriting it underneath them would leave answers attached to problems that no
     longer exist.
     """
-    artifact = artifacts.get_artifact(conn, artifact_id)
+    artifact = _require_solution_set(conn, artifact_id)
     if artifact["state"] != artifacts.AWAITING_REVIEW:
         raise ConflictError(NOT_AT_GATE_MESSAGE)
     if len(payload.problems) > MAX_PROBLEMS:
@@ -403,7 +372,7 @@ def start_solution(artifact_id: int, conn: DbConn) -> dict[str, object]:
     complete, so `Solve the rest` after a cancel is this same call rather than a second
     endpoint with its own resume logic to keep in step.
     """
-    artifact = artifacts.get_artifact(conn, artifact_id)
+    artifact = _require_solution_set(conn, artifact_id)
     if artifact["state"] not in STARTABLE_STATES:
         raise ConflictError(ALREADY_RUNNING_MESSAGE)
     if not _problem_count(conn, artifact_id):
@@ -472,49 +441,20 @@ def read_part_revisions(artifact_id: int, part_id: int, conn: DbConn) -> list[di
 def restore_part_revision(
     artifact_id: int, part_id: int, payload: RestoreRequest, conn: DbConn
 ) -> dict[str, object]:
-    """Put an earlier version of a part back.
+    """Put an earlier version of a solution part back.
 
     Recorded as a new revision rather than by rewinding the history, so restoring is
     itself undoable and the sheet still shows what was there in between.
-
-    The behavior is fixed by the part's kind, not by whether the caller happened to send a
-    token (PLA-289):
-
-    - A **draft body** *requires* `expected_version`. A missing one is a deterministic `400`
-      with nothing mutated - a stale bundle or a direct caller cannot restore a draft body
-      without naming the version it saw. The restore runs through
-      `compare_and_restore_part_content`, which refuses a stale version and, before writing
-      the target, preserves the outgoing body as a revision so the student's current writing
-      (which may exist only via the debounced autosave) stays recoverable.
-    - A **solution part** restores unconditionally, exactly as before; it has no version token
-      and every write to it already records a revision.
     """
-    part = _require_part(conn, artifact_id, part_id)
+    _require_part(conn, artifact_id, part_id)
     revision = artifacts.get_revision(conn, part_id, payload.revision)
-    is_draft_body = part["kind"] == artifacts.DRAFT_BODY
-    if is_draft_body:
-        if payload.expected_version is None:
-            # Never fall back to an unconditional write for a draft: that is the exact
-            # last-writer-wins loophole this ticket closes. Refuse before touching anything.
-            raise LyraError(DRAFT_RESTORE_NEEDS_VERSION)
-        artifacts.compare_and_restore_part_content(
-            conn,
-            part_id,
-            str(revision["content"]),
-            artifacts.USER_CORRECTED,
-            expected_version=payload.expected_version,
-            restored_note=RESTORED_NOTE.format(revision=payload.revision),
-            preserved_origin=artifacts.USER_CORRECTED,
-            preserved_note=PRE_RESTORE_NOTE,
-        )
-    else:
-        artifacts.set_part_content(
-            conn,
-            part_id,
-            str(revision["content"]),
-            artifacts.USER_CORRECTED,
-            RESTORED_NOTE.format(revision=payload.revision),
-        )
+    artifacts.set_part_content(
+        conn,
+        part_id,
+        str(revision["content"]),
+        artifacts.USER_CORRECTED,
+        RESTORED_NOTE.format(revision=payload.revision),
+    )
     artifacts.set_part_verdict(conn, part_id, artifacts.UNCHECKED, EDITED_SINCE_CHECK)
     artifacts.record_checks(conn, part_id, [])
     return _part_response(conn, part_id)
@@ -532,7 +472,7 @@ def resegment_solution(artifact_id: int, conn: DbConn) -> dict[str, object]:
     Lyra redo than fix by hand. Refused once solving has started, for the same reason the
     correction endpoint is.
     """
-    artifact = artifacts.get_artifact(conn, artifact_id)
+    artifact = _require_solution_set(conn, artifact_id)
     if artifact["state"] in (artifacts.SOLVING, artifacts.SEGMENTING):
         raise ConflictError("This solution set is already running.")
 
@@ -549,7 +489,7 @@ def cancel_solution(artifact_id: int, conn: DbConn) -> dict[str, object]:
     worker checks this state before it writes, so a run cancelled mid-pass discards its
     proposal rather than landing the student back where they left.
     """
-    artifact = artifacts.get_artifact(conn, artifact_id)
+    artifact = _require_solution_set(conn, artifact_id)
     if artifact["state"] not in artifacts.RUNNING_STATES:
         raise ConflictError(NOT_RUNNING_MESSAGE)
 
@@ -564,11 +504,13 @@ def rename_solution(artifact_id: int, payload: SolutionRename, conn: DbConn) -> 
     The default name is the problem set's filename with its extension dropped, which is
     what the file happened to be called rather than what the work is.
     """
+    _require_solution_set(conn, artifact_id)
     return _with_sources(conn, artifacts.rename_artifact(conn, artifact_id, payload.title))
 
 
 @router.delete("/solutions/{artifact_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_solution(artifact_id: int, conn: DbConn) -> None:
+    _require_solution_set(conn, artifact_id)
     artifacts.delete_artifact(conn, artifact_id)
 
 
@@ -589,14 +531,22 @@ def _require_ready(conn: sqlite3.Connection, document_id: int) -> sqlite3.Row:
     return row
 
 
+def _require_solution_set(conn: sqlite3.Connection, artifact_id: int) -> dict[str, object]:
+    """The artifact, when it is a solution set. 404 for any other kind or missing ID."""
+    artifact = artifacts.get_artifact(conn, artifact_id)
+    if artifact["kind"] != artifacts.KIND_SOLUTION_SET:
+        raise NotFoundError(NOT_A_SOLUTION_SET_MESSAGE)
+    return artifact
+
+
 def _require_part(conn: sqlite3.Connection, artifact_id: int, part_id: int) -> dict[str, object]:
-    """One part of this artifact, or a 404 naming which of the two was wrong.
+    """One part of this solution set, or a 404 naming which of the two was wrong.
 
     The artifact is checked first so a stale solution link is a 404 rather than a part
     that happens not to exist, and the ownership check is what stops one artifact's route
     from editing another's part.
     """
-    artifacts.get_artifact(conn, artifact_id)
+    _require_solution_set(conn, artifact_id)
     part = artifacts.get_part(conn, part_id)
     if int(part["artifact_id"]) != artifact_id:
         raise NotFoundError(NOT_THIS_SET_MESSAGE)
@@ -675,10 +625,6 @@ def _to_segmented(
         provenance = artifacts.list_provenance(conn, int(source["id"])) if source else []
         problems.append(
             SegmentedProblem(
-                # An entry that still matches what Lyra proposed was not edited, whatever
-                # else the student did elsewhere in the list. Marking the whole list as
-                # corrected would put an `Edited` badge on every untouched problem, which
-                # is exactly the wrong thing for a badge that means "not verbatim".
                 origin=(
                     artifacts.GENERATED
                     if source is not None and _unchanged(problem, source, children)

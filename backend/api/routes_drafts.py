@@ -26,6 +26,8 @@ from fastapi import APIRouter, Depends, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
+from starlette.types import Receive, Scope, Send
+
 from backend.core import (
     artifacts,
     briefs,
@@ -37,6 +39,7 @@ from backend.core import (
     sessions,
     source_ledger,
     suggestions,
+    writer_attempts,
     writer_intent,
     writer_pipeline,
     writer_runs,
@@ -54,13 +57,24 @@ from backend.core.profiles import select_active_facts
 from backend.core.writer_budgets import Depth, validate_depth
 from backend.llm import client, prompts
 from backend.llm.tools import (
+    ContextBudget,
     RecordedCall,
     ToolDefinition,
     ToolLoopResult,
     conversation_tokens,
     run_tool_loop,
+    schema_tokens,
+    tool_schemas,
 )
-from backend.llm.turn_budget import input_ceiling, plan_budget, trim_history
+from backend.llm.turn_budget import (
+    CONTEXT_SAFETY_MARGIN,
+    HistoryMessage,
+    TurnReserve,
+    input_ceiling,
+    mandatory_history_tokens,
+    plan_budget,
+    trim_history,
+)
 from backend.rag.retrieve import retrieve
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect, get_db
@@ -785,6 +799,64 @@ def resolve_comment(comment_id: int, payload: ResolveWrite, conn: DbConn) -> dic
     return comments.set_resolved(conn, comment_id, payload.resolved)
 
 
+@router.get("/drafts/{artifact_id}/parts/{part_id}/revisions", response_model=None)
+def read_draft_revisions(artifact_id: int, part_id: int, conn: DbConn) -> list[dict[str, object]]:
+    """Every stored version of the draft body, newest first."""
+    _require_draft(conn, artifact_id)
+    part = artifacts.get_part(conn, part_id)
+    if int(part["artifact_id"]) != artifact_id or part["kind"] != artifacts.DRAFT_BODY:
+        raise NotFoundError(NO_DOCUMENT_MESSAGE)
+    return artifacts.list_revisions(conn, part_id)
+
+
+class DraftRestoreRequest(BaseModel):
+    """Body of `POST /api/drafts/{artifact_id}/parts/{part_id}/restore`."""
+
+    revision: int = Field(ge=1)
+    expected_version: int = Field(ge=0)
+
+
+RESTORED_NOTE = "Restored version {revision}."
+PRE_RESTORE_NOTE = "Your writing before restoring an earlier version."
+DRAFT_RESTORE_NEEDS_VERSION = (
+    "This draft changed somewhere else, so it was not restored. Reopen it and try again."
+)
+EDITED_SINCE_CHECK = "This was edited after it was checked, so the earlier check no longer applies."
+
+
+@router.post("/drafts/{artifact_id}/parts/{part_id}/restore", response_model=None)
+def restore_draft_revision(
+    artifact_id: int, part_id: int, payload: DraftRestoreRequest, conn: DbConn
+) -> dict[str, object]:
+    """Restore an earlier version of the draft body through the compare-and-swap.
+
+    The version token is required: a draft body must never restore without naming the version
+    it saw, because that is the stale-write loophole PLA-289 closes.
+    """
+    _require_draft(conn, artifact_id)
+    part = artifacts.get_part(conn, part_id)
+    if int(part["artifact_id"]) != artifact_id or part["kind"] != artifacts.DRAFT_BODY:
+        raise NotFoundError(NO_DOCUMENT_MESSAGE)
+    revision = artifacts.get_revision(conn, part_id, payload.revision)
+    artifacts.compare_and_restore_part_content(
+        conn,
+        part_id,
+        str(revision["content"]),
+        artifacts.USER_CORRECTED,
+        expected_version=payload.expected_version,
+        restored_note=RESTORED_NOTE.format(revision=payload.revision),
+        preserved_origin=artifacts.USER_CORRECTED,
+        preserved_note=PRE_RESTORE_NOTE,
+    )
+    artifacts.set_part_verdict(conn, part_id, artifacts.UNCHECKED, EDITED_SINCE_CHECK)
+    artifacts.record_checks(conn, part_id, [])
+    return {
+        **artifacts.get_part(conn, part_id),
+        "provenance": artifacts.list_provenance(conn, part_id),
+        "checks": artifacts.list_checks(conn, part_id),
+    }
+
+
 @router.get("/drafts/{artifact_id}/pending", response_model=None)
 def read_pending(artifact_id: int, conn: DbConn) -> dict[str, object] | None:
     """The pending edit for the draft, refreshed against the body, or null."""
@@ -1093,6 +1165,14 @@ WRITER_CHAT_MAX_DEPTH = 8
 WRITER_CHAT_TIMEOUT_SECONDS = 600.0
 
 _WRITER_TURN_ERROR = "Something went wrong while working on this. Try again."
+_TOO_LARGE_MESSAGE = (
+    "This message and the conversation so far are too large for the configured "
+    "context window. Try a shorter message or start a new conversation."
+)
+_PERSISTENCE_STOPPED_DETAIL = (
+    "The turn finished, but Lyra could not save the reply. Try it again."
+)
+_PERSISTENCE_FAILED_DETAIL = _PERSISTENCE_STOPPED_DETAIL
 
 WRONG_SESSION_MESSAGE = "That conversation does not belong to this draft."
 
@@ -1136,20 +1216,131 @@ def create_writer_session(artifact_id: int, conn: DbConn) -> dict[str, object]:
     )
 
 
+class _WriterTurnStreamingResponse(StreamingResponse):
+    """A streaming response that owns the release of its session's turn claim.
+
+    Mirrors `TurnStreamingResponse` in `routes_chat`: the claim is taken before the
+    route returns, and this `finally` covers every ending (streamed to completion,
+    failed mid-frame, cancelled before the first frame). `end_turn` is idempotent
+    and token-owned, so this and the generator's own release can never double-free.
+    """
+
+    def __init__(
+        self,
+        session_id: int,
+        turn_token: int,
+        content: AsyncIterator[str],
+        **kwargs: object,
+    ) -> None:
+        super().__init__(content, **kwargs)  # type: ignore[arg-type]
+        self._session_id = session_id
+        self._turn_token = turn_token
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            sessions.end_turn(self._session_id, self._turn_token)
+
+
+def _writer_turn_response(
+    session_id: int,
+    turn_token: int,
+    stream: AsyncIterator[str],
+) -> _WriterTurnStreamingResponse:
+    """Wrap a claimed writer turn so the claim cannot outlive the response."""
+    try:
+        return _WriterTurnStreamingResponse(
+            session_id,
+            turn_token,
+            stream,
+            media_type="text/event-stream",
+            headers=SSE_HEADERS,
+        )
+    except BaseException:
+        sessions.end_turn(session_id, turn_token)
+        raise
+
+
+def _finish_writer_opening(
+    opener: asyncio.Future, session_id: int, turn_token: int
+) -> None:
+    """Release an abandoned claim, but never while its opener may still be running.
+
+    Mirrors `_finish_opening` in `routes_chat`.
+    """
+
+    def _release(task: asyncio.Future) -> None:
+        if not task.cancelled() and task.exception() is not None:
+            logger.debug("Abandoned writer turn opener for session %s failed", session_id)
+        sessions.end_turn(session_id, turn_token)
+
+    if opener.done():
+        _release(opener)
+    else:
+        opener.add_done_callback(_release)
+
+
 @router.post("/drafts/{artifact_id}/chat/{session_id}")
 async def writer_chat(
     artifact_id: int, session_id: int, payload: WriterChatRequest, conn: DbConn
-) -> StreamingResponse:
+) -> _WriterTurnStreamingResponse:
     """One writer turn: persist the question, then stream the tool loop as it works.
 
-    Everything fallible before the first byte happens in the open, where it can still be
-    an ordinary error response. After that, failures travel as `error` frames.
+    Everything fallible before the first byte happens in the open, where it can still
+    be an ordinary error response. After that, failures travel as `error` frames.
+
+    The turn claim is taken synchronously before the first `await` (PLA-308): a
+    second request on the same session is refused with a deterministic 409.
     """
-    opened = await asyncio.to_thread(_open_writer_turn, conn, artifact_id, session_id, payload)
-    return StreamingResponse(
+    turn_token = sessions.begin_turn(session_id)
+    opener = asyncio.ensure_future(
+        asyncio.to_thread(_open_writer_turn, conn, artifact_id, session_id, payload, turn_token)
+    )
+    try:
+        opened = await asyncio.shield(opener)
+    except BaseException:
+        _finish_writer_opening(opener, session_id, turn_token)
+        raise
+    return _writer_turn_response(
+        session_id,
+        turn_token,
         _stream_writer_turn(artifact_id, session_id, opened, payload.content),
-        media_type="text/event-stream",
-        headers=SSE_HEADERS,
+    )
+
+
+@router.post("/drafts/{artifact_id}/chat/{session_id}/retry")
+async def retry_writer_chat(
+    artifact_id: int, session_id: int, conn: DbConn
+) -> _WriterTurnStreamingResponse:
+    """Retry the last failed writer turn, reusing its user message (PLA-310).
+
+    Serialized against normal sends by the per-session claim. A retry of a turn that
+    already completed replays the stored reply instead of running the model again.
+    """
+    turn_token = sessions.begin_turn(session_id)
+    opener = asyncio.ensure_future(
+        asyncio.to_thread(
+            _open_writer_retry, conn, artifact_id, session_id, turn_token
+        )
+    )
+    try:
+        opened = await asyncio.shield(opener)
+    except BaseException:
+        _finish_writer_opening(opener, session_id, turn_token)
+        raise
+    if opened.replay is not None:
+        return _writer_turn_response(
+            session_id,
+            turn_token,
+            _replay_completed_writer_turn(opened.replay),
+        )
+    return _writer_turn_response(
+        session_id,
+        turn_token,
+        _stream_writer_turn(
+            artifact_id, session_id, opened.turn, opened.retry_content, is_retry=True
+        ),
     )
 
 
@@ -1159,6 +1350,16 @@ class _WriterTurn:
 
     config: TutorConfig
     user_message_id: int
+    turn_token: int
+
+
+@dataclass(frozen=True)
+class _WriterRetryResult:
+    """The open's answer for a retry: either a replay or a re-run."""
+
+    turn: _WriterTurn
+    retry_content: str
+    replay: dict[str, object] | None = None
 
 
 def _open_writer_turn(
@@ -1166,39 +1367,143 @@ def _open_writer_turn(
     artifact_id: int,
     session_id: int,
     payload: WriterChatRequest,
+    turn_token: int,
 ) -> _WriterTurn:
-    """Guards, then the user message, before any streaming starts."""
+    """Guards, persist the question, and bind the turn, before streaming starts."""
     artifact = _require_draft(conn, artifact_id)
     part = _body_part(conn, artifact_id)
     session = sessions.get_session(conn, session_id)
     if session["mode"] != sessions.WRITER or session["artifact_part_id"] != part["id"]:
         raise NotFoundError(WRONG_SESSION_MESSAGE)
-    # One snapshot: the endpoint checked for consent is the endpoint the turn is sent to.
     access = resolve_tutor_access(conn)
     if access.document_block is not None:
         raise LyraError(BLOCKED_MESSAGES.get(access.document_block, BLOCKED_MESSAGES[NO_ENDPOINT]))
     config = access.config
+    _preflight_writer_fit(conn, config, session_id, payload.content)
     sessions.set_session_title_if_unset(conn, session_id, payload.content)
     user_message_id = sessions.add_message(conn, session_id, "user", payload.content)
+    sessions.bind_turn(session_id, turn_token, user_message_id)
     touch_class(conn, int(artifact["class_id"]))
-    return _WriterTurn(config=config, user_message_id=user_message_id)
+    return _WriterTurn(config=config, user_message_id=user_message_id, turn_token=turn_token)
+
+
+def _open_writer_retry(
+    conn: sqlite3.Connection,
+    artifact_id: int,
+    session_id: int,
+    turn_token: int,
+) -> _WriterRetryResult:
+    """Resolve the retry target under the claim. Replay if completed, re-run otherwise."""
+    artifact = _require_draft(conn, artifact_id)
+    part = _body_part(conn, artifact_id)
+    session = sessions.get_session(conn, session_id)
+    if session["mode"] != sessions.WRITER or session["artifact_part_id"] != part["id"]:
+        raise NotFoundError(WRONG_SESSION_MESSAGE)
+    access = resolve_tutor_access(conn)
+    if access.document_block is not None:
+        raise LyraError(BLOCKED_MESSAGES.get(access.document_block, BLOCKED_MESSAGES[NO_ENDPOINT]))
+    config = access.config
+    target = writer_attempts.resolve_retry_target(conn, session_id)
+    sessions.bind_turn(session_id, turn_token, target.user_message_id)
+    touch_class(conn, int(artifact["class_id"]))
+    if target.latest["state"] == writer_attempts.COMPLETED:
+        assistant_message_id = target.latest["assistant_message_id"]
+        stored = next(
+            (
+                message
+                for message in sessions.list_messages(conn, session_id)
+                if int(message["id"]) == assistant_message_id
+            ),
+            None,
+        )
+        if stored is None:
+            raise NotFoundError(writer_attempts.NO_TURN_TO_RETRY)
+        return _WriterRetryResult(
+            turn=_WriterTurn(config=config, user_message_id=target.user_message_id, turn_token=turn_token),
+            retry_content=target.content,
+            replay=dict(stored),
+        )
+    return _WriterRetryResult(
+        turn=_WriterTurn(config=config, user_message_id=target.user_message_id, turn_token=turn_token),
+        retry_content=target.content,
+    )
+
+
+def _preflight_writer_fit(
+    conn: sqlite3.Connection,
+    config: TutorConfig,
+    session_id: int,
+    content: str,
+) -> None:
+    """Coarse fit gate before any mutation (PLA-309).
+
+    Uses `TurnReserve` to check whether the question and the mandatory tail of
+    history fit inside the context window at all. Refuses early with a helpful error
+    rather than persisting a question that can never be answered.
+    """
+    history = [
+        HistoryMessage(role=str(m["role"]), content=str(m["content"]))
+        for m in sessions.list_messages(conn, session_id)
+    ]
+    budget = plan_budget(config.context_window)
+    system_estimate = budget.system
+    question_tokens = int(len(content) / 3.5) + 10
+    reserve = TurnReserve(
+        context_window=config.context_window,
+        generation=budget.generation,
+        fixed_tokens=system_estimate,
+        question_tokens=question_tokens,
+        mandatory_history_tokens=mandatory_history_tokens(history),
+    )
+    if not reserve.fits:
+        raise LyraError(_TOO_LARGE_MESSAGE)
+
+
+async def _replay_completed_writer_turn(
+    stored: dict[str, object],
+) -> AsyncIterator[str]:
+    """Stream the stored reply of a completed attempt without running the model."""
+    yield _frame(type="start", message_id=stored["id"])
+    activity = stored.get("tool_activity") or []
+    if isinstance(activity, str):
+        activity = json.loads(activity)
+    for entry in activity:
+        yield _frame(type="activity", **entry)
+    yield _frame(type="token", text=str(stored["content"]))
+    yield _frame(type="done", message_id=int(stored["id"]))
+
+
+@dataclass(frozen=True)
+class _WriterTurnPlan:
+    """Everything the stream needs to run one writer turn."""
+
+    messages: list[dict[str, object]]
+    registry: dict[str, ToolDefinition]
+    effects: writer_tools.RunEffects
+    intent: str
+    context_budget: ContextBudget
+    tool_tokens: int
 
 
 def _prepare_writer_turn(
-    conn: sqlite3.Connection, artifact_id: int, session_id: int, turn: _WriterTurn, content: str
-) -> tuple[
-    list[dict[str, object]],
-    dict[str, ToolDefinition],
-    writer_tools.RunEffects,
-    str,
-]:
-    """Messages, registry, and the effects record for one writer turn.
+    conn: sqlite3.Connection,
+    artifact_id: int,
+    session_id: int,
+    turn: _WriterTurn,
+    content: str,
+    *,
+    is_retry: bool = False,
+) -> _WriterTurnPlan:
+    """Messages, registry, budget, and the effects record for one writer turn.
 
     Built together and off the event loop, because all of it reads the database. The
     budget arithmetic follows the tutor's, with one difference: the retrieval share is
     lent to history whole, because the writer retrieves through its search tool inside
     the loop rather than up front. The tool's own budget bounds what a search brings
     back.
+
+    On a retry, `turn.user_message_id` is excluded from history so the reused question
+    appears exactly once in model context.
     """
     artifact = artifacts.get_artifact(conn, artifact_id)
     part = _body_part(conn, artifact_id)
@@ -1213,10 +1518,12 @@ def _prepare_writer_turn(
     system_prompt = "\n\n".join((system_prompt, writer_intent.prompt_contract(intent)))
     budget = plan_budget(turn.config.context_window)
     overrun = max(0, estimate_tokens(system_prompt) - budget.system)
+    exclude_ids = frozenset({turn.user_message_id}) if is_retry else frozenset()
     earlier = [
         message
         for message in sessions.list_messages(conn, session_id)
-        if int(message["id"]) != turn.user_message_id
+        if int(message["id"]) not in exclude_ids
+        and int(message["id"]) != turn.user_message_id
     ]
     history, _ = trim_history(earlier, max(0, budget.history + budget.retrieval - overrun))
 
@@ -1232,11 +1539,37 @@ def _prepare_writer_turn(
         writer_tools.CHAT,
         private_context=private_context,
     )
-    return messages, registry, effects, intent
+    frozen_tools = tool_schemas(registry)
+    tool_tok = schema_tokens(frozen_tools)
+    context_budget = ContextBudget(
+        context_window=turn.config.context_window,
+        generation_reserve=budget.generation,
+        tool_tokens=tool_tok,
+        safety_margin=CONTEXT_SAFETY_MARGIN,
+    )
+    wire_tokens = conversation_tokens(messages) + tool_tok
+    ceiling = input_ceiling(
+        turn.config.context_window, budget.generation, margin=CONTEXT_SAFETY_MARGIN
+    )
+    if wire_tokens > ceiling:
+        raise LyraError(_TOO_LARGE_MESSAGE)
+    return _WriterTurnPlan(
+        messages=messages,
+        registry=registry,
+        effects=effects,
+        intent=intent,
+        context_budget=context_budget,
+        tool_tokens=tool_tok,
+    )
 
 
 async def _stream_writer_turn(
-    artifact_id: int, session_id: int, turn: _WriterTurn, content: str
+    artifact_id: int,
+    session_id: int,
+    turn: _WriterTurn,
+    content: str,
+    *,
+    is_retry: bool = False,
 ) -> AsyncIterator[str]:
     """Drive the tool loop, narrating each call as it lands, then deliver the answer.
 
@@ -1246,20 +1579,30 @@ async def _stream_writer_turn(
     reveal. See the run-model note in docs/writer-overhaul.md.
 
     The connection is opened here because this generator outlives the request-scoped one.
+    A durable attempt brackets the model run (PLA-310), and the context budget bounds
+    each round of the tool loop (PLA-309).
     """
     conn = connect()
     activity: list[dict[str, object]] = []
     frames: asyncio.Queue[dict[str, object]] = asyncio.Queue()
     loop_task: asyncio.Task[ToolLoopResult] | None = None
+    attempt_id: int | None = None
     try:
         yield _frame(type="start", message_id=turn.user_message_id)
         yield _frame(type="status", stage="prompt_processing")
-        messages, registry, effects, intent = await asyncio.to_thread(
-            _prepare_writer_turn, conn, artifact_id, session_id, turn, content
+        plan = await asyncio.to_thread(
+            _prepare_writer_turn, conn, artifact_id, session_id, turn, content,
+            is_retry=is_retry,
+        )
+
+        attempt_id = writer_attempts.create_attempt(
+            conn,
+            session_id=session_id,
+            user_message_id=turn.user_message_id,
+            intent=plan.intent,
         )
 
         def on_call(recorded: RecordedCall) -> None:
-            # Runs on the event loop thread, between rounds; put_nowait cannot block.
             entry = writer_tools.activity_entry(recorded)
             activity.append(entry)
             frames.put_nowait(entry)
@@ -1269,11 +1612,12 @@ async def _stream_writer_turn(
                 turn.config.endpoint_url,
                 turn.config.api_key,
                 turn.config.model,
-                messages,
+                plan.messages,
                 max_depth=WRITER_CHAT_MAX_DEPTH,
                 timeout_seconds=WRITER_CHAT_TIMEOUT_SECONDS,
-                registry=registry,
+                registry=plan.registry,
                 on_call=on_call,
+                context_budget=plan.context_budget,
             )
         )
         while True:
@@ -1285,37 +1629,45 @@ async def _stream_writer_turn(
                 continue
             getter.cancel()
             break
-        # The loop has returned; whatever it narrated after the last await is drained
-        # in order before the answer, so the trail never arrives out of sequence.
         while not frames.empty():
             yield _frame(type="activity", **frames.get_nowait())
         result = loop_task.result()
 
-        if effects.brief_saved:
+        if plan.effects.brief_saved:
             yield _frame(type="brief")
-        if effects.proposed_edit_id is not None:
-            yield _frame(type="proposed", edit_id=effects.proposed_edit_id)
-        if effects.pass_started:
+        if plan.effects.proposed_edit_id is not None:
+            yield _frame(type="proposed", edit_id=plan.effects.proposed_edit_id)
+        if plan.effects.pass_started:
             yield _frame(type="pass")
-        if effects.review_started:
+        if plan.effects.review_started:
             yield _frame(type="review")
-        if effects.replied_to_comments:
+        if plan.effects.replied_to_comments:
             yield _frame(type="comments")
 
         if not result.complete:
-            # The turn did not finish; its side effects above are real and reported, but
-            # a partial answer is not an answer, so nothing is persisted and the student
-            # is told to try again. Same rule as the tutor's failed turns.
-            yield _frame(type="error", message=result.detail or _WRITER_TURN_ERROR)
+            detail = result.detail or _WRITER_TURN_ERROR
+            writer_attempts.fail_attempt(
+                conn, attempt_id, stopped_reason=result.stopped, detail=detail
+            )
+            attempt_id = None
+            yield _frame(type="error", message=detail)
             return
-        answer = result.content
+        answer = result.content.strip()
+        if not answer:
+            writer_attempts.fail_attempt(
+                conn, attempt_id, stopped_reason="empty",
+                detail="The writer returned an empty response.",
+            )
+            attempt_id = None
+            yield _frame(type="error", message=_WRITER_TURN_ERROR)
+            return
         contract = writer_intent.validate(
-            intent,
+            plan.intent,
             (entry["tool"] for entry in activity if entry.get("ok")),
             complete=result.complete,
-            pass_started=effects.pass_started,
-            review_started=effects.review_started,
-            proposed_edit_id=effects.proposed_edit_id,
+            pass_started=plan.effects.pass_started,
+            review_started=plan.effects.review_started,
+            proposed_edit_id=plan.effects.proposed_edit_id,
         )
         if not contract.satisfied and contract.failure_message:
             logger.warning(
@@ -1325,20 +1677,69 @@ async def _stream_writer_turn(
                 ", ".join(contract.observed_tools) or "(none)",
             )
             answer = contract.failure_message
+        try:
+            conn.execute("begin immediate")
+            message_id = sessions.insert_message(
+                conn, session_id, "assistant", answer, tool_activity=activity
+            )
+            writer_attempts.mark_completed(conn, attempt_id, message_id)
+            conn.commit()
+            attempt_id = None
+        except BaseException as exc:
+            if conn.in_transaction:
+                conn.rollback()
+            try:
+                if isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+                    writer_attempts.stop_attempt(
+                        conn, attempt_id, detail=_PERSISTENCE_STOPPED_DETAIL
+                    )
+                else:
+                    writer_attempts.fail_attempt(
+                        conn, attempt_id,
+                        stopped_reason="persistence_failed",
+                        detail=_PERSISTENCE_FAILED_DETAIL,
+                    )
+            except Exception:
+                logger.warning(
+                    "Could not settle writer attempt %s after persistence failed; "
+                    "startup reconciliation remains the fallback",
+                    attempt_id,
+                )
+            attempt_id = None
+            raise
         yield _frame(type="token", text=answer)
-        message_id = sessions.add_message(
-            conn, session_id, "assistant", answer, tool_activity=activity
-        )
         yield _frame(type="done", message_id=message_id)
     except (asyncio.CancelledError, GeneratorExit):
-        # The reader went away. The loop must not keep burning the endpoint for a turn
-        # nobody is reading; its completed side effects (a proposal, a saved brief) are
-        # durable rows the rail will show on next load either way.
+        if attempt_id is not None:
+            try:
+                writer_attempts.stop_attempt(
+                    conn, attempt_id,
+                    detail="This turn was interrupted before it finished. Try it again.",
+                )
+            except Exception:
+                logger.debug("Could not settle writer attempt %s after cancellation", attempt_id)
         raise
     except LyraError as exc:
+        if attempt_id is not None:
+            try:
+                writer_attempts.fail_attempt(
+                    conn, attempt_id, stopped_reason="error", detail=exc.message,
+                )
+            except Exception:
+                logger.debug("Could not settle writer attempt %s after LyraError", attempt_id)
+            attempt_id = None
         yield _frame(type="error", message=exc.message)
     except Exception:
         logger.exception("Writer turn failed for draft %s", artifact_id)
+        if attempt_id is not None:
+            try:
+                writer_attempts.fail_attempt(
+                    conn, attempt_id, stopped_reason="error",
+                    detail=_WRITER_TURN_ERROR,
+                )
+            except Exception:
+                logger.debug("Could not settle writer attempt %s after error", attempt_id)
+            attempt_id = None
         yield _frame(type="error", message=_WRITER_TURN_ERROR)
     finally:
         if loop_task is not None and not loop_task.done():

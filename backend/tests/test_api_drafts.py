@@ -1142,3 +1142,148 @@ def test_write_is_blocked_without_an_endpoint(
 
     assert response.status_code == 400
     assert "No tutor endpoint" in response.json()["detail"]
+
+
+# --- Draft revision/restore endpoints (PLA-311: kind boundary) ---
+
+
+def test_draft_revisions_endpoint(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft(db, class_id, "first draft")
+    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
+
+    response = client.get(f"/api/drafts/{artifact_id}/parts/{part_id}/revisions")
+
+    assert response.status_code == 200
+    contents = [r["content"] for r in response.json()]
+    assert contents == ["second draft", "first draft"]
+
+
+def test_draft_restore_with_the_current_version_succeeds(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft(db, class_id, "first draft")
+    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
+    version = int(artifacts.get_part(db, part_id)["content_version"])
+
+    restored = client.post(
+        f"/api/drafts/{artifact_id}/parts/{part_id}/restore",
+        json={"revision": 1, "expected_version": version},
+    )
+
+    assert restored.status_code == 200
+    assert str(artifacts.get_part(db, part_id)["content"]) == "first draft"
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == version + 1
+
+
+def test_stale_draft_restore_is_refused_without_mutation(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft(db, class_id, "first draft")
+    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
+    stale_version = int(artifacts.get_part(db, part_id)["content_version"])
+    artifacts.set_part_content(db, part_id, "third from elsewhere", origin=artifacts.USER_CORRECTED)
+    moved_version = int(artifacts.get_part(db, part_id)["content_version"])
+
+    refused = client.post(
+        f"/api/drafts/{artifact_id}/parts/{part_id}/restore",
+        json={"revision": 1, "expected_version": stale_version},
+    )
+
+    assert refused.status_code == 409
+    assert str(artifacts.get_part(db, part_id)["content"]) == "third from elsewhere"
+    assert int(artifacts.get_part(db, part_id)["content_version"]) == moved_version
+
+
+def test_draft_restore_without_a_version_is_rejected(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft(db, class_id, "first draft")
+    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
+
+    refused = client.post(
+        f"/api/drafts/{artifact_id}/parts/{part_id}/restore",
+        json={"revision": 1},
+    )
+
+    assert refused.status_code == 422
+    assert str(artifacts.get_part(db, part_id)["content"]) == "second draft"
+
+
+def test_draft_restore_preserves_the_pre_restore_autosaved_body_as_history(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft(db, class_id, "revision A body")
+    assert [r["content"] for r in artifacts.list_revisions(db, part_id)] == ["revision A body"]
+    version = int(artifacts.get_part(db, part_id)["content_version"])
+    artifacts.compare_and_set_part_content(
+        db,
+        part_id,
+        "manually autosaved body B",
+        artifacts.USER_CORRECTED,
+        expected_version=version,
+        record_revision=False,
+    )
+    restore_version = int(artifacts.get_part(db, part_id)["content_version"])
+
+    restored = client.post(
+        f"/api/drafts/{artifact_id}/parts/{part_id}/restore",
+        json={"revision": 1, "expected_version": restore_version},
+    )
+
+    assert restored.status_code == 200
+    assert str(artifacts.get_part(db, part_id)["content"]) == "revision A body"
+    contents = [r["content"] for r in artifacts.list_revisions(db, part_id)]
+    assert contents == ["revision A body", "manually autosaved body B", "revision A body"]
+
+
+def test_stale_draft_restore_creates_no_phantom_revision(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    artifact_id, part_id = _draft(db, class_id, "first draft")
+    artifacts.set_part_content(db, part_id, "second draft", origin=artifacts.USER_CORRECTED)
+    stale_version = int(artifacts.get_part(db, part_id)["content_version"])
+    artifacts.set_part_content(db, part_id, "third from elsewhere", origin=artifacts.USER_CORRECTED)
+    before_revisions = artifacts.list_revisions(db, part_id)
+
+    refused = client.post(
+        f"/api/drafts/{artifact_id}/parts/{part_id}/restore",
+        json={"revision": 1, "expected_version": stale_version},
+    )
+
+    assert refused.status_code == 409
+    assert artifacts.list_revisions(db, part_id) == before_revisions
+    assert str(artifacts.get_part(db, part_id)["content"]) == "third from elsewhere"
+
+
+def _solution_set(db: sqlite3.Connection, class_id: int) -> dict[str, object]:
+    """A solution-set artifact in the same class, for cross-kind refusal tests."""
+    cursor = db.execute(
+        "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
+        "values (?, 'hw.pdf', 'irrelevant', 'application/pdf', 100, 'ready')",
+        (class_id,),
+    )
+    doc_id = int(cursor.lastrowid or 0)
+    return artifacts.create_artifact(
+        db, class_id, "Solutions", [artifacts.SourceSpec(document_id=doc_id)]
+    )
+
+
+def test_draft_revisions_refuses_a_solution_set(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    created = _solution_set(db, class_id)
+    response = client.get(f"/api/drafts/{created['id']}/parts/1/revisions")
+    assert response.status_code == 404
+
+
+def test_draft_restore_refuses_a_solution_set(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    created = _solution_set(db, class_id)
+    response = client.post(
+        f"/api/drafts/{created['id']}/parts/1/restore",
+        json={"revision": 1, "expected_version": 0},
+    )
+    assert response.status_code == 404

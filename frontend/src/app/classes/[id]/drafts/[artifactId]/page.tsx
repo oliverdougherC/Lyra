@@ -1124,6 +1124,7 @@ export default function DraftWorkspacePage() {
           artifactId={artifact.id}
           part={historyOpen ? bodyPart : null}
           noun="draft"
+          kind="draft"
           // A draft's live body can be newer than the newest recorded revision (autosave
           // records none), so the history marks "shown now" by matching this, not by assuming
           // the top row is current (PLA-289).
