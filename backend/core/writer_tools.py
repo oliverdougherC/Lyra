@@ -593,20 +593,19 @@ def build_registry(
         )
 
     def propose_revision(section: str, replacement: str) -> ToolResult:
-        part = _body_part(conn, artifact_id)
-        current = str(part["content"])
+        part_id = int(_body_part(conn, artifact_id)["id"])
         replacement = mathnorm.normalize(replacement)
-        pending = suggestions.pending_for_part(conn, int(part["id"]))
-        base_text = str(pending["proposed_content"]) if pending else current
-        target = sections.extract(base_text, section)
-        if target is None:
-            return failure(_NO_SECTION.format(ref=section))
-        proposed = sections.splice(base_text, target, replacement)
         try:
             conn.execute("begin immediate")
-            edit = suggestions.propose(
-                conn, int(part["id"]), proposed, f"revise {section}", commit=False
-            )
+            current = str(artifacts.get_part(conn, part_id)["content"])
+            pending = suggestions.pending_for_part(conn, part_id)
+            base_text = str(pending["proposed_content"]) if pending else current
+            target = sections.extract(base_text, section)
+            if target is None:
+                conn.rollback()
+                return failure(_NO_SECTION.format(ref=section))
+            proposed = sections.splice(base_text, target, replacement)
+            edit = suggestions.propose(conn, part_id, proposed, f"revise {section}", commit=False)
             if edit is None:
                 conn.commit()
                 return success(
@@ -616,7 +615,8 @@ def build_registry(
             effects.link(conn, "proposal", edit.id, commit=False)
             conn.commit()
         except Exception:
-            conn.rollback()
+            if conn.in_transaction:
+                conn.rollback()
             raise
         effects.proposed_edit_id = edit.id
         return success(
@@ -725,16 +725,17 @@ def build_registry(
         )
 
     def write_section(section: str, content: str) -> ToolResult:
-        part = _body_part(conn, artifact_id)
-        body = str(part["content"])
-        target = sections.extract(body, section)
-        if target is None:
-            return failure(_NO_SECTION.format(ref=section))
-        if not target.is_empty:
-            return failure(_OCCUPIED.format(ref=section))
-        part_id = int(part["id"])
+        part_id = int(_body_part(conn, artifact_id)["id"])
         try:
             conn.execute("begin immediate")
+            body = str(artifacts.get_part(conn, part_id)["content"])
+            target = sections.extract(body, section)
+            if target is None:
+                conn.rollback()
+                return failure(_NO_SECTION.format(ref=section))
+            if not target.is_empty:
+                conn.rollback()
+                return failure(_OCCUPIED.format(ref=section))
             artifacts.apply_part_content(
                 conn,
                 part_id,
@@ -746,7 +747,8 @@ def build_registry(
             effects.link(conn, "section_write", part_id, commit=False)
             conn.commit()
         except Exception:
-            conn.rollback()
+            if conn.in_transaction:
+                conn.rollback()
             raise
         effects.note_write(target.number)
         return success(written=True, section=target.number)

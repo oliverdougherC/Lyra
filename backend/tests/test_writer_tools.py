@@ -14,12 +14,16 @@ from backend.core import (
     artifacts,
     briefs,
     comments,
+    errors,
     query_guard,
+    sessions,
     source_ledger,
     suggestions,
+    writer_attempts,
     writer_tools,
 )
 from backend.llm.tools import RecordedCall
+from backend.storage.database import connect
 from backend.tools.result import ToolResult
 
 BODY = (
@@ -745,3 +749,223 @@ def test_read_comments_reports_open_threads_with_their_replies(
     assert thread["severity"] == "major"
     assert thread["quote"] == "Numbers went up."
     assert thread["replies"] == [{"author": "student", "body": "Which source would fit?"}]
+
+
+# ---------------------------------------------------------------------------
+# write_section vs autosave concurrency (PLA-308 round 5)
+# ---------------------------------------------------------------------------
+
+
+class _BeginBarrier:
+    """Wraps a connection to run a callback before the first BEGIN IMMEDIATE.
+
+    This is the deterministic seam for the concurrency tests: the callback
+    commits a student autosave on a *separate* connection, simulating the
+    race window between entering ``write_section`` and acquiring the write
+    lock. Because the callback fires synchronously before ``begin immediate``
+    executes, the ordering is fully deterministic with no timing sleeps.
+    """
+
+    def __init__(self, real: sqlite3.Connection, before_lock):
+        self._real = real
+        self._callback = before_lock
+        self._armed = True
+
+    def execute(self, sql, parameters=()):
+        if self._armed and "begin" in sql.lower():
+            self._armed = False
+            self._callback()
+        return self._real.execute(sql, parameters)
+
+    @property
+    def in_transaction(self):
+        return self._real.in_transaction
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _attempt_id(db: sqlite3.Connection, class_id: int, part_id: int) -> int:
+    """Create a writer session, user message, and planned attempt for ownership tests."""
+    session = sessions.create_session(db, class_id, artifact_part_id=part_id, mode=sessions.WRITER)
+    msg_id = int(
+        db.execute(
+            "insert into messages (session_id, role, content) values (?, 'user', 'Fill it')",
+            (int(session["id"]),),
+        ).lastrowid
+        or 0
+    )
+    db.commit()
+    attempt = writer_attempts.create_attempt(
+        db,
+        session_id=int(session["id"]),
+        user_message_id=msg_id,
+        intent="draft",
+    )
+    db.commit()
+    return attempt
+
+
+class TestWriteSectionAutosaveRace:
+    """Regression tests for the stale-read / whole-body overwrite race between
+    ``write_section`` and the draft autosave endpoint.
+
+    Each test uses two genuine SQLite connections to the same on-disk database
+    so the locking and WAL visibility semantics match production exactly.
+    ``_BeginBarrier`` injects the autosave at the precise instant between entering
+    the tool and acquiring the write lock, with no timing sleeps.
+    """
+
+    def test_autosave_before_writer_lock_preserves_student_edit(
+        self, db: sqlite3.Connection, class_id: int
+    ) -> None:
+        """A student autosave that commits before the writer's BEGIN IMMEDIATE
+        is visible under the lock: the student's edit elsewhere in the document
+        survives byte-for-byte, the empty target section is filled, and
+        content_version advances for both writes."""
+        artifact_id, part_id = _draft(db, class_id)
+        attempt = _attempt_id(db, class_id, part_id)
+        v0 = int(artifacts.get_part(db, part_id)["content_version"])
+
+        conn2 = connect()
+        try:
+            edited_intro = BODY.replace(
+                "Opening prose the student wrote.",
+                "Opening prose the student revised while AI was thinking.",
+            )
+
+            def autosave_on_conn2():
+                artifacts.compare_and_set_part_content(
+                    conn2,
+                    part_id,
+                    edited_intro,
+                    artifacts.USER_CORRECTED,
+                    expected_version=v0,
+                )
+
+            proxy = _BeginBarrier(db, autosave_on_conn2)
+            registry, effects = writer_tools.build_registry(
+                proxy, artifact_id, writer_tools.DRAFTER
+            )
+            effects.attempt_id = attempt
+
+            result = _call(
+                registry,
+                "write_section",
+                section="Methods",
+                content="# Methods\n\nThe rig, described.\n",
+            )
+
+            assert result.ok
+            assert result.value["section"] == "2"
+            body = str(artifacts.get_part(db, part_id)["content"])
+            assert "the student revised while AI was thinking" in body
+            assert "The rig, described." in body
+            assert "[TODO: describe the rig]" not in body
+
+            version = int(artifacts.get_part(db, part_id)["content_version"])
+            assert version == v0 + 2
+
+            targets = db.execute(
+                "select * from writer_attempt_targets "
+                "where attempt_id = ? and target_kind = 'section_write'",
+                (attempt,),
+            ).fetchall()
+            assert len(targets) == 1
+        finally:
+            conn2.close()
+
+    def test_autosave_fills_section_before_writer_lock(
+        self, db: sqlite3.Connection, class_id: int
+    ) -> None:
+        """If a student autosave fills the previously empty target section before
+        the writer acquires the lock, write_section returns the occupied-section
+        failure and the student's content remains untouched."""
+        artifact_id, part_id = _draft(db, class_id)
+        attempt = _attempt_id(db, class_id, part_id)
+        v0 = int(artifacts.get_part(db, part_id)["content_version"])
+
+        conn2 = connect()
+        try:
+            student_methods = BODY.replace(
+                "[TODO: describe the rig]", "Student's own methods paragraph."
+            )
+
+            def autosave_fills_section():
+                artifacts.compare_and_set_part_content(
+                    conn2,
+                    part_id,
+                    student_methods,
+                    artifacts.USER_CORRECTED,
+                    expected_version=v0,
+                )
+
+            proxy = _BeginBarrier(db, autosave_fills_section)
+            registry, effects = writer_tools.build_registry(
+                proxy, artifact_id, writer_tools.DRAFTER
+            )
+            effects.attempt_id = attempt
+
+            result = _call(
+                registry,
+                "write_section",
+                section="Methods",
+                content="# Methods\n\nAI prose that must not land.\n",
+            )
+
+            assert result.ok is False
+            assert "propose" in result.error.lower()
+            body = str(artifacts.get_part(db, part_id)["content"])
+            assert "Student's own methods paragraph." in body
+            assert "AI prose that must not land" not in body
+
+            version = int(artifacts.get_part(db, part_id)["content_version"])
+            assert version == v0 + 1
+
+            targets = db.execute(
+                "select * from writer_attempt_targets "
+                "where attempt_id = ? and target_kind = 'section_write'",
+                (attempt,),
+            ).fetchall()
+            assert len(targets) == 0
+        finally:
+            conn2.close()
+
+    def test_stale_autosave_after_writer_gets_stale_content_error(
+        self, db: sqlite3.Connection, class_id: int
+    ) -> None:
+        """When write_section wins the lock and commits generated content, a
+        stale autosave built on the pre-writer version gets StaleContentError
+        and the generated content is not overwritten."""
+        artifact_id, part_id = _draft(db, class_id)
+        v0 = int(artifacts.get_part(db, part_id)["content_version"])
+
+        registry, _ = writer_tools.build_registry(db, artifact_id, writer_tools.DRAFTER)
+        result = _call(
+            registry,
+            "write_section",
+            section="Methods",
+            content="# Methods\n\nGenerated methods content.\n",
+        )
+        assert result.ok
+
+        conn2 = connect()
+        try:
+            stale_body = BODY.replace(
+                "Opening prose the student wrote.",
+                "Student edit built on pre-writer snapshot.",
+            )
+            with pytest.raises(errors.StaleContentError):
+                artifacts.compare_and_set_part_content(
+                    conn2,
+                    part_id,
+                    stale_body,
+                    artifacts.USER_CORRECTED,
+                    expected_version=v0,
+                )
+
+            body = str(artifacts.get_part(db, part_id)["content"])
+            assert "Generated methods content." in body
+            assert "pre-writer snapshot" not in body
+        finally:
+            conn2.close()
