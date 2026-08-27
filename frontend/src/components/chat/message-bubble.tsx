@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatCount, formatRelativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { AgentAttempt, WriterActivity, WriterAttempt } from '@/types'
+import type { AgentAttempt, TutorAttempt, WriterActivity, WriterAttempt } from '@/types'
 
 export type ChatMessage = {
   id: number
@@ -32,6 +32,8 @@ export type ChatMessage = {
   agent_attempt?: AgentAttempt | null
   /** The latest writer-turn attempt on this message, when it was a writer turn (PLA-310). */
   writer_attempt?: WriterAttempt | null
+  /** The latest tutor-turn attempt on this message, when it was a tutor turn (PLA-306). */
+  tutor_attempt?: TutorAttempt | null
 }
 
 type MessageRowProps = {
@@ -79,8 +81,10 @@ export function MessageRow({
   if (message.role === 'user') {
     const agentAttempt = message.agent_attempt
     const writerAttempt = message.writer_attempt
+    const tutorAttempt = message.tutor_attempt
     const agentFailed = agentAttempt?.state === 'failed' || agentAttempt?.state === 'stopped'
     const writerFailed = writerAttempt?.state === 'failed' || writerAttempt?.state === 'stopped'
+    const tutorFailed = tutorAttempt?.state === 'failed' || tutorAttempt?.state === 'stopped'
     return (
       <div className={cn('group flex flex-col items-end', className)}>
         <div className="bg-accent-secondary/45 border-accent-secondary/60 max-w-[80%] rounded-2xl rounded-br-md border px-4 py-2.5 text-[0.9375rem] leading-6 whitespace-pre-wrap">
@@ -89,6 +93,9 @@ export function MessageRow({
         {agentFailed ? <AgentTurnFailure detail={agentAttempt?.detail ?? null} /> : null}
         {writerFailed ? (
           <WriterTurnFailure detail={writerAttempt?.detail ?? null} onRetry={onRetry} />
+        ) : null}
+        {tutorFailed ? (
+          <TutorTurnFailure detail={tutorAttempt?.detail ?? null} onRetry={onRetry} />
         ) : null}
         <MessageActions
           align="end"
@@ -305,6 +312,30 @@ function WriterTurnFailure({ detail, onRetry }: { detail: string | null; onRetry
   return (
     <div
       data-writer-turn-failure
+      className="text-destructive mt-1 flex max-w-[80%] items-start gap-1.5 text-xs"
+      role="status"
+    >
+      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+      <span>{detail?.trim() || 'This turn did not finish.'}</span>
+      {onRetry ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="text-destructive hover:text-foreground -mt-0.5 ml-0.5 shrink-0"
+          onClick={onRetry}
+          aria-label="Try again"
+        >
+          <RefreshCw className="size-3" />
+        </Button>
+      ) : null}
+    </div>
+  )
+}
+
+function TutorTurnFailure({ detail, onRetry }: { detail: string | null; onRetry?: () => void }) {
+  return (
+    <div
+      data-tutor-turn-failure
       className="text-destructive mt-1 flex max-w-[80%] items-start gap-1.5 text-xs"
       role="status"
     >

@@ -972,6 +972,15 @@ export function streamRegenerate(
   return streamTurn(`/api/sessions/${sessionId}/regenerate`, body, onEvent, signal)
 }
 
+export function streamChatRetry(
+  sessionId: number,
+  body: RegenerateRequest,
+  onEvent: (event: ChatEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamTurn(`/api/sessions/${sessionId}/retry`, body, onEvent, signal)
+}
+
 /**
  * Streams one drafted passage for the editor's `/write` block. Stateless: nothing about
  * the document changes until the student accepts what streamed in, so the frames are

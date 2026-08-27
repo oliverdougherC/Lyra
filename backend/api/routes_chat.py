@@ -25,7 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.types import Receive, Scope, Send
 
-from backend.core import agent_attempts, artifacts, sessions, writer_attempts
+from backend.core import agent_attempts, artifacts, sessions, tutor_attempts, writer_attempts
 from backend.core.app_settings import (
     NO_ENDPOINT,
     REMOTE_UNACKNOWLEDGED,
@@ -188,6 +188,7 @@ class MessageRead(BaseModel):
     created_at: str
     agent_attempt: AgentAttemptRead | None = None
     writer_attempt: AgentAttemptRead | None = None
+    tutor_attempt: AgentAttemptRead | None = None
 
 
 class ChatRequest(BaseModel):
@@ -250,6 +251,7 @@ class TurnPlan:
 
     user_message_id: int
     superseded: tuple[int, ...] = ()
+    attempt_id: int = 0
 
     @property
     def excluded(self) -> frozenset[int]:
@@ -515,6 +517,7 @@ def read_messages(session_id: int, conn: DbConn) -> list[dict[str, object]]:
     messages = sessions.list_messages(conn, session_id)
     agent_att = agent_attempts.latest_attempts_by_message(conn, session_id)
     writer_att = writer_attempts.latest_attempts_by_message(conn, session_id)
+    tutor_att = tutor_attempts.latest_attempts_by_message(conn, session_id)
     for message in messages:
         mid = int(message["id"])
         aa = agent_att.get(mid)
@@ -530,6 +533,13 @@ def read_messages(session_id: int, conn: DbConn) -> list[dict[str, object]]:
                 "state": wa["state"],
                 "stopped_reason": wa["stopped_reason"],
                 "detail": wa["detail"],
+            }
+        ta = tutor_att.get(mid)
+        if ta is not None:
+            message["tutor_attempt"] = {
+                "state": ta["state"],
+                "stopped_reason": ta["stopped_reason"],
+                "detail": ta["detail"],
             }
     return messages
 
@@ -641,6 +651,124 @@ async def regenerate_chat(
     )
 
 
+class RetryRequest(BaseModel):
+    """Body of `POST /api/sessions/{session_id}/retry`."""
+
+    mode: ChatMode
+    document_id: int | None = None
+
+
+@router.post("/sessions/{session_id}/retry")
+async def retry_chat(session_id: int, payload: RetryRequest, conn: DbConn) -> StreamingResponse:
+    """Retry the conversation's last tutor turn, reusing the original user message.
+
+    If the last attempt completed, the stored reply is replayed without re-running the
+    model (the "lost HTTP response" case). If it failed or was stopped, a new attempt is
+    created on the same user message and the model is re-run.
+    """
+    turn_token = sessions.begin_turn(session_id)
+    opener = asyncio.ensure_future(
+        asyncio.to_thread(_open_retry, conn, session_id, payload, turn_token)
+    )
+    try:
+        result = await asyncio.shield(opener)
+    except BaseException:
+        _finish_opening(opener, session_id, turn_token)
+        raise
+    if isinstance(result, str):
+        return _turn_response(session_id, turn_token, _replay_turn(session_id, result, turn_token))
+    config, plan, request, cost = result
+    return _turn_response(
+        session_id, turn_token, _stream_turn(session_id, request, config, plan, cost, turn_token)
+    )
+
+
+def _open_retry(
+    conn: sqlite3.Connection,
+    session_id: int,
+    request: RetryRequest,
+    turn_token: int,
+) -> str | tuple[TutorConfig, TurnPlan, TurnInput, TurnCost]:
+    """Plan a causal retry of the conversation's last tutor turn.
+
+    Returns a replay string for completed attempts, or a tuple to drive a fresh turn for
+    failed/stopped ones.
+    """
+    try:
+        session = sessions.get_session(conn, session_id)
+        _refuse_writer_session(session)
+        target = tutor_attempts.resolve_retry_target(conn, session_id)
+        sessions.bind_turn(session_id, turn_token, target.user_message_id)
+
+        state = str(target.latest["state"])
+
+        if state == tutor_attempts.COMPLETED:
+            assistant_message_id = target.latest.get("assistant_message_id")
+            if assistant_message_id is not None:
+                row = conn.execute(
+                    "select content from messages where id = ?", (int(assistant_message_id),)
+                ).fetchone()
+                if row is not None:
+                    return str(row["content"])
+            return ""
+
+        if state == tutor_attempts.RUNNING:
+            raise LyraError("That turn is still in progress.")
+
+        access = resolve_tutor_access(conn)
+        require_document_allowed(access)
+        config = access.config
+
+        superseded_rows = conn.execute(
+            "select id from messages where session_id = ? and id > ? order by id",
+            (session_id, target.user_message_id),
+        ).fetchall()
+        superseded = tuple(int(r["id"]) for r in superseded_rows)
+
+        plan_excluded = frozenset({target.user_message_id, *superseded})
+        cost = _plan_turn_cost(
+            conn, session_id, request.mode, target.content, plan_excluded, config
+        )
+        _require_turn_fits(cost)
+
+        attempt_id = tutor_attempts.create_attempt(
+            conn, session_id=session_id, user_message_id=target.user_message_id
+        )
+        conn.commit()
+
+        plan = TurnPlan(
+            user_message_id=target.user_message_id,
+            superseded=superseded,
+            attempt_id=attempt_id,
+        )
+        turn_input = TurnInput(
+            content=target.content,
+            mode=request.mode,
+            document_id=request.document_id,
+        )
+        sessions.set_session_mode(conn, session_id, request.mode)
+        touch_class(conn, int(session["class_id"]))
+    except BaseException:
+        sessions.end_turn(session_id, turn_token)
+        raise
+    return config, plan, turn_input, cost
+
+
+async def _replay_turn(
+    session_id: int,
+    content: str,
+    turn_token: int,
+) -> AsyncIterator[str]:
+    """Re-emit a completed turn's stored reply as SSE frames without re-running the model."""
+    try:
+        yield _frame(type="start", message_id=0)
+        for char in content:
+            yield _frame(type="token", text=char)
+        yield _frame(type="done", message_id=0)
+    finally:
+        sessions.end_turn(session_id, turn_token)
+
+
 def _refuse_writer_session(session: dict[str, object]) -> None:
     """The tutor never answers in a writer conversation.
 
@@ -675,38 +803,29 @@ def _open_turn(
     try:
         session = sessions.get_session(conn, session_id)
         _refuse_writer_session(session)
-        # One snapshot for the endpoint and its consent, so the endpoint authorized below
-        # is the exact endpoint this turn is later streamed to. Taken before the question
-        # is stored and before any retrieval or upstream call, so an unacknowledged remote
-        # endpoint refuses the turn without persisting an orphaned question and without a
-        # byte of course material leaving the machine.
         access = resolve_tutor_access(conn)
         require_document_allowed(access)
         config = access.config
-        # The privacy gate above proves the endpoint is one document text may reach; this
-        # proves the turn fits it. Both run before the message is stored and before any
-        # retrieval or upstream call, so a question too large for the window - once the
-        # generation reserve, system prompt, pinned step, and the history Lyra always
-        # keeps are set aside - refuses cleanly instead of being persisted and then
-        # forcing context to be truncated past the window. The current question is not yet
-        # persisted, so `excluded` is empty and the history it costs is exactly the prior
-        # conversation.
         cost = _plan_turn_cost(conn, session_id, request.mode, request.content, frozenset(), config)
         _require_turn_fits(cost)
-        # Persisted on the session, not just used for this turn, so the toggle survives a
-        # reload and the next turn continues in the mode the student picked.
         sessions.set_session_mode(conn, session_id, request.mode)
-        # Before the message is stored, so "first message" means this one.
         sessions.set_session_title_if_unset(conn, session_id, request.content)
-        user_message_id = sessions.add_message(conn, session_id, "user", request.content)
+        conn.execute("begin immediate")
+        try:
+            user_message_id = sessions.insert_message(conn, session_id, "user", request.content)
+            attempt_id = tutor_attempts.create_attempt(
+                conn, session_id=session_id, user_message_id=user_message_id
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         sessions.bind_turn(session_id, turn_token, user_message_id)
         touch_class(conn, int(session["class_id"]))
     except BaseException:
-        # A turn that never starts streaming must not hold the session: the refusal is the
-        # end of this turn, and the next request gets a fresh claim.
         sessions.end_turn(session_id, turn_token)
         raise
-    return config, TurnPlan(user_message_id=user_message_id), cost
+    return config, TurnPlan(user_message_id=user_message_id, attempt_id=attempt_id), cost
 
 
 def _open_regeneration(
@@ -851,24 +970,36 @@ async def _stream_turn(
         if thinking_started and not received:
             thinking_ms = round((time.monotonic() - thinking_started) * 1000)
 
-        message_id = _commit_reply(
+        message_id = _commit_reply_atomic(
             conn, session_id, plan, received, thought, retrieval, thinking_ms
         )
         yield _frame(type="done", message_id=message_id)
     except (asyncio.CancelledError, GeneratorExit):
-        # The reader went away mid-answer. Keep what did arrive, so the conversation is
-        # not left holding a question with no reply, then let the cancellation continue.
-        # A turn cut off while still thinking has a thought and no answer, and that is
-        # worth keeping too: it is the only record of what the model was doing.
         if conn is not None and (received or thought):
-            _commit_reply(conn, session_id, plan, received, thought, retrieval, thinking_ms)
+            _commit_reply_atomic(conn, session_id, plan, received, thought, retrieval, thinking_ms)
+        elif conn is not None and plan.attempt_id:
+            tutor_attempts.stop_attempt(
+                conn, plan.attempt_id, detail="The answer was cancelled before any text arrived."
+            )
         raise
     except LyraError as exc:
-        # Deliberately not persisted: a turn that failed partway is a turn to retry, and
-        # a stored fragment would read on reload as if it were the whole answer.
+        if conn is not None and plan.attempt_id:
+            tutor_attempts.fail_attempt(
+                conn,
+                plan.attempt_id,
+                stopped_reason="upstream_failed",
+                detail=exc.message,
+            )
         yield _frame(type="error", message=exc.message)
     except Exception:
         logger.exception("Chat turn failed for session %s", session_id)
+        if conn is not None and plan.attempt_id:
+            tutor_attempts.fail_attempt(
+                conn,
+                plan.attempt_id,
+                stopped_reason="unexpected",
+                detail=_UNEXPECTED_ERROR,
+            )
         yield _frame(type="error", message=_UNEXPECTED_ERROR)
     finally:
         # Nested so a connection that fails to close still releases the claim: the close
@@ -1001,7 +1132,7 @@ def _context_entry(chunk: RetrievedChunk) -> dict[str, object]:
     }
 
 
-def _commit_reply(
+def _commit_reply_atomic(
     conn: sqlite3.Connection,
     session_id: int,
     plan: TurnPlan,
@@ -1010,26 +1141,50 @@ def _commit_reply(
     retrieval: RetrievalResult,
     thinking_ms: int = 0,
 ) -> int:
-    """Swap in this turn's reply, dropping whatever it supersedes.
+    """Swap in this turn's reply and mark its attempt completed, atomically.
 
-    The order matters and is the whole point of deferring the delete: a reply the student
-    can already read is only removed once there is a new one to take its place, so a retry
-    that dies upstream costs them nothing. The delete names exact message ids - the ones
-    the plan observed when the turn opened - never "everything after the question", so a
-    newer independent turn can never be collateral damage of a retry, whatever the timing.
+    The reply and the completed state land in the same transaction so a crash can never
+    leave a stored reply beside an attempt still reading as running (which a later retry
+    would re-run, double-answering). When there is no attempt_id (regeneration without
+    attempt tracking), it commits the reply alone.
     """
     if plan.superseded:
         sessions.delete_messages(conn, session_id, plan.superseded)
-    return sessions.add_message(
-        conn,
-        session_id,
-        "assistant",
-        "".join(received),
-        retrieval_trimmed=retrieval.trimmed,
-        omitted_document_count=retrieval.omitted_document_count,
-        thinking="".join(thought),
-        thinking_ms=thinking_ms,
-    )
+    if not plan.attempt_id:
+        return sessions.add_message(
+            conn,
+            session_id,
+            "assistant",
+            "".join(received),
+            retrieval_trimmed=retrieval.trimmed,
+            omitted_document_count=retrieval.omitted_document_count,
+            thinking="".join(thought),
+            thinking_ms=thinking_ms,
+        )
+    try:
+        conn.execute("begin immediate")
+        message_id = sessions.insert_message(
+            conn,
+            session_id,
+            "assistant",
+            "".join(received),
+            retrieval_trimmed=retrieval.trimmed,
+            omitted_document_count=retrieval.omitted_document_count,
+            thinking="".join(thought),
+            thinking_ms=thinking_ms,
+        )
+        tutor_attempts.mark_completed(conn, plan.attempt_id, message_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        tutor_attempts.fail_attempt(
+            conn,
+            plan.attempt_id,
+            stopped_reason="persistence_failed",
+            detail="The reply was written but could not be saved. Try again.",
+        )
+        raise
+    return message_id
 
 
 def _frame(**payload: object) -> str:

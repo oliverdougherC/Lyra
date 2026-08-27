@@ -256,16 +256,18 @@ def test_a_v34_database_upgrades_through_035_then_036_without_losing_existing_da
         assert audit_row is not None and audit_row["attempt_id"] is None
         assert conn.execute("pragma foreign_key_check").fetchall() == []
 
-        assert migrate(conn) == 37
+        assert migrate(conn) == 38
         assert _table_exists(conn, "writer_turn_attempts")
         assert _table_exists(conn, "writer_attempt_targets")
+        assert _table_exists(conn, "tutor_turn_attempts")
+        assert conn.execute("pragma foreign_key_check").fetchall() == []
     finally:
         conn.close()
 
     reopened = connect(db_path)
     try:
-        assert migrate(reopened) == 37
-        assert reopened.execute("pragma user_version").fetchone()[0] == 37
+        assert migrate(reopened) == 38
+        assert reopened.execute("pragma user_version").fetchone()[0] == 38
         assert reopened.execute("pragma foreign_key_check").fetchall() == []
     finally:
         reopened.close()

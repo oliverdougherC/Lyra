@@ -342,7 +342,9 @@ def test_regeneration_can_never_delete_a_turn_it_did_not_observe(
     newer_question_id = sessions.add_message(db, session_id, "user", "Newer question")
     newer_reply_id = sessions.add_message(db, session_id, "assistant", "Newer reply")
 
-    routes_chat._commit_reply(db, session_id, plan, ["Replacement reply"], [], NOTHING_RETRIEVED)
+    routes_chat._commit_reply_atomic(
+        db, session_id, plan, ["Replacement reply"], [], NOTHING_RETRIEVED
+    )
 
     remaining = {
         int(m["id"]): (m["role"], m["content"]) for m in sessions.list_messages(db, session_id)

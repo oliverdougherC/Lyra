@@ -124,6 +124,12 @@ export interface WriterAttempt {
   detail: string | null
 }
 
+export interface TutorAttempt {
+  state: 'running' | 'completed' | 'failed' | 'stopped'
+  stopped_reason: string | null
+  detail: string | null
+}
+
 export interface MessageRead {
   id: number
   session_id: number
@@ -142,6 +148,8 @@ export interface MessageRead {
   agent_attempt?: AgentAttempt | null
   /** The latest writer-turn attempt on this message, when it was a writer turn. */
   writer_attempt?: WriterAttempt | null
+  /** The latest tutor-turn attempt on this message, when it was a tutor turn (PLA-306). */
+  tutor_attempt?: TutorAttempt | null
 }
 
 export interface FactRead {
