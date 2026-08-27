@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import secrets as _secrets_mod
 import shlex
 import shutil
 import signal
@@ -1854,6 +1855,52 @@ def stop(args: argparse.Namespace) -> int:
     return 0 if success else 1
 
 
+def _fsync_path(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_directory(path: Path) -> None:
+    """Fsync a directory entry to establish rename/link durability on POSIX.
+
+    On non-POSIX platforms the call is a no-op (the OS provides no directory-fsync
+    primitive).  On POSIX, errors that indicate the filesystem genuinely does not
+    support directory fsync (EINVAL, ENOTSUP, EOPNOTSUPP, ENOSYS, EBADF on an
+    O_RDONLY directory fd) are tolerated — durability is best-effort on those mounts.
+    Real I/O errors (EIO, ENOSPC, EROFS, …) propagate so callers never silently
+    claim durable publication after an actual storage failure.
+    """
+    if os.name != "posix":
+        return
+    import errno
+
+    fsync_unsupported = frozenset(
+        (
+            errno.EINVAL,
+            errno.ENOSYS,
+            getattr(errno, "ENOTSUP", 0),
+            getattr(errno, "EOPNOTSUPP", 0),
+            errno.EBADF,
+        )
+    )
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError as exc:
+        if exc.errno in fsync_unsupported:
+            return
+        raise
+    try:
+        os.fsync(fd)
+    except OSError as exc:
+        if exc.errno not in fsync_unsupported:
+            raise
+    finally:
+        os.close(fd)
+
+
 def backup(args: argparse.Namespace) -> int:
     runtime = load_runtime()
     step("Stopping the supervised Lyra stack before backup")
@@ -1869,25 +1916,47 @@ def backup(args: argparse.Namespace) -> int:
             f"backup target must not live inside the data directory being archived: {archive}"
         )
 
+    staging = archive.parent / f".lyra-backup-{_secrets_mod.token_hex(16)}.tmp"
+
     with tempfile.TemporaryDirectory(prefix="lyra-backup-") as temporary:
         stage_root = Path(temporary)
         manifest = stage_backup_tree(stage_root, data_dir, db_path)
-        # Created 0o600 from the first byte. The archive holds the whole data tree - and, on
-        # a keychain-less machine, the fallback API key - but lives outside the data
-        # directory, so it has no owner-only parent to hide behind and its own mode is the
-        # only thing keeping it private. Setting the mode after writing would leave the
-        # sensitive bytes briefly world-readable. O_EXCL preserves the refuse-if-exists that
-        # tar mode "x" gave, backing up the earlier existence check.
-        descriptor = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with (
-            os.fdopen(descriptor, "wb") as raw,
-            tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.PAX_FORMAT) as bundle,
-        ):
-            bundle.add(stage_root / BACKUP_MANIFEST, arcname=BACKUP_MANIFEST, recursive=False)
-            bundle.add(stage_root / BACKUP_DATA_PREFIX, arcname=BACKUP_DATA_PREFIX)
-            db_member = str(manifest["db"]["member"])  # type: ignore[index]
-            if db_member == BACKUP_EXTERNAL_DB:
-                bundle.add(stage_root / BACKUP_EXTERNAL_DB, arcname=BACKUP_EXTERNAL_DB)
+        try:
+            descriptor = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with (
+                os.fdopen(descriptor, "wb") as raw,
+                tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.PAX_FORMAT) as bundle,
+            ):
+                bundle.add(
+                    stage_root / BACKUP_MANIFEST,
+                    arcname=BACKUP_MANIFEST,
+                    recursive=False,
+                )
+                bundle.add(stage_root / BACKUP_DATA_PREFIX, arcname=BACKUP_DATA_PREFIX)
+                db_member = str(manifest["db"]["member"])  # type: ignore[index]
+                if db_member == BACKUP_EXTERNAL_DB:
+                    bundle.add(stage_root / BACKUP_EXTERNAL_DB, arcname=BACKUP_EXTERNAL_DB)
+
+            with tarfile.open(staging, mode="r:gz") as check:
+                verified_manifest = read_backup_manifest(check)
+                validate_backup_members(check, verified_manifest)
+
+            _fsync_path(staging)
+            os.link(staging, archive)
+            _fsync_directory(archive.parent)
+        except BaseException:
+            if staging.exists() and archive.exists():
+                try:
+                    is_ours = os.path.samefile(staging, archive)
+                except OSError:
+                    is_ours = False
+                if is_ours:
+                    with suppress(OSError):
+                        archive.unlink()
+            raise
+        finally:
+            with suppress(OSError):
+                staging.unlink(missing_ok=True)
 
     say()
     say(f"Lyra backup created at {archive}")
