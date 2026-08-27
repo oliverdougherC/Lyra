@@ -125,6 +125,7 @@ def test_reranking_mode_is_asked_for_explicitly(
 
     # The spawn now happens in the shared lifecycle, so it is patched there.
     monkeypatch.setattr(llama_server.subprocess, "Popen", record)
+    monkeypatch.setattr(llama_server, "_record_server", lambda *_a, **_k: None)
     server.ensure_running()
 
     assert "--reranking" in spawned[0]
@@ -142,6 +143,8 @@ class _DeadProcess:
     Carries its stderr as a real stream so the shared lifecycle's drain thread reads it
     the way it reads a real pipe.
     """
+
+    pid = 99998
 
     def __init__(self, stderr: bytes = b"") -> None:
         self.stderr = io.BytesIO(stderr)
@@ -220,6 +223,7 @@ def test_a_failed_start_quotes_the_child_s_last_words(
         "Popen",
         lambda argv, **_: _DeadProcess(b"llama_model_load: error loading model\ninvalid magic\n"),
     )
+    monkeypatch.setattr(llama_server, "_record_server", lambda *_a, **_k: None)
 
     with pytest.raises(ConfigurationError) as caught:
         server.ensure_running()
@@ -241,6 +245,7 @@ def test_a_failed_start_is_remembered_rather_than_respawned(
         return _DeadProcess(b"boom\n")
 
     monkeypatch.setattr(llama_server.subprocess, "Popen", dying)
+    monkeypatch.setattr(llama_server, "_record_server", lambda *_a, **_k: None)
 
     with pytest.raises(ConfigurationError) as first:
         server.ensure_running()
@@ -272,6 +277,7 @@ def test_losing_the_start_race_to_the_right_server_is_a_success(
     monkeypatch.setattr(instance, "_served_model", lambda: settings.rerank_model_path.name)
     monkeypatch.setattr(instance, "_find_binary", lambda: settings.models_dir / "llama-server")
     monkeypatch.setattr(llama_server.subprocess, "Popen", lambda argv, **_: _DeadProcess())
+    monkeypatch.setattr(llama_server, "_record_server", lambda *_a, **_k: None)
 
     instance.ensure_running()
 
