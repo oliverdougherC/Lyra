@@ -35,10 +35,7 @@ function message(overrides: Partial<ChatMessage>): ChatMessage {
   }
 }
 
-function tutorAttempt(
-  state: TutorAttempt['state'],
-  detail: string | null = null,
-): TutorAttempt {
+function tutorAttempt(state: TutorAttempt['state'], detail: string | null = null): TutorAttempt {
   return { state, stopped_reason: state === 'completed' ? null : state, detail }
 }
 

@@ -462,23 +462,25 @@ class TurnStreamingResponse(StreamingResponse):
         self._session_id = session_id
         self._turn_token = turn_token
         self._attempt_id = attempt_id
-        self._generator_entered = False
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         try:
             await super().__call__(scope, receive, send)
         finally:
             try:
-                if not self._generator_entered and self._attempt_id:
-                    conn = connect()
+                if self._attempt_id:
                     try:
-                        tutor_attempts.stop_attempt(
-                            conn,
-                            self._attempt_id,
-                            detail="The answer was cancelled before streaming began.",
-                        )
-                    finally:
-                        conn.close()
+                        conn = connect()
+                        try:
+                            tutor_attempts.stop_attempt(
+                                conn,
+                                self._attempt_id,
+                                detail="Response exited with this attempt still running.",
+                            )
+                        finally:
+                            conn.close()
+                    except Exception:
+                        pass
             finally:
                 sessions.end_turn(self._session_id, self._turn_token)
 
@@ -497,7 +499,7 @@ def _turn_response(
     the claim and the response owning it.
     """
     try:
-        response = TurnStreamingResponse(
+        return TurnStreamingResponse(
             session_id,
             turn_token,
             stream,
@@ -505,16 +507,6 @@ def _turn_response(
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
-        if attempt_id is not None:
-            original_iterator = response.body_iterator
-
-            async def _tracked() -> AsyncIterator[bytes]:
-                response._generator_entered = True
-                async for chunk in original_iterator:  # type: ignore[union-attr]
-                    yield chunk
-
-            response.body_iterator = _tracked()
-        return response
     except BaseException:
         sessions.end_turn(session_id, turn_token)
         raise
@@ -754,9 +746,12 @@ def _open_retry(
         require_document_allowed(access)
         config = access.config
 
-        original_mode = target.latest.get("mode") or request.mode
-        original_doc = target.latest.get("document_id")
-        if original_doc is None:
+        persisted_mode = target.latest.get("mode")
+        if persisted_mode:
+            original_mode = persisted_mode
+            original_doc = target.latest.get("document_id")
+        else:
+            original_mode = request.mode
             original_doc = request.document_id
 
         superseded_rows = conn.execute(

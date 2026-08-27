@@ -1002,9 +1002,176 @@ class TestRetryOriginalIntent:
         finally:
             conn.close()
 
+    def test_retry_preserves_explicit_document_id_none(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failed turn with document_id=None must keep None on retry, not adopt the
+        frontend's current selection."""
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_fail_immediately())
+        _send_with_mode(client, session_id, mode="show", document_id=None)
+
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("recovered"))
+        response = _retry_with_mode(client, session_id, mode="guide", document_id=99)
+        assert response.status_code == 200
+        _ = response.text
+
+        conn = connect()
+        try:
+            user_msg = conn.execute(
+                "select id from messages where session_id = ? and role = 'user'",
+                (session_id,),
+            ).fetchone()
+            attempts = conn.execute(
+                "select mode, document_id from tutor_turn_attempts "
+                "where user_message_id = ? order by id",
+                (int(user_msg["id"]),),
+            ).fetchall()
+            retry_attempt = attempts[-1]
+            assert retry_attempt["mode"] == "show", (
+                "Retry must use the original mode, not the frontend's current mode"
+            )
+            assert retry_attempt["document_id"] is None, (
+                "Retry must preserve explicit None, not adopt the frontend's document_id"
+            )
+        finally:
+            conn.close()
+
 
 # ---------------------------------------------------------------------------
-# 14. Finding 2: post-commit exceptions settle attempts, not strand them
+# 14. Response-lifetime settlement: every exit path settles the attempt
+# ---------------------------------------------------------------------------
+
+
+class TestResponseLifetimeSettlement:
+    """When a response owning a tutor attempt exits, the attempt must be settled.
+
+    stop_attempt() only updates state='running' rows, so it is safe to call
+    unconditionally: completed/failed attempts are not reverted.
+    """
+
+    def test_normal_completion_attempt_is_completed(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Hello"))
+        response = _send(client, session_id)
+        assert response.status_code == 200
+        _ = response.text
+
+        conn = connect()
+        try:
+            att = conn.execute(
+                "select state from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchone()
+            assert att["state"] == "completed"
+        finally:
+            conn.close()
+
+    def test_upstream_failure_attempt_is_failed(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_fail_immediately())
+        response = _send(client, session_id)
+        assert response.status_code == 200
+        _ = response.text
+
+        conn = connect()
+        try:
+            att = conn.execute(
+                "select state from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchone()
+            assert att["state"] == "failed"
+        finally:
+            conn.close()
+
+    def test_completion_then_response_exit_does_not_revert_to_stopped(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Answer"))
+        response = _send(client, session_id)
+        assert response.status_code == 200
+        _ = response.text
+
+        conn = connect()
+        try:
+            att = conn.execute(
+                "select state from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchone()
+            assert att["state"] == "completed", (
+                "Response exit must not revert a completed attempt to stopped"
+            )
+        finally:
+            conn.close()
+
+    def test_failure_then_response_exit_does_not_revert_to_stopped(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_fail_immediately())
+        response = _send(client, session_id)
+        assert response.status_code == 200
+        _ = response.text
+
+        conn = connect()
+        try:
+            att = conn.execute(
+                "select state from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchone()
+            assert att["state"] == "failed", (
+                "Response exit must not revert a failed attempt to stopped"
+            )
+        finally:
+            conn.close()
+
+    def test_unexpected_error_attempt_is_not_left_running(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_unexpected_error())
+        response = _send(client, session_id)
+        _ = response.text
+
+        conn = connect()
+        try:
+            att = conn.execute(
+                "select state from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchone()
+            assert att is not None
+            assert att["state"] != "running", (
+                "No attempt may be left running after the response exits"
+            )
+        finally:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 15. Finding 2: post-commit exceptions settle attempts, not strand them
 # ---------------------------------------------------------------------------
 
 
