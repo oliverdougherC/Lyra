@@ -14,6 +14,8 @@ create table tutor_turn_attempts (
   user_message_id integer not null references messages(id) on delete cascade,
   state text not null default 'running'
     check (state in ('running', 'completed', 'failed', 'stopped')),
+  mode text,
+  document_id integer,
   stopped_reason text,
   detail text,
   assistant_message_id integer references messages(id) on delete set null,

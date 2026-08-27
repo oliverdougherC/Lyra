@@ -793,3 +793,519 @@ class TestRegenerationCoexistence:
         assistant_msgs = [m for m in messages if m["role"] == "assistant"]
         assert len(assistant_msgs) == 1
         assert assistant_msgs[0]["content"] == "regenerated."
+
+
+# ---------------------------------------------------------------------------
+# 12. Finding 3: interrupted partial output must be STOPPED, never COMPLETED
+# ---------------------------------------------------------------------------
+
+
+def _send_with_mode(
+    client: TestClient,
+    session_id: int,
+    *,
+    mode: str = "guide",
+    document_id: int | None = None,
+    content: str = QUESTION,
+) -> httpx.Response:
+    return client.post(
+        f"/api/sessions/{session_id}/chat",
+        json={"content": content, "mode": mode, "document_id": document_id},
+    )
+
+
+def _retry_with_mode(
+    client: TestClient,
+    session_id: int,
+    *,
+    mode: str = "guide",
+    document_id: int | None = None,
+) -> httpx.Response:
+    return client.post(
+        f"/api/sessions/{session_id}/retry",
+        json={"mode": mode, "document_id": document_id},
+    )
+
+
+class TestInterruptedPartialOutput:
+    """Finding 3: a cancelled turn with partial tokens must be STOPPED, not COMPLETED."""
+
+    def test_mid_stream_upstream_failure_with_partial_tokens_is_failed(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_then_fail("partial ", "content"))
+        response = _send(client, session_id)
+        _ = response.text
+
+        messages = _messages(client, session_id)
+        user_msg = [m for m in messages if m["role"] == "user"][0]
+        assert user_msg["tutor_attempt"]["state"] == "failed"
+        assert user_msg["tutor_attempt"]["stopped_reason"] == "upstream_failed"
+
+    def test_mid_stream_failure_does_not_persist_partial_reply_as_complete(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_then_fail("partial"))
+        _send(client, session_id)
+
+        conn = connect()
+        try:
+            user_msg = conn.execute(
+                "select id from messages where session_id = ? and role = 'user'",
+                (session_id,),
+            ).fetchone()
+            att = tutor_attempts.latest_attempt_for_message(conn, int(user_msg["id"]))
+            assert att is not None
+            assert att["state"] != "completed", (
+                "A turn that failed mid-stream must not be marked completed"
+            )
+        finally:
+            conn.close()
+
+    def test_failed_partial_turn_is_retryable(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_then_fail("partial "))
+        _send(client, session_id)
+
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("recovered"))
+        response = _retry(client, session_id)
+        assert response.status_code == 200
+        _ = response.text
+
+        messages = _messages(client, session_id)
+        user_msg = [m for m in messages if m["role"] == "user"][0]
+        assert user_msg["tutor_attempt"]["state"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# 13. Finding 4: causal retry preserves original intent (mode/document_id)
+# ---------------------------------------------------------------------------
+
+
+class TestRetryOriginalIntent:
+    """Finding 4: retry uses the failed attempt's mode/document_id, not the frontend's current."""
+
+    def test_attempt_stores_mode_and_document_id(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_fail_immediately())
+        _send_with_mode(client, session_id, mode="show", document_id=42)
+
+        conn = connect()
+        try:
+            user_msg = conn.execute(
+                "select id from messages where session_id = ? and role = 'user'",
+                (session_id,),
+            ).fetchone()
+            att = tutor_attempts.latest_attempt_for_message(conn, int(user_msg["id"]))
+            assert att is not None
+            assert att["mode"] == "show"
+            assert att["document_id"] == 42
+        finally:
+            conn.close()
+
+    def test_retry_uses_original_mode_not_current_frontend_mode(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_fail_immediately())
+        _send_with_mode(client, session_id, mode="show", document_id=7)
+
+        captured: dict = {}
+
+        original_stream = _stream_of("recovered")
+
+        async def capturing_stream(
+            endpoint_url: str,
+            api_key: str | None,
+            model: str | None,
+            messages: list[dict[str, str]],
+            **kwargs: object,
+        ) -> AsyncIterator[StreamDelta]:
+            captured["messages"] = messages
+            async for delta in original_stream(endpoint_url, api_key, model, messages, **kwargs):
+                yield delta
+
+        monkeypatch.setattr(routes_chat, "stream_chat", capturing_stream)
+        response = _retry_with_mode(client, session_id, mode="guide", document_id=99)
+        assert response.status_code == 200
+        _ = response.text
+
+        conn = connect()
+        try:
+            user_msg = conn.execute(
+                "select id from messages where session_id = ? and role = 'user'",
+                (session_id,),
+            ).fetchone()
+            attempts = conn.execute(
+                "select mode, document_id from tutor_turn_attempts "
+                "where user_message_id = ? order by id",
+                (int(user_msg["id"]),),
+            ).fetchall()
+            retry_attempt = attempts[-1]
+            assert retry_attempt["mode"] == "show", (
+                "Retry must use the original attempt's mode, not the frontend's current mode"
+            )
+            assert retry_attempt["document_id"] == 7, (
+                "Retry must use the original attempt's document_id"
+            )
+        finally:
+            conn.close()
+
+    def test_retry_falls_back_to_request_for_pre_migration_attempts(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_msg_id = sessions.add_message(db, session_id, "user", QUESTION)
+        tutor_attempts.create_attempt(db, session_id=session_id, user_message_id=user_msg_id)
+        db.commit()
+        tutor_attempts.fail_attempt(db, 1, stopped_reason="upstream_failed", detail="test")
+
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("recovered"))
+        response = _retry_with_mode(client, session_id, mode="show", document_id=5)
+        assert response.status_code == 200
+        _ = response.text
+
+        conn = connect()
+        try:
+            attempts = conn.execute(
+                "select mode, document_id from tutor_turn_attempts "
+                "where user_message_id = ? order by id",
+                (user_msg_id,),
+            ).fetchall()
+            retry_attempt = attempts[-1]
+            assert retry_attempt["mode"] == "show"
+            assert retry_attempt["document_id"] == 5
+        finally:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 14. Finding 2: post-commit exceptions settle attempts, not strand them
+# ---------------------------------------------------------------------------
+
+
+class TestPostCommitStranding:
+    """Finding 2: if bind_turn or touch_class fails after the attempt is committed,
+    the attempt must be settled as stopped rather than left running forever."""
+
+    def test_open_turn_post_commit_failure_settles_attempt(
+        self,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("reply"))
+
+        def failing_bind(sid: int, token: int, msg_id: int) -> None:
+            raise RuntimeError("simulated bind_turn failure")
+
+        monkeypatch.setattr(sessions, "bind_turn", failing_bind)
+
+        app = FastAPI()
+
+        @app.exception_handler(LyraError)
+        async def handle_lyra_error(request: Request, exc: LyraError) -> JSONResponse:
+            return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+
+        app.include_router(routes_chat.router)
+        app.dependency_overrides[get_db] = _request_db
+        with TestClient(app, raise_server_exceptions=False) as test_client:
+            response = _send(test_client, session_id)
+            assert response.status_code == 500
+
+        conn = connect()
+        try:
+            rows = conn.execute(
+                "select state from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchall()
+            for row in rows:
+                assert row["state"] != "running", (
+                    "A post-commit failure must not leave the attempt in running state"
+                )
+        finally:
+            conn.close()
+
+    def test_open_retry_post_commit_failure_settles_attempt(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _seed_failed_turn(client, session_id, monkeypatch)
+
+        def failing_touch(conn: sqlite3.Connection, class_id: int) -> None:
+            raise RuntimeError("simulated touch_class failure")
+
+        monkeypatch.setattr(routes_chat, "touch_class", failing_touch)
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("recovered"))
+
+        app = FastAPI()
+
+        @app.exception_handler(LyraError)
+        async def handle_lyra_error(request: Request, exc: LyraError) -> JSONResponse:
+            return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+
+        app.include_router(routes_chat.router)
+        app.dependency_overrides[get_db] = _request_db
+        with TestClient(app, raise_server_exceptions=False) as test_client:
+            response = _retry(test_client, session_id)
+            assert response.status_code == 500
+
+        conn = connect()
+        try:
+            rows = conn.execute(
+                "select state from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchall()
+            for row in rows:
+                assert row["state"] != "running", (
+                    "A post-commit failure must not leave the attempt in running state"
+                )
+        finally:
+            conn.close()
+
+    def test_session_claim_is_released_after_post_commit_failure(
+        self,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("reply"))
+
+        def failing_bind(sid: int, token: int, msg_id: int) -> None:
+            raise RuntimeError("simulated failure")
+
+        monkeypatch.setattr(sessions, "bind_turn", failing_bind)
+
+        app = FastAPI()
+
+        @app.exception_handler(LyraError)
+        async def handle_lyra_error(request: Request, exc: LyraError) -> JSONResponse:
+            return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+
+        app.include_router(routes_chat.router)
+        app.dependency_overrides[get_db] = _request_db
+        with TestClient(app, raise_server_exceptions=False) as test_client:
+            _send(test_client, session_id)
+
+        assert sessions.active_turn(session_id) is None, (
+            "The session claim must be released even when post-commit setup fails"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 15. Comprehensive disconnect/failure matrix
+# ---------------------------------------------------------------------------
+
+
+class TestDisconnectMatrix:
+    """Every failure timing must settle the attempt and release the claim."""
+
+    def test_failure_before_first_token_creates_failed_attempt(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_fail_immediately())
+        response = _send(client, session_id)
+        _ = response.text
+
+        messages = _messages(client, session_id)
+        user_msg = [m for m in messages if m["role"] == "user"][0]
+        assert user_msg["tutor_attempt"]["state"] == "failed"
+        assert sessions.active_turn(session_id) is None
+
+    def test_unexpected_error_releases_claim(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_unexpected_error())
+        response = _send(client, session_id)
+        _ = response.text
+
+        messages = _messages(client, session_id)
+        user_msg = [m for m in messages if m["role"] == "user"][0]
+        assert user_msg["tutor_attempt"]["state"] == "failed"
+        assert sessions.active_turn(session_id) is None
+
+    def test_successful_turn_releases_claim(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("reply"))
+        response = _send(client, session_id)
+        _ = response.text
+
+        assert sessions.active_turn(session_id) is None
+
+    def test_retry_after_failed_releases_claim(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _seed_failed_turn(client, session_id, monkeypatch)
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("recovered"))
+        response = _retry(client, session_id)
+        _ = response.text
+
+        assert sessions.active_turn(session_id) is None
+
+    def test_retry_replay_releases_claim(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _seed_completed_turn(client, session_id, monkeypatch)
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("nope"))
+        response = _retry(client, session_id)
+        _ = response.text
+
+        assert sessions.active_turn(session_id) is None
+
+    def test_mid_stream_failure_releases_claim(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_then_fail("partial"))
+        response = _send(client, session_id)
+        _ = response.text
+
+        assert sessions.active_turn(session_id) is None
+
+    def test_retry_of_stopped_attempt_creates_new_attempt(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_msg_id = sessions.add_message(db, session_id, "user", QUESTION)
+        tutor_attempts.create_attempt(db, session_id=session_id, user_message_id=user_msg_id)
+        db.commit()
+        tutor_attempts.reconcile_running(db)
+
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("recovered"))
+        response = _retry(client, session_id)
+        assert response.status_code == 200
+        _ = response.text
+
+        conn = connect()
+        try:
+            attempts = conn.execute(
+                "select state from tutor_turn_attempts where user_message_id = ? order by id",
+                (user_msg_id,),
+            ).fetchall()
+            assert len(attempts) == 2
+            assert attempts[0]["state"] == "stopped"
+            assert attempts[1]["state"] == "completed"
+        finally:
+            conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 16. Concurrency: retry while still running is 409
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrencyMatrix:
+    def test_send_while_another_turn_active_is_409(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+    ) -> None:
+        token = sessions.begin_turn(session_id)
+        response = _send(client, session_id)
+        assert response.status_code == 409
+        sessions.end_turn(session_id, token)
+
+    def test_retry_while_running_attempt_is_refused(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        user_msg_id = sessions.add_message(db, session_id, "user", QUESTION)
+        tutor_attempts.create_attempt(db, session_id=session_id, user_message_id=user_msg_id)
+        db.commit()
+
+        response = _retry(client, session_id)
+        assert response.status_code == 400
+
+        sessions._active_turns.clear()
+
+    def test_sequential_retries_both_succeed(
+        self,
+        client: TestClient,
+        db: sqlite3.Connection,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _seed_failed_turn(client, session_id, monkeypatch)
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_fail_immediately())
+        response1 = _retry(client, session_id)
+        _ = response1.text
+
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("finally recovered"))
+        response2 = _retry(client, session_id)
+        assert response2.status_code == 200
+        _ = response2.text
+
+        messages = _messages(client, session_id)
+        user_msg = [m for m in messages if m["role"] == "user"][0]
+        assert user_msg["tutor_attempt"]["state"] == "completed"
+
+        conn = connect()
+        try:
+            attempts = conn.execute(
+                "select state from tutor_turn_attempts where session_id = ? order by id",
+                (session_id,),
+            ).fetchall()
+            assert len(attempts) == 3
+            assert attempts[0]["state"] == "failed"
+            assert attempts[1]["state"] == "failed"
+            assert attempts[2]["state"] == "completed"
+        finally:
+            conn.close()

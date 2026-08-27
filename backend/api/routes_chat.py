@@ -454,23 +454,41 @@ class TurnStreamingResponse(StreamingResponse):
         session_id: int,
         turn_token: int,
         content: AsyncIterator[str],
+        *,
+        attempt_id: int | None = None,
         **kwargs: object,
     ) -> None:
         super().__init__(content, **kwargs)  # type: ignore[arg-type]
         self._session_id = session_id
         self._turn_token = turn_token
+        self._attempt_id = attempt_id
+        self._generator_entered = False
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         try:
             await super().__call__(scope, receive, send)
         finally:
-            sessions.end_turn(self._session_id, self._turn_token)
+            try:
+                if not self._generator_entered and self._attempt_id:
+                    conn = connect()
+                    try:
+                        tutor_attempts.stop_attempt(
+                            conn,
+                            self._attempt_id,
+                            detail="The answer was cancelled before streaming began.",
+                        )
+                    finally:
+                        conn.close()
+            finally:
+                sessions.end_turn(self._session_id, self._turn_token)
 
 
 def _turn_response(
     session_id: int,
     turn_token: int,
     stream: AsyncIterator[str],
+    *,
+    attempt_id: int | None = None,
 ) -> TurnStreamingResponse:
     """Wrap a claimed turn's stream so the claim cannot outlive the response.
 
@@ -479,13 +497,24 @@ def _turn_response(
     the claim and the response owning it.
     """
     try:
-        return TurnStreamingResponse(
+        response = TurnStreamingResponse(
             session_id,
             turn_token,
             stream,
+            attempt_id=attempt_id,
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
+        if attempt_id is not None:
+            original_iterator = response.body_iterator
+
+            async def _tracked() -> AsyncIterator[bytes]:
+                response._generator_entered = True
+                async for chunk in original_iterator:  # type: ignore[union-attr]
+                    yield chunk
+
+            response.body_iterator = _tracked()
+        return response
     except BaseException:
         sessions.end_turn(session_id, turn_token)
         raise
@@ -618,7 +647,10 @@ async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> Stre
         _finish_opening(opener, session_id, turn_token)
         raise
     return _turn_response(
-        session_id, turn_token, _stream_turn(session_id, request, config, plan, cost, turn_token)
+        session_id,
+        turn_token,
+        _stream_turn(session_id, request, config, plan, cost, turn_token),
+        attempt_id=plan.attempt_id,
     )
 
 
@@ -679,7 +711,10 @@ async def retry_chat(session_id: int, payload: RetryRequest, conn: DbConn) -> St
         return _turn_response(session_id, turn_token, _replay_turn(session_id, result, turn_token))
     config, plan, request, cost = result
     return _turn_response(
-        session_id, turn_token, _stream_turn(session_id, request, config, plan, cost, turn_token)
+        session_id,
+        turn_token,
+        _stream_turn(session_id, request, config, plan, cost, turn_token),
+        attempt_id=plan.attempt_id,
     )
 
 
@@ -719,6 +754,11 @@ def _open_retry(
         require_document_allowed(access)
         config = access.config
 
+        original_mode = target.latest.get("mode") or request.mode
+        original_doc = target.latest.get("document_id")
+        if original_doc is None:
+            original_doc = request.document_id
+
         superseded_rows = conn.execute(
             "select id from messages where session_id = ? and id > ? order by id",
             (session_id, target.user_message_id),
@@ -727,27 +767,37 @@ def _open_retry(
 
         plan_excluded = frozenset({target.user_message_id, *superseded})
         cost = _plan_turn_cost(
-            conn, session_id, request.mode, target.content, plan_excluded, config
+            conn, session_id, original_mode, target.content, plan_excluded, config
         )
         _require_turn_fits(cost)
 
         attempt_id = tutor_attempts.create_attempt(
-            conn, session_id=session_id, user_message_id=target.user_message_id
+            conn,
+            session_id=session_id,
+            user_message_id=target.user_message_id,
+            mode=original_mode,
+            document_id=original_doc,
         )
         conn.commit()
 
-        plan = TurnPlan(
-            user_message_id=target.user_message_id,
-            superseded=superseded,
-            attempt_id=attempt_id,
-        )
-        turn_input = TurnInput(
-            content=target.content,
-            mode=request.mode,
-            document_id=request.document_id,
-        )
-        sessions.set_session_mode(conn, session_id, request.mode)
-        touch_class(conn, int(session["class_id"]))
+        try:
+            plan = TurnPlan(
+                user_message_id=target.user_message_id,
+                superseded=superseded,
+                attempt_id=attempt_id,
+            )
+            turn_input = TurnInput(
+                content=target.content,
+                mode=original_mode,
+                document_id=original_doc,
+            )
+            sessions.set_session_mode(conn, session_id, original_mode)
+            touch_class(conn, int(session["class_id"]))
+        except BaseException:
+            tutor_attempts.stop_attempt(
+                conn, attempt_id, detail="Turn setup failed after attempt was committed."
+            )
+            raise
     except BaseException:
         sessions.end_turn(session_id, turn_token)
         raise
@@ -814,14 +864,24 @@ def _open_turn(
         try:
             user_message_id = sessions.insert_message(conn, session_id, "user", request.content)
             attempt_id = tutor_attempts.create_attempt(
-                conn, session_id=session_id, user_message_id=user_message_id
+                conn,
+                session_id=session_id,
+                user_message_id=user_message_id,
+                mode=request.mode,
+                document_id=request.document_id,
             )
             conn.commit()
         except Exception:
             conn.rollback()
             raise
-        sessions.bind_turn(session_id, turn_token, user_message_id)
-        touch_class(conn, int(session["class_id"]))
+        try:
+            sessions.bind_turn(session_id, turn_token, user_message_id)
+            touch_class(conn, int(session["class_id"]))
+        except BaseException:
+            tutor_attempts.stop_attempt(
+                conn, attempt_id, detail="Turn setup failed after attempt was committed."
+            )
+            raise
     except BaseException:
         sessions.end_turn(session_id, turn_token)
         raise
@@ -975,12 +1035,15 @@ async def _stream_turn(
         )
         yield _frame(type="done", message_id=message_id)
     except (asyncio.CancelledError, GeneratorExit):
-        if conn is not None and (received or thought):
-            _commit_reply_atomic(conn, session_id, plan, received, thought, retrieval, thinking_ms)
-        elif conn is not None and plan.attempt_id:
-            tutor_attempts.stop_attempt(
-                conn, plan.attempt_id, detail="The answer was cancelled before any text arrived."
+        if conn is not None and plan.attempt_id:
+            detail = (
+                f"The answer was cancelled after {len(received)} token(s) were received."
+                if received or thought
+                else "The answer was cancelled before any text arrived."
             )
+            tutor_attempts.stop_attempt(conn, plan.attempt_id, detail=detail)
+        elif conn is not None and not plan.attempt_id and (received or thought):
+            _commit_reply_atomic(conn, session_id, plan, received, thought, retrieval, thinking_ms)
         raise
     except LyraError as exc:
         if conn is not None and plan.attempt_id:

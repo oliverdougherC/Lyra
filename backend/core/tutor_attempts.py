@@ -53,6 +53,8 @@ def create_attempt(
     *,
     session_id: int,
     user_message_id: int,
+    mode: str | None = None,
+    document_id: int | None = None,
 ) -> int:
     """Record a running attempt on one user message and return its id.
 
@@ -60,8 +62,9 @@ def create_attempt(
     the message and its attempt land together or not at all.
     """
     cursor = conn.execute(
-        "insert into tutor_turn_attempts (session_id, user_message_id, state) values (?, ?, ?)",
-        (session_id, user_message_id, RUNNING),
+        "insert into tutor_turn_attempts "
+        "(session_id, user_message_id, state, mode, document_id) values (?, ?, ?, ?, ?)",
+        (session_id, user_message_id, RUNNING, mode, document_id),
     )
     return int(cursor.lastrowid or 0)
 
