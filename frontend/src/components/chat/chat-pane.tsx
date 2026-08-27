@@ -20,6 +20,7 @@ import {
   ApiError,
   api,
   streamChat,
+  streamChatRetry,
   streamRegenerate,
   streamWriterChat,
   streamWriterChatRetry,
@@ -139,8 +140,8 @@ function startsTimeGap(messages: ChatMessage[], index: number): boolean {
 
 type TurnOutcome = 'active' | 'completed' | 'stopped' | 'failed'
 
-/** A new question, a tutor regeneration, or a writer retry (PLA-310). */
-type TurnKind = 'send' | 'regenerate' | 'writer-retry'
+/** A new question, a tutor regeneration, a tutor retry (PLA-306), or a writer retry (PLA-310). */
+type TurnKind = 'send' | 'regenerate' | 'tutor-retry' | 'writer-retry'
 
 export function ChatPane({
   classId,
@@ -266,7 +267,7 @@ export function ChatPane({
     // A retry answers the question already on screen, so its optimistic reply stands where
     // the previous one did rather than below it. The server holds the old reply until the
     // new one is written, which is why a failed retry falls back to `live` intact.
-    if (turnKind === 'regenerate' || turnKind === 'writer-retry') {
+    if (turnKind === 'regenerate' || turnKind === 'tutor-retry' || turnKind === 'writer-retry') {
       const withoutLastReply =
         base.length > 0 && base[base.length - 1].role === 'assistant' ? base.slice(0, -1) : base
       return [...withoutLastReply, ...pendingTurn]
@@ -449,7 +450,7 @@ export function ChatPane({
       // which is exactly what this turn is being appended to.
       setTurnBase(persisted ?? [])
       setPendingTurn(
-        kind === 'regenerate' || kind === 'writer-retry'
+        kind === 'regenerate' || kind === 'tutor-retry' || kind === 'writer-retry'
           ? [placeholderReply(now)]
           : [
               {
@@ -539,19 +540,26 @@ export function ChatPane({
                 onEvent,
                 controller.signal,
               )
-            : kind === 'regenerate'
-              ? streamRegenerate(
+            : kind === 'tutor-retry'
+              ? streamChatRetry(
                   turnSessionId,
                   { mode: activeMode, document_id: documentId },
                   onEvent,
                   controller.signal,
                 )
-              : streamChat(
-                  turnSessionId,
-                  { content, mode: activeMode, document_id: documentId },
-                  onEvent,
-                  controller.signal,
-                ))
+              : kind === 'regenerate'
+                ? streamRegenerate(
+                    turnSessionId,
+                    { mode: activeMode, document_id: documentId },
+                    onEvent,
+                    controller.signal,
+                  )
+                : streamChat(
+                    turnSessionId,
+                    { content, mode: activeMode, document_id: documentId },
+                    onEvent,
+                    controller.signal,
+                  ))
       } catch (caught) {
         if (!owns()) {
           // Nothing to report and nobody to report it to: this turn's rows are gone.
@@ -653,6 +661,11 @@ export function ChatPane({
   const regenerate = useCallback(() => {
     if (activeSessionId === null || writer) return
     void runTurn('regenerate', '', activeSessionId)
+  }, [activeSessionId, runTurn, writer])
+
+  const retryTutorTurn = useCallback(() => {
+    if (activeSessionId === null || writer) return
+    void runTurn('tutor-retry', '', activeSessionId)
   }, [activeSessionId, runTurn, writer])
 
   const retryWriterTurn = useCallback(() => {
@@ -934,7 +947,14 @@ export function ChatPane({
                       message.writer_attempt?.state === 'stopped')
                     ? retryWriterTurn
                     : undefined
-                  : regenerate
+                  : !optimisticTurn &&
+                      index === lastUserIndex &&
+                      (message.tutor_attempt?.state === 'failed' ||
+                        message.tutor_attempt?.state === 'stopped')
+                    ? retryTutorTurn
+                    : message.role === 'assistant'
+                      ? regenerate
+                      : undefined
               }
             />
           )
