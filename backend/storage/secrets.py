@@ -5,9 +5,18 @@ the machine has no working keyring backend, it falls back to `data/.api_key`, cr
 with mode `0o600`, and `api_key_storage()` reports `"file"` so the interface can say
 plainly that the key is stored unencrypted.
 
+**Transition invariant (PLA-302):** At any instant, at most one authoritative copy of the
+key exists. After a successful keychain write, the fallback file is removed before success
+is reported. After a successful file write on demotion, the keychain entry is removed
+before success is reported. ``delete_api_key`` clears both locations idempotently. A
+partial replacement that cannot guarantee exactly one stored value either preserves the
+previously known-good credential or raises, so a later ``get_api_key`` never silently
+returns a stale value the caller thought was replaced.
+
 The key is never returned by any endpoint and never written to a log line.
 """
 
+from contextlib import suppress
 from pathlib import Path
 from types import ModuleType
 from typing import Literal
@@ -21,7 +30,6 @@ from backend.storage import private
 SERVICE = "lyra"
 USERNAME = "tutor-endpoint"
 
-# None until the backend has been probed once. Read it through `api_key_storage()`.
 _keyring_ok: bool | None = None
 
 
@@ -63,24 +71,56 @@ def _read_key_file() -> str | None:
     return value or None
 
 
+def _remove_key_file() -> None:
+    """Remove the fallback file if it exists, tolerating absence."""
+    _key_file().unlink(missing_ok=True)
+
+
+def _remove_keychain_entry() -> None:
+    """Remove the keychain entry if it exists, tolerating absence."""
+    with suppress(keyring.errors.PasswordDeleteError):
+        _keyring().delete_password(SERVICE, USERNAME)
+
+
 def set_api_key(value: str) -> None:
-    """Store the tutor API key, replacing any existing one."""
+    """Store the tutor API key, replacing any existing one.
+
+    Transition contract: after this call returns normally, the new value is the sole
+    stored credential. The previously stored value (if any) has been removed from
+    whichever location held it. If the keychain write succeeds, the fallback file is
+    removed before returning. If the keychain write fails and the call demotes to file
+    storage, the keychain entry is removed after the file write so no stale keychain
+    value can later resurface.
+
+    If the fallback file cannot be removed after a successful keychain write, the
+    keychain entry is rolled back (deleted) so that the old file value remains the sole
+    authoritative credential, and a ``KeyError`` is raised. This prevents a state where
+    two different values coexist.
+    """
     if _keyring_usable():
         try:
             _keyring().set_password(SERVICE, USERNAME, value)
         except keyring.errors.KeyringError:
             _demote_to_file()
         else:
+            try:
+                _remove_key_file()
+            except OSError:
+                # Cannot remove fallback file: two values would coexist. Roll back
+                # the keychain write so the old file value remains sole authority.
+                with suppress(keyring.errors.KeyringError):
+                    _remove_keychain_entry()
+                raise
             return
 
+    # Demoted to file storage (either from this call or the probe).
     path = _key_file()
-    # `0o700`, so the key file sits in an owner-only directory even if the data tree was
-    # somehow created before the permissions contract existed.
     private.secure_mkdir(path.parent, root=settings.data_dir)
-    # Written private from the first byte and without following a symlink at the key path:
-    # `write_private_text` opens with O_NOFOLLOW so the key can never be written through a
-    # link to some other file, and sets the mode on the open so it is never briefly broad.
     private.write_private_text(path, value)
+    # Clean up any stale keychain entry so it cannot resurface if the keychain
+    # recovers in a later process.
+    with suppress(keyring.errors.KeyringError):
+        _remove_keychain_entry()
 
 
 def get_api_key() -> str | None:
@@ -107,11 +147,20 @@ def delete_api_key() -> None:
             pass
         except keyring.errors.KeyringError:
             _demote_to_file()
-    # Always clear the fallback too, so a file left over from a keyring-less run can
-    # never resurface as the active key.
-    _key_file().unlink(missing_ok=True)
+    _remove_key_file()
 
 
 def api_key_storage() -> Literal["keychain", "file"]:
     """Where a key would be stored right now, for the interface to state honestly."""
     return "keychain" if _keyring_usable() else "file"
+
+
+def reset_keyring_probe() -> None:
+    """Allow the keyring probe to run again on the next access.
+
+    Called after a process restart boundary (or in tests) so that a recovered keychain
+    is detected. This does NOT change which value is stored; it only allows the next
+    ``_keyring_usable()`` to re-probe.
+    """
+    global _keyring_ok
+    _keyring_ok = None
