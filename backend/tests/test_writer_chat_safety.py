@@ -1457,3 +1457,472 @@ class TestCrashSafeCompletion:
             m for m in sessions.list_messages(db, writer_session) if m["role"] == "user"
         ]
         assert len(user_messages) == 1
+
+
+# ---------------------------------------------------------------------------
+# PLA-309: Live web-research revocation at dispatch time
+# ---------------------------------------------------------------------------
+
+
+class TestLiveWebRevocation:
+    """The tool registry is frozen at preflight, but outbound web requests
+    re-check the live permission before making the network call (PLA-309).
+
+    Enabled->disabled after preflight: the tool stays in the registry but the
+    handler refuses locally, no outbound web call is made, no source rows.
+
+    Disabled->enabled after preflight: the tool never enters the registry, so
+    it cannot be called at all. These cases are already covered by
+    ``TestFrozenPolicyEnforcement``; the assertions here prove the handler-
+    level gate is also closed for the inverse direction.
+    """
+
+    def test_search_web_refused_after_live_revocation(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """search_web returns a failure ToolResult when web research is revoked mid-turn."""
+        db.execute("update settings set allow_web_research = 1 where id = 1")
+        db.commit()
+
+        search_called = []
+        original_search = web_research.search_web
+
+        def tracking_search(*args, **kwargs):
+            search_called.append(True)
+            return original_search(*args, **kwargs)
+
+        monkeypatch.setattr(web_research, "search_web", tracking_search)
+
+        async def revoking_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            assert "search_web" in registry, "search_web must be in the frozen registry"
+            db.execute("update settings set allow_web_research = 0 where id = 1")
+            db.commit()
+            result = registry["search_web"].handler(query="test query")
+            assert not result.ok, "search_web must refuse after revocation"
+            assert "disabled" in str(result.body).lower()
+            return tools.ToolLoopResult(content="Refused.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", revoking_loop)
+        resp = _send_chat(client, artifact_id, writer_session, "Search something")
+        assert resp.status_code == 200
+        assert len(search_called) == 0, "web_research.search_web must NOT be called"
+
+    def test_fetch_source_refused_after_live_revocation(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """fetch_source returns a failure ToolResult when web research is revoked mid-turn."""
+        db.execute("update settings set allow_web_research = 1 where id = 1")
+        db.commit()
+
+        fetch_called = []
+        original_fetch = web_research.fetch_source
+
+        def tracking_fetch(*args, **kwargs):
+            fetch_called.append(True)
+            return original_fetch(*args, **kwargs)
+
+        monkeypatch.setattr(web_research, "fetch_source", tracking_fetch)
+
+        async def revoking_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            assert "fetch_source" in registry, "fetch_source must be in the frozen registry"
+            db.execute("update settings set allow_web_research = 0 where id = 1")
+            db.commit()
+            result = registry["fetch_source"].handler(url="https://example.com")
+            assert not result.ok, "fetch_source must refuse after revocation"
+            assert "disabled" in str(result.body).lower()
+            return tools.ToolLoopResult(content="Refused.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", revoking_loop)
+        resp = _send_chat(client, artifact_id, writer_session, "Fetch something")
+        assert resp.status_code == 200
+        assert len(fetch_called) == 0, "web_research.fetch_source must NOT be called"
+
+    def test_no_source_rows_after_revoked_fetch(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """A revoked fetch_source creates no source or snapshot rows."""
+        db.execute("update settings set allow_web_research = 1 where id = 1")
+        db.commit()
+
+        source_count_before = db.execute("select count(*) as n from writer_sources").fetchone()["n"]
+
+        async def revoking_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            db.execute("update settings set allow_web_research = 0 where id = 1")
+            db.commit()
+            registry["fetch_source"].handler(url="https://example.com/should-not-land")
+            return tools.ToolLoopResult(content="Refused.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", revoking_loop)
+        _send_chat(client, artifact_id, writer_session, "Fetch it")
+
+        source_count_after = db.execute("select count(*) as n from writer_sources").fetchone()["n"]
+        assert source_count_after == source_count_before
+
+    def test_schema_tokens_unchanged_after_revocation(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """Revoking web research mid-turn does not change schema token accounting."""
+        db.execute("update settings set allow_web_research = 1 where id = 1")
+        db.commit()
+
+        received = {}
+
+        async def capturing_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            budget = kwargs.get("context_budget")
+            db.execute("update settings set allow_web_research = 0 where id = 1")
+            db.commit()
+            received["registry"] = registry
+            received["budget"] = budget
+            return tools.ToolLoopResult(content="OK", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", capturing_loop)
+        _send_chat(client, artifact_id, writer_session, "Hello")
+
+        registry = received["registry"]
+        budget = received["budget"]
+        from backend.llm.tools import schema_tokens, tool_schemas
+
+        assert schema_tokens(tool_schemas(registry)) == budget.tool_tokens
+
+    def test_enabled_after_preflight_still_excluded_from_registry(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """Enabling web research after preflight: the tool stays out of the registry
+        AND the handler-level gate cannot be reached (the tool simply does not exist).
+        """
+        db.execute("update settings set allow_web_research = 0 where id = 1")
+        db.commit()
+
+        async def enabling_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            db.execute("update settings set allow_web_research = 1 where id = 1")
+            db.commit()
+            assert "search_web" not in registry
+            assert "fetch_source" not in registry
+            return tools.ToolLoopResult(content="OK", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", enabling_loop)
+        resp = _send_chat(client, artifact_id, writer_session, "Hello")
+        assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# PLA-308: Cross-resource coordination evidence
+# ---------------------------------------------------------------------------
+
+
+class TestWriterVsAutosave:
+    """Writer chat's propose_revision is intentionally inert: it must not
+    directly overwrite the student's body. An autosave that lands while a
+    writer turn is in progress cannot be silently lost.
+    """
+
+    def test_proposal_does_not_overwrite_student_body(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """A writer proposal records a pending edit without modifying the body part."""
+        part = db.execute(
+            "select id, content, content_version from artifact_parts "
+            "where artifact_id = ? and kind = ?",
+            (artifact_id, artifacts.DRAFT_BODY),
+        ).fetchone()
+        body_before = str(part["content"])
+        version_before = int(part["content_version"])
+
+        async def proposing_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            registry["propose_revision"].handler(
+                section="Body", replacement="## Body\n\nCompletely rewritten.\n"
+            )
+            return tools.ToolLoopResult(content="Proposed.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", proposing_loop)
+        _send_chat(client, artifact_id, writer_session, "Revise body")
+
+        part_after = db.execute(
+            "select content, content_version from artifact_parts where id = ?",
+            (part["id"],),
+        ).fetchone()
+        assert str(part_after["content"]) == body_before
+        assert int(part_after["content_version"]) == version_before
+        pending = suggestions.pending_for_part(db, int(part["id"]))
+        assert pending is not None
+
+    def test_autosave_during_writer_turn_preserved(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """An autosave that lands while the writer is proposing survives intact.
+
+        The autosave happens from a different connection (a second HTTP request),
+        so it is simulated before the tool loop starts, between preflight and
+        execution. The proposal reads the body part fresh on each call, so it
+        sees the autosaved content as its base.
+        """
+        part = db.execute(
+            "select id, content_version from artifact_parts where artifact_id = ? and kind = ?",
+            (artifact_id, artifacts.DRAFT_BODY),
+        ).fetchone()
+        part_id = int(part["id"])
+        version_before = int(part["content_version"])
+
+        autosave_text = (
+            "# Essay\n\nStudent typed this during the turn.\n\n"
+            "## Body\n\nBody text.\n\n## Conclusion\n\nConclusion.\n"
+        )
+        artifacts.compare_and_set_part_content(
+            db, part_id, autosave_text, "user_corrected", expected_version=version_before
+        )
+
+        async def proposing_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            registry["propose_revision"].handler(
+                section="Body", replacement="## Body\n\nRevised.\n"
+            )
+            return tools.ToolLoopResult(content="Done.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", proposing_loop)
+        _send_chat(client, artifact_id, writer_session, "Revise body")
+
+        part_after = db.execute(
+            "select content from artifact_parts where id = ?", (part_id,)
+        ).fetchone()
+        assert "Student typed this during the turn" in str(part_after["content"])
+
+    def test_stale_acceptance_refused_by_version_defense(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """A proposal accepted against a stale body version is refused by the CAS guard."""
+        part = db.execute(
+            "select id, content_version from artifact_parts where artifact_id = ? and kind = ?",
+            (artifact_id, artifacts.DRAFT_BODY),
+        ).fetchone()
+        part_id = int(part["id"])
+        stale_version = int(part["content_version"])
+
+        async def proposing_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            registry["propose_revision"].handler(
+                section="Body", replacement="## Body\n\nProposed text.\n"
+            )
+            return tools.ToolLoopResult(content="Proposed.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", proposing_loop)
+        _send_chat(client, artifact_id, writer_session, "Revise body")
+
+        pending = suggestions.pending_for_part(db, part_id)
+        assert pending is not None
+
+        artifacts.compare_and_set_part_content(
+            db,
+            part_id,
+            "# Essay\n\nAutosaved after proposal.\n",
+            "user_corrected",
+            expected_version=stale_version,
+        )
+
+        from backend.core.errors import StaleContentError
+
+        with pytest.raises(StaleContentError):
+            suggestions.accept(
+                db,
+                int(pending["id"]),
+                expected_version=stale_version,
+            )
+
+
+class TestWriterVsProposalAcceptance:
+    """Acceptance while a writer turn is running must not be falsely serialized
+    by the chat-session claim, and the accepted content must stay authoritative.
+    """
+
+    def test_acceptance_not_serialized_by_chat_claim(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """A proposal can be accepted from a different connection while a chat turn holds
+        the session claim -- acceptance operates on the edit, not the session.
+        """
+        part = db.execute(
+            "select id, content_version from artifact_parts where artifact_id = ? and kind = ?",
+            (artifact_id, artifacts.DRAFT_BODY),
+        ).fetchone()
+        part_id = int(part["id"])
+
+        acceptance_result = {}
+
+        async def proposing_then_accepting(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            registry["propose_revision"].handler(
+                section="Body", replacement="## Body\n\nAcceptable revision.\n"
+            )
+            pending = suggestions.pending_for_part(db, part_id)
+            assert pending is not None
+            current_version = int(
+                db.execute(
+                    "select content_version from artifact_parts where id = ?", (part_id,)
+                ).fetchone()["content_version"]
+            )
+            result = suggestions.accept(db, int(pending["id"]), expected_version=current_version)
+            acceptance_result["result"] = result
+            return tools.ToolLoopResult(content="Accepted mid-turn.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", proposing_then_accepting)
+        _send_chat(client, artifact_id, writer_session, "Revise and accept")
+
+        assert "result" in acceptance_result
+        part_after = db.execute(
+            "select content from artifact_parts where id = ?", (part_id,)
+        ).fetchone()
+        assert "Acceptable revision" in str(part_after["content"])
+
+    def test_accepted_content_authoritative_over_later_proposal(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """After acceptance, a new writer proposal proposes against the accepted content,
+        not the pre-acceptance body.
+        """
+        part = db.execute(
+            "select id, content_version from artifact_parts where artifact_id = ? and kind = ?",
+            (artifact_id, artifacts.DRAFT_BODY),
+        ).fetchone()
+        part_id = int(part["id"])
+
+        async def first_turn(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            registry["propose_revision"].handler(
+                section="Body", replacement="## Body\n\nFirst revision.\n"
+            )
+            return tools.ToolLoopResult(content="First.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", first_turn)
+        _send_chat(client, artifact_id, writer_session, "First revision")
+
+        pending = suggestions.pending_for_part(db, part_id)
+        assert pending is not None
+        current_version = int(
+            db.execute(
+                "select content_version from artifact_parts where id = ?", (part_id,)
+            ).fetchone()["content_version"]
+        )
+        suggestions.accept(db, int(pending["id"]), expected_version=current_version)
+
+        async def second_turn(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            registry["propose_revision"].handler(
+                section="Body", replacement="## Body\n\nSecond revision.\n"
+            )
+            return tools.ToolLoopResult(content="Second.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", second_turn)
+        _send_chat(client, artifact_id, writer_session, "Second revision")
+
+        pending2 = suggestions.pending_for_part(db, part_id)
+        assert pending2 is not None
+        proposed = str(pending2["proposed_content"])
+        assert "Second revision" in proposed
+        part_now = db.execute(
+            "select content from artifact_parts where id = ?", (part_id,)
+        ).fetchone()
+        assert "First revision" in str(part_now["content"])
+
+
+class TestWriterVsBackgroundJobs:
+    """Writer chat cannot start a background pass/review while another run
+    already owns the draft, and the session claim does not imply the run finished.
+    """
+
+    def test_start_draft_pass_refused_while_run_in_progress(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """start_draft_pass fails when another run already owns the draft."""
+        from backend.core import writer_pipeline
+
+        monkeypatch.setattr(writer_pipeline, "enqueue", lambda job: None)
+
+        async def first_pass(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            result1 = registry["start_draft_pass"].handler()
+            assert result1.ok, "First pass must succeed"
+            result2 = registry["start_draft_pass"].handler()
+            assert not result2.ok, "Second pass must be refused"
+            assert "already" in str(result2.body).lower() or "running" in str(result2.body).lower()
+            return tools.ToolLoopResult(content="Tried two passes.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", first_pass)
+        _send_chat(client, artifact_id, writer_session, "Start two passes")
+
+    def test_review_refused_while_pass_in_progress(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """start_review fails when a draft pass already owns the draft."""
+        from backend.core import review_pipeline, writer_pipeline
+
+        monkeypatch.setattr(writer_pipeline, "enqueue", lambda job: None)
+        monkeypatch.setattr(review_pipeline, "enqueue", lambda job: None)
+
+        async def pass_then_review(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            result1 = registry["start_draft_pass"].handler()
+            assert result1.ok, "Pass must succeed"
+            result2 = registry["start_review"].handler()
+            assert not result2.ok, "Review must be refused while pass runs"
+            return tools.ToolLoopResult(content="Tried.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", pass_then_review)
+        _send_chat(client, artifact_id, writer_session, "Pass then review")
+
+    def test_job_gets_one_durable_run_and_one_ownership_row(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """A job started through chat creates exactly one run row and one attempt target."""
+        from backend.core import writer_pipeline
+
+        monkeypatch.setattr(writer_pipeline, "enqueue", lambda job: None)
+
+        async def pass_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            registry["start_draft_pass"].handler()
+            return tools.ToolLoopResult(content="Queued.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", pass_loop)
+        _send_chat(client, artifact_id, writer_session, "Start a pass")
+
+        runs = db.execute(
+            "select id from writer_runs where artifact_id = ?", (artifact_id,)
+        ).fetchall()
+        assert len(runs) == 1
+
+        messages = sessions.list_messages(db, writer_session)
+        user_msg = next(m for m in messages if m["role"] == "user")
+        attempt = writer_attempts.latest_attempt_for_message(db, int(user_msg["id"]))
+        assert attempt is not None
+        targets = writer_attempts.targets_for_attempt(db, int(attempt["id"]))
+        pass_targets = [t for t in targets if t["target_kind"] == "pass"]
+        assert len(pass_targets) == 1
+
+    def test_session_claim_release_does_not_imply_run_finished(
+        self, client: TestClient, artifact_id: int, writer_session: int, monkeypatch, db
+    ):
+        """After a writer chat turn completes and releases the session claim, a background
+        run started during that turn is still in progress on the draft.
+        """
+        from backend.core import writer_pipeline
+
+        monkeypatch.setattr(writer_pipeline, "enqueue", lambda job: None)
+
+        async def pass_loop(*args, **kwargs):
+            registry = kwargs.get("registry", {})
+            registry["start_draft_pass"].handler()
+            return tools.ToolLoopResult(content="Pass started.", calls=())
+
+        monkeypatch.setattr(routes_drafts, "run_tool_loop", pass_loop)
+        resp = _send_chat(client, artifact_id, writer_session, "Start a pass")
+        assert resp.status_code == 200
+
+        assert sessions.active_turn(writer_session) is None
+
+        artifact = db.execute("select state from artifacts where id = ?", (artifact_id,)).fetchone()
+        assert artifact["state"] in (artifacts.PENDING, artifacts.GENERATING)

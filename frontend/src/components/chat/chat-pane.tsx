@@ -571,7 +571,9 @@ export function ChatPane({
           } else {
             toast.error('Another turn is still in progress on this conversation.')
           }
-          setDraft(content)
+          if (kind === 'send') {
+            setDraft(content)
+          }
           setOutcome('failed')
         } else {
           toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')

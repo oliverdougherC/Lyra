@@ -326,12 +326,25 @@ def build_registry(
         exposed_private.add(*(row["excerpt"] for row in rows))
         return success(results=rows)
 
+    def _web_still_allowed() -> bool:
+        """Re-read the live web-research permission at dispatch time.
+
+        The frozen ``capabilities`` snapshot decides which tools appear in the
+        registry (grant membership) and how many schema tokens are charged.
+        This helper decides whether the outbound network request may proceed:
+        a student who revokes web research mid-turn gets an immediate local
+        refusal even though the tool is still in the transcript (PLA-309).
+        """
+        return get_writer_capabilities(conn, class_id).allow_web_research
+
     def search_web(query: str) -> ToolResult:
+        if not _web_still_allowed():
+            return failure("Web research has been disabled for this class.")
         try:
             return success(
                 results=web_research.search_web(
                     query,
-                    allowed=capabilities.allow_web_research,
+                    allowed=True,
                     firecrawl_base_url=capabilities.firecrawl_base_url,
                     private_context=exposed_private.snapshot(),
                 )
@@ -340,10 +353,12 @@ def build_registry(
             return failure(str(exc))
 
     def fetch_source(url: str) -> ToolResult:
+        if not _web_still_allowed():
+            return failure("Web research has been disabled for this class.")
         try:
             fetched = web_research.fetch_source(
                 url,
-                allowed=capabilities.allow_web_research,
+                allowed=True,
                 firecrawl_base_url=capabilities.firecrawl_base_url,
                 scrape_enabled=capabilities.firecrawl_scrape_enabled,
             )
