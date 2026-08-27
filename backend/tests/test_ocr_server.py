@@ -82,6 +82,8 @@ def test_the_spawned_command_is_the_publisher_s_reference_invocation(
     spawned: list[list[str]] = []
 
     class _Fake:
+        pid = 99999
+
         def poll(self) -> int | None:
             return None
 

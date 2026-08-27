@@ -138,7 +138,7 @@ def test_a_healthy_embedding_port_is_not_started_over(monkeypatch: pytest.Monkey
     monkeypatch.setattr(EmbeddingServer, "_healthy", lambda _self: True)
     # Adoption now also asks the occupant which model it loaded; that identity check
     # has its own tests, and here it is assumed to pass so the no-spawn claim is isolated.
-    monkeypatch.setattr(EmbeddingServer, "_verify_adoption", lambda _self: None)
+    monkeypatch.setattr(EmbeddingServer, "_verify_and_adopt", lambda _self: None)
     monkeypatch.setattr(
         EmbeddingServer,
         "_start_locked",

@@ -116,6 +116,8 @@ def test_reranking_mode_is_asked_for_explicitly(
         spawned.append(argv)
 
         class Process:
+            pid = 99999
+
             def poll(self) -> None:
                 return None
 
