@@ -38,24 +38,25 @@ def _install_weights() -> None:
 
 
 class _AliveProcess:
-    """A spawned child that stays alive: poll() returns None."""
+    """A spawned child that stays alive: poll() returns None until killed."""
 
     pid = 99999
 
     def __init__(self, stderr: bytes = b"") -> None:
         self.stderr = io.BytesIO(stderr)
+        self._killed = False
 
-    def poll(self) -> None:
-        return None
+    def poll(self) -> int | None:
+        return 1 if self._killed else None
 
     def wait(self, timeout: float | None = None) -> int:
         return 0
 
     def kill(self) -> None:
-        pass
+        self._killed = True
 
     def terminate(self) -> None:
-        pass
+        self._killed = True
 
 
 class _DeadProcess:
@@ -148,9 +149,10 @@ class TestOwnershipFile:
     def test_absent_file_loads_empty(self) -> None:
         assert _load_ownership() == {}
 
-    def test_corrupt_file_loads_empty(self) -> None:
+    def test_corrupt_file_raises_configuration_error(self) -> None:
         llama_server._OWNERSHIP_FILE.write_text("not json{{{")
-        assert _load_ownership() == {}
+        with pytest.raises(ConfigurationError, match="corrupt"):
+            _load_ownership()
 
     def test_multiple_services_coexist(self) -> None:
         pid = os.getpid()
@@ -208,7 +210,12 @@ class TestHealthAwareness:
         instance._last_health_ok = 0.0
 
         terminated: list[object] = []
-        monkeypatch.setattr(llama_server, "_terminate", lambda p: terminated.append(p))
+
+        def mock_terminate(p: object) -> None:
+            terminated.append(p)
+            p._killed = True  # type: ignore[union-attr]
+
+        monkeypatch.setattr(llama_server, "_terminate", mock_terminate)
 
         health_calls = [False, False]
 
@@ -250,7 +257,11 @@ class TestHealthAwareness:
         instance = RerankServer()
         instance._last_health_ok = 0.0
         monkeypatch.setattr(instance, "_healthy", lambda: False)
-        monkeypatch.setattr(llama_server, "_terminate", lambda p: None)
+        monkeypatch.setattr(
+            llama_server,
+            "_terminate",
+            lambda p: setattr(p, "_killed", True),
+        )
 
         for i in range(llama_server._MAX_UNHEALTHY_RESTARTS):
             instance._process = _AliveProcess()
@@ -300,9 +311,7 @@ class TestAdoption:
         assert instance._adopted_pid == pid
         assert instance._adopted_start_token is not None
 
-    def test_adopted_server_is_reclaimed_on_stop(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_adopted_server_is_reclaimed_on_stop(self, monkeypatch: pytest.MonkeyPatch) -> None:
         instance = RerankServer()
         pid = os.getpid()
         token = _process_start_token(pid)
@@ -334,14 +343,19 @@ class TestAdoption:
         instance._adopted_start_token = token
         instance._last_health_ok = 0.0
 
+        killed = [False]
         terminated_pids: list[int] = []
+
+        def mock_terminate_pid(p: int, g: object, t: object, label: str) -> None:
+            terminated_pids.append(p)
+            killed[0] = True
+
+        monkeypatch.setattr(llama_server, "_terminate_pid", mock_terminate_pid)
         monkeypatch.setattr(
             llama_server,
-            "_terminate_pid",
-            lambda p, g, t, label: terminated_pids.append(p),
+            "_token_matches_pid",
+            lambda p, t: False if killed[0] else _token_matches_pid(p, t),
         )
-        # First health check: unhealthy (for the adopted process).
-        # Second health check: nothing on port (before start).
         health_calls = iter([False, False])
         monkeypatch.setattr(instance, "_healthy", lambda: next(health_calls, True))
         monkeypatch.setattr(instance, "_find_binary", lambda: settings.models_dir / "llama-server")
@@ -387,9 +401,7 @@ class TestExternalServer:
         assert instance._adopted_pid is None
         assert instance._process is None
 
-    def test_stop_does_not_signal_external_server(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_stop_does_not_signal_external_server(self, monkeypatch: pytest.MonkeyPatch) -> None:
         instance = RerankServer()
         monkeypatch.setattr(instance, "_healthy", lambda: True)
         monkeypatch.setattr(
@@ -446,9 +458,7 @@ class TestWrongModelAndUnrelated:
 class TestPidReuseAndStaleRecords:
     """Stale ownership records are cleaned, never acted on."""
 
-    def test_stale_record_with_dead_pid_is_cleaned(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_stale_record_with_dead_pid_is_cleaned(self, monkeypatch: pytest.MonkeyPatch) -> None:
         instance = RerankServer()
         _save_ownership(
             {
@@ -505,20 +515,23 @@ class TestPidReuseAndStaleRecords:
 
         assert instance._adopted_pid is None
 
-    def test_record_with_wrong_port_is_not_adopted(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_record_with_wrong_port_is_not_adopted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         instance = RerankServer()
         pid = os.getpid()
         _record_server("reranking", pid, instance.port + 100, settings.rerank_model_path.name)
 
-        # The wrong-port record triggers reconciliation, which would terminate our
-        # own process. Mock _terminate_pid so the test survives.
+        killed = [False]
         terminated_pids: list[int] = []
+
+        def mock_terminate_pid(p: int, g: object, t: object, label: str) -> None:
+            terminated_pids.append(p)
+            killed[0] = True
+
+        monkeypatch.setattr(llama_server, "_terminate_pid", mock_terminate_pid)
         monkeypatch.setattr(
             llama_server,
-            "_terminate_pid",
-            lambda p, g, t, label: terminated_pids.append(p),
+            "_token_matches_pid",
+            lambda p, t: False if killed[0] else _token_matches_pid(p, t),
         )
         monkeypatch.setattr(instance, "_healthy", lambda: True)
         monkeypatch.setattr(
@@ -646,9 +659,7 @@ class TestFailedStartCooldown:
 class TestOwnershipRecording:
     """Spawning a server records ownership for later adoption."""
 
-    def test_spawn_records_ownership(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_spawn_records_ownership(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _install_weights()
         instance = RerankServer()
         monkeypatch.setattr(instance, "_healthy", lambda: False)
@@ -668,9 +679,7 @@ class TestOwnershipRecording:
         assert record["model"] == settings.rerank_model_path.name
         assert record["start_token"] == f"test:{spawned_process.pid}"
 
-    def test_ownership_recorded_before_health_wait(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_ownership_recorded_before_health_wait(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Ownership is recorded immediately after Popen, before _await_health.
 
         Finding 4: a crash between spawn and health-wait must not create an unowned
@@ -695,9 +704,7 @@ class TestOwnershipRecording:
         assert record_at_health_time[0] is not None
         assert record_at_health_time[0]["pid"] == _AliveProcess.pid
 
-    def test_recording_failure_terminates_child(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_recording_failure_terminates_child(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Finding 5: if _record_server raises, the child is terminated rather than
         left as an unrecoverable orphan."""
         _install_weights()
@@ -705,9 +712,7 @@ class TestOwnershipRecording:
         monkeypatch.setattr(instance, "_healthy", lambda: False)
         monkeypatch.setattr(instance, "_find_binary", lambda: settings.models_dir / "llama-server")
 
-        monkeypatch.setattr(
-            llama_server, "_process_start_token", lambda pid: None
-        )
+        monkeypatch.setattr(llama_server, "_process_start_token", lambda pid: None)
 
         terminated: list[object] = []
         monkeypatch.setattr(llama_server, "_terminate", lambda p: terminated.append(p))
@@ -808,9 +813,7 @@ class TestStaleOwnershipCleanup:
 class TestCrashAndAdoptCycle:
     """Simulate a backend crash followed by a fresh backend finding the orphan."""
 
-    def test_spawn_crash_adopt_stop(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_spawn_crash_adopt_stop(self, monkeypatch: pytest.MonkeyPatch) -> None:
         pid = os.getpid()
         token = _process_start_token(pid)
         port = settings.llama_port + 2
@@ -846,9 +849,7 @@ class TestCrashAndAdoptCycle:
 class TestFailureInjection:
     """What happens if Lyra dies or throws after every meaningful lifecycle transition."""
 
-    def test_crash_after_spawn_before_record(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_crash_after_spawn_before_record(self, monkeypatch: pytest.MonkeyPatch) -> None:
         assert _read_server_record("reranking") is None
 
         instance = RerankServer()
@@ -863,9 +864,7 @@ class TestFailureInjection:
 
         assert instance._adopted_pid is None
 
-    def test_crash_after_record_before_health(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_crash_after_record_before_health(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _save_ownership(
             {
                 "reranking": {
@@ -1032,30 +1031,22 @@ class TestOwnershipSurvivesFailedTermination:
     def test_verify_and_adopt_preserves_record_for_live_mismatched_port(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Finding 2 corollary: _verify_and_adopt must not remove a record for a live
-        process just because its port doesn't match -- that's a config-drift survivor
-        whose record stop() needs to reclaim it."""
+        """Finding 2 corollary: a config-drift survivor that cannot be terminated
+        raises ConfigurationError and its record is preserved for stop()."""
         pid = os.getpid()
         instance = RerankServer()
         _record_server("reranking", pid, instance.port + 100, settings.rerank_model_path.name)
 
-        # Reconciliation would try to SIGTERM us; mock it so the test survives.
         terminated_pids: list[int] = []
         monkeypatch.setattr(
             llama_server,
             "_terminate_pid",
             lambda p, g, t, label: terminated_pids.append(p),
         )
-        monkeypatch.setattr(instance, "_healthy", lambda: True)
-        monkeypatch.setattr(
-            instance,
-            "_served_model",
-            lambda: f"/m/{settings.rerank_model_path.name}",
-        )
 
-        instance.ensure_running()
+        with pytest.raises(ConfigurationError, match="could not be terminated"):
+            instance.ensure_running()
 
-        assert instance._adopted_pid is None
         record = _read_server_record("reranking")
         assert record is not None
         assert record["pid"] == pid
@@ -1119,11 +1110,18 @@ class TestConfigDriftReconciliation:
         instance = RerankServer()
         assert instance.port != old_port
 
+        killed = [False]
         terminated_pids: list[int] = []
+
+        def mock_terminate_pid(p: int, g: object, t: object, label: str) -> None:
+            terminated_pids.append(p)
+            killed[0] = True
+
+        monkeypatch.setattr(llama_server, "_terminate_pid", mock_terminate_pid)
         monkeypatch.setattr(
             llama_server,
-            "_terminate_pid",
-            lambda p, g, t, label: terminated_pids.append(p),
+            "_token_matches_pid",
+            lambda p, t: False if killed[0] else _token_matches_pid(p, t),
         )
         monkeypatch.setattr(instance, "_healthy", lambda: False)
         monkeypatch.setattr(instance, "_find_binary", lambda: settings.models_dir / "llama-server")
@@ -1156,11 +1154,18 @@ class TestConfigDriftReconciliation:
         )
 
         _install_weights()
+        killed = [False]
         terminated_pids: list[int] = []
+
+        def mock_terminate_pid(p: int, g: object, t: object, label: str) -> None:
+            terminated_pids.append(p)
+            killed[0] = True
+
+        monkeypatch.setattr(llama_server, "_terminate_pid", mock_terminate_pid)
         monkeypatch.setattr(
             llama_server,
-            "_terminate_pid",
-            lambda p, g, t, label: terminated_pids.append(p),
+            "_token_matches_pid",
+            lambda p, t: False if killed[0] else _token_matches_pid(p, t),
         )
         monkeypatch.setattr(instance, "_healthy", lambda: False)
         monkeypatch.setattr(instance, "_find_binary", lambda: settings.models_dir / "llama-server")
@@ -1172,9 +1177,7 @@ class TestConfigDriftReconciliation:
 
         assert pid in terminated_pids
 
-    def test_matching_config_skips_reconciliation(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_matching_config_skips_reconciliation(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """No termination when the durable record matches current config."""
         pid = os.getpid()
         instance = RerankServer()
@@ -1216,9 +1219,7 @@ class TestConfigDriftReconciliation:
         )
 
         signals: list[object] = []
-        monkeypatch.setattr(
-            llama_server, "_terminate_pid", lambda *a: signals.append(a)
-        )
+        monkeypatch.setattr(llama_server, "_terminate_pid", lambda *a: signals.append(a))
         monkeypatch.setattr(instance, "_healthy", lambda: False)
         monkeypatch.setattr(instance, "_find_binary", lambda: settings.models_dir / "llama-server")
         monkeypatch.setattr(instance, "_await_health", lambda p: None)
@@ -1235,7 +1236,7 @@ class TestConfigDriftReconciliation:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """If the old helper survives termination after a config change, its record
-        is preserved for stop() to try again."""
+        is preserved and ConfigurationError is raised to block replacement."""
         pid = os.getpid()
         token = _process_start_token(pid)
         instance = RerankServer()
@@ -1255,14 +1256,9 @@ class TestConfigDriftReconciliation:
         monkeypatch.setattr(os, "killpg", lambda g, s: None)
         monkeypatch.setattr(os, "kill", lambda p, s: None)
         monkeypatch.setattr(llama_server, "_SHUTDOWN_GRACE_SECONDS", 0.01)
-        monkeypatch.setattr(instance, "_healthy", lambda: False)
-        monkeypatch.setattr(instance, "_find_binary", lambda: settings.models_dir / "llama-server")
-        monkeypatch.setattr(instance, "_await_health", lambda p: None)
-        monkeypatch.setattr(llama_server.subprocess, "Popen", lambda argv, **kw: _AliveProcess())
-        monkeypatch.setattr(llama_server, "_record_server", lambda *a: None)
-        _install_weights()
 
-        instance.ensure_running()
+        with pytest.raises(ConfigurationError, match="could not be terminated"):
+            instance.ensure_running()
 
         record = _read_server_record("reranking")
         assert record is not None
@@ -1303,11 +1299,18 @@ class TestAdoptedModelCheck:
         instance._adopted_start_token = token
         instance._last_health_ok = 0.0
 
+        killed = [False]
         terminated_pids: list[int] = []
+
+        def mock_terminate_pid(p: int, g: object, t: object, label: str) -> None:
+            terminated_pids.append(p)
+            killed[0] = True
+
+        monkeypatch.setattr(llama_server, "_terminate_pid", mock_terminate_pid)
         monkeypatch.setattr(
             llama_server,
-            "_terminate_pid",
-            lambda p, g, t, label: terminated_pids.append(p),
+            "_token_matches_pid",
+            lambda p, t: False if killed[0] else _token_matches_pid(p, t),
         )
         monkeypatch.setattr(instance, "_healthy", lambda: False)
         monkeypatch.setattr(instance, "_find_binary", lambda: settings.models_dir / "llama-server")
@@ -1364,3 +1367,234 @@ class TestAdoptedModelCheck:
         instance.ensure_running()
 
         assert instance._adopted_pid == pid
+
+
+# ------------------------------------------------------------------ survival blocks replacement
+
+
+class TestSurvivalBlocksReplacement:
+    """A proved-live process that survives termination blocks its own replacement."""
+
+    def test_surviving_unhealthy_tracked_child_blocks_replacement(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If a tracked child is unhealthy and survives _terminate, ConfigurationError
+        is raised instead of proceeding to _start_locked."""
+        instance = RerankServer()
+        old_process = _AliveProcess()
+        instance._process = old_process
+        instance._last_health_ok = 0.0
+
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+        monkeypatch.setattr(llama_server, "_terminate", lambda p: None)
+
+        with pytest.raises(ConfigurationError, match="could not be terminated"):
+            instance.ensure_running()
+
+        assert old_process.poll() is None
+
+    def test_surviving_unhealthy_adopted_child_blocks_replacement(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If an adopted child is unhealthy and survives _terminate_pid,
+        ConfigurationError is raised."""
+        pid = os.getpid()
+        token = _process_start_token(pid)
+        instance = RerankServer()
+        instance._adopted_pid = pid
+        instance._adopted_pgid = os.getpgid(pid)
+        instance._adopted_start_token = token
+        instance._last_health_ok = 0.0
+
+        monkeypatch.setattr(
+            llama_server,
+            "_terminate_pid",
+            lambda p, g, t, label: None,
+        )
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+
+        _record_server("reranking", pid, instance.port, settings.rerank_model_path.name)
+
+        with pytest.raises(ConfigurationError, match="could not be terminated"):
+            instance.ensure_running()
+
+        assert instance._adopted_pid == pid
+
+    def test_surviving_wrong_model_adopted_child_blocks_replacement(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If an adopted child with the wrong model survives _terminate_pid,
+        ConfigurationError is raised."""
+        pid = os.getpid()
+        token = _process_start_token(pid)
+        instance = RerankServer()
+
+        _save_ownership(
+            {
+                "reranking": {
+                    "pid": pid,
+                    "start_token": token,
+                    "pgid": os.getpgid(pid),
+                    "port": instance.port,
+                    "model": "old-model.gguf",
+                    "started_at": time.time(),
+                }
+            }
+        )
+
+        instance._adopted_pid = pid
+        instance._adopted_pgid = os.getpgid(pid)
+        instance._adopted_start_token = token
+        instance._last_health_ok = 0.0
+
+        monkeypatch.setattr(
+            llama_server,
+            "_terminate_pid",
+            lambda p, g, t, label: None,
+        )
+
+        with pytest.raises(ConfigurationError, match="could not be terminated"):
+            instance.ensure_running()
+
+        assert instance._adopted_pid == pid
+
+
+# ------------------------------------------------------------------ overwrite refusal
+
+
+class TestOverwriteRefusal:
+    """_record_server refuses to overwrite a live record for a different process."""
+
+    def test_record_server_refuses_overwrite_of_live_process(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pid = os.getpid()
+        _record_server("reranking", pid, 8083, "bge.gguf")
+
+        fake_pid = 2**30 - 1
+        monkeypatch.setattr(
+            llama_server,
+            "_process_start_token",
+            lambda p: f"fake:{p}" if p == fake_pid else _process_start_token(p),
+        )
+
+        with pytest.raises(RuntimeError, match="different live process"):
+            _record_server("reranking", fake_pid, 8083, "bge.gguf")
+
+    def test_record_server_allows_same_process_update(self) -> None:
+        pid = os.getpid()
+        _record_server("reranking", pid, 8083, "bge.gguf")
+        _record_server("reranking", pid, 8083, "bge-v2.gguf")
+
+        record = _read_server_record("reranking")
+        assert record is not None
+        assert record["model"] == "bge-v2.gguf"
+
+    def test_record_server_allows_overwrite_of_dead_process(self) -> None:
+        _save_ownership(
+            {
+                "reranking": {
+                    "pid": 2**30,
+                    "start_token": "proc:0",
+                    "pgid": 2**30,
+                    "port": 8083,
+                    "model": "bge.gguf",
+                    "started_at": time.time(),
+                }
+            }
+        )
+
+        pid = os.getpid()
+        _record_server("reranking", pid, 8083, "bge.gguf")
+
+        record = _read_server_record("reranking")
+        assert record is not None
+        assert record["pid"] == pid
+
+
+# ------------------------------------------------------------------ ownership file hardening
+
+
+class TestOwnershipFileHardening:
+    """Corrupt or unreadable ownership files fail closed."""
+
+    def test_unreadable_file_raises_configuration_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        llama_server._OWNERSHIP_FILE.write_text("{}")
+        llama_server._OWNERSHIP_FILE.chmod(0o000)
+        try:
+            with pytest.raises(ConfigurationError, match="cannot be read"):
+                _load_ownership()
+        finally:
+            llama_server._OWNERSHIP_FILE.chmod(0o600)
+
+    def test_non_dict_json_raises_configuration_error(self) -> None:
+        llama_server._OWNERSHIP_FILE.write_text("[1, 2, 3]")
+        with pytest.raises(ConfigurationError, match="unexpected content"):
+            _load_ownership()
+
+    def test_save_ownership_writes_complete_file(self) -> None:
+        data = {"reranking": {"pid": 1, "port": 8083}}
+        _save_ownership(data)
+        loaded = _load_ownership()
+        assert loaded == data
+
+    def test_save_ownership_preserves_permissions(self) -> None:
+        _save_ownership({"a": 1})
+        mode = os.stat(llama_server._OWNERSHIP_FILE).st_mode
+        assert mode & 0o777 == 0o600
+
+    def test_save_ownership_atomic_on_write_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """If the write fails, the original file is not corrupted."""
+        _save_ownership({"original": True})
+
+        original_open = os.open
+
+        def failing_open(path: str, flags: int, mode: int = 0) -> int:
+            if path.endswith(".tmp"):
+                raise OSError("disk full")
+            return original_open(path, flags, mode)
+
+        monkeypatch.setattr(os, "open", failing_open)
+
+        with pytest.raises(OSError, match="disk full"):
+            _save_ownership({"corrupted": True})
+
+        loaded = _load_ownership()
+        assert loaded == {"original": True}
+
+
+# ----------------------------------------------------------- restart -> adopt -> shutdown
+
+
+class TestRestartAdoptShutdownRecovery:
+    """Full lifecycle: spawn, simulate backend restart, adopt, shut down cleanly."""
+
+    def test_full_restart_adopt_shutdown_cycle(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        pid = os.getpid()
+        port = settings.llama_port + 2
+
+        _record_server("reranking", pid, port, settings.rerank_model_path.name)
+
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_healthy", lambda: True)
+        monkeypatch.setattr(
+            instance,
+            "_served_model",
+            lambda: f"/models/{settings.rerank_model_path.name}",
+        )
+
+        instance.ensure_running()
+        assert instance._adopted_pid == pid
+
+        monkeypatch.setattr(
+            llama_server,
+            "_token_matches_pid",
+            lambda p, t: False,
+        )
+
+        instance.stop()
+
+        assert instance._adopted_pid is None
+        assert _read_server_record("reranking") is None

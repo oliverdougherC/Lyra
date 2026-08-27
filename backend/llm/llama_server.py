@@ -38,6 +38,7 @@ common, which turned out to be everything that was hard to get right:
   the process is confirmed dead or its PID has been reused.
 - **Configuration-drift reconciliation.** A port or model change does not silently
   orphan an old Lyra-owned helper; it is reclaimed before the replacement launches.
+  If reclamation fails, the replacement is blocked until the old process is dead.
 
 Each concrete server contributes only its facts: which model, which flags, which port
 offset, how long a healthy start may take, and what to tell the student when something
@@ -189,31 +190,80 @@ def _token_matches_pid(pid: int, token: str | None) -> bool:
 
 
 def _load_ownership() -> dict:
-    """Load the server ownership file, returning {} if absent or corrupt."""
+    """Load the server ownership file, returning {} if absent.
+
+    Raises ConfigurationError when the file exists but cannot be read or
+    parsed, because silently treating a corrupt file as empty would forget
+    all owned processes.
+    """
     try:
-        return json.loads(_OWNERSHIP_FILE.read_text())
-    except (OSError, json.JSONDecodeError, ValueError):
+        raw = _OWNERSHIP_FILE.read_text()
+    except FileNotFoundError:
         return {}
+    except OSError as exc:
+        raise ConfigurationError(
+            f"The server ownership file {_OWNERSHIP_FILE} exists but cannot "
+            f"be read: {exc}. Remove it to clear all ownership records and "
+            f"retry."
+        ) from exc
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ConfigurationError(
+            f"The server ownership file {_OWNERSHIP_FILE} is corrupt: {exc}. "
+            f"Remove it to clear all ownership records and retry."
+        ) from exc
+    if not isinstance(data, dict):
+        raise ConfigurationError(
+            f"The server ownership file {_OWNERSHIP_FILE} has unexpected "
+            f"content (expected a JSON object). Remove it to clear all "
+            f"ownership records and retry."
+        )
+    return data
 
 
 def _save_ownership(data: dict) -> None:
-    """Atomically write the server ownership file with restrictive permissions."""
+    """Atomically write the server ownership file with restrictive permissions.
+
+    Writes the full payload in a loop (guarding against short writes), flushes
+    to stable storage, and atomically replaces the target.  The directory entry
+    is durably published where supported so a power loss after the rename
+    cannot revert to the previous content.
+    """
     _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
     tmp = _OWNERSHIP_FILE.with_suffix(".tmp")
+    payload = json.dumps(data, indent=2).encode()
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.write(fd, json.dumps(data, indent=2).encode())
-    finally:
+        offset = 0
+        while offset < len(payload):
+            written = os.write(fd, payload[offset:])
+            offset += written
+        os.fsync(fd)
+    except BaseException:
         os.close(fd)
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+    os.close(fd)
     tmp.replace(_OWNERSHIP_FILE)
+    dir_fd = None
+    try:
+        dir_fd = os.open(str(_RUNTIME_DIR), os.O_RDONLY)
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        if dir_fd is not None:
+            os.close(dir_fd)
 
 
 def _record_server(service: str, pid: int, port: int, model: str) -> None:
     """Record ownership of a spawned server in the durable ownership file.
 
     Raises RuntimeError if the process birth identity cannot be established,
-    and OSError if the ownership file cannot be written.  Both are fatal to
-    the caller: a process whose identity cannot be proven is unrecoverable.
+    if a different live process already owns this service, or if the ownership
+    file cannot be written.
     """
     token = _process_start_token(pid)
     if token is None:
@@ -223,6 +273,21 @@ def _record_server(service: str, pid: int, port: int, model: str) -> None:
         )
     with _ownership_lock:
         data = _load_ownership()
+        existing = data.get(service)
+        if isinstance(existing, dict):
+            ex_pid = existing.get("pid")
+            ex_token = existing.get("start_token")
+            if (
+                isinstance(ex_pid, int)
+                and isinstance(ex_token, str)
+                and (ex_pid != pid or ex_token != token)
+                and _token_matches_pid(ex_pid, ex_token)
+            ):
+                raise RuntimeError(
+                    f"Cannot record ownership of {service} for PID {pid}: "
+                    f"a different live process (PID {ex_pid}) already owns "
+                    f"this service and has not been reconciled"
+                )
         data[service] = {
             "pid": pid,
             "start_token": token,
@@ -417,6 +482,13 @@ class LlamaServer:
                         self._process.pid,
                     )
                     _terminate(self._process)
+                    if self._process.poll() is None:
+                        raise ConfigurationError(
+                            f"The {self._display_name} server "
+                            f"(PID {self._process.pid}) is unhealthy but "
+                            f"could not be terminated. Stop it manually "
+                            f"(kill {self._process.pid}) and retry."
+                        )
                     self._process = None
                     self._unhealthy_restarts += 1
                     if self._unhealthy_restarts >= _MAX_UNHEALTHY_RESTARTS:
@@ -436,10 +508,7 @@ class LlamaServer:
                 if _token_matches_pid(self._adopted_pid, self._adopted_start_token):
                     record = _read_server_record(self._display_name)
                     adopted_model = record.get("model") if record else None
-                    if (
-                        adopted_model is not None
-                        and adopted_model != self._model_path().name
-                    ):
+                    if adopted_model is not None and adopted_model != self._model_path().name:
                         logger.info(
                             "Adopted %s server (PID %d) serves model %s but %s is "
                             "configured; terminating for replacement",
@@ -454,6 +523,14 @@ class LlamaServer:
                             self._adopted_start_token,
                             self._display_name,
                         )
+                        if _token_matches_pid(self._adopted_pid, self._adopted_start_token):
+                            raise ConfigurationError(
+                                f"The adopted {self._display_name} server "
+                                f"(PID {self._adopted_pid}) serves the wrong "
+                                f"model but could not be terminated. Stop it "
+                                f"manually (kill {self._adopted_pid}) and "
+                                f"retry."
+                            )
                         self._adopted_pid = None
                         self._adopted_pgid = None
                         self._adopted_start_token = None
@@ -477,6 +554,13 @@ class LlamaServer:
                             self._adopted_start_token,
                             self._display_name,
                         )
+                        if _token_matches_pid(self._adopted_pid, self._adopted_start_token):
+                            raise ConfigurationError(
+                                f"The adopted {self._display_name} server "
+                                f"(PID {self._adopted_pid}) is unhealthy but "
+                                f"could not be terminated. Stop it manually "
+                                f"(kill {self._adopted_pid}) and retry."
+                            )
                         self._adopted_pid = None
                         self._adopted_pgid = None
                         self._adopted_start_token = None
@@ -531,7 +615,15 @@ class LlamaServer:
             _terminate_pid(adopted_pid, adopted_pgid, adopted_token, self._display_name)
 
         if process is None and adopted_pid is None:
-            record = _read_server_record(self._display_name)
+            try:
+                record = _read_server_record(self._display_name)
+            except ConfigurationError:
+                logger.warning(
+                    "Cannot read ownership file during %s shutdown; "
+                    "skipping durable-record reclamation",
+                    self._display_name,
+                )
+                record = None
             if record is not None:
                 rec_pid = record.get("pid")
                 rec_token = record.get("start_token")
@@ -548,7 +640,14 @@ class LlamaServer:
                         self._display_name,
                     )
 
-        record = _read_server_record(self._display_name)
+        try:
+            record = _read_server_record(self._display_name)
+        except ConfigurationError:
+            logger.warning(
+                "Cannot read ownership file during %s shutdown cleanup; skipping record removal",
+                self._display_name,
+            )
+            return
         if record is not None:
             rec_pid = record.get("pid")
             rec_token = record.get("start_token")
@@ -691,6 +790,11 @@ class LlamaServer:
                 self._display_name,
                 rec_pid,
             )
+            raise ConfigurationError(
+                f"The {self._display_name} server (PID {rec_pid}) could not "
+                f"be terminated after a configuration change. Stop it "
+                f"manually (kill {rec_pid}) and retry."
+            )
 
     # ------------------------------------------------------------------ starting
 
@@ -781,11 +885,7 @@ class LlamaServer:
             if rec is not None:
                 rp = rec.get("pid")
                 rt = rec.get("start_token")
-                if not (
-                    isinstance(rp, int)
-                    and isinstance(rt, str)
-                    and _token_matches_pid(rp, rt)
-                ):
+                if not (isinstance(rp, int) and isinstance(rt, str) and _token_matches_pid(rp, rt)):
                     _remove_server_record(self._display_name)
             raise
 
