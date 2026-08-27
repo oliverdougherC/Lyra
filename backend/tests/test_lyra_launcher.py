@@ -1042,10 +1042,10 @@ def test_backup_retry_succeeds_after_failed_attempt(
     assert archive.exists()
 
 
-def test_backup_publication_race_does_not_leave_orphans(
+def test_backup_publication_race_does_not_delete_competing_file(
     launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """If the final link fails (someone raced us), no staging or final artifact remains."""
+    """If another process creates the archive before our link, their file must survive."""
     _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
 
     original_link = os.link
@@ -1059,7 +1059,12 @@ def test_backup_publication_race_does_not_leave_orphans(
     with pytest.raises(FileExistsError):
         launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)]))
 
-    assert list(archive.parent.glob(".lyra-backup-*.tmp")) == []
+    assert archive.exists(), "competing file must survive the race"
+    assert archive.read_bytes() == b"raced-into-place", "competing file content must be intact"
+    assert list(archive.parent.glob(".lyra-backup-*.tmp")) == [], "staging must be cleaned"
+    staging_candidates = list(archive.parent.glob(".lyra-backup-*"))
+    assert staging_candidates == [], "no staging artifacts should remain"
+    assert archive.stat().st_size == len(b"raced-into-place"), "file size must match"
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")

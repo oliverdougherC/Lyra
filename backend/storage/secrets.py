@@ -97,7 +97,8 @@ def set_api_key(value: str) -> None:
     authoritative credential, and a ``KeyError`` is raised. This prevents a state where
     two different values coexist.
     """
-    if _keyring_usable():
+    keychain_was_reachable = _keyring_usable()
+    if keychain_was_reachable:
         try:
             _keyring().set_password(SERVICE, USERNAME, value)
         except keyring.errors.KeyringError:
@@ -106,21 +107,23 @@ def set_api_key(value: str) -> None:
             try:
                 _remove_key_file()
             except OSError:
-                # Cannot remove fallback file: two values would coexist. Roll back
-                # the keychain write so the old file value remains sole authority.
                 with suppress(keyring.errors.KeyringError):
                     _remove_keychain_entry()
                 raise
             return
 
-    # Demoted to file storage (either from this call or the probe).
     path = _key_file()
     private.secure_mkdir(path.parent, root=settings.data_dir)
     private.write_private_text(path, value)
-    # Clean up any stale keychain entry so it cannot resurface if the keychain
-    # recovers in a later process.
-    with suppress(keyring.errors.KeyringError):
-        _remove_keychain_entry()
+    if keychain_was_reachable:
+        try:
+            _remove_keychain_entry()
+        except keyring.errors.KeyringError:
+            _remove_key_file()
+            raise KeyError(
+                "Cannot guarantee single-authority credential: keychain "
+                "entry could not be removed after file demotion"
+            ) from None
 
 
 def get_api_key() -> str | None:
@@ -139,15 +142,26 @@ def has_api_key() -> bool:
 
 
 def delete_api_key() -> None:
-    """Forget the stored key. Idempotent: a missing key or file is not an error."""
+    """Forget the stored key. Idempotent: a missing key or file is not an error.
+
+    Raises ``KeyError`` when the keychain entry cannot be deleted and may survive.
+    The file credential is still removed so only the keychain ghost remains.
+    """
+    keychain_entry_survived = False
     if _keyring_usable():
         try:
             _keyring().delete_password(SERVICE, USERNAME)
         except keyring.errors.PasswordDeleteError:
             pass
         except keyring.errors.KeyringError:
+            keychain_entry_survived = True
             _demote_to_file()
     _remove_key_file()
+    if keychain_entry_survived:
+        raise KeyError(
+            "Keychain entry could not be deleted; file credential removed "
+            "but keychain secret may survive until the keychain recovers"
+        )
 
 
 def api_key_storage() -> Literal["keychain", "file"]:

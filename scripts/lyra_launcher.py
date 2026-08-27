@@ -1855,6 +1855,29 @@ def stop(args: argparse.Namespace) -> int:
     return 0 if success else 1
 
 
+def _fsync_path(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name != "posix":
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def backup(args: argparse.Namespace) -> int:
     runtime = load_runtime()
     step("Stopping the supervised Lyra stack before backup")
@@ -1875,6 +1898,7 @@ def backup(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="lyra-backup-") as temporary:
         stage_root = Path(temporary)
         manifest = stage_backup_tree(stage_root, data_dir, db_path)
+        published = False
         try:
             descriptor = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with (
@@ -1892,12 +1916,17 @@ def backup(args: argparse.Namespace) -> int:
                     bundle.add(stage_root / BACKUP_EXTERNAL_DB, arcname=BACKUP_EXTERNAL_DB)
 
             with tarfile.open(staging, mode="r:gz") as check:
-                read_backup_manifest(check)
+                verified_manifest = read_backup_manifest(check)
+                validate_backup_members(check, verified_manifest)
 
+            _fsync_path(staging)
             os.link(staging, archive)
+            published = True
+            _fsync_directory(archive.parent)
         except BaseException:
-            with suppress(OSError):
-                Path(archive).unlink(missing_ok=True)
+            if published:
+                with suppress(OSError):
+                    Path(archive).unlink(missing_ok=True)
             raise
         finally:
             with suppress(OSError):

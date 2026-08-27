@@ -288,22 +288,26 @@ def test_delete_idempotent_from_empty_state(isolated_secrets: FakeKeyring) -> No
     assert secrets.get_api_key() is None
 
 
-def test_delete_handles_keychain_error_and_still_clears_file(
+def test_delete_raises_when_keychain_entry_survives(
     isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """delete_api_key must raise KeyError when the keychain entry cannot be removed."""
     from backend.config import settings
 
     fallback = settings.data_dir / ".api_key"
     fallback.parent.mkdir(parents=True, exist_ok=True)
     fallback.write_text("sk-orphan")
+    isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] = "sk-in-keychain"
 
     monkeypatch.setattr(secrets, "_keyring_ok", True)
     isolated_secrets.delete_error = keyring.errors.KeyringError("locked")
 
-    secrets.delete_api_key()
+    with pytest.raises(KeyError, match="Keychain entry could not be deleted"):
+        secrets.delete_api_key()
 
-    assert not fallback.exists()
+    assert not fallback.exists(), "file credential must still be removed"
     assert secrets.api_key_storage() == "file"
+    assert isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] == "sk-in-keychain"
 
 
 # ---------------------------------------------------------------------------
@@ -448,3 +452,213 @@ def test_full_lifecycle_keychain_to_file_to_keychain(
     # Must NOT return "sk-v2" from the now-deleted fallback file.
     result = secrets.get_api_key()
     assert result is None, f"stale value resurfaced: {result!r}"
+
+
+# ---------------------------------------------------------------------------
+# Finding 3: demotion path must not suppress keychain cleanup failure
+# ---------------------------------------------------------------------------
+
+
+def test_demotion_raises_when_stale_keychain_entry_cannot_be_removed(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If keychain delete fails after file demotion, the file is rolled back and KeyError raised."""
+    from backend.config import settings
+
+    isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] = "sk-old-keychain"
+    isolated_secrets.set_error = keyring.errors.KeyringError("locked for writes")
+    isolated_secrets.delete_error = keyring.errors.KeyringError("locked for deletes")
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+    isolated_secrets.get_error = None
+
+    with pytest.raises(KeyError, match="single-authority credential"):
+        secrets.set_api_key("sk-new-demoted")
+
+    fallback = settings.data_dir / ".api_key"
+    assert not fallback.exists(), "file must be rolled back after failed cleanup"
+    assert isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] == "sk-old-keychain"
+
+
+def test_demotion_raises_and_get_returns_old_keychain_value_after_recovery(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """After a failed demotion, recovering the keychain returns the old value."""
+    isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] = "sk-original"
+    isolated_secrets.set_error = keyring.errors.KeyringError("locked for writes")
+    isolated_secrets.delete_error = keyring.errors.KeyringError("locked for deletes")
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+    isolated_secrets.get_error = None
+
+    with pytest.raises(KeyError):
+        secrets.set_api_key("sk-attempted")
+
+    isolated_secrets.set_error = None
+    isolated_secrets.delete_error = None
+    secrets.reset_keyring_probe()
+
+    assert secrets.get_api_key() == "sk-original"
+
+
+def test_demotion_skips_cleanup_when_keychain_was_never_reachable(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When the probe itself fails, no stale entry exists, so no cleanup is needed."""
+    from backend.config import settings
+
+    isolated_secrets.get_error = keyring.errors.KeyringError("no backend")
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+    isolated_secrets.delete_error = keyring.errors.KeyringError("would fail if called")
+
+    secrets.set_api_key("sk-file-only")
+
+    fallback = settings.data_dir / ".api_key"
+    assert fallback.exists()
+    assert secrets.get_api_key() == "sk-file-only"
+
+
+def test_demotion_with_password_delete_error_succeeds(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PasswordDeleteError (nothing to delete) is not a real failure."""
+    from backend.config import settings
+
+    isolated_secrets.set_error = keyring.errors.KeyringError("locked for writes")
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+    isolated_secrets.get_error = None
+
+    secrets.set_api_key("sk-demoted-clean")
+
+    fallback = settings.data_dir / ".api_key"
+    assert fallback.exists()
+    assert secrets.get_api_key() == "sk-demoted-clean"
+
+
+def test_demotion_with_successful_cleanup_clears_keychain(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Demotion with successful keychain cleanup leaves only file credential."""
+    from backend.config import settings
+
+    isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] = "sk-stale"
+    isolated_secrets.set_error = keyring.errors.KeyringError("locked for writes")
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+    isolated_secrets.get_error = None
+
+    secrets.set_api_key("sk-demoted-v2")
+
+    fallback = settings.data_dir / ".api_key"
+    assert fallback.exists()
+    assert (secrets.SERVICE, secrets.USERNAME) not in isolated_secrets.store
+    assert secrets.get_api_key() == "sk-demoted-v2"
+
+
+def test_demotion_cleanup_failure_preserves_known_good_keychain_value(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """After rollback, get_api_key returns the old keychain value, not stale file."""
+    from backend.config import settings
+
+    isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] = "sk-known-good"
+    isolated_secrets.set_error = keyring.errors.KeyringError("locked for writes")
+    isolated_secrets.delete_error = keyring.errors.KeyringError("locked for deletes")
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+    isolated_secrets.get_error = None
+
+    with pytest.raises(KeyError):
+        secrets.set_api_key("sk-new-attempt")
+
+    fallback = settings.data_dir / ".api_key"
+    assert not fallback.exists()
+
+    isolated_secrets.set_error = None
+    isolated_secrets.delete_error = None
+    secrets.reset_keyring_probe()
+    assert secrets.get_api_key() == "sk-known-good"
+    assert secrets.api_key_storage() == "keychain"
+
+
+# ---------------------------------------------------------------------------
+# Finding 4: delete_api_key must raise when keychain entry survives
+# ---------------------------------------------------------------------------
+
+
+def test_delete_idempotent_when_nothing_to_delete_in_keychain(
+    isolated_secrets: FakeKeyring,
+) -> None:
+    """PasswordDeleteError means nothing to delete — that's fine, not a failure."""
+    secrets.delete_api_key()
+    assert secrets.get_api_key() is None
+
+
+def test_delete_clears_both_when_keychain_works(
+    isolated_secrets: FakeKeyring, tmp_path: Path
+) -> None:
+    from backend.config import settings
+
+    isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] = "sk-kc"
+    fallback = settings.data_dir / ".api_key"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text("sk-file")
+
+    secrets.delete_api_key()
+
+    assert (secrets.SERVICE, secrets.USERNAME) not in isolated_secrets.store
+    assert not fallback.exists()
+    assert secrets.get_api_key() is None
+
+
+def test_delete_removes_file_even_when_keychain_fails(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The file is always removed; the KeyError only fires after file cleanup."""
+    from backend.config import settings
+
+    fallback = settings.data_dir / ".api_key"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text("sk-file-val")
+    isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] = "sk-kc-val"
+
+    monkeypatch.setattr(secrets, "_keyring_ok", True)
+    isolated_secrets.delete_error = keyring.errors.KeyringError("locked")
+
+    with pytest.raises(KeyError):
+        secrets.delete_api_key()
+
+    assert not fallback.exists()
+    assert isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] == "sk-kc-val"
+
+
+def test_delete_keychain_ghost_survives_and_resurfaces(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """After a failed delete, the keychain ghost resurfaces when the keychain recovers."""
+    isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] = "sk-ghost"
+
+    monkeypatch.setattr(secrets, "_keyring_ok", True)
+    isolated_secrets.delete_error = keyring.errors.KeyringError("locked")
+
+    with pytest.raises(KeyError):
+        secrets.delete_api_key()
+
+    isolated_secrets.delete_error = None
+    secrets.reset_keyring_probe()
+    assert secrets.get_api_key() == "sk-ghost"
+
+
+def test_delete_succeeds_when_keychain_not_usable(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When keychain was never usable, only file matters, and delete succeeds."""
+    from backend.config import settings
+
+    isolated_secrets.get_error = keyring.errors.KeyringError("no backend")
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+
+    fallback = settings.data_dir / ".api_key"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text("sk-file-only")
+
+    secrets.delete_api_key()
+
+    assert not fallback.exists()
+    assert secrets.get_api_key() is None
