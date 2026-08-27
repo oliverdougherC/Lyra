@@ -1877,23 +1877,25 @@ def _fsync_directory(path: Path) -> None:
         return
     import errno
 
-    _FSYNC_UNSUPPORTED = frozenset((
-        errno.EINVAL,
-        errno.ENOSYS,
-        getattr(errno, "ENOTSUP", 0),
-        getattr(errno, "EOPNOTSUPP", 0),
-        errno.EBADF,
-    ))
+    fsync_unsupported = frozenset(
+        (
+            errno.EINVAL,
+            errno.ENOSYS,
+            getattr(errno, "ENOTSUP", 0),
+            getattr(errno, "EOPNOTSUPP", 0),
+            errno.EBADF,
+        )
+    )
     try:
         fd = os.open(path, os.O_RDONLY)
     except OSError as exc:
-        if exc.errno in _FSYNC_UNSUPPORTED:
+        if exc.errno in fsync_unsupported:
             return
         raise
     try:
         os.fsync(fd)
     except OSError as exc:
-        if exc.errno not in _FSYNC_UNSUPPORTED:
+        if exc.errno not in fsync_unsupported:
             raise
     finally:
         os.close(fd)

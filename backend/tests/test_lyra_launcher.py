@@ -1152,8 +1152,6 @@ def test_backup_cleanup_removes_own_hard_link_on_fsync_failure(
 
     _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
 
-    original_fsync_dir = launcher._fsync_directory
-
     def exploding_fsync(path: Path) -> None:
         raise OSError(errno.EIO, "simulated I/O error")
 
@@ -1208,8 +1206,6 @@ def test_fsync_directory_propagates_real_io_error(
     """A real I/O error (EIO) from os.fsync on a directory must propagate."""
     import errno
 
-    original_fsync = os.fsync
-
     def eio_fsync(fd: int) -> None:
         raise OSError(errno.EIO, "simulated disk failure")
 
@@ -1227,8 +1223,6 @@ def test_fsync_directory_tolerates_unsupported_operation(
 ) -> None:
     """EINVAL from os.fsync (filesystem does not support dir fsync) is tolerated."""
     import errno
-
-    original_fsync = os.fsync
 
     def einval_fsync(fd: int) -> None:
         raise OSError(errno.EINVAL, "operation not supported")
