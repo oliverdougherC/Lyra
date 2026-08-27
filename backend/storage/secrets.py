@@ -94,8 +94,13 @@ def set_api_key(value: str) -> None:
 
     If the fallback file cannot be removed after a successful keychain write, the
     keychain entry is rolled back (deleted) so that the old file value remains the sole
-    authoritative credential, and a ``KeyError`` is raised. This prevents a state where
-    two different values coexist.
+    authoritative credential, and the original ``OSError`` is raised. This prevents a
+    state where two different values coexist.
+
+    If the rollback delete itself also fails (the keychain refuses to delete), both the
+    new keychain value and the old fallback file survive. Rather than suppress this
+    ambiguity, a ``KeyError`` is raised so the caller knows credential authority is
+    unresolved and can surface that to the operator.
     """
     keychain_was_reachable = _keyring_usable()
     if keychain_was_reachable:
@@ -107,8 +112,15 @@ def set_api_key(value: str) -> None:
             try:
                 _remove_key_file()
             except OSError:
-                with suppress(keyring.errors.KeyringError):
+                try:
                     _remove_keychain_entry()
+                except keyring.errors.KeyringError:
+                    raise KeyError(
+                        "Credential authority is ambiguous: the new keychain value and "
+                        "the old fallback file both survive because neither the file "
+                        "unlink nor the keychain rollback delete succeeded. Inspect and "
+                        "remove one location manually before retrying."
+                    ) from None
                 raise
             return
 

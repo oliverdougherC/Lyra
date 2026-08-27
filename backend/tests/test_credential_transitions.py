@@ -662,3 +662,128 @@ def test_delete_succeeds_when_keychain_not_usable(
 
     assert not fallback.exists()
     assert secrets.get_api_key() is None
+
+
+# ---------------------------------------------------------------------------
+# PLA-302: rollback-of-rollback — both file unlink AND keychain delete fail
+# ---------------------------------------------------------------------------
+
+
+def test_rollback_of_rollback_raises_ambiguous_authority(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When keychain write succeeds, file unlink fails, AND keychain rollback delete
+    also fails, the caller must receive an explicit ambiguous-authority error — not
+    the bare OSError from the file unlink, and not a silent success.
+    """
+    from backend.config import settings
+
+    fallback = settings.data_dir / ".api_key"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text("sk-old-file")
+
+    original_unlink = Path.unlink
+
+    def fail_unlink(self: Path, **kwargs: object) -> None:
+        if self == fallback:
+            raise OSError("permission denied")
+        original_unlink(self, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    isolated_secrets.delete_error = keyring.errors.KeyringError("keychain locked for delete")
+
+    with pytest.raises(KeyError, match="ambiguous"):
+        secrets.set_api_key("sk-new-attempt")
+
+
+def test_rollback_of_rollback_leaves_both_values_surviving(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """After a rollback-of-rollback failure, both the new keychain value and the old
+    fallback file coexist.  get_api_key returns the keychain value (keychain is
+    authoritative when reachable), and the file still holds the old value.
+    """
+    from backend.config import settings
+
+    fallback = settings.data_dir / ".api_key"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text("sk-old-file")
+
+    original_unlink = Path.unlink
+
+    def fail_unlink(self: Path, **kwargs: object) -> None:
+        if self == fallback:
+            raise OSError("permission denied")
+        original_unlink(self, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    isolated_secrets.delete_error = keyring.errors.KeyringError("locked")
+
+    with pytest.raises(KeyError, match="ambiguous"):
+        secrets.set_api_key("sk-new")
+
+    assert isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] == "sk-new"
+    assert fallback.read_text().strip() == "sk-old-file"
+
+    assert secrets.get_api_key() == "sk-new"
+
+
+def test_rollback_of_rollback_then_reprobe_returns_keychain_value(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """After a rollback-of-rollback, a process restart (probe reset) still returns
+    the keychain value since the keychain is reachable for reads.
+    """
+    from backend.config import settings
+
+    fallback = settings.data_dir / ".api_key"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text("sk-old-file")
+
+    original_unlink = Path.unlink
+
+    def fail_unlink(self: Path, **kwargs: object) -> None:
+        if self == fallback:
+            raise OSError("permission denied")
+        original_unlink(self, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    isolated_secrets.delete_error = keyring.errors.KeyringError("locked")
+
+    with pytest.raises(KeyError, match="ambiguous"):
+        secrets.set_api_key("sk-new")
+
+    isolated_secrets.delete_error = None
+    secrets.reset_keyring_probe()
+
+    assert secrets.get_api_key() == "sk-new"
+    assert secrets.api_key_storage() == "keychain"
+
+
+def test_rollback_of_rollback_no_false_success_path(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The rollback-of-rollback path must never return normally — it must always raise."""
+    from backend.config import settings
+
+    fallback = settings.data_dir / ".api_key"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.write_text("sk-old")
+
+    original_unlink = Path.unlink
+
+    def fail_unlink(self: Path, **kwargs: object) -> None:
+        if self == fallback:
+            raise OSError("disk error")
+        original_unlink(self, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    isolated_secrets.delete_error = keyring.errors.KeyringError("locked")
+
+    raised = False
+    try:
+        secrets.set_api_key("sk-attempt")
+    except (KeyError, OSError):
+        raised = True
+
+    assert raised, "set_api_key must raise when both file unlink and keychain rollback fail"

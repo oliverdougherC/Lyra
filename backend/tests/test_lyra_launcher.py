@@ -1137,6 +1137,157 @@ def test_backup_normal_roundtrip_still_works(
     assert_restored_workspace(restored, restored / "lyra.db")
 
 
+# ---------------------------------------------------------------------------
+# PLA-307: ownership-based publication cleanup (inode identity)
+# ---------------------------------------------------------------------------
+
+
+def test_backup_cleanup_removes_own_hard_link_on_fsync_failure(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """When _fsync_directory raises after os.link succeeds, the archive is removed
+    because inode identity proves it belongs to this attempt.
+    """
+    import errno
+
+    _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
+
+    original_fsync_dir = launcher._fsync_directory
+
+    def exploding_fsync(path: Path) -> None:
+        raise OSError(errno.EIO, "simulated I/O error")
+
+    monkeypatch.setattr(launcher, "_fsync_directory", exploding_fsync)
+
+    with pytest.raises(OSError, match="I/O error"):
+        launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)]))
+
+    assert not archive.exists(), "our own hard link must be cleaned up after fsync failure"
+    assert list(archive.parent.glob(".lyra-backup-*.tmp")) == [], "staging must be cleaned"
+
+
+def test_backup_cleanup_preserves_competitor_file_after_link_and_fsync_failure(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If a competitor replaces the archive between os.link and _fsync_directory,
+    the cleanup must not remove the competitor's file.
+    """
+    import errno
+
+    _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
+
+    original_link = os.link
+
+    def replacing_link(src: object, dst: object) -> None:
+        original_link(src, dst)
+        Path(str(dst)).unlink()
+        Path(str(dst)).write_bytes(b"competitor-archive")
+
+    def exploding_fsync(path: Path) -> None:
+        raise OSError(errno.EIO, "simulated I/O error")
+
+    monkeypatch.setattr(os, "link", replacing_link)
+    monkeypatch.setattr(launcher, "_fsync_directory", exploding_fsync)
+
+    with pytest.raises(OSError, match="I/O error"):
+        launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)]))
+
+    assert archive.exists(), "competitor's file must survive"
+    assert archive.read_bytes() == b"competitor-archive", "competitor's content must be intact"
+
+
+# ---------------------------------------------------------------------------
+# PLA-307: fsync durability contract truthfulness
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX errno semantics")
+def test_fsync_directory_propagates_real_io_error(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A real I/O error (EIO) from os.fsync on a directory must propagate."""
+    import errno
+
+    original_fsync = os.fsync
+
+    def eio_fsync(fd: int) -> None:
+        raise OSError(errno.EIO, "simulated disk failure")
+
+    monkeypatch.setattr(os, "fsync", eio_fsync)
+
+    with pytest.raises(OSError) as exc_info:
+        launcher._fsync_directory(tmp_path)
+
+    assert exc_info.value.errno == errno.EIO
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX errno semantics")
+def test_fsync_directory_tolerates_unsupported_operation(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """EINVAL from os.fsync (filesystem does not support dir fsync) is tolerated."""
+    import errno
+
+    original_fsync = os.fsync
+
+    def einval_fsync(fd: int) -> None:
+        raise OSError(errno.EINVAL, "operation not supported")
+
+    monkeypatch.setattr(os, "fsync", einval_fsync)
+
+    launcher._fsync_directory(tmp_path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX errno semantics")
+def test_fsync_directory_tolerates_enosys(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """ENOSYS (function not implemented) is tolerated."""
+    import errno
+
+    def enosys_fsync(fd: int) -> None:
+        raise OSError(errno.ENOSYS, "not implemented")
+
+    monkeypatch.setattr(os, "fsync", enosys_fsync)
+
+    launcher._fsync_directory(tmp_path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX errno semantics")
+def test_backup_fails_on_real_fsync_directory_error(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A real fsync failure during backup must prevent false success."""
+    import errno
+
+    _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
+
+    original_fsync = os.fsync
+
+    def selective_eio_fsync(fd: int) -> None:
+        try:
+            name = os.readlink(f"/proc/self/fd/{fd}")
+        except OSError:
+            name = ""
+        if os.path.isdir(name):
+            raise OSError(errno.EIO, "disk failure")
+        original_fsync(fd)
+
+    # On macOS /proc/self/fd doesn't exist; use a counter instead.
+    call_count = [0]
+
+    def counting_eio_fsync(fd: int) -> None:
+        call_count[0] += 1
+        if call_count[0] > 1:
+            raise OSError(errno.EIO, "disk failure on directory fsync")
+        original_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", counting_eio_fsync)
+
+    with pytest.raises(OSError, match="disk failure"):
+        launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)]))
+
+
 @pytest.mark.parametrize(
     "output,expected",
     [("Python 3.14.6\n", (3, 14, 6)), ("v22.23.0\n", (22, 23, 0))],

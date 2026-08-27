@@ -1864,16 +1864,37 @@ def _fsync_path(path: Path) -> None:
 
 
 def _fsync_directory(path: Path) -> None:
+    """Fsync a directory entry to establish rename/link durability on POSIX.
+
+    On non-POSIX platforms the call is a no-op (the OS provides no directory-fsync
+    primitive).  On POSIX, errors that indicate the filesystem genuinely does not
+    support directory fsync (EINVAL, ENOTSUP, EOPNOTSUPP, ENOSYS, EBADF on an
+    O_RDONLY directory fd) are tolerated — durability is best-effort on those mounts.
+    Real I/O errors (EIO, ENOSPC, EROFS, …) propagate so callers never silently
+    claim durable publication after an actual storage failure.
+    """
     if os.name != "posix":
         return
+    import errno
+
+    _FSYNC_UNSUPPORTED = frozenset((
+        errno.EINVAL,
+        errno.ENOSYS,
+        getattr(errno, "ENOTSUP", 0),
+        getattr(errno, "EOPNOTSUPP", 0),
+        errno.EBADF,
+    ))
     try:
         fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return
+    except OSError as exc:
+        if exc.errno in _FSYNC_UNSUPPORTED:
+            return
+        raise
     try:
         os.fsync(fd)
-    except OSError:
-        pass
+    except OSError as exc:
+        if exc.errno not in _FSYNC_UNSUPPORTED:
+            raise
     finally:
         os.close(fd)
 
@@ -1898,7 +1919,6 @@ def backup(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="lyra-backup-") as temporary:
         stage_root = Path(temporary)
         manifest = stage_backup_tree(stage_root, data_dir, db_path)
-        published = False
         try:
             descriptor = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with (
@@ -1921,12 +1941,16 @@ def backup(args: argparse.Namespace) -> int:
 
             _fsync_path(staging)
             os.link(staging, archive)
-            published = True
             _fsync_directory(archive.parent)
         except BaseException:
-            if published:
-                with suppress(OSError):
-                    Path(archive).unlink(missing_ok=True)
+            if staging.exists() and archive.exists():
+                try:
+                    is_ours = os.path.samefile(staging, archive)
+                except OSError:
+                    is_ours = False
+                if is_ours:
+                    with suppress(OSError):
+                        archive.unlink()
             raise
         finally:
             with suppress(OSError):
