@@ -115,20 +115,49 @@ making the product that already exists dependable during real study sessions.
 - [x] Exercise tutor disconnects, malformed model output, Firecrawl outages, cancellation, and
   process restarts through end-to-end fault tests.
 
-### 4. Release gates
+### 4. Correctness and safety hardening
+
+A comprehensive code review in August 2026 identified school-readiness defects across the
+product surface. All were fixed, merged to `main`, and covered by deterministic tests in CI
+Gate. Linear tracks the individual issues.
+
+- [x] Helper-process supervision: health-aware lifecycle, adopted-process reclamation, and clean
+  shutdown.
+- [x] Credential safety: atomic transitions with no stale fallback resurfacing after keychain
+  recovery.
+- [x] Browser and API boundaries: untrusted-origin rejection on every state-changing loopback
+  request, and exact workspace-hunk review before application.
+- [x] Writer-chat durability: turn serialization, failed-turn recovery, and context-window
+  enforcement.
+- [x] Tutor and study lifecycle: causal retry without duplication, flashcard review idempotency,
+  study artifact ready-state gating, and atomic backup publication.
+
+### 5. Release gates and evidence
 
 - [x] Run backend formatting, lint, and tests in CI.
 - [x] Run frontend formatting, lint, type checking, unit tests, production build, and production
   dependency audit in CI.
+- [x] Enforce a required aggregate `CI Gate` check on `main` through a repository ruleset. See
+  [security-and-ci-gates.md](security-and-ci-gates.md) for the full policy.
+- [x] Add a locked Python production-dependency vulnerability gate with a documented policy,
+  deterministic offline tests, and machine-readable evidence.
 - [x] Add a nonvisual browser smoke test for route hydration and runtime errors without coupling it
   to the ongoing visual redesign.
-- [x] Add end-to-end coverage for one representative class, document, chat, solution, study, and
-  draft lifecycle.
+- [ ] Add deterministic real-backend acceptance coverage that composes the real frontend, FastAPI,
+  migrations, SQLite, workers, and filesystem through the browser. The existing Playwright smoke
+  tests intercept application API traffic and do not prove this composition. When this job lands,
+  add it to `CI Gate`'s `needs` list. See Linear PLA-292.
+- [ ] Build a truthful class-scale retrieval evaluation that records requested and observed
+  execution paths separately. A requested optional path that fell back cannot be published as
+  that path's result. See Linear PLA-149.
 - [x] Define a macOS Apple Silicon release checklist covering clean installation, first launch,
   restart recovery, offline/degraded use, and data preservation.
+- [ ] Execute the release-candidate soak on one exact merged SHA on a supported Mac after the
+  real-backend acceptance and retrieval evaluation gates are green. This is the final Go/No-Go
+  rehearsal. See Linear PLA-147.
 - [x] Keep production dependency audits free of known high and critical advisories.
 
-### 5. Documentation and supportability
+### 6. Documentation and supportability
 
 - [x] Replace the internal top-level README with a user-facing overview and quick start.
 - [x] Separate live roadmap material from historical phase and handoff records.
@@ -140,21 +169,42 @@ making the product that already exists dependable during real study sessions.
 
 ### Stabilization exit criteria
 
-The stabilization release is ready only when all of the following are true:
+The stabilization release is ready only when all of the following are objectively verified:
 
 - a clean macOS Apple Silicon setup can launch through `./run` without manual process cleanup;
+- the required `CI Gate` is enforced on `main` and green on the release-candidate commit;
+- the real-backend acceptance lane proves school-critical user journeys through the shipped
+  application boundary without mocked API interception (PLA-292);
+- no High or Urgent issue is open in the Fall 2026 school-readiness milestone;
+- a truthful class-scale retrieval baseline exists with evidence that separates requested from
+  observed execution paths (PLA-149);
 - the app remains useful when optional web research is unavailable;
 - a restart does not silently discard queued work or corrupt a partially completed artifact;
 - cancellation and upstream failures settle into an honest, retryable state;
-- no known high-severity correctness, privacy, or production dependency issue is open;
-- CI passes from a clean checkout; and
+- backup and restore round-trip representative application data;
+- the release-candidate soak passes on a supported Mac against the exact candidate commit,
+  covering sustained study, writing, restart, dependency outage, and resource stability (PLA-147);
+- no known high-severity correctness, privacy, or production dependency issue is open; and
 - the README, local deployment guide, privacy notes, and troubleshooting steps match the shipped
   behavior.
+
+Linear is the detailed state source of truth for open issues and blockers. The current release
+sequence is:
+
+1. PLA-292 (real-stack acceptance) and PLA-149 (truthful retrieval evidence) in parallel.
+2. Merge both to `main` with green CI Gate.
+3. PLA-147 (supported-Mac release-candidate soak) on the exact merged SHA.
+
+Source-checkout Fall readiness is distinct from later signed/native packaging work, which is
+tracked under **Later**.
 
 ## Next: measured quality
 
 After stabilization, improve the quality of existing answers and artifacts with repeatable
 measurements rather than adding unrelated surfaces.
+
+Quality evidence must distinguish requested from observed execution paths. A measurement that
+labels a fallback or degraded run as the intended path is invalid regardless of the quality score.
 
 ### Retrieval and document quality
 
@@ -162,8 +212,8 @@ measurements rather than adding unrelated surfaces.
   headers or scattered equation characters.
 - Add a page-selective recognition quality gate so lossy pages can be re-read without retranscribing
   a good document wholesale.
-- Maintain class-scale retrieval evaluations that distinguish the right passage in the wrong
-  document from a true hit.
+- Extend class-scale retrieval evaluations beyond the initial release baseline, covering additional
+  document types, query patterns, and the full hybrid/reranked path matrix.
 - Revisit embedding or reranking changes only when a recorded failure case justifies re-indexing or
   added latency.
 
@@ -190,7 +240,8 @@ measurements rather than adding unrelated surfaces.
   prompts, API keys, or private paths.
 - Exercise migrations and launcher recovery against upgrades from released versions, not only fresh
   databases.
-- Establish a small, repeatable release-candidate soak test for long study and writing sessions.
+- Extend soak evidence beyond the initial release rehearsal to cover upgrade paths, multi-session
+  resource drift, and sustained operational stability.
 
 ## Later: distribution and deliberate expansion
 
@@ -231,3 +282,8 @@ The responsive web interface remains important, but a separate mobile applicatio
   of turning this file into an implementation log.
 - When scope changes, revise the roadmap in the same change so the public plan never trails the
   product again.
+- When a release gate changes state, update this roadmap and the Linear project baseline in the
+  same change so they stay consistent.
+- Linear is the detailed work-state source of truth. The roadmap communicates stable product
+  direction and objectively verified gates; it does not duplicate volatile issue counts or
+  per-ticket implementation detail.
