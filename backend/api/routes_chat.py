@@ -480,7 +480,7 @@ class TurnStreamingResponse(StreamingResponse):
                         finally:
                             conn.close()
                     except Exception:
-                        pass
+                        logger.debug("Could not settle attempt %s on exit", self._attempt_id)
             finally:
                 sessions.end_turn(self._session_id, self._turn_token)
 
