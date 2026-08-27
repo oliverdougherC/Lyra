@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import secrets as _secrets_mod
 import shlex
 import shutil
 import signal
@@ -1869,25 +1870,38 @@ def backup(args: argparse.Namespace) -> int:
             f"backup target must not live inside the data directory being archived: {archive}"
         )
 
+    staging = archive.parent / f".lyra-backup-{_secrets_mod.token_hex(16)}.tmp"
+
     with tempfile.TemporaryDirectory(prefix="lyra-backup-") as temporary:
         stage_root = Path(temporary)
         manifest = stage_backup_tree(stage_root, data_dir, db_path)
-        # Created 0o600 from the first byte. The archive holds the whole data tree - and, on
-        # a keychain-less machine, the fallback API key - but lives outside the data
-        # directory, so it has no owner-only parent to hide behind and its own mode is the
-        # only thing keeping it private. Setting the mode after writing would leave the
-        # sensitive bytes briefly world-readable. O_EXCL preserves the refuse-if-exists that
-        # tar mode "x" gave, backing up the earlier existence check.
-        descriptor = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with (
-            os.fdopen(descriptor, "wb") as raw,
-            tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.PAX_FORMAT) as bundle,
-        ):
-            bundle.add(stage_root / BACKUP_MANIFEST, arcname=BACKUP_MANIFEST, recursive=False)
-            bundle.add(stage_root / BACKUP_DATA_PREFIX, arcname=BACKUP_DATA_PREFIX)
-            db_member = str(manifest["db"]["member"])  # type: ignore[index]
-            if db_member == BACKUP_EXTERNAL_DB:
-                bundle.add(stage_root / BACKUP_EXTERNAL_DB, arcname=BACKUP_EXTERNAL_DB)
+        try:
+            descriptor = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with (
+                os.fdopen(descriptor, "wb") as raw,
+                tarfile.open(fileobj=raw, mode="w:gz", format=tarfile.PAX_FORMAT) as bundle,
+            ):
+                bundle.add(
+                    stage_root / BACKUP_MANIFEST,
+                    arcname=BACKUP_MANIFEST,
+                    recursive=False,
+                )
+                bundle.add(stage_root / BACKUP_DATA_PREFIX, arcname=BACKUP_DATA_PREFIX)
+                db_member = str(manifest["db"]["member"])  # type: ignore[index]
+                if db_member == BACKUP_EXTERNAL_DB:
+                    bundle.add(stage_root / BACKUP_EXTERNAL_DB, arcname=BACKUP_EXTERNAL_DB)
+
+            with tarfile.open(staging, mode="r:gz") as check:
+                read_backup_manifest(check)
+
+            os.link(staging, archive)
+        except BaseException:
+            with suppress(OSError):
+                Path(archive).unlink(missing_ok=True)
+            raise
+        finally:
+            with suppress(OSError):
+                staging.unlink(missing_ok=True)
 
     say()
     say(f"Lyra backup created at {archive}")

@@ -913,6 +913,225 @@ def test_backup_refuses_when_an_external_writer_holds_the_database(
         writer.close()
 
 
+# ---------------------------------------------------------------------------
+# PLA-307: Atomic backup publication — failure-injection tests
+# ---------------------------------------------------------------------------
+
+
+def _backup_monkeypatch(
+    launcher: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    *,
+    archive_name: str = "lyra-backup.tgz",
+) -> tuple[Path, Path]:
+    """Common setup for PLA-307 backup-failure tests."""
+    data_dir, _db_path = seed_workspace(tmp_path)
+    archive = tmp_path / archive_name
+    monkeypatch.setenv("LYRA_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("LYRA_DB_PATH", raising=False)
+    monkeypatch.setattr(launcher, "load_runtime", lambda: launcher.empty_runtime())
+    monkeypatch.setattr(launcher, "stop_supervised_stack", lambda _runtime: True)
+    return data_dir, archive
+
+
+def test_backup_cleans_staging_after_tar_write_failure(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An exception during archive compression must not leave staging or final artifacts."""
+    _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
+
+    original_add = tarfile.TarFile.add
+
+    def exploding_add(self: tarfile.TarFile, name: str, arcname: str = "", **kw: object) -> None:
+        if arcname == launcher.BACKUP_DATA_PREFIX:
+            raise OSError("simulated write failure")
+        original_add(self, name, arcname=arcname, **kw)
+
+    monkeypatch.setattr(tarfile.TarFile, "add", exploding_add)
+
+    with pytest.raises(OSError, match="simulated write failure"):
+        launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)]))
+
+    assert not archive.exists(), "final archive must not exist after write failure"
+    staging_leftovers = list(archive.parent.glob(".lyra-backup-*.tmp"))
+    assert staging_leftovers == [], f"staging file left behind: {staging_leftovers}"
+
+
+def test_backup_cleans_staging_after_keyboard_interrupt(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A KeyboardInterrupt mid-write must clean up staging without leaving partial artifacts."""
+    _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
+
+    original_add = tarfile.TarFile.add
+
+    def interrupting_add(self: tarfile.TarFile, name: str, arcname: str = "", **kw: object) -> None:
+        if arcname == launcher.BACKUP_DATA_PREFIX:
+            raise KeyboardInterrupt
+        original_add(self, name, arcname=arcname, **kw)
+
+    monkeypatch.setattr(tarfile.TarFile, "add", interrupting_add)
+
+    with pytest.raises(KeyboardInterrupt):
+        launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)]))
+
+    assert not archive.exists()
+    assert list(archive.parent.glob(".lyra-backup-*.tmp")) == []
+
+
+def test_backup_cleans_staging_after_disk_full_simulation(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A simulated disk-full error during write must clean up completely."""
+    import errno as _errno
+
+    _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
+
+    original_add = tarfile.TarFile.add
+
+    def disk_full_add(self: tarfile.TarFile, name: str, arcname: str = "", **kw: object) -> None:
+        if arcname == launcher.BACKUP_DATA_PREFIX:
+            raise OSError(_errno.ENOSPC, "No space left on device")
+        original_add(self, name, arcname=arcname, **kw)
+
+    monkeypatch.setattr(tarfile.TarFile, "add", disk_full_add)
+
+    with pytest.raises(OSError, match="No space left on device"):
+        launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)]))
+
+    assert not archive.exists()
+    assert list(archive.parent.glob(".lyra-backup-*.tmp")) == []
+
+
+def test_backup_refuses_pre_existing_destination(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """backup_archive_target refuses when the archive already exists."""
+    _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
+    archive.write_bytes(b"existing content")
+
+    with pytest.raises(launcher.LauncherError, match="target already exists"):
+        launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)]))
+
+
+def test_backup_retry_succeeds_after_failed_attempt(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A retry to the same destination after a failed attempt must succeed."""
+    _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
+
+    original_add = tarfile.TarFile.add
+    attempt = [0]
+
+    def fail_first_add(self: tarfile.TarFile, name: str, arcname: str = "", **kw: object) -> None:
+        if arcname == launcher.BACKUP_DATA_PREFIX and attempt[0] == 0:
+            attempt[0] = 1
+            raise OSError("first attempt fails")
+        original_add(self, name, arcname=arcname, **kw)
+
+    monkeypatch.setattr(tarfile.TarFile, "add", fail_first_add)
+
+    with pytest.raises(OSError, match="first attempt fails"):
+        launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)]))
+
+    assert not archive.exists()
+
+    monkeypatch.setattr(tarfile.TarFile, "add", original_add)
+    assert launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)])) == 0
+    assert archive.exists()
+
+
+def test_backup_publication_race_does_not_leave_orphans(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If the final link fails (someone raced us), no staging or final artifact remains."""
+    _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
+
+    original_link = os.link
+
+    def racing_link(src: object, dst: object) -> None:
+        Path(str(dst)).write_bytes(b"raced-into-place")
+        original_link(src, dst)
+
+    monkeypatch.setattr(os, "link", racing_link)
+
+    with pytest.raises(FileExistsError):
+        launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)]))
+
+    assert list(archive.parent.glob(".lyra-backup-*.tmp")) == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_backup_staging_file_is_private(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The staging file must be mode 0o600 from creation, even under a wide-open umask."""
+    _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
+
+    observed_modes: list[int] = []
+    original_link = os.link
+
+    def capturing_link(src: object, dst: object) -> None:
+        observed_modes.append(stat.S_IMODE(os.stat(src).st_mode))
+        original_link(src, dst)
+
+    monkeypatch.setattr(os, "link", capturing_link)
+
+    previous_umask = os.umask(0)
+    try:
+        assert launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)])) == 0
+    finally:
+        os.umask(previous_umask)
+
+    assert observed_modes == [0o600]
+    assert stat.S_IMODE(archive.stat().st_mode) == 0o600
+
+
+def test_backup_structurally_validates_archive_before_publication(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The archive is validated after writing. A corrupt archive must not be published."""
+    _data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
+
+    original_open = tarfile.open
+
+    def corrupt_validation(name: object = None, mode: str = "r", **kw: object) -> tarfile.TarFile:
+        if mode == "r:gz":
+            raise tarfile.ReadError("simulated corrupt archive")
+        return original_open(name, mode=mode, **kw)
+
+    monkeypatch.setattr(tarfile, "open", corrupt_validation)
+
+    with pytest.raises(tarfile.ReadError, match="simulated corrupt archive"):
+        launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)]))
+
+    assert not archive.exists()
+    assert list(archive.parent.glob(".lyra-backup-*.tmp")) == []
+
+
+def test_backup_normal_roundtrip_still_works(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Sanity check: the atomic publication path produces a valid, restorable archive."""
+    data_dir, archive = _backup_monkeypatch(launcher, monkeypatch, tmp_path)
+    assert launcher.backup(launcher.parse_args(["backup", "--archive", str(archive)])) == 0
+
+    assert archive.exists()
+    with tarfile.open(archive, mode="r:gz") as check:
+        manifest = launcher.read_backup_manifest(check)
+        assert manifest["version"] == launcher.BACKUP_VERSION
+
+    restored = tmp_path / "restored"
+    assert (
+        launcher.restore(
+            launcher.parse_args(["restore", "--archive", str(archive), "--data-dir", str(restored)])
+        )
+        == 0
+    )
+    assert_restored_workspace(restored, restored / "lyra.db")
+
+
 @pytest.mark.parametrize(
     "output,expected",
     [("Python 3.14.6\n", (3, 14, 6)), ("v22.23.0\n", (22, 23, 0))],
