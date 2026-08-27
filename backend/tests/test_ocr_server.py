@@ -82,6 +82,8 @@ def test_the_spawned_command_is_the_publisher_s_reference_invocation(
     spawned: list[list[str]] = []
 
     class _Fake:
+        pid = 99999
+
         def poll(self) -> int | None:
             return None
 
@@ -90,8 +92,8 @@ def test_the_spawned_command_is_the_publisher_s_reference_invocation(
         return _Fake()
 
     monkeypatch.setattr(OcrServer, "_find_binary", lambda self: Path("llama-server"))
-    # The spawn now happens in the shared lifecycle, so it is patched there.
     monkeypatch.setattr(llama_server.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(llama_server, "_record_server", lambda *_a, **_k: None)
     monkeypatch.setattr(OcrServer, "_await_health", lambda self, process: None)
 
     server.ensure_running()
