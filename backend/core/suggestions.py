@@ -314,7 +314,12 @@ def pending_for_part(conn: sqlite3.Connection, part_id: int) -> dict[str, object
 
 
 def propose(
-    conn: sqlite3.Connection, part_id: int, proposed_content: str, note: str | None
+    conn: sqlite3.Connection,
+    part_id: int,
+    proposed_content: str,
+    note: str | None,
+    *,
+    commit: bool = True,
 ) -> PendingEdit | None:
     """Create or coalesce the pending edit for one draft body.
 
@@ -322,6 +327,8 @@ def propose(
     proposed content and the instruction only - the stored base survives, which is what
     makes sequential AI passes coherent. An empty diff creates nothing: proposing the
     current content is not a suggestion.
+
+    When ``commit=False`` the caller owns the transaction boundary (PLA-310 atomicity).
     """
     part = artifacts.get_part(conn, part_id)
     current = str(part["content"])
@@ -336,17 +343,17 @@ def propose(
             "values (?, ?, ?, ?, ?)",
             (part_id, current, _sha256(current), proposed_content, note),
         )
-        conn.commit()
+        if commit:
+            conn.commit()
         return _get_by_part(conn, part_id)
 
     if proposed_content == existing.base_content:
-        # The new proposal reads exactly as the stored base: nothing left to suggest.
-        _delete(conn, existing.id)
+        _delete(conn, existing.id, commit=commit)
         return None
     coalesced = PendingEdit(
         **{**vars(existing), "proposed_content": proposed_content, "note": note}
     )
-    _store(conn, coalesced)
+    _store(conn, coalesced, commit=commit)
     return coalesced
 
 

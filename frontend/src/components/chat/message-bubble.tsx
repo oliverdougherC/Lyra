@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatCount, formatRelativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { AgentAttempt, WriterActivity } from '@/types'
+import type { AgentAttempt, WriterActivity, WriterAttempt } from '@/types'
 
 export type ChatMessage = {
   id: number
@@ -30,6 +30,8 @@ export type ChatMessage = {
   created_at: string
   /** The latest agent-turn attempt on this message, when it was an agent turn (PLA-295). */
   agent_attempt?: AgentAttempt | null
+  /** The latest writer-turn attempt on this message, when it was a writer turn (PLA-310). */
+  writer_attempt?: WriterAttempt | null
 }
 
 type MessageRowProps = {
@@ -75,19 +77,19 @@ export function MessageRow({
   onRetry,
 }: MessageRowProps) {
   if (message.role === 'user') {
-    const attempt = message.agent_attempt
-    const turnFailed = attempt?.state === 'failed' || attempt?.state === 'stopped'
+    const agentAttempt = message.agent_attempt
+    const writerAttempt = message.writer_attempt
+    const agentFailed = agentAttempt?.state === 'failed' || agentAttempt?.state === 'stopped'
+    const writerFailed = writerAttempt?.state === 'failed' || writerAttempt?.state === 'stopped'
     return (
       <div className={cn('group flex flex-col items-end', className)}>
-        {/* The student's note in the margin: warm tan rather than neutral gray, with one
-            square corner pointing back at the composer it came from. */}
         <div className="bg-accent-secondary/45 border-accent-secondary/60 max-w-[80%] rounded-2xl rounded-br-md border px-4 py-2.5 text-[0.9375rem] leading-6 whitespace-pre-wrap">
           {message.content}
         </div>
-        {/* A failed or stopped agent turn is shown as what it is - the reply never came -
-            rather than as a question with silence under it. The Retry itself lives in the
-            agent controls, where the turn was sent from. */}
-        {turnFailed ? <AgentTurnFailure detail={attempt?.detail ?? null} /> : null}
+        {agentFailed ? <AgentTurnFailure detail={agentAttempt?.detail ?? null} /> : null}
+        {writerFailed ? (
+          <WriterTurnFailure detail={writerAttempt?.detail ?? null} onRetry={onRetry} />
+        ) : null}
         <MessageActions
           align="end"
           content={message.content}
@@ -295,6 +297,30 @@ function AgentTurnFailure({ detail }: { detail: string | null }) {
     >
       <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
       <span>{detail?.trim() || 'This turn did not finish. Retry it from the agent controls.'}</span>
+    </div>
+  )
+}
+
+function WriterTurnFailure({ detail, onRetry }: { detail: string | null; onRetry?: () => void }) {
+  return (
+    <div
+      data-writer-turn-failure
+      className="text-destructive mt-1 flex max-w-[80%] items-start gap-1.5 text-xs"
+      role="status"
+    >
+      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+      <span>{detail?.trim() || 'This turn did not finish.'}</span>
+      {onRetry ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="text-destructive hover:text-foreground -mt-0.5 ml-0.5 shrink-0"
+          onClick={onRetry}
+          aria-label="Try again"
+        >
+          <RefreshCw className="size-3" />
+        </Button>
+      ) : null}
     </div>
   )
 }

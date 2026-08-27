@@ -118,6 +118,12 @@ export interface AgentAttempt {
   detail: string | null
 }
 
+export interface WriterAttempt {
+  state: 'running' | 'completed' | 'failed' | 'stopped'
+  stopped_reason: string | null
+  detail: string | null
+}
+
 export interface MessageRead {
   id: number
   session_id: number
@@ -134,6 +140,8 @@ export interface MessageRead {
   created_at: string
   /** The latest agent-turn attempt on this message, when it was an agent turn. */
   agent_attempt?: AgentAttempt | null
+  /** The latest writer-turn attempt on this message, when it was a writer turn. */
+  writer_attempt?: WriterAttempt | null
 }
 
 export interface FactRead {

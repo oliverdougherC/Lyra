@@ -109,12 +109,14 @@ export function figureUrl(figureId: number): string {
 export class ApiError extends Error {
   readonly status: number
   readonly detail: string
+  readonly code: string | undefined
 
-  constructor(status: number, detail: string) {
+  constructor(status: number, detail: string, code?: string) {
     super(detail)
     this.name = 'ApiError'
     this.status = status
     this.detail = detail
+    this.code = code
   }
 }
 
@@ -197,8 +199,14 @@ function readDetail(payload: unknown, status: number): string {
   return detail
 }
 
+function readCode(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined
+  const value = payload as Record<string, unknown>
+  return typeof value.code === 'string' ? value.code : undefined
+}
+
 function defaultErrorFactory(status: number, payload: unknown | undefined): ApiError {
-  return new ApiError(status, readDetail(payload, status))
+  return new ApiError(status, readDetail(payload, status), readCode(payload))
 }
 
 function isAgentChatActivity(payload: unknown): payload is AgentChatActivity {
@@ -993,9 +1001,23 @@ export function streamWriterChat(
   return streamTurn(`/api/drafts/${draftId}/chat/${sessionId}`, body, onEvent, signal)
 }
 
+export function streamWriterChatRetry(
+  draftId: number,
+  sessionId: number,
+  onEvent: (event: ChatEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamTurn(
+    `/api/drafts/${draftId}/chat/${sessionId}/retry`,
+    {} as Record<string, never>,
+    onEvent,
+    signal,
+  )
+}
+
 async function streamTurn<StreamEvent>(
   path: string,
-  body: ChatRequest | RegenerateRequest | WriteRequest | WriterChatRequest,
+  body: ChatRequest | RegenerateRequest | WriteRequest | WriterChatRequest | Record<string, never>,
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {

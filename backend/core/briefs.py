@@ -139,12 +139,15 @@ def save_brief(
     length_target: str = "",
     source_document_id: int | None = None,
     status: str = PROPOSED,
+    commit: bool = True,
 ) -> dict[str, object]:
     """Write the draft's brief, replacing any prior one, and return it.
 
     The default status is `proposed` even over a previously confirmed brief: a changed
     brief is a new proposal. `status=CONFIRMED` is for the student's own edits, where
     saving and agreeing are the same gesture.
+
+    When ``commit=False`` the caller owns the transaction boundary (PLA-310 atomicity).
 
     Raises:
         NotFoundError: when the artifact is not a draft, or `source_document_id` names
@@ -182,7 +185,8 @@ def save_brief(
             status,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     brief = get_brief(conn, artifact_id)
     assert brief is not None  # noqa: S101 - just written above, same connection.
     return brief
