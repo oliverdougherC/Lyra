@@ -1,15 +1,21 @@
 /**
- * Acceptance global setup — starts the full production-shaped stack.
+ * Acceptance global setup -- starts the full production-shaped stack.
  *
- * 1. Creates an isolated temporary data directory.
- * 2. Starts the fake tutor fixture on TUTOR_PORT.
- * 3. Starts the real FastAPI backend (with deterministic embedding fixtures)
- *    on BACKEND_PORT, pointing at the temp data dir.
- * 4. Waits for the backend health endpoint.
- * 5. Configures the tutor endpoint + API key through PUT /api/settings.
- * 6. Starts the production Next.js frontend on FRONTEND_PORT.
- * 7. Waits for the frontend to respond.
- * 8. Writes a state file so global-teardown can stop everything.
+ * 1. Resolves ports from env vars (ACCEPTANCE_BACKEND_PORT, etc.) or defaults.
+ * 2. Creates an isolated temporary data directory.
+ * 3. Starts the fake tutor fixture on the tutor port.
+ * 4. Starts the real FastAPI backend (with deterministic embedding fixtures).
+ * 5. Waits for the backend health endpoint.
+ * 6. Configures the tutor endpoint + API key through PUT /api/settings.
+ * 7. Starts the production Next.js frontend.
+ * 8. Waits for the frontend to respond.
+ * 9. Writes a state file so global-teardown can stop everything.
+ *
+ * Ports are configurable via environment variables so parallel CI jobs or
+ * local runs can avoid conflicts:
+ *   ACCEPTANCE_BACKEND_PORT  (default 8000)
+ *   ACCEPTANCE_FRONTEND_PORT (default 3000)
+ *   ACCEPTANCE_TUTOR_PORT    (default 18900)
  */
 
 import { type ChildProcess, spawn } from 'node:child_process'
@@ -19,10 +25,6 @@ import { join, resolve } from 'node:path'
 
 import { TutorFixture } from './tutor-fixture'
 
-export const BACKEND_PORT = 8000
-export const FRONTEND_PORT = 3000
-export const TUTOR_PORT = 18_900
-
 const PROJECT_ROOT = resolve(__dirname, '..', '..', '..')
 const STATE_FILE = join(PROJECT_ROOT, '.acceptance-state.json')
 
@@ -30,13 +32,31 @@ const READY_POLL_MS = 500
 const BACKEND_TIMEOUT_MS = 60_000
 const FRONTEND_TIMEOUT_MS = 120_000
 
+function resolvePort(envVar: string, fallback: number): number {
+  const v = process.env[envVar]
+  return v ? Number(v) : fallback
+}
+
 export default async function globalSetup() {
+  const BACKEND_PORT = resolvePort('ACCEPTANCE_BACKEND_PORT', 8000)
+  const FRONTEND_PORT = resolvePort('ACCEPTANCE_FRONTEND_PORT', 3000)
+  const TUTOR_PORT = resolvePort('ACCEPTANCE_TUTOR_PORT', 18_900)
+
+  // Publish resolved ports so workers and the config can read them.
+  process.env.ACCEPTANCE_BACKEND_PORT = String(BACKEND_PORT)
+  process.env.ACCEPTANCE_FRONTEND_PORT = String(FRONTEND_PORT)
+  process.env.ACCEPTANCE_TUTOR_PORT = String(TUTOR_PORT)
+
   // ── 0. Guard against port conflicts ──────────────────────────────
-  for (const port of [BACKEND_PORT, FRONTEND_PORT, TUTOR_PORT]) {
+  for (const [label, port] of [
+    ['backend', BACKEND_PORT],
+    ['frontend', FRONTEND_PORT],
+    ['tutor', TUTOR_PORT],
+  ] as const) {
     if (await isPortInUse(port)) {
       throw new Error(
-        `Port ${port} is already in use. Stop any running Lyra ` +
-          `servers before running acceptance tests.`,
+        `Port ${port} (${label}) is already in use. Stop any running Lyra ` +
+          `servers or set ACCEPTANCE_${label.toUpperCase()}_PORT to an open port.`,
       )
     }
   }
@@ -137,7 +157,10 @@ export default async function globalSetup() {
       dataDir,
       backendPid: backend.pid,
       frontendPid: frontend.pid,
+      backendPort: BACKEND_PORT,
+      frontendPort: FRONTEND_PORT,
       tutorPort: TUTOR_PORT,
+      startedAt: Date.now(),
     }),
   )
 

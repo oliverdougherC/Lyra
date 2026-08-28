@@ -29,6 +29,7 @@ type Mode =
   | 'auth-error'
   | 'consent-refusal'
   | 'empty-response'
+  | 'barrier'
 
 interface QueuedResponse {
   content: string
@@ -87,6 +88,8 @@ export class TutorFixture {
   private mode: Mode = 'success'
   private queue: QueuedResponse[] = []
   private requests: RecordedRequest[] = []
+  private barrierResolvers: Array<(content: string) => void> = []
+  private barrierArrivals = 0
 
   constructor(port: number) {
     this.port = port
@@ -178,7 +181,25 @@ export class TutorFixture {
       this.queue = []
       this.requests = []
       this.mode = 'success'
+      for (const resolver of this.barrierResolvers) resolver('Cleared.')
+      this.barrierResolvers = []
+      this.barrierArrivals = 0
       json(res, 200, { ok: true })
+      return
+    }
+
+    if (path === 'barrier/arrived' && req.method === 'GET') {
+      json(res, 200, { arrived: this.barrierArrivals, waiting: this.barrierResolvers.length })
+      return
+    }
+
+    if (path === 'barrier/release' && req.method === 'POST') {
+      const parsed = body ? JSON.parse(body) : {}
+      const resolver = this.barrierResolvers.shift()
+      if (resolver) {
+        resolver(parsed.content ?? 'Barrier-released response from tutor fixture.')
+      }
+      json(res, 200, { ok: true, remaining: this.barrierResolvers.length })
       return
     }
 
@@ -266,6 +287,18 @@ export class TutorFixture {
           this.jsonCompletion(res, '')
         }
         return
+      case 'barrier': {
+        this.barrierArrivals++
+        const held = await new Promise<string>((resolve) => {
+          this.barrierResolvers.push(resolve)
+        })
+        if (wantStream) {
+          this.streamResponse(res, held)
+        } else {
+          this.jsonCompletion(res, held)
+        }
+        return
+      }
     }
 
     // Default success: generate content based on the request

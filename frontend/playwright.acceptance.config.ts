@@ -31,7 +31,7 @@ export default defineConfig({
 
   use: {
     ...devices['Desktop Chrome'],
-    baseURL: 'http://127.0.0.1:3000',
+    baseURL: `http://127.0.0.1:${process.env.ACCEPTANCE_FRONTEND_PORT ?? '3000'}`,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'off',

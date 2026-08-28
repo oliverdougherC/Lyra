@@ -53,11 +53,8 @@ test.describe('Accessibility: keyboard and focus', () => {
     await page.goto('/settings')
     await page.waitForLoadState('networkidle')
 
-    // Check that key form fields have accessible names
-    const endpointInput = page.getByLabel(/endpoint/i)
-    if (await endpointInput.isVisible()) {
-      await expect(endpointInput).toBeVisible()
-    }
+    // The endpoint input must have an accessible label
+    await expect(page.getByLabel(/endpoint/i)).toBeVisible({ timeout: 5_000 })
   })
 
   test('class creation dialog: focus management', async ({ page }) => {
@@ -91,25 +88,18 @@ test.describe('Accessibility: keyboard and focus', () => {
     await page.goto(`/classes/${classId}/drafts/${draft.id}`)
     await page.waitForLoadState('networkidle')
 
-    // The editor region should have an accessible name
-    const editor = page.locator('[aria-label="Draft document"]')
-    if (await editor.isVisible()) {
-      await expect(editor).toBeVisible()
-    }
+    // The editor region must have an accessible name
+    await expect(page.locator('[aria-label="Draft document"]')).toBeVisible({ timeout: 10_000 })
   })
 
-  test('loading states use aria-busy', async ({ page }) => {
-    // Navigate without waiting for load so we can catch the loading state
+  test('loading skeleton markup includes aria-busy', async ({ page }) => {
+    // Navigate and check for aria-busy on the loading skeleton.  The window
+    // between commit and networkidle is narrow, so we use a 3s timeout.  If
+    // the page loads instantly the assertion still passes provided the
+    // skeleton rendered (even briefly) with aria-busy.
     await page.goto('/', { waitUntil: 'commit' })
-
-    // Best-effort: check whether the loading skeleton uses aria-busy.
-    // The page may have already loaded by the time we check, which is fine.
-    try {
-      await expect(page.locator('[aria-busy="true"]').first()).toBeAttached({
-        timeout: 2_000,
-      })
-    } catch {
-      // Already loaded — the assertion is only meaningful during the loading window
-    }
+    await expect(page.locator('[aria-busy="true"]').first()).toBeAttached({
+      timeout: 3_000,
+    })
   })
 })

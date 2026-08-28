@@ -4,16 +4,18 @@
  * Proves: hostile browser Origin requests cannot mutate local state, while
  * legitimate Lyra-origin requests still work.  Hits representative JSON,
  * streaming, multipart, and empty-body mutations through the actual running
- * backend rather than only TestClient middleware tests.
+ * backend.  Includes a real browser-driven test where Playwright loads an
+ * attacker page on a distinct origin and attempts a cross-origin mutation.
  */
 
 import { test, expect } from '@playwright/test'
+import { createServer, type Server } from 'node:http'
 import { resolve } from 'node:path'
 import { createClass, fetchWithOrigin, apiPost, BACKEND } from './helpers'
 
 const TEST_DATA = resolve(__dirname, 'test-data')
 const EVIL_ORIGIN = 'http://evil.example.com'
-const GOOD_ORIGIN = 'http://127.0.0.1:3000'
+const GOOD_ORIGIN = `http://127.0.0.1:${process.env.ACCEPTANCE_FRONTEND_PORT ?? 3000}`
 
 test.describe('Origin security (PLA-304)', () => {
   let classId: number
@@ -41,7 +43,7 @@ test.describe('Origin security (PLA-304)', () => {
       headers: {
         'Content-Type': 'application/json',
         'X-Lyra-Client': 'test-cli',
-        'Host': '127.0.0.1:8000',
+        'Host': `127.0.0.1:${process.env.ACCEPTANCE_BACKEND_PORT ?? 8000}`,
       },
       body: JSON.stringify({ name: 'CLI Class' }),
     })
@@ -69,14 +71,13 @@ test.describe('Origin security (PLA-304)', () => {
     const res = await fetch(`${BACKEND}/api/classes`, {
       headers: {
         Origin: EVIL_ORIGIN,
-        Host: '127.0.0.1:8000',
+        Host: `127.0.0.1:${process.env.ACCEPTANCE_BACKEND_PORT ?? 8000}`,
       },
     })
     expect(res.ok).toBe(true)
   })
 
   test('streaming chat endpoint blocked from evil origin', async () => {
-    // Create a session first (via legitimate request)
     const session = await apiPost(`/api/classes/${classId}/sessions`, {})
     const sessionData = await session.json()
 
@@ -97,7 +98,7 @@ test.describe('Origin security (PLA-304)', () => {
       method: 'POST',
       headers: {
         Origin: EVIL_ORIGIN,
-        Host: '127.0.0.1:8000',
+        Host: `127.0.0.1:${process.env.ACCEPTANCE_BACKEND_PORT ?? 8000}`,
       },
       body: form,
     })
@@ -114,7 +115,7 @@ test.describe('Origin security (PLA-304)', () => {
       method: 'POST',
       headers: {
         Origin: GOOD_ORIGIN,
-        Host: '127.0.0.1:8000',
+        Host: `127.0.0.1:${process.env.ACCEPTANCE_BACKEND_PORT ?? 8000}`,
       },
       body: form,
     })
@@ -129,14 +130,13 @@ test.describe('Origin security (PLA-304)', () => {
   })
 
   test('DNS rebinding via Host header rejected', async () => {
-    // Node's fetch() strips custom Host headers (it's a forbidden header).
-    // Use node:http directly so the spoofed Host actually reaches the server.
     const http = await import('node:http')
+    const backendPort = Number(process.env.ACCEPTANCE_BACKEND_PORT ?? 8000)
     const status = await new Promise<number>((resolve, reject) => {
       const req = http.request(
         {
           hostname: '127.0.0.1',
-          port: 8000,
+          port: backendPort,
           path: '/api/health/live',
           method: 'GET',
           headers: { Host: 'attacker.example.com' },
@@ -147,5 +147,70 @@ test.describe('Origin security (PLA-304)', () => {
       req.end()
     })
     expect(status).toBe(400)
+  })
+
+  test('browser: real attacker page on distinct origin cannot POST to backend', async ({
+    page,
+  }) => {
+    const backendPort = Number(process.env.ACCEPTANCE_BACKEND_PORT ?? 8000)
+
+    // Serve an attacker page on a different port (distinct origin)
+    const attackerPort = backendPort + 100
+    const attackerPage = `
+<!DOCTYPE html>
+<html>
+<body>
+<script>
+async function attack() {
+  try {
+    const res = await fetch('http://127.0.0.1:${backendPort}/api/classes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Browser Attack Class' }),
+      mode: 'cors',
+    });
+    window.__attackResult = { status: res.status, ok: res.ok };
+  } catch (e) {
+    // CORS preflight failure or network error
+    window.__attackResult = { status: 0, error: e.message, blocked: true };
+  }
+}
+attack();
+</script>
+</body>
+</html>`
+
+    let attackerServer: Server | null = null
+    try {
+      attackerServer = createServer((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/html' })
+        res.end(attackerPage)
+      })
+      await new Promise<void>((resolve) => {
+        attackerServer!.listen(attackerPort, '127.0.0.1', () => resolve())
+      })
+
+      // Navigate the Playwright browser to the attacker page
+      await page.goto(`http://127.0.0.1:${attackerPort}`)
+
+      // Wait for the attack to complete
+      await page.waitForFunction(() => (window as any).__attackResult !== undefined, null, {
+        timeout: 10_000,
+      })
+
+      const result = await page.evaluate(() => (window as any).__attackResult)
+
+      // The attack should be blocked: either by CORS (status 0, network error)
+      // or by the backend's origin check (status 403)
+      if (result.blocked) {
+        expect(result.status).toBe(0) // CORS preflight blocked
+      } else {
+        expect(result.status).toBe(403) // Backend origin check blocked
+      }
+    } finally {
+      if (attackerServer) {
+        await new Promise<void>((resolve) => attackerServer!.close(() => resolve()))
+      }
+    }
   })
 })

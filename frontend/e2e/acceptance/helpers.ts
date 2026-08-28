@@ -1,15 +1,27 @@
 /**
  * Shared helpers for acceptance specs.
  *
- * Every helper communicates with the running stack over HTTP — no mocks, no
+ * Every helper communicates with the running stack over HTTP -- no mocks, no
  * monkeypatches, no intercepted routes.  The only "control" API is the tutor
  * fixture, which sits outside the Lyra application boundary.
+ *
+ * Ports are resolved from environment variables set by global-setup so that
+ * parallel test runs can use distinct ports.
  */
 
 import { type Page, expect } from '@playwright/test'
 
-export const BACKEND = 'http://127.0.0.1:8000'
-export const TUTOR_CONTROL = 'http://127.0.0.1:18900/_control'
+/* ------------------------------------------------------------------ */
+/*  Port resolution                                                    */
+/* ------------------------------------------------------------------ */
+
+const BACKEND_PORT = Number(process.env.ACCEPTANCE_BACKEND_PORT ?? 8000)
+const FRONTEND_PORT = Number(process.env.ACCEPTANCE_FRONTEND_PORT ?? 3000)
+const TUTOR_PORT = Number(process.env.ACCEPTANCE_TUTOR_PORT ?? 18_900)
+
+export const BACKEND = `http://127.0.0.1:${BACKEND_PORT}`
+export const FRONTEND = `http://127.0.0.1:${FRONTEND_PORT}`
+export const TUTOR_CONTROL = `http://127.0.0.1:${TUTOR_PORT}/_control`
 
 const LYRA_HEADERS: Record<string, string> = {
   'Content-Type': 'application/json',
@@ -47,17 +59,59 @@ export async function clearTutorState() {
   await fetch(`${TUTOR_CONTROL}/clear`, { method: 'POST' })
 }
 
+/**
+ * Wait until the tutor fixture has received at least `count` requests.
+ * Useful as a deterministic barrier: start a request that will be held by the
+ * fixture (timeout/barrier mode), then wait here before attempting a concurrent
+ * operation.
+ */
+export async function waitForTutorRequest(count = 1, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const reqs = await getTutorRequests()
+    if (reqs.length >= count) return
+    await sleep(50)
+  }
+  throw new Error(`Tutor fixture did not receive ${count} request(s) within ${timeoutMs}ms`)
+}
+
+/**
+ * Wait until the tutor barrier has at least one request waiting, then return.
+ * Requires the tutor to be in 'barrier' mode.
+ */
+export async function waitForBarrier(timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const res = await fetch(`${TUTOR_CONTROL}/barrier/arrived`)
+    const { waiting } = await res.json()
+    if (waiting > 0) return
+    await sleep(50)
+  }
+  throw new Error('No request arrived at barrier within timeout')
+}
+
+/**
+ * Release one request held at the tutor barrier, optionally with custom content.
+ */
+export async function releaseBarrier(content?: string): Promise<void> {
+  const res = await fetch(`${TUTOR_CONTROL}/barrier/release`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: content ?? undefined }),
+  })
+  if (!res.ok) throw new Error(`releaseBarrier failed: ${res.status}`)
+}
+
 /* ------------------------------------------------------------------ */
 /*  Backend API helpers                                                */
 /* ------------------------------------------------------------------ */
 
 export async function apiPost(path: string, body?: unknown) {
-  const res = await fetch(`${BACKEND}${path}`, {
+  return fetch(`${BACKEND}${path}`, {
     method: 'POST',
     headers: LYRA_HEADERS,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
-  return res
 }
 
 export async function apiGet(path: string) {
@@ -104,6 +158,50 @@ export async function uploadDocument(
 }
 
 /* ------------------------------------------------------------------ */
+/*  SSE reader                                                         */
+/* ------------------------------------------------------------------ */
+
+export interface SSEFrame {
+  type: string
+  [key: string]: unknown
+}
+
+export async function readSSEFrames(res: Response): Promise<SSEFrame[]> {
+  const frames: SSEFrame[] = []
+  if (!res.body) return frames
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      const lines = buffer.split('\n')
+      buffer = lines.pop() ?? ''
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const payload = trimmed.slice(5).trim()
+        if (payload === '[DONE]') continue
+        try {
+          frames.push(JSON.parse(payload))
+        } catch {
+          // skip non-JSON lines
+        }
+      }
+    }
+  } catch {
+    // stream may be terminated early
+  }
+  return frames
+}
+
+/* ------------------------------------------------------------------ */
 /*  Polling helpers                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -115,7 +213,7 @@ export async function waitForDocumentReady(documentId: number, timeoutMs = 30_00
     if (status.state === 'ready') return
     if (status.state === 'failed' || status.state === 'unsupported') {
       throw new Error(
-        `Document ${documentId} reached terminal state: ${status.state} — ${status.error_message}`,
+        `Document ${documentId} reached terminal state: ${status.state} -- ${status.error_message}`,
       )
     }
     await sleep(300)
@@ -135,7 +233,7 @@ export async function waitForStudyReady(
     if (status.state === 'ready') return
     if (status.state === 'failed' || status.state === 'cancelled') {
       throw new Error(
-        `Study artifact ${artifactId} reached state: ${status.state} — ${status.error_message}`,
+        `Study artifact ${artifactId} reached state: ${status.state} -- ${status.error_message}`,
       )
     }
     await sleep(300)
@@ -155,6 +253,22 @@ export async function waitForDraftRun(artifactId: number, timeoutMs = 30_000): P
     await sleep(300)
   }
   throw new Error(`Draft run did not complete within ${timeoutMs}ms`)
+}
+
+export async function waitForSolutionReady(artifactId: number, timeoutMs = 60_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const res = await apiGet(`/api/solutions/${artifactId}/status`)
+    const status = await res.json()
+    if (status.state === 'ready' || status.state === 'idle') return
+    if (status.state === 'failed' || status.state === 'cancelled') {
+      throw new Error(
+        `Solution ${artifactId} reached state: ${status.state} -- ${status.error_message}`,
+      )
+    }
+    await sleep(300)
+  }
+  throw new Error(`Solution ${artifactId} did not become ready within ${timeoutMs}ms`)
 }
 
 /* ------------------------------------------------------------------ */
@@ -200,8 +314,96 @@ export async function sendChatMessage(page: Page, message: string) {
 }
 
 export async function waitForChatResponse(page: Page, timeoutMs = 30_000) {
-  // Wait for the streaming to complete — the send button reappears
   await expect(page.locator('[aria-label="Send message"]')).toBeVisible({
+    timeout: timeoutMs,
+  })
+}
+
+/**
+ * Send a chat message in the browser and wait for the response to complete.
+ * Returns the visible assistant message text.
+ */
+export async function sendChatAndWait(
+  page: Page,
+  message: string,
+  timeoutMs = 30_000,
+): Promise<string> {
+  await sendChatMessage(page, message)
+  await waitForChatResponse(page, timeoutMs)
+  // Return the last assistant message
+  const msgs = page.locator('[data-role="assistant"]')
+  const count = await msgs.count()
+  if (count > 0) {
+    return (await msgs.nth(count - 1).textContent()) ?? ''
+  }
+  return ''
+}
+
+/* ---- Study browser helpers --------------------------------------- */
+
+/**
+ * Click the flashcard to flip it (front -> back or back -> front).
+ */
+export async function flipCard(page: Page) {
+  await page.locator('[role="button"][aria-label*="Card"]').click()
+}
+
+/**
+ * Rate the current card (requires the card to be flipped to show the back).
+ */
+export async function rateCard(page: Page, rating: 'Again' | 'Hard' | 'Good' | 'Easy') {
+  const group = page.locator('[aria-label="Rate this card"]')
+  await group.getByRole('button', { name: rating }).click()
+}
+
+/**
+ * Click "Study again" from the session summary screen.
+ */
+export async function clickStudyAgain(page: Page) {
+  const summary = page.locator('[aria-label="Session summary"]')
+  await summary.getByRole('button', { name: 'Study again' }).click()
+}
+
+/**
+ * Wait for the session summary to appear (all cards reviewed).
+ */
+export async function waitForSessionSummary(page: Page, timeoutMs = 15_000) {
+  await expect(page.locator('[aria-label="Session summary"]')).toBeVisible({
+    timeout: timeoutMs,
+  })
+}
+
+/**
+ * Get the current card position text (e.g. "Card 1 of 4").
+ */
+export async function getCardPosition(page: Page): Promise<string> {
+  return (await page.getByText(/Card \d+ of \d+/).textContent()) ?? ''
+}
+
+/* ---- Quiz browser helpers ---------------------------------------- */
+
+/**
+ * Select an answer option by index (0-based) and submit.
+ */
+export async function answerQuizQuestion(page: Page, optionIndex: number) {
+  const options = page.locator('[aria-label="Your answer"] label')
+  await options.nth(optionIndex).click()
+  await page.getByRole('button', { name: 'Check' }).click()
+}
+
+/**
+ * Click "Next" or "See results" after answering.
+ */
+export async function advanceQuiz(page: Page) {
+  const nextBtn = page.getByRole('button', { name: /Next|See results/ })
+  await nextBtn.click()
+}
+
+/**
+ * Wait for quiz results to appear.
+ */
+export async function waitForQuizResults(page: Page, timeoutMs = 15_000) {
+  await expect(page.locator('[aria-label="Quiz results"]')).toBeVisible({
     timeout: timeoutMs,
   })
 }
@@ -221,7 +423,7 @@ export async function fetchWithOrigin(
     headers: {
       'Content-Type': 'application/json',
       'Origin': origin,
-      'Host': '127.0.0.1:8000',
+      'Host': `127.0.0.1:${BACKEND_PORT}`,
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })

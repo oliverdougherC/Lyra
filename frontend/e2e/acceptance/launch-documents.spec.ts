@@ -8,7 +8,14 @@
 
 import { test, expect } from '@playwright/test'
 import { resolve } from 'node:path'
-import { apiGet, apiDelete, createClass, uploadDocument, waitForDocumentReady } from './helpers'
+import {
+  apiGet,
+  apiDelete,
+  createClass,
+  uploadDocument,
+  waitForDocumentReady,
+  BACKEND,
+} from './helpers'
 
 const TEST_DATA = resolve(__dirname, 'test-data')
 
@@ -90,7 +97,7 @@ test.describe('Launch and documents', () => {
     expect(supplement).toBeDefined()
 
     // Move it
-    const moveRes = await fetch(`http://127.0.0.1:8000/api/documents/${supplement.id}/move`, {
+    const moveRes = await fetch(`${BACKEND}/api/documents/${supplement.id}/move`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

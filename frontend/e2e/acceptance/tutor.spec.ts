@@ -2,8 +2,9 @@
  * Tutor chat through the real SSE route and persisted session state.
  *
  * Proves: grounded turn, transcript persistence, pre-stream failure,
- * mid-stream disconnect, PLA-306 causal retry (no duplicate), concurrent
- * turn serialisation (409), regenerate, context-window refusal.
+ * mid-stream disconnect recovery, PLA-306 causal retry (no duplicate),
+ * concurrent turn serialisation (409), regenerate, browser-driven
+ * send/retry/regeneration flows.
  */
 
 import { test, expect } from '@playwright/test'
@@ -16,6 +17,10 @@ import {
   waitForDocumentReady,
   setTutorMode,
   clearTutorState,
+  waitForTutorRequest,
+  readSSEFrames,
+  sendChatMessage,
+  waitForChatResponse,
   BACKEND,
   TUTOR_CONTROL,
 } from './helpers'
@@ -30,7 +35,6 @@ test.describe('Tutor chat', () => {
     const cls = await createClass('Acceptance: Tutor')
     classId = cls.id
 
-    // Upload and ingest a document for grounded chat
     const res = await uploadDocument(classId, resolve(TEST_DATA, 'sample.txt'), 'sample.txt')
     const doc = await res.json()
     documentId = doc.id
@@ -44,7 +48,6 @@ test.describe('Tutor chat', () => {
   test('send a grounded chat turn through the real SSE path', async () => {
     const session = await createSession(classId)
 
-    // Send a message via the real API
     const chatRes = await fetch(`${BACKEND}/api/sessions/${session.id}/chat`, {
       method: 'POST',
       headers: {
@@ -59,7 +62,6 @@ test.describe('Tutor chat', () => {
     expect(chatRes.status).toBe(200)
     expect(chatRes.headers.get('content-type')).toContain('text/event-stream')
 
-    // Read the SSE stream
     const frames = await readSSEFrames(chatRes)
     const types = frames.map((f) => f.type)
     expect(types).toContain('start')
@@ -70,7 +72,7 @@ test.describe('Tutor chat', () => {
     // Verify persistence
     const msgsRes = await apiGet(`/api/sessions/${session.id}/messages`)
     const msgs = await msgsRes.json()
-    expect(msgs.length).toBe(2) // user + assistant
+    expect(msgs.length).toBe(2)
     expect(msgs[0].role).toBe('user')
     expect(msgs[0].content).toBe('What is the first law of thermodynamics?')
     expect(msgs[1].role).toBe('assistant')
@@ -93,27 +95,22 @@ test.describe('Tutor chat', () => {
       }),
     })
 
-    // The backend may return an error SSE frame or a non-200 status
     const frames = await readSSEFrames(chatRes)
     if (chatRes.status === 200) {
       const errorFrames = frames.filter((f) => f.type === 'error')
       expect(errorFrames.length).toBeGreaterThan(0)
     }
 
-    // The user message is persisted (it was committed before the model call)
-    // but the assistant message should not be persisted on failure
     const msgsRes = await apiGet(`/api/sessions/${session.id}/messages`)
     const msgs = await msgsRes.json()
     const assistantMsgs = msgs.filter((m: { role: string }) => m.role === 'assistant')
-    // Failed attempt: user msg persisted, assistant msg absent or marked failed
     expect(msgs.length).toBeGreaterThanOrEqual(1)
     if (assistantMsgs.length > 0) {
-      // If persisted, it should have a failed attempt marker
       expect(assistantMsgs[0].tutor_attempt?.settled).toBeTruthy()
     }
   })
 
-  test('mid-stream disconnect handled gracefully', async () => {
+  test('mid-stream disconnect: partial tokens received before cut', async () => {
     await setTutorMode('disconnect-mid')
     const session = await createSession(classId)
 
@@ -130,13 +127,18 @@ test.describe('Tutor chat', () => {
     })
 
     const frames = await readSSEFrames(chatRes)
-    // Should have some tokens before the disconnect
+    // The fixture sends "This response will be cut" before disconnecting,
+    // so the backend should forward at least some token frames.
     const tokens = frames.filter((f) => f.type === 'token')
-    expect(tokens.length).toBeGreaterThanOrEqual(0)
+    expect(tokens.length).toBeGreaterThan(0)
+
+    // Verify the backend handled the disconnect gracefully (no 500, no crash)
+    const msgsRes = await apiGet(`/api/sessions/${session.id}/messages`)
+    const msgs = await msgsRes.json()
+    expect(msgs.length).toBeGreaterThanOrEqual(1)
   })
 
   test('PLA-306: retry after failure does not duplicate the question', async () => {
-    // First turn: succeed
     await setTutorMode('success')
     const session = await createSession(classId)
 
@@ -170,7 +172,7 @@ test.describe('Tutor chat', () => {
 
     // Retry: succeed
     await setTutorMode('success')
-    await clearTutorState() // clear request log to count only the retry
+    await clearTutorState()
     const retryRes = await fetch(`${BACKEND}/api/sessions/${session.id}/retry`, {
       method: 'POST',
       headers: {
@@ -182,21 +184,18 @@ test.describe('Tutor chat', () => {
     expect(retryRes.status).toBe(200)
     await readSSEFrames(retryRes)
 
-    // Verify: the messages list should not have duplicate user messages
     const msgsRes = await apiGet(`/api/sessions/${session.id}/messages`)
     const msgs = await msgsRes.json()
     const userMessages = msgs.filter((m: { role: string }) => m.role === 'user')
-    // Should have exactly 2 user messages (the two turns), not 3
     expect(userMessages.length).toBe(2)
     expect(userMessages[0].content).toBe('What is entropy?')
     expect(userMessages[1].content).toBe('What is enthalpy?')
   })
 
   test('concurrent turn rejected with 409', async () => {
-    await setTutorMode('timeout') // hold the first turn open
+    await setTutorMode('timeout')
     const session = await createSession(classId)
 
-    // Start first turn (will block on timeout fixture)
     const abortController = new AbortController()
     const firstTurnPromise = fetch(`${BACKEND}/api/sessions/${session.id}/chat`, {
       method: 'POST',
@@ -211,16 +210,9 @@ test.describe('Tutor chat', () => {
       signal: abortController.signal,
     }).catch(() => null)
 
-    // Wait until the fixture has received the request — that proves the backend
-    // has passed begin_turn and is now blocked on the upstream call.
-    const deadline = Date.now() + 10_000
-    while (Date.now() < deadline) {
-      const reqs = await (await fetch(`${TUTOR_CONTROL}/requests`)).json()
-      if (reqs.length > 0) break
-      await new Promise((r) => setTimeout(r, 100))
-    }
+    // Deterministic barrier: wait until the fixture has received the request
+    await waitForTutorRequest(1)
 
-    // Second turn should be rejected
     const secondRes = await fetch(`${BACKEND}/api/sessions/${session.id}/chat`, {
       method: 'POST',
       headers: {
@@ -236,7 +228,6 @@ test.describe('Tutor chat', () => {
     const body = await secondRes.json()
     expect(body.detail).toMatch(/already answering/i)
 
-    // Cleanup: abort the first turn
     abortController.abort()
     await firstTurnPromise
   })
@@ -245,7 +236,6 @@ test.describe('Tutor chat', () => {
     await setTutorMode('success')
     const session = await createSession(classId)
 
-    // Send initial turn
     const chatRes = await fetch(`${BACKEND}/api/sessions/${session.id}/chat`, {
       method: 'POST',
       headers: {
@@ -259,12 +249,10 @@ test.describe('Tutor chat', () => {
     })
     await readSSEFrames(chatRes)
 
-    // Get message count before regenerate
     const beforeRes = await apiGet(`/api/sessions/${session.id}/messages`)
     const beforeMsgs = await beforeRes.json()
     const beforeCount = beforeMsgs.length
 
-    // Regenerate
     const regenRes = await fetch(`${BACKEND}/api/sessions/${session.id}/regenerate`, {
       method: 'POST',
       headers: {
@@ -276,73 +264,42 @@ test.describe('Tutor chat', () => {
     expect(regenRes.status).toBe(200)
     await readSSEFrames(regenRes)
 
-    // Same number of messages (reply replaced, not appended)
     const afterRes = await apiGet(`/api/sessions/${session.id}/messages`)
     const afterMsgs = await afterRes.json()
     expect(afterMsgs.length).toBe(beforeCount)
   })
 
-  test('chat renders in the browser through the real stack', async ({ page }) => {
+  test('browser: send message, see response, retry after failure', async ({ page }) => {
     await setTutorMode('success')
     await createSession(classId)
 
     await page.goto(`/classes/${classId}/chat`)
     await page.waitForLoadState('networkidle')
 
-    // Type and send a message
-    const composer = page.locator('#message-composer')
-    await composer.fill('What is temperature?')
-    await page.locator('[aria-label="Send message"]').click()
+    // Send a message and wait for the response
+    await sendChatMessage(page, 'What is temperature?')
+    await waitForChatResponse(page)
 
-    // Wait for response to appear (the send button reappears when done)
-    await expect(page.locator('[aria-label="Send message"]')).toBeVisible({
-      timeout: 30_000,
+    await expect(page.getByText(/deterministic response|thermodynamics/i).first()).toBeVisible({
+      timeout: 5_000,
     })
 
-    // The assistant response should be visible on the page
-    await expect(page.getByText(/deterministic response|thermodynamics/i).first()).toBeVisible({
+    // Now trigger a failure and verify the "Try again" button appears
+    await setTutorMode('error-before-stream')
+    await sendChatMessage(page, 'This should fail')
+
+    // Wait for error state -- the "Try again" button should appear
+    const retryButton = page.locator('[aria-label="Try again"]')
+    await expect(retryButton).toBeVisible({ timeout: 15_000 })
+
+    // Restore success mode and retry
+    await setTutorMode('success')
+    await retryButton.click()
+    await waitForChatResponse(page)
+
+    // The retry should produce a successful response
+    await expect(page.getByText(/deterministic response|thermodynamics/i).last()).toBeVisible({
       timeout: 5_000,
     })
   })
 })
-
-/* ------------------------------------------------------------------ */
-/*  SSE reader                                                         */
-/* ------------------------------------------------------------------ */
-
-async function readSSEFrames(
-  res: Response,
-): Promise<Array<{ type: string; [key: string]: unknown }>> {
-  const frames: Array<{ type: string; [key: string]: unknown }> = []
-  if (!res.body) return frames
-
-  const reader = res.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed.startsWith('data:')) continue
-        const payload = trimmed.slice(5).trim()
-        if (payload === '[DONE]') continue
-        try {
-          frames.push(JSON.parse(payload))
-        } catch {
-          // skip non-JSON lines
-        }
-      }
-    }
-  } catch {
-    // stream may be terminated early
-  }
-  return frames
-}

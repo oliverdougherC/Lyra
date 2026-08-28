@@ -2,7 +2,9 @@
  * Agent and local-effect boundary through the real stack.
  *
  * Proves: capabilities begin gated, grants change what can be proposed,
- * effects require exact confirmation, PLA-303 stale/refreshed hunk boundary.
+ * effects require exact confirmation, PLA-303 stale hunk race (display hunk,
+ * mutate workspace on disk, attempt approval with stale hash -- proves
+ * rejection).
  */
 
 import { test, expect } from '@playwright/test'
@@ -28,7 +30,6 @@ test.describe('Agent and effect boundary', () => {
     const cls = await createClass('Acceptance: Agent')
     classId = cls.id
 
-    // Create a temporary workspace directory
     workspaceDir = realpathSync(await mkdtemp(join(tmpdir(), 'lyra-workspace-')))
     await writeFile(join(workspaceDir, 'hello.py'), 'print("hello world")\n')
     await writeFile(join(workspaceDir, 'README.md'), '# Test Project\n\nA test workspace.\n')
@@ -39,7 +40,6 @@ test.describe('Agent and effect boundary', () => {
   })
 
   test('workspace attach and grants start disabled', async () => {
-    // Attach workspace
     const attachRes = await fetch(`${BACKEND}/api/classes/${classId}/workspace`, {
       method: 'PUT',
       headers: {
@@ -50,7 +50,6 @@ test.describe('Agent and effect boundary', () => {
     })
     expect(attachRes.status).toBe(201)
 
-    // Read workspace — grants should be disabled
     const readRes = await apiGet(`/api/classes/${classId}/workspace`)
     expect(readRes.ok).toBe(true)
     const ws = await readRes.json()
@@ -63,7 +62,6 @@ test.describe('Agent and effect boundary', () => {
   test('workspace operations are gated by grants', async () => {
     const session = await createSession(classId)
 
-    // Try to list workspace files without grants — should fail
     const listRes = await apiGet(
       `/api/classes/${classId}/sessions/${session.id}/workspace/list?path=.`,
     )
@@ -73,7 +71,6 @@ test.describe('Agent and effect boundary', () => {
   })
 
   test('enable grants and verify workspace read works', async () => {
-    // Enable read grant
     const grantRes = await apiPatch(`/api/classes/${classId}/workspace/grants`, {
       read_enabled: true,
     })
@@ -81,7 +78,6 @@ test.describe('Agent and effect boundary', () => {
 
     const session = await createSession(classId)
 
-    // Now listing should work
     const listRes = await apiGet(
       `/api/classes/${classId}/sessions/${session.id}/workspace/list?path=.`,
     )
@@ -92,7 +88,6 @@ test.describe('Agent and effect boundary', () => {
     expect(names).toContain('hello.py')
     expect(names).toContain('README.md')
 
-    // Read a file
     const readRes = await apiGet(
       `/api/classes/${classId}/sessions/${session.id}/workspace/read?path=hello.py`,
     )
@@ -101,15 +96,13 @@ test.describe('Agent and effect boundary', () => {
     expect(content.content).toContain('print("hello world")')
   })
 
-  test('change proposal requires confirmation token', async () => {
-    // Enable change proposals
+  test('change proposal requires confirmation token and applies on disk', async () => {
     await apiPatch(`/api/classes/${classId}/workspace/grants`, {
       change_proposals_enabled: true,
     })
 
     const session = await createSession(classId)
 
-    // Read the file to get its current sha256
     const readRes = await apiGet(
       `/api/classes/${classId}/sessions/${session.id}/workspace/read?path=hello.py`,
     )
@@ -117,7 +110,6 @@ test.describe('Agent and effect boundary', () => {
     const fileData = await readRes.json()
     const sha256 = fileData.sha256
 
-    // Create a change proposal with correct field names
     const changeRes = await apiPost(
       `/api/classes/${classId}/sessions/${session.id}/workspace/changes`,
       {
@@ -131,13 +123,12 @@ test.describe('Agent and effect boundary', () => {
     const change = await changeRes.json()
     expect(change.hunks.length).toBeGreaterThan(0)
 
-    // Extract hunk selections from the review response
     const acceptedHunks = change.hunks.map((h: { index: number; hash: string }) => ({
       index: h.index,
       hash: h.hash,
     }))
 
-    // Try to apply without confirmation token — should fail (422)
+    // Without confirmation token -- should fail
     const applyWithoutToken = await fetch(
       `${BACKEND}/api/classes/${classId}/sessions/${session.id}/workspace/changes/${change.id}/apply`,
       {
@@ -153,7 +144,7 @@ test.describe('Agent and effect boundary', () => {
     )
     expect(applyWithoutToken.status).toBe(422)
 
-    // Get confirmation token (requires Origin for CSRF)
+    // Get confirmation token
     const confirmRes = await fetch(
       `${BACKEND}/api/classes/${classId}/sessions/${session.id}/workspace/changes/${change.id}/confirmation`,
       {
@@ -172,7 +163,7 @@ test.describe('Agent and effect boundary', () => {
     expect(confirmation.token).toBeTruthy()
     expect(confirmation.token.length).toBe(64)
 
-    // Apply with confirmation token and accepted hunks
+    // Apply with token
     const applyRes = await fetch(
       `${BACKEND}/api/classes/${classId}/sessions/${session.id}/workspace/changes/${change.id}/apply`,
       {
@@ -190,9 +181,90 @@ test.describe('Agent and effect boundary', () => {
     )
     expect(applyRes.ok).toBe(true)
 
-    // Verify file was actually changed on disk
     const actual = await readFile(join(workspaceDir, 'hello.py'), 'utf-8')
     expect(actual).toContain('hello acceptance')
+  })
+
+  test('PLA-303: stale hunk rejected after workspace file changes on disk', async () => {
+    // Reset file to known state
+    await writeFile(join(workspaceDir, 'hello.py'), 'print("hello acceptance")\n')
+
+    const session = await createSession(classId)
+
+    // Read current file state
+    const readRes = await apiGet(
+      `/api/classes/${classId}/sessions/${session.id}/workspace/read?path=hello.py`,
+    )
+    const fileData = await readRes.json()
+
+    // Propose a change based on the current file state
+    const changeRes = await apiPost(
+      `/api/classes/${classId}/sessions/${session.id}/workspace/changes`,
+      {
+        relative_path: 'hello.py',
+        observed_base_hash: fileData.sha256,
+        proposed_content: 'print("hello stale")\n',
+        rationale: 'This will become stale',
+      },
+    )
+    expect(changeRes.status).toBe(201)
+    const change = await changeRes.json()
+    const staleHunks = change.hunks.map((h: { index: number; hash: string }) => ({
+      index: h.index,
+      hash: h.hash,
+    }))
+
+    // MUTATE the workspace file on disk -- simulating an external edit or
+    // another change that happened between display and approval
+    await writeFile(join(workspaceDir, 'hello.py'), 'print("hello mutated externally")\n')
+
+    // Try to get confirmation with the stale hunk hashes -- the backend
+    // should detect that the file has changed and reject
+    const confirmRes = await fetch(
+      `${BACKEND}/api/classes/${classId}/sessions/${session.id}/workspace/changes/${change.id}/confirmation`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Lyra-Client': 'acceptance-test',
+          'Origin': 'http://127.0.0.1:3000',
+          'Host': '127.0.0.1:8000',
+        },
+        body: JSON.stringify({ accepted_hunks: staleHunks }),
+      },
+    )
+
+    // The backend should reject because the file is no longer fresh
+    if (confirmRes.ok) {
+      // If confirmation succeeds (some implementations check at apply time),
+      // the apply step should fail
+      const confirmation = await confirmRes.json()
+      const applyRes = await fetch(
+        `${BACKEND}/api/classes/${classId}/sessions/${session.id}/workspace/changes/${change.id}/apply`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Origin': 'http://127.0.0.1:3000',
+            'Host': '127.0.0.1:8000',
+          },
+          body: JSON.stringify({
+            accepted_hunks: staleHunks,
+            confirmation_token: confirmation.token,
+          }),
+        },
+      )
+      // Must NOT succeed -- the hunk was stale
+      expect(applyRes.ok).toBe(false)
+      expect(applyRes.status).toBe(409)
+    } else {
+      // Confirmation itself rejected -- also correct
+      expect(confirmRes.status).toBe(409)
+    }
+
+    // Verify the file on disk was NOT modified by the stale proposal
+    const diskContent = await readFile(join(workspaceDir, 'hello.py'), 'utf-8')
+    expect(diskContent).toBe('print("hello mutated externally")\n')
   })
 
   test('workspace detach cleans up', async () => {
@@ -202,7 +274,6 @@ test.describe('Agent and effect boundary', () => {
     })
     expect(detachRes.status).toBe(204)
 
-    // Workspace should now be null
     const readRes = await apiGet(`/api/classes/${classId}/workspace`)
     const ws = await readRes.json()
     expect(ws).toBeNull()
