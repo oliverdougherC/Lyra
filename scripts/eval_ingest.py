@@ -657,9 +657,7 @@ def _resolve_targets(
         class_id, document_id, stored = _find_document(workspace, conn, stem)
         classes.add(class_id)
         ranges = section_ranges(read_outline(stored)) if wants_sections else {}
-        row = conn.execute(
-            "select filename from documents where id = ?", (document_id,)
-        ).fetchone()
+        row = conn.execute("select filename from documents where id = ?", (document_id,)).fetchone()
         filename = str(row["filename"]) if row else ""
         anchors = corpus_sections.get(stem, {})
         targets[stem] = Target(
@@ -692,6 +690,44 @@ def _states_a_location(question: dict[str, object]) -> bool:
         or question.get("expect_pages") is not None
         or question.get("expect_passage_id") is not None
     )
+
+
+_RERANK_NA_STATUSES = frozenset(
+    {
+        RerankStatus.EMPTY_INPUT.value,
+        RerankStatus.NOT_REQUESTED.value,
+    }
+)
+
+
+def _classify_rerank_validity(
+    requested: bool, results: list[dict[str, object]]
+) -> tuple[bool, bool, set[str]]:
+    """Per-query rerank applicability rather than naive whole-run set comparison.
+
+    A question with zero retrieved candidates has nothing to rerank. EMPTY_INPUT
+    there is not evidence that the reranker failed -- it is rerank N/A for that
+    query.  Only questions that had candidates and received a non-APPLIED status
+    constitute evidence of reranker failure.
+
+    Returns:
+        ``(rerank_applied, rerank_degraded, failure_reasons)``
+    """
+    if not requested:
+        return False, False, set()
+
+    applicable = [
+        str(r["rerank_status"])
+        for r in results
+        if str(r["rerank_status"]) not in _RERANK_NA_STATUSES
+    ]
+    if not applicable:
+        return True, False, set()
+
+    failures = {s for s in applicable if s != RerankStatus.APPLIED.value}
+    if failures:
+        return False, True, failures
+    return True, False, set()
 
 
 def cmd_retrieve(args: argparse.Namespace) -> int:
@@ -733,12 +769,11 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
 
     elapsed = time.monotonic() - started
 
-    observed_statuses = {str(r["rerank_status"]) for r in results}
-    rerank_applied = observed_statuses == {RerankStatus.APPLIED.value}
-    rerank_degraded = args.rerank and not rerank_applied
+    rerank_applied, rerank_degraded, degradation_reasons = _classify_rerank_validity(
+        args.rerank, results
+    )
 
     if rerank_degraded:
-        degradation_reasons = observed_statuses - {RerankStatus.APPLIED.value}
         reason_str = ", ".join(sorted(degradation_reasons))
         suffix = "-rerank-INVALID"
     elif rerank_applied:
@@ -764,9 +799,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             "reranked": rerank_applied,
             "observed_path": observed_path,
             "degraded": rerank_degraded,
-            "degradation_reasons": sorted(observed_statuses - {RerankStatus.APPLIED.value})
-            if rerank_degraded
-            else [],
+            "degradation_reasons": sorted(degradation_reasons) if rerank_degraded else [],
             "valid": not rerank_degraded,
             "seconds_per_question": round(elapsed / max(1, len(results)), 2),
             "k": args.k,
@@ -845,13 +878,23 @@ def _ask(
 ) -> dict[str, object]:
     """Run one question and locate the expected chunk in the ranking.
 
-    Location is determined by one of three mechanisms, checked in order:
+    Two independent dimensions are recorded:
+
+    ``document_rank``
+        Position of the first chunk belonging to the expected document, regardless
+        of whether it is the expected passage.  Document-level hit/MRR are derived
+        from this.
+
+    ``passage_rank``
+        Position of the first chunk satisfying the passage/section/page locator.
+        Passage-level hit/MRR are derived from this.
+
+    The locator that determines ``passage_rank`` is chosen by the annotation:
     1. ``expect_section``: outline path resolved to page range (PDF books).
-    2. ``expect_pages``: explicit page span (scanned handouts).
+    2. ``expect_pages``: explicit page span (scanned handouts, page-ground-truth).
     3. ``expect_passage_id``: passage anchor text must appear in chunk content.
 
-    A chunk from the wrong document is always a miss. A chunk from the right document
-    but the wrong passage is a document hit but a passage miss.
+    A chunk from the wrong document is always a miss on both dimensions.
     """
     expected = question.get("expect_section")
     stated = question.get("expect_pages")
@@ -870,58 +913,54 @@ def _ask(
     passage_anchor: str | None = None
     if passage_id is not None:
         passage_anchor = target.passage_anchors.get(str(passage_id))
-        if passage_anchor is None and target.passage_anchors:
+        if passage_anchor is None:
             raise SystemExit(
-                f"{question['id']}: expect_passage_id {passage_id!r} has no anchor "
-                f"in the corpus sections for {stem!r}."
+                f"{question['id']}: expect_passage_id {passage_id!r} cannot be resolved "
+                f"for {stem!r}. The corpus file is missing, has no section map for this "
+                f"document, or the passage ID is absent."
             )
 
-    targeted = pages is not None or passage_anchor is not None or passage_id is not None
+    targeted = pages is not None or passage_anchor is not None
     result = retrieval.retrieve(conn, class_id, str(question["question"]), UNLIMITED_BUDGET)
     chunks = result.chunks[:k]
 
-    rank: int | None = None
-    passage_hit: bool | None = None
+    document_rank: int | None = None
     passage_rank: int | None = None
 
     for position, chunk in enumerate(chunks, start=1):
         if chunk.document_id != target.document_id:
             continue
 
-        doc_match = False
-        if pages is not None:
-            page = chunk.page_number
-            if page is not None and pages[0] <= page <= pages[1]:
-                doc_match = True
-        elif passage_anchor is not None:
-            if passage_anchor in chunk.content:
-                doc_match = True
-        elif targeted:
-            doc_match = True
+        if document_rank is None:
+            document_rank = position
 
-        if doc_match and rank is None:
-            rank = position
+        if passage_rank is None:
+            if passage_anchor is not None:
+                if passage_anchor in chunk.content:
+                    passage_rank = position
+            elif pages is not None:
+                page = chunk.page_number
+                if page is not None and pages[0] <= page <= pages[1]:
+                    passage_rank = position
 
-        if passage_anchor is not None and passage_anchor in chunk.content:
-            if passage_rank is None:
-                passage_rank = position
-                passage_hit = True
+    document_hit = document_rank is not None if targeted else None
+    passage_hit = passage_rank is not None if targeted else None
 
-    if passage_anchor is not None and passage_hit is None:
-        passage_hit = False
-
-    ahead = chunks[: rank - 1] if rank else chunks[:PRODUCT_K]
+    ref_rank = passage_rank or document_rank
+    ahead = chunks[: ref_rank - 1] if ref_rank else chunks[:PRODUCT_K]
     record: dict[str, object] = {
         "id": question["id"],
         "question": question["question"],
         "expect_document": stem,
+        "expect_filename": target.filename if targeted else None,
         "expect_section": expected,
         "expect_pages": list(pages) if pages else None,
         "expect_passage_id": passage_id,
         "targeted": targeted,
-        "rank": rank,
-        "passage_hit": passage_hit,
+        "document_rank": document_rank,
+        "document_hit": document_hit,
         "passage_rank": passage_rank,
+        "passage_hit": passage_hit,
         "returned": len(chunks),
         "top_similarity": round(chunks[0].similarity, 4) if chunks else None,
         "rerank_status": result.rerank_status.value,
@@ -1411,16 +1450,21 @@ def _report_retrieval(retrieved: dict[str, object]) -> None:
             f"  requested: {'rerank' if retrieved.get('requested_rerank') else 'embedding order'}, "
             f"observed: {how}"
         )
-    ranks = [one["rank"] for one in targeted if one["rank"]]
+    doc_ranks = [one["document_rank"] for one in targeted if one.get("document_rank")]
+    pass_ranks = [one["passage_rank"] for one in targeted if one.get("passage_rank")]
     for k in REPORTED_K:
         if k > int(retrieved.get("k") or 0):
             continue
-        hits = sum(1 for rank in ranks if rank <= k)
-        print(f"  hit rate at k={k:>2}: {hits}/{len(targeted)}")
-    if ranks:
-        print(f"  median rank of a hit: {statistics.median(ranks)}")
+        d_hits = sum(1 for r in doc_ranks if r <= k)
+        p_hits = sum(1 for r in pass_ranks if r <= k)
+        n = len(targeted)
+        print(f"  hit rate at k={k:>2}: doc {d_hits}/{n}, passage {p_hits}/{n}")
+    if doc_ranks:
+        print(f"  median document rank of a hit: {statistics.median(doc_ranks)}")
+    if pass_ranks:
+        print(f"  median passage rank of a hit: {statistics.median(pass_ranks)}")
 
-    missed = [one["id"] for one in targeted if not one["rank"]]
+    missed = [one["id"] for one in targeted if not one.get("document_rank")]
     if missed:
         print(f"  never found: {', '.join(missed)}")
 
@@ -1440,7 +1484,9 @@ def _report_retrieval(retrieved: dict[str, object]) -> None:
         target = one.get("expect_section") or (
             f"pages {pages[0]}-{pages[1]}" if pages else "not here"
         )
-        print(f"    {one['id']}: rank {one['rank'] or '-'} of {one['returned']}, {target}")
+        dr = one.get("document_rank") or "-"
+        pr = one.get("passage_rank") or "-"
+        print(f"    {one['id']}: doc {dr} / passage {pr} of {one['returned']}, {target}")
 
 
 def _report_crowding(targeted: list[dict[str, object]]) -> None:
@@ -1539,9 +1585,7 @@ def _reproducibility_metadata(
             qdata = json.loads(qpath.read_text(encoding="utf-8"))
             meta["questions_version"] = qdata.get("corpus_version", "unknown")
             meta["questions_file"] = qpath.name
-            meta["questions_hash"] = hashlib.sha256(
-                qpath.read_bytes()
-            ).hexdigest()[:16]
+            meta["questions_hash"] = hashlib.sha256(qpath.read_bytes()).hexdigest()[:16]
     if hasattr(args, "k"):
         meta["retrieval_k"] = args.k
     if hasattr(args, "rerank"):
@@ -1605,13 +1649,19 @@ def cmd_build_corpus(args: argparse.Namespace) -> int:
 
 
 def cmd_score(args: argparse.Namespace) -> int:
-    """Score a retrieval run with document-aware metrics and write a graded report."""
+    """Score a retrieval run with document-aware metrics and write a graded report.
+
+    Returns nonzero when any scored retrieval result is invalid, making it
+    impossible to mistake the stage for a passing baseline.  Diagnostic JSON
+    is still written for inspection.
+    """
     workspace = Workspace(Path(args.workspace).resolve())
     retrieved = sorted(workspace.root.glob("retrieval*.json"))
     if not retrieved:
         print("No retrieval results found. Run the retrieve stage first.")
         return 1
 
+    exit_code = 0
     for path in retrieved:
         data = json.loads(path.read_text(encoding="utf-8"))
         questions = [q for q in data.get("questions", []) if isinstance(q, dict)]
@@ -1619,6 +1669,8 @@ def cmd_score(args: argparse.Namespace) -> int:
             continue
 
         valid = data.get("valid", True)
+        if not valid:
+            exit_code = 1
         observed = data.get(
             "observed_path", "reranked" if data.get("reranked") else "embedding_order"
         )
@@ -1636,72 +1688,70 @@ def cmd_score(args: argparse.Namespace) -> int:
         }
 
         if targeted:
-            ranks = [q["rank"] for q in targeted if q.get("rank")]
-            misses = [q["id"] for q in targeted if not q.get("rank")]
+            doc_ranks = [q["document_rank"] for q in targeted if q.get("document_rank")]
+            doc_misses = [q["id"] for q in targeted if not q.get("document_rank")]
+            passage_ranks = [q["passage_rank"] for q in targeted if q.get("passage_rank")]
+            passage_misses = [q["id"] for q in targeted if not q.get("passage_rank")]
 
-            scores["hit_rates"] = {}
+            scores["document_hit_rates"] = {}
+            scores["passage_hit_rates"] = {}
             for k_val in REPORTED_K:
                 if k_val > int(data.get("k") or 0):
                     continue
-                hits = sum(1 for r in ranks if r <= k_val)
-                scores["hit_rates"][f"k={k_val}"] = {
-                    "hits": hits,
+                d_hits = sum(1 for r in doc_ranks if r <= k_val)
+                scores["document_hit_rates"][f"k={k_val}"] = {
+                    "hits": d_hits,
                     "total": len(targeted),
-                    "rate": round(hits / len(targeted), 4),
+                    "rate": round(d_hits / len(targeted), 4),
+                }
+                p_hits = sum(1 for r in passage_ranks if r <= k_val)
+                scores["passage_hit_rates"][f"k={k_val}"] = {
+                    "hits": p_hits,
+                    "total": len(targeted),
+                    "rate": round(p_hits / len(targeted), 4),
                 }
 
-            if ranks:
-                reciprocal_ranks = [1.0 / r for r in ranks]
-                scores["mrr"] = round(statistics.mean(reciprocal_ranks), 4)
-                scores["median_rank"] = statistics.median(ranks)
-                scores["mean_rank"] = round(statistics.mean(ranks), 2)
+            if doc_ranks:
+                scores["document_mrr"] = round(statistics.mean([1.0 / r for r in doc_ranks]), 4)
             else:
-                scores["mrr"] = 0.0
-                scores["median_rank"] = None
-                scores["mean_rank"] = None
+                scores["document_mrr"] = 0.0
+            if passage_ranks:
+                scores["passage_mrr"] = round(statistics.mean([1.0 / r for r in passage_ranks]), 4)
+                scores["passage_median_rank"] = statistics.median(passage_ranks)
+            else:
+                scores["passage_mrr"] = 0.0
+                scores["passage_median_rank"] = None
 
-            scores["misses"] = misses
-            scores["miss_count"] = len(misses)
+            scores["document_misses"] = doc_misses
+            scores["passage_misses"] = passage_misses
 
             by_document: dict[str, list[dict[str, object]]] = {}
             for q in targeted:
                 doc = str(q.get("expect_document") or "unknown")
                 by_document.setdefault(doc, []).append(q)
 
-            doc_scores: dict[str, object] = {}
+            per_doc: dict[str, object] = {}
             for doc, qs in sorted(by_document.items()):
-                doc_ranks = [q["rank"] for q in qs if q.get("rank")]
-                doc_misses = [q["id"] for q in qs if not q.get("rank")]
-                doc_scores[doc] = {
+                dr = [q["document_rank"] for q in qs if q.get("document_rank")]
+                pr = [q["passage_rank"] for q in qs if q.get("passage_rank")]
+                per_doc[doc] = {
                     "targeted": len(qs),
-                    "found": len(doc_ranks),
-                    "missed": doc_misses,
-                    "ranks": doc_ranks,
-                    "mrr": round(statistics.mean([1.0 / r for r in doc_ranks]), 4)
-                    if doc_ranks
-                    else 0.0,
+                    "document_found": len(dr),
+                    "passage_found": len(pr),
+                    "document_mrr": round(statistics.mean([1.0 / r for r in dr]), 4) if dr else 0.0,
+                    "passage_mrr": round(statistics.mean([1.0 / r for r in pr]), 4) if pr else 0.0,
                 }
-            scores["by_document"] = doc_scores
-
-            stem_to_filename: dict[str, str] = {}
-            for q in questions:
-                for nb in q.get("neighbours", []):
-                    if isinstance(nb, dict):
-                        fn = str(nb.get("document", ""))
-                        doc_stem = Path(fn).stem if fn else ""
-                        if doc_stem:
-                            stem_to_filename[doc_stem] = fn
+            scores["by_document"] = per_doc
 
             wrong_doc = 0
             for q in targeted:
-                if not q.get("rank"):
-                    continue
                 nbs = q.get("neighbours")
                 if not isinstance(nbs, list) or not nbs:
                     continue
                 top_filename = str(nbs[0].get("document", ""))
-                expect_stem = str(q.get("expect_document", ""))
-                expected_filename = stem_to_filename.get(expect_stem, "")
+                expected_filename = str(q.get("expect_filename") or "")
+                if not expected_filename:
+                    continue
                 if top_filename != expected_filename:
                     wrong_doc += 1
             scores["wrong_document_top1"] = wrong_doc
@@ -1713,36 +1763,16 @@ def cmd_score(args: argparse.Namespace) -> int:
             cat_scores: dict[str, object] = {}
             for cat, qs in sorted(by_category.items()):
                 targ = [q for q in qs if q.get("targeted")]
-                cat_ranks = [q["rank"] for q in targ if q.get("rank")]
+                cat_pr = [q["passage_rank"] for q in targ if q.get("passage_rank")]
                 cat_scores[cat] = {
                     "count": len(qs),
                     "targeted": len(targ),
-                    "found": len(cat_ranks),
-                    "mrr": round(statistics.mean([1.0 / r for r in cat_ranks]), 4)
-                    if cat_ranks
+                    "passage_found": len(cat_pr),
+                    "passage_mrr": round(statistics.mean([1.0 / r for r in cat_pr]), 4)
+                    if cat_pr
                     else 0.0,
                 }
             scores["by_category"] = cat_scores
-
-            passage_targeted = [q for q in targeted if q.get("expect_passage_id")]
-            if passage_targeted:
-                passage_hits = sum(1 for q in passage_targeted if q.get("passage_hit"))
-                passage_ranks = [
-                    q["passage_rank"]
-                    for q in passage_targeted
-                    if q.get("passage_rank") is not None
-                ]
-                scores["passage_hit_rate"] = round(
-                    passage_hits / len(passage_targeted), 4
-                )
-                scores["passage_mrr"] = (
-                    round(statistics.mean([1.0 / r for r in passage_ranks]), 4)
-                    if passage_ranks
-                    else 0.0
-                )
-                scores["passage_misses"] = [
-                    q["id"] for q in passage_targeted if not q.get("passage_hit")
-                ]
 
         if controls:
             control_sims = [
@@ -1765,7 +1795,7 @@ def cmd_score(args: argparse.Namespace) -> int:
         workspace.write(score_name, scores)
         _print_scores(scores)
 
-    return 0
+    return exit_code
 
 
 def _print_scores(scores: dict[str, object]) -> None:
@@ -1775,61 +1805,71 @@ def _print_scores(scores: dict[str, object]) -> None:
     validity = "" if valid else " ** INVALID **"
     print(f"\nScored: {scores.get('report_file')} ({path}){validity}")
 
-    hit_rates = scores.get("hit_rates")
-    if isinstance(hit_rates, dict):
-        for k_label, data in hit_rates.items():
-            if isinstance(data, dict):
-                rate = data.get("rate", 0)
-                print(f"  {k_label}: {data.get('hits')}/{data.get('total')} ({rate:.1%})")
+    for label, key in [("Document", "document_hit_rates"), ("Passage", "passage_hit_rates")]:
+        hit_rates = scores.get(key)
+        if isinstance(hit_rates, dict):
+            for k_label, data in hit_rates.items():
+                if isinstance(data, dict):
+                    rate = data.get("rate", 0)
+                    print(
+                        f"  {label} {k_label}: {data.get('hits')}/{data.get('total')} ({rate:.1%})"
+                    )
 
-    mrr = scores.get("mrr")
-    if mrr is not None:
-        print(f"  MRR: {mrr}")
-    median = scores.get("median_rank")
-    if median is not None:
-        print(f"  Median rank: {median}")
+    d_mrr = scores.get("document_mrr")
+    if d_mrr is not None:
+        print(f"  Document MRR: {d_mrr}")
+    p_mrr = scores.get("passage_mrr")
+    if p_mrr is not None:
+        print(f"  Passage MRR: {p_mrr}")
+    p_median = scores.get("passage_median_rank")
+    if p_median is not None:
+        print(f"  Passage median rank: {p_median}")
 
-    misses = scores.get("misses")
-    if misses:
-        print(f"  Missed: {', '.join(str(m) for m in misses)}")
+    for label, key in [("Document", "document_misses"), ("Passage", "passage_misses")]:
+        misses = scores.get(key)
+        if misses:
+            print(f"  {label} missed: {', '.join(str(m) for m in misses)}")
 
     by_doc = scores.get("by_document")
     if isinstance(by_doc, dict) and by_doc:
         print("\n  Per document:")
         for doc, data in by_doc.items():
             if isinstance(data, dict):
-                mrr_val = data.get("mrr", 0)
-                print(f"    {doc}: {data.get('found')}/{data.get('targeted')}, MRR {mrr_val}")
+                print(
+                    f"    {doc}: doc {data.get('document_found')}/{data.get('targeted')}"
+                    f" MRR {data.get('document_mrr', 0)},"
+                    f" passage {data.get('passage_found')}/{data.get('targeted')}"
+                    f" MRR {data.get('passage_mrr', 0)}"
+                )
 
     by_cat = scores.get("by_category")
     if isinstance(by_cat, dict) and by_cat:
         print("\n  Per category:")
         for cat, data in by_cat.items():
             if isinstance(data, dict):
-                mrr_val = data.get("mrr", 0)
-                print(f"    {cat}: {data.get('found')}/{data.get('targeted')}, MRR {mrr_val}")
+                print(
+                    f"    {cat}: {data.get('passage_found')}/{data.get('targeted')},"
+                    f" passage MRR {data.get('passage_mrr', 0)}"
+                )
 
     wrong = scores.get("wrong_document_top1")
     if wrong:
         print(f"\n  Wrong-document top-1: {wrong}")
 
-    p_rate = scores.get("passage_hit_rate")
-    if p_rate is not None:
-        p_mrr = scores.get("passage_mrr", 0)
-        print(f"\n  Passage hit rate: {p_rate:.1%}, passage MRR: {p_mrr}")
-        p_misses = scores.get("passage_misses")
-        if p_misses:
-            print(f"  Passage misses: {', '.join(str(m) for m in p_misses)}")
 
-
-_COMPATIBILITY_KEYS = (
-    "corpus_version",
+_REQUIRED_COMPATIBILITY_KEYS = (
     "corpus_hash",
     "questions_hash",
     "embedding_model",
     "embedding_dim",
+)
+_OPTIONAL_COMPATIBILITY_KEYS = (
+    "corpus_version",
     "chunk_max_tokens",
     "chunk_overlap_tokens",
+    "retrieval_k",
+    "requested_rerank",
+    "rerank_model",
 )
 
 
@@ -1838,9 +1878,27 @@ def _check_compatibility(
     meta_b: dict[str, object],
     allow_override: bool,
 ) -> list[str]:
-    """Return a list of incompatible fields. Empty means comparable."""
+    """Return a list of incompatible fields. Empty means comparable.
+
+    Required keys must be present on both sides; a missing required key is
+    INCOMPATIBLE (fail closed), not silently skipped.
+    """
     problems: list[str] = []
-    for key in _COMPATIBILITY_KEYS:
+    for key in _REQUIRED_COMPATIBILITY_KEYS:
+        va, vb = meta_a.get(key), meta_b.get(key)
+        if va is None or vb is None:
+            label = f"{key}: missing ({'baseline' if va is None else 'candidate'})"
+            if allow_override:
+                problems.append(f"WARNING: {label} (override: comparing anyway)")
+            else:
+                problems.append(f"INCOMPATIBLE: {label}")
+        elif va != vb:
+            label = f"{key}: {va} vs {vb}"
+            if allow_override:
+                problems.append(f"WARNING: {label} (override: comparing anyway)")
+            else:
+                problems.append(f"INCOMPATIBLE: {label}")
+    for key in _OPTIONAL_COMPATIBILITY_KEYS:
         va, vb = meta_a.get(key), meta_b.get(key)
         if va is not None and vb is not None and va != vb:
             label = f"{key}: {va} vs {vb}"

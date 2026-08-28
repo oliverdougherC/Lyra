@@ -22,7 +22,7 @@
     "  - answer-key retrieval (solution to a specific problem)",
     "  - no-answer / control queries (topics not in this class)",
     "",
-    "Corpus version: 1.0.0 (scripts/eval_corpora/retrieval_class.json).",
+    "Corpus version: 2.0.0 (scripts/eval_corpora/retrieval_class.json).",
     "Self-authored, privacy-safe, deterministic."
   ],
   "corpus": "retrieval_class",

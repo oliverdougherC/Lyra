@@ -138,7 +138,8 @@ def test_rank_is_the_position_of_the_first_chunk_from_the_right_pages_of_the_rig
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
 
-    assert record["rank"] == 4
+    assert record["passage_rank"] == 4
+    assert record["document_rank"] == 2
     assert record["targeted"] is True
     # Only the wrong-document chunk above the hit is crowding; the right document is not.
     assert record["ahead"] == ["other.pdf"]
@@ -156,7 +157,8 @@ def test_a_never_found_answer_has_no_rank_and_the_whole_served_k_ahead_of_it(
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=12)
 
-    assert record["rank"] is None
+    assert record["document_rank"] is None
+    assert record["passage_rank"] is None
     assert record["targeted"] is True
     assert record["returned"] == 12
     # Everything the product would serve outranked the missing answer.
@@ -177,7 +179,8 @@ def test_an_expected_section_resolves_through_the_outline_ranges(
 
     record = _ask(None, 1, "book", target, _question(expect_section="Ch / Sec"), k=8)
 
-    assert record["rank"] == 2
+    assert record["passage_rank"] == 2
+    assert record["document_rank"] == 1
     assert record["expect_pages"] == [10, 12]
 
 
@@ -196,7 +199,8 @@ def test_a_control_is_never_ranked_and_never_credits_a_document(
     record = _ask(None, 1, None, NO_TARGET, _question(id="control"), k=8)
 
     assert record["targeted"] is False
-    assert record["rank"] is None
+    assert record["document_rank"] is None
+    assert record["passage_rank"] is None
     assert record["from_expected"] == 0
 
 
@@ -213,7 +217,8 @@ def test_the_ranking_is_cut_to_k_before_anything_is_scored(
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=4)
 
-    assert record["rank"] is None
+    assert record["document_rank"] is None
+    assert record["passage_rank"] is None
     assert record["returned"] == 4
 
 
@@ -227,7 +232,10 @@ def _reported(**overrides: object) -> dict[str, object]:
         "expect_section": None,
         "expect_pages": [1, 2],
         "targeted": True,
-        "rank": 1,
+        "document_rank": 1,
+        "passage_rank": 1,
+        "document_hit": True,
+        "passage_hit": True,
         "returned": 32,
         "top_similarity": 0.8,
         "from_expected": 4,
@@ -249,14 +257,24 @@ def test_hit_rates_exclude_controls_and_count_a_never_found_in_every_denominator
             "class_documents": 3,
             "class_chunks": 100,
             "questions": [
-                _reported(id="first", rank=1),
-                _reported(id="fifth", rank=5, ahead=["crowd.pdf"]),
-                _reported(id="lost", rank=None, ahead=["crowd.pdf"]),
+                _reported(id="first", document_rank=1, passage_rank=1),
+                _reported(id="fifth", document_rank=5, passage_rank=5, ahead=["crowd.pdf"]),
+                _reported(
+                    id="lost",
+                    document_rank=None,
+                    passage_rank=None,
+                    document_hit=False,
+                    passage_hit=False,
+                    ahead=["crowd.pdf"],
+                ),
                 _reported(
                     id="control",
                     targeted=False,
                     expect_pages=None,
-                    rank=None,
+                    document_rank=None,
+                    passage_rank=None,
+                    document_hit=None,
+                    passage_hit=None,
                     top_similarity=0.3,
                 ),
             ],
@@ -265,11 +283,9 @@ def test_hit_rates_exclude_controls_and_count_a_never_found_in_every_denominator
 
     out = capsys.readouterr().out
     # Three targeted questions, never four: the control is not a denominator.
-    assert "hit rate at k= 1: 1/3" in out
-    assert "hit rate at k= 4: 1/3" in out
+    assert "doc 1/3, passage 1/3" in out
     # The rank-5 hit arrives at k=8; the never-found stays in the denominator forever.
-    assert "hit rate at k= 8: 2/3" in out
-    assert "hit rate at k=32: 2/3" in out
+    assert "doc 2/3, passage 2/3" in out
     # The report never claims a width the run did not have.
     assert "k=64" not in out
     assert "never found: lost" in out
@@ -307,14 +323,21 @@ def test_a_report_written_before_phase_3_still_reports_rather_than_crashing(
             "document": "book",
             "k": 8,
             "questions": [
-                {"id": "old", "question": "where", "rank": 2, "returned": 8, "top_similarity": 0.7}
+                {
+                    "id": "old",
+                    "question": "where",
+                    "document_rank": 2,
+                    "passage_rank": 2,
+                    "returned": 8,
+                    "top_similarity": 0.7,
+                }
             ],
         }
     )
 
     out = capsys.readouterr().out
     assert "Retrieval over book" in out
-    assert "old: rank 2 of 8" in out
+    assert "old: doc 2 / passage 2 of 8" in out
 
 
 # -------------------------------------------------------------------------------- _widened_k
@@ -499,7 +522,7 @@ def test_degraded_report_shows_invalid_and_requested_vs_observed(
             "class_documents": 2,
             "class_chunks": 100,
             "questions": [
-                _reported(id="q1", rank=1, rerank_status="weights_absent"),
+                _reported(id="q1", document_rank=1, passage_rank=1, rerank_status="weights_absent"),
             ],
         }
     )
@@ -525,7 +548,7 @@ def test_valid_reranked_report_shows_no_invalid(
             "class_documents": 2,
             "class_chunks": 100,
             "questions": [
-                _reported(id="q1", rank=1, rerank_status="applied"),
+                _reported(id="q1", document_rank=1, passage_rank=1, rerank_status="applied"),
             ],
         }
     )
@@ -554,7 +577,8 @@ def test_a_right_passage_from_the_wrong_document_is_a_miss(
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
 
-    assert record["rank"] is None
+    assert record["document_rank"] is None
+    assert record["passage_rank"] is None
     assert record["targeted"] is True
 
 
@@ -571,7 +595,8 @@ def test_no_answer_control_has_zero_from_expected(
 
     assert record["from_expected"] == 0
     assert record["targeted"] is False
-    assert record["rank"] is None
+    assert record["document_rank"] is None
+    assert record["passage_rank"] is None
 
 
 # ------------------------------------------------ invalid/degraded runs never published valid
@@ -593,8 +618,8 @@ def test_degraded_run_is_not_treated_as_valid_baseline(
         "class_documents": 2,
         "class_chunks": 50,
         "questions": [
-            _reported(id="q1", rank=1, rerank_status="start_refused"),
-            _reported(id="q2", rank=2, rerank_status="start_refused"),
+            _reported(id="q1", document_rank=1, passage_rank=1, rerank_status="start_refused"),
+            _reported(id="q2", document_rank=2, passage_rank=2, rerank_status="start_refused"),
         ],
     }
 
@@ -673,7 +698,7 @@ def test_passage_miss_when_anchor_absent(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_right_document_wrong_passage_is_document_hit_passage_miss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Correct document but wrong section: rank should be set (doc hit) but passage_hit False."""
+    """Correct document but wrong section: document_rank set, passage_rank None."""
     _stub_retrieve(
         monkeypatch,
         [
@@ -704,34 +729,25 @@ def test_right_document_wrong_passage_is_document_hit_passage_miss(
         k=8,
     )
 
-    assert record["rank"] is None
+    assert record["document_rank"] == 1
+    assert record["document_hit"] is True
+    assert record["passage_rank"] is None
     assert record["passage_hit"] is False
 
 
-def test_passage_id_with_no_anchors_in_target_still_targets(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When target has no passage_anchors (corpus has no sections), passage scoring is skipped."""
-    _stub_retrieve(
-        monkeypatch,
-        [
-            _Chunk(document_id=1, page_number=1, filename="book.pdf", content="anything"),
-        ],
-    )
+def test_passage_id_with_no_anchors_in_target_is_a_config_error() -> None:
+    """An expect_passage_id that cannot resolve is a broken annotation, not a miss."""
     target = Target(document_id=1, filename="book.pdf", ranges={})
 
-    record = _ask(
-        None,
-        1,
-        "book",
-        target,
-        _question(expect_passage_id="ch3::3.3-third-law"),
-        k=8,
-    )
-
-    assert record["targeted"] is True
-    assert record["passage_hit"] is None
-    assert record["rank"] == 1
+    with pytest.raises(SystemExit, match="cannot be resolved"):
+        _ask(
+            None,
+            1,
+            "book",
+            target,
+            _question(expect_passage_id="ch3::3.3-third-law"),
+            k=8,
+        )
 
 
 # ---------------------------------------------------------- EMPTY_INPUT semantics (item 6)
@@ -766,7 +782,8 @@ def test_empty_input_status_on_targeted_is_a_miss(
 
     assert record["rerank_status"] == "empty_input"
     assert record["targeted"] is True
-    assert record["rank"] is None
+    assert record["document_rank"] is None
+    assert record["passage_rank"] is None
 
 
 # ----------------------------------------------------- compare identity pairing (items 3, 4)
@@ -785,31 +802,39 @@ def test_score_identity_same_when_content_matches() -> None:
 
 
 def test_compatibility_check_rejects_different_corpus_hash() -> None:
-    meta_a = {"corpus_hash": "abc123", "embedding_model": "e5"}
-    meta_b = {"corpus_hash": "def456", "embedding_model": "e5"}
+    shared = {"questions_hash": "qh1", "embedding_model": "e5", "embedding_dim": 384}
+    meta_a = {"corpus_hash": "abc123", **shared}
+    meta_b = {"corpus_hash": "def456", **shared}
     problems = _check_compatibility(meta_a, meta_b, allow_override=False)
-    assert any("INCOMPATIBLE" in p for p in problems)
+    assert any("INCOMPATIBLE" in p and "corpus_hash" in p for p in problems)
 
 
 def test_compatibility_check_accepts_matching_metadata() -> None:
-    meta = {"corpus_hash": "abc123", "embedding_model": "e5", "embedding_dim": 384}
+    meta = {
+        "corpus_hash": "abc123",
+        "questions_hash": "qh1",
+        "embedding_model": "e5",
+        "embedding_dim": 384,
+    }
     problems = _check_compatibility(meta, meta, allow_override=False)
     assert problems == []
 
 
 def test_compatibility_check_warns_with_force() -> None:
-    meta_a = {"corpus_hash": "abc123"}
-    meta_b = {"corpus_hash": "def456"}
+    shared = {"questions_hash": "qh1", "embedding_model": "e5", "embedding_dim": 384}
+    meta_a = {"corpus_hash": "abc123", **shared}
+    meta_b = {"corpus_hash": "def456", **shared}
     problems = _check_compatibility(meta_a, meta_b, allow_override=True)
     assert any("WARNING" in p for p in problems)
     assert not any("INCOMPATIBLE" in p for p in problems)
 
 
-def test_compatibility_ignores_none_values() -> None:
+def test_compatibility_fails_closed_on_missing_required_fields() -> None:
+    """A required field absent on either side is INCOMPATIBLE, not silently skipped."""
     meta_a = {"corpus_hash": None, "embedding_model": "e5"}
     meta_b = {"corpus_hash": "def456", "embedding_model": "e5"}
     problems = _check_compatibility(meta_a, meta_b, allow_override=False)
-    assert problems == []
+    assert any("INCOMPATIBLE" in p and "corpus_hash" in p for p in problems)
 
 
 # ------------------------------------------------- INVALID_JSON status surfaces (item 5)
@@ -830,11 +855,11 @@ def test_invalid_json_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
 # ------------------------------------------------- wrong document identity (item 2)
 
 
-def test_wrong_document_top1_does_not_hardcode_txt() -> None:
-    """The wrong-document check must compare actual filenames, not stem + '.txt'."""
-    from scripts.eval_ingest import cmd_score, Workspace
-
+def test_wrong_document_top1_uses_expect_filename() -> None:
+    """The wrong-document check must use expect_filename, not reconstruct from neighbours."""
     import tempfile
+
+    from scripts.eval_ingest import Workspace, cmd_score
 
     with tempfile.TemporaryDirectory() as tmp:
         ws = Workspace(root=Path(tmp))
@@ -847,8 +872,12 @@ def test_wrong_document_top1_does_not_hardcode_txt() -> None:
                     "id": "q1",
                     "question": "what?",
                     "expect_document": "notes",
+                    "expect_filename": "notes.md",
                     "targeted": True,
-                    "rank": 1,
+                    "document_rank": 1,
+                    "passage_rank": 1,
+                    "document_hit": True,
+                    "passage_hit": True,
                     "returned": 8,
                     "top_similarity": 0.9,
                     "rerank_status": "not_requested",
@@ -875,3 +904,57 @@ def test_wrong_document_top1_does_not_hardcode_txt() -> None:
 
         scores = ws.read("scores-test")
         assert scores["wrong_document_top1"] == 0
+
+
+def test_cmd_score_nonzero_exit_on_invalid_run() -> None:
+    """cmd_score must return nonzero when valid=False so CI catches it."""
+    import tempfile
+
+    from scripts.eval_ingest import Workspace, cmd_score
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Workspace(root=Path(tmp))
+        retrieval_data = {
+            "k": 8,
+            "valid": False,
+            "observed_path": "embedding_order",
+            "questions": [
+                {
+                    "id": "q1",
+                    "question": "what?",
+                    "expect_document": "notes",
+                    "expect_filename": "notes.pdf",
+                    "targeted": True,
+                    "document_rank": 1,
+                    "passage_rank": 1,
+                    "document_hit": True,
+                    "passage_hit": True,
+                    "returned": 8,
+                    "top_similarity": 0.9,
+                    "rerank_status": "not_requested",
+                    "from_expected": 4,
+                    "ahead": [],
+                    "neighbours": [],
+                },
+            ],
+        }
+        ws.write("retrieval-test", retrieval_data)
+
+        import argparse
+
+        args = argparse.Namespace(workspace=tmp)
+        assert cmd_score(args) != 0
+
+
+def test_compatibility_check_includes_retrieval_k() -> None:
+    """retrieval_k, requested_rerank, and rerank_model are compared when present."""
+    meta_a = {
+        "corpus_hash": "abc123",
+        "questions_hash": "qh1",
+        "embedding_model": "e5",
+        "embedding_dim": 384,
+        "retrieval_k": 32,
+    }
+    meta_b = {**meta_a, "retrieval_k": 64}
+    problems = _check_compatibility(meta_a, meta_b, allow_override=False)
+    assert any("retrieval_k" in p for p in problems)
