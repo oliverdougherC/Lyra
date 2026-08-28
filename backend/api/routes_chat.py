@@ -867,9 +867,7 @@ def _open_turn(
         # PLA-313 idempotency: if the same operation_id already committed a user message
         # and attempt in this session, reuse them instead of inserting a duplicate.
         if request.operation_id:
-            existing = tutor_attempts.find_by_operation_id(
-                conn, session_id, request.operation_id
-            )
+            existing = tutor_attempts.find_by_operation_id(conn, session_id, request.operation_id)
             if existing is not None:
                 user_message_id = existing["user_message_id"]
                 attempt_id = existing["attempt_id"]
