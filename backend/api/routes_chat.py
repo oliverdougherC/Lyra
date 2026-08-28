@@ -198,11 +198,17 @@ class ChatRequest(BaseModel):
     over-length paste is rejected as a 422 before it is stripped, persisted, or budgeted,
     whatever the configured context window. The narrower, window-relative limit lives in
     `_require_turn_fits`.
+
+    `operation_id` is the client-generated idempotency key (PLA-313): one per logical
+    send, reused on a transport retry after an ambiguous failure. When the server finds
+    an existing attempt carrying the same operation_id, it replays/reconciles instead of
+    inserting a second user message.
     """
 
     content: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
     mode: ChatMode
     document_id: int | None = None
+    operation_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     @field_validator("content")
     @classmethod
@@ -238,6 +244,7 @@ class TurnInput:
     content: str
     mode: ChatMode
     document_id: int | None = None
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -622,7 +629,12 @@ async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> Stre
     Once the first frame is out the status line is gone, so every later failure has to
     travel as an `error` frame instead.
     """
-    request = TurnInput(content=payload.content, mode=payload.mode, document_id=payload.document_id)
+    request = TurnInput(
+        content=payload.content,
+        mode=payload.mode,
+        document_id=payload.document_id,
+        operation_id=payload.operation_id,
+    )
     # The claim is taken here, synchronously, before the coroutine's first suspension
     # point: cancellation can only land on an `await`, so from the moment `begin_turn`
     # returns this coroutine owns the token with no window in which a worker could hold
@@ -851,6 +863,55 @@ def _open_turn(
         access = resolve_tutor_access(conn)
         require_document_allowed(access)
         config = access.config
+
+        # PLA-313 idempotency: if the same operation_id already committed a user message
+        # and attempt in this session, reuse them instead of inserting a duplicate.
+        if request.operation_id:
+            existing = tutor_attempts.find_by_operation_id(
+                conn, session_id, request.operation_id
+            )
+            if existing is not None:
+                user_message_id = existing["user_message_id"]
+                attempt_id = existing["attempt_id"]
+                attempt_state = existing["state"]
+                sessions.bind_turn(session_id, turn_token, user_message_id)
+                touch_class(conn, int(session["class_id"]))
+                plan = TurnPlan(
+                    user_message_id=user_message_id,
+                    attempt_id=attempt_id,
+                )
+                if attempt_state == "completed":
+                    # The prior attempt already finished; replay its stored reply.
+                    cost = _plan_turn_cost(
+                        conn, session_id, request.mode, request.content, frozenset(), config
+                    )
+                    return config, plan, cost
+                # The prior attempt was running/failed/stopped; create a fresh attempt
+                # on the same user message (the retry path).
+                cost = _plan_turn_cost(
+                    conn, session_id, request.mode, request.content, frozenset(), config
+                )
+                _require_turn_fits(cost)
+                conn.execute("begin immediate")
+                try:
+                    attempt_id = tutor_attempts.create_attempt(
+                        conn,
+                        session_id=session_id,
+                        user_message_id=user_message_id,
+                        mode=request.mode,
+                        document_id=request.document_id,
+                        operation_id=None,
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                return (
+                    config,
+                    TurnPlan(user_message_id=user_message_id, attempt_id=attempt_id),
+                    cost,
+                )
+
         cost = _plan_turn_cost(conn, session_id, request.mode, request.content, frozenset(), config)
         _require_turn_fits(cost)
         sessions.set_session_mode(conn, session_id, request.mode)
@@ -864,6 +925,7 @@ def _open_turn(
                 user_message_id=user_message_id,
                 mode=request.mode,
                 document_id=request.document_id,
+                operation_id=request.operation_id,
             )
             conn.commit()
         except Exception:

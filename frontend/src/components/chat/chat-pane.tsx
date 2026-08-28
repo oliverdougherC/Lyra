@@ -222,6 +222,7 @@ export function ChatPane({
   // the elapsed thinking time cannot come from the `turnStartedAt` state.
   const turnOpenedAtRef = useRef(0)
   const submittedTextRef = useRef<string | null>(null)
+  const operationIdRef = useRef<string | null>(null)
 
   const newestSession = useMemo(
     () => (sessions && sessions.length > 0 ? [...sessions].sort((a, b) => b.id - a.id)[0] : null),
@@ -557,11 +558,17 @@ export function ChatPane({
                   )
                 : streamChat(
                     turnSessionId,
-                    { content, mode: activeMode, document_id: documentId },
+                    {
+                      content,
+                      mode: activeMode,
+                      document_id: documentId,
+                      operation_id: operationIdRef.current ?? undefined,
+                    },
                     onEvent,
                     controller.signal,
                     () => {
                       submittedTextRef.current = null
+                      operationIdRef.current = null
                     },
                   ))
       } catch (caught) {
@@ -591,6 +598,7 @@ export function ChatPane({
             setDraft(content)
           }
           submittedTextRef.current = null
+          operationIdRef.current = null
           setOutcome('failed')
         } else {
           toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
@@ -632,6 +640,7 @@ export function ChatPane({
     (content: string) => {
       const trimmed = content.trim()
       if (trimmed.length === 0) return
+      operationIdRef.current ??= crypto.randomUUID()
       submittedTextRef.current = trimmed
       setDraft('')
       void (async () => {
@@ -691,6 +700,7 @@ export function ChatPane({
   const stop = useCallback(() => {
     if (!abortRef.current) return
     setOutcome('stopped')
+    operationIdRef.current = null
     if (streamTextRef.current.trim().length === 0) {
       revealDrainedRef.current = true
       setRevealDrained(true)

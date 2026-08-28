@@ -1006,6 +1006,187 @@ describe('isDirty: beforeunload guard contract', () => {
   })
 })
 
+/**
+ * PLA-315: the beforeunload handler that the drafts page registers must call
+ * `preventDefault` exactly when the engine has unconfirmed state. These tests
+ * mount the same wiring pattern the page uses (`engine.isDirty(current)`),
+ * dispatch real `beforeunload` events, and prove `defaultPrevented` toggles
+ * across all lifecycle states.
+ */
+describe('beforeunload event wiring (PLA-315)', () => {
+  function fireBeforeUnload(): Event {
+    const event = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(event)
+    return event
+  }
+
+  it('does not prevent navigation when saved and editor matches', () => {
+    const server = new FakeServer('saved text', 1)
+    const { engine } = makeEngine(server)
+    const current = 'saved text'
+
+    const handler = (e: Event) => {
+      if (engine.isDirty(current)) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', handler)
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(false)
+    } finally {
+      window.removeEventListener('beforeunload', handler)
+    }
+  })
+
+  it('prevents navigation during debounce (pending scheduled write)', () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'new typing'
+
+    engine.schedule('new typing')
+    const handler = (e: Event) => {
+      if (engine.isDirty(current)) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', handler)
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(true)
+    } finally {
+      window.removeEventListener('beforeunload', handler)
+    }
+  })
+
+  it('prevents navigation while a write is in flight', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'content'
+
+    engine.schedule('content')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    expect(server.inFlight()).toBe(1)
+
+    const handler = (e: Event) => {
+      if (engine.isDirty(current)) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', handler)
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(true)
+    } finally {
+      window.removeEventListener('beforeunload', handler)
+    }
+  })
+
+  it('prevents navigation after a failed save', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'will fail'
+
+    engine.schedule('will fail')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    await server.failNext()
+
+    const handler = (e: Event) => {
+      if (engine.isDirty(current)) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', handler)
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(true)
+    } finally {
+      window.removeEventListener('beforeunload', handler)
+    }
+  })
+
+  it('prevents navigation with an unresolved conflict', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'local text'
+
+    engine.schedule('local text')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    server.version = 5
+    server.body = 'server moved'
+    await server.settleNext()
+    expect(engine.conflict()).not.toBeNull()
+
+    const handler = (e: Event) => {
+      if (engine.isDirty(current)) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', handler)
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(true)
+    } finally {
+      window.removeEventListener('beforeunload', handler)
+    }
+  })
+
+  it('does not prevent navigation after a successful authoritative save', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'typed'
+
+    engine.schedule('typed')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    await server.settleNext()
+
+    const handler = (e: Event) => {
+      if (engine.isDirty(current)) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', handler)
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(false)
+    } finally {
+      window.removeEventListener('beforeunload', handler)
+    }
+  })
+
+  it('does not prevent navigation after conflict resolution and confirmed save', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'local'
+
+    engine.schedule('local')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    server.version = 2
+    server.body = 'server version'
+    await server.settleNext()
+    expect(engine.conflict()).not.toBeNull()
+
+    engine.keepLocal('local')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    await server.settleNext()
+
+    const handler = (e: Event) => {
+      if (engine.isDirty(current)) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', handler)
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(false)
+    } finally {
+      window.removeEventListener('beforeunload', handler)
+    }
+  })
+
+  it('removing the listener stops preventing navigation even when dirty', () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'unsaved work'
+
+    engine.schedule('unsaved work')
+
+    const handler = (e: Event) => {
+      if (engine.isDirty(current)) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', handler)
+    expect(fireBeforeUnload().defaultPrevented).toBe(true)
+
+    window.removeEventListener('beforeunload', handler)
+    expect(fireBeforeUnload().defaultPrevented).toBe(false)
+  })
+})
+
 describe('flushOnHidden', () => {
   it('flushes when the tab goes hidden, and only then', () => {
     const flush = vi.fn()
