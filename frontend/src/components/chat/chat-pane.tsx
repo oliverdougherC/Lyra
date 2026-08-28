@@ -221,6 +221,7 @@ export function ChatPane({
   // Read inside the stream callback, which closes over the value it was created with, so
   // the elapsed thinking time cannot come from the `turnStartedAt` state.
   const turnOpenedAtRef = useRef(0)
+  const submittedTextRef = useRef<string | null>(null)
 
   const newestSession = useMemo(
     () => (sessions && sessions.length > 0 ? [...sessions].sort((a, b) => b.id - a.id)[0] : null),
@@ -472,7 +473,9 @@ export function ChatPane({
         // A turn the pane has handed on still has an answer coming, and the server still
         // writes it down. It just has no rows of its own to put it in any more.
         if (!owns()) return
-        if (event.type === 'token') {
+        if (event.type === 'start') {
+          submittedTextRef.current = null
+        } else if (event.type === 'token') {
           // The first word of the answer is what ends thinking, so the elapsed time is
           // fixed here rather than when the reasoning channel happens to fall quiet.
           if (assistantText.length === 0 && reasoningText.length > 0) {
@@ -566,6 +569,10 @@ export function ChatPane({
         } else if (caught instanceof DOMException && caught.name === 'AbortError') {
           if (outcomeRef.current === 'active') {
             setOutcome('stopped')
+            if (submittedTextRef.current !== null) {
+              setDraft(submittedTextRef.current)
+              submittedTextRef.current = null
+            }
             if (streamTextRef.current.trim().length === 0) {
               revealDrainedRef.current = true
               setRevealDrained(true)
@@ -585,6 +592,10 @@ export function ChatPane({
           setOutcome('failed')
         } else {
           toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
+          if (submittedTextRef.current !== null) {
+            setDraft(submittedTextRef.current)
+            submittedTextRef.current = null
+          }
           setOutcome('failed')
         }
       } finally {
@@ -619,6 +630,7 @@ export function ChatPane({
     (content: string) => {
       const trimmed = content.trim()
       if (trimmed.length === 0) return
+      submittedTextRef.current = trimmed
       setDraft('')
       void (async () => {
         const target = await ensureSession()
@@ -626,6 +638,7 @@ export function ChatPane({
         // could not be opened, so there is nowhere for it to have gone.
         if (target === null) {
           setDraft(trimmed)
+          submittedTextRef.current = null
           return
         }
         await runTurn('send', trimmed, target)

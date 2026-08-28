@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ChatPane } from '@/components/chat/chat-pane'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { api, streamChat } from '@/lib/api'
+import { ApiError, api, streamChat } from '@/lib/api'
 import type { ChatEvent, MessageRead } from '@/types'
 
 vi.mock('@/lib/api', async () => {
@@ -360,5 +360,74 @@ describe('ChatPane handoffs', () => {
     await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
     expect(streamChat).not.toHaveBeenCalled()
     expect(api.createSession).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * PLA-313: the composer must preserve the student's text across the acceptance
+ * boundary. The `start` frame is the server's acceptance signal; before it
+ * arrives, a failure puts the text back in the composer. After it arrives, the
+ * question is persisted and PLA-306's retry contract takes over.
+ */
+describe('ChatPane composer preservation (PLA-313)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.listSessions).mockResolvedValue([])
+    vi.mocked(api.listDocuments).mockResolvedValue([])
+    vi.mocked(api.getClassProfile).mockResolvedValue({
+      facts: [],
+      extraction_skipped_reason: null,
+    })
+    vi.mocked(api.getSettings).mockResolvedValue({
+      endpoint_url: 'http://localhost:1234/v1',
+      model: 'local',
+    } as Awaited<ReturnType<typeof api.getSettings>>)
+    vi.mocked(api.createSession).mockResolvedValue({
+      id: 7,
+      class_id: 1,
+      title: null,
+      mode: 'guide',
+      artifact_part_id: null,
+      created_at: '2026-08-04T12:00:00Z',
+    } as Awaited<ReturnType<typeof api.createSession>>)
+    vi.mocked(api.listMessages).mockResolvedValue([])
+  })
+
+  it('restores composer text when the server rejects before acceptance (pre-SSE network error)', async () => {
+    vi.mocked(streamChat).mockRejectedValue(new Error('Network error'))
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+  })
+
+  it('does not restore composer text after the start frame arrives (post-acceptance)', async () => {
+    const stream: { emit?: (event: ChatEvent) => void; reject?: (error: Error) => void } = {}
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, onEvent) => {
+      stream.emit = onEvent
+      return new Promise<void>((_resolve, reject) => {
+        stream.reject = reject
+      })
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([message({ id: 11, content: QUESTION })])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => expect(streamChat).toHaveBeenCalled())
+    await act(async () => stream.emit?.({ type: 'start', message_id: 11 }))
+    await act(async () => stream.emit?.({ type: 'token', text: 'Partial' }))
+    await act(async () => stream.reject?.(new Error('connection lost')))
+
+    await waitFor(() => expect(composer).toHaveValue(''))
   })
 })
