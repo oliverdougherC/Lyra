@@ -308,13 +308,20 @@ export default function DraftWorkspacePage() {
   }, [passRunning])
 
   // Flush on the way out: a hidden tab is the last moment a write can still be sent, and
-  // an unmount drops the editor entirely.
+  // an unmount drops the editor entirely. The beforeunload handler warns the student when
+  // the save engine has unconfirmed state so the browser's native "unsaved changes"
+  // dialog can prevent accidental data loss.
   useEffect(() => {
     const detach = flushOnHidden(() => {
       void engine.flush(latestMarkdownRef.current)
     })
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (engine.isDirty(latestMarkdownRef.current)) e.preventDefault()
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
     return () => {
       detach()
+      window.removeEventListener('beforeunload', onBeforeUnload)
       void engine.flush(latestMarkdownRef.current)
     }
   }, [engine])
