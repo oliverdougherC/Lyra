@@ -26,7 +26,6 @@ import {
   answerQuizQuestion,
   advanceQuiz,
   waitForQuizResults,
-  BACKEND,
 } from './helpers'
 
 const TEST_DATA = resolve(__dirname, 'test-data')
@@ -100,12 +99,11 @@ test.describe('Study tools', () => {
       await waitForSessionSummary(page)
       await expect(page.getByText(/Session complete/)).toBeVisible()
 
-      // Verify via the API that exactly `total` scheduling transitions occurred
+      // PLA-305: exactly `total` scheduling transitions, not "at least"
       const sessionRes = await apiGet(`/api/decks/${deckId}/session`)
       const session = await sessionRes.json()
       for (const card of session.cards) {
-        // Each card was reviewed exactly once
-        expect(card.card_state.reps).toBeGreaterThanOrEqual(1)
+        expect(card.card_state.reps).toBe(1)
       }
 
       // Click "Study again" -- this is the PLA-305 lifecycle: the frontend
@@ -129,11 +127,12 @@ test.describe('Study tools', () => {
 
       await waitForSessionSummary(page)
 
-      // Verify via API: reps should have incremented (2 reviews, not 1)
+      // PLA-305: exactly 2 reviews total (one per pass), not "at least 2"
       const session2Res = await apiGet(`/api/decks/${deckId}/session`)
       const session2 = await session2Res.json()
-      const firstCard = session2.cards[0]
-      expect(firstCard.card_state.reps).toBeGreaterThanOrEqual(2)
+      for (const card of session2.cards) {
+        expect(card.card_state.reps).toBe(2)
+      }
     })
 
     test('PLA-305: API-level idempotent replay with same operation_id', async () => {
@@ -190,8 +189,8 @@ test.describe('Study tools', () => {
       await page.goto(`/classes/${classId}/study/${quizId}`)
       await page.waitForLoadState('networkidle')
 
-      // Wait for first question to render
-      await expect(page.locator('[aria-label="Your answer"]')).toBeVisible({ timeout: 10_000 })
+      // Wait for the first question to render (MCQ options are buttons in a list)
+      await expect(page.getByText(/Question 1 of/)).toBeVisible({ timeout: 10_000 })
 
       // Answer 3 questions through the browser
       for (let i = 0; i < 3; i++) {
@@ -209,45 +208,56 @@ test.describe('Study tools', () => {
       expect(current.attempt?.answers.length).toBe(3)
     })
 
-    test('resume quiz attempt after navigation', async () => {
-      const startRes = await apiPost(`/api/quizzes/${quizId}/attempts?restart=true`)
-      expect(startRes.ok).toBe(true)
-      const attempt = await startRes.json()
+    test('browser: resume quiz attempt after navigation', async ({ page }) => {
+      // Start a fresh attempt via API
+      await apiPost(`/api/quizzes/${quizId}/attempts?restart=true`)
+
+      // Open quiz in browser
+      await page.goto(`/classes/${classId}/study/${quizId}`)
+      await page.waitForLoadState('networkidle')
+      await expect(page.getByText(/Question 1 of/)).toBeVisible({ timeout: 10_000 })
 
       // Answer one question
-      const firstPart = attempt.question_part_ids[0]
-      await apiPost(`/api/attempts/${attempt.attempt_id}/answers`, {
-        part_id: firstPart,
-        selected_index: 0,
-      })
+      await answerQuizQuestion(page, 0)
+      await advanceQuiz(page)
 
-      // Simulate navigation: get current attempt
+      // Wait for question 2 to render
+      await expect(page.getByText(/Question 2 of/)).toBeVisible({ timeout: 5_000 })
+
+      // Navigate away
+      await page.goto('/')
+      await page.waitForLoadState('networkidle')
+
+      // Return to the quiz
+      await page.goto(`/classes/${classId}/study/${quizId}`)
+      await page.waitForLoadState('networkidle')
+
+      // Should resume at question 2 (same attempt, answer preserved)
+      await expect(page.getByText(/Question 2 of/)).toBeVisible({ timeout: 10_000 })
+
+      // Answer remaining questions and finish
+      await answerQuizQuestion(page, 0)
+      await advanceQuiz(page)
+      await expect(page.getByText(/Question 3 of/)).toBeVisible({ timeout: 5_000 })
+      await answerQuizQuestion(page, 0)
+      await advanceQuiz(page)
+
+      // Results should appear
+      await waitForQuizResults(page)
+
+      // Verify via API that the attempt is finished
       const currentRes = await apiGet(`/api/quizzes/${quizId}/attempts/current`)
-      expect(currentRes.ok).toBe(true)
-      const currentBody = await currentRes.json()
-      const current = currentBody.attempt
-      expect(current).toBeTruthy()
-      expect(current.attempt_id).toBe(attempt.attempt_id)
-      expect(current.answers.length).toBe(1)
-      expect(current.finished).toBe(false)
+      const current = await currentRes.json()
+      expect(current.attempt?.finished).toBe(true)
+      expect(current.attempt?.answers.length).toBe(3)
 
-      // Resume
-      const resumeRes = await apiPost(`/api/quizzes/${quizId}/attempts`)
-      const resumed = await resumeRes.json()
-      expect(resumed.attempt_id).toBe(attempt.attempt_id)
-      expect(resumed.answers.length).toBe(1)
+      // "Start over" (Try again on results) produces a new attempt
+      const tryAgainBtn = page.getByRole('button', { name: /Try again/i })
+      await expect(tryAgainBtn).toBeVisible({ timeout: 5_000 })
+      await tryAgainBtn.click()
 
-      // Answer remaining and finish
-      for (const partId of attempt.question_part_ids.slice(1)) {
-        await apiPost(`/api/attempts/${attempt.attempt_id}/answers`, {
-          part_id: partId,
-          selected_index: 0,
-        })
-      }
-      const finishRes = await apiPost(`/api/attempts/${attempt.attempt_id}/finish`)
-      expect(finishRes.ok).toBe(true)
-      const result = await finishRes.json()
-      expect(result.total).toBe(attempt.question_part_ids.length)
+      // New attempt starts at question 1
+      await expect(page.getByText(/Question 1 of/)).toBeVisible({ timeout: 10_000 })
     })
   })
 

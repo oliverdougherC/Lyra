@@ -10,6 +10,7 @@
 
 import { test, expect } from '@playwright/test'
 import { createServer, type Server } from 'node:http'
+import { type AddressInfo } from 'node:net'
 import { resolve } from 'node:path'
 import { createClass, fetchWithOrigin, apiPost, BACKEND } from './helpers'
 
@@ -154,8 +155,7 @@ test.describe('Origin security (PLA-304)', () => {
   }) => {
     const backendPort = Number(process.env.ACCEPTANCE_BACKEND_PORT ?? 8000)
 
-    // Serve an attacker page on a different port (distinct origin)
-    const attackerPort = backendPort + 100
+    // Serve an attacker page on a dynamic port (distinct origin, no collision)
     const attackerPage = `
 <!DOCTYPE html>
 <html>
@@ -186,19 +186,32 @@ attack();
         res.writeHead(200, { 'Content-Type': 'text/html' })
         res.end(attackerPage)
       })
+      // Use port 0 so the OS assigns an available port (no static collision)
       await new Promise<void>((resolve) => {
-        attackerServer!.listen(attackerPort, '127.0.0.1', () => resolve())
+        attackerServer!.listen(0, '127.0.0.1', () => resolve())
       })
+      const attackerPort = (attackerServer!.address() as AddressInfo).port
 
       // Navigate the Playwright browser to the attacker page
       await page.goto(`http://127.0.0.1:${attackerPort}`)
 
       // Wait for the attack to complete
-      await page.waitForFunction(() => (window as any).__attackResult !== undefined, null, {
-        timeout: 10_000,
-      })
+      await page.waitForFunction(
+        () =>
+          (window as unknown as Record<string, unknown>).__attackResult !== undefined,
+        null,
+        { timeout: 10_000 },
+      )
 
-      const result = await page.evaluate(() => (window as any).__attackResult)
+      const result = await page.evaluate(
+        () =>
+          (window as unknown as Record<string, unknown>).__attackResult as {
+            status: number
+            ok?: boolean
+            error?: string
+            blocked?: boolean
+          },
+      )
 
       // The attack should be blocked: either by CORS (status 0, network error)
       // or by the backend's origin check (status 403)

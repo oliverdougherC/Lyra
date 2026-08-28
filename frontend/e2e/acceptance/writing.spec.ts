@@ -199,24 +199,22 @@ test.describe('Writing', () => {
       snapshot: false,
     })
 
-    // The browser's next autosave (or manual save) should detect the conflict.
+    // The browser's next autosave should detect the 409 conflict.
     // Type something to trigger the save engine.
     const editor = page.locator('[aria-label="Draft document"]')
-    if (await editor.isVisible()) {
-      await editor.click()
-      await page.keyboard.type(' appended text')
+    await expect(editor).toBeVisible({ timeout: 10_000 })
+    await editor.click()
+    await page.keyboard.type(' appended text')
 
-      // Wait for the conflict dialog or the save status to show an error
-      // The exact UI depends on the implementation, but the draft should not
-      // silently overwrite the concurrent change.
-      const saveStatus = page.locator('role=status')
-      // Give the autosave time to fire and encounter the 409
-      await page.waitForTimeout(3000)
+    // Wait for the conflict dialog to appear (deterministic: the save engine
+    // fires on debounce, gets 409, enters 'conflict' state, dialog renders)
+    await expect(page.getByText('This draft was changed somewhere else')).toBeVisible({
+      timeout: 10_000,
+    })
 
-      // Verify the server still has the concurrent update (not silently replaced)
-      const serverRes = await apiGet(`/api/drafts/${draft.id}`)
-      const serverDraft = await serverRes.json()
-      expect(serverDraft.body).toBe('Content updated by another tab.')
-    }
+    // Verify the server still has the concurrent update (not silently replaced)
+    const serverRes = await apiGet(`/api/drafts/${draft.id}`)
+    const serverDraft = await serverRes.json()
+    expect(serverDraft.body).toBe('Content updated by another tab.')
   })
 })

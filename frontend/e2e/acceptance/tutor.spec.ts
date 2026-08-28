@@ -22,7 +22,6 @@ import {
   sendChatMessage,
   waitForChatResponse,
   BACKEND,
-  TUTOR_CONTROL,
 } from './helpers'
 
 const TEST_DATA = resolve(__dirname, 'test-data')
@@ -271,9 +270,9 @@ test.describe('Tutor chat', () => {
 
   test('browser: send message, see response, retry after failure', async ({ page }) => {
     await setTutorMode('success')
-    await createSession(classId)
 
-    await page.goto(`/classes/${classId}/chat`)
+    // Navigate to a fresh draft session so earlier API tests don't contaminate
+    await page.goto(`/classes/${classId}/chat?session=new`)
     await page.waitForLoadState('networkidle')
 
     // Send a message and wait for the response
@@ -281,16 +280,21 @@ test.describe('Tutor chat', () => {
     await waitForChatResponse(page)
 
     await expect(page.getByText(/deterministic response|thermodynamics/i).first()).toBeVisible({
-      timeout: 5_000,
+      timeout: 10_000,
     })
 
     // Now trigger a failure and verify the "Try again" button appears
     await setTutorMode('error-before-stream')
     await sendChatMessage(page, 'This should fail')
 
-    // Wait for error state -- the "Try again" button should appear
-    const retryButton = page.locator('[aria-label="Try again"]')
-    await expect(retryButton).toBeVisible({ timeout: 15_000 })
+    // The failed turn persists a user message with tutor_attempt.state='failed'.
+    // After the SSE error frame, the frontend refetches messages and renders
+    // the TutorTurnFailure component with a Retry button on the user row.
+    const failureIndicator = page.locator('[data-tutor-turn-failure]')
+    await expect(failureIndicator).toBeVisible({ timeout: 15_000 })
+
+    const retryButton = failureIndicator.locator('[aria-label="Try again"]')
+    await expect(retryButton).toBeVisible({ timeout: 5_000 })
 
     // Restore success mode and retry
     await setTutorMode('success')

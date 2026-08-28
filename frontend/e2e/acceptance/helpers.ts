@@ -383,12 +383,12 @@ export async function getCardPosition(page: Page): Promise<string> {
 /* ---- Quiz browser helpers ---------------------------------------- */
 
 /**
- * Select an answer option by index (0-based) and submit.
+ * Select an MCQ answer option by index (0-based).
+ * MCQ options are plain buttons inside a list -- clicking auto-submits.
  */
 export async function answerQuizQuestion(page: Page, optionIndex: number) {
-  const options = page.locator('[aria-label="Your answer"] label')
-  await options.nth(optionIndex).click()
-  await page.getByRole('button', { name: 'Check' }).click()
+  const questionList = page.locator('main ul > li button')
+  await questionList.nth(optionIndex).click()
 }
 
 /**
@@ -396,6 +396,7 @@ export async function answerQuizQuestion(page: Page, optionIndex: number) {
  */
 export async function advanceQuiz(page: Page) {
   const nextBtn = page.getByRole('button', { name: /Next|See results/ })
+  await expect(nextBtn).toBeVisible({ timeout: 5_000 })
   await nextBtn.click()
 }
 

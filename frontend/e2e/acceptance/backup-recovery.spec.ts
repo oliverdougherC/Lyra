@@ -88,12 +88,14 @@ test.describe('Backup and restore', () => {
     const backupDir = await mkdtemp(join(tmpdir(), 'lyra-backup-'))
     const archivePath = join(backupDir, 'backup.tar.gz')
 
-    // Run backup via the launcher's backup module
+    // Run backup via the launcher's stage_backup_tree + archive creation --
+    // the same sequence the real backup() handler uses, without the server
+    // stop that would tear down the acceptance stack.
     execSync(
       `uv run python -c "
-import sys; sys.path.insert(0, '.')
-from scripts.lyra_launcher import stage_backup_tree
-import tarfile, tempfile, shutil
+import sys; sys.path.insert(0, 'scripts')
+from lyra_launcher import stage_backup_tree, read_backup_manifest, validate_backup_members, BACKUP_MANIFEST, BACKUP_DATA_PREFIX
+import tarfile, tempfile, shutil, json
 from pathlib import Path
 
 data = Path('${dataDir}')
@@ -101,12 +103,19 @@ db = data / 'lyra.db'
 stage_dir = Path(tempfile.mkdtemp())
 manifest = stage_backup_tree(stage_dir, data, db)
 
-with tarfile.open('${archivePath}', 'w:gz') as tar:
-    for item in stage_dir.iterdir():
-        tar.add(item, arcname=item.name)
+# Create the archive the same way the real backup() does: pax format,
+# manifest first, then the data prefix tree.
+with tarfile.open('${archivePath}', 'w:gz', format=tarfile.PAX_FORMAT) as tar:
+    tar.add(stage_dir / BACKUP_MANIFEST, arcname=BACKUP_MANIFEST)
+    tar.add(stage_dir / BACKUP_DATA_PREFIX, arcname=BACKUP_DATA_PREFIX)
+
+# Validate the written archive using the real verification functions
+with tarfile.open('${archivePath}', 'r:gz') as bundle:
+    read_manifest = read_backup_manifest(bundle)
+    validate_backup_members(bundle, read_manifest)
 
 shutil.rmtree(stage_dir)
-print('Backup created, manifest:', manifest)
+print(json.dumps({'manifest': manifest, 'valid': True}))
 "`,
       { cwd: PROJECT_ROOT, timeout: 30_000 },
     )
@@ -119,34 +128,49 @@ print('Backup created, manifest:', manifest)
       encoding: 'utf-8',
     })
     expect(listing).toContain('lyra.db')
+    expect(listing).toContain('data/')
 
-    // Verify the backup database contains our test class
+    // Extract and verify the backup database contains our test class,
+    // then simulate restore by extracting into a fresh directory and
+    // running SQLite quick_check (the same integrity check restore() uses).
     const verifyOutput = execSync(
       `uv run python -c "
-import sys, tarfile, tempfile, sqlite3, json
+import sys; sys.path.insert(0, 'scripts')
+from lyra_launcher import read_backup_manifest, validate_backup_members, extract_archive_prefix, BACKUP_DATA_PREFIX
+import tarfile, tempfile, sqlite3, json, shutil
 from pathlib import Path
 
-extract_dir = Path(tempfile.mkdtemp())
-with tarfile.open('${archivePath}', 'r:gz') as tar:
-    tar.extractall(extract_dir)
+restore_dir = Path(tempfile.mkdtemp())
 
-db_path = extract_dir / 'lyra.db'
+with tarfile.open('${archivePath}', 'r:gz') as bundle:
+    manifest = read_backup_manifest(bundle)
+    validate_backup_members(bundle, manifest)
+    extract_archive_prefix(bundle, prefix=BACKUP_DATA_PREFIX, destination=restore_dir)
+
+db_path = restore_dir / 'lyra.db'
 conn = sqlite3.connect(str(db_path))
 conn.row_factory = sqlite3.Row
+# Same integrity check that restore() runs
+check = conn.execute('pragma quick_check').fetchone()
 rows = conn.execute('SELECT name FROM classes').fetchall()
 names = [r['name'] for r in rows]
+doc_count = conn.execute('SELECT count(*) FROM documents').fetchone()[0]
 conn.close()
+shutil.rmtree(restore_dir)
 
-import shutil
-shutil.rmtree(extract_dir)
-
-result = {'class_names': names}
+result = {
+    'integrity': check[0],
+    'class_names': names,
+    'document_count': doc_count,
+}
 print(json.dumps(result))
 "`,
       { cwd: PROJECT_ROOT, timeout: 10_000, encoding: 'utf-8' },
     )
 
     const result = JSON.parse(verifyOutput.trim())
+    expect(result.integrity).toBe('ok')
     expect(result.class_names).toContain('Backup Test Class')
+    expect(result.document_count).toBeGreaterThan(0)
   })
 })

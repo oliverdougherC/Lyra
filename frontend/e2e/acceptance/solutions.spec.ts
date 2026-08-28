@@ -45,7 +45,7 @@ test.describe('Solutions (PLA-311)', () => {
   test('create solution from selected sources', async () => {
     const res = await apiPost(`/api/classes/${classId}/solutions`, {
       title: 'Thermo Solutions',
-      document_ids: [docId],
+      sources: [{ document_id: docId, role: 'problem_set' }],
     })
     expect(res.status).toBe(201)
     const solution = await res.json()
@@ -115,7 +115,7 @@ test.describe('Solutions (PLA-311)', () => {
     // Create solution referencing the document
     const solRes = await apiPost(`/api/classes/${classId}/solutions`, {
       title: 'Orphan Solution',
-      document_ids: [doc2.id],
+      sources: [{ document_id: doc2.id, role: 'problem_set' }],
     })
     expect(solRes.status).toBe(201)
     const sol = await solRes.json()
