@@ -1,0 +1,24 @@
+Introduction to Thermodynamics
+
+Thermodynamics is the branch of physics that studies heat, work, temperature,
+and their relation to energy, entropy, and the physical properties of matter.
+
+First Law of Thermodynamics
+The first law states that energy cannot be created or destroyed in an isolated
+system.  The change in internal energy equals heat added minus work done:
+delta-U equals Q minus W.
+
+Second Law of Thermodynamics
+The second law states that the total entropy of an isolated system can only
+increase over time.  Heat naturally flows from a hotter body to a cooler one.
+
+Third Law of Thermodynamics
+The third law states that as a system approaches absolute zero, its entropy
+approaches a minimum value.
+
+Key Definitions
+Internal energy is the total kinetic and potential energy of the particles in
+a system.  Entropy is a measure of the number of accessible microstates.
+Enthalpy equals internal energy plus pressure times volume (H = U + PV).
+Free energy determines whether a process is spontaneous at constant
+temperature and pressure.

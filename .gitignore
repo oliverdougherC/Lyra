@@ -63,3 +63,7 @@ Thumbs.db
 # Python security gate work dir (exported requirements + evidence; regenerated per run)
 .security-audit/
 python-audit-evidence.json
+
+# Acceptance test transient state
+.acceptance-state.json
+acceptance-report/
