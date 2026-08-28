@@ -1192,12 +1192,25 @@ def test_compare_rejects_missing_metric() -> None:
 # -------------------------------------------------- e2e evaluator regression (fix 5)
 
 
+_DEFAULT_E2E_METADATA: dict[str, object] = {
+    "corpus_hash": "e2etest123",
+    "questions_hash": "e2eqh1",
+    "embedding_model": "test-e5",
+    "embedding_dim": 384,
+    "retrieval_k": 8,
+    "requested_rerank": False,
+    "git_revision": "e2etest",
+    "chunk_max_tokens": 1024,
+}
+
+
 def _e2e_retrieval_data(
     *,
     valid: bool = True,
     doc_rank: int = 1,
     passage_rank: int = 1,
     observed_path: str = "embedding_order",
+    metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Minimal retrieval result the score + compare pipeline can consume."""
     return {
@@ -1232,32 +1245,18 @@ def _e2e_retrieval_data(
                 ],
             },
         ],
+        "metadata": metadata if metadata is not None else dict(_DEFAULT_E2E_METADATA),
     }
 
 
-_E2E_METADATA = {
-    "corpus_hash": "e2etest123",
-    "questions_hash": "e2eqh1",
-    "embedding_model": "test-e5",
-    "embedding_dim": 384,
-    "retrieval_k": 8,
-    "requested_rerank": False,
-    "git_revision": "e2etest",
-    "chunk_max_tokens": 1024,
-}
-
-
 def _e2e_score(ws: "Workspace", retrieval_data: dict[str, object]) -> dict[str, object]:
-    """Score a retrieval result, patch in stable metadata, and return the scores dict."""
+    """Score a retrieval result and return the scores dict. No metadata surgery."""
     import argparse
 
     ws.write("retrieval-test", retrieval_data)
     args = argparse.Namespace(workspace=str(ws.root))
     cmd_score(args)
-    scores = ws.read("scores-test")
-    scores["metadata"] = _E2E_METADATA
-    ws.write("scores-test", scores)
-    return scores
+    return ws.read("scores-test")
 
 
 def test_e2e_current_schema_is_consumed() -> None:
@@ -1329,6 +1328,160 @@ def test_e2e_missing_required_metric_cannot_pass() -> None:
         _e2e_score(ws_a, _e2e_retrieval_data())
         scores_b = _e2e_score(ws_b, _e2e_retrieval_data())
         del scores_b["document_mrr"]
+        del scores_b["document_hit_rates"]
+        ws_b.write("scores-test", scores_b)
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+# ---------------------------------------- true e2e: no metadata surgery (fix 5b)
+
+
+def test_e2e_metadata_survives_score_pipeline() -> None:
+    """cmd_score carries retrieval-time identity fields into the score artifact."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Workspace(root=Path(tmp))
+        data = _e2e_retrieval_data()
+        ws.write("retrieval-test", data)
+        args = argparse.Namespace(workspace=tmp)
+        cmd_score(args)
+        scores = ws.read("scores-test")
+        meta = scores["metadata"]
+        retrieval_meta = data["metadata"]
+        for key in (
+            "corpus_hash",
+            "questions_hash",
+            "embedding_model",
+            "embedding_dim",
+            "retrieval_k",
+            "requested_rerank",
+        ):
+            assert meta.get(key) == retrieval_meta[key], f"{key} not carried forward"
+
+
+def test_e2e_changed_corpus_exits_nonzero() -> None:
+    """Different corpus identity between baseline and candidate is incompatible."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        _e2e_score(ws_a, _e2e_retrieval_data())
+        _e2e_score(
+            ws_b,
+            _e2e_retrieval_data(metadata={**_DEFAULT_E2E_METADATA, "corpus_hash": "different"}),
+        )
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+def test_e2e_changed_questions_exits_nonzero() -> None:
+    """Different question-set identity is incompatible."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        _e2e_score(ws_a, _e2e_retrieval_data())
+        _e2e_score(
+            ws_b,
+            _e2e_retrieval_data(metadata={**_DEFAULT_E2E_METADATA, "questions_hash": "different"}),
+        )
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+def test_e2e_changed_retrieval_k_exits_nonzero() -> None:
+    """Different retrieval width is incompatible."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        _e2e_score(ws_a, _e2e_retrieval_data())
+        _e2e_score(
+            ws_b,
+            _e2e_retrieval_data(metadata={**_DEFAULT_E2E_METADATA, "retrieval_k": 16}),
+        )
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+def test_e2e_changed_requested_rerank_exits_nonzero() -> None:
+    """Different requested rerank path is incompatible."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        _e2e_score(ws_a, _e2e_retrieval_data())
+        _e2e_score(
+            ws_b,
+            _e2e_retrieval_data(
+                metadata={**_DEFAULT_E2E_METADATA, "requested_rerank": True},
+            ),
+        )
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+def test_e2e_changed_rerank_model_exits_nonzero() -> None:
+    """Different reranker identity on reranked runs is incompatible."""
+    import argparse
+    import tempfile
+
+    reranked_a = {
+        **_DEFAULT_E2E_METADATA,
+        "requested_rerank": True,
+        "rerank_model": "model-v1",
+    }
+    reranked_b = {
+        **_DEFAULT_E2E_METADATA,
+        "requested_rerank": True,
+        "rerank_model": "model-v2",
+    }
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        _e2e_score(ws_a, _e2e_retrieval_data(observed_path="reranked", metadata=reranked_a))
+        _e2e_score(ws_b, _e2e_retrieval_data(observed_path="reranked", metadata=reranked_b))
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+def test_e2e_missing_required_identity_exits_nonzero() -> None:
+    """A score file missing a required identity field cannot compare."""
+    import argparse
+    import tempfile
+
+    incomplete = dict(_DEFAULT_E2E_METADATA)
+    del incomplete["corpus_hash"]
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        _e2e_score(ws_a, _e2e_retrieval_data())
+        _e2e_score(ws_b, _e2e_retrieval_data(metadata=incomplete))
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+def test_e2e_missing_hit_rates_only_exits_nonzero() -> None:
+    """Missing hit-rate maps fail closed even when MRR is present."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        _e2e_score(ws_a, _e2e_retrieval_data())
+        scores_b = _e2e_score(ws_b, _e2e_retrieval_data())
         del scores_b["document_hit_rates"]
         ws_b.write("scores-test", scores_b)
         args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)

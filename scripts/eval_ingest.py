@@ -1798,8 +1798,8 @@ def cmd_score(args: argparse.Namespace) -> int:
                 round(statistics.median(targeted_sims), 4) if targeted_sims else None
             )
 
-        meta = _reproducibility_metadata(args, _corpus_path_from_retrieval(data))
-        scores["metadata"] = meta
+        retrieval_meta = data.get("metadata")
+        scores["metadata"] = dict(retrieval_meta) if isinstance(retrieval_meta, dict) else {}
 
         score_name = path.stem.replace("retrieval", "scores")
         workspace.write(score_name, scores)
@@ -2053,13 +2053,25 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 if delta < MRR_REGRESSION_THRESHOLD:
                     exit_code = 1
 
-            hit_a = a.get(hr_key, {})
-            hit_b = b.get(hr_key, {})
-            if isinstance(hit_a, dict) and isinstance(hit_b, dict):
+            hit_a = a.get(hr_key)
+            hit_b = b.get(hr_key)
+            if hit_a is None and hit_b is None:
+                pass
+            elif hit_a is None or hit_b is None:
+                side = "baseline" if hit_a is None else "candidate"
+                print(f"  {dimension} hit rates: missing on {side}")
+                if not allow_override:
+                    exit_code = 1
+            elif isinstance(hit_a, dict) and isinstance(hit_b, dict):
                 for k_label in sorted(set(hit_a) | set(hit_b)):
-                    ra = hit_a.get(k_label, {})
-                    rb = hit_b.get(k_label, {})
-                    if isinstance(ra, dict) and isinstance(rb, dict):
+                    ra = hit_a.get(k_label)
+                    rb = hit_b.get(k_label)
+                    if ra is None or rb is None:
+                        side = "baseline" if ra is None else "candidate"
+                        print(f"  {dimension} {k_label}: missing on {side}")
+                        if not allow_override:
+                            exit_code = 1
+                    elif isinstance(ra, dict) and isinstance(rb, dict):
                         rate_a = ra.get("rate", 0)
                         rate_b = rb.get("rate", 0)
                         tag = (
