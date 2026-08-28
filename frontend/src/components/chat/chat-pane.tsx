@@ -223,6 +223,7 @@ export function ChatPane({
   const turnOpenedAtRef = useRef(0)
   const submittedTextRef = useRef<string | null>(null)
   const operationIdRef = useRef<string | null>(null)
+  const responseAcceptedRef = useRef(false)
 
   const newestSession = useMemo(
     () => (sessions && sessions.length > 0 ? [...sessions].sort((a, b) => b.id - a.id)[0] : null),
@@ -567,6 +568,7 @@ export function ChatPane({
                     onEvent,
                     controller.signal,
                     () => {
+                      responseAcceptedRef.current = true
                       submittedTextRef.current = null
                       operationIdRef.current = null
                     },
@@ -640,7 +642,15 @@ export function ChatPane({
     (content: string) => {
       const trimmed = content.trim()
       if (trimmed.length === 0) return
+      if (
+        operationIdRef.current !== null &&
+        submittedTextRef.current !== null &&
+        trimmed !== submittedTextRef.current
+      ) {
+        operationIdRef.current = null
+      }
       operationIdRef.current ??= crypto.randomUUID()
+      responseAcceptedRef.current = false
       submittedTextRef.current = trimmed
       setDraft('')
       void (async () => {
@@ -700,7 +710,9 @@ export function ChatPane({
   const stop = useCallback(() => {
     if (!abortRef.current) return
     setOutcome('stopped')
-    operationIdRef.current = null
+    if (responseAcceptedRef.current) {
+      operationIdRef.current = null
+    }
     if (streamTextRef.current.trim().length === 0) {
       revealDrainedRef.current = true
       setRevealDrained(true)

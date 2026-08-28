@@ -1476,3 +1476,128 @@ class TestConcurrencyMatrix:
             assert attempts[2]["state"] == "completed"
         finally:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# PLA-313: client-generated operation_id idempotency
+# ---------------------------------------------------------------------------
+
+
+def _send_with_op(
+    client: TestClient,
+    session_id: int,
+    content: str = QUESTION,
+    *,
+    operation_id: str | None = None,
+    mode: str = "guide",
+    document_id: int | None = None,
+) -> httpx.Response:
+    return client.post(
+        f"/api/sessions/{session_id}/chat",
+        json={
+            "content": content,
+            "mode": mode,
+            "document_id": document_id,
+            "operation_id": operation_id,
+        },
+    )
+
+
+class TestOperationIdReplay:
+    """PLA-313 blocker 1: a completed operation_id replays the stored reply with
+    zero model calls, zero new messages, and zero new attempts."""
+
+    def test_completed_operation_replays_stored_reply(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        call_count = 0
+        original = _stream_of("The answer is 42.")
+
+        async def counting_stream(*a: object, **kw: object) -> AsyncIterator[StreamDelta]:
+            nonlocal call_count
+            call_count += 1
+            async for delta in original(*a, **kw):
+                yield delta
+
+        monkeypatch.setattr(routes_chat, "stream_chat", counting_stream)
+        r1 = _send_with_op(client, session_id, operation_id="op-1")
+        assert r1.status_code == 200
+        _ = r1.text
+        assert call_count == 1
+
+        r2 = _send_with_op(client, session_id, operation_id="op-1")
+        assert r2.status_code == 200
+        frames = _parse_frames(r2)
+        assert call_count == 1, "replay must not call the model"
+
+        token_texts = [f["text"] for f in frames if f["type"] == "token"]
+        assert "".join(token_texts) == "The answer is 42."
+
+    def test_replay_creates_no_new_messages_or_attempts(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Reply."))
+        _send_with_op(client, session_id, operation_id="op-2")
+
+        messages_before = _messages(client, session_id)
+        conn = connect()
+        try:
+            attempts_before = conn.execute(
+                "select id from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        _send_with_op(client, session_id, operation_id="op-2")
+
+        messages_after = _messages(client, session_id)
+        conn = connect()
+        try:
+            attempts_after = conn.execute(
+                "select id from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        assert len(messages_after) == len(messages_before)
+        assert len(attempts_after) == len(attempts_before)
+
+
+class TestOperationIdLogicalRequestBinding:
+    """PLA-313 blocker 2: the operation_id is bound to the normalized content,
+    mode, and document scope. A resubmit with different parameters is rejected."""
+
+    def test_different_content_rejected(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Answer."))
+        r1 = _send_with_op(client, session_id, content="question A", operation_id="op-bind")
+        assert r1.status_code == 200
+        _ = r1.text
+
+        r2 = _send_with_op(client, session_id, content="question B", operation_id="op-bind")
+        assert r2.status_code == 409
+
+    def test_different_mode_rejected(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Answer."))
+        r1 = _send_with_op(client, session_id, operation_id="op-mode", mode="guide")
+        assert r1.status_code == 200
+        _ = r1.text
+
+        r2 = _send_with_op(client, session_id, operation_id="op-mode", mode="show")
+        assert r2.status_code == 409
+
+    def test_same_logical_request_accepted(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Answer."))
+        r1 = _send_with_op(client, session_id, operation_id="op-same")
+        assert r1.status_code == 200
+        _ = r1.text
+
+        r2 = _send_with_op(client, session_id, operation_id="op-same")
+        assert r2.status_code == 200

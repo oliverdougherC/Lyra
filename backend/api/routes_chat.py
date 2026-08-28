@@ -34,7 +34,7 @@ from backend.core.app_settings import (
     resolve_tutor_access,
 )
 from backend.core.classes import get_class, touch_class
-from backend.core.errors import LyraError
+from backend.core.errors import ConflictError, LyraError
 from backend.core.profiles import select_active_facts, select_user_facts
 from backend.llm.client import stream_chat
 from backend.llm.prompts import ChatMode, build_system_prompt, format_context_block
@@ -646,10 +646,13 @@ async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> Stre
         asyncio.to_thread(_open_turn, conn, session_id, request, turn_token)
     )
     try:
-        config, plan, cost = await asyncio.shield(opener)
+        result = await asyncio.shield(opener)
     except BaseException:
         _finish_opening(opener, session_id, turn_token)
         raise
+    if isinstance(result, str):
+        return _turn_response(session_id, turn_token, _replay_turn(session_id, result, turn_token))
+    config, plan, cost = result
     return _turn_response(
         session_id,
         turn_token,
@@ -839,7 +842,7 @@ def _refuse_writer_session(session: dict[str, object]) -> None:
 
 def _open_turn(
     conn: sqlite3.Connection, session_id: int, request: TurnInput, turn_token: int
-) -> tuple[TutorConfig, TurnPlan, TurnCost]:
+) -> tuple[TutorConfig, TurnPlan, TurnCost] | str:
     """Validate the turn and persist the user's message before any streaming starts.
 
     Runs in a worker thread against a session the route already claimed: `begin_turn`
@@ -872,18 +875,45 @@ def _open_turn(
                 user_message_id = existing["user_message_id"]
                 attempt_id = existing["attempt_id"]
                 attempt_state = existing["state"]
+
+                # PLA-313 blocker 2: the operation_id is bound to the logical request
+                # that created it. A resubmit with different content/mode/document is
+                # a client bug, not a retry — reject it so the model never runs against
+                # mismatched stored/request content.
+                stored_msg = conn.execute(
+                    "select content from messages where id = ?",
+                    (user_message_id,),
+                ).fetchone()
+                stored_content = str(stored_msg["content"]) if stored_msg else ""
+                if (
+                    stored_content.strip() != request.content.strip()
+                    or existing.get("mode") != request.mode
+                    or existing.get("document_id") != request.document_id
+                ):
+                    raise ConflictError(
+                        "This operation ID was already used for a different request. "
+                        "Submit with a new operation ID.",
+                    )
+
                 sessions.bind_turn(session_id, turn_token, user_message_id)
                 touch_class(conn, int(session["class_id"]))
-                plan = TurnPlan(
-                    user_message_id=user_message_id,
-                    attempt_id=attempt_id,
-                )
+
                 if attempt_state == "completed":
-                    # The prior attempt already finished; replay its stored reply.
-                    cost = _plan_turn_cost(
-                        conn, session_id, request.mode, request.content, frozenset(), config
+                    # PLA-313 blocker 1: the prior attempt already finished — replay
+                    # its stored reply with zero model calls, zero new messages, zero
+                    # new attempts. Return the content string; send_chat routes it to
+                    # _replay_turn.
+                    asst_id = existing.get("assistant_message_id")
+                    reply_row = (
+                        conn.execute(
+                            "select content from messages where id = ?",
+                            (asst_id,),
+                        ).fetchone()
+                        if asst_id
+                        else None
                     )
-                    return config, plan, cost
+                    return str(reply_row["content"]) if reply_row else ""
+
                 # The prior attempt was running/failed/stopped; create a fresh attempt
                 # on the same user message (the retry path).
                 cost = _plan_turn_cost(

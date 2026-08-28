@@ -4,6 +4,7 @@ import {
   createSaveEngine,
   decideServerSync,
   flushOnHidden,
+  installBeforeUnloadGuard,
   SAVE_DEBOUNCE_MS,
   type SaveConflict,
   type SaveStateName,
@@ -1025,14 +1026,11 @@ describe('beforeunload event wiring (PLA-315)', () => {
     const { engine } = makeEngine(server)
     const current = 'saved text'
 
-    const handler = (e: Event) => {
-      if (engine.isDirty(current)) e.preventDefault()
-    }
-    window.addEventListener('beforeunload', handler)
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
     try {
       expect(fireBeforeUnload().defaultPrevented).toBe(false)
     } finally {
-      window.removeEventListener('beforeunload', handler)
+      detach()
     }
   })
 
@@ -1042,14 +1040,11 @@ describe('beforeunload event wiring (PLA-315)', () => {
     const current = 'new typing'
 
     engine.schedule('new typing')
-    const handler = (e: Event) => {
-      if (engine.isDirty(current)) e.preventDefault()
-    }
-    window.addEventListener('beforeunload', handler)
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
     try {
       expect(fireBeforeUnload().defaultPrevented).toBe(true)
     } finally {
-      window.removeEventListener('beforeunload', handler)
+      detach()
     }
   })
 
@@ -1063,14 +1058,11 @@ describe('beforeunload event wiring (PLA-315)', () => {
     await flushMicrotasks()
     expect(server.inFlight()).toBe(1)
 
-    const handler = (e: Event) => {
-      if (engine.isDirty(current)) e.preventDefault()
-    }
-    window.addEventListener('beforeunload', handler)
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
     try {
       expect(fireBeforeUnload().defaultPrevented).toBe(true)
     } finally {
-      window.removeEventListener('beforeunload', handler)
+      detach()
     }
   })
 
@@ -1084,14 +1076,11 @@ describe('beforeunload event wiring (PLA-315)', () => {
     await flushMicrotasks()
     await server.failNext()
 
-    const handler = (e: Event) => {
-      if (engine.isDirty(current)) e.preventDefault()
-    }
-    window.addEventListener('beforeunload', handler)
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
     try {
       expect(fireBeforeUnload().defaultPrevented).toBe(true)
     } finally {
-      window.removeEventListener('beforeunload', handler)
+      detach()
     }
   })
 
@@ -1108,14 +1097,11 @@ describe('beforeunload event wiring (PLA-315)', () => {
     await server.settleNext()
     expect(engine.conflict()).not.toBeNull()
 
-    const handler = (e: Event) => {
-      if (engine.isDirty(current)) e.preventDefault()
-    }
-    window.addEventListener('beforeunload', handler)
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
     try {
       expect(fireBeforeUnload().defaultPrevented).toBe(true)
     } finally {
-      window.removeEventListener('beforeunload', handler)
+      detach()
     }
   })
 
@@ -1129,14 +1115,11 @@ describe('beforeunload event wiring (PLA-315)', () => {
     await flushMicrotasks()
     await server.settleNext()
 
-    const handler = (e: Event) => {
-      if (engine.isDirty(current)) e.preventDefault()
-    }
-    window.addEventListener('beforeunload', handler)
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
     try {
       expect(fireBeforeUnload().defaultPrevented).toBe(false)
     } finally {
-      window.removeEventListener('beforeunload', handler)
+      detach()
     }
   })
 
@@ -1158,31 +1141,25 @@ describe('beforeunload event wiring (PLA-315)', () => {
     await flushMicrotasks()
     await server.settleNext()
 
-    const handler = (e: Event) => {
-      if (engine.isDirty(current)) e.preventDefault()
-    }
-    window.addEventListener('beforeunload', handler)
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
     try {
       expect(fireBeforeUnload().defaultPrevented).toBe(false)
     } finally {
-      window.removeEventListener('beforeunload', handler)
+      detach()
     }
   })
 
-  it('removing the listener stops preventing navigation even when dirty', () => {
+  it('detach stops preventing navigation even when dirty', () => {
     const server = new FakeServer('', 0)
     const { engine } = makeEngine(server)
     const current = 'unsaved work'
 
     engine.schedule('unsaved work')
 
-    const handler = (e: Event) => {
-      if (engine.isDirty(current)) e.preventDefault()
-    }
-    window.addEventListener('beforeunload', handler)
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
     expect(fireBeforeUnload().defaultPrevented).toBe(true)
 
-    window.removeEventListener('beforeunload', handler)
+    detach()
     expect(fireBeforeUnload().defaultPrevented).toBe(false)
   })
 })

@@ -57,7 +57,12 @@ import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { api, ApiError, DraftBodyConflictError } from '@/lib/api'
 import { SaveStateIndicator } from '@/components/drafts/save-state-indicator'
 import { normalizeMathDelimiters } from '@/lib/drafts/math-delimiters'
-import { createSaveEngine, decideServerSync, flushOnHidden } from '@/lib/drafts/save-engine'
+import {
+  createSaveEngine,
+  decideServerSync,
+  flushOnHidden,
+  installBeforeUnloadGuard,
+} from '@/lib/drafts/save-engine'
 import type { SaveConflict, SaveStateName } from '@/lib/drafts/save-engine'
 import { useClasses } from '@/lib/hooks/use-classes'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
@@ -315,13 +320,10 @@ export default function DraftWorkspacePage() {
     const detach = flushOnHidden(() => {
       void engine.flush(latestMarkdownRef.current)
     })
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (engine.isDirty(latestMarkdownRef.current)) e.preventDefault()
-    }
-    window.addEventListener('beforeunload', onBeforeUnload)
+    const detachGuard = installBeforeUnloadGuard(() => engine.isDirty(latestMarkdownRef.current))
     return () => {
       detach()
-      window.removeEventListener('beforeunload', onBeforeUnload)
+      detachGuard()
       void engine.flush(latestMarkdownRef.current)
     }
   }, [engine])

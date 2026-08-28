@@ -76,11 +76,13 @@ def find_by_operation_id(
 ) -> dict[str, object] | None:
     """Find an existing attempt by its client-generated operation_id (PLA-313).
 
-    Returns a dict with `user_message_id`, `attempt_id`, and `state` when a prior
-    attempt committed with the same operation_id in this session; None otherwise.
+    Returns a dict with `user_message_id`, `attempt_id`, `state`,
+    `assistant_message_id`, `mode`, and `document_id` when a prior attempt committed
+    with the same operation_id in this session; None otherwise.
     """
     row = conn.execute(
-        "select user_message_id, id as attempt_id, state "
+        "select user_message_id, id as attempt_id, state, "
+        "assistant_message_id, mode, document_id "
         "from tutor_turn_attempts "
         "where session_id = ? and operation_id = ? "
         "order by id desc limit 1",

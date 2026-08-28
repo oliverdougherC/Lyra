@@ -768,4 +768,97 @@ describe('ChatPane idempotency (PLA-313)', () => {
     const body = vi.mocked(streamChat).mock.calls[0][1]
     expect(body.operation_id).toBeDefined()
   })
+
+  it('editing restored text after pre-response stop mints a new operation_id (PLA-313 blocker 2)', async () => {
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, _onEvent, signal) => {
+      return new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    await screen.findByLabelText('Stop generating')
+    await user.click(screen.getByLabelText('Stop generating'))
+
+    vi.mocked(streamChat).mockImplementation(() => new Promise<void>(() => {}))
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, 'Edited question')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const secondId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(secondId).toMatch(UUID_RE)
+    expect(secondId).not.toBe(firstId)
+  })
+
+  it('re-typing the same text after pre-response stop reuses the same operation_id (PLA-313 blocker 3)', async () => {
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, _onEvent, signal) => {
+      return new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    await screen.findByLabelText('Stop generating')
+    await user.click(screen.getByLabelText('Stop generating'))
+
+    vi.mocked(streamChat).mockImplementation(() => new Promise<void>(() => {}))
+
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const retryId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(retryId).toBe(firstId)
+  })
+
+  it('stop after response acceptance clears operation_id normally (PLA-313 blocker 3)', async () => {
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, _onEvent, signal, onResponse) => {
+      onResponse?.()
+      return new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    await screen.findByLabelText('Stop generating')
+    await user.click(screen.getByLabelText('Stop generating'))
+
+    vi.mocked(streamChat).mockImplementation(() => new Promise<void>(() => {}))
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, 'Follow-up')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const secondId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(secondId).toMatch(UUID_RE)
+    expect(secondId).not.toBe(firstId)
+  })
 })
