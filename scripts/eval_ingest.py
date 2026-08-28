@@ -65,6 +65,7 @@ from backend.llm.locality import is_local_endpoint  # noqa: E402
 from backend.rag import chunk as chunking  # noqa: E402
 from backend.rag import render, transcribe  # noqa: E402
 from backend.rag import retrieve as retrieval  # noqa: E402
+from backend.rag.chunk import MAX_CHUNK_TOKENS  # noqa: E402
 from backend.rag.rerank import RerankStatus  # noqa: E402
 from backend.storage.database import connect, migrate  # noqa: E402
 
@@ -692,42 +693,39 @@ def _states_a_location(question: dict[str, object]) -> bool:
     )
 
 
-_RERANK_NA_STATUSES = frozenset(
-    {
-        RerankStatus.EMPTY_INPUT.value,
-        RerankStatus.NOT_REQUESTED.value,
-    }
-)
-
-
 def _classify_rerank_validity(
     requested: bool, results: list[dict[str, object]]
-) -> tuple[bool, bool, set[str]]:
-    """Per-query rerank applicability rather than naive whole-run set comparison.
+) -> tuple[bool, bool, bool, set[str]]:
+    """Per-query rerank applicability driven by whether candidates existed.
 
-    A question with zero retrieved candidates has nothing to rerank. EMPTY_INPUT
-    there is not evidence that the reranker failed -- it is rerank N/A for that
-    query.  Only questions that had candidates and received a non-APPLIED status
-    constitute evidence of reranker failure.
+    Only ``EMPTY_INPUT`` is N/A for a requested-rerank run: zero candidates
+    means there was nothing to rerank.  ``NOT_REQUESTED`` on a query with
+    candidates is evidence that rerank did not execute despite being asked for,
+    and must invalidate the reranked measurement.
+
+    When *every* query is N/A (all ``EMPTY_INPUT``), reranking was never
+    exercised. The run itself may be diagnostically valid, but it is not
+    proof of a reranked baseline and must not be labelled ``observed_path =
+    'reranked'``.
 
     Returns:
-        ``(rerank_applied, rerank_degraded, failure_reasons)``
+        ``(rerank_applied, rerank_degraded, rerank_unexercised, failure_reasons)``
     """
     if not requested:
-        return False, False, set()
+        return False, False, False, set()
 
     applicable = [
         str(r["rerank_status"])
         for r in results
-        if str(r["rerank_status"]) not in _RERANK_NA_STATUSES
+        if str(r["rerank_status"]) != RerankStatus.EMPTY_INPUT.value
     ]
     if not applicable:
-        return True, False, set()
+        return False, False, True, set()
 
     failures = {s for s in applicable if s != RerankStatus.APPLIED.value}
     if failures:
-        return False, True, failures
-    return True, False, set()
+        return False, True, False, failures
+    return True, False, False, set()
 
 
 def cmd_retrieve(args: argparse.Namespace) -> int:
@@ -769,19 +767,26 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
 
     elapsed = time.monotonic() - started
 
-    rerank_applied, rerank_degraded, degradation_reasons = _classify_rerank_validity(
-        args.rerank, results
+    rerank_applied, rerank_degraded, rerank_unexercised, degradation_reasons = (
+        _classify_rerank_validity(args.rerank, results)
     )
 
     if rerank_degraded:
         reason_str = ", ".join(sorted(degradation_reasons))
         suffix = "-rerank-INVALID"
+    elif rerank_unexercised:
+        suffix = "-rerank-UNEXERCISED"
     elif rerank_applied:
         suffix = "-reranked"
     else:
         suffix = ""
 
-    observed_path = "reranked" if rerank_applied else "embedding_order"
+    if rerank_applied:
+        observed_path = "reranked"
+    elif rerank_unexercised:
+        observed_path = "unexercised"
+    else:
+        observed_path = "embedding_order"
     questions_path = Path(args.questions)
     corpus_path = None
     if questions_path.exists():
@@ -818,6 +823,11 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             f"The report is marked invalid and must not be used as a reranked baseline."
         )
         return 1
+    if rerank_unexercised:
+        print(
+            "\nUNEXERCISED: --rerank was requested but every query had zero candidates. "
+            "Reranking was never exercised. The run is not proof of a reranked baseline."
+        )
     return 0
 
 
@@ -1572,7 +1582,7 @@ def _reproducibility_metadata(
         "rerank_model": (
             str(settings.rerank_model_path.name) if settings.rerank_installed else None
         ),
-        "chunk_max_tokens": getattr(settings, "chunk_max_tokens", None),
+        "chunk_max_tokens": MAX_CHUNK_TOKENS,
         "chunk_overlap_tokens": getattr(settings, "chunk_overlap_tokens", None),
     }
     if corpus_path and corpus_path.exists():
@@ -1857,18 +1867,26 @@ def _print_scores(scores: dict[str, object]) -> None:
         print(f"\n  Wrong-document top-1: {wrong}")
 
 
+# Regression thresholds for the comparison gate.  A drop larger than these
+# from baseline to candidate exits nonzero.  The same threshold applies to
+# both document and passage dimensions: a 5 pp MRR drop is a regression
+# regardless of which dimension it appears in, and a 5 pp hit-rate drop at
+# any shared k is likewise.
+MRR_REGRESSION_THRESHOLD = -0.05
+HIT_RATE_REGRESSION_THRESHOLD = -0.05
+
 _REQUIRED_COMPATIBILITY_KEYS = (
     "corpus_hash",
     "questions_hash",
     "embedding_model",
     "embedding_dim",
+    "retrieval_k",
+    "requested_rerank",
 )
 _OPTIONAL_COMPATIBILITY_KEYS = (
     "corpus_version",
     "chunk_max_tokens",
     "chunk_overlap_tokens",
-    "retrieval_k",
-    "requested_rerank",
     "rerank_model",
 )
 
@@ -1906,6 +1924,20 @@ def _check_compatibility(
                 problems.append(f"WARNING: {label} (override: comparing anyway)")
             else:
                 problems.append(f"INCOMPATIBLE: {label}")
+    if meta_a.get("requested_rerank") and meta_b.get("requested_rerank"):
+        ra, rb = meta_a.get("rerank_model"), meta_b.get("rerank_model")
+        if ra is None or rb is None:
+            label = f"rerank_model: missing ({'baseline' if ra is None else 'candidate'})"
+            if allow_override:
+                problems.append(f"WARNING: {label} (override: comparing anyway)")
+            else:
+                problems.append(f"INCOMPATIBLE: {label}")
+        elif ra != rb:
+            label = f"rerank_model: {ra} vs {rb}"
+            if allow_override:
+                problems.append(f"WARNING: {label} (override: comparing anyway)")
+            else:
+                problems.append(f"INCOMPATIBLE: {label}")
     return problems
 
 
@@ -1921,8 +1953,13 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
     Pairing is by identity (observed_path + report_file), not by position. Runs
     that exist in one workspace but not the other are flagged as unmatched.
-    Incompatible metadata (different corpus, embedding, chunking) fails closed
-    unless --force is passed.
+    Incompatible metadata (different corpus, embedding, chunking, retrieval k,
+    or reranker identity) fails closed unless ``--force`` is passed; a forced
+    comparison is exploratory and must not be used as a release gate.
+
+    Both document-level and passage-level metrics are compared independently.
+    Regression thresholds are ``MRR_REGRESSION_THRESHOLD`` and
+    ``HIT_RATE_REGRESSION_THRESHOLD``, defined centrally above.
     """
     ws_a = Workspace(Path(args.baseline).resolve())
     ws_b = Workspace(Path(args.candidate).resolve())
@@ -1995,32 +2032,46 @@ def cmd_compare(args: argparse.Namespace) -> int:
             print(f"  CANDIDATE INVALID: {src_b.name}")
             exit_code = 1
 
-        mrr_a = a.get("mrr", 0)
-        mrr_b = b.get("mrr", 0)
-        if isinstance(mrr_a, (int, float)) and isinstance(mrr_b, (int, float)):
-            delta = mrr_b - mrr_a
-            direction = "IMPROVEMENT" if delta > 0 else "REGRESSION" if delta < 0 else "UNCHANGED"
-            print(f"  MRR: {mrr_a} -> {mrr_b} ({direction}, delta {delta:+.4f})")
-            if delta < -0.05:
-                exit_code = 1
+        for dimension in ("document", "passage"):
+            mrr_key = f"{dimension}_mrr"
+            hr_key = f"{dimension}_hit_rates"
 
-        hit_a = a.get("hit_rates", {})
-        hit_b = b.get("hit_rates", {})
-        if isinstance(hit_a, dict) and isinstance(hit_b, dict):
-            for k_label in sorted(set(hit_a) | set(hit_b)):
-                ra = hit_a.get(k_label, {})
-                rb = hit_b.get(k_label, {})
-                if isinstance(ra, dict) and isinstance(rb, dict):
-                    rate_a = ra.get("rate", 0)
-                    rate_b = rb.get("rate", 0)
-                    direction = (
-                        "IMPROVEMENT"
-                        if rate_b > rate_a
-                        else "REGRESSION"
-                        if rate_b < rate_a
-                        else "UNCHANGED"
-                    )
-                    print(f"  {k_label}: {rate_a:.1%} -> {rate_b:.1%} ({direction})")
+            mrr_a = a.get(mrr_key)
+            mrr_b = b.get(mrr_key)
+            if mrr_a is None and mrr_b is None:
+                continue
+            if mrr_a is None or mrr_b is None:
+                side = "baseline" if mrr_a is None else "candidate"
+                print(f"  {dimension} MRR: missing on {side}")
+                if not allow_override:
+                    exit_code = 1
+                continue
+            if isinstance(mrr_a, (int, float)) and isinstance(mrr_b, (int, float)):
+                delta = mrr_b - mrr_a
+                tag = "IMPROVEMENT" if delta > 0 else "REGRESSION" if delta < 0 else "UNCHANGED"
+                print(f"  {dimension} MRR: {mrr_a} -> {mrr_b} ({tag}, delta {delta:+.4f})")
+                if delta < MRR_REGRESSION_THRESHOLD:
+                    exit_code = 1
+
+            hit_a = a.get(hr_key, {})
+            hit_b = b.get(hr_key, {})
+            if isinstance(hit_a, dict) and isinstance(hit_b, dict):
+                for k_label in sorted(set(hit_a) | set(hit_b)):
+                    ra = hit_a.get(k_label, {})
+                    rb = hit_b.get(k_label, {})
+                    if isinstance(ra, dict) and isinstance(rb, dict):
+                        rate_a = ra.get("rate", 0)
+                        rate_b = rb.get("rate", 0)
+                        tag = (
+                            "IMPROVEMENT"
+                            if rate_b > rate_a
+                            else "REGRESSION"
+                            if rate_b < rate_a
+                            else "UNCHANGED"
+                        )
+                        print(f"  {dimension} {k_label}: {rate_a:.1%} -> {rate_b:.1%} ({tag})")
+                        if rate_b - rate_a < HIT_RATE_REGRESSION_THRESHOLD:
+                            exit_code = 1
 
     return exit_code
 
@@ -2104,7 +2155,7 @@ def main(argv: list[str] | None = None) -> int:
     compare.add_argument(
         "--force",
         action="store_true",
-        help="Compare even when metadata is incompatible (for exploratory analysis)",
+        help="Compare even when metadata is incompatible (exploratory, non-gating)",
     )
     compare.set_defaults(func=cmd_compare)
 

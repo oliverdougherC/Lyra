@@ -27,12 +27,16 @@ from scripts.eval_ingest import (  # noqa: E402
     PRODUCT_K,
     WIDE_K,
     Target,
+    Workspace,
     _already_ingested,
     _ask,
     _check_compatibility,
+    _classify_rerank_validity,
     _report_retrieval,
     _score_identity,
     _widened_k,
+    cmd_compare,
+    cmd_score,
     section_ranges,
 )
 
@@ -815,6 +819,8 @@ def test_compatibility_check_accepts_matching_metadata() -> None:
         "questions_hash": "qh1",
         "embedding_model": "e5",
         "embedding_dim": 384,
+        "retrieval_k": 32,
+        "requested_rerank": False,
     }
     problems = _check_compatibility(meta, meta, allow_override=False)
     assert problems == []
@@ -947,7 +953,7 @@ def test_cmd_score_nonzero_exit_on_invalid_run() -> None:
 
 
 def test_compatibility_check_includes_retrieval_k() -> None:
-    """retrieval_k, requested_rerank, and rerank_model are compared when present."""
+    """retrieval_k is a required compatibility field."""
     meta_a = {
         "corpus_hash": "abc123",
         "questions_hash": "qh1",
@@ -958,3 +964,372 @@ def test_compatibility_check_includes_retrieval_k() -> None:
     meta_b = {**meta_a, "retrieval_k": 64}
     problems = _check_compatibility(meta_a, meta_b, allow_override=False)
     assert any("retrieval_k" in p for p in problems)
+
+
+def test_compatibility_fails_closed_on_missing_retrieval_k() -> None:
+    """A missing retrieval_k on either side is INCOMPATIBLE."""
+    meta_a = {
+        "corpus_hash": "abc123",
+        "questions_hash": "qh1",
+        "embedding_model": "e5",
+        "embedding_dim": 384,
+        "retrieval_k": 32,
+        "requested_rerank": False,
+    }
+    meta_b = {**meta_a}
+    del meta_b["retrieval_k"]
+    meta_b["retrieval_k"] = None
+    problems = _check_compatibility(meta_a, meta_b, allow_override=False)
+    assert any("INCOMPATIBLE" in p and "retrieval_k" in p for p in problems)
+
+
+def test_compatibility_requires_rerank_model_for_reranked_comparisons() -> None:
+    """When both sides requested rerank, rerank_model must be present and matching."""
+    base = {
+        "corpus_hash": "abc123",
+        "questions_hash": "qh1",
+        "embedding_model": "e5",
+        "embedding_dim": 384,
+        "retrieval_k": 32,
+        "requested_rerank": True,
+    }
+    meta_a = {**base, "rerank_model": "model-a.gguf"}
+    meta_b = {**base, "rerank_model": None}
+    problems = _check_compatibility(meta_a, meta_b, allow_override=False)
+    assert any("INCOMPATIBLE" in p and "rerank_model" in p for p in problems)
+
+    meta_b2 = {**base, "rerank_model": "model-b.gguf"}
+    problems2 = _check_compatibility(meta_a, meta_b2, allow_override=False)
+    assert any("INCOMPATIBLE" in p and "rerank_model" in p for p in problems2)
+
+
+# --------------------------------------------------------- rerank applicability (fix 3)
+
+
+def test_applied_targeted_plus_empty_controls_is_valid_reranked() -> None:
+    """Targeted queries APPLIED + control with EMPTY_INPUT = valid reranked baseline."""
+    results = [
+        {"rerank_status": "applied"},
+        {"rerank_status": "applied"},
+        {"rerank_status": "empty_input"},
+    ]
+    applied, degraded, unexercised, reasons = _classify_rerank_validity(True, results)
+    assert applied is True
+    assert degraded is False
+    assert unexercised is False
+    assert reasons == set()
+
+
+def test_requested_rerank_nonempty_not_requested_is_invalid() -> None:
+    """A nonempty query returning NOT_REQUESTED when --rerank was asked = degradation."""
+    results = [
+        {"rerank_status": "applied"},
+        {"rerank_status": "not_requested"},
+    ]
+    applied, degraded, unexercised, reasons = _classify_rerank_validity(True, results)
+    assert applied is False
+    assert degraded is True
+    assert "not_requested" in reasons
+
+
+def test_all_queries_empty_input_is_not_reported_as_reranked() -> None:
+    """When every query had zero candidates, the run is unexercised, not reranked."""
+    results = [
+        {"rerank_status": "empty_input"},
+        {"rerank_status": "empty_input"},
+    ]
+    applied, degraded, unexercised, reasons = _classify_rerank_validity(True, results)
+    assert applied is False
+    assert unexercised is True
+    assert degraded is False
+
+
+def test_mixed_applied_plus_one_degradation_is_invalid() -> None:
+    """One real failure among successful reranks invalidates the run."""
+    results = [
+        {"rerank_status": "applied"},
+        {"rerank_status": "applied"},
+        {"rerank_status": "upstream_error"},
+    ]
+    applied, degraded, unexercised, reasons = _classify_rerank_validity(True, results)
+    assert applied is False
+    assert degraded is True
+    assert "upstream_error" in reasons
+
+
+def test_not_requested_run_returns_no_flags() -> None:
+    """When reranking was not requested, all flags are False."""
+    results = [{"rerank_status": "not_requested"}]
+    applied, degraded, unexercised, reasons = _classify_rerank_validity(False, results)
+    assert applied is False
+    assert degraded is False
+    assert unexercised is False
+
+
+# -------------------------------------------------- cmd_compare with new schema (fix 2)
+
+
+def _make_scores(
+    *,
+    doc_mrr: float = 0.8,
+    pass_mrr: float = 0.7,
+    doc_hit_k1: float = 0.6,
+    pass_hit_k1: float = 0.5,
+    valid: bool = True,
+    observed_path: str = "embedding_order",
+    report_file: str = "retrieval-test.json",
+) -> dict[str, object]:
+    return {
+        "report_file": report_file,
+        "observed_path": observed_path,
+        "valid": valid,
+        "document_mrr": doc_mrr,
+        "passage_mrr": pass_mrr,
+        "document_hit_rates": {
+            "k=1": {"hits": 3, "total": 5, "rate": doc_hit_k1},
+        },
+        "passage_hit_rates": {
+            "k=1": {"hits": 2, "total": 5, "rate": pass_hit_k1},
+        },
+        "metadata": {
+            "corpus_hash": "abc123",
+            "questions_hash": "qh1",
+            "embedding_model": "e5",
+            "embedding_dim": 384,
+            "retrieval_k": 32,
+            "requested_rerank": False,
+        },
+    }
+
+
+def test_compare_detects_document_mrr_regression() -> None:
+    """Document MRR regression exits nonzero even when passage MRR is unchanged."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        ws_a.write("scores-test", _make_scores(doc_mrr=0.8, pass_mrr=0.7))
+        ws_b.write("scores-test", _make_scores(doc_mrr=0.7, pass_mrr=0.7))
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+def test_compare_detects_passage_mrr_regression() -> None:
+    """Passage MRR regression exits nonzero even when document MRR improves."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        ws_a.write("scores-test", _make_scores(doc_mrr=0.7, pass_mrr=0.8))
+        ws_b.write("scores-test", _make_scores(doc_mrr=0.9, pass_mrr=0.7))
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+def test_compare_detects_document_hit_rate_regression() -> None:
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        ws_a.write("scores-test", _make_scores(doc_hit_k1=0.8))
+        ws_b.write("scores-test", _make_scores(doc_hit_k1=0.7))
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+def test_compare_detects_passage_hit_rate_regression() -> None:
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        ws_a.write("scores-test", _make_scores(pass_hit_k1=0.8))
+        ws_b.write("scores-test", _make_scores(pass_hit_k1=0.7))
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+def test_compare_passes_unchanged_results() -> None:
+    """Identical scores in both workspaces exits zero."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        scores = _make_scores()
+        ws_a.write("scores-test", scores)
+        ws_b.write("scores-test", scores)
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) == 0
+
+
+def test_compare_rejects_missing_metric() -> None:
+    """A score file missing a required metric dimension cannot silently pass."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        full = _make_scores()
+        partial = _make_scores()
+        del partial["passage_mrr"]
+        del partial["passage_hit_rates"]
+        ws_a.write("scores-test", full)
+        ws_b.write("scores-test", partial)
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+# -------------------------------------------------- e2e evaluator regression (fix 5)
+
+
+def _e2e_retrieval_data(
+    *,
+    valid: bool = True,
+    doc_rank: int = 1,
+    passage_rank: int = 1,
+    observed_path: str = "embedding_order",
+) -> dict[str, object]:
+    """Minimal retrieval result the score + compare pipeline can consume."""
+    return {
+        "k": 8,
+        "valid": valid,
+        "observed_path": observed_path,
+        "requested_rerank": False,
+        "questions": [
+            {
+                "id": "q1",
+                "question": "what?",
+                "expect_document": "notes",
+                "expect_filename": "notes.txt",
+                "targeted": True,
+                "document_rank": doc_rank,
+                "document_hit": True,
+                "passage_rank": passage_rank,
+                "passage_hit": True,
+                "returned": 8,
+                "top_similarity": 0.9,
+                "rerank_status": "not_requested",
+                "from_expected": 4,
+                "ahead": [],
+                "neighbours": [
+                    {
+                        "document": "notes.txt",
+                        "page": 1,
+                        "similarity": 0.9,
+                        "section_title": None,
+                        "opening": "x",
+                    }
+                ],
+            },
+        ],
+    }
+
+
+_E2E_METADATA = {
+    "corpus_hash": "e2etest123",
+    "questions_hash": "e2eqh1",
+    "embedding_model": "test-e5",
+    "embedding_dim": 384,
+    "retrieval_k": 8,
+    "requested_rerank": False,
+    "git_revision": "e2etest",
+    "chunk_max_tokens": 1024,
+}
+
+
+def _e2e_score(ws: "Workspace", retrieval_data: dict[str, object]) -> dict[str, object]:
+    """Score a retrieval result, patch in stable metadata, and return the scores dict."""
+    import argparse
+
+    ws.write("retrieval-test", retrieval_data)
+    args = argparse.Namespace(workspace=str(ws.root))
+    cmd_score(args)
+    scores = ws.read("scores-test")
+    scores["metadata"] = _E2E_METADATA
+    ws.write("scores-test", scores)
+    return scores
+
+
+def test_e2e_current_schema_is_consumed() -> None:
+    """Score files produced by cmd_score have the new schema keys."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Workspace(root=Path(tmp))
+        scores = _e2e_score(ws, _e2e_retrieval_data())
+        assert "document_mrr" in scores
+        assert "passage_mrr" in scores
+        assert "document_hit_rates" in scores
+        assert "passage_hit_rates" in scores
+        assert "mrr" not in scores
+        assert "hit_rates" not in scores
+
+
+def test_e2e_passage_regression_exits_nonzero() -> None:
+    """A known passage regression through score+compare exits nonzero."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        _e2e_score(ws_a, _e2e_retrieval_data(passage_rank=1))
+        _e2e_score(ws_b, _e2e_retrieval_data(passage_rank=8))
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+def test_e2e_document_regression_exits_nonzero() -> None:
+    """A known document regression through score+compare exits nonzero."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        _e2e_score(ws_a, _e2e_retrieval_data(doc_rank=1))
+        _e2e_score(ws_b, _e2e_retrieval_data(doc_rank=8))
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0
+
+
+def test_e2e_compatible_unchanged_exits_zero() -> None:
+    """Identical evidence through score+compare exits zero."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        data = _e2e_retrieval_data()
+        _e2e_score(ws_a, data)
+        _e2e_score(ws_b, data)
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) == 0
+
+
+def test_e2e_missing_required_metric_cannot_pass() -> None:
+    """A score file that lacks a required metric cannot silently exit zero."""
+    import argparse
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as base_dir, tempfile.TemporaryDirectory() as cand_dir:
+        ws_a = Workspace(root=Path(base_dir))
+        ws_b = Workspace(root=Path(cand_dir))
+        _e2e_score(ws_a, _e2e_retrieval_data())
+        scores_b = _e2e_score(ws_b, _e2e_retrieval_data())
+        del scores_b["document_mrr"]
+        del scores_b["document_hit_rates"]
+        ws_b.write("scores-test", scores_b)
+        args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
+        assert cmd_compare(args) != 0

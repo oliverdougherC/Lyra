@@ -465,12 +465,11 @@ def test_invalid_json_is_distinguished_from_upstream_error(
             return None
 
         def post(self, url: str, json: dict[str, object]) -> httpx.Response:
-            response = httpx.Response(
+            return httpx.Response(
                 200,
                 content=b"not json at all",
                 request=httpx.Request("POST", url),
             )
-            return response
 
     monkeypatch.setattr(rerank_module.httpx, "Client", lambda timeout: InvalidJsonClient())
 
