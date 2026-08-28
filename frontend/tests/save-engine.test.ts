@@ -908,6 +908,104 @@ describe('reconciliation: an equality sync never invalidates an in-flight save t
   })
 })
 
+/**
+ * PLA-315: the beforeunload guard must consult `isDirty()` at each state of
+ * the save engine. These tests drive the engine through real state transitions
+ * with the FakeServer, verifying that `isDirty()` returns the correct value
+ * at every point the guard would check.
+ */
+describe('isDirty: beforeunload guard contract', () => {
+  it('is clean when saved and editor matches', async () => {
+    const server = new FakeServer('saved text', 1)
+    const { engine } = makeEngine(server)
+    expect(engine.isDirty('saved text')).toBe(false)
+  })
+
+  it('is dirty during debounce (scheduled but not yet written)', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    engine.schedule('new typing')
+    expect(engine.isDirty('new typing')).toBe(true)
+  })
+
+  it('is dirty while a write is in flight', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    engine.schedule('content')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    expect(server.inFlight()).toBe(1)
+    expect(engine.isDirty('content')).toBe(true)
+  })
+
+  it('is dirty after a failed save', async () => {
+    const server = new FakeServer('', 0)
+    const { engine, states } = makeEngine(server)
+    engine.schedule('will fail')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    await server.failNext()
+    expect(names(states).at(-1)).toBe('error')
+    expect(engine.isDirty('will fail')).toBe(true)
+  })
+
+  it('is dirty with an unresolved conflict', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    engine.schedule('local text')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    server.version = 5
+    server.body = 'server moved'
+    await server.settleNext()
+    expect(engine.conflict()).not.toBeNull()
+    expect(engine.isDirty('local text')).toBe(true)
+  })
+
+  it('is clean after a successful authoritative save', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    engine.schedule('typed')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    await server.settleNext()
+    expect(engine.isDirty('typed')).toBe(false)
+  })
+
+  it('is clean after conflict resolution and successful save', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    engine.schedule('local')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    server.version = 2
+    server.body = 'server version'
+    await server.settleNext()
+    expect(engine.conflict()).not.toBeNull()
+    expect(engine.isDirty('local')).toBe(true)
+
+    engine.keepLocal('local')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    await server.settleNext()
+    expect(engine.conflict()).toBeNull()
+    expect(engine.isDirty('local')).toBe(false)
+  })
+
+  it('is dirty when editor content diverges from last saved', () => {
+    const server = new FakeServer('saved', 1)
+    const { engine } = makeEngine(server)
+    expect(engine.isDirty('saved')).toBe(false)
+    expect(engine.isDirty('edited')).toBe(true)
+  })
+
+  it('is not dirty when current is null (no editor open)', () => {
+    const server = new FakeServer('saved', 1)
+    const { engine } = makeEngine(server)
+    expect(engine.isDirty(null)).toBe(false)
+  })
+})
+
 describe('flushOnHidden', () => {
   it('flushes when the tab goes hidden, and only then', () => {
     const flush = vi.fn()

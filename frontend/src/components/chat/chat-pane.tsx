@@ -473,9 +473,7 @@ export function ChatPane({
         // A turn the pane has handed on still has an answer coming, and the server still
         // writes it down. It just has no rows of its own to put it in any more.
         if (!owns()) return
-        if (event.type === 'start') {
-          submittedTextRef.current = null
-        } else if (event.type === 'token') {
+        if (event.type === 'token') {
           // The first word of the answer is what ends thinking, so the elapsed time is
           // fixed here rather than when the reasoning channel happens to fall quiet.
           if (assistantText.length === 0 && reasoningText.length > 0) {
@@ -562,6 +560,9 @@ export function ChatPane({
                     { content, mode: activeMode, document_id: documentId },
                     onEvent,
                     controller.signal,
+                    () => {
+                      submittedTextRef.current = null
+                    },
                   ))
       } catch (caught) {
         if (!owns()) {
@@ -589,6 +590,7 @@ export function ChatPane({
           if (kind === 'send') {
             setDraft(content)
           }
+          submittedTextRef.current = null
           setOutcome('failed')
         } else {
           toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')

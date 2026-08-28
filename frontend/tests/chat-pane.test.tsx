@@ -365,9 +365,10 @@ describe('ChatPane handoffs', () => {
 
 /**
  * PLA-313: the composer must preserve the student's text across the acceptance
- * boundary. The `start` frame is the server's acceptance signal; before it
- * arrives, a failure puts the text back in the composer. After it arrives, the
- * question is persisted and PLA-306's retry contract takes over.
+ * boundary. The HTTP 200 response is the acceptance signal: once `onResponse`
+ * fires, the question is durably persisted and the submitted-text bookmark is
+ * cleared. Before that, a failure puts the text back in the composer. After
+ * that, the question is persisted and PLA-306's retry contract takes over.
  */
 describe('ChatPane composer preservation (PLA-313)', () => {
   beforeEach(() => {
@@ -406,14 +407,21 @@ describe('ChatPane composer preservation (PLA-313)', () => {
     await waitFor(() => expect(composer).toHaveValue(QUESTION))
   })
 
-  it('does not restore composer text after the start frame arrives (post-acceptance)', async () => {
-    const stream: { emit?: (event: ChatEvent) => void; reject?: (error: Error) => void } = {}
-    vi.mocked(streamChat).mockImplementation((_sessionId, _body, onEvent) => {
-      stream.emit = onEvent
-      return new Promise<void>((_resolve, reject) => {
-        stream.reject = reject
-      })
-    })
+  it('does not restore composer text after acceptance (post-response model failure)', async () => {
+    const stream: {
+      emit?: (event: ChatEvent) => void
+      accept?: () => void
+      reject?: (error: Error) => void
+    } = {}
+    vi.mocked(streamChat).mockImplementation(
+      (_sessionId, _body, onEvent, _signal, onResponse) => {
+        stream.emit = onEvent
+        stream.accept = onResponse
+        return new Promise<void>((_resolve, reject) => {
+          stream.reject = reject
+        })
+      },
+    )
     vi.mocked(api.listMessages).mockResolvedValue([message({ id: 11, content: QUESTION })])
 
     const user = userEvent.setup()
@@ -424,9 +432,86 @@ describe('ChatPane composer preservation (PLA-313)', () => {
     await user.click(screen.getByLabelText('Send message'))
 
     await waitFor(() => expect(streamChat).toHaveBeenCalled())
+    await act(async () => stream.accept?.())
     await act(async () => stream.emit?.({ type: 'start', message_id: 11 }))
     await act(async () => stream.emit?.({ type: 'token', text: 'Partial' }))
     await act(async () => stream.reject?.(new Error('connection lost')))
+
+    await waitFor(() => expect(composer).toHaveValue(''))
+  })
+
+  it('does not restore composer when connection drops after HTTP 200 but before start frame', async () => {
+    const stream: { accept?: () => void; reject?: (error: Error) => void } = {}
+    vi.mocked(streamChat).mockImplementation(
+      (_sessionId, _body, _onEvent, _signal, onResponse) => {
+        stream.accept = onResponse
+        return new Promise<void>((_resolve, reject) => {
+          stream.reject = reject
+        })
+      },
+    )
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => expect(streamChat).toHaveBeenCalled())
+    await act(async () => stream.accept?.())
+    await act(async () => stream.reject?.(new Error('stream dropped')))
+
+    await waitFor(() => expect(composer).toHaveValue(''))
+  })
+
+  it('restores draft on 409 conflict and clears submitted-text bookkeeping', async () => {
+    vi.mocked(streamChat).mockRejectedValue(new ApiError(409, 'busy'))
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+
+    vi.mocked(streamChat).mockImplementation(
+      (_sessionId, _body, onEvent, _signal, onResponse) => {
+        onResponse?.()
+        onEvent({ type: 'start', message_id: 11 })
+        onEvent({ type: 'done', message_id: 12 })
+        return Promise.resolve()
+      },
+    )
+    vi.mocked(api.listMessages).mockResolvedValue([message({ id: 11, content: QUESTION })])
+
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(composer).toHaveValue(''))
+  })
+
+  it('clears submitted text on successful completion', async () => {
+    vi.mocked(streamChat).mockImplementation(
+      (_sessionId, _body, onEvent, _signal, onResponse) => {
+        onResponse?.()
+        onEvent({ type: 'start', message_id: 11 })
+        onEvent({ type: 'token', text: 'Full answer' })
+        onEvent({ type: 'done', message_id: 12 })
+        return Promise.resolve()
+      },
+    )
+    vi.mocked(api.listMessages).mockResolvedValue([
+      message({ id: 11, content: QUESTION }),
+      message({ id: 12, role: 'assistant', content: 'Full answer' }),
+    ])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
 
     await waitFor(() => expect(composer).toHaveValue(''))
   })
