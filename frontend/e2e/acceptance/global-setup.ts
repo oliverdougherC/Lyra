@@ -11,6 +11,12 @@
  * 8. Waits for the frontend to respond.
  * 9. Writes a state file so global-teardown can stop everything.
  *
+ * Partial-failure cleanup: if any step fails after starting a component,
+ * all previously-started components are stopped before re-throwing.
+ *
+ * State file: uses a unique run identifier so parallel suites sharing a
+ * project root do not collide.
+ *
  * Ports are configurable via environment variables so parallel CI jobs or
  * local runs can avoid conflicts:
  *   ACCEPTANCE_BACKEND_PORT  (default 8000)
@@ -18,7 +24,7 @@
  *   ACCEPTANCE_TUTOR_PORT    (default 18900)
  */
 
-import { type ChildProcess, spawn } from 'node:child_process'
+import { type ChildProcess, execSync, spawn } from 'node:child_process'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -26,7 +32,8 @@ import { join, resolve } from 'node:path'
 import { TutorFixture } from './tutor-fixture'
 
 const PROJECT_ROOT = resolve(__dirname, '..', '..', '..')
-const STATE_FILE = join(PROJECT_ROOT, '.acceptance-state.json')
+const RUN_ID = `${process.pid}-${Date.now()}`
+const STATE_FILE = join(PROJECT_ROOT, `.acceptance-state-${RUN_ID}.json`)
 
 const READY_POLL_MS = 500
 const BACKEND_TIMEOUT_MS = 60_000
@@ -61,108 +68,154 @@ export default async function globalSetup() {
     }
   }
 
-  // ── 1. Isolated data directory ───────────────────────────────────
-  const dataDir = await mkdtemp(join(tmpdir(), 'lyra-acceptance-'))
+  // Track started components for partial-failure cleanup
+  let tutor: TutorFixture | null = null
+  let backend: ChildProcess | null = null
+  let frontend: ChildProcess | null = null
+  let dataDir: string | null = null
 
-  // ── 2. Fake tutor fixture ────────────────────────────────────────
-  const tutor = new TutorFixture(TUTOR_PORT)
-  await tutor.start()
-  console.log(`  Tutor fixture listening on ${tutor.baseUrl}`)
-
-  // ── 3. Real FastAPI backend ──────────────────────────────────────
-  const backendEnv: Record<string, string> = {
-    ...stripUndefined(process.env),
-    LYRA_DATA_DIR: dataDir,
-    LYRA_HOST: '127.0.0.1',
-    LYRA_PORT: String(BACKEND_PORT),
-    PYTHONDONTWRITEBYTECODE: '1',
+  async function cleanupOnFailure() {
+    console.error('  Setup failed, cleaning up started components...')
+    if (frontend?.pid) {
+      try {
+        frontend.kill('SIGTERM')
+      } catch {
+        /* already gone */
+      }
+    }
+    if (backend?.pid) {
+      try {
+        backend.kill('SIGTERM')
+      } catch {
+        /* already gone */
+      }
+    }
+    if (tutor) {
+      try {
+        await tutor.stop()
+      } catch {
+        /* already gone */
+      }
+    }
   }
 
-  const backend = spawn(
-    'uv',
-    [
-      'run',
-      'python',
-      '-m',
-      'uvicorn',
-      'acceptance.backend_harness:app',
-      '--host',
-      '127.0.0.1',
-      '--port',
-      String(BACKEND_PORT),
-      '--log-level',
-      'warning',
-    ],
-    {
-      cwd: PROJECT_ROOT,
-      env: backendEnv as NodeJS.ProcessEnv,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  ) as ChildProcess
+  try {
+    // ── 1. Isolated data directory ───────────────────────────────────
+    dataDir = await mkdtemp(join(tmpdir(), 'lyra-acceptance-'))
 
-  collectOutput(backend, 'backend')
-  console.log(`  Backend starting (pid ${backend.pid}) with data dir ${dataDir}`)
+    // ── 2. Fake tutor fixture ────────────────────────────────────────
+    tutor = new TutorFixture(TUTOR_PORT)
+    await tutor.start()
+    console.log(`  Tutor fixture listening on ${tutor.baseUrl}`)
 
-  // ── 4. Wait for backend health ───────────────────────────────────
-  await waitForUrl(
-    `http://127.0.0.1:${BACKEND_PORT}/api/health/ready`,
-    BACKEND_TIMEOUT_MS,
-    'Backend',
-  )
-  console.log('  Backend ready')
+    // ── 3. Real FastAPI backend ──────────────────────────────────────
+    const backendEnv: Record<string, string> = {
+      ...stripUndefined(process.env),
+      LYRA_DATA_DIR: dataDir,
+      LYRA_HOST: '127.0.0.1',
+      LYRA_PORT: String(BACKEND_PORT),
+      PYTHONDONTWRITEBYTECODE: '1',
+    }
 
-  // ── 5. Configure tutor endpoint ──────────────────────────────────
-  const settingsRes = await fetch(`http://127.0.0.1:${BACKEND_PORT}/api/settings`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Lyra-Client': 'acceptance-setup',
-    },
-    body: JSON.stringify({
-      endpoint_url: tutor.baseUrl,
-      api_key: 'test-acceptance-key',
-      model: 'test-model',
-      context_window: 8192,
-      remote_ack: true,
-    }),
-  })
-  if (!settingsRes.ok) {
-    const text = await settingsRes.text()
-    throw new Error(`Failed to configure tutor endpoint: ${settingsRes.status} ${text}`)
+    backend = spawn(
+      'uv',
+      [
+        'run',
+        'python',
+        '-m',
+        'uvicorn',
+        'acceptance.backend_harness:app',
+        '--host',
+        '127.0.0.1',
+        '--port',
+        String(BACKEND_PORT),
+        '--log-level',
+        'warning',
+      ],
+      {
+        cwd: PROJECT_ROOT,
+        env: backendEnv as NodeJS.ProcessEnv,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    ) as ChildProcess
+
+    collectOutput(backend, 'backend')
+    console.log(`  Backend starting (pid ${backend.pid}) with data dir ${dataDir}`)
+
+    // ── 4. Wait for backend health ───────────────────────────────────
+    await waitForUrl(
+      `http://127.0.0.1:${BACKEND_PORT}/api/health/ready`,
+      BACKEND_TIMEOUT_MS,
+      'Backend',
+    )
+    console.log('  Backend ready')
+
+    // ── 5. Configure tutor endpoint ──────────────────────────────────
+    const settingsRes = await fetch(`http://127.0.0.1:${BACKEND_PORT}/api/settings`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lyra-Client': 'acceptance-setup',
+      },
+      body: JSON.stringify({
+        endpoint_url: tutor.baseUrl,
+        api_key: 'test-acceptance-key',
+        model: 'test-model',
+        context_window: 8192,
+        remote_ack: true,
+      }),
+    })
+    if (!settingsRes.ok) {
+      const text = await settingsRes.text()
+      throw new Error(`Failed to configure tutor endpoint: ${settingsRes.status} ${text}`)
+    }
+    console.log('  Tutor endpoint configured')
+
+    // ── 6. Production frontend ───────────────────────────────────────
+    frontend = spawn(
+      'pnpm',
+      ['exec', 'next', 'start', '--hostname', '127.0.0.1', '--port', String(FRONTEND_PORT)],
+      {
+        cwd: join(PROJECT_ROOT, 'frontend'),
+        env: stripUndefined(process.env) as NodeJS.ProcessEnv,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    ) as ChildProcess
+
+    collectOutput(frontend, 'frontend')
+    console.log(`  Frontend starting (pid ${frontend.pid})`)
+
+    // ── 7. Wait for frontend ─────────────────────────────────────────
+    await waitForUrl(`http://127.0.0.1:${FRONTEND_PORT}`, FRONTEND_TIMEOUT_MS, 'Frontend')
+    console.log('  Frontend ready')
+  } catch (err) {
+    await cleanupOnFailure()
+    throw err
   }
-  console.log('  Tutor endpoint configured')
-
-  // ── 6. Production frontend ───────────────────────────────────────
-  const frontend = spawn(
-    'pnpm',
-    ['exec', 'next', 'start', '--hostname', '127.0.0.1', '--port', String(FRONTEND_PORT)],
-    {
-      cwd: join(PROJECT_ROOT, 'frontend'),
-      env: stripUndefined(process.env) as NodeJS.ProcessEnv,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  ) as ChildProcess
-
-  collectOutput(frontend, 'frontend')
-  console.log(`  Frontend starting (pid ${frontend.pid})`)
-
-  // ── 7. Wait for frontend ─────────────────────────────────────────
-  await waitForUrl(`http://127.0.0.1:${FRONTEND_PORT}`, FRONTEND_TIMEOUT_MS, 'Frontend')
-  console.log('  Frontend ready')
 
   // ── 8. Persist state for teardown ────────────────────────────────
-  await writeFile(
-    STATE_FILE,
-    JSON.stringify({
-      dataDir,
-      backendPid: backend.pid,
-      frontendPid: frontend.pid,
-      backendPort: BACKEND_PORT,
-      frontendPort: FRONTEND_PORT,
-      tutorPort: TUTOR_PORT,
-      startedAt: Date.now(),
-    }),
-  )
+  // Store process birth tokens (start times) for PID identity verification
+  // in teardown -- prevents killing recycled PIDs.
+  const backendStartToken = backend.pid ? processStartToken(backend.pid) : null
+  const frontendStartToken = frontend.pid ? processStartToken(frontend.pid) : null
+
+  const statePayload = {
+    runId: RUN_ID,
+    dataDir,
+    backendPid: backend.pid,
+    frontendPid: frontend.pid,
+    backendPort: BACKEND_PORT,
+    frontendPort: FRONTEND_PORT,
+    tutorPort: TUTOR_PORT,
+    backendStartToken,
+    frontendStartToken,
+    startedAt: Date.now(),
+  }
+
+  await writeFile(STATE_FILE, JSON.stringify(statePayload))
+
+  // Publish the state file path so teardown and tests can find it
+  process.env.ACCEPTANCE_STATE_FILE = STATE_FILE
 
   // Keep references alive so Node doesn't GC the child processes
   ;(globalThis as Record<string, unknown>).__acceptanceState = {
@@ -170,6 +223,7 @@ export default async function globalSetup() {
     backend,
     frontend,
     dataDir,
+    stateFile: STATE_FILE,
   }
 
   console.log('  Acceptance stack ready\n')
@@ -236,4 +290,17 @@ function collectOutput(proc: ChildProcess, label: string) {
   proc.on('exit', (code, signal) => {
     console.log(`  [${label}] exited code=${code} signal=${signal}`)
   })
+}
+
+/**
+ * Return a birth token for a running process -- the kernel-level start time
+ * that survives across PID checks. On macOS, uses `ps -p PID -o lstart=`.
+ * Returns null if the process is not found.
+ */
+function processStartToken(pid: number): string | null {
+  try {
+    return execSync(`ps -p ${pid} -o lstart=`, { encoding: 'utf-8', timeout: 2000 }).trim()
+  } catch {
+    return null
+  }
 }

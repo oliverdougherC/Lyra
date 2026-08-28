@@ -3,17 +3,16 @@
  *
  * Runs after all specs complete (or after any crash/timeout).  Uses confirmed
  * exit waits (no fire-and-forget setTimeout) and verifies process identity
- * before signalling PIDs read from the state file.
+ * via birth tokens before signalling PIDs read from state files.
  */
 
 import { execSync } from 'node:child_process'
-import { readFile, rm, unlink } from 'node:fs/promises'
+import { readdir, readFile, rm, unlink } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 
 import { TutorFixture } from './tutor-fixture'
 
 const PROJECT_ROOT = resolve(__dirname, '..', '..', '..')
-const STATE_FILE = join(PROJECT_ROOT, '.acceptance-state.json')
 
 const SIGTERM_WAIT_MS = 5_000
 const SIGKILL_WAIT_MS = 3_000
@@ -27,6 +26,7 @@ export default async function globalTeardown() {
         backend: import('node:child_process').ChildProcess
         frontend: import('node:child_process').ChildProcess
         dataDir: string
+        stateFile: string
       }
     | undefined
 
@@ -40,45 +40,64 @@ export default async function globalTeardown() {
       /* already gone */
     }
     await cleanDataDir(mem.dataDir)
-  } else {
-    // Fall back to the state file.  Verify each PID is still ours before
-    // signalling -- a recycled PID could belong to an unrelated process.
     try {
-      const raw = await readFile(STATE_FILE, 'utf-8')
-      const state = JSON.parse(raw) as {
-        dataDir: string
-        backendPid: number
-        frontendPid: number
-        tutorPort: number
-        startedAt: number
-      }
-
-      await verifyAndKill(state.frontendPid, 'node', 'frontend')
-      await verifyAndKill(state.backendPid, 'python', 'backend')
-      await cleanDataDir(state.dataDir)
-    } catch (err) {
-      console.warn('  Could not read state file; manual cleanup may be needed:', err)
+      await unlink(mem.stateFile)
+    } catch {
+      /* already gone */
     }
-  }
-
-  try {
-    await unlink(STATE_FILE)
-  } catch {
-    /* already gone */
+  } else {
+    // Fall back to scanning for state files from this or prior runs.
+    await cleanupFromStateFiles()
   }
 
   console.log('  Teardown complete\n')
 }
 
 /* ------------------------------------------------------------------ */
+/*  State file fallback                                                */
+/* ------------------------------------------------------------------ */
+
+async function cleanupFromStateFiles() {
+  try {
+    const entries = await readdir(PROJECT_ROOT)
+    const stateFiles = entries.filter(
+      (e) => e.startsWith('.acceptance-state-') && e.endsWith('.json'),
+    )
+
+    if (stateFiles.length === 0) {
+      console.log('  No state files found; nothing to clean up')
+      return
+    }
+
+    for (const file of stateFiles) {
+      const filePath = join(PROJECT_ROOT, file)
+      try {
+        const raw = await readFile(filePath, 'utf-8')
+        const state = JSON.parse(raw) as {
+          dataDir: string
+          backendPid: number
+          frontendPid: number
+          backendStartToken: string | null
+          frontendStartToken: string | null
+        }
+
+        await verifyAndKill(state.frontendPid, state.frontendStartToken, 'frontend')
+        await verifyAndKill(state.backendPid, state.backendStartToken, 'backend')
+        await cleanDataDir(state.dataDir)
+        await unlink(filePath)
+      } catch (err) {
+        console.warn(`  Could not process state file ${file}:`, err)
+      }
+    }
+  } catch (err) {
+    console.warn('  Could not scan for state files; manual cleanup may be needed:', err)
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-/**
- * Send SIGTERM and wait for the child to exit.  If it does not exit within
- * SIGTERM_WAIT_MS, escalate to SIGKILL and wait again.  Returns only after
- * the process has actually exited (or was already gone).
- */
 async function killAndWait(
   proc: import('node:child_process').ChildProcess | undefined,
   label: string,
@@ -121,14 +140,25 @@ async function killAndWait(
 }
 
 /**
- * Verify that a PID from the state file still belongs to a process we
- * started (by checking its command name) before signalling it.  This
- * prevents killing an unrelated process if the PID was recycled.
+ * Verify that a PID from the state file still belongs to the process we
+ * started (by comparing its birth token) before signalling it.
  */
-async function verifyAndKill(pid: number, expectedCmd: string, label: string): Promise<void> {
-  if (!isProcessOurs(pid, expectedCmd)) {
-    console.log(`  ${label} (pid ${pid}): not ours or already gone, skipping`)
+async function verifyAndKill(
+  pid: number,
+  expectedToken: string | null,
+  label: string,
+): Promise<void> {
+  if (!isProcessAlive(pid)) {
+    console.log(`  ${label} (pid ${pid}): already gone`)
     return
+  }
+
+  if (expectedToken) {
+    const currentToken = processStartToken(pid)
+    if (currentToken && currentToken !== expectedToken) {
+      console.log(`  ${label} (pid ${pid}): PID recycled (token mismatch), skipping`)
+      return
+    }
   }
 
   try {
@@ -139,7 +169,6 @@ async function verifyAndKill(pid: number, expectedCmd: string, label: string): P
     return
   }
 
-  // Wait for exit by polling (we don't have the ChildProcess handle)
   const deadline = Date.now() + SIGTERM_WAIT_MS
   while (Date.now() < deadline) {
     if (!isProcessAlive(pid)) {
@@ -149,7 +178,6 @@ async function verifyAndKill(pid: number, expectedCmd: string, label: string): P
     await sleep(200)
   }
 
-  // Escalate
   console.log(`  ${label} did not exit after SIGTERM, sending SIGKILL`)
   try {
     process.kill(pid, 'SIGKILL')
@@ -174,12 +202,11 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function isProcessOurs(pid: number, expectedCmd: string): boolean {
+function processStartToken(pid: number): string | null {
   try {
-    const cmd = execSync(`ps -p ${pid} -o comm=`, { encoding: 'utf-8', timeout: 2000 }).trim()
-    return cmd.toLowerCase().includes(expectedCmd.toLowerCase())
+    return execSync(`ps -p ${pid} -o lstart=`, { encoding: 'utf-8', timeout: 2000 }).trim()
   } catch {
-    return false
+    return null
   }
 }
 

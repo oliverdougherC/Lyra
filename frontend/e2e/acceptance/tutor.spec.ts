@@ -283,6 +283,13 @@ test.describe('Tutor chat', () => {
       timeout: 10_000,
     })
 
+    // Wait for the first turn to fully settle before sending the next message.
+    // waitForChatResponse returns when streaming stops (send button visible),
+    // but the optimistic turn isn't cleared until the messages refetch completes.
+    // Without this, the second sendChatMessage can be silently dropped by the
+    // runTurn guard (pendingTurn still non-null).
+    await page.waitForLoadState('networkidle')
+
     // Now trigger a failure and verify the "Try again" button appears
     await setTutorMode('error-before-stream')
     await sendChatMessage(page, 'This should fail')

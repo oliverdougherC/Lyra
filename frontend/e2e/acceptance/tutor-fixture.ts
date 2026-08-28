@@ -51,6 +51,69 @@ const CANNED_TOPICS = JSON.stringify({
   topics: ['Thermodynamics Fundamentals', 'Laws of Thermodynamics'],
 })
 
+function cannedSegmentation(): string {
+  return JSON.stringify({
+    problems: [
+      {
+        label: 'Problem 1',
+        number: '1',
+        statement:
+          'State the first law of thermodynamics and explain its significance in closed systems.',
+        page: null,
+        parts: [],
+        parts_relation: 'none',
+      },
+      {
+        label: 'Problem 2',
+        number: '2',
+        statement:
+          'Describe the second law of thermodynamics. How does it relate to the concept of entropy?',
+        page: null,
+        parts: [],
+        parts_relation: 'none',
+      },
+      {
+        label: 'Problem 3',
+        number: '3',
+        statement:
+          'A gas undergoes an isothermal expansion. Calculate the work done if the initial volume is 2L and the final volume is 6L at 300K.',
+        page: null,
+        parts: [],
+        parts_relation: 'none',
+      },
+    ],
+  })
+}
+
+function cannedSolution(): string {
+  return JSON.stringify({
+    steps: [
+      {
+        title: 'Identify the relevant principle',
+        content:
+          'This problem involves a fundamental thermodynamic concept. We apply the appropriate law directly.',
+        sources: [],
+      },
+      {
+        title: 'Apply the formula',
+        content:
+          'Using the standard thermodynamic relationship, we substitute the given values and simplify.',
+        sources: [],
+      },
+      {
+        title: 'Final calculation',
+        content: 'Evaluating the expression gives the result.',
+        sources: [],
+      },
+    ],
+    answer: 'The result follows directly from the thermodynamic principles stated above.',
+  })
+}
+
+function cannedLatexRestore(): string {
+  return JSON.stringify({ statements: [] })
+}
+
 function cannedFlashcards(count: number, topic: string): string {
   const cards = Array.from({ length: count }, (_, i) => ({
     front: `[${topic}] What is the ${i === 0 ? 'first' : i === 1 ? 'second' : 'third'} law of thermodynamics?`,
@@ -323,9 +386,19 @@ export class TutorFixture {
       .toLowerCase()
 
     // JSON schema request — generate matching content.
-    // Order matters: flashcard/quiz prompts also contain "topic", so check the
-    // more specific patterns first.
+    // Order matters: segmentation/solve prompts also contain "homework" and
+    // flashcard/quiz prompts also contain "topic", so check the more specific
+    // patterns first.
     if (fmt?.type === 'json_schema' || fmt?.type === 'json_object') {
+      if (systemContent.includes('listing the problems')) {
+        return cannedSegmentation()
+      }
+      if (systemContent.includes('solving one homework')) {
+        return cannedSolution()
+      }
+      if (systemContent.includes('put the mathematics back')) {
+        return cannedLatexRestore()
+      }
       if (
         systemContent.includes('flashcard') ||
         (systemContent.includes('write') && systemContent.includes('cards'))
@@ -385,9 +458,12 @@ export class TutorFixture {
     })
     const id = `chatcmpl-partial-${Date.now()}`
     res.write(sseChunk(id, { role: 'assistant', content: '' }))
-    res.write(sseChunk(id, { content: 'This response will be cut' }))
-    // Destroy without [DONE]
-    res.destroy()
+    const partialChunk = sseChunk(id, { content: 'This response will be cut' })
+    res.write(partialChunk, () => {
+      // Destroy only after the partial chunk is flushed to the socket,
+      // so the backend receives at least one token frame before disconnect.
+      res.destroy()
+    })
   }
 
   private streamWithMidError(res: ServerResponse) {

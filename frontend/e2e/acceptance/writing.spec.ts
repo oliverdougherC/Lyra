@@ -18,6 +18,7 @@ import {
   setTutorMode,
   waitForBarrier,
   releaseBarrier,
+  readSSEFrames,
   BACKEND,
 } from './helpers'
 
@@ -175,6 +176,107 @@ test.describe('Writing', () => {
     await page.waitForLoadState('networkidle')
 
     await expect(page.getByText('acceptance test content')).toBeVisible({ timeout: 10_000 })
+  })
+
+  test('writer retry after failure: no durable effects allows new attempt', async () => {
+    await setTutorMode('error-before-stream')
+    const draft = await createDraft(classId, 'Retry No Effects Test')
+
+    const sessRes = await apiPost(`/api/drafts/${draft.id}/sessions`, {})
+    expect(sessRes.ok).toBe(true)
+    const session = await sessRes.json()
+
+    // Send a turn that will fail pre-stream (no durable effects produced)
+    const turn1Res = await fetch(`${BACKEND}/api/drafts/${draft.id}/chat/${session.id}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lyra-Client': 'acceptance-test',
+      },
+      body: JSON.stringify({
+        content: 'This turn should fail without effects',
+        mode: 'guide',
+      }),
+    })
+    // Consume the SSE stream (error frame expected, then stream ends)
+    await readSSEFrames(turn1Res)
+
+    // Verify messages: the user message was persisted
+    const msgsRes = await apiGet(`/api/sessions/${session.id}/messages`)
+    expect(msgsRes.ok).toBe(true)
+    const msgs = await msgsRes.json()
+    const userMsgs = msgs.filter((m: { role: string }) => m.role === 'user')
+    expect(userMsgs.length).toBe(1)
+    expect(userMsgs[0].content).toBe('This turn should fail without effects')
+
+    // Retry: since there are no durable effects, a new attempt should be created
+    await setTutorMode('success')
+    const retryRes = await fetch(`${BACKEND}/api/drafts/${draft.id}/chat/${session.id}/retry`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lyra-Client': 'acceptance-test',
+      },
+    })
+    expect(retryRes.status).toBe(200)
+    const retryFrames = await readSSEFrames(retryRes)
+    const retryTokens = retryFrames.filter((f) => f.type === 'token')
+    expect(retryTokens.length).toBeGreaterThan(0)
+
+    // No duplicate user message -- still only one
+    const msgs2Res = await apiGet(`/api/sessions/${session.id}/messages`)
+    const msgs2 = await msgs2Res.json()
+    const userMsgs2 = msgs2.filter((m: { role: string }) => m.role === 'user')
+    expect(userMsgs2.length).toBe(1)
+  })
+
+  test('writer retry after success: replays stored response', async () => {
+    await setTutorMode('success')
+    const draft = await createDraft(classId, 'Retry Replay Test')
+
+    const sessRes = await apiPost(`/api/drafts/${draft.id}/sessions`, {})
+    expect(sessRes.ok).toBe(true)
+    const session = await sessRes.json()
+
+    // Send a successful turn
+    const turn1Res = await fetch(`${BACKEND}/api/drafts/${draft.id}/chat/${session.id}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lyra-Client': 'acceptance-test',
+      },
+      body: JSON.stringify({
+        content: 'Help me with this essay',
+        mode: 'guide',
+      }),
+    })
+    expect(turn1Res.status).toBe(200)
+    await readSSEFrames(turn1Res)
+
+    // Record the assistant response
+    const msgsRes = await apiGet(`/api/sessions/${session.id}/messages`)
+    const msgs = await msgsRes.json()
+    const assistant1 = msgs.filter((m: { role: string }) => m.role === 'assistant')
+    expect(assistant1.length).toBe(1)
+    const originalContent = assistant1[0].content
+
+    // Retry: should replay the stored response without re-running the model
+    const retryRes = await fetch(`${BACKEND}/api/drafts/${draft.id}/chat/${session.id}/retry`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lyra-Client': 'acceptance-test',
+      },
+    })
+    expect(retryRes.status).toBe(200)
+    await readSSEFrames(retryRes)
+
+    // The replayed response should be the same content
+    const msgs2Res = await apiGet(`/api/sessions/${session.id}/messages`)
+    const msgs2 = await msgs2Res.json()
+    const assistant2 = msgs2.filter((m: { role: string }) => m.role === 'assistant')
+    expect(assistant2.length).toBe(1)
+    expect(assistant2[0].content).toBe(originalContent)
   })
 
   test('browser: conflict dialog appears on stale version save', async ({ page }) => {

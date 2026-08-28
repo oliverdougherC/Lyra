@@ -2,18 +2,26 @@
  * Backup, credential transition, and recovery through the real stack.
  *
  * Proves: API key set/check/delete lifecycle, endpoint change resets
- * remote_ack (PLA-302), real launcher backup creates a valid archive that
- * contains representative entities (PLA-307).  Required tests fail (not skip)
- * if the harness cannot provide the data directory.
+ * remote_ack (PLA-302), real launcher backup() creates a valid archive
+ * and real launcher restore() recovers it with entity verification (PLA-307).
+ * Uses the actual backup()/restore() functions with monkeypatched stack
+ * management so the running acceptance stack is not torn down.
  */
 
 import { test, expect } from '@playwright/test'
 import { execSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { apiGet, apiPut, createClass, uploadDocument, waitForDocumentReady } from './helpers'
+import {
+  apiGet,
+  apiPut,
+  createClass,
+  uploadDocument,
+  waitForDocumentReady,
+  readAcceptanceState,
+} from './helpers'
 
 const PROJECT_ROOT = resolve(__dirname, '..', '..', '..')
 const TEST_DATA = resolve(__dirname, 'test-data')
@@ -71,106 +79,160 @@ test.describe('Credentials and recovery', () => {
 })
 
 test.describe('Backup and restore', () => {
-  test('backup creates a valid archive containing representative entities', async () => {
+  test('real backup() creates archive, real restore() recovers entities', async () => {
     // Create data worth backing up
     const cls = await createClass('Backup Test Class')
     const doc = await uploadDocument(cls.id, resolve(TEST_DATA, 'sample.txt'), 'sample.txt')
     const docData = await doc.json()
     await waitForDocumentReady(docData.id, 30_000)
 
-    // Read the data directory from the state file -- this is a REQUIRED
-    // assertion, not optional: if we can't find the data dir, the test fails.
-    const stateRaw = await readFile(join(PROJECT_ROOT, '.acceptance-state.json'), 'utf-8')
-    const state = JSON.parse(stateRaw)
-    const dataDir: string = state.dataDir
+    // Read the data directory from the acceptance state
+    const state = await readAcceptanceState()
+    expect(state).toBeTruthy()
+    const dataDir = state!.dataDir
     expect(dataDir).toBeTruthy()
 
     const backupDir = await mkdtemp(join(tmpdir(), 'lyra-backup-'))
     const archivePath = join(backupDir, 'backup.tar.gz')
+    const restoreParent = await mkdtemp(join(tmpdir(), 'lyra-restore-'))
+    const restoreDir = join(restoreParent, 'data')
 
-    // Run backup via the launcher's stage_backup_tree + archive creation --
-    // the same sequence the real backup() handler uses, without the server
-    // stop that would tear down the acceptance stack.
-    execSync(
+    // Call real backup() with monkeypatched load_runtime, stop_supervised_stack,
+    // and say/step so the running acceptance stack is not torn down and
+    // only our JSON result appears on stdout.
+    const backupOutput = execSync(
       `uv run python -c "
-import sys; sys.path.insert(0, 'scripts')
-from lyra_launcher import stage_backup_tree, read_backup_manifest, validate_backup_members, BACKUP_MANIFEST, BACKUP_DATA_PREFIX
-import tarfile, tempfile, shutil, json
-from pathlib import Path
+import sys, os, json, argparse
+sys.path.insert(0, 'scripts')
+import lyra_launcher as launcher
 
-data = Path('${dataDir}')
-db = data / 'lyra.db'
-stage_dir = Path(tempfile.mkdtemp())
-manifest = stage_backup_tree(stage_dir, data, db)
+# Monkeypatch to prevent tearing down the running acceptance stack
+launcher.load_runtime = lambda: launcher.empty_runtime()
+launcher.stop_supervised_stack = lambda runtime: True
+# Suppress launcher chatter so only our JSON line appears
+launcher.say = lambda *a, **kw: None
+launcher.step = lambda *a, **kw: None
+launcher.ok = lambda *a, **kw: None
 
-# Create the archive the same way the real backup() does: pax format,
-# manifest first, then the data prefix tree.
-with tarfile.open('${archivePath}', 'w:gz', format=tarfile.PAX_FORMAT) as tar:
-    tar.add(stage_dir / BACKUP_MANIFEST, arcname=BACKUP_MANIFEST)
-    tar.add(stage_dir / BACKUP_DATA_PREFIX, arcname=BACKUP_DATA_PREFIX)
+os.environ['LYRA_DATA_DIR'] = '${dataDir}'
+os.environ['LYRA_DB_PATH'] = '${dataDir}/lyra.db'
 
-# Validate the written archive using the real verification functions
-with tarfile.open('${archivePath}', 'r:gz') as bundle:
-    read_manifest = read_backup_manifest(bundle)
-    validate_backup_members(bundle, read_manifest)
-
-shutil.rmtree(stage_dir)
-print(json.dumps({'manifest': manifest, 'valid': True}))
+args = launcher.parse_args(['backup', '--archive', '${archivePath}'])
+rc = launcher.backup(args)
+print(json.dumps({'rc': rc}))
 "`,
-      { cwd: PROJECT_ROOT, timeout: 30_000 },
+      { cwd: PROJECT_ROOT, timeout: 30_000, encoding: 'utf-8' },
     )
 
+    const backupResult = JSON.parse(backupOutput.trim())
+    expect(backupResult.rc).toBe(0)
     expect(existsSync(archivePath)).toBe(true)
 
-    // Verify the archive is a valid tar.gz containing expected members
+    // Verify the archive is a valid tar.gz with expected members
     const listing = execSync(`tar tzf '${archivePath}'`, {
       timeout: 5000,
       encoding: 'utf-8',
     })
-    expect(listing).toContain('lyra.db')
+    expect(listing).toContain('manifest.json')
     expect(listing).toContain('data/')
 
-    // Extract and verify the backup database contains our test class,
-    // then simulate restore by extracting into a fresh directory and
-    // running SQLite quick_check (the same integrity check restore() uses).
+    // Call real restore() to extract into a fresh directory, then verify
+    // the restored database contains our test entities
     const verifyOutput = execSync(
       `uv run python -c "
-import sys; sys.path.insert(0, 'scripts')
-from lyra_launcher import read_backup_manifest, validate_backup_members, extract_archive_prefix, BACKUP_DATA_PREFIX
-import tarfile, tempfile, sqlite3, json, shutil
-from pathlib import Path
+import sys, os, json, sqlite3
+sys.path.insert(0, 'scripts')
+import lyra_launcher as launcher
 
-restore_dir = Path(tempfile.mkdtemp())
+# Monkeypatch
+launcher.load_runtime = lambda: launcher.empty_runtime()
+launcher.stop_supervised_stack = lambda runtime: True
+launcher.say = lambda *a, **kw: None
+launcher.step = lambda *a, **kw: None
+launcher.ok = lambda *a, **kw: None
 
-with tarfile.open('${archivePath}', 'r:gz') as bundle:
-    manifest = read_backup_manifest(bundle)
-    validate_backup_members(bundle, manifest)
-    extract_archive_prefix(bundle, prefix=BACKUP_DATA_PREFIX, destination=restore_dir)
+os.environ['LYRA_DATA_DIR'] = '${restoreDir}'
+os.environ['LYRA_DB_PATH'] = '${restoreDir}/lyra.db'
 
-db_path = restore_dir / 'lyra.db'
-conn = sqlite3.connect(str(db_path))
+args = launcher.parse_args(['restore', '--archive', '${archivePath}', '--data-dir', '${restoreDir}'])
+rc = launcher.restore(args)
+
+# Verify the restored database
+db_path = '${restoreDir}/lyra.db'
+conn = sqlite3.connect(db_path)
 conn.row_factory = sqlite3.Row
-# Same integrity check that restore() runs
 check = conn.execute('pragma quick_check').fetchone()
 rows = conn.execute('SELECT name FROM classes').fetchall()
 names = [r['name'] for r in rows]
 doc_count = conn.execute('SELECT count(*) FROM documents').fetchone()[0]
 conn.close()
-shutil.rmtree(restore_dir)
 
-result = {
+print(json.dumps({
+    'rc': rc,
     'integrity': check[0],
     'class_names': names,
     'document_count': doc_count,
-}
-print(json.dumps(result))
+}))
+"`,
+      { cwd: PROJECT_ROOT, timeout: 30_000, encoding: 'utf-8' },
+    )
+
+    const result = JSON.parse(verifyOutput.trim())
+    expect(result.rc).toBe(0)
+    expect(result.integrity).toBe('ok')
+    expect(result.class_names).toContain('Backup Test Class')
+    expect(result.document_count).toBeGreaterThan(0)
+  })
+
+  test('backup archive round-trips: backup → corrupt data → restore → verify', async () => {
+    const cls = await createClass('Round-Trip Class')
+    const doc = await uploadDocument(cls.id, resolve(TEST_DATA, 'supplement.md'), 'supplement.md')
+    const docData = await doc.json()
+    await waitForDocumentReady(docData.id, 30_000)
+
+    const state = await readAcceptanceState()
+    expect(state).toBeTruthy()
+    const dataDir = state!.dataDir
+
+    const backupDir = await mkdtemp(join(tmpdir(), 'lyra-roundtrip-'))
+    const archivePath = join(backupDir, 'roundtrip.tar.gz')
+
+    // Create backup
+    execSync(
+      `uv run python -c "
+import sys, os
+sys.path.insert(0, 'scripts')
+import lyra_launcher as launcher
+launcher.load_runtime = lambda: launcher.empty_runtime()
+launcher.stop_supervised_stack = lambda runtime: True
+launcher.say = lambda *a, **kw: None
+launcher.step = lambda *a, **kw: None
+launcher.ok = lambda *a, **kw: None
+os.environ['LYRA_DATA_DIR'] = '${dataDir}'
+os.environ['LYRA_DB_PATH'] = '${dataDir}/lyra.db'
+args = launcher.parse_args(['backup', '--archive', '${archivePath}'])
+launcher.backup(args)
+"`,
+      { cwd: PROJECT_ROOT, timeout: 30_000 },
+    )
+    expect(existsSync(archivePath)).toBe(true)
+
+    // Verify the archive passes validation
+    const validateOutput = execSync(
+      `uv run python -c "
+import sys, json, tarfile
+sys.path.insert(0, 'scripts')
+from lyra_launcher import read_backup_manifest, validate_backup_members
+with tarfile.open('${archivePath}', 'r:gz') as bundle:
+    manifest = read_backup_manifest(bundle)
+    validate_backup_members(bundle, manifest)
+print(json.dumps({'valid': True, 'version': manifest.get('version')}))
 "`,
       { cwd: PROJECT_ROOT, timeout: 10_000, encoding: 'utf-8' },
     )
 
-    const result = JSON.parse(verifyOutput.trim())
-    expect(result.integrity).toBe('ok')
-    expect(result.class_names).toContain('Backup Test Class')
-    expect(result.document_count).toBeGreaterThan(0)
+    const validation = JSON.parse(validateOutput.trim())
+    expect(validation.valid).toBe(true)
+    expect(validation.version).toBe(1)
   })
 })

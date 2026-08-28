@@ -255,6 +255,26 @@ export async function waitForDraftRun(artifactId: number, timeoutMs = 30_000): P
   throw new Error(`Draft run did not complete within ${timeoutMs}ms`)
 }
 
+export async function waitForSolutionSegmented(
+  artifactId: number,
+  timeoutMs = 60_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const res = await apiGet(`/api/solutions/${artifactId}/status`)
+    const status = await res.json()
+    if (status.state === 'awaiting_review') return
+    if (status.state === 'ready') return
+    if (status.state === 'failed' || status.state === 'cancelled') {
+      throw new Error(
+        `Solution ${artifactId} reached state: ${status.state} -- ${status.error_message}`,
+      )
+    }
+    await sleep(300)
+  }
+  throw new Error(`Solution ${artifactId} did not reach awaiting_review within ${timeoutMs}ms`)
+}
+
 export async function waitForSolutionReady(artifactId: number, timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -428,6 +448,153 @@ export async function fetchWithOrigin(
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
+}
+
+/* ------------------------------------------------------------------ */
+/*  Harness lifecycle helpers                                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Read the acceptance state file to get the data directory, backend PID,
+ * and port configuration. Returns null if the file cannot be read.
+ */
+export async function readAcceptanceState(): Promise<{
+  runId: string
+  dataDir: string
+  backendPid: number
+  frontendPid: number
+  backendPort: number
+  frontendPort: number
+  tutorPort: number
+} | null> {
+  const { readdir, readFile } = await import('node:fs/promises')
+  const { resolve, join } = await import('node:path')
+  const projectRoot = resolve(__dirname, '..', '..', '..')
+
+  // Find the state file (unique per run)
+  const entries = await readdir(projectRoot)
+  const stateFiles = entries.filter(
+    (e) => e.startsWith('.acceptance-state-') && e.endsWith('.json'),
+  )
+  if (stateFiles.length === 0) return null
+
+  const raw = await readFile(join(projectRoot, stateFiles[0]), 'utf-8')
+  return JSON.parse(raw)
+}
+
+/**
+ * Stop the backend process, wait for it to exit, then spawn a fresh one
+ * on the same port with the same data directory. Returns the new ChildProcess.
+ * Used by restart-reconciliation tests.
+ */
+export async function restartBackend(): Promise<void> {
+  const { spawn } = await import('node:child_process')
+  const { readdir, readFile, writeFile } = await import('node:fs/promises')
+  const { resolve, join } = await import('node:path')
+  const projectRoot = resolve(__dirname, '..', '..', '..')
+
+  const state = await readAcceptanceState()
+  if (!state) throw new Error('Cannot restart backend: no state file found')
+
+  // Kill the current backend
+  try {
+    process.kill(state.backendPid, 'SIGTERM')
+  } catch {
+    /* already gone */
+  }
+
+  // Wait for exit
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    try {
+      process.kill(state.backendPid, 0)
+      await sleep(100)
+    } catch {
+      break
+    }
+  }
+
+  // Wait for port to be free
+  const portDeadline = Date.now() + 5_000
+  while (Date.now() < portDeadline) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${state.backendPort}/api/health/live`, {
+        signal: AbortSignal.timeout(500),
+      })
+      void res.body?.cancel()
+      await sleep(200)
+    } catch {
+      break
+    }
+  }
+
+  // Spawn a new backend on the same port with the same data dir
+  const backendEnv: Record<string, string> = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined) backendEnv[k] = v
+  }
+  backendEnv.LYRA_DATA_DIR = state.dataDir
+  backendEnv.LYRA_HOST = '127.0.0.1'
+  backendEnv.LYRA_PORT = String(state.backendPort)
+  backendEnv.PYTHONDONTWRITEBYTECODE = '1'
+
+  const newBackend = spawn(
+    'uv',
+    [
+      'run',
+      'python',
+      '-m',
+      'uvicorn',
+      'acceptance.backend_harness:app',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      String(state.backendPort),
+      '--log-level',
+      'warning',
+    ],
+    {
+      cwd: projectRoot,
+      env: backendEnv as NodeJS.ProcessEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: false,
+    },
+  )
+
+  // Wait for the new backend to be ready
+  const readyDeadline = Date.now() + 60_000
+  while (Date.now() < readyDeadline) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${state.backendPort}/api/health/ready`, {
+        signal: AbortSignal.timeout(2000),
+      })
+      if (res.ok) break
+    } catch {
+      // not ready yet
+    }
+    await sleep(500)
+  }
+
+  // Update the state file and globalThis with the new PID
+  const entries = await readdir(projectRoot)
+  const stateFiles = entries.filter(
+    (e) => e.startsWith('.acceptance-state-') && e.endsWith('.json'),
+  )
+  if (stateFiles.length > 0) {
+    const filePath = join(projectRoot, stateFiles[0])
+    const raw = await readFile(filePath, 'utf-8')
+    const stateObj = JSON.parse(raw)
+    stateObj.backendPid = newBackend.pid
+    stateObj.backendStartToken = null
+    await writeFile(filePath, JSON.stringify(stateObj))
+  }
+
+  // Update in-memory state if available
+  const mem = (globalThis as Record<string, unknown>).__acceptanceState as
+    { backend: import('node:child_process').ChildProcess } | undefined
+  if (mem) {
+    mem.backend = newBackend
+  }
 }
 
 /* ------------------------------------------------------------------ */

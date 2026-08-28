@@ -197,8 +197,7 @@ attack();
 
       // Wait for the attack to complete
       await page.waitForFunction(
-        () =>
-          (window as unknown as Record<string, unknown>).__attackResult !== undefined,
+        () => (window as unknown as Record<string, unknown>).__attackResult !== undefined,
         null,
         { timeout: 10_000 },
       )
