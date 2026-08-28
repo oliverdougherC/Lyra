@@ -1007,7 +1007,13 @@ real question once a course's Fourier material is in the same class.
 
 `scripts/eval_ingest.py` grew what this needs: a question set names the document each answer is in
 (`expect_document`), a chunk from the right pages of the wrong document is scored as a miss, and the
-report names which documents did the crowding.
+report names which documents did the crowding. Three new commands complete the harness:
+`build-corpus` ingests a versioned JSON corpus (`scripts/eval_corpora/`) into a workspace,
+`score` computes document-aware metrics (per-document MRR, hit rates, wrong-document top-1,
+per-category breakdown) over a question set, and `compare` diffs two scored workspaces and flags
+regressions. A class-scale corpus (`retrieval_class.json`, 8 Physics 201 documents with
+overlapping vocabulary) and its 21-question set (`phys201-class.json`) are the first
+deterministic, privacy-safe evaluation fixture at class scale.
 
 **Reranking, added after Phase 3.** The KNN is a bi-encoder search: the embedder turns a passage into
 768 numbers before it has seen the question, which is what lets it search a whole class and is also
@@ -1043,6 +1049,15 @@ Four things this is not:
 - **Not always better.** On the linear algebra textbook, whose topics nothing else in the class
   shares, reranking costs one question its first place and changes nothing at `k = 4`. It earns its
   place on documents that compete, which is what a course is
+
+**Structured execution metadata.** `rerank()` returns a `RerankOutcome` carrying both the scores and
+a bounded `RerankStatus` enum (`APPLIED`, `NOT_REQUESTED`, `WEIGHTS_ABSENT`, `START_REFUSED`,
+`TIMEOUT`, `UPSTREAM_ERROR`, `MALFORMED_RESPONSE`, `EMPTY_INPUT`). The status is threaded through
+`RetrievalResult.rerank_status` so that every consumer of retrieval results knows what actually
+happened rather than inferring it from the presence or absence of scores. The evaluation harness
+uses this to distinguish the requested rerank path (the `--rerank` flag) from the observed one (what
+the boundary reports), and a degraded run -- one that requested reranking but did not get it -- is
+marked `valid: false` in the report and exits nonzero.
 
 The over-fetch is cut to `k` before budgeting rather than left to the budget. Everything past `k` is
 material the search was not confident about and the reranker did not rescue, and letting the budget

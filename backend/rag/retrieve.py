@@ -32,7 +32,7 @@ import sqlite_vec
 from backend.llm.rerank_server import rerank_server
 from backend.rag.chunk import SOLUTIONS
 from backend.rag.embed import embed_query
-from backend.rag.rerank import rerank
+from backend.rag.rerank import RerankStatus, rerank
 from backend.rag.tokens import estimate_tokens
 
 K = 8
@@ -214,12 +214,17 @@ class RetrievalResult:
         omitted_document_count: Distinct documents among the dropped chunks.
         omitted_document_ids: The same documents by id, retained so a caller performing
             another exact-fit pass can union omissions without double-counting them.
+        rerank_status: What actually happened at the rerank boundary. ``APPLIED``
+            when the cross-encoder ran and its scores were used; ``NOT_REQUESTED``
+            when the caller did not ask for reranking; one of the failure statuses
+            when reranking was attempted but fell back to the embedding order.
     """
 
     chunks: list[RetrievedChunk]
     trimmed: bool
     omitted_document_count: int
     omitted_document_ids: frozenset[int] = frozenset()
+    rerank_status: RerankStatus = RerankStatus.NOT_REQUESTED
 
 
 def retrieve(
@@ -260,9 +265,18 @@ def retrieve(
         distances = _knn(conn, class_id, vector, RERANK_FETCH_K)
         vector_chunks = _load_candidates(conn, distances) if distances else []
     candidates = _fuse(conn, vector_chunks, lexical, vector)
-    candidates = _reranked(query, candidates[:RERANK_FETCH_K]) if reranking else candidates[:K]
+    if reranking:
+        candidates, rerank_status = _reranked(query, candidates[:RERANK_FETCH_K])
+    else:
+        candidates = candidates[:K]
+        rerank_status = RerankStatus.NOT_REQUESTED
     if not candidates and not resolved:
-        return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+        return RetrievalResult(
+            chunks=[],
+            trimmed=False,
+            omitted_document_count=0,
+            rerank_status=rerank_status,
+        )
 
     # A section that was asked for by name goes in front of the similarity ranking rather
     # than competing with it, because naming a section is a fact about where the answer is
@@ -284,6 +298,7 @@ def retrieve(
         trimmed=bool(candidates) and len(dropped) * 2 > len(candidates),
         omitted_document_count=len(omitted_document_ids),
         omitted_document_ids=omitted_document_ids,
+        rerank_status=rerank_status,
     )
 
 
@@ -547,7 +562,9 @@ def _fuse(
     return [RetrievedChunk(**{**vars(chunk), "score": fused[chunk.chunk_id]}) for chunk in ranked]
 
 
-def _reranked(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk]:
+def _reranked(
+    query: str, candidates: list[RetrievedChunk]
+) -> tuple[list[RetrievedChunk], RerankStatus]:
     """Reorder the over-fetch by cross-encoder score and cut it back to `K`.
 
     `similarity` is left exactly as the embedder measured it, because that is what it
@@ -560,17 +577,20 @@ def _reranked(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChu
     Cutting to `K` here rather than leaving it to the budget is deliberate. The over-fetch
     is a shortlist, not more context: everything past `K` is material the search was not
     confident about and the reranker did not rescue.
+
+    Returns:
+        The ranked chunks and the rerank status that says what actually happened.
     """
-    scores = rerank(query, [chunk.content for chunk in candidates])
-    if scores is None:
-        return candidates[:K]
+    outcome = rerank(query, [chunk.content for chunk in candidates])
+    if outcome.scores is None:
+        return candidates[:K], outcome.status
 
     rescored = [
         RetrievedChunk(**{**vars(chunk), "score": score})
-        for chunk, score in zip(candidates, scores, strict=True)
+        for chunk, score in zip(candidates, outcome.scores, strict=True)
     ]
     rescored.sort(key=lambda chunk: (-chunk.score, chunk.chunk_id))
-    return rescored[:K]
+    return rescored[:K], outcome.status
 
 
 def _chunk_from_row(row: sqlite3.Row, similarity: float, score: float) -> RetrievedChunk:

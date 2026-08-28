@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.rag import retrieve as retrieval  # noqa: E402
+from backend.rag.rerank import RerankStatus  # noqa: E402
 from scripts.eval_ingest import (  # noqa: E402
     NO_TARGET,
     PRODUCT_K,
@@ -100,6 +101,7 @@ class _Chunk:
 @dataclass(frozen=True)
 class _Result:
     chunks: list[_Chunk]
+    rerank_status: RerankStatus = RerankStatus.NOT_REQUESTED
 
 
 def _stub_retrieve(monkeypatch: pytest.MonkeyPatch, chunks: list[_Chunk]) -> None:
@@ -367,3 +369,236 @@ def test_a_file_already_in_the_workspace_is_found_by_its_stem(
     assert _already_ingested(db, class_id, Path("/elsewhere/Other_Tables.pdf")) is None
     # A document in another class is not a duplicate: retrieval never crosses a class.
     assert _already_ingested(db, class_id + 1, Path("/elsewhere/Fourier_Tables.pdf")) is None
+
+
+# --------------------------------------------------------------------------- execution metadata
+
+
+def _stub_retrieve_with_status(
+    monkeypatch: pytest.MonkeyPatch,
+    chunks: list[_Chunk],
+    rerank_status: RerankStatus,
+) -> None:
+    """Stub retrieval to return chunks with a specific rerank status."""
+
+    @dataclass(frozen=True)
+    class _StatusResult:
+        chunks: list[_Chunk]
+        rerank_status: RerankStatus
+
+    def fake(conn: object, class_id: int, query: str, budget: int) -> _StatusResult:
+        return _StatusResult(chunks=chunks, rerank_status=rerank_status)
+
+    monkeypatch.setattr(retrieval, "retrieve", fake)
+
+
+def test_rerank_status_surfaces_in_ask_record(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_ask must record the observed rerank status, not a hardcoded value."""
+    _stub_retrieve_with_status(
+        monkeypatch,
+        [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
+        RerankStatus.APPLIED,
+    )
+    target = Target(document_id=1, ranges={})
+
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
+    assert record["rerank_status"] == "applied"
+
+
+def test_weights_absent_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_retrieve_with_status(
+        monkeypatch,
+        [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
+        RerankStatus.WEIGHTS_ABSENT,
+    )
+    target = Target(document_id=1, ranges={})
+
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
+    assert record["rerank_status"] == "weights_absent"
+
+
+def test_start_refused_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_retrieve_with_status(
+        monkeypatch,
+        [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
+        RerankStatus.START_REFUSED,
+    )
+    target = Target(document_id=1, ranges={})
+
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
+    assert record["rerank_status"] == "start_refused"
+
+
+def test_timeout_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_retrieve_with_status(
+        monkeypatch,
+        [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
+        RerankStatus.TIMEOUT,
+    )
+    target = Target(document_id=1, ranges={})
+
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
+    assert record["rerank_status"] == "timeout"
+
+
+def test_malformed_response_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_retrieve_with_status(
+        monkeypatch,
+        [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
+        RerankStatus.MALFORMED_RESPONSE,
+    )
+    target = Target(document_id=1, ranges={})
+
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
+    assert record["rerank_status"] == "malformed_response"
+
+
+def test_upstream_error_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_retrieve_with_status(
+        monkeypatch,
+        [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
+        RerankStatus.UPSTREAM_ERROR,
+    )
+    target = Target(document_id=1, ranges={})
+
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
+    assert record["rerank_status"] == "upstream_error"
+
+
+def test_not_requested_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_retrieve_with_status(
+        monkeypatch,
+        [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
+        RerankStatus.NOT_REQUESTED,
+    )
+    target = Target(document_id=1, ranges={})
+
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
+    assert record["rerank_status"] == "not_requested"
+
+
+# ------------------------------------------------------------------- report with observed path
+
+
+def test_degraded_report_shows_invalid_and_requested_vs_observed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A degraded run must say INVALID and show the requested vs observed distinction."""
+    _report_retrieval(
+        {
+            "document": "book",
+            "requested_rerank": True,
+            "reranked": False,
+            "observed_path": "embedding_order",
+            "degraded": True,
+            "degradation_reasons": ["weights_absent"],
+            "valid": False,
+            "k": 8,
+            "class_documents": 2,
+            "class_chunks": 100,
+            "questions": [
+                _reported(id="q1", rank=1, rerank_status="weights_absent"),
+            ],
+        }
+    )
+
+    out = capsys.readouterr().out
+    assert "INVALID" in out
+    assert "DEGRADED" in out
+    assert "requested: rerank" in out
+    assert "observed: embedding_order" in out
+
+
+def test_valid_reranked_report_shows_no_invalid(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _report_retrieval(
+        {
+            "document": "book",
+            "requested_rerank": True,
+            "reranked": True,
+            "observed_path": "reranked",
+            "valid": True,
+            "k": 8,
+            "class_documents": 2,
+            "class_chunks": 100,
+            "questions": [
+                _reported(id="q1", rank=1, rerank_status="applied"),
+            ],
+        }
+    )
+
+    out = capsys.readouterr().out
+    assert "INVALID" not in out
+    assert "DEGRADED" not in out
+    assert "reranked" in out
+
+
+# ------------------------------------------------------ wrong-document scoring and no-answer
+
+
+def test_a_right_passage_from_the_wrong_document_is_a_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hit pages are right, but the document id is wrong. Must be rank None."""
+    _stub_retrieve(
+        monkeypatch,
+        [
+            _Chunk(document_id=2, page_number=5, filename="wrong.pdf"),
+            _Chunk(document_id=2, page_number=6, filename="wrong.pdf"),
+        ],
+    )
+    target = Target(document_id=1, ranges={})
+
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
+
+    assert record["rank"] is None
+    assert record["targeted"] is True
+
+
+def test_no_answer_control_has_zero_from_expected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A control question must have from_expected == 0 regardless of what comes back."""
+    _stub_retrieve(
+        monkeypatch,
+        [_Chunk(document_id=3, page_number=1, filename="doc.pdf")],
+    )
+
+    record = _ask(None, 1, None, NO_TARGET, _question(id="control"), k=8)
+
+    assert record["from_expected"] == 0
+    assert record["targeted"] is False
+    assert record["rank"] is None
+
+
+# ------------------------------------------------ invalid/degraded runs never published valid
+
+
+def test_degraded_run_is_not_treated_as_valid_baseline(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A report with valid=False must never be silently treated as a passing baseline."""
+    report = {
+        "document": "book",
+        "requested_rerank": True,
+        "reranked": False,
+        "observed_path": "embedding_order",
+        "degraded": True,
+        "degradation_reasons": ["start_refused"],
+        "valid": False,
+        "k": 8,
+        "class_documents": 2,
+        "class_chunks": 50,
+        "questions": [
+            _reported(id="q1", rank=1, rerank_status="start_refused"),
+            _reported(id="q2", rank=2, rerank_status="start_refused"),
+        ],
+    }
+
+    _report_retrieval(report)
+    out = capsys.readouterr().out
+
+    assert "INVALID" in out
+    assert report["valid"] is False
+    assert report["reranked"] is False

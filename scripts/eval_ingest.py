@@ -35,12 +35,14 @@ produced rather than redoing it.
 
 import argparse
 import asyncio
+import hashlib
 import json
 import logging
 import re
 import shutil
 import sqlite3
 import statistics
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator
@@ -63,6 +65,7 @@ from backend.llm.locality import is_local_endpoint  # noqa: E402
 from backend.rag import chunk as chunking  # noqa: E402
 from backend.rag import render, transcribe  # noqa: E402
 from backend.rag import retrieve as retrieval  # noqa: E402
+from backend.rag.rerank import RerankStatus  # noqa: E402
 from backend.storage.database import connect, migrate  # noqa: E402
 
 logger = logging.getLogger("lyra.eval.ingest")
@@ -70,6 +73,8 @@ logger = logging.getLogger("lyra.eval.ingest")
 DEFAULT_WORKSPACE = ROOT / "data" / "eval-ingest"
 DEFAULT_SOURCE_DB = ROOT / "data" / "lyra.db"
 DEFAULT_QUESTIONS = ROOT / "scripts" / "eval_questions" / "kuttler-linear-algebra.json"
+DEFAULT_CORPUS = ROOT / "scripts" / "eval_corpora" / "retrieval_class.json"
+DEFAULT_CLASS_WORKSPACE = ROOT / "data" / "eval-class"
 
 PDF_MIME = "application/pdf"
 
@@ -690,29 +695,59 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             )
 
     elapsed = time.monotonic() - started
-    # Named after the question set rather than fixed, because a class is asked more than one
-    # set and a single `retrieval.json` would mean each run destroyed the one before it.
-    # The reranked run is named apart from the plain one for the same reason: the pair is
-    # the measurement, so neither may overwrite the other.
-    suffix = "-reranked" if args.rerank else ""
+
+    observed_statuses = {str(r["rerank_status"]) for r in results}
+    rerank_applied = observed_statuses == {RerankStatus.APPLIED.value}
+    rerank_degraded = args.rerank and not rerank_applied
+
+    if rerank_degraded:
+        degradation_reasons = observed_statuses - {RerankStatus.APPLIED.value}
+        reason_str = ", ".join(sorted(degradation_reasons))
+        suffix = "-rerank-INVALID"
+    elif rerank_applied:
+        suffix = "-reranked"
+    else:
+        suffix = ""
+
+    observed_path = "reranked" if rerank_applied else "embedding_order"
+    questions_path = Path(args.questions)
+    corpus_path = None
+    if questions_path.exists():
+        qdata = json.loads(questions_path.read_text(encoding="utf-8"))
+        corpus_name = qdata.get("corpus")
+        if corpus_name:
+            corpus_path = ROOT / "scripts" / "eval_corpora" / f"{corpus_name}.json"
+
     workspace.write(
         f"retrieval-{Path(args.questions).stem}{suffix}",
         {
             "document": default or "several",
-            "questions_file": Path(args.questions).name,
-            "reranked": bool(args.rerank),
-            # Per question, and the whole turn's retrieval rather than the rerank call
-            # alone, because what a student waits for is the whole turn.
+            "questions_file": questions_path.name,
+            "requested_rerank": bool(args.rerank),
+            "reranked": rerank_applied,
+            "observed_path": observed_path,
+            "degraded": rerank_degraded,
+            "degradation_reasons": sorted(observed_statuses - {RerankStatus.APPLIED.value})
+            if rerank_degraded
+            else [],
+            "valid": not rerank_degraded,
             "seconds_per_question": round(elapsed / max(1, len(results)), 2),
             "k": args.k,
-            # The size of the haystack, recorded because a rank means nothing without it.
-            # One document's rank 1 and a class's rank 1 are not the same measurement.
             "class_chunks": int(scale["chunks"]),
             "class_documents": int(scale["documents"]),
             "questions": results,
+            "metadata": _reproducibility_metadata(args, corpus_path),
         },
     )
     conn.close()
+
+    if rerank_degraded:
+        print(
+            f"\nINVALID: --rerank was requested but reranking did not run. "
+            f"Observed: {reason_str}. "
+            f"The report is marked invalid and must not be used as a reranked baseline."
+        )
+        return 1
     return 0
 
 
@@ -819,12 +854,11 @@ def _ask(
         "expect_document": stem,
         "expect_section": expected,
         "expect_pages": list(pages) if pages else None,
-        # A question is targeted when it has an answer to find, however it says where.
         "targeted": pages is not None,
         "rank": rank,
         "returned": len(chunks),
         "top_similarity": round(chunks[0].similarity, 4) if chunks else None,
-        # Of the k the product would actually serve, how many came from the right document.
+        "rerank_status": result.rerank_status.value,
         "from_expected": sum(
             1 for chunk in chunks[:PRODUCT_K] if chunk.document_id == target.document_id
         ),
@@ -1291,13 +1325,25 @@ def _report_retrieval(retrieved: dict[str, object]) -> None:
         if retrieved.get("class_chunks")
         else "scale not recorded"
     )
-    how = "reranked" if retrieved.get("reranked") else "embedding order"
+    how = retrieved.get("observed_path") or (
+        "reranked" if retrieved.get("reranked") else "embedding order"
+    )
     rate = retrieved.get("seconds_per_question")
     cost = f", {rate}s a question" if rate else ""
+    valid = retrieved.get("valid", True)
+    validity = "" if valid else " ** INVALID **"
     print(
         f"\nRetrieval over {retrieved.get('document')} ({scale}), "
-        f"k = {retrieved.get('k')}, {how}{cost}"
+        f"k = {retrieved.get('k')}, {how}{cost}{validity}"
     )
+    if retrieved.get("degraded"):
+        reasons = retrieved.get("degradation_reasons", [])
+        print(f"  DEGRADED: requested rerank, got {', '.join(str(r) for r in reasons)}")
+    if retrieved.get("requested_rerank") is not None:
+        print(
+            f"  requested: {'rerank' if retrieved.get('requested_rerank') else 'embedding order'}, "
+            f"observed: {how}"
+        )
     ranks = [one["rank"] for one in targeted if one["rank"]]
     for k in REPORTED_K:
         if k > int(retrieved.get("k") or 0):
@@ -1364,6 +1410,353 @@ def _report_crowding(targeted: list[dict[str, object]]) -> None:
         print(f"      {name}: {count}")
 
 
+def _git_revision() -> str:
+    """The current git commit, or 'unknown' outside a repository."""
+    try:
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],  # noqa: S607
+                cwd=ROOT,
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def _corpus_hash(path: Path) -> str:
+    """SHA-256 of the corpus file, short enough to compare by eye."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def _reproducibility_metadata(
+    args: argparse.Namespace, corpus_path: Path | None = None
+) -> dict[str, object]:
+    """State sufficient to reproduce or compare a measurement."""
+    meta: dict[str, object] = {
+        "git_revision": _git_revision(),
+        "embedding_model": getattr(settings, "embedding_model", None),
+        "embedding_dim": getattr(settings, "embedding_dim", None),
+        "rerank_model": (
+            str(settings.rerank_model_path.name) if settings.rerank_installed else None
+        ),
+    }
+    if corpus_path and corpus_path.exists():
+        corpus_data = json.loads(corpus_path.read_text(encoding="utf-8"))
+        meta["corpus_version"] = corpus_data.get("corpus_version", "unknown")
+        meta["corpus_hash"] = _corpus_hash(corpus_path)
+    if hasattr(args, "questions"):
+        qpath = Path(args.questions)
+        if qpath.exists():
+            qdata = json.loads(qpath.read_text(encoding="utf-8"))
+            meta["questions_version"] = qdata.get("corpus_version", "unknown")
+            meta["questions_file"] = qpath.name
+    return meta
+
+
+def cmd_build_corpus(args: argparse.Namespace) -> int:
+    """Build a workspace from the committed evaluation corpus and ingest every document."""
+    corpus_path = Path(args.corpus).resolve()
+    corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
+    workspace = Workspace(Path(args.workspace).resolve())
+
+    if args.fresh and workspace.root.exists():
+        shutil.rmtree(workspace.root)
+
+    conn = prepare(workspace, Path(args.source_db))
+    if args.no_extraction:
+        conn.execute("update settings set extraction_enabled = 0 where id = 1")
+        conn.commit()
+    class_name = corpus.get("class_name", "Evaluation")
+    class_id = _class_id(conn, class_name)
+
+    doc_dir = workspace.root / "corpus_sources"
+    doc_dir.mkdir(parents=True, exist_ok=True)
+
+    documents: dict[str, dict[str, object]] = {}
+    for doc_spec in corpus["documents"]:
+        stem = doc_spec["stem"]
+        filename = doc_spec["filename"]
+        text = doc_spec["text"]
+
+        source_file = doc_dir / filename
+        source_file.write_text(text, encoding="utf-8")
+
+        duplicate = _already_ingested(conn, class_id, source_file)
+        if duplicate is not None:
+            print(f"{filename}: already in this workspace as document {duplicate}; skipped.")
+            continue
+
+        record = _ingest_one(conn, class_id, source_file)
+        documents[stem] = record
+        workspace.write(
+            "ingestion",
+            {
+                "class_id": class_id,
+                "corpus_version": corpus.get("corpus_version", "unknown"),
+                "documents": {
+                    **_mapping(workspace.existing("ingestion").get("documents", {})),
+                    **documents,
+                },
+            },
+        )
+        print(
+            f"{filename}: {record['state']} in {record['seconds']}s, {record['chunk_count']} chunks"
+        )
+
+    conn.close()
+    print(f"\nCorpus built: {len(documents)} documents in {workspace.root}")
+    return 0
+
+
+def cmd_score(args: argparse.Namespace) -> int:
+    """Score a retrieval run with document-aware metrics and write a graded report."""
+    workspace = Workspace(Path(args.workspace).resolve())
+    retrieved = sorted(workspace.root.glob("retrieval*.json"))
+    if not retrieved:
+        print("No retrieval results found. Run the retrieve stage first.")
+        return 1
+
+    for path in retrieved:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        questions = [q for q in data.get("questions", []) if isinstance(q, dict)]
+        if not questions:
+            continue
+
+        valid = data.get("valid", True)
+        observed = data.get(
+            "observed_path", "reranked" if data.get("reranked") else "embedding_order"
+        )
+
+        targeted = [q for q in questions if q.get("targeted", q.get("expect_section") is not None)]
+        controls = [q for q in questions if q not in targeted]
+
+        scores: dict[str, object] = {
+            "report_file": path.name,
+            "observed_path": observed,
+            "valid": valid,
+            "question_count": len(questions),
+            "targeted_count": len(targeted),
+            "control_count": len(controls),
+        }
+
+        if targeted:
+            ranks = [q["rank"] for q in targeted if q.get("rank")]
+            misses = [q["id"] for q in targeted if not q.get("rank")]
+
+            scores["hit_rates"] = {}
+            for k_val in REPORTED_K:
+                if k_val > int(data.get("k") or 0):
+                    continue
+                hits = sum(1 for r in ranks if r <= k_val)
+                scores["hit_rates"][f"k={k_val}"] = {
+                    "hits": hits,
+                    "total": len(targeted),
+                    "rate": round(hits / len(targeted), 4),
+                }
+
+            if ranks:
+                reciprocal_ranks = [1.0 / r for r in ranks]
+                scores["mrr"] = round(statistics.mean(reciprocal_ranks), 4)
+                scores["median_rank"] = statistics.median(ranks)
+                scores["mean_rank"] = round(statistics.mean(ranks), 2)
+            else:
+                scores["mrr"] = 0.0
+                scores["median_rank"] = None
+                scores["mean_rank"] = None
+
+            scores["misses"] = misses
+            scores["miss_count"] = len(misses)
+
+            by_document: dict[str, list[dict[str, object]]] = {}
+            for q in targeted:
+                doc = str(q.get("expect_document") or "unknown")
+                by_document.setdefault(doc, []).append(q)
+
+            doc_scores: dict[str, object] = {}
+            for doc, qs in sorted(by_document.items()):
+                doc_ranks = [q["rank"] for q in qs if q.get("rank")]
+                doc_misses = [q["id"] for q in qs if not q.get("rank")]
+                doc_scores[doc] = {
+                    "targeted": len(qs),
+                    "found": len(doc_ranks),
+                    "missed": doc_misses,
+                    "ranks": doc_ranks,
+                    "mrr": round(statistics.mean([1.0 / r for r in doc_ranks]), 4)
+                    if doc_ranks
+                    else 0.0,
+                }
+            scores["by_document"] = doc_scores
+
+            wrong_doc = sum(
+                1
+                for q in targeted
+                if q.get("rank")
+                and q.get("neighbours")
+                and isinstance(q["neighbours"], list)
+                and q["neighbours"]
+                and str(q["neighbours"][0].get("document", ""))
+                != str(q.get("expect_document", "") + ".txt")
+            )
+            scores["wrong_document_top1"] = wrong_doc
+
+            by_category: dict[str, list[dict[str, object]]] = {}
+            for q in questions:
+                cat = str(q.get("category", "uncategorized"))
+                by_category.setdefault(cat, []).append(q)
+            cat_scores: dict[str, object] = {}
+            for cat, qs in sorted(by_category.items()):
+                targ = [q for q in qs if q.get("targeted", q.get("expect_section") is not None)]
+                cat_ranks = [q["rank"] for q in targ if q.get("rank")]
+                cat_scores[cat] = {
+                    "count": len(qs),
+                    "targeted": len(targ),
+                    "found": len(cat_ranks),
+                    "mrr": round(statistics.mean([1.0 / r for r in cat_ranks]), 4)
+                    if cat_ranks
+                    else 0.0,
+                }
+            scores["by_category"] = cat_scores
+
+        if controls:
+            control_sims = [
+                q["top_similarity"] for q in controls if q.get("top_similarity") is not None
+            ]
+            targeted_sims = [
+                q["top_similarity"] for q in targeted if q.get("top_similarity") is not None
+            ]
+            scores["control_median_similarity"] = (
+                round(statistics.median(control_sims), 4) if control_sims else None
+            )
+            scores["targeted_median_similarity"] = (
+                round(statistics.median(targeted_sims), 4) if targeted_sims else None
+            )
+
+        meta = _reproducibility_metadata(args)
+        scores["metadata"] = meta
+
+        score_name = path.stem.replace("retrieval", "scores")
+        workspace.write(score_name, scores)
+        _print_scores(scores)
+
+    return 0
+
+
+def _print_scores(scores: dict[str, object]) -> None:
+    """Print a scored report to stdout."""
+    valid = scores.get("valid", True)
+    path = scores.get("observed_path", "unknown")
+    validity = "" if valid else " ** INVALID **"
+    print(f"\nScored: {scores.get('report_file')} ({path}){validity}")
+
+    hit_rates = scores.get("hit_rates")
+    if isinstance(hit_rates, dict):
+        for k_label, data in hit_rates.items():
+            if isinstance(data, dict):
+                rate = data.get("rate", 0)
+                print(f"  {k_label}: {data.get('hits')}/{data.get('total')} ({rate:.1%})")
+
+    mrr = scores.get("mrr")
+    if mrr is not None:
+        print(f"  MRR: {mrr}")
+    median = scores.get("median_rank")
+    if median is not None:
+        print(f"  Median rank: {median}")
+
+    misses = scores.get("misses")
+    if misses:
+        print(f"  Missed: {', '.join(str(m) for m in misses)}")
+
+    by_doc = scores.get("by_document")
+    if isinstance(by_doc, dict) and by_doc:
+        print("\n  Per document:")
+        for doc, data in by_doc.items():
+            if isinstance(data, dict):
+                mrr_val = data.get("mrr", 0)
+                print(f"    {doc}: {data.get('found')}/{data.get('targeted')}, MRR {mrr_val}")
+
+    by_cat = scores.get("by_category")
+    if isinstance(by_cat, dict) and by_cat:
+        print("\n  Per category:")
+        for cat, data in by_cat.items():
+            if isinstance(data, dict):
+                mrr_val = data.get("mrr", 0)
+                print(f"    {cat}: {data.get('found')}/{data.get('targeted')}, MRR {mrr_val}")
+
+    wrong = scores.get("wrong_document_top1")
+    if wrong:
+        print(f"\n  Wrong-document top-1: {wrong}")
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    """Compare two scored retrieval runs and flag regressions."""
+    ws_a = Workspace(Path(args.baseline).resolve())
+    ws_b = Workspace(Path(args.candidate).resolve())
+
+    scores_a = sorted(ws_a.root.glob("scores*.json"))
+    scores_b = sorted(ws_b.root.glob("scores*.json"))
+
+    if not scores_a:
+        print(f"No scored results in {args.baseline}. Run the score stage first.")
+        return 1
+    if not scores_b:
+        print(f"No scored results in {args.candidate}. Run the score stage first.")
+        return 1
+
+    exit_code = 0
+    for path_a, path_b in zip(scores_a, scores_b, strict=False):
+        a = json.loads(path_a.read_text(encoding="utf-8"))
+        b = json.loads(path_b.read_text(encoding="utf-8"))
+
+        print(f"\nComparison: {path_a.name} vs {path_b.name}")
+
+        if not a.get("valid", True):
+            print(f"  BASELINE INVALID: {path_a.name}")
+            exit_code = 1
+        if not b.get("valid", True):
+            print(f"  CANDIDATE INVALID: {path_b.name}")
+            exit_code = 1
+
+        mrr_a = a.get("mrr", 0)
+        mrr_b = b.get("mrr", 0)
+        if isinstance(mrr_a, (int, float)) and isinstance(mrr_b, (int, float)):
+            delta = mrr_b - mrr_a
+            direction = "IMPROVEMENT" if delta > 0 else "REGRESSION" if delta < 0 else "UNCHANGED"
+            print(f"  MRR: {mrr_a} -> {mrr_b} ({direction}, delta {delta:+.4f})")
+            if delta < -0.05:
+                exit_code = 1
+
+        hit_a = a.get("hit_rates", {})
+        hit_b = b.get("hit_rates", {})
+        if isinstance(hit_a, dict) and isinstance(hit_b, dict):
+            for k_label in sorted(set(hit_a) | set(hit_b)):
+                ra = hit_a.get(k_label, {})
+                rb = hit_b.get(k_label, {})
+                if isinstance(ra, dict) and isinstance(rb, dict):
+                    rate_a = ra.get("rate", 0)
+                    rate_b = rb.get("rate", 0)
+                    direction = (
+                        "IMPROVEMENT"
+                        if rate_b > rate_a
+                        else "REGRESSION"
+                        if rate_b < rate_a
+                        else "UNCHANGED"
+                    )
+                    print(f"  {k_label}: {rate_a:.1%} -> {rate_b:.1%} ({direction})")
+
+        meta_a = a.get("metadata", {})
+        meta_b = b.get("metadata", {})
+        if isinstance(meta_a, dict) and isinstance(meta_b, dict):
+            for key in ("corpus_version", "corpus_hash", "embedding_model"):
+                va, vb = meta_a.get(key), meta_b.get(key)
+                if va != vb:
+                    print(f"  WARNING: {key} differs: {va} vs {vb}")
+
+    return exit_code
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1419,6 +1812,28 @@ def main(argv: list[str] | None = None) -> int:
 
     report = subparsers.add_parser("report", help="Summarise the recorded runs")
     report.set_defaults(func=cmd_report)
+
+    build = subparsers.add_parser(
+        "build-corpus", help="Build a workspace from the committed evaluation corpus"
+    )
+    build.add_argument("--corpus", default=str(DEFAULT_CORPUS))
+    build.add_argument("--fresh", action="store_true", help="Delete the workspace first")
+    build.add_argument(
+        "--no-extraction", action="store_true", help="Skip the profile extraction stage"
+    )
+    build.set_defaults(func=cmd_build_corpus, workspace=str(DEFAULT_CLASS_WORKSPACE))
+
+    score = subparsers.add_parser(
+        "score", help="Score retrieval results with document-aware metrics"
+    )
+    score.set_defaults(func=cmd_score)
+
+    compare = subparsers.add_parser(
+        "compare", help="Compare two scored workspaces and flag regressions"
+    )
+    compare.add_argument("baseline", help="Path to the baseline workspace")
+    compare.add_argument("candidate", help="Path to the candidate workspace")
+    compare.set_defaults(func=cmd_compare)
 
     args = parser.parse_args(argv)
     return int(args.func(args))
