@@ -462,6 +462,25 @@ def last_user_message(conn: sqlite3.Connection, session_id: int) -> dict[str, ob
     return dict(row)
 
 
+def remove_messages(
+    conn: sqlite3.Connection, session_id: int, message_ids: tuple[int, ...]
+) -> None:
+    """Drop exactly the named messages without committing.
+
+    The caller owns the transaction. This is the non-committing primitive that
+    ``delete_messages`` delegates to; use it directly inside an explicit
+    ``begin immediate`` / ``commit`` block when the delete must land atomically
+    with other mutations (e.g. regeneration's delete-then-insert).
+    """
+    if not message_ids:
+        return
+    placeholders = ", ".join("?" for _ in message_ids)
+    conn.execute(
+        f"delete from messages where session_id = ? and id in ({placeholders})",  # noqa: S608
+        (session_id, *message_ids),
+    )
+
+
 def delete_messages(
     conn: sqlite3.Connection, session_id: int, message_ids: tuple[int, ...]
 ) -> None:
@@ -474,14 +493,9 @@ def delete_messages(
     replace. A newer independent question or reply - one committed by a turn this plan
     never saw - is not in the list and is untouchable, whatever the request timing.
     """
-    if not message_ids:
-        return
-    placeholders = ", ".join("?" for _ in message_ids)
-    conn.execute(
-        f"delete from messages where session_id = ? and id in ({placeholders})",  # noqa: S608
-        (session_id, *message_ids),
-    )
-    conn.commit()
+    remove_messages(conn, session_id, message_ids)
+    if message_ids:
+        conn.commit()
 
 
 def list_messages(conn: sqlite3.Connection, session_id: int) -> list[dict[str, object]]:

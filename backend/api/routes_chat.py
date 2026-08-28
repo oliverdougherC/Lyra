@@ -1037,8 +1037,13 @@ async def _stream_turn(
                 else "The answer was cancelled before any text arrived."
             )
             tutor_attempts.stop_attempt(conn, plan.attempt_id, detail=detail)
-        elif conn is not None and not plan.attempt_id and (received or thought):
+        elif conn is not None and not plan.superseded and (received or thought):
+            # A regular send (no superseded replies) keeps whatever arrived.
             _commit_reply_atomic(conn, session_id, plan, received, thought, retrieval, thinking_ms)
+        # Regeneration (superseded != ()): partial content is discarded on
+        # cancel.  The original reply stays intact because _open_regeneration
+        # only plans the superseded ids -- the delete happens inside
+        # _commit_reply_atomic, which was never reached.
         raise
     except LyraError as exc:
         if conn is not None and plan.attempt_id:
@@ -1201,46 +1206,39 @@ def _commit_reply_atomic(
 ) -> int:
     """Swap in this turn's reply and mark its attempt completed, atomically.
 
-    The reply and the completed state land in the same transaction so a crash can never
-    leave a stored reply beside an attempt still reading as running (which a later retry
-    would re-run, double-answering). When there is no attempt_id (regeneration without
-    attempt tracking), it commits the reply alone.
+    Every mutation -- superseded-message deletion, new-reply insertion, and
+    attempt completion -- lands in one ``begin immediate`` / ``commit`` so a
+    crash or insert failure can never leave the conversation with the old reply
+    deleted and nothing in its place.
     """
-    if plan.superseded:
-        sessions.delete_messages(conn, session_id, plan.superseded)
-    if not plan.attempt_id:
-        return sessions.add_message(
-            conn,
-            session_id,
-            "assistant",
-            "".join(received),
-            retrieval_trimmed=retrieval.trimmed,
-            omitted_document_count=retrieval.omitted_document_count,
-            thinking="".join(thought),
-            thinking_ms=thinking_ms,
-        )
+    content = "".join(received)
+    thinking = "".join(thought)
     try:
         conn.execute("begin immediate")
+        if plan.superseded:
+            sessions.remove_messages(conn, session_id, plan.superseded)
         message_id = sessions.insert_message(
             conn,
             session_id,
             "assistant",
-            "".join(received),
+            content,
             retrieval_trimmed=retrieval.trimmed,
             omitted_document_count=retrieval.omitted_document_count,
-            thinking="".join(thought),
+            thinking=thinking,
             thinking_ms=thinking_ms,
         )
-        tutor_attempts.mark_completed(conn, plan.attempt_id, message_id)
+        if plan.attempt_id:
+            tutor_attempts.mark_completed(conn, plan.attempt_id, message_id)
         conn.commit()
     except Exception:
         conn.rollback()
-        tutor_attempts.fail_attempt(
-            conn,
-            plan.attempt_id,
-            stopped_reason="persistence_failed",
-            detail="The reply was written but could not be saved. Try again.",
-        )
+        if plan.attempt_id:
+            tutor_attempts.fail_attempt(
+                conn,
+                plan.attempt_id,
+                stopped_reason="persistence_failed",
+                detail="The reply was written but could not be saved. Try again.",
+            )
         raise
     return message_id
 
