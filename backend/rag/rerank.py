@@ -11,6 +11,7 @@ model did not download gets slightly worse search, not a broken class.
 """
 
 import enum
+import json
 import logging
 from dataclasses import dataclass
 
@@ -41,6 +42,7 @@ class RerankStatus(enum.Enum):
     START_REFUSED = "start_refused"
     TIMEOUT = "timeout"
     UPSTREAM_ERROR = "upstream_error"
+    INVALID_JSON = "invalid_json"
     MALFORMED_RESPONSE = "malformed_response"
     EMPTY_INPUT = "empty_input"
 
@@ -90,13 +92,18 @@ def rerank(query: str, passages: list[str]) -> RerankOutcome:
                 json={"query": query, "documents": passages},
             )
             response.raise_for_status()
-            payload = response.json()
     except httpx.TimeoutException:
         logger.warning("The reranking server timed out; keeping the search order", exc_info=True)
         return RerankOutcome(status=RerankStatus.TIMEOUT, scores=None)
-    except (httpx.HTTPError, ValueError):
+    except httpx.HTTPError:
         logger.warning("The reranking server failed; keeping the search order", exc_info=True)
         return RerankOutcome(status=RerankStatus.UPSTREAM_ERROR, scores=None)
+
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("The reranking server returned invalid JSON; keeping the search order")
+        return RerankOutcome(status=RerankStatus.INVALID_JSON, scores=None)
 
     scores = _scores(payload, len(passages))
     if scores is None:

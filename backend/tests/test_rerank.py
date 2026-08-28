@@ -452,6 +452,33 @@ def test_malformed_response_is_distinguished_from_success(
     assert outcome.status == RerankStatus.MALFORMED_RESPONSE
 
 
+def test_invalid_json_is_distinguished_from_upstream_error(
+    installed: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 200 response with non-JSON body must be INVALID_JSON, not UPSTREAM_ERROR."""
+
+    class InvalidJsonClient:
+        def __enter__(self) -> "InvalidJsonClient":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+            response = httpx.Response(
+                200,
+                content=b"not json at all",
+                request=httpx.Request("POST", url),
+            )
+            return response
+
+    monkeypatch.setattr(rerank_module.httpx, "Client", lambda timeout: InvalidJsonClient())
+
+    outcome = rerank("a question", ["one", "two"])
+    assert outcome.scores is None
+    assert outcome.status == RerankStatus.INVALID_JSON
+
+
 def test_successful_rerank_returns_applied(
     installed: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

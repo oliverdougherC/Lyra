@@ -26,152 +26,224 @@
     "Self-authored, privacy-safe, deterministic."
   ],
   "corpus": "retrieval_class",
-  "corpus_version": "1.0.0",
+  "corpus_version": "2.0.0",
   "document": null,
   "questions": [
     {
       "id": "syllabus-grading",
       "question": "What percentage of the final grade do homework assignments count for in this course?",
       "expect_document": "phys201-syllabus",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "same_document",
-      "note": "Only the syllabus states the grading policy. No other document mentions percentages."
+      "note": "Only the syllabus states the grading policy. No other document mentions percentages.",
+      "expect_passage_id": "phys201-syllabus::grading-policy"
     },
     {
       "id": "syllabus-exam-date",
       "question": "When is Midterm 1 scheduled?",
       "expect_document": "phys201-syllabus",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "same_document",
-      "note": "Only the syllabus carries the exam schedule."
+      "note": "Only the syllabus carries the exam schedule.",
+      "expect_passage_id": "phys201-syllabus::schedule"
     },
     {
       "id": "newtons-third-law-error",
       "question": "What is the common error students make about Newton's third law pairs?",
       "expect_document": "phys201-ch3-newtons-laws",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "same_document",
-      "note": "Section 3.3 of chapter 3 notes. The weight/normal confusion. No other document discusses this."
+      "note": "Section 3.3 of chapter 3 notes. The weight/normal confusion. No other document discusses this.",
+      "expect_passage_id": "phys201-ch3-newtons-laws::3.3-third-law"
     },
     {
       "id": "fbd-steps",
       "question": "What are the five steps for drawing a free body diagram?",
       "expect_document": "phys201-ch3-newtons-laws",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "structural",
-      "note": "Section 3.4 lists them as a numbered sequence. The problem sets mention FBDs but do not list the steps."
+      "note": "Section 3.4 lists them as a numbered sequence. The problem sets mention FBDs but do not list the steps.",
+      "expect_passage_id": "phys201-ch3-newtons-laws::3.4-free-body-diagrams"
     },
     {
       "id": "incline-force-approach",
       "question": "On a frictionless incline of angle theta, what is the acceleration of a sliding block?",
       "expect_document": "phys201-ch3-newtons-laws",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "cross_document_confusion",
-      "note": "Section 3.5 gives a = g*sin(theta). Chapter 5 section 5.7 discusses the same incline with energy. The formula sheet also lists this. The chapter 3 derivation is the canonical force-approach answer."
+      "note": "Section 3.5 gives a = g*sin(theta). Chapter 5 section 5.7 discusses the same incline with energy. The formula sheet also lists this. The chapter 3 derivation is the canonical force-approach answer.",
+      "expect_passage_id": "phys201-ch3-newtons-laws::3.5-inclined-planes"
     },
     {
       "id": "work-energy-theorem",
       "question": "How is the work-energy theorem derived from Newton's second law?",
       "expect_document": "phys201-ch5-energy",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "same_document",
-      "note": "Section 5.2 states it is a consequence of F=ma. No other document explains the derivation."
+      "note": "Section 5.2 states it is a consequence of F=ma. No other document explains the derivation.",
+      "expect_passage_id": "phys201-ch5-energy::5.2-work-energy-theorem"
     },
     {
       "id": "friction-work",
       "question": "Why is friction a non-conservative force, and what happens to the mechanical energy it removes?",
       "expect_document": "phys201-ch5-energy",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "same_document",
-      "note": "Section 5.5 explains friction converts mechanical energy to thermal energy."
+      "note": "Section 5.5 explains friction converts mechanical energy to thermal energy.",
+      "expect_passage_id": "phys201-ch5-energy::5.5-friction-work"
     },
     {
       "id": "incline-energy-approach",
       "question": "How do you find the speed of a block at the bottom of an incline using conservation of energy?",
       "expect_document": "phys201-ch5-energy",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "cross_document_confusion",
-      "note": "Section 5.7 gives the energy approach. Must not be confused with chapter 3's force approach, which gives the same numerical answer. The hw5 solution also solves an incline with energy."
+      "note": "Section 5.7 gives the energy approach. Must not be confused with chapter 3's force approach, which gives the same numerical answer. The hw5 solution also solves an incline with energy.",
+      "expect_passage_id": "phys201-ch5-energy::5.7-incline-energy"
     },
     {
       "id": "hw3-atwood-problem",
       "question": "In the Atwood machine problem with m1 = 4.0 kg and m2 = 6.0 kg, what are the questions asked?",
       "expect_document": "phys201-hw3",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "answer_key",
-      "note": "The homework poses the problem. The solution answers it with identical mass values. This is the problem-set-vs-solution-key confusion case."
+      "note": "The homework poses the problem. The solution answers it with identical mass values. This is the problem-set-vs-solution-key confusion case.",
+      "expect_passage_id": "phys201-hw3::problem-3"
     },
     {
       "id": "hw3-atwood-answer",
       "question": "What is the acceleration of the Atwood machine with masses 4.0 kg and 6.0 kg, worked out step by step?",
       "expect_document": "phys201-hw3-solution",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "answer_key",
-      "note": "The solution works out a = 1.96 m/s^2. The homework poses the same problem with the same numbers but does not contain the answer. Lexical search should find both; the 'worked out' phrasing targets the solution."
+      "note": "The solution works out a = 1.96 m/s^2. The homework poses the same problem with the same numbers but does not contain the answer. Lexical search should find both; the 'worked out' phrasing targets the solution.",
+      "expect_passage_id": "phys201-hw3-solution::problem-3"
     },
     {
       "id": "hw3-incline-friction-answer",
       "question": "For the 8.0 kg box on a 25-degree incline with mu_k = 0.30, what is the acceleration?",
       "expect_document": "phys201-hw3-solution",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "lexical",
-      "note": "Specific numerical values (8.0 kg, 25 degrees, 0.30) appear in both the problem and the solution. The acceleration value 1.48 m/s^2 appears only in the solution. This tests lexical matching of rare tokens."
+      "note": "Specific numerical values (8.0 kg, 25 degrees, 0.30) appear in both the problem and the solution. The acceleration value 1.48 m/s^2 appears only in the solution. This tests lexical matching of rare tokens.",
+      "expect_passage_id": "phys201-hw3-solution::problem-2"
     },
     {
       "id": "hw5-spring-ball",
       "question": "A 0.50 kg ball is launched by a spring compressed 0.10 m with k = 200 N/m. How high does it go up a ramp?",
       "expect_document": "phys201-hw5-solution",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "answer_key",
-      "note": "Problem 3 appears in both hw5 and hw5-solution. The height h = 0.204 m is only in the solution."
+      "note": "Problem 3 appears in both hw5 and hw5-solution. The height h = 0.204 m is only in the solution.",
+      "expect_passage_id": "phys201-hw5-solution::problem-3"
     },
     {
       "id": "hw5-power-horsepower",
       "question": "How many horsepower does the 70 kg sprinter produce?",
       "expect_document": "phys201-hw5-solution",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "lexical",
-      "note": "The answer 2.35 hp is in the solution only. The formula sheet also mentions horsepower conversion but does not have this problem."
+      "note": "The answer 2.35 hp is in the solution only. The formula sheet also mentions horsepower conversion but does not have this problem.",
+      "expect_passage_id": "phys201-hw5-solution::problem-4"
     },
     {
       "id": "formula-centripetal",
       "question": "What is the formula for centripetal force?",
       "expect_document": "phys201-formula-sheet",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "cross_document_confusion",
-      "note": "The formula sheet lists F_c = m*v^2/r. Chapter 3 section 3.6 also derives it. Both are correct; the formula sheet is the expected document because it is the reference listing."
+      "note": "The formula sheet lists F_c = m*v^2/r. Chapter 3 section 3.6 also derives it. Both are correct; the formula sheet is the expected document because it is the reference listing.",
+      "expect_passage_id": "phys201-formula-sheet::forces"
     },
     {
       "id": "structural-section-3-5",
       "question": "What does section 3.5 of the chapter 3 notes cover?",
       "expect_document": "phys201-ch3-newtons-laws",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "structural",
-      "note": "Section 3.5 covers inclined planes. Tests structural/section cue retrieval."
+      "note": "Section 3.5 covers inclined planes. Tests structural/section cue retrieval.",
+      "expect_passage_id": "phys201-ch3-newtons-laws::3.5-inclined-planes"
     },
     {
       "id": "energy-vs-force-incline",
       "question": "Chapter 5 says the energy and force approaches to an inclined plane must agree. Where is this stated?",
       "expect_document": "phys201-ch5-energy",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "cross_document_synthesis",
-      "note": "Section 5.7 of chapter 5 explicitly states the energy answer must agree with the force answer from chapter 3. Tests cross-document synthesis awareness."
+      "note": "Section 5.7 of chapter 5 explicitly states the energy answer must agree with the force answer from chapter 3. Tests cross-document synthesis awareness.",
+      "expect_passage_id": "phys201-ch5-energy::5.7-incline-energy"
     },
     {
       "id": "ambiguous-friction-incline",
       "question": "How is friction handled on an inclined plane?",
       "expect_document": "phys201-ch3-newtons-laws",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "ambiguous",
-      "note": "Both chapter 3 (section 3.5) and chapter 5 (section 5.7) discuss friction on inclines, as do hw3 and hw3-solution. Chapter 3 is the primary treatment."
+      "note": "Both chapter 3 (section 3.5) and chapter 5 (section 5.7) discuss friction on inclines, as do hw3 and hw3-solution. Chapter 3 is the primary treatment.",
+      "expect_passage_id": "phys201-ch3-newtons-laws::3.5-inclined-planes"
     },
     {
       "id": "circular-motion-car",
       "question": "What minimum coefficient of friction keeps a car on an unbanked curve of radius 85 m at 20 m/s?",
       "expect_document": "phys201-hw3-solution",
-      "expect_pages": [1, 1],
+      "expect_pages": [
+        1,
+        1
+      ],
       "category": "lexical",
-      "note": "The specific numbers (85 m, 20 m/s) appear in both hw3 and hw3-solution. The answer mu_s = 0.48 is only in the solution."
+      "note": "The specific numbers (85 m, 20 m/s) appear in both hw3 and hw3-solution. The answer mu_s = 0.48 is only in the solution.",
+      "expect_passage_id": "phys201-hw3-solution::problem-4"
     },
     {
       "id": "control-thermodynamics",

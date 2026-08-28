@@ -581,21 +581,46 @@ class Target:
 
     Attributes:
         document_id: The row the answer has to come from for a hit to count.
+        filename: The actual stored filename, used for cross-format document identity.
         ranges: Outline paths to page spans, empty for a document that names no sections.
+        passage_anchors: Mapping from passage ID to anchor text that must appear in the
+            chunk for a passage-level hit. Empty for documents with no section metadata.
     """
 
     document_id: int
+    filename: str
     ranges: dict[str, tuple[int, int]]
+    passage_anchors: dict[str, str] = field(default_factory=dict)
 
 
-# A control names no document because it has no answer to find. Its document id matches
-# nothing, which is exactly the reading a control wants: whatever came back is the wrong
-# document, because every document is.
-NO_TARGET = Target(document_id=0, ranges={})
+NO_TARGET = Target(document_id=0, filename="", ranges={})
+
+
+def _load_corpus_sections(question_set: dict[str, object]) -> dict[str, dict[str, str]]:
+    """Load passage anchors from the corpus file, keyed by stem then passage ID."""
+    corpus_name = question_set.get("corpus")
+    if not corpus_name:
+        return {}
+    corpus_path = ROOT / "scripts" / "eval_corpora" / f"{corpus_name}.json"
+    if not corpus_path.exists():
+        return {}
+    corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
+    result: dict[str, dict[str, str]] = {}
+    for doc in corpus.get("documents", []):
+        stem = doc.get("stem", "")
+        anchors: dict[str, str] = {}
+        for sec in doc.get("sections", []):
+            if sec.get("id") and sec.get("anchor"):
+                anchors[sec["id"]] = sec["anchor"]
+        if anchors:
+            result[stem] = anchors
+    return result
 
 
 def _resolve_targets(
-    workspace: Workspace, conn: sqlite3.Connection, question_set: dict[str, object]
+    workspace: Workspace,
+    conn: sqlite3.Connection,
+    question_set: dict[str, object],
 ) -> tuple[int, dict[str, Target]]:
     """Every document the question set refers to, resolved once each.
 
@@ -610,6 +635,7 @@ def _resolve_targets(
     """
     default = question_set.get("document")
     questions = [one for one in question_set["questions"] if isinstance(one, dict)]
+    corpus_sections = _load_corpus_sections(question_set)
 
     wanted: dict[str, bool] = {}
     for question in questions:
@@ -621,9 +647,6 @@ def _resolve_targets(
                 f"{question['id']} names no document, and the set has no default. "
                 "Give the set a `document`, or the question an `expect_document`."
             )
-        # A document needs its outline read only if some question addresses it by section.
-        # Every scan has no outline, and reading one it does not have would fail the run
-        # before a question was asked.
         wanted[str(stem)] = wanted.get(str(stem), False) or (
             question.get("expect_section") is not None
         )
@@ -634,7 +657,17 @@ def _resolve_targets(
         class_id, document_id, stored = _find_document(workspace, conn, stem)
         classes.add(class_id)
         ranges = section_ranges(read_outline(stored)) if wants_sections else {}
-        targets[stem] = Target(document_id=document_id, ranges=ranges)
+        row = conn.execute(
+            "select filename from documents where id = ?", (document_id,)
+        ).fetchone()
+        filename = str(row["filename"]) if row else ""
+        anchors = corpus_sections.get(stem, {})
+        targets[stem] = Target(
+            document_id=document_id,
+            filename=filename,
+            ranges=ranges,
+            passage_anchors=anchors,
+        )
 
     if len(classes) > 1:
         raise SystemExit(
@@ -654,7 +687,11 @@ def _states_a_location(question: dict[str, object]) -> bool:
     False for a control, which is the point of a control: there is no document to name
     because there is nothing in the class to find.
     """
-    return question.get("expect_section") is not None or question.get("expect_pages") is not None
+    return (
+        question.get("expect_section") is not None
+        or question.get("expect_pages") is not None
+        or question.get("expect_passage_id") is not None
+    )
 
 
 def cmd_retrieve(args: argparse.Namespace) -> int:
@@ -806,20 +843,19 @@ def _ask(
     question: dict[str, object],
     k: int,
 ) -> dict[str, object]:
-    """Run one question and locate the expected pages in the ranking.
+    """Run one question and locate the expected chunk in the ranking.
 
-    A question says where its answer is either by naming a section of the book's outline,
-    which is the ground truth a book carries about itself, or by giving the pages outright.
-    The second is not a lesser form of the first: a scanned handout has no outline to name,
-    and the pages of an eight-page appendix are as checkable by eye as an outline entry.
+    Location is determined by one of three mechanisms, checked in order:
+    1. ``expect_section``: outline path resolved to page range (PDF books).
+    2. ``expect_pages``: explicit page span (scanned handouts).
+    3. ``expect_passage_id``: passage anchor text must appear in chunk content.
 
-    Either way the search covers the whole class, and a chunk from the wrong document is
-    counted as a miss however well it scored. That is the point of running this against a
-    class: the same page ranks first among eleven chunks and eleventh among a thousand, and
-    only the second number describes what a student experiences.
+    A chunk from the wrong document is always a miss. A chunk from the right document
+    but the wrong passage is a document hit but a passage miss.
     """
     expected = question.get("expect_section")
     stated = question.get("expect_pages")
+    passage_id = question.get("expect_passage_id")
     pages: tuple[int, int] | None = None
     if expected is not None:
         pages = target.ranges.get(str(expected))
@@ -831,31 +867,61 @@ def _ask(
     elif isinstance(stated, list) and len(stated) == 2:
         pages = (int(stated[0]), int(stated[1]))
 
+    passage_anchor: str | None = None
+    if passage_id is not None:
+        passage_anchor = target.passage_anchors.get(str(passage_id))
+        if passage_anchor is None and target.passage_anchors:
+            raise SystemExit(
+                f"{question['id']}: expect_passage_id {passage_id!r} has no anchor "
+                f"in the corpus sections for {stem!r}."
+            )
+
+    targeted = pages is not None or passage_anchor is not None or passage_id is not None
     result = retrieval.retrieve(conn, class_id, str(question["question"]), UNLIMITED_BUDGET)
     chunks = result.chunks[:k]
 
     rank: int | None = None
-    if pages is not None:
-        for position, chunk in enumerate(chunks, start=1):
-            page = chunk.page_number
-            if chunk.document_id != target.document_id or page is None:
-                continue
-            if pages[0] <= page <= pages[1]:
-                rank = position
-                break
+    passage_hit: bool | None = None
+    passage_rank: int | None = None
 
-    # What outranked the answer, by document. Everything above the hit when there was one,
-    # and the whole of the product's `k` when there was not, because a question that missed
-    # was crowded out by all of it.
+    for position, chunk in enumerate(chunks, start=1):
+        if chunk.document_id != target.document_id:
+            continue
+
+        doc_match = False
+        if pages is not None:
+            page = chunk.page_number
+            if page is not None and pages[0] <= page <= pages[1]:
+                doc_match = True
+        elif passage_anchor is not None:
+            if passage_anchor in chunk.content:
+                doc_match = True
+        elif targeted:
+            doc_match = True
+
+        if doc_match and rank is None:
+            rank = position
+
+        if passage_anchor is not None and passage_anchor in chunk.content:
+            if passage_rank is None:
+                passage_rank = position
+                passage_hit = True
+
+    if passage_anchor is not None and passage_hit is None:
+        passage_hit = False
+
     ahead = chunks[: rank - 1] if rank else chunks[:PRODUCT_K]
-    return {
+    record: dict[str, object] = {
         "id": question["id"],
         "question": question["question"],
         "expect_document": stem,
         "expect_section": expected,
         "expect_pages": list(pages) if pages else None,
-        "targeted": pages is not None,
+        "expect_passage_id": passage_id,
+        "targeted": targeted,
         "rank": rank,
+        "passage_hit": passage_hit,
+        "passage_rank": passage_rank,
         "returned": len(chunks),
         "top_similarity": round(chunks[0].similarity, 4) if chunks else None,
         "rerank_status": result.rerank_status.value,
@@ -876,6 +942,7 @@ def _ask(
             for chunk in chunks[:_KEPT_NEIGHBOURS]
         ],
     }
+    return record
 
 
 def _mapping(value: object) -> dict[str, dict[str, object]]:
@@ -1431,6 +1498,23 @@ def _corpus_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
 
 
+def _corpus_path_from_retrieval(data: dict[str, object]) -> Path | None:
+    """Recover the corpus path from a retrieval result's metadata."""
+    meta = data.get("metadata")
+    if isinstance(meta, dict):
+        qfile = meta.get("questions_file")
+        if qfile:
+            qpath = ROOT / "scripts" / "eval_questions" / str(qfile)
+            if qpath.exists():
+                qdata = json.loads(qpath.read_text(encoding="utf-8"))
+                corpus_name = qdata.get("corpus")
+                if corpus_name:
+                    cpath = ROOT / "scripts" / "eval_corpora" / f"{corpus_name}.json"
+                    if cpath.exists():
+                        return cpath
+    return None
+
+
 def _reproducibility_metadata(
     args: argparse.Namespace, corpus_path: Path | None = None
 ) -> dict[str, object]:
@@ -1442,6 +1526,8 @@ def _reproducibility_metadata(
         "rerank_model": (
             str(settings.rerank_model_path.name) if settings.rerank_installed else None
         ),
+        "chunk_max_tokens": getattr(settings, "chunk_max_tokens", None),
+        "chunk_overlap_tokens": getattr(settings, "chunk_overlap_tokens", None),
     }
     if corpus_path and corpus_path.exists():
         corpus_data = json.loads(corpus_path.read_text(encoding="utf-8"))
@@ -1453,6 +1539,13 @@ def _reproducibility_metadata(
             qdata = json.loads(qpath.read_text(encoding="utf-8"))
             meta["questions_version"] = qdata.get("corpus_version", "unknown")
             meta["questions_file"] = qpath.name
+            meta["questions_hash"] = hashlib.sha256(
+                qpath.read_bytes()
+            ).hexdigest()[:16]
+    if hasattr(args, "k"):
+        meta["retrieval_k"] = args.k
+    if hasattr(args, "rerank"):
+        meta["requested_rerank"] = bool(args.rerank)
     return meta
 
 
@@ -1530,7 +1623,7 @@ def cmd_score(args: argparse.Namespace) -> int:
             "observed_path", "reranked" if data.get("reranked") else "embedding_order"
         )
 
-        targeted = [q for q in questions if q.get("targeted", q.get("expect_section") is not None)]
+        targeted = [q for q in questions if q.get("targeted")]
         controls = [q for q in questions if q not in targeted]
 
         scores: dict[str, object] = {
@@ -1590,16 +1683,27 @@ def cmd_score(args: argparse.Namespace) -> int:
                 }
             scores["by_document"] = doc_scores
 
-            wrong_doc = sum(
-                1
-                for q in targeted
-                if q.get("rank")
-                and q.get("neighbours")
-                and isinstance(q["neighbours"], list)
-                and q["neighbours"]
-                and str(q["neighbours"][0].get("document", ""))
-                != str(q.get("expect_document", "") + ".txt")
-            )
+            stem_to_filename: dict[str, str] = {}
+            for q in questions:
+                for nb in q.get("neighbours", []):
+                    if isinstance(nb, dict):
+                        fn = str(nb.get("document", ""))
+                        doc_stem = Path(fn).stem if fn else ""
+                        if doc_stem:
+                            stem_to_filename[doc_stem] = fn
+
+            wrong_doc = 0
+            for q in targeted:
+                if not q.get("rank"):
+                    continue
+                nbs = q.get("neighbours")
+                if not isinstance(nbs, list) or not nbs:
+                    continue
+                top_filename = str(nbs[0].get("document", ""))
+                expect_stem = str(q.get("expect_document", ""))
+                expected_filename = stem_to_filename.get(expect_stem, "")
+                if top_filename != expected_filename:
+                    wrong_doc += 1
             scores["wrong_document_top1"] = wrong_doc
 
             by_category: dict[str, list[dict[str, object]]] = {}
@@ -1608,7 +1712,7 @@ def cmd_score(args: argparse.Namespace) -> int:
                 by_category.setdefault(cat, []).append(q)
             cat_scores: dict[str, object] = {}
             for cat, qs in sorted(by_category.items()):
-                targ = [q for q in qs if q.get("targeted", q.get("expect_section") is not None)]
+                targ = [q for q in qs if q.get("targeted")]
                 cat_ranks = [q["rank"] for q in targ if q.get("rank")]
                 cat_scores[cat] = {
                     "count": len(qs),
@@ -1619,6 +1723,26 @@ def cmd_score(args: argparse.Namespace) -> int:
                     else 0.0,
                 }
             scores["by_category"] = cat_scores
+
+            passage_targeted = [q for q in targeted if q.get("expect_passage_id")]
+            if passage_targeted:
+                passage_hits = sum(1 for q in passage_targeted if q.get("passage_hit"))
+                passage_ranks = [
+                    q["passage_rank"]
+                    for q in passage_targeted
+                    if q.get("passage_rank") is not None
+                ]
+                scores["passage_hit_rate"] = round(
+                    passage_hits / len(passage_targeted), 4
+                )
+                scores["passage_mrr"] = (
+                    round(statistics.mean([1.0 / r for r in passage_ranks]), 4)
+                    if passage_ranks
+                    else 0.0
+                )
+                scores["passage_misses"] = [
+                    q["id"] for q in passage_targeted if not q.get("passage_hit")
+                ]
 
         if controls:
             control_sims = [
@@ -1634,7 +1758,7 @@ def cmd_score(args: argparse.Namespace) -> int:
                 round(statistics.median(targeted_sims), 4) if targeted_sims else None
             )
 
-        meta = _reproducibility_metadata(args)
+        meta = _reproducibility_metadata(args, _corpus_path_from_retrieval(data))
         scores["metadata"] = meta
 
         score_name = path.stem.replace("retrieval", "scores")
@@ -1689,11 +1813,62 @@ def _print_scores(scores: dict[str, object]) -> None:
     if wrong:
         print(f"\n  Wrong-document top-1: {wrong}")
 
+    p_rate = scores.get("passage_hit_rate")
+    if p_rate is not None:
+        p_mrr = scores.get("passage_mrr", 0)
+        print(f"\n  Passage hit rate: {p_rate:.1%}, passage MRR: {p_mrr}")
+        p_misses = scores.get("passage_misses")
+        if p_misses:
+            print(f"  Passage misses: {', '.join(str(m) for m in p_misses)}")
+
+
+_COMPATIBILITY_KEYS = (
+    "corpus_version",
+    "corpus_hash",
+    "questions_hash",
+    "embedding_model",
+    "embedding_dim",
+    "chunk_max_tokens",
+    "chunk_overlap_tokens",
+)
+
+
+def _check_compatibility(
+    meta_a: dict[str, object],
+    meta_b: dict[str, object],
+    allow_override: bool,
+) -> list[str]:
+    """Return a list of incompatible fields. Empty means comparable."""
+    problems: list[str] = []
+    for key in _COMPATIBILITY_KEYS:
+        va, vb = meta_a.get(key), meta_b.get(key)
+        if va is not None and vb is not None and va != vb:
+            label = f"{key}: {va} vs {vb}"
+            if allow_override:
+                problems.append(f"WARNING: {label} (override: comparing anyway)")
+            else:
+                problems.append(f"INCOMPATIBLE: {label}")
+    return problems
+
+
+def _score_identity(scores: dict[str, object]) -> str:
+    """A stable key for pairing scored runs by what they measured."""
+    observed = str(scores.get("observed_path", ""))
+    report = str(scores.get("report_file", ""))
+    return f"{observed}::{report}"
+
 
 def cmd_compare(args: argparse.Namespace) -> int:
-    """Compare two scored retrieval runs and flag regressions."""
+    """Compare two scored retrieval runs and flag regressions.
+
+    Pairing is by identity (observed_path + report_file), not by position. Runs
+    that exist in one workspace but not the other are flagged as unmatched.
+    Incompatible metadata (different corpus, embedding, chunking) fails closed
+    unless --force is passed.
+    """
     ws_a = Workspace(Path(args.baseline).resolve())
     ws_b = Workspace(Path(args.candidate).resolve())
+    allow_override = getattr(args, "force", False)
 
     scores_a = sorted(ws_a.root.glob("scores*.json"))
     scores_b = sorted(ws_b.root.glob("scores*.json"))
@@ -1705,18 +1880,61 @@ def cmd_compare(args: argparse.Namespace) -> int:
         print(f"No scored results in {args.candidate}. Run the score stage first.")
         return 1
 
-    exit_code = 0
-    for path_a, path_b in zip(scores_a, scores_b, strict=False):
-        a = json.loads(path_a.read_text(encoding="utf-8"))
-        b = json.loads(path_b.read_text(encoding="utf-8"))
+    map_a: dict[str, dict[str, object]] = {}
+    for path in scores_a:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["_source_path"] = str(path)
+        key = _score_identity(data)
+        if key in map_a:
+            print(f"Duplicate identity in baseline: {key}")
+            return 1
+        map_a[key] = data
 
-        print(f"\nComparison: {path_a.name} vs {path_b.name}")
+    map_b: dict[str, dict[str, object]] = {}
+    for path in scores_b:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["_source_path"] = str(path)
+        key = _score_identity(data)
+        if key in map_b:
+            print(f"Duplicate identity in candidate: {key}")
+            return 1
+        map_b[key] = data
+
+    all_keys = sorted(set(map_a) | set(map_b))
+    exit_code = 0
+
+    for key in all_keys:
+        a = map_a.get(key)
+        b = map_b.get(key)
+
+        if a is None:
+            print(f"\nUNMATCHED in candidate only: {key}")
+            exit_code = 1
+            continue
+        if b is None:
+            print(f"\nUNMATCHED in baseline only: {key}")
+            exit_code = 1
+            continue
+
+        src_a = Path(str(a.get("_source_path", "")))
+        src_b = Path(str(b.get("_source_path", "")))
+        print(f"\nComparison: {src_a.name} vs {src_b.name}")
+
+        meta_a = a.get("metadata", {})
+        meta_b = b.get("metadata", {})
+        if isinstance(meta_a, dict) and isinstance(meta_b, dict):
+            problems = _check_compatibility(meta_a, meta_b, allow_override)
+            for p in problems:
+                print(f"  {p}")
+            if any("INCOMPATIBLE" in p for p in problems):
+                exit_code = 1
+                continue
 
         if not a.get("valid", True):
-            print(f"  BASELINE INVALID: {path_a.name}")
+            print(f"  BASELINE INVALID: {src_a.name}")
             exit_code = 1
         if not b.get("valid", True):
-            print(f"  CANDIDATE INVALID: {path_b.name}")
+            print(f"  CANDIDATE INVALID: {src_b.name}")
             exit_code = 1
 
         mrr_a = a.get("mrr", 0)
@@ -1745,14 +1963,6 @@ def cmd_compare(args: argparse.Namespace) -> int:
                         else "UNCHANGED"
                     )
                     print(f"  {k_label}: {rate_a:.1%} -> {rate_b:.1%} ({direction})")
-
-        meta_a = a.get("metadata", {})
-        meta_b = b.get("metadata", {})
-        if isinstance(meta_a, dict) and isinstance(meta_b, dict):
-            for key in ("corpus_version", "corpus_hash", "embedding_model"):
-                va, vb = meta_a.get(key), meta_b.get(key)
-                if va != vb:
-                    print(f"  WARNING: {key} differs: {va} vs {vb}")
 
     return exit_code
 
@@ -1833,6 +2043,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     compare.add_argument("baseline", help="Path to the baseline workspace")
     compare.add_argument("candidate", help="Path to the candidate workspace")
+    compare.add_argument(
+        "--force",
+        action="store_true",
+        help="Compare even when metadata is incompatible (for exploratory analysis)",
+    )
     compare.set_defaults(func=cmd_compare)
 
     args = parser.parse_args(argv)

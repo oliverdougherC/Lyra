@@ -29,7 +29,9 @@ from scripts.eval_ingest import (  # noqa: E402
     Target,
     _already_ingested,
     _ask,
+    _check_compatibility,
     _report_retrieval,
+    _score_identity,
     _widened_k,
     section_ranges,
 )
@@ -132,7 +134,7 @@ def test_rank_is_the_position_of_the_first_chunk_from_the_right_pages_of_the_rig
             _Chunk(document_id=1, page_number=5, filename="book.pdf"),
         ],
     )
-    target = Target(document_id=1, ranges={})
+    target = Target(document_id=1, filename="book.pdf", ranges={})
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
 
@@ -150,7 +152,7 @@ def test_a_never_found_answer_has_no_rank_and_the_whole_served_k_ahead_of_it(
         monkeypatch,
         [_Chunk(document_id=2, page_number=n, filename=f"doc{n}.pdf") for n in range(1, 13)],
     )
-    target = Target(document_id=1, ranges={})
+    target = Target(document_id=1, filename="book.pdf", ranges={})
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=12)
 
@@ -171,7 +173,7 @@ def test_an_expected_section_resolves_through_the_outline_ranges(
             _Chunk(document_id=1, page_number=11, filename="book.pdf"),
         ],
     )
-    target = Target(document_id=1, ranges={"Ch / Sec": (10, 12)})
+    target = Target(document_id=1, filename="book.pdf", ranges={"Ch / Sec": (10, 12)})
 
     record = _ask(None, 1, "book", target, _question(expect_section="Ch / Sec"), k=8)
 
@@ -180,7 +182,7 @@ def test_an_expected_section_resolves_through_the_outline_ranges(
 
 
 def test_a_section_the_outline_does_not_carry_is_a_configuration_error_not_a_miss() -> None:
-    target = Target(document_id=1, ranges={"Ch / Sec": (10, 12)})
+    target = Target(document_id=1, filename="book.pdf", ranges={"Ch / Sec": (10, 12)})
 
     with pytest.raises(SystemExit, match="no outline entry"):
         _ask(None, 1, "book", target, _question(expect_section="Ch / Nowhere"), k=8)
@@ -207,7 +209,7 @@ def test_the_ranking_is_cut_to_k_before_anything_is_scored(
         [_Chunk(document_id=2, page_number=1)] * 4
         + [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
     )
-    target = Target(document_id=1, ranges={})
+    target = Target(document_id=1, filename="book.pdf", ranges={})
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=4)
 
@@ -399,7 +401,7 @@ def test_rerank_status_surfaces_in_ask_record(monkeypatch: pytest.MonkeyPatch) -
         [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
         RerankStatus.APPLIED,
     )
-    target = Target(document_id=1, ranges={})
+    target = Target(document_id=1, filename="book.pdf", ranges={})
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
     assert record["rerank_status"] == "applied"
@@ -411,7 +413,7 @@ def test_weights_absent_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None
         [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
         RerankStatus.WEIGHTS_ABSENT,
     )
-    target = Target(document_id=1, ranges={})
+    target = Target(document_id=1, filename="book.pdf", ranges={})
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
     assert record["rerank_status"] == "weights_absent"
@@ -423,7 +425,7 @@ def test_start_refused_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
         [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
         RerankStatus.START_REFUSED,
     )
-    target = Target(document_id=1, ranges={})
+    target = Target(document_id=1, filename="book.pdf", ranges={})
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
     assert record["rerank_status"] == "start_refused"
@@ -435,7 +437,7 @@ def test_timeout_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
         [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
         RerankStatus.TIMEOUT,
     )
-    target = Target(document_id=1, ranges={})
+    target = Target(document_id=1, filename="book.pdf", ranges={})
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
     assert record["rerank_status"] == "timeout"
@@ -447,7 +449,7 @@ def test_malformed_response_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> 
         [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
         RerankStatus.MALFORMED_RESPONSE,
     )
-    target = Target(document_id=1, ranges={})
+    target = Target(document_id=1, filename="book.pdf", ranges={})
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
     assert record["rerank_status"] == "malformed_response"
@@ -459,7 +461,7 @@ def test_upstream_error_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None
         [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
         RerankStatus.UPSTREAM_ERROR,
     )
-    target = Target(document_id=1, ranges={})
+    target = Target(document_id=1, filename="book.pdf", ranges={})
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
     assert record["rerank_status"] == "upstream_error"
@@ -471,7 +473,7 @@ def test_not_requested_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
         [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
         RerankStatus.NOT_REQUESTED,
     )
-    target = Target(document_id=1, ranges={})
+    target = Target(document_id=1, filename="book.pdf", ranges={})
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
     assert record["rerank_status"] == "not_requested"
@@ -548,7 +550,7 @@ def test_a_right_passage_from_the_wrong_document_is_a_miss(
             _Chunk(document_id=2, page_number=6, filename="wrong.pdf"),
         ],
     )
-    target = Target(document_id=1, ranges={})
+    target = Target(document_id=1, filename="book.pdf", ranges={})
 
     record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
 
@@ -602,3 +604,274 @@ def test_degraded_run_is_not_treated_as_valid_baseline(
     assert "INVALID" in out
     assert report["valid"] is False
     assert report["reranked"] is False
+
+
+# ---------------------------------------------------------- passage-level scoring (item 1)
+
+
+def test_passage_hit_when_anchor_appears_in_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_retrieve(
+        monkeypatch,
+        [
+            _Chunk(document_id=1, page_number=1, filename="book.pdf", content="other stuff"),
+            _Chunk(
+                document_id=1,
+                page_number=1,
+                filename="book.pdf",
+                content="before 3.3 Newton's Third Law after",
+            ),
+        ],
+    )
+    target = Target(
+        document_id=1,
+        filename="book.pdf",
+        ranges={},
+        passage_anchors={"ch3::3.3-third-law": "3.3 Newton's Third Law"},
+    )
+
+    record = _ask(
+        None,
+        1,
+        "book",
+        target,
+        _question(expect_passage_id="ch3::3.3-third-law", expect_pages=[1, 1]),
+        k=8,
+    )
+
+    assert record["passage_hit"] is True
+    assert record["passage_rank"] == 2
+    assert record["targeted"] is True
+
+
+def test_passage_miss_when_anchor_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_retrieve(
+        monkeypatch,
+        [
+            _Chunk(document_id=1, page_number=1, filename="book.pdf", content="irrelevant"),
+        ],
+    )
+    target = Target(
+        document_id=1,
+        filename="book.pdf",
+        ranges={},
+        passage_anchors={"ch3::3.3-third-law": "3.3 Newton's Third Law"},
+    )
+
+    record = _ask(
+        None,
+        1,
+        "book",
+        target,
+        _question(expect_passage_id="ch3::3.3-third-law"),
+        k=8,
+    )
+
+    assert record["passage_hit"] is False
+    assert record["passage_rank"] is None
+
+
+def test_right_document_wrong_passage_is_document_hit_passage_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Correct document but wrong section: rank should be set (doc hit) but passage_hit False."""
+    _stub_retrieve(
+        monkeypatch,
+        [
+            _Chunk(
+                document_id=1,
+                page_number=1,
+                filename="book.pdf",
+                content="3.5 Applications: Inclined Planes on a slope",
+            ),
+        ],
+    )
+    target = Target(
+        document_id=1,
+        filename="book.pdf",
+        ranges={},
+        passage_anchors={
+            "ch3::3.3-third-law": "3.3 Newton's Third Law",
+            "ch3::3.5-inclined": "3.5 Applications: Inclined Planes",
+        },
+    )
+
+    record = _ask(
+        None,
+        1,
+        "book",
+        target,
+        _question(expect_passage_id="ch3::3.3-third-law"),
+        k=8,
+    )
+
+    assert record["rank"] is None
+    assert record["passage_hit"] is False
+
+
+def test_passage_id_with_no_anchors_in_target_still_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When target has no passage_anchors (corpus has no sections), passage scoring is skipped."""
+    _stub_retrieve(
+        monkeypatch,
+        [
+            _Chunk(document_id=1, page_number=1, filename="book.pdf", content="anything"),
+        ],
+    )
+    target = Target(document_id=1, filename="book.pdf", ranges={})
+
+    record = _ask(
+        None,
+        1,
+        "book",
+        target,
+        _question(expect_passage_id="ch3::3.3-third-law"),
+        k=8,
+    )
+
+    assert record["targeted"] is True
+    assert record["passage_hit"] is None
+    assert record["rank"] == 1
+
+
+# ---------------------------------------------------------- EMPTY_INPUT semantics (item 6)
+
+
+def test_empty_input_status_on_control_is_legitimate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A no-answer control producing EMPTY_INPUT is not a failure."""
+    _stub_retrieve_with_status(
+        monkeypatch,
+        [],
+        RerankStatus.EMPTY_INPUT,
+    )
+    record = _ask(None, 1, None, NO_TARGET, _question(id="control"), k=8)
+
+    assert record["rerank_status"] == "empty_input"
+    assert record["targeted"] is False
+
+
+def test_empty_input_status_on_targeted_is_a_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A targeted question that returns empty is a miss, not a success."""
+    _stub_retrieve_with_status(
+        monkeypatch,
+        [],
+        RerankStatus.EMPTY_INPUT,
+    )
+    target = Target(document_id=1, filename="book.pdf", ranges={})
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
+
+    assert record["rerank_status"] == "empty_input"
+    assert record["targeted"] is True
+    assert record["rank"] is None
+
+
+# ----------------------------------------------------- compare identity pairing (items 3, 4)
+
+
+def test_score_identity_uses_observed_path_and_report_file() -> None:
+    a = {"observed_path": "reranked", "report_file": "scores-phys201.json"}
+    b = {"observed_path": "embedding_order", "report_file": "scores-phys201.json"}
+    assert _score_identity(a) != _score_identity(b)
+
+
+def test_score_identity_same_when_content_matches() -> None:
+    a = {"observed_path": "reranked", "report_file": "scores-phys201.json", "mrr": 0.8}
+    b = {"observed_path": "reranked", "report_file": "scores-phys201.json", "mrr": 0.5}
+    assert _score_identity(a) == _score_identity(b)
+
+
+def test_compatibility_check_rejects_different_corpus_hash() -> None:
+    meta_a = {"corpus_hash": "abc123", "embedding_model": "e5"}
+    meta_b = {"corpus_hash": "def456", "embedding_model": "e5"}
+    problems = _check_compatibility(meta_a, meta_b, allow_override=False)
+    assert any("INCOMPATIBLE" in p for p in problems)
+
+
+def test_compatibility_check_accepts_matching_metadata() -> None:
+    meta = {"corpus_hash": "abc123", "embedding_model": "e5", "embedding_dim": 384}
+    problems = _check_compatibility(meta, meta, allow_override=False)
+    assert problems == []
+
+
+def test_compatibility_check_warns_with_force() -> None:
+    meta_a = {"corpus_hash": "abc123"}
+    meta_b = {"corpus_hash": "def456"}
+    problems = _check_compatibility(meta_a, meta_b, allow_override=True)
+    assert any("WARNING" in p for p in problems)
+    assert not any("INCOMPATIBLE" in p for p in problems)
+
+
+def test_compatibility_ignores_none_values() -> None:
+    meta_a = {"corpus_hash": None, "embedding_model": "e5"}
+    meta_b = {"corpus_hash": "def456", "embedding_model": "e5"}
+    problems = _check_compatibility(meta_a, meta_b, allow_override=False)
+    assert problems == []
+
+
+# ------------------------------------------------- INVALID_JSON status surfaces (item 5)
+
+
+def test_invalid_json_status_surfaces(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_retrieve_with_status(
+        monkeypatch,
+        [_Chunk(document_id=1, page_number=5, filename="book.pdf")],
+        RerankStatus.INVALID_JSON,
+    )
+    target = Target(document_id=1, filename="book.pdf", ranges={})
+
+    record = _ask(None, 1, "book", target, _question(expect_pages=[5, 9]), k=8)
+    assert record["rerank_status"] == "invalid_json"
+
+
+# ------------------------------------------------- wrong document identity (item 2)
+
+
+def test_wrong_document_top1_does_not_hardcode_txt() -> None:
+    """The wrong-document check must compare actual filenames, not stem + '.txt'."""
+    from scripts.eval_ingest import cmd_score, Workspace
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Workspace(root=Path(tmp))
+        retrieval_data = {
+            "k": 8,
+            "valid": True,
+            "observed_path": "embedding_order",
+            "questions": [
+                {
+                    "id": "q1",
+                    "question": "what?",
+                    "expect_document": "notes",
+                    "targeted": True,
+                    "rank": 1,
+                    "returned": 8,
+                    "top_similarity": 0.9,
+                    "rerank_status": "not_requested",
+                    "from_expected": 4,
+                    "ahead": [],
+                    "neighbours": [
+                        {
+                            "document": "notes.md",
+                            "page": 1,
+                            "similarity": 0.9,
+                            "section_title": None,
+                            "opening": "x",
+                        }
+                    ],
+                },
+            ],
+        }
+        ws.write("retrieval-test", retrieval_data)
+
+        import argparse
+
+        args = argparse.Namespace(workspace=tmp)
+        cmd_score(args)
+
+        scores = ws.read("scores-test")
+        assert scores["wrong_document_top1"] == 0
