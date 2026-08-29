@@ -1764,3 +1764,135 @@ class TestOperationIdRetryLineage:
             client, session_id, content="different question", operation_id="lineage-mm"
         )
         assert r2.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# PLA-313 final pass: busy 409 vs operation-ID mismatch are distinct outcomes
+# ---------------------------------------------------------------------------
+
+
+class TestBusyVsOperationMismatch:
+    """The last PLA-313 race: an ambiguous send whose server turn still owns the
+    session claim must not lose its operation ID to a generic busy 409."""
+
+    async def test_ambiguous_send_busy_409_preserves_key_then_replays(
+        self,
+        db: sqlite3.Connection,
+        client: TestClient,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Full causal sequence, every step gated on a server-observable fact.
+
+        The model client is instrumented with two deterministic handshakes: it raises
+        an `Event` the moment the stream reaches it (so the route has already taken the
+        session claim and `_open_turn` has already committed the question), and then it
+        waits on a future before producing any token. Between those two points the
+        original turn is provably still in flight and still owns the claim, so the
+        immediate resend reaches `sessions.begin_turn()` and gets the ordinary busy 409
+        exactly as the race describes. No sleeps: every step waits on a fact.
+
+        1. Send X durably; its stream parks mid-turn with the claim held.
+        2. Identical resend X -> conversation-busy 409 raised before `_open_turn` can
+           see the operation ID at all.
+        3. That busy 409 carries NO structured code (it is not a mismatch) and leaves
+           no trace: still exactly one durable user message.
+        4. The original turn settles; its reply commits once.
+        5. A later resend of the same X reaches `_open_turn`, finds the completed
+           lineage, and replays the stored reply: zero extra model calls, one user
+           message, one assistant publication.
+        """
+        import asyncio
+
+        import httpx
+
+        reached = asyncio.Event()
+        gate: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        calls = 0
+
+        async def gated_stream(*a: object, **kw: object) -> AsyncIterator[StreamDelta]:
+            nonlocal calls
+            calls += 1
+            reached.set()
+            await gate
+            yield StreamDelta("answer", "First answer.")
+
+        monkeypatch.setattr(routes_chat, "stream_chat", gated_stream)
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=client.app), base_url="http://test"
+        ) as ac:
+
+            async def _send_op(operation_id: str) -> httpx.Response:
+                return await ac.post(
+                    f"/api/sessions/{session_id}/chat",
+                    json={
+                        "content": QUESTION,
+                        "mode": "guide",
+                        "document_id": None,
+                        "operation_id": operation_id,
+                    },
+                )
+
+            # 1. X is durably accepted and still streaming: the claim is held while the
+            # model client waits at its gate. `reached` proves both halves of that -
+            # `_open_turn` committed before streaming started, and the stream has not
+            # ended, so nothing has released the turn.
+            first = asyncio.ensure_future(_send_op("op-race"))
+            await reached.wait()
+            assert sessions.active_turn(session_id) is not None
+
+            # 2/3. Immediate identical resend: busy 409, structurally distinct from a
+            # mismatch (no code), and it persisted nothing new.
+            r_busy = await _send_op("op-race")
+            assert r_busy.status_code == 409
+            assert r_busy.json().get("code") is None
+            user_msgs = db.execute(
+                "select id from messages where session_id = ? and role = 'user'",
+                (session_id,),
+            ).fetchall()
+            assert len(user_msgs) == 1
+            assert calls == 1, "the refused resend must not reach the model"
+
+            # 4. The original X settles: gate released, its response drains to the end
+            # so the reply commits atomically and the claim frees.
+            gate.set_result(None)
+            r1 = await first
+            assert r1.status_code == 200
+            joined = "".join(f["text"] for f in _parse_frames(r1) if f["type"] == "token")
+            assert joined == "First answer."
+            assert sessions.active_turn(session_id) is None
+
+            # 5. A later identical resend carrying X reaches `_open_turn`, which finds
+            # the completed lineage and replays it: the stored reply, no new attempt.
+            r2 = await _send_op("op-race")
+            assert r2.status_code == 200
+            replayed = "".join(f["text"] for f in _parse_frames(r2) if f["type"] == "token")
+            assert replayed == "First answer."
+
+        assert calls == 1, "the replay must not re-run the model"
+        user_msgs = db.execute(
+            "select id from messages where session_id = ? and role = 'user'",
+            (session_id,),
+        ).fetchall()
+        asst_msgs = db.execute(
+            "select id from messages where session_id = ? and role = 'assistant'",
+            (session_id,),
+        ).fetchall()
+        assert len(user_msgs) == 1, "no second durable question"
+        assert len(asst_msgs) == 1, "no duplicate assistant publication"
+
+    def test_mismatch_409_carries_structured_code(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A genuinely reused operation ID with different canonical content is a
+        structured `operation_id_mismatch` - distinguishable from the busy 409 by
+        code alone, never by matching the user-facing message."""
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Answer."))
+        r1 = _send_with_op(client, session_id, content="question A", operation_id="op-code")
+        assert r1.status_code == 200
+        _ = r1.text
+
+        r2 = _send_with_op(client, session_id, content="question B", operation_id="op-code")
+        assert r2.status_code == 409
+        assert r2.json()["code"] == "operation_id_mismatch"

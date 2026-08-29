@@ -593,14 +593,27 @@ export function ChatPane({
             toast.error(
               'The previous attempt made changes before it failed. Review what landed, then send a new message.',
             )
+          } else if (caught.code === 'operation_id_mismatch') {
+            toast.error(caught.detail)
           } else {
             toast.error('Another turn is still in progress on this conversation.')
           }
           if (kind === 'send') {
             setDraft(content)
+            // PLA-313: a busy 409 means THIS attempt was not accepted; it says nothing
+            // about whether the earlier ambiguous operation committed. Keep the
+            // ambiguity key (operationIdRef) and its submitted-text bookmark so a later
+            // identical Send carries the same operation ID and the backend reconciles
+            // or replays it instead of creating a second durable question. Only a true
+            // operation-ID mismatch - a structured 409 proving the key itself is spent
+            // on a different request - may discard it so the next Send mints fresh.
+            if (caught.code === 'operation_id_mismatch') {
+              operationIdRef.current = null
+              submittedTextRef.current = null
+            }
           }
-          submittedTextRef.current = null
-          operationIdRef.current = null
+          // A non-send turn kind never carries the ambiguity key, so a 409 on it must
+          // not clear one either: an earlier ambiguous send's X stays intact.
           setOutcome('failed')
         } else {
           toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')

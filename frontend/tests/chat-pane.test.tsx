@@ -462,8 +462,21 @@ describe('ChatPane composer preservation (PLA-313)', () => {
     await waitFor(() => expect(composer).toHaveValue(''))
   })
 
-  it('restores draft on 409 conflict and clears submitted-text bookkeeping', async () => {
-    vi.mocked(streamChat).mockRejectedValue(new ApiError(409, 'busy'))
+  it('restores draft on busy 409 and keeps the ambiguity key for a later retry', async () => {
+    // PLA-313's full frontend race: send X, lose the transport before acceptance
+    // (generic error restores the text), resend while the original server turn still
+    // owns its claim (ordinary busy 409), and the retry after that must carry X again.
+    // A busy 409 says this attempt was not accepted; it is never evidence to discard
+    // the ambiguity key or its submitted-text bookmark.
+    vi.mocked(streamChat)
+      .mockRejectedValueOnce(new Error('connection reset'))
+      .mockRejectedValueOnce(new ApiError(409, 'busy'))
+      .mockImplementation((_sessionId, _body, onEvent, _signal, onResponse) => {
+        onResponse?.()
+        onEvent({ type: 'start', message_id: 11 })
+        onEvent({ type: 'done', message_id: 12 })
+        return Promise.resolve()
+      })
 
     const user = userEvent.setup()
     renderWorkspace()
@@ -471,18 +484,23 @@ describe('ChatPane composer preservation (PLA-313)', () => {
     const composer = await screen.findByLabelText('Message Lyra')
     await user.type(composer, QUESTION)
     await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
 
+    // Ambiguous pre-response failure: the question comes back into the composer.
     await waitFor(() => expect(composer).toHaveValue(QUESTION))
 
-    vi.mocked(streamChat).mockImplementation((_sessionId, _body, onEvent, _signal, onResponse) => {
-      onResponse?.()
-      onEvent({ type: 'start', message_id: 11 })
-      onEvent({ type: 'done', message_id: 12 })
-      return Promise.resolve()
-    })
-    vi.mocked(api.listMessages).mockResolvedValue([message({ id: 11, content: QUESTION })])
-
+    // Resend while the server turn is still claimed: ordinary busy 409, text stays put.
     await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(streamChat).mock.calls[1][1].operation_id).toBe(firstId)
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+
+    // The claim has released: the next identical Send still carries X, and it lands.
+    vi.mocked(api.listMessages).mockResolvedValue([message({ id: 11, content: QUESTION })])
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(3))
+    expect(vi.mocked(streamChat).mock.calls[2][1].operation_id).toBe(firstId)
     await waitFor(() => expect(composer).toHaveValue(''))
   })
 
@@ -626,9 +644,11 @@ describe('ChatPane idempotency (PLA-313)', () => {
     expect(retryId).toBe(firstId)
   })
 
-  it('409 conflict clears operation_id so the next send mints a fresh one', async () => {
+  it('operation_id_mismatch 409 discards the key so the next send mints a fresh one', async () => {
+    // The structured mismatch is the one conflict that proves the key itself is spent
+    // on a different request: text is preserved, X is discarded, and Y replaces it.
     vi.mocked(streamChat)
-      .mockRejectedValueOnce(new ApiError(409, 'busy'))
+      .mockRejectedValueOnce(new ApiError(409, 'mismatch', 'operation_id_mismatch'))
       .mockImplementation(() => new Promise<void>(() => {}))
 
     const user = userEvent.setup()

@@ -888,9 +888,13 @@ def _open_turn(
                     or existing.get("mode") != request.mode
                     or existing.get("document_id") != request.document_id
                 ):
+                    # PLA-313: structured code so the client can tell this apart from
+                    # the ordinary conversation-busy 409 without matching messages. Only
+                    # this mismatch may discard the ambiguity key; a busy 409 must not.
                     raise ConflictError(
                         "This operation ID was already used for a different request. "
                         "Submit with a new operation ID.",
+                        extra={"code": "operation_id_mismatch"},
                     )
 
                 sessions.bind_turn(session_id, turn_token, user_message_id)
