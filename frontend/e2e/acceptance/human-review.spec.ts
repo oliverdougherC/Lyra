@@ -1,146 +1,213 @@
 /**
- * Human-review boundary for solution segmentation (PLA-303).
+ * Workspace hunk confirmation boundary through the real browser (PLA-303).
  *
- * Proves: when problems change behind the reviewer's back (via a concurrent
- * tab or re-segmentation), the review page detects the stale base via
- * partSignature and re-seeds the problem list rather than letting the
- * student start solving a problem list they never reviewed.
+ * Proves: workspace change proposals display hunks in the agent panel,
+ * the student can accept or reject through the browser UI, accepted hunks
+ * land on disk, and stale hunks (file changed after proposal) are rejected
+ * rather than silently applied.
+ *
+ * Uses the real workspace attach, change-proposal, and confirmation APIs
+ * through the agent panel at /classes/{classId}/chat?session={sessionId}.
  */
 
 import { test, expect } from '@playwright/test'
-import { resolve } from 'node:path'
+import { realpathSync } from 'node:fs'
+import { mkdtemp, writeFile, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   apiGet,
   apiPost,
   apiPatch,
   createClass,
-  uploadDocument,
-  waitForDocumentReady,
-  waitForSolutionSegmented,
+  createSession,
   clearTutorState,
+  BACKEND,
 } from './helpers'
 
-const TEST_DATA = resolve(__dirname, 'test-data')
+async function openAgentPanel(page: import('@playwright/test').Page): Promise<void> {
+  const agentBtn = page.getByRole('button', { name: 'Agent' })
+  if (await agentBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
+    const expanded = await agentBtn.getAttribute('aria-expanded')
+    if (expanded !== 'true') {
+      await agentBtn.click()
+    }
+  }
+}
 
-test.describe('Human-review boundary (PLA-303)', () => {
+test.describe('Workspace hunk confirmation boundary (PLA-303)', () => {
   let classId: number
-  let docId: number
+  let workspaceDir: string
 
   test.beforeAll(async () => {
-    const cls = await createClass('Acceptance: Human Review')
+    const cls = await createClass('Acceptance: Workspace Review')
     classId = cls.id
 
-    const res = await uploadDocument(classId, resolve(TEST_DATA, 'sample.txt'), 'sample.txt')
-    const doc = await res.json()
-    docId = doc.id
-    await waitForDocumentReady(docId, 30_000)
+    workspaceDir = realpathSync(await mkdtemp(join(tmpdir(), 'lyra-ws-review-')))
+    await writeFile(join(workspaceDir, 'greet.py'), 'print("hello world")\n')
+
+    // Attach workspace and enable change proposals
+    const attachRes = await fetch(`${BACKEND}/api/classes/${classId}/workspace`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lyra-Client': 'acceptance-test',
+      },
+      body: JSON.stringify({ root_path: workspaceDir }),
+    })
+    expect(attachRes.status).toBe(201)
+
+    await apiPatch(`/api/classes/${classId}/workspace/grants`, {
+      read_enabled: true,
+      change_proposals_enabled: true,
+    })
   })
 
   test.afterEach(async () => {
     await clearTutorState()
   })
 
-  test('review page shows problems in awaiting_review state', async ({ page }) => {
-    const solRes = await apiPost(`/api/classes/${classId}/solutions`, {
-      title: 'Review Display Test',
-      sources: [{ document_id: docId, role: 'problem_set' }],
-    })
-    expect(solRes.status).toBe(202)
-    const sol = await solRes.json()
+  test('browser: accept workspace change hunks and verify on disk', async ({ page }) => {
+    const session = await createSession(classId)
 
-    await waitForSolutionSegmented(sol.id, 60_000)
-
-    // Load the solution page in the browser
-    await page.goto(`/classes/${classId}/solutions/${sol.id}`)
-    await page.waitForLoadState('networkidle')
-
-    // The review gate should show problem cards
-    await expect(page.getByText(/Solve \d+ problem/i)).toBeVisible({ timeout: 15_000 })
-
-    // Verify at least one problem is displayed
-    const solutionRes = await apiGet(`/api/solutions/${sol.id}`)
-    const solution = await solutionRes.json()
-    const problems = solution.parts.filter(
-      (p: { parent_part_id: number | null; kind: string }) =>
-        p.parent_part_id === null && p.kind === 'problem',
+    // Read current file state
+    const readRes = await apiGet(
+      `/api/classes/${classId}/sessions/${session.id}/workspace/read?path=greet.py`,
     )
-    expect(problems.length).toBeGreaterThan(0)
-  })
+    const fileData = await readRes.json()
 
-  test('concurrent segmentation edit updates the review page', async ({ page }) => {
-    const solRes = await apiPost(`/api/classes/${classId}/solutions`, {
-      title: 'Concurrent Edit Test',
-      sources: [{ document_id: docId, role: 'problem_set' }],
-    })
-    expect(solRes.status).toBe(202)
-    const sol = await solRes.json()
-
-    await waitForSolutionSegmented(sol.id, 60_000)
-
-    // Get the current problem list
-    const detailRes = await apiGet(`/api/solutions/${sol.id}`)
-    const detail = await detailRes.json()
-    const originalProblems = detail.parts.filter(
-      (p: { parent_part_id: number | null; kind: string }) =>
-        p.parent_part_id === null && p.kind === 'problem',
-    )
-    expect(originalProblems.length).toBeGreaterThan(0)
-
-    // Load the review page
-    await page.goto(`/classes/${classId}/solutions/${sol.id}`)
-    await page.waitForLoadState('networkidle')
-    await expect(page.getByText(/Solve \d+ problem/i)).toBeVisible({ timeout: 15_000 })
-
-    // Simulate concurrent edit: replace the problem list via API
-    // This is what a second tab editing problems would do.
-    const editedProblems = [
-      ...originalProblems.map((p: { id: number; content: string; label: string | null }) => ({
-        id: p.id,
-        statement: p.content,
-        label: p.label,
-      })),
+    // Create a change proposal via API
+    const changeRes = await apiPost(
+      `/api/classes/${classId}/sessions/${session.id}/workspace/changes`,
       {
-        id: null,
-        statement: 'Newly added problem from a concurrent session.',
-        label: 'New Problem',
+        relative_path: 'greet.py',
+        observed_base_hash: fileData.sha256,
+        proposed_content: 'print("hello acceptance")\n',
+        rationale: 'Update greeting message',
       },
-    ]
+    )
+    expect(changeRes.status).toBe(201)
 
-    const patchRes = await apiPatch(`/api/solutions/${sol.id}/segmentation`, {
-      problems: editedProblems,
-    })
-    expect(patchRes.ok).toBe(true)
-
-    // The solution detail query has no active polling once segmentation
-    // settles, so a concurrent edit is picked up on the next navigation.
-    // Navigate away and back to trigger a refetch.
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-    await page.goto(`/classes/${classId}/solutions/${sol.id}`)
+    // Navigate to the agent chat page with the session in the URL
+    await page.goto(`/classes/${classId}/chat?session=${session.id}`)
     await page.waitForLoadState('networkidle')
 
-    // After reload, partSignature detects the changed parts and re-seeds
-    // the draft list with the updated problem set.
-    await expect(page.getByText('Newly added problem from a concurrent session')).toBeVisible({
-      timeout: 15_000,
-    })
+    // Open the agent panel
+    await openAgentPanel(page)
 
-    // The solve button should reflect the updated count
-    const updatedButton = page.getByText(/Solve \d+ problem/i)
-    await expect(updatedButton).toBeVisible()
+    // The workspace change review card should be visible
+    const changeCard = page.locator('[aria-label="Workspace change for greet.py"]')
+    await expect(changeCard).toBeVisible({ timeout: 15_000 })
+
+    // Verify the diff is displayed with hunk content
+    await expect(changeCard.getByText('greet.py')).toBeVisible()
+    await expect(changeCard.getByText('Update greeting message')).toBeVisible()
+
+    // Click "Accept remaining" to accept all hunks through the browser UI
+    const acceptBtn = changeCard.getByRole('button', { name: /Accept remaining/i })
+    await expect(acceptBtn).toBeVisible({ timeout: 5_000 })
+    await acceptBtn.click()
+
+    // Wait for the change to be applied (the card state should update)
+    await expect(changeCard.getByText('Applied')).toBeVisible({ timeout: 10_000 })
+
+    // Verify the file on disk was modified
+    const diskContent = await readFile(join(workspaceDir, 'greet.py'), 'utf-8')
+    expect(diskContent).toContain('hello acceptance')
   })
 
-  test('start rejects non-awaiting_review state', async () => {
-    const solRes = await apiPost(`/api/classes/${classId}/solutions`, {
-      title: 'State Guard Test',
-      sources: [{ document_id: docId, role: 'problem_set' }],
-    })
-    expect(solRes.status).toBe(202)
-    const sol = await solRes.json()
+  test('browser: reject workspace change through UI leaves file unchanged', async ({ page }) => {
+    // Reset file
+    await writeFile(join(workspaceDir, 'greet.py'), 'print("hello acceptance")\n')
 
-    // Try to start before segmentation completes (state is pending/segmenting)
-    const startRes = await apiPost(`/api/solutions/${sol.id}/start`)
-    // Should reject with 409 -- the solution is not at the review gate
-    expect(startRes.status).toBe(409)
+    const session = await createSession(classId)
+    const readRes = await apiGet(
+      `/api/classes/${classId}/sessions/${session.id}/workspace/read?path=greet.py`,
+    )
+    const fileData = await readRes.json()
+
+    await apiPost(`/api/classes/${classId}/sessions/${session.id}/workspace/changes`, {
+      relative_path: 'greet.py',
+      observed_base_hash: fileData.sha256,
+      proposed_content: 'print("rejected change")\n',
+      rationale: 'This should be rejected',
+    })
+
+    await page.goto(`/classes/${classId}/chat?session=${session.id}`)
+    await page.waitForLoadState('networkidle')
+
+    await openAgentPanel(page)
+
+    const changeCard = page.locator('[aria-label="Workspace change for greet.py"]')
+    await expect(changeCard).toBeVisible({ timeout: 15_000 })
+
+    // Click "Reject proposal"
+    const rejectBtn = changeCard.getByRole('button', { name: /Reject proposal/i })
+    await expect(rejectBtn).toBeVisible({ timeout: 5_000 })
+    await rejectBtn.click()
+
+    // The card should show the Rejected badge
+    await expect(changeCard.locator('[data-slot="badge"]', { hasText: 'Rejected' })).toBeVisible({
+      timeout: 10_000,
+    })
+
+    // File on disk should be unchanged
+    const diskContent = await readFile(join(workspaceDir, 'greet.py'), 'utf-8')
+    expect(diskContent).toBe('print("hello acceptance")\n')
+  })
+
+  test('PLA-303: stale hunk is rejected when file changes between display and acceptance', async ({
+    page,
+  }) => {
+    // Reset file to known state
+    await writeFile(join(workspaceDir, 'greet.py'), 'print("fresh content")\n')
+
+    const session = await createSession(classId)
+    const readRes = await apiGet(
+      `/api/classes/${classId}/sessions/${session.id}/workspace/read?path=greet.py`,
+    )
+    const fileData = await readRes.json()
+
+    // Create a change proposal based on the current file state
+    const changeRes = await apiPost(
+      `/api/classes/${classId}/sessions/${session.id}/workspace/changes`,
+      {
+        relative_path: 'greet.py',
+        observed_base_hash: fileData.sha256,
+        proposed_content: 'print("stale proposal")\n',
+        rationale: 'This will go stale',
+      },
+    )
+    expect(changeRes.status).toBe(201)
+
+    // Navigate to the review page so the hunks are displayed
+    await page.goto(`/classes/${classId}/chat?session=${session.id}`)
+    await page.waitForLoadState('networkidle')
+
+    await openAgentPanel(page)
+
+    const changeCard = page.locator('[aria-label="Workspace change for greet.py"]')
+    await expect(changeCard).toBeVisible({ timeout: 15_000 })
+
+    // MUTATE the file on disk while the student is reviewing
+    await writeFile(join(workspaceDir, 'greet.py'), 'print("externally modified")\n')
+
+    // Try to accept -- the backend should detect the stale base hash
+    const acceptBtn = changeCard.getByRole('button', { name: /Accept remaining/i })
+    await expect(acceptBtn).toBeVisible({ timeout: 5_000 })
+    await acceptBtn.click()
+
+    // The UI should show either:
+    // 1. A "Stale" or "Failed" badge on the card
+    // 2. A toast error about the stale/changed proposal
+    const staleOrFailedBadge = changeCard.locator('[data-slot="badge"]', {
+      hasText: /Stale|Failed/,
+    })
+    const toastError = page.getByText(/proposal changed|review the updated/i)
+    await expect(staleOrFailedBadge.or(toastError)).toBeVisible({ timeout: 10_000 })
+
+    // The stale proposal must NOT have been applied to disk
+    const diskContent = await readFile(join(workspaceDir, 'greet.py'), 'utf-8')
+    expect(diskContent).toBe('print("externally modified")\n')
   })
 })

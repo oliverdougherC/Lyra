@@ -57,17 +57,22 @@ test.describe('Restart reconciliation', () => {
     expect(deckRes.status).toBe(202)
     const deck = await deckRes.json()
 
-    // Wait for the worker to hit the barrier (job is mid-flight)
+    // Wait for the worker to hit the barrier (job is mid-flight generating)
     await waitForBarrier(15_000)
 
-    // Kill the backend while the job is in progress
-    // Switch to success mode first so the restarted backend can complete the job
+    // Verify the deck is in a generating state before restart
+    const preRestart = await apiGet(`/api/decks/${deck.id}/status`)
+    const preState = (await preRestart.json()).state
+    expect(preState).toBe('generating')
+
+    // Switch to success mode so the restarted backend can complete the job
     await setTutorMode('success')
 
     await restartBackend()
 
-    // After restart, reconciliation should have either requeued (pending) or
-    // marked failed (mid-flight). If requeued, it should complete.
+    // Study reconciliation detects the generating job with a reconstructable
+    // study_jobs row, deletes any partial cards, resets to pending, and
+    // re-enqueues. The restarted worker then completes it to ready.
     const deadline = Date.now() + 60_000
     let finalState = ''
     while (Date.now() < deadline) {
@@ -84,8 +89,7 @@ test.describe('Restart reconciliation', () => {
       await new Promise((r) => setTimeout(r, 500))
     }
 
-    // Mid-flight jobs are marked failed by reconciliation (not auto-retried)
-    expect(finalState).toMatch(/ready|failed/)
+    expect(finalState).toBe('ready')
   })
 
   test('completed artifacts survive restart intact', async () => {

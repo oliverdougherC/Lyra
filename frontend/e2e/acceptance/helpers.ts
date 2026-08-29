@@ -103,6 +103,37 @@ export async function releaseBarrier(content?: string): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ */
+/*  PLA-291 source-validation barrier (worker-level)                   */
+/* ------------------------------------------------------------------ */
+
+export async function enableSourceBarrier(): Promise<void> {
+  const res = await fetch(`${BACKEND}/_acceptance/source-barrier/enable`, {
+    method: 'POST',
+    headers: LYRA_HEADERS,
+  })
+  if (!res.ok) throw new Error(`enableSourceBarrier failed: ${res.status}`)
+}
+
+export async function waitForSourceBarrier(timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const res = await fetch(`${BACKEND}/_acceptance/source-barrier/arrived`)
+    const { arrived } = await res.json()
+    if (arrived) return
+    await sleep(50)
+  }
+  throw new Error('No worker arrived at source-validation barrier within timeout')
+}
+
+export async function releaseSourceBarrier(): Promise<void> {
+  const res = await fetch(`${BACKEND}/_acceptance/source-barrier/release`, {
+    method: 'POST',
+    headers: LYRA_HEADERS,
+  })
+  if (!res.ok) throw new Error(`releaseSourceBarrier failed: ${res.status}`)
+}
+
+/* ------------------------------------------------------------------ */
 /*  Backend API helpers                                                */
 /* ------------------------------------------------------------------ */
 
@@ -496,14 +527,13 @@ export async function restartBackend(): Promise<void> {
   const state = await readAcceptanceState()
   if (!state) throw new Error('Cannot restart backend: no state file found')
 
-  // Kill the current backend
+  // Kill the current backend: SIGTERM → wait → SIGKILL → wait → prove dead
   try {
     process.kill(state.backendPid, 'SIGTERM')
   } catch {
     /* already gone */
   }
 
-  // Wait for exit
   const deadline = Date.now() + 5_000
   while (Date.now() < deadline) {
     try {
@@ -512,6 +542,23 @@ export async function restartBackend(): Promise<void> {
     } catch {
       break
     }
+  }
+
+  // SIGKILL fallback if still alive
+  try {
+    process.kill(state.backendPid, 0)
+    process.kill(state.backendPid, 'SIGKILL')
+    const killDeadline = Date.now() + 3_000
+    while (Date.now() < killDeadline) {
+      try {
+        process.kill(state.backendPid, 0)
+        await sleep(100)
+      } catch {
+        break
+      }
+    }
+  } catch {
+    /* already gone */
   }
 
   // Wait for port to be free

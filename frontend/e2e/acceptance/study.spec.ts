@@ -22,6 +22,9 @@ import {
   setTutorMode,
   waitForBarrier,
   releaseBarrier,
+  enableSourceBarrier,
+  waitForSourceBarrier,
+  releaseSourceBarrier,
   flipCard,
   rateCard,
   clickStudyAgain,
@@ -256,7 +259,11 @@ test.describe('Study tools', () => {
     const doc2 = await res.json()
     await waitForDocumentReady(doc2.id, 30_000)
 
-    await setTutorMode('barrier')
+    // Enable the worker-level source-validation barrier so the worker
+    // pauses BEFORE _validate_sources runs -- this is the exact window
+    // where a source can be deleted between job creation and validation.
+    await enableSourceBarrier()
+    await setTutorMode('success')
 
     const deckRes = await apiPost(`/api/classes/${classId}/decks`, {
       title: 'Source Invalidation Test',
@@ -266,11 +273,14 @@ test.describe('Study tools', () => {
     expect(deckRes.status).toBe(202)
     const deck = await deckRes.json()
 
-    await waitForBarrier(15_000)
+    // Wait for the worker to arrive at the barrier (before _validate_sources)
+    await waitForSourceBarrier(15_000)
 
+    // Delete the source document while the worker is paused
     await apiDelete(`/api/documents/${doc2.id}`)
 
-    await releaseBarrier()
+    // Release the barrier -- _validate_sources will now find the source missing
+    await releaseSourceBarrier()
 
     const deadline = Date.now() + 30_000
     let finalState = ''

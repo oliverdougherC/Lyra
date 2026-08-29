@@ -11,7 +11,7 @@
 import { test, expect } from '@playwright/test'
 import { execSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdtemp, readFile, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
@@ -234,5 +234,133 @@ print(json.dumps({'valid': True, 'version': manifest.get('version')}))
     const validation = JSON.parse(validateOutput.trim())
     expect(validation.valid).toBe(true)
     expect(validation.version).toBe(1)
+  })
+
+  test('injected archive failure leaves no corrupt final archive; retry succeeds and restores', async () => {
+    const cls = await createClass('Backup Failure Test')
+    const doc = await uploadDocument(cls.id, resolve(TEST_DATA, 'sample.txt'), 'sample.txt')
+    const docData = await doc.json()
+    await waitForDocumentReady(docData.id, 30_000)
+
+    const state = await readAcceptanceState()
+    expect(state).toBeTruthy()
+    const dataDir = state!.dataDir
+
+    const backupDir = await mkdtemp(join(tmpdir(), 'lyra-failbackup-'))
+    const archivePath = join(backupDir, 'backup.tar.gz')
+
+    // Inject failure: make the archive target read-only so the hardlink
+    // from staging to final path fails. The atomic protocol must clean up
+    // the staging file and leave no corrupt archive at the target path.
+    const failOutput = execSync(
+      `uv run python -c "
+import sys, os, json
+sys.path.insert(0, 'scripts')
+import lyra_launcher as launcher
+
+launcher.load_runtime = lambda: launcher.empty_runtime()
+launcher.stop_supervised_stack = lambda runtime: True
+launcher.say = lambda *a, **kw: None
+launcher.step = lambda *a, **kw: None
+launcher.ok = lambda *a, **kw: None
+
+os.environ['LYRA_DATA_DIR'] = '${dataDir}'
+os.environ['LYRA_DB_PATH'] = '${dataDir}/lyra.db'
+
+# Create a regular file at the archive path so os.link fails with FileExistsError
+with open('${archivePath}', 'w') as f:
+    f.write('blocker')
+
+args = launcher.parse_args(['backup', '--archive', '${archivePath}'])
+try:
+    rc = launcher.backup(args)
+except SystemExit as e:
+    rc = e.code if e.code is not None else 1
+except Exception as e:
+    rc = 1
+print(json.dumps({'rc': rc}))
+"`,
+      { cwd: PROJECT_ROOT, timeout: 30_000, encoding: 'utf-8' },
+    )
+
+    const failResult = JSON.parse(failOutput.trim())
+    expect(failResult.rc).not.toBe(0)
+
+    // Verify no corrupt archive exists at the target -- the blocker file
+    // should still be there (backup must not clobber existing files)
+    const blockerContent = await readFile(archivePath, 'utf-8')
+    expect(blockerContent).toBe('blocker')
+
+    // Remove the blocker and retry the same destination -- must succeed
+    await unlink(archivePath)
+
+    const retryOutput = execSync(
+      `uv run python -c "
+import sys, os, json
+sys.path.insert(0, 'scripts')
+import lyra_launcher as launcher
+
+launcher.load_runtime = lambda: launcher.empty_runtime()
+launcher.stop_supervised_stack = lambda runtime: True
+launcher.say = lambda *a, **kw: None
+launcher.step = lambda *a, **kw: None
+launcher.ok = lambda *a, **kw: None
+
+os.environ['LYRA_DATA_DIR'] = '${dataDir}'
+os.environ['LYRA_DB_PATH'] = '${dataDir}/lyra.db'
+
+args = launcher.parse_args(['backup', '--archive', '${archivePath}'])
+rc = launcher.backup(args)
+print(json.dumps({'rc': rc}))
+"`,
+      { cwd: PROJECT_ROOT, timeout: 30_000, encoding: 'utf-8' },
+    )
+
+    const retryResult = JSON.parse(retryOutput.trim())
+    expect(retryResult.rc).toBe(0)
+    expect(existsSync(archivePath)).toBe(true)
+
+    // Restore and verify entities
+    const restoreDir = join(backupDir, 'restored')
+    const restoreOutput = execSync(
+      `uv run python -c "
+import sys, os, json, sqlite3
+sys.path.insert(0, 'scripts')
+import lyra_launcher as launcher
+
+launcher.load_runtime = lambda: launcher.empty_runtime()
+launcher.stop_supervised_stack = lambda runtime: True
+launcher.say = lambda *a, **kw: None
+launcher.step = lambda *a, **kw: None
+launcher.ok = lambda *a, **kw: None
+
+os.environ['LYRA_DATA_DIR'] = '${restoreDir}'
+os.environ['LYRA_DB_PATH'] = '${restoreDir}/lyra.db'
+
+args = launcher.parse_args(['restore', '--archive', '${archivePath}', '--data-dir', '${restoreDir}'])
+rc = launcher.restore(args)
+
+conn = sqlite3.connect('${restoreDir}/lyra.db')
+conn.row_factory = sqlite3.Row
+check = conn.execute('pragma quick_check').fetchone()
+names = [r['name'] for r in conn.execute('SELECT name FROM classes').fetchall()]
+doc_count = conn.execute('SELECT count(*) FROM documents').fetchone()[0]
+conn.close()
+
+print(json.dumps({
+    'rc': rc,
+    'integrity': check[0],
+    'class_names': names,
+    'document_count': doc_count,
+}))
+"`,
+      { cwd: PROJECT_ROOT, timeout: 30_000, encoding: 'utf-8' },
+    )
+
+    const result = JSON.parse(restoreOutput.trim())
+    expect(result.rc).toBe(0)
+    expect(result.integrity).toBe('ok')
+    expect(result.class_names).toContain('Backup Failure Test')
+    expect(result.document_count).toBeGreaterThan(0)
   })
 })

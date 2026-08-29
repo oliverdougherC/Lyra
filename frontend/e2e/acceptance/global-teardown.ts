@@ -136,7 +136,11 @@ async function killAndWait(
     await Promise.race([exitPromise, sleep(SIGKILL_WAIT_MS)])
   }
 
-  console.log(`  ${label} stopped`)
+  if (proc.exitCode === null && proc.signalCode === null) {
+    console.error(`  ${label} (pid ${proc.pid}) could not be proven dead`)
+  } else {
+    console.log(`  ${label} stopped`)
+  }
 }
 
 /**
@@ -190,7 +194,11 @@ async function verifyAndKill(
     if (!isProcessAlive(pid)) break
     await sleep(200)
   }
-  console.log(`  ${label} stopped`)
+  if (isProcessAlive(pid)) {
+    console.error(`  ${label} (pid ${pid}) could not be proven dead`)
+  } else {
+    console.log(`  ${label} stopped`)
+  }
 }
 
 function isProcessAlive(pid: number): boolean {

@@ -284,11 +284,15 @@ test.describe('Tutor chat', () => {
     })
 
     // Wait for the first turn to fully settle before sending the next message.
-    // waitForChatResponse returns when streaming stops (send button visible),
-    // but the optimistic turn isn't cleared until the messages refetch completes.
-    // Without this, the second sendChatMessage can be silently dropped by the
-    // runTurn guard (pendingTurn still non-null).
-    await page.waitForLoadState('networkidle')
+    // The reveal animation delays settlement by ~1-2s after the stream ends:
+    // the optimistic turn is only cleared once the animation completes and the
+    // messages query refetches. The regenerate button on the assistant reply
+    // only mounts when optimisticTurn is false, so its presence in the DOM
+    // proves the pendingTurn guard will not swallow the next send.
+    await page.locator('[aria-label="Try this answer again"]').first().waitFor({
+      state: 'attached',
+      timeout: 15_000,
+    })
 
     // Now trigger a failure and verify the "Try again" button appears
     await setTutorMode('error-before-stream')

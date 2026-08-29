@@ -76,25 +76,22 @@ export default async function globalSetup() {
 
   async function cleanupOnFailure() {
     console.error('  Setup failed, cleaning up started components...')
-    if (frontend?.pid) {
-      try {
-        frontend.kill('SIGTERM')
-      } catch {
-        /* already gone */
-      }
-    }
-    if (backend?.pid) {
-      try {
-        backend.kill('SIGTERM')
-      } catch {
-        /* already gone */
-      }
-    }
+    if (frontend) await killChild(frontend, 'frontend')
+    if (backend) await killChild(backend, 'backend')
     if (tutor) {
       try {
         await tutor.stop()
       } catch {
         /* already gone */
+      }
+    }
+    if (dataDir && dataDir.includes('lyra-acceptance')) {
+      const { rm } = await import('node:fs/promises')
+      try {
+        await rm(dataDir, { recursive: true, force: true })
+        console.log(`  Removed data dir ${dataDir}`)
+      } catch {
+        console.warn(`  Could not remove data dir ${dataDir}`)
       }
     }
   }
@@ -263,6 +260,45 @@ async function isPortInUse(port: number): Promise<boolean> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+async function killChild(proc: ChildProcess, label: string): Promise<void> {
+  if (!proc.pid) return
+  if (proc.exitCode !== null || proc.signalCode !== null) return
+
+  const exitPromise = new Promise<void>((resolve) => {
+    proc.on('exit', () => resolve())
+    proc.on('error', () => resolve())
+  })
+
+  try {
+    proc.kill('SIGTERM')
+  } catch {
+    return
+  }
+  console.log(`  Sent SIGTERM to ${label} (pid ${proc.pid})`)
+
+  const termResult = await Promise.race([
+    exitPromise.then(() => 'exited' as const),
+    sleep(5_000).then(() => 'timeout' as const),
+  ])
+
+  if (termResult === 'timeout') {
+    console.log(`  ${label} did not exit after SIGTERM, sending SIGKILL`)
+    try {
+      proc.kill('SIGKILL')
+    } catch {
+      /* already gone */
+    }
+    await Promise.race([exitPromise, sleep(3_000)])
+  }
+
+  if (proc.exitCode === null && proc.signalCode === null) {
+    throw new Error(
+      `Setup cleanup: ${label} (pid ${proc.pid}) could not be proven dead after SIGTERM + SIGKILL`,
+    )
+  }
+  console.log(`  ${label} stopped`)
 }
 
 function stripUndefined(env: NodeJS.ProcessEnv): Record<string, string> {

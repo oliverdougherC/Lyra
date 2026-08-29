@@ -1,250 +1,215 @@
 /**
- * Helper process supervision protocol through real subprocesses (PLA-301).
+ * Helper process supervision protocol through the PRODUCTION LlamaServer
+ * supervisor (PLA-301).
  *
- * Proves: spawn a real child process, health-check it, send SIGTERM and
- * verify clean exit, verify birth token identity survives across checks,
- * and detect health failure.
+ * Proves: the real LlamaServer class spawns fake-helper.py, health-checks it,
+ * records ownership with birth tokens, handles replacement (stop + start on
+ * same port), detects unhealthy processes, and terminates cleanly on stop.
  *
- * Uses a tiny Python fake helper (fake-helper.py) that speaks the same
- * /health and /props HTTP interface as llama-server.
+ * All process lifecycle is routed through the production supervisor via
+ * acceptance API endpoints -- no direct spawn()/kill() from TypeScript.
  */
 
 import { test, expect } from '@playwright/test'
-import { type ChildProcess, execSync, spawn } from 'node:child_process'
-import { resolve } from 'node:path'
-import { apiGet } from './helpers'
+import { apiGet, BACKEND } from './helpers'
 
-const PROJECT_ROOT = resolve(__dirname, '..', '..', '..')
-const FAKE_HELPER = resolve(__dirname, 'fake-helper.py')
-const HELPER_PORT = 19_500
+const LYRA_HEADERS: Record<string, string> = {
+  'Content-Type': 'application/json',
+  'X-Lyra-Client': 'acceptance-test',
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-async function waitForHelper(port: number, timeoutMs = 10_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(`http://127.0.0.1:${port}/health`, {
-        signal: AbortSignal.timeout(1000),
-      })
-      if (res.ok) return
-    } catch {
-      // not ready
-    }
-    await sleep(100)
-  }
-  throw new Error(`Helper on port ${port} did not become ready within ${timeoutMs}ms`)
-}
-
-function spawnHelper(
-  port: number,
-  opts: { model?: string; hangHealth?: boolean; failHealth?: boolean; slowStart?: number } = {},
-): ChildProcess {
-  const args = ['run', 'python', FAKE_HELPER, '--port', String(port)]
-  if (opts.model) args.push('--model', opts.model)
-  if (opts.hangHealth) args.push('--hang-health')
-  if (opts.failHealth) args.push('--fail-health')
-  if (opts.slowStart) args.push('--slow-start', String(opts.slowStart))
-  return spawn('uv', args, {
-    cwd: PROJECT_ROOT,
-    stdio: ['ignore', 'pipe', 'pipe'],
+async function startHelper(
+  opts: {
+    model?: string
+    fail_health?: boolean
+    slow_start?: number
+  } = {},
+): Promise<{ ok: boolean; port?: number; pid?: number; birth_token?: string; error?: string }> {
+  const res = await fetch(`${BACKEND}/_acceptance/helper/start`, {
+    method: 'POST',
+    headers: LYRA_HEADERS,
+    body: JSON.stringify({
+      model: opts.model ?? 'acceptance-test-model',
+      fail_health: opts.fail_health ?? false,
+      slow_start: opts.slow_start ?? 0,
+    }),
   })
+  return res.json()
 }
 
-async function killHelper(proc: ChildProcess): Promise<void> {
-  if (!proc.pid) return
-  const exitPromise = new Promise<void>((resolve) => {
-    proc.on('exit', () => resolve())
-    proc.on('error', () => resolve())
+async function stopHelper(): Promise<{ ok: boolean; was_running: boolean }> {
+  const res = await fetch(`${BACKEND}/_acceptance/helper/stop`, {
+    method: 'POST',
+    headers: LYRA_HEADERS,
   })
-  try {
-    proc.kill('SIGTERM')
-  } catch {
-    return
-  }
-  await Promise.race([exitPromise, sleep(5_000)])
+  return res.json()
 }
 
-function processStartToken(pid: number): string | null {
-  try {
-    return execSync(`ps -p ${pid} -o lstart=`, { encoding: 'utf-8', timeout: 2000 }).trim()
-  } catch {
-    return null
+async function getHelperStatus(): Promise<{
+  running: boolean
+  port?: number
+  pid?: number
+  birth_token?: string
+  healthy?: boolean
+  ownership_record?: {
+    pid: number
+    start_token: string
+    port: number
+    model: string
   }
+}> {
+  const res = await fetch(`${BACKEND}/_acceptance/helper/status`, {
+    headers: { 'X-Lyra-Client': 'acceptance-test' },
+  })
+  return res.json()
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
+async function cleanupOwnership(): Promise<void> {
+  await fetch(`${BACKEND}/_acceptance/helper/cleanup-ownership`, {
+    method: 'POST',
+    headers: LYRA_HEADERS,
+  })
 }
 
 test.describe('Helper supervision (PLA-301)', () => {
-  let helper: ChildProcess | null = null
-
   test.afterEach(async () => {
-    if (helper) {
-      await killHelper(helper)
-      helper = null
-    }
+    await stopHelper()
+    await cleanupOwnership()
   })
 
-  test('spawn fake helper, verify health and props endpoints', async () => {
-    helper = spawnHelper(HELPER_PORT, { model: 'acceptance-test-model' })
-    await waitForHelper(HELPER_PORT)
+  test('supervisor spawns helper, records ownership, and health-checks it', async () => {
+    const result = await startHelper({ model: 'acceptance-test-model' })
+    expect(result.ok).toBe(true)
+    expect(result.pid).toBeTruthy()
+    expect(result.birth_token).toBeTruthy()
+    expect(result.port).toBe(19500)
 
-    const healthRes = await fetch(`http://127.0.0.1:${HELPER_PORT}/health`)
+    // Verify health through the real supervisor status check
+    const status = await getHelperStatus()
+    expect(status.running).toBe(true)
+    expect(status.healthy).toBe(true)
+    expect(status.pid).toBe(result.pid)
+    expect(status.birth_token).toBe(result.birth_token)
+
+    // Verify the production ownership record was written
+    expect(status.ownership_record).toBeTruthy()
+    expect(status.ownership_record!.pid).toBe(result.pid)
+    expect(status.ownership_record!.start_token).toBe(result.birth_token)
+    expect(status.ownership_record!.port).toBe(19500)
+    expect(status.ownership_record!.model).toBe('acceptance-test-model')
+
+    // Verify the fake helper endpoints respond correctly
+    const healthRes = await fetch(`http://127.0.0.1:19500/health`)
     expect(healthRes.ok).toBe(true)
     const health = await healthRes.json()
     expect(health.status).toBe('ok')
 
-    const propsRes = await fetch(`http://127.0.0.1:${HELPER_PORT}/props`)
-    expect(propsRes.ok).toBe(true)
+    const propsRes = await fetch(`http://127.0.0.1:19500/props`)
     const props = await propsRes.json()
     expect(props.model_path).toBe('acceptance-test-model')
 
-    const modelsRes = await fetch(`http://127.0.0.1:${HELPER_PORT}/v1/models`)
-    expect(modelsRes.ok).toBe(true)
+    const modelsRes = await fetch(`http://127.0.0.1:19500/v1/models`)
     const models = await modelsRes.json()
     expect(models.data[0].id).toBe('acceptance-test-model')
   })
 
-  test('SIGTERM causes clean exit', async () => {
-    helper = spawnHelper(HELPER_PORT)
-    await waitForHelper(HELPER_PORT)
+  test('supervisor stop terminates child and cleans ownership', async () => {
+    const result = await startHelper()
+    expect(result.ok).toBe(true)
+    const pid = result.pid!
 
-    const pid = helper.pid!
-    expect(isProcessAlive(pid)).toBe(true)
+    // Stop through the production supervisor
+    const stopResult = await stopHelper()
+    expect(stopResult.ok).toBe(true)
+    expect(stopResult.was_running).toBe(true)
 
-    const exitPromise = new Promise<number | null>((resolve) => {
-      helper!.on('exit', (code) => resolve(code))
-    })
-    helper.kill('SIGTERM')
-    await Promise.race([exitPromise, sleep(5_000).then(() => null)])
-
-    expect(isProcessAlive(pid)).toBe(false)
-    helper = null
+    // Verify the process is dead
+    await sleep(200)
+    const status = await getHelperStatus()
+    expect(status.running).toBe(false)
   })
 
-  test('birth token identifies the process across checks', async () => {
-    helper = spawnHelper(HELPER_PORT)
-    await waitForHelper(HELPER_PORT)
+  test('ownership record tracks birth token identity across supervisor checks', async () => {
+    const result1 = await startHelper({ model: 'token-test-model' })
+    expect(result1.ok).toBe(true)
 
-    const pid = helper.pid!
-    const token1 = processStartToken(pid)
+    const status1 = await getHelperStatus()
+    const token1 = status1.birth_token
+    const pid1 = status1.pid
     expect(token1).toBeTruthy()
 
-    // Same PID, same token a moment later
+    // Same PID, same token after a moment (supervisor sees consistent identity)
     await sleep(200)
-    const token2 = processStartToken(pid)
-    expect(token2).toBe(token1)
+    const status2 = await getHelperStatus()
+    expect(status2.birth_token).toBe(token1)
+    expect(status2.pid).toBe(pid1)
 
-    // Kill, wait past the lstart second boundary, then spawn a new process.
-    // lstart has second resolution, so spawning in the same second can
-    // produce an identical token even with a different PID.
-    await killHelper(helper)
+    // Stop and start a new helper -- different birth token
+    await stopHelper()
     await sleep(1100)
 
-    const helper2 = spawnHelper(HELPER_PORT + 1)
-    await waitForHelper(HELPER_PORT + 1)
-    const pid2 = helper2.pid!
-    const token3 = processStartToken(pid2)
-    expect(token3).toBeTruthy()
+    const result2 = await startHelper({ model: 'token-test-model-2' })
+    expect(result2.ok).toBe(true)
 
-    if (pid !== pid2) {
-      expect(token3).not.toBe(token1)
+    const status3 = await getHelperStatus()
+    expect(status3.birth_token).toBeTruthy()
+
+    if (status3.pid !== pid1) {
+      expect(status3.birth_token).not.toBe(token1)
     }
-
-    helper = helper2
   })
 
-  test('replacement: kill old helper and spawn new one on same port', async () => {
-    helper = spawnHelper(HELPER_PORT, { model: 'old-model' })
-    await waitForHelper(HELPER_PORT)
+  test('supervisor replacement: stop old, start new on same port with different model', async () => {
+    const result1 = await startHelper({ model: 'old-model' })
+    expect(result1.ok).toBe(true)
+    const oldPid = result1.pid!
+    const oldToken = result1.birth_token
 
-    const oldPid = helper.pid!
-    const oldToken = processStartToken(oldPid)
-
-    // Verify old model
-    const oldProps = await (await fetch(`http://127.0.0.1:${HELPER_PORT}/props`)).json()
+    // Verify old model via the supervisor's owned process
+    const oldProps = await (await fetch('http://127.0.0.1:19500/props')).json()
     expect(oldProps.model_path).toBe('old-model')
 
-    // Kill old, wait past lstart second boundary, spawn replacement
-    await killHelper(helper)
-    expect(isProcessAlive(oldPid)).toBe(false)
+    // Stop old, start new with different model (production replacement flow)
+    await stopHelper()
     await sleep(1100)
 
-    helper = spawnHelper(HELPER_PORT, { model: 'new-model' })
-    await waitForHelper(HELPER_PORT)
+    const result2 = await startHelper({ model: 'new-model' })
+    expect(result2.ok).toBe(true)
+    const newPid = result2.pid!
+    const newToken = result2.birth_token
 
-    const newPid = helper.pid!
-    const newToken = processStartToken(newPid)
-
-    // Verify replacement
-    const newProps = await (await fetch(`http://127.0.0.1:${HELPER_PORT}/props`)).json()
+    // Verify replacement model
+    const newProps = await (await fetch('http://127.0.0.1:19500/props')).json()
     expect(newProps.model_path).toBe('new-model')
 
-    // Birth tokens differ (new process)
+    // The supervisor recorded new ownership with a different birth token
+    const status = await getHelperStatus()
+    expect(status.ownership_record!.model).toBe('new-model')
     if (oldPid !== newPid) {
       expect(newToken).not.toBe(oldToken)
     }
   })
 
-  test('unhealthy helper detected via failed health check', async () => {
-    helper = spawnHelper(HELPER_PORT, { failHealth: true })
-
-    // The process is alive but health check fails
-    const deadline = Date.now() + 5_000
-    while (Date.now() < deadline) {
-      try {
-        await fetch(`http://127.0.0.1:${HELPER_PORT}/health`, {
-          signal: AbortSignal.timeout(1000),
-        })
-        break
-      } catch {
-        await sleep(100)
-      }
-    }
-
-    const healthRes = await fetch(`http://127.0.0.1:${HELPER_PORT}/health`, {
-      signal: AbortSignal.timeout(2000),
-    })
-    expect(healthRes.status).toBe(503)
+  test('supervisor detects unhealthy helper via health-check failure', async () => {
+    const result = await startHelper({ fail_health: true })
+    // The supervisor should fail to start because health never passes
+    expect(result.ok).toBe(false)
+    expect(result.error).toBeTruthy()
   })
 
-  test('slow-starting helper: health fails then succeeds', async () => {
-    helper = spawnHelper(HELPER_PORT, { slowStart: 1.5 })
+  test('supervisor handles slow-starting helper within health timeout', async () => {
+    const result = await startHelper({ slow_start: 1.5 })
+    expect(result.ok).toBe(true)
+    expect(result.pid).toBeTruthy()
 
-    // Initially unhealthy
-    const earlyDeadline = Date.now() + 3_000
-    let sawUnhealthy = false
-    while (Date.now() < earlyDeadline) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${HELPER_PORT}/health`, {
-          signal: AbortSignal.timeout(500),
-        })
-        if (res.status === 503) {
-          sawUnhealthy = true
-        } else if (res.ok && sawUnhealthy) {
-          break
-        }
-      } catch {
-        // not bound yet
-      }
-      await sleep(200)
-    }
-
-    expect(sawUnhealthy).toBe(true)
-
-    // Eventually healthy
-    await waitForHelper(HELPER_PORT, 5_000)
-    const healthRes = await fetch(`http://127.0.0.1:${HELPER_PORT}/health`)
-    expect(healthRes.ok).toBe(true)
+    // After the supervisor returned, the helper should be healthy
+    const status = await getHelperStatus()
+    expect(status.running).toBe(true)
+    expect(status.healthy).toBe(true)
   })
 
   test('backend health endpoint reports database ready', async () => {

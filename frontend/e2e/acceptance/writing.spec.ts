@@ -279,6 +279,88 @@ test.describe('Writing', () => {
     expect(assistant2[0].content).toBe(originalContent)
   })
 
+  test('PLA-310: durable effect then failure blocks retry', async () => {
+    await setTutorMode('error-before-stream')
+    const draft = await createDraft(classId, 'Durable Effect Failure Test')
+
+    const sessRes = await apiPost(`/api/drafts/${draft.id}/sessions`, {})
+    expect(sessRes.ok).toBe(true)
+    const session = await sessRes.json()
+
+    // Send a turn that fails (no durable effects produced by guide mode)
+    const turn1Res = await fetch(`${BACKEND}/api/drafts/${draft.id}/chat/${session.id}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lyra-Client': 'acceptance-test',
+      },
+      body: JSON.stringify({
+        content: 'This turn will fail then get an injected effect',
+        mode: 'guide',
+      }),
+    })
+    await readSSEFrames(turn1Res)
+
+    // Wait briefly for the attempt state to settle (the SSE error may race
+    // with the database commit)
+    await new Promise((r) => setTimeout(r, 500))
+
+    // Find the failed attempt via the acceptance endpoint
+    const attemptRes = await fetch(
+      `${BACKEND}/_acceptance/writer-latest-attempt/${session.id}`,
+      { headers: { 'X-Lyra-Client': 'acceptance-test' } },
+    )
+    const attemptBody = await attemptRes.text()
+    expect(attemptRes.ok, `writer-latest-attempt returned ${attemptRes.status}: ${attemptBody}`).toBe(
+      true,
+    )
+    const attemptData = JSON.parse(attemptBody)
+    expect(attemptData.found, `attempt lookup returned: ${attemptBody}`).toBe(true)
+    expect(attemptData.state).toBe('failed')
+    const attemptId: number = attemptData.id
+
+    // Inject a durable effect (simulates a tool that created a brief before failure)
+    const injectRes = await fetch(`${BACKEND}/_acceptance/writer-inject-effect`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lyra-Client': 'acceptance-test',
+      },
+      body: JSON.stringify({ attempt_id: attemptId, target_kind: 'brief', target_id: 99999 }),
+    })
+    if (!injectRes.ok) {
+      const errBody = await injectRes.text()
+      throw new Error(`writer-inject-effect failed ${injectRes.status}: ${errBody}`)
+    }
+
+    // Confirm the effect landed
+    const targetsRes = await fetch(`${BACKEND}/_acceptance/writer-attempt-targets/${attemptId}`, {
+      headers: { 'X-Lyra-Client': 'acceptance-test' },
+    })
+    const targets = await targetsRes.json()
+    expect(targets.targets.length).toBe(1)
+    expect(targets.targets[0].target_kind).toBe('brief')
+
+    // Retry should be blocked by PLA-310 because the attempt has durable effects
+    const retryRes = await fetch(`${BACKEND}/api/drafts/${draft.id}/chat/${session.id}/retry`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Lyra-Client': 'acceptance-test',
+      },
+    })
+    expect(retryRes.status).toBe(409)
+    const retryBody = await retryRes.json()
+    expect(retryBody.code).toBe('writer_retry_has_effects')
+
+    // Confirm the effect was not duplicated (still exactly one)
+    const targets2Res = await fetch(`${BACKEND}/_acceptance/writer-attempt-targets/${attemptId}`, {
+      headers: { 'X-Lyra-Client': 'acceptance-test' },
+    })
+    const targets2 = await targets2Res.json()
+    expect(targets2.targets.length).toBe(1)
+  })
+
   test('browser: conflict dialog appears on stale version save', async ({ page }) => {
     const draft = await createDraft(classId, 'Browser Conflict Test')
 
