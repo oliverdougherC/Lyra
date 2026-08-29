@@ -221,6 +221,9 @@ export function ChatPane({
   // Read inside the stream callback, which closes over the value it was created with, so
   // the elapsed thinking time cannot come from the `turnStartedAt` state.
   const turnOpenedAtRef = useRef(0)
+  const submittedTextRef = useRef<string | null>(null)
+  const operationIdRef = useRef<string | null>(null)
+  const responseAcceptedRef = useRef(false)
 
   const newestSession = useMemo(
     () => (sessions && sessions.length > 0 ? [...sessions].sort((a, b) => b.id - a.id)[0] : null),
@@ -556,9 +559,19 @@ export function ChatPane({
                   )
                 : streamChat(
                     turnSessionId,
-                    { content, mode: activeMode, document_id: documentId },
+                    {
+                      content,
+                      mode: activeMode,
+                      document_id: documentId,
+                      operation_id: operationIdRef.current ?? undefined,
+                    },
                     onEvent,
                     controller.signal,
+                    () => {
+                      responseAcceptedRef.current = true
+                      submittedTextRef.current = null
+                      operationIdRef.current = null
+                    },
                   ))
       } catch (caught) {
         if (!owns()) {
@@ -566,6 +579,10 @@ export function ChatPane({
         } else if (caught instanceof DOMException && caught.name === 'AbortError') {
           if (outcomeRef.current === 'active') {
             setOutcome('stopped')
+            if (submittedTextRef.current !== null) {
+              setDraft(submittedTextRef.current)
+              submittedTextRef.current = null
+            }
             if (streamTextRef.current.trim().length === 0) {
               revealDrainedRef.current = true
               setRevealDrained(true)
@@ -576,15 +593,33 @@ export function ChatPane({
             toast.error(
               'The previous attempt made changes before it failed. Review what landed, then send a new message.',
             )
+          } else if (caught.code === 'operation_id_mismatch') {
+            toast.error(caught.detail)
           } else {
             toast.error('Another turn is still in progress on this conversation.')
           }
           if (kind === 'send') {
             setDraft(content)
+            // PLA-313: a busy 409 means THIS attempt was not accepted; it says nothing
+            // about whether the earlier ambiguous operation committed. Keep the
+            // ambiguity key (operationIdRef) and its submitted-text bookmark so a later
+            // identical Send carries the same operation ID and the backend reconciles
+            // or replays it instead of creating a second durable question. Only a true
+            // operation-ID mismatch - a structured 409 proving the key itself is spent
+            // on a different request - may discard it so the next Send mints fresh.
+            if (caught.code === 'operation_id_mismatch') {
+              operationIdRef.current = null
+              submittedTextRef.current = null
+            }
           }
+          // A non-send turn kind never carries the ambiguity key, so a 409 on it must
+          // not clear one either: an earlier ambiguous send's X stays intact.
           setOutcome('failed')
         } else {
           toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
+          if (submittedTextRef.current !== null) {
+            setDraft(submittedTextRef.current)
+          }
           setOutcome('failed')
         }
       } finally {
@@ -619,6 +654,16 @@ export function ChatPane({
     (content: string) => {
       const trimmed = content.trim()
       if (trimmed.length === 0) return
+      if (
+        operationIdRef.current !== null &&
+        submittedTextRef.current !== null &&
+        trimmed !== submittedTextRef.current
+      ) {
+        operationIdRef.current = null
+      }
+      operationIdRef.current ??= crypto.randomUUID()
+      responseAcceptedRef.current = false
+      submittedTextRef.current = trimmed
       setDraft('')
       void (async () => {
         const target = await ensureSession()
@@ -626,6 +671,7 @@ export function ChatPane({
         // could not be opened, so there is nowhere for it to have gone.
         if (target === null) {
           setDraft(trimmed)
+          submittedTextRef.current = null
           return
         }
         await runTurn('send', trimmed, target)
@@ -676,6 +722,9 @@ export function ChatPane({
   const stop = useCallback(() => {
     if (!abortRef.current) return
     setOutcome('stopped')
+    if (responseAcceptedRef.current) {
+      operationIdRef.current = null
+    }
     if (streamTextRef.current.trim().length === 0) {
       revealDrainedRef.current = true
       setRevealDrained(true)

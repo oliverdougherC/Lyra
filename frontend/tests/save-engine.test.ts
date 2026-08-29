@@ -4,6 +4,7 @@ import {
   createSaveEngine,
   decideServerSync,
   flushOnHidden,
+  installBeforeUnloadGuard,
   SAVE_DEBOUNCE_MS,
   type SaveConflict,
   type SaveStateName,
@@ -905,6 +906,261 @@ describe('reconciliation: an equality sync never invalidates an in-flight save t
     expect(engine.lastSaved()).toBe('typed')
     expect(engine.isDirty('typed')).toBe(false)
     expect(names(states).at(-1)).toBe('saved')
+  })
+})
+
+/**
+ * PLA-315: the beforeunload guard must consult `isDirty()` at each state of
+ * the save engine. These tests drive the engine through real state transitions
+ * with the FakeServer, verifying that `isDirty()` returns the correct value
+ * at every point the guard would check.
+ */
+describe('isDirty: beforeunload guard contract', () => {
+  it('is clean when saved and editor matches', async () => {
+    const server = new FakeServer('saved text', 1)
+    const { engine } = makeEngine(server)
+    expect(engine.isDirty('saved text')).toBe(false)
+  })
+
+  it('is dirty during debounce (scheduled but not yet written)', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    engine.schedule('new typing')
+    expect(engine.isDirty('new typing')).toBe(true)
+  })
+
+  it('is dirty while a write is in flight', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    engine.schedule('content')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    expect(server.inFlight()).toBe(1)
+    expect(engine.isDirty('content')).toBe(true)
+  })
+
+  it('is dirty after a failed save', async () => {
+    const server = new FakeServer('', 0)
+    const { engine, states } = makeEngine(server)
+    engine.schedule('will fail')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    await server.failNext()
+    expect(names(states).at(-1)).toBe('error')
+    expect(engine.isDirty('will fail')).toBe(true)
+  })
+
+  it('is dirty with an unresolved conflict', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    engine.schedule('local text')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    server.version = 5
+    server.body = 'server moved'
+    await server.settleNext()
+    expect(engine.conflict()).not.toBeNull()
+    expect(engine.isDirty('local text')).toBe(true)
+  })
+
+  it('is clean after a successful authoritative save', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    engine.schedule('typed')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    await server.settleNext()
+    expect(engine.isDirty('typed')).toBe(false)
+  })
+
+  it('is clean after conflict resolution and successful save', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    engine.schedule('local')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    server.version = 2
+    server.body = 'server version'
+    await server.settleNext()
+    expect(engine.conflict()).not.toBeNull()
+    expect(engine.isDirty('local')).toBe(true)
+
+    engine.keepLocal('local')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    await server.settleNext()
+    expect(engine.conflict()).toBeNull()
+    expect(engine.isDirty('local')).toBe(false)
+  })
+
+  it('is dirty when editor content diverges from last saved', () => {
+    const server = new FakeServer('saved', 1)
+    const { engine } = makeEngine(server)
+    expect(engine.isDirty('saved')).toBe(false)
+    expect(engine.isDirty('edited')).toBe(true)
+  })
+
+  it('is not dirty when current is null (no editor open)', () => {
+    const server = new FakeServer('saved', 1)
+    const { engine } = makeEngine(server)
+    expect(engine.isDirty(null)).toBe(false)
+  })
+})
+
+/**
+ * PLA-315: the beforeunload handler that the drafts page registers must call
+ * `preventDefault` exactly when the engine has unconfirmed state. These tests
+ * mount the same wiring pattern the page uses (`engine.isDirty(current)`),
+ * dispatch real `beforeunload` events, and prove `defaultPrevented` toggles
+ * across all lifecycle states.
+ */
+describe('beforeunload event wiring (PLA-315)', () => {
+  function fireBeforeUnload(): Event {
+    const event = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(event)
+    return event
+  }
+
+  it('does not prevent navigation when saved and editor matches', () => {
+    const server = new FakeServer('saved text', 1)
+    const { engine } = makeEngine(server)
+    const current = 'saved text'
+
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(false)
+    } finally {
+      detach()
+    }
+  })
+
+  it('prevents navigation during debounce (pending scheduled write)', () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'new typing'
+
+    engine.schedule('new typing')
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(true)
+    } finally {
+      detach()
+    }
+  })
+
+  it('prevents navigation while a write is in flight', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'content'
+
+    engine.schedule('content')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    expect(server.inFlight()).toBe(1)
+
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(true)
+    } finally {
+      detach()
+    }
+  })
+
+  it('prevents navigation after a failed save', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'will fail'
+
+    engine.schedule('will fail')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    await server.failNext()
+
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(true)
+    } finally {
+      detach()
+    }
+  })
+
+  it('prevents navigation with an unresolved conflict', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'local text'
+
+    engine.schedule('local text')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    server.version = 5
+    server.body = 'server moved'
+    await server.settleNext()
+    expect(engine.conflict()).not.toBeNull()
+
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(true)
+    } finally {
+      detach()
+    }
+  })
+
+  it('does not prevent navigation after a successful authoritative save', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'typed'
+
+    engine.schedule('typed')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    await server.settleNext()
+
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(false)
+    } finally {
+      detach()
+    }
+  })
+
+  it('does not prevent navigation after conflict resolution and confirmed save', async () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'local'
+
+    engine.schedule('local')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    server.version = 2
+    server.body = 'server version'
+    await server.settleNext()
+    expect(engine.conflict()).not.toBeNull()
+
+    engine.keepLocal('local')
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_MS)
+    await flushMicrotasks()
+    await server.settleNext()
+
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
+    try {
+      expect(fireBeforeUnload().defaultPrevented).toBe(false)
+    } finally {
+      detach()
+    }
+  })
+
+  it('detach stops preventing navigation even when dirty', () => {
+    const server = new FakeServer('', 0)
+    const { engine } = makeEngine(server)
+    const current = 'unsaved work'
+
+    engine.schedule('unsaved work')
+
+    const detach = installBeforeUnloadGuard(() => engine.isDirty(current))
+    expect(fireBeforeUnload().defaultPrevented).toBe(true)
+
+    detach()
+    expect(fireBeforeUnload().defaultPrevented).toBe(false)
   })
 })
 

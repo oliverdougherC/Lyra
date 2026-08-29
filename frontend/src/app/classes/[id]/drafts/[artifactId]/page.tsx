@@ -57,7 +57,12 @@ import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { api, ApiError, DraftBodyConflictError } from '@/lib/api'
 import { SaveStateIndicator } from '@/components/drafts/save-state-indicator'
 import { normalizeMathDelimiters } from '@/lib/drafts/math-delimiters'
-import { createSaveEngine, decideServerSync, flushOnHidden } from '@/lib/drafts/save-engine'
+import {
+  createSaveEngine,
+  decideServerSync,
+  flushOnHidden,
+  installBeforeUnloadGuard,
+} from '@/lib/drafts/save-engine'
 import type { SaveConflict, SaveStateName } from '@/lib/drafts/save-engine'
 import { useClasses } from '@/lib/hooks/use-classes'
 import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
@@ -308,13 +313,17 @@ export default function DraftWorkspacePage() {
   }, [passRunning])
 
   // Flush on the way out: a hidden tab is the last moment a write can still be sent, and
-  // an unmount drops the editor entirely.
+  // an unmount drops the editor entirely. The beforeunload handler warns the student when
+  // the save engine has unconfirmed state so the browser's native "unsaved changes"
+  // dialog can prevent accidental data loss.
   useEffect(() => {
     const detach = flushOnHidden(() => {
       void engine.flush(latestMarkdownRef.current)
     })
+    const detachGuard = installBeforeUnloadGuard(() => engine.isDirty(latestMarkdownRef.current))
     return () => {
       detach()
+      detachGuard()
       void engine.flush(latestMarkdownRef.current)
     }
   }, [engine])

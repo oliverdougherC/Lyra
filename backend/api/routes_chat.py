@@ -34,7 +34,7 @@ from backend.core.app_settings import (
     resolve_tutor_access,
 )
 from backend.core.classes import get_class, touch_class
-from backend.core.errors import LyraError
+from backend.core.errors import ConflictError, LyraError
 from backend.core.profiles import select_active_facts, select_user_facts
 from backend.llm.client import stream_chat
 from backend.llm.prompts import ChatMode, build_system_prompt, format_context_block
@@ -198,11 +198,17 @@ class ChatRequest(BaseModel):
     over-length paste is rejected as a 422 before it is stripped, persisted, or budgeted,
     whatever the configured context window. The narrower, window-relative limit lives in
     `_require_turn_fits`.
+
+    `operation_id` is the client-generated idempotency key (PLA-313): one per logical
+    send, reused on a transport retry after an ambiguous failure. When the server finds
+    an existing attempt carrying the same operation_id, it replays/reconciles instead of
+    inserting a second user message.
     """
 
     content: str = Field(min_length=1, max_length=MAX_QUESTION_CHARS)
     mode: ChatMode
     document_id: int | None = None
+    operation_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     @field_validator("content")
     @classmethod
@@ -238,6 +244,7 @@ class TurnInput:
     content: str
     mode: ChatMode
     document_id: int | None = None
+    operation_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -622,7 +629,12 @@ async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> Stre
     Once the first frame is out the status line is gone, so every later failure has to
     travel as an `error` frame instead.
     """
-    request = TurnInput(content=payload.content, mode=payload.mode, document_id=payload.document_id)
+    request = TurnInput(
+        content=payload.content,
+        mode=payload.mode,
+        document_id=payload.document_id,
+        operation_id=payload.operation_id,
+    )
     # The claim is taken here, synchronously, before the coroutine's first suspension
     # point: cancellation can only land on an `await`, so from the moment `begin_turn`
     # returns this coroutine owns the token with no window in which a worker could hold
@@ -634,10 +646,13 @@ async def send_chat(session_id: int, payload: ChatRequest, conn: DbConn) -> Stre
         asyncio.to_thread(_open_turn, conn, session_id, request, turn_token)
     )
     try:
-        config, plan, cost = await asyncio.shield(opener)
+        result = await asyncio.shield(opener)
     except BaseException:
         _finish_opening(opener, session_id, turn_token)
         raise
+    if isinstance(result, str):
+        return _turn_response(session_id, turn_token, _replay_turn(session_id, result, turn_token))
+    config, plan, cost = result
     return _turn_response(
         session_id,
         turn_token,
@@ -827,7 +842,7 @@ def _refuse_writer_session(session: dict[str, object]) -> None:
 
 def _open_turn(
     conn: sqlite3.Connection, session_id: int, request: TurnInput, turn_token: int
-) -> tuple[TutorConfig, TurnPlan, TurnCost]:
+) -> tuple[TutorConfig, TurnPlan, TurnCost] | str:
     """Validate the turn and persist the user's message before any streaming starts.
 
     Runs in a worker thread against a session the route already claimed: `begin_turn`
@@ -851,6 +866,87 @@ def _open_turn(
         access = resolve_tutor_access(conn)
         require_document_allowed(access)
         config = access.config
+
+        # PLA-313 idempotency: if the same operation_id already committed a user message
+        # and attempt in this session, reuse them instead of inserting a duplicate.
+        if request.operation_id:
+            existing = tutor_attempts.find_by_operation_id(conn, session_id, request.operation_id)
+            if existing is not None:
+                user_message_id = existing["user_message_id"]
+
+                # PLA-313 blocker 2: the operation_id is bound to the logical request
+                # that created it. A resubmit with different content/mode/document is
+                # a client bug, not a retry — reject it so the model never runs against
+                # mismatched stored/request content.
+                stored_msg = conn.execute(
+                    "select content from messages where id = ?",
+                    (user_message_id,),
+                ).fetchone()
+                stored_content = str(stored_msg["content"]) if stored_msg else ""
+                if (
+                    stored_content.strip() != request.content.strip()
+                    or existing.get("mode") != request.mode
+                    or existing.get("document_id") != request.document_id
+                ):
+                    # PLA-313: structured code so the client can tell this apart from
+                    # the ordinary conversation-busy 409 without matching messages. Only
+                    # this mismatch may discard the ambiguity key; a busy 409 must not.
+                    raise ConflictError(
+                        "This operation ID was already used for a different request. "
+                        "Submit with a new operation ID.",
+                        extra={"code": "operation_id_mismatch"},
+                    )
+
+                sessions.bind_turn(session_id, turn_token, user_message_id)
+                touch_class(conn, int(session["class_id"]))
+
+                # PLA-313: inspect the entire attempt lineage for this user
+                # message, not just the original attempt that carries the
+                # operation_id.  A retry attempt (operation_id=None) may have
+                # completed after the original failed/stopped.
+                completed = tutor_attempts.find_completed_attempt(conn, user_message_id)
+                if completed is not None:
+                    asst_id = completed.get("assistant_message_id")
+                    reply_row = (
+                        conn.execute(
+                            "select content from messages where id = ?",
+                            (asst_id,),
+                        ).fetchone()
+                        if asst_id
+                        else None
+                    )
+                    return str(reply_row["content"]) if reply_row else ""
+
+                latest = tutor_attempts.latest_attempt_for_message(conn, user_message_id)
+                if latest is not None and str(latest["state"]) == tutor_attempts.RUNNING:
+                    raise ConflictError("Another turn is still in progress on this conversation.")
+
+                # All attempts failed/stopped — create a fresh retry attempt
+                # on the same user message.
+                cost = _plan_turn_cost(
+                    conn, session_id, request.mode, request.content, frozenset(), config
+                )
+                _require_turn_fits(cost)
+                conn.execute("begin immediate")
+                try:
+                    attempt_id = tutor_attempts.create_attempt(
+                        conn,
+                        session_id=session_id,
+                        user_message_id=user_message_id,
+                        mode=request.mode,
+                        document_id=request.document_id,
+                        operation_id=None,
+                    )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                return (
+                    config,
+                    TurnPlan(user_message_id=user_message_id, attempt_id=attempt_id),
+                    cost,
+                )
+
         cost = _plan_turn_cost(conn, session_id, request.mode, request.content, frozenset(), config)
         _require_turn_fits(cost)
         sessions.set_session_mode(conn, session_id, request.mode)
@@ -864,6 +960,7 @@ def _open_turn(
                 user_message_id=user_message_id,
                 mode=request.mode,
                 document_id=request.document_id,
+                operation_id=request.operation_id,
             )
             conn.commit()
         except Exception:
@@ -1037,8 +1134,13 @@ async def _stream_turn(
                 else "The answer was cancelled before any text arrived."
             )
             tutor_attempts.stop_attempt(conn, plan.attempt_id, detail=detail)
-        elif conn is not None and not plan.attempt_id and (received or thought):
+        elif conn is not None and not plan.superseded and (received or thought):
+            # A regular send (no superseded replies) keeps whatever arrived.
             _commit_reply_atomic(conn, session_id, plan, received, thought, retrieval, thinking_ms)
+        # Regeneration (superseded != ()): partial content is discarded on
+        # cancel.  The original reply stays intact because _open_regeneration
+        # only plans the superseded ids -- the delete happens inside
+        # _commit_reply_atomic, which was never reached.
         raise
     except LyraError as exc:
         if conn is not None and plan.attempt_id:
@@ -1201,46 +1303,39 @@ def _commit_reply_atomic(
 ) -> int:
     """Swap in this turn's reply and mark its attempt completed, atomically.
 
-    The reply and the completed state land in the same transaction so a crash can never
-    leave a stored reply beside an attempt still reading as running (which a later retry
-    would re-run, double-answering). When there is no attempt_id (regeneration without
-    attempt tracking), it commits the reply alone.
+    Every mutation -- superseded-message deletion, new-reply insertion, and
+    attempt completion -- lands in one ``begin immediate`` / ``commit`` so a
+    crash or insert failure can never leave the conversation with the old reply
+    deleted and nothing in its place.
     """
-    if plan.superseded:
-        sessions.delete_messages(conn, session_id, plan.superseded)
-    if not plan.attempt_id:
-        return sessions.add_message(
-            conn,
-            session_id,
-            "assistant",
-            "".join(received),
-            retrieval_trimmed=retrieval.trimmed,
-            omitted_document_count=retrieval.omitted_document_count,
-            thinking="".join(thought),
-            thinking_ms=thinking_ms,
-        )
+    content = "".join(received)
+    thinking = "".join(thought)
     try:
         conn.execute("begin immediate")
+        if plan.superseded:
+            sessions.remove_messages(conn, session_id, plan.superseded)
         message_id = sessions.insert_message(
             conn,
             session_id,
             "assistant",
-            "".join(received),
+            content,
             retrieval_trimmed=retrieval.trimmed,
             omitted_document_count=retrieval.omitted_document_count,
-            thinking="".join(thought),
+            thinking=thinking,
             thinking_ms=thinking_ms,
         )
-        tutor_attempts.mark_completed(conn, plan.attempt_id, message_id)
+        if plan.attempt_id:
+            tutor_attempts.mark_completed(conn, plan.attempt_id, message_id)
         conn.commit()
     except Exception:
         conn.rollback()
-        tutor_attempts.fail_attempt(
-            conn,
-            plan.attempt_id,
-            stopped_reason="persistence_failed",
-            detail="The reply was written but could not be saved. Try again.",
-        )
+        if plan.attempt_id:
+            tutor_attempts.fail_attempt(
+                conn,
+                plan.attempt_id,
+                stopped_reason="persistence_failed",
+                detail="The reply was written but could not be saved. Try again.",
+            )
         raise
     return message_id
 

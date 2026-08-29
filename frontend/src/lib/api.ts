@@ -954,8 +954,9 @@ export function streamChat(
   body: ChatRequest,
   onEvent: (event: ChatEvent) => void,
   signal?: AbortSignal,
+  onResponse?: () => void,
 ): Promise<void> {
-  return streamTurn(`/api/sessions/${sessionId}/chat`, body, onEvent, signal)
+  return streamTurn(`/api/sessions/${sessionId}/chat`, body, onEvent, signal, onResponse)
 }
 
 /**
@@ -1029,8 +1030,10 @@ async function streamTurn<StreamEvent>(
   body: ChatRequest | RegenerateRequest | WriteRequest | WriterChatRequest | Record<string, never>,
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,
+  onResponse?: () => void,
 ): Promise<void> {
   const response = await send(path, { method: 'POST', body, signal })
+  onResponse?.()
 
   const reader = response.body?.getReader()
   if (!reader) throw new ApiError(0, UNREACHABLE)

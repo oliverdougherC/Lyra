@@ -485,3 +485,16 @@ export function flushOnHidden(flush: () => void): () => void {
   document.addEventListener('visibilitychange', onVisibilityChange)
   return () => document.removeEventListener('visibilitychange', onVisibilityChange)
 }
+
+/**
+ * Wire the native "unsaved changes" dialog to a dirty check. Returns the detach
+ * function for unmount. Both the draft page and its tests import this so the
+ * production guard is what gets tested.
+ */
+export function installBeforeUnloadGuard(isDirty: () => boolean): () => void {
+  const onBeforeUnload = (e: BeforeUnloadEvent) => {
+    if (isDirty()) e.preventDefault()
+  }
+  window.addEventListener('beforeunload', onBeforeUnload)
+  return () => window.removeEventListener('beforeunload', onBeforeUnload)
+}

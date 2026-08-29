@@ -398,6 +398,7 @@ export interface ChatRequest {
   content: string
   mode: ChatMode
   document_id: number | null
+  operation_id?: string
 }
 
 /** Body of `POST /api/sessions/{id}/regenerate`: the question is the one already stored. */

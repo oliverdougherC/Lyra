@@ -1476,3 +1476,423 @@ class TestConcurrencyMatrix:
             assert attempts[2]["state"] == "completed"
         finally:
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# PLA-313: client-generated operation_id idempotency
+# ---------------------------------------------------------------------------
+
+
+def _send_with_op(
+    client: TestClient,
+    session_id: int,
+    content: str = QUESTION,
+    *,
+    operation_id: str | None = None,
+    mode: str = "guide",
+    document_id: int | None = None,
+) -> httpx.Response:
+    return client.post(
+        f"/api/sessions/{session_id}/chat",
+        json={
+            "content": content,
+            "mode": mode,
+            "document_id": document_id,
+            "operation_id": operation_id,
+        },
+    )
+
+
+class TestOperationIdReplay:
+    """PLA-313 blocker 1: a completed operation_id replays the stored reply with
+    zero model calls, zero new messages, and zero new attempts."""
+
+    def test_completed_operation_replays_stored_reply(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        call_count = 0
+        original = _stream_of("The answer is 42.")
+
+        async def counting_stream(*a: object, **kw: object) -> AsyncIterator[StreamDelta]:
+            nonlocal call_count
+            call_count += 1
+            async for delta in original(*a, **kw):
+                yield delta
+
+        monkeypatch.setattr(routes_chat, "stream_chat", counting_stream)
+        r1 = _send_with_op(client, session_id, operation_id="op-1")
+        assert r1.status_code == 200
+        _ = r1.text
+        assert call_count == 1
+
+        r2 = _send_with_op(client, session_id, operation_id="op-1")
+        assert r2.status_code == 200
+        frames = _parse_frames(r2)
+        assert call_count == 1, "replay must not call the model"
+
+        token_texts = [f["text"] for f in frames if f["type"] == "token"]
+        assert "".join(token_texts) == "The answer is 42."
+
+    def test_replay_creates_no_new_messages_or_attempts(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Reply."))
+        _send_with_op(client, session_id, operation_id="op-2")
+
+        messages_before = _messages(client, session_id)
+        conn = connect()
+        try:
+            attempts_before = conn.execute(
+                "select id from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        _send_with_op(client, session_id, operation_id="op-2")
+
+        messages_after = _messages(client, session_id)
+        conn = connect()
+        try:
+            attempts_after = conn.execute(
+                "select id from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        assert len(messages_after) == len(messages_before)
+        assert len(attempts_after) == len(attempts_before)
+
+
+class TestOperationIdLogicalRequestBinding:
+    """PLA-313 blocker 2: the operation_id is bound to the normalized content,
+    mode, and document scope. A resubmit with different parameters is rejected."""
+
+    def test_different_content_rejected(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Answer."))
+        r1 = _send_with_op(client, session_id, content="question A", operation_id="op-bind")
+        assert r1.status_code == 200
+        _ = r1.text
+
+        r2 = _send_with_op(client, session_id, content="question B", operation_id="op-bind")
+        assert r2.status_code == 409
+
+    def test_different_mode_rejected(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Answer."))
+        r1 = _send_with_op(client, session_id, operation_id="op-mode", mode="guide")
+        assert r1.status_code == 200
+        _ = r1.text
+
+        r2 = _send_with_op(client, session_id, operation_id="op-mode", mode="show")
+        assert r2.status_code == 409
+
+    def test_same_logical_request_accepted(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Answer."))
+        r1 = _send_with_op(client, session_id, operation_id="op-same")
+        assert r1.status_code == 200
+        _ = r1.text
+
+        r2 = _send_with_op(client, session_id, operation_id="op-same")
+        assert r2.status_code == 200
+
+
+class TestOperationIdRetryLineage:
+    """PLA-313: operation_id must span the entire retry-attempt lineage.
+
+    Once any retry for logical operation X successfully publishes a reply, all later
+    submissions of X must replay that result with zero model calls.
+    """
+
+    def test_retry_lineage_replays_successful_retry(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """X → A fails → X → B completes with R → X → replay R."""
+        call_count = 0
+
+        def _counting_fail() -> StreamFactory:
+            async def stream(*a: object, **kw: object) -> AsyncIterator[StreamDelta]:
+                nonlocal call_count
+                call_count += 1
+                raise UpstreamError("Connection refused")
+                yield  # noqa: RET503  # type: ignore[misc]
+
+            return stream
+
+        def _counting_succeed(text: str) -> StreamFactory:
+            async def stream(*a: object, **kw: object) -> AsyncIterator[StreamDelta]:
+                nonlocal call_count
+                call_count += 1
+                yield StreamDelta("answer", text)
+
+            return stream
+
+        # Step 1: attempt A fails
+        monkeypatch.setattr(routes_chat, "stream_chat", _counting_fail())
+        r1 = _send_with_op(client, session_id, operation_id="lineage-1")
+        assert r1.status_code == 200
+        _ = r1.text
+        assert call_count == 1
+
+        # Step 2: retry B succeeds with "Reply R"
+        monkeypatch.setattr(routes_chat, "stream_chat", _counting_succeed("Reply R"))
+        r2 = _send_with_op(client, session_id, operation_id="lineage-1")
+        assert r2.status_code == 200
+        _ = r2.text
+        assert call_count == 2
+
+        # Step 3: same X again — must replay R with zero additional model calls
+        r3 = _send_with_op(client, session_id, operation_id="lineage-1")
+        assert r3.status_code == 200
+        frames = _parse_frames(r3)
+        token_texts = [f["text"] for f in frames if f["type"] == "token"]
+        assert "".join(token_texts) == "Reply R"
+        assert call_count == 2, "replay must not call the model a third time"
+
+        # Verify durable state
+        conn = connect()
+        try:
+            user_msgs = conn.execute(
+                "select id from messages where session_id = ? and role = 'user'",
+                (session_id,),
+            ).fetchall()
+            assert len(user_msgs) == 1, "exactly one durable user question"
+
+            attempts = conn.execute(
+                "select id, state from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchall()
+            assert len(attempts) == 2, "A (failed) + B (completed), no attempt C"
+
+            completed = [a for a in attempts if a["state"] == "completed"]
+            assert len(completed) == 1, "exactly one authoritative completed attempt"
+        finally:
+            conn.close()
+
+    def test_all_failed_allows_next_retry(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed → B failed → X may create legitimate next retry C."""
+        call_count = 0
+
+        def _counting_fail() -> StreamFactory:
+            async def stream(*a: object, **kw: object) -> AsyncIterator[StreamDelta]:
+                nonlocal call_count
+                call_count += 1
+                raise UpstreamError("Connection refused")
+                yield  # noqa: RET503  # type: ignore[misc]
+
+            return stream
+
+        # A fails
+        monkeypatch.setattr(routes_chat, "stream_chat", _counting_fail())
+        _send_with_op(client, session_id, operation_id="lineage-all-fail")
+        _ = client.get(f"/api/sessions/{session_id}/messages").json()
+        assert call_count == 1
+
+        # B also fails (retry of same op)
+        _send_with_op(client, session_id, operation_id="lineage-all-fail")
+        assert call_count == 2
+
+        # C: next retry is allowed because no attempt ever completed
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Finally."))
+        r3 = _send_with_op(client, session_id, operation_id="lineage-all-fail")
+        assert r3.status_code == 200
+        frames = _parse_frames(r3)
+        token_texts = [f["text"] for f in frames if f["type"] == "token"]
+        assert "".join(token_texts) == "Finally."
+
+        conn = connect()
+        try:
+            attempts = conn.execute(
+                "select id, state from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchall()
+            assert len(attempts) == 3, "A + B (failed) + C (completed)"
+            assert sum(1 for a in attempts if a["state"] == "completed") == 1
+        finally:
+            conn.close()
+
+    def test_running_retry_blocks_duplicate(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed → B currently running → duplicate X does not create competing C."""
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_fail_immediately())
+        r1 = _send_with_op(client, session_id, operation_id="lineage-run")
+        assert r1.status_code == 200
+        _ = r1.text
+
+        # Simulate a running retry: insert attempt B directly in the DB
+        conn = connect()
+        try:
+            orig = conn.execute(
+                "select user_message_id from tutor_turn_attempts "
+                "where session_id = ? and operation_id = 'lineage-run'",
+                (session_id,),
+            ).fetchone()
+            conn.execute(
+                "insert into tutor_turn_attempts "
+                "(session_id, user_message_id, state, mode) "
+                "values (?, ?, 'running', 'guide')",
+                (session_id, orig["user_message_id"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        r2 = _send_with_op(client, session_id, operation_id="lineage-run")
+        assert r2.status_code == 409
+
+    def test_mismatch_still_rejected_after_retry(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Content mismatch is rejected even when the original attempt failed."""
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_fail_immediately())
+        r1 = _send_with_op(
+            client, session_id, content="original question", operation_id="lineage-mm"
+        )
+        assert r1.status_code == 200
+        _ = r1.text
+
+        r2 = _send_with_op(
+            client, session_id, content="different question", operation_id="lineage-mm"
+        )
+        assert r2.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# PLA-313 final pass: busy 409 vs operation-ID mismatch are distinct outcomes
+# ---------------------------------------------------------------------------
+
+
+class TestBusyVsOperationMismatch:
+    """The last PLA-313 race: an ambiguous send whose server turn still owns the
+    session claim must not lose its operation ID to a generic busy 409."""
+
+    async def test_ambiguous_send_busy_409_preserves_key_then_replays(
+        self,
+        db: sqlite3.Connection,
+        client: TestClient,
+        session_id: int,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Full causal sequence, every step gated on a server-observable fact.
+
+        The model client is instrumented with two deterministic handshakes: it raises
+        an `Event` the moment the stream reaches it (so the route has already taken the
+        session claim and `_open_turn` has already committed the question), and then it
+        waits on a future before producing any token. Between those two points the
+        original turn is provably still in flight and still owns the claim, so the
+        immediate resend reaches `sessions.begin_turn()` and gets the ordinary busy 409
+        exactly as the race describes. No sleeps: every step waits on a fact.
+
+        1. Send X durably; its stream parks mid-turn with the claim held.
+        2. Identical resend X -> conversation-busy 409 raised before `_open_turn` can
+           see the operation ID at all.
+        3. That busy 409 carries NO structured code (it is not a mismatch) and leaves
+           no trace: still exactly one durable user message.
+        4. The original turn settles; its reply commits once.
+        5. A later resend of the same X reaches `_open_turn`, finds the completed
+           lineage, and replays the stored reply: zero extra model calls, one user
+           message, one assistant publication.
+        """
+        import asyncio
+
+        import httpx
+
+        reached = asyncio.Event()
+        gate: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        calls = 0
+
+        async def gated_stream(*a: object, **kw: object) -> AsyncIterator[StreamDelta]:
+            nonlocal calls
+            calls += 1
+            reached.set()
+            await gate
+            yield StreamDelta("answer", "First answer.")
+
+        monkeypatch.setattr(routes_chat, "stream_chat", gated_stream)
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=client.app), base_url="http://test"
+        ) as ac:
+
+            async def _send_op(operation_id: str) -> httpx.Response:
+                return await ac.post(
+                    f"/api/sessions/{session_id}/chat",
+                    json={
+                        "content": QUESTION,
+                        "mode": "guide",
+                        "document_id": None,
+                        "operation_id": operation_id,
+                    },
+                )
+
+            # 1. X is durably accepted and still streaming: the claim is held while the
+            # model client waits at its gate. `reached` proves both halves of that -
+            # `_open_turn` committed before streaming started, and the stream has not
+            # ended, so nothing has released the turn.
+            first = asyncio.ensure_future(_send_op("op-race"))
+            await reached.wait()
+            assert sessions.active_turn(session_id) is not None
+
+            # 2/3. Immediate identical resend: busy 409, structurally distinct from a
+            # mismatch (no code), and it persisted nothing new.
+            r_busy = await _send_op("op-race")
+            assert r_busy.status_code == 409
+            assert r_busy.json().get("code") is None
+            user_msgs = db.execute(
+                "select id from messages where session_id = ? and role = 'user'",
+                (session_id,),
+            ).fetchall()
+            assert len(user_msgs) == 1
+            assert calls == 1, "the refused resend must not reach the model"
+
+            # 4. The original X settles: gate released, its response drains to the end
+            # so the reply commits atomically and the claim frees.
+            gate.set_result(None)
+            r1 = await first
+            assert r1.status_code == 200
+            joined = "".join(f["text"] for f in _parse_frames(r1) if f["type"] == "token")
+            assert joined == "First answer."
+            assert sessions.active_turn(session_id) is None
+
+            # 5. A later identical resend carrying X reaches `_open_turn`, which finds
+            # the completed lineage and replays it: the stored reply, no new attempt.
+            r2 = await _send_op("op-race")
+            assert r2.status_code == 200
+            replayed = "".join(f["text"] for f in _parse_frames(r2) if f["type"] == "token")
+            assert replayed == "First answer."
+
+        assert calls == 1, "the replay must not re-run the model"
+        user_msgs = db.execute(
+            "select id from messages where session_id = ? and role = 'user'",
+            (session_id,),
+        ).fetchall()
+        asst_msgs = db.execute(
+            "select id from messages where session_id = ? and role = 'assistant'",
+            (session_id,),
+        ).fetchall()
+        assert len(user_msgs) == 1, "no second durable question"
+        assert len(asst_msgs) == 1, "no duplicate assistant publication"
+
+    def test_mismatch_409_carries_structured_code(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A genuinely reused operation ID with different canonical content is a
+        structured `operation_id_mismatch` - distinguishable from the busy 409 by
+        code alone, never by matching the user-facing message."""
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Answer."))
+        r1 = _send_with_op(client, session_id, content="question A", operation_id="op-code")
+        assert r1.status_code == 200
+        _ = r1.text
+
+        r2 = _send_with_op(client, session_id, content="question B", operation_id="op-code")
+        assert r2.status_code == 409
+        assert r2.json()["code"] == "operation_id_mismatch"

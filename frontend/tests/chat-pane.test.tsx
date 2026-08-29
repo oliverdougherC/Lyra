@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ChatPane } from '@/components/chat/chat-pane'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { api, streamChat } from '@/lib/api'
+import { ApiError, api, streamChat } from '@/lib/api'
 import type { ChatEvent, MessageRead } from '@/types'
 
 vi.mock('@/lib/api', async () => {
@@ -36,6 +36,7 @@ function message(overrides: Partial<MessageRead> & { id: number }): MessageRead 
     thinking_ms: 0,
     retrieval_trimmed: false,
     omitted_document_count: 0,
+    tool_activity: [],
     created_at: '2026-08-04T12:00:00Z',
     ...overrides,
   } as MessageRead
@@ -360,5 +361,573 @@ describe('ChatPane handoffs', () => {
     await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
     expect(streamChat).not.toHaveBeenCalled()
     expect(api.createSession).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * PLA-313: the composer must preserve the student's text across the acceptance
+ * boundary. The HTTP 200 response is the acceptance signal: once `onResponse`
+ * fires, the question is durably persisted and the submitted-text bookmark is
+ * cleared. Before that, a failure puts the text back in the composer. After
+ * that, the question is persisted and PLA-306's retry contract takes over.
+ */
+describe('ChatPane composer preservation (PLA-313)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.listSessions).mockResolvedValue([])
+    vi.mocked(api.listDocuments).mockResolvedValue([])
+    vi.mocked(api.getClassProfile).mockResolvedValue({
+      facts: [],
+      extraction_skipped_reason: null,
+    })
+    vi.mocked(api.getSettings).mockResolvedValue({
+      endpoint_url: 'http://localhost:1234/v1',
+      model: 'local',
+    } as Awaited<ReturnType<typeof api.getSettings>>)
+    vi.mocked(api.createSession).mockResolvedValue({
+      id: 7,
+      class_id: 1,
+      title: null,
+      mode: 'guide',
+      artifact_part_id: null,
+      created_at: '2026-08-04T12:00:00Z',
+    } as Awaited<ReturnType<typeof api.createSession>>)
+    vi.mocked(api.listMessages).mockResolvedValue([])
+  })
+
+  it('restores composer text when the server rejects before acceptance (pre-SSE network error)', async () => {
+    vi.mocked(streamChat).mockRejectedValue(new Error('Network error'))
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+  })
+
+  it('does not restore composer text after acceptance (post-response model failure)', async () => {
+    const stream: {
+      emit?: (event: ChatEvent) => void
+      accept?: () => void
+      reject?: (error: Error) => void
+    } = {}
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, onEvent, _signal, onResponse) => {
+      stream.emit = onEvent
+      stream.accept = onResponse
+      return new Promise<void>((_resolve, reject) => {
+        stream.reject = reject
+      })
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([message({ id: 11, content: QUESTION })])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => expect(streamChat).toHaveBeenCalled())
+    await act(async () => stream.accept?.())
+    await act(async () => stream.emit?.({ type: 'start', message_id: 11 }))
+    await act(async () => stream.emit?.({ type: 'token', text: 'Partial' }))
+    await act(async () => stream.reject?.(new Error('connection lost')))
+
+    await waitFor(() => expect(composer).toHaveValue(''))
+  })
+
+  it('does not restore composer when connection drops after HTTP 200 but before start frame', async () => {
+    const stream: { accept?: () => void; reject?: (error: Error) => void } = {}
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, _onEvent, _signal, onResponse) => {
+      stream.accept = onResponse
+      return new Promise<void>((_resolve, reject) => {
+        stream.reject = reject
+      })
+    })
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => expect(streamChat).toHaveBeenCalled())
+    await act(async () => stream.accept?.())
+    await act(async () => stream.reject?.(new Error('stream dropped')))
+
+    await waitFor(() => expect(composer).toHaveValue(''))
+  })
+
+  it('restores draft on busy 409 and keeps the ambiguity key for a later retry', async () => {
+    // PLA-313's full frontend race: send X, lose the transport before acceptance
+    // (generic error restores the text), resend while the original server turn still
+    // owns its claim (ordinary busy 409), and the retry after that must carry X again.
+    // A busy 409 says this attempt was not accepted; it is never evidence to discard
+    // the ambiguity key or its submitted-text bookmark.
+    vi.mocked(streamChat)
+      .mockRejectedValueOnce(new Error('connection reset'))
+      .mockRejectedValueOnce(new ApiError(409, 'busy'))
+      .mockImplementation((_sessionId, _body, onEvent, _signal, onResponse) => {
+        onResponse?.()
+        onEvent({ type: 'start', message_id: 11 })
+        onEvent({ type: 'done', message_id: 12 })
+        return Promise.resolve()
+      })
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    // Ambiguous pre-response failure: the question comes back into the composer.
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+
+    // Resend while the server turn is still claimed: ordinary busy 409, text stays put.
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(streamChat).mock.calls[1][1].operation_id).toBe(firstId)
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+
+    // The claim has released: the next identical Send still carries X, and it lands.
+    vi.mocked(api.listMessages).mockResolvedValue([message({ id: 11, content: QUESTION })])
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(3))
+    expect(vi.mocked(streamChat).mock.calls[2][1].operation_id).toBe(firstId)
+    await waitFor(() => expect(composer).toHaveValue(''))
+  })
+
+  it('clears submitted text on successful completion', async () => {
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, onEvent, _signal, onResponse) => {
+      onResponse?.()
+      onEvent({ type: 'start', message_id: 11 })
+      onEvent({ type: 'token', text: 'Full answer' })
+      onEvent({ type: 'done', message_id: 12 })
+      return Promise.resolve()
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([
+      message({ id: 11, content: QUESTION }),
+      message({ id: 12, role: 'assistant', content: 'Full answer' }),
+    ])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => expect(composer).toHaveValue(''))
+  })
+})
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+/**
+ * PLA-313 idempotency: a client-generated operation_id travels with the first
+ * send and is reused on retry after an ambiguous failure. The server enforces
+ * uniqueness so the user's question is committed at most once.
+ */
+describe('ChatPane idempotency (PLA-313)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.listSessions).mockResolvedValue([])
+    vi.mocked(api.listDocuments).mockResolvedValue([])
+    vi.mocked(api.getClassProfile).mockResolvedValue({
+      facts: [],
+      extraction_skipped_reason: null,
+    })
+    vi.mocked(api.getSettings).mockResolvedValue({
+      endpoint_url: 'http://localhost:1234/v1',
+      model: 'local',
+    } as Awaited<ReturnType<typeof api.getSettings>>)
+    vi.mocked(api.createSession).mockResolvedValue({
+      id: 7,
+      class_id: 1,
+      title: null,
+      mode: 'guide',
+      artifact_part_id: null,
+      created_at: '2026-08-04T12:00:00Z',
+    } as Awaited<ReturnType<typeof api.createSession>>)
+    vi.mocked(api.listMessages).mockResolvedValue([])
+  })
+
+  it('fresh send includes a client-generated operation_id in UUID v4 format', async () => {
+    vi.mocked(streamChat).mockImplementation(() => new Promise<void>(() => {}))
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => expect(streamChat).toHaveBeenCalled())
+    const body = vi.mocked(streamChat).mock.calls[0][1]
+    expect(body.operation_id).toMatch(UUID_RE)
+  })
+
+  it('onResponse acceptance clears operation_id so the next send gets a fresh one', async () => {
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, onEvent, _signal, onResponse) => {
+      onResponse?.()
+      onEvent({ type: 'start', message_id: 11 })
+      onEvent({ type: 'done', message_id: 12 })
+      return Promise.resolve()
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([
+      message({ id: 11, content: QUESTION }),
+      message({ id: 12, role: 'assistant', content: 'Answer' }),
+    ])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await waitFor(() => expect(composer).toHaveValue(''))
+    await user.type(composer, 'Follow-up question')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const secondId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(secondId).toMatch(UUID_RE)
+    expect(secondId).not.toBe(firstId)
+  })
+
+  it('network error before acceptance preserves operation_id in the ref', async () => {
+    vi.mocked(streamChat).mockRejectedValue(new Error('Network error'))
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(streamChat).mock.calls[0][1]
+    expect(body.operation_id).toMatch(UUID_RE)
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+  })
+
+  it('re-send after ambiguous failure reuses the same operation_id', async () => {
+    vi.mocked(streamChat)
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockImplementation(() => new Promise<void>(() => {}))
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const retryId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(retryId).toBe(firstId)
+  })
+
+  it('operation_id_mismatch 409 discards the key so the next send mints a fresh one', async () => {
+    // The structured mismatch is the one conflict that proves the key itself is spent
+    // on a different request: text is preserved, X is discarded, and Y replaces it.
+    vi.mocked(streamChat)
+      .mockRejectedValueOnce(new ApiError(409, 'mismatch', 'operation_id_mismatch'))
+      .mockImplementation(() => new Promise<void>(() => {}))
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const secondId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(secondId).toMatch(UUID_RE)
+    expect(secondId).not.toBe(firstId)
+  })
+
+  it('user-initiated stop clears operation_id so the next send is a fresh logical turn', async () => {
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, _onEvent, signal) => {
+      return new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+    expect(firstId).toMatch(UUID_RE)
+
+    await screen.findByLabelText('Stop generating')
+    await user.click(screen.getByLabelText('Stop generating'))
+
+    vi.mocked(streamChat).mockImplementation(() => new Promise<void>(() => {}))
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, 'Different question')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const secondId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(secondId).toMatch(UUID_RE)
+    expect(secondId).not.toBe(firstId)
+  })
+
+  it('consecutive successful sends each get a unique operation_id', async () => {
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, onEvent, _signal, onResponse) => {
+      onResponse?.()
+      onEvent({ type: 'start', message_id: 11 })
+      onEvent({ type: 'done', message_id: 12 })
+      return Promise.resolve()
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([
+      message({ id: 11, content: QUESTION }),
+      message({ id: 12, role: 'assistant', content: 'Answer' }),
+    ])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+    const ids: (string | undefined)[] = []
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    for (let i = 0; i < 3; i++) {
+      await user.type(composer, `Question ${i}`)
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(i + 1))
+      ids.push(vi.mocked(streamChat).mock.calls[i][1].operation_id)
+      await waitFor(() => expect(composer).toHaveValue(''))
+    }
+
+    expect(new Set(ids).size).toBe(3)
+    ids.forEach((id) => expect(id).toMatch(UUID_RE))
+  })
+
+  it('server commits the question but client receives no response headers — retry carries the same stable ID', async () => {
+    let callCount = 0
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, onEvent, _signal, onResponse) => {
+      callCount++
+      if (callCount === 1) {
+        return Promise.reject(new Error('connection reset'))
+      }
+      onResponse?.()
+      onEvent({ type: 'start', message_id: 11 })
+      onEvent({ type: 'done', message_id: 12 })
+      return Promise.resolve()
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([
+      message({ id: 11, content: QUESTION }),
+      message({ id: 12, role: 'assistant', content: 'Answer' }),
+    ])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const retryId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(retryId).toBe(firstId)
+    expect(firstId).toMatch(UUID_RE)
+  })
+
+  it('operation_id is absent for non-send turn kinds (retry, regenerate)', async () => {
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, onEvent, _signal, onResponse) => {
+      onResponse?.()
+      onEvent({ type: 'start', message_id: 11 })
+      onEvent({ type: 'done', message_id: 12 })
+      return Promise.resolve()
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([
+      message({ id: 11, content: QUESTION }),
+      message({ id: 12, role: 'assistant', content: 'Answer' }),
+    ])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(streamChat).mock.calls[0][1]
+    expect(body.operation_id).toBeDefined()
+  })
+
+  it('editing restored text after pre-response stop mints a new operation_id (PLA-313 blocker 2)', async () => {
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, _onEvent, signal) => {
+      return new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    await screen.findByLabelText('Stop generating')
+    await user.click(screen.getByLabelText('Stop generating'))
+
+    vi.mocked(streamChat).mockImplementation(() => new Promise<void>(() => {}))
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, 'Edited question')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const secondId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(secondId).toMatch(UUID_RE)
+    expect(secondId).not.toBe(firstId)
+  })
+
+  it('re-typing the same text after pre-response stop reuses the same operation_id (PLA-313 blocker 3)', async () => {
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, _onEvent, signal) => {
+      return new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    await screen.findByLabelText('Stop generating')
+    await user.click(screen.getByLabelText('Stop generating'))
+
+    vi.mocked(streamChat).mockImplementation(() => new Promise<void>(() => {}))
+
+    await user.type(composer, QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const retryId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(retryId).toBe(firstId)
+  })
+
+  it('stop after response acceptance clears operation_id normally (PLA-313 blocker 3)', async () => {
+    vi.mocked(streamChat).mockImplementation((_sessionId, _body, _onEvent, signal, onResponse) => {
+      onResponse?.()
+      return new Promise<void>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.mocked(api.listMessages).mockResolvedValue([])
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    await screen.findByLabelText('Stop generating')
+    await user.click(screen.getByLabelText('Stop generating'))
+
+    vi.mocked(streamChat).mockImplementation(() => new Promise<void>(() => {}))
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await user.type(composer, 'Follow-up')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const secondId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(secondId).toMatch(UUID_RE)
+    expect(secondId).not.toBe(firstId)
+  })
+
+  it('editing restored text after generic network error mints a new operation_id', async () => {
+    vi.mocked(streamChat)
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockImplementation(() => new Promise<void>(() => {}))
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+
+    await user.clear(composer)
+    await user.type(composer, 'Edited question')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const secondId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(secondId).toMatch(UUID_RE)
+    expect(secondId).not.toBe(firstId)
+  })
+
+  it('unchanged restored text after generic network error reuses the same operation_id', async () => {
+    vi.mocked(streamChat)
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockImplementation(() => new Promise<void>(() => {}))
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const retryId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(retryId).toBe(firstId)
   })
 })

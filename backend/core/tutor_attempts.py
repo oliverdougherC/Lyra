@@ -55,6 +55,7 @@ def create_attempt(
     user_message_id: int,
     mode: str | None = None,
     document_id: int | None = None,
+    operation_id: str | None = None,
 ) -> int:
     """Record a running attempt on one user message and return its id.
 
@@ -63,10 +64,31 @@ def create_attempt(
     """
     cursor = conn.execute(
         "insert into tutor_turn_attempts "
-        "(session_id, user_message_id, state, mode, document_id) values (?, ?, ?, ?, ?)",
-        (session_id, user_message_id, RUNNING, mode, document_id),
+        "(session_id, user_message_id, state, mode, document_id, operation_id) "
+        "values (?, ?, ?, ?, ?, ?)",
+        (session_id, user_message_id, RUNNING, mode, document_id, operation_id),
     )
     return int(cursor.lastrowid or 0)
+
+
+def find_by_operation_id(
+    conn: sqlite3.Connection, session_id: int, operation_id: str
+) -> dict[str, object] | None:
+    """Find an existing attempt by its client-generated operation_id (PLA-313).
+
+    Returns a dict with `user_message_id`, `attempt_id`, `state`,
+    `assistant_message_id`, `mode`, and `document_id` when a prior attempt committed
+    with the same operation_id in this session; None otherwise.
+    """
+    row = conn.execute(
+        "select user_message_id, id as attempt_id, state, "
+        "assistant_message_id, mode, document_id "
+        "from tutor_turn_attempts "
+        "where session_id = ? and operation_id = ? "
+        "order by id desc limit 1",
+        (session_id, operation_id),
+    ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def mark_completed(conn: sqlite3.Connection, attempt_id: int, assistant_message_id: int) -> None:
@@ -109,6 +131,19 @@ def stop_attempt(conn: sqlite3.Connection, attempt_id: int, *, detail: str) -> N
         (STOPPED, "cancelled", detail[:_MAX_DETAIL_CHARS], _timestamp(), attempt_id, RUNNING),
     )
     conn.commit()
+
+
+def find_completed_attempt(
+    conn: sqlite3.Connection, user_message_id: int
+) -> dict[str, object] | None:
+    """The most recent completed attempt on a user message, or None."""
+    row = conn.execute(
+        "select * from tutor_turn_attempts "
+        "where user_message_id = ? and state = ? "
+        "order by id desc limit 1",
+        (user_message_id, COMPLETED),
+    ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def latest_attempt_for_message(
