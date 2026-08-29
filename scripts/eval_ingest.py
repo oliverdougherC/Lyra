@@ -1721,16 +1721,14 @@ def cmd_score(args: argparse.Namespace) -> int:
                     "rate": round(p_hits / len(targeted), 4),
                 }
 
-            if doc_ranks:
-                scores["document_mrr"] = round(statistics.mean([1.0 / r for r in doc_ranks]), 4)
-            else:
-                scores["document_mrr"] = 0.0
-            if passage_ranks:
-                scores["passage_mrr"] = round(statistics.mean([1.0 / r for r in passage_ranks]), 4)
-                scores["passage_median_rank"] = statistics.median(passage_ranks)
-            else:
-                scores["passage_mrr"] = 0.0
-                scores["passage_median_rank"] = None
+            scores["document_mrr"] = round(sum(1.0 / r for r in doc_ranks) / len(targeted), 4)
+            passage_rr_sum = sum(1.0 / r for r in passage_ranks)
+            scores["passage_mrr"] = round(passage_rr_sum / len(targeted), 4)
+            # Median rank of hits: operates only on found ranks, not over
+            # all targeted queries.  A miss has no rank to take a median of.
+            scores["passage_median_rank"] = (
+                statistics.median(passage_ranks) if passage_ranks else None
+            )
 
             scores["document_misses"] = doc_misses
             scores["passage_misses"] = passage_misses
@@ -1748,8 +1746,8 @@ def cmd_score(args: argparse.Namespace) -> int:
                     "targeted": len(qs),
                     "document_found": len(dr),
                     "passage_found": len(pr),
-                    "document_mrr": round(statistics.mean([1.0 / r for r in dr]), 4) if dr else 0.0,
-                    "passage_mrr": round(statistics.mean([1.0 / r for r in pr]), 4) if pr else 0.0,
+                    "document_mrr": round(sum(1.0 / r for r in dr) / len(qs), 4),
+                    "passage_mrr": round(sum(1.0 / r for r in pr) / len(qs), 4),
                 }
             scores["by_document"] = per_doc
 
@@ -1778,8 +1776,8 @@ def cmd_score(args: argparse.Namespace) -> int:
                     "count": len(qs),
                     "targeted": len(targ),
                     "passage_found": len(cat_pr),
-                    "passage_mrr": round(statistics.mean([1.0 / r for r in cat_pr]), 4)
-                    if cat_pr
+                    "passage_mrr": round(sum(1.0 / r for r in cat_pr) / len(targ), 4)
+                    if targ
                     else 0.0,
                 }
             scores["by_category"] = cat_scores

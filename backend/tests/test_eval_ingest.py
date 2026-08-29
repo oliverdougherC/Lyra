@@ -1486,3 +1486,174 @@ def test_e2e_missing_hit_rates_only_exits_nonzero() -> None:
         ws_b.write("scores-test", scores_b)
         args = argparse.Namespace(baseline=base_dir, candidate=cand_dir, force=False)
         assert cmd_compare(args) != 0
+
+
+# ---------------------------------------- MRR denominator arithmetic (fix 6)
+
+
+def _mrr_retrieval(questions: list[dict[str, object]]) -> dict[str, object]:
+    """Retrieval result with hand-crafted question records for MRR testing."""
+    return {
+        "k": 8,
+        "valid": True,
+        "observed_path": "embedding_order",
+        "requested_rerank": False,
+        "questions": questions,
+        "metadata": dict(_DEFAULT_E2E_METADATA),
+    }
+
+
+def _targeted_q(
+    qid: str,
+    *,
+    doc_rank: int | None = None,
+    passage_rank: int | None = None,
+    expect_document: str = "notes",
+    category: str = "factual",
+) -> dict[str, object]:
+    """A targeted question record with controllable ranks."""
+    return {
+        "id": qid,
+        "question": f"question {qid}",
+        "expect_document": expect_document,
+        "expect_filename": f"{expect_document}.txt",
+        "targeted": True,
+        "document_rank": doc_rank,
+        "document_hit": doc_rank is not None,
+        "passage_rank": passage_rank,
+        "passage_hit": passage_rank is not None,
+        "returned": 8,
+        "top_similarity": 0.9,
+        "rerank_status": "not_requested",
+        "from_expected": 4 if doc_rank else 0,
+        "ahead": [],
+        "category": category,
+        "neighbours": [
+            {
+                "document": f"{expect_document}.txt" if doc_rank else "other.txt",
+                "page": 1,
+                "similarity": 0.9,
+                "section_title": None,
+                "opening": "x",
+            }
+        ],
+    }
+
+
+def test_mrr_document_rank1_hit_plus_miss_equals_half() -> None:
+    """One rank-1 hit + one miss = document MRR 0.5, not 1.0."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Workspace(root=Path(tmp))
+        data = _mrr_retrieval(
+            [
+                _targeted_q("a", doc_rank=1, passage_rank=1),
+                _targeted_q("b", doc_rank=None, passage_rank=None),
+            ]
+        )
+        scores = _e2e_score(ws, data)
+        assert scores["document_mrr"] == 0.5
+
+
+def test_mrr_passage_rank2_hit_plus_miss_equals_quarter() -> None:
+    """One rank-2 passage hit + one miss = passage MRR 0.25."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Workspace(root=Path(tmp))
+        data = _mrr_retrieval(
+            [
+                _targeted_q("a", doc_rank=1, passage_rank=2),
+                _targeted_q("b", doc_rank=None, passage_rank=None),
+            ]
+        )
+        scores = _e2e_score(ws, data)
+        assert scores["passage_mrr"] == 0.25
+
+
+def test_mrr_all_misses_equals_zero() -> None:
+    """Multiple targeted queries with no rank = MRR 0.0."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Workspace(root=Path(tmp))
+        data = _mrr_retrieval(
+            [
+                _targeted_q("a", doc_rank=None, passage_rank=None),
+                _targeted_q("b", doc_rank=None, passage_rank=None),
+                _targeted_q("c", doc_rank=None, passage_rank=None),
+            ]
+        )
+        scores = _e2e_score(ws, data)
+        assert scores["document_mrr"] == 0.0
+        assert scores["passage_mrr"] == 0.0
+
+
+def test_mrr_document_and_passage_are_independent() -> None:
+    """Document found but passage missed: document MRR > 0, passage MRR = 0."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Workspace(root=Path(tmp))
+        data = _mrr_retrieval(
+            [
+                _targeted_q("a", doc_rank=1, passage_rank=None),
+            ]
+        )
+        scores = _e2e_score(ws, data)
+        assert scores["document_mrr"] == 1.0
+        assert scores["passage_mrr"] == 0.0
+
+
+def test_mrr_per_document_denominator_includes_misses() -> None:
+    """Per-document MRR with one hit + one miss = 0.5, not 1.0."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Workspace(root=Path(tmp))
+        data = _mrr_retrieval(
+            [
+                _targeted_q("a", doc_rank=1, passage_rank=1, expect_document="physics"),
+                _targeted_q("b", doc_rank=None, passage_rank=None, expect_document="physics"),
+            ]
+        )
+        scores = _e2e_score(ws, data)
+        per_doc = scores["by_document"]
+        assert per_doc["physics"]["document_mrr"] == 0.5
+        assert per_doc["physics"]["passage_mrr"] == 0.5
+
+
+def test_mrr_per_category_denominator_includes_misses() -> None:
+    """Per-category passage MRR with one hit + one miss = 0.5, not 1.0."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Workspace(root=Path(tmp))
+        data = _mrr_retrieval(
+            [
+                _targeted_q("a", doc_rank=1, passage_rank=1, category="conceptual"),
+                _targeted_q("b", doc_rank=None, passage_rank=None, category="conceptual"),
+            ]
+        )
+        scores = _e2e_score(ws, data)
+        by_cat = scores["by_category"]
+        assert by_cat["conceptual"]["passage_mrr"] == 0.5
+
+
+def test_mrr_passage_median_rank_only_counts_hits() -> None:
+    """passage_median_rank operates over hits only, not all targeted queries."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ws = Workspace(root=Path(tmp))
+        data = _mrr_retrieval(
+            [
+                _targeted_q("a", doc_rank=1, passage_rank=3),
+                _targeted_q("b", doc_rank=1, passage_rank=7),
+                _targeted_q("c", doc_rank=None, passage_rank=None),
+            ]
+        )
+        scores = _e2e_score(ws, data)
+        assert scores["passage_median_rank"] == 5.0
+        assert scores["passage_mrr"] == round((1 / 3 + 1 / 7) / 3, 4)
