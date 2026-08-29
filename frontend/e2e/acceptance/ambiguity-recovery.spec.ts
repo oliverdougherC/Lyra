@@ -161,9 +161,13 @@ test.describe('PLA-313 browser ambiguity recovery', () => {
     expect(pre.user[0].content.trim()).toBe(QUESTION)
 
     // The model was called exactly once (the original send); the lost browser view caused no hidden
-    // second call.
-    const callsBeforeRelease = (await getTutorRequests()).length
-    expect(callsBeforeRelease).toBe(1)
+    // second call. POLL to one: the durable commit above happens BEFORE the streaming generator
+    // issues the model call, so a one-shot count races it by design (the CI trace showed the whole
+    // commit-check -> count-check path completing ~25ms after the send, before the call landed).
+    // The count provably cannot exceed 1 here -- the resend has not happened, and the interceptor
+    // holds the transport abort until this first call is issued -- so converging on 1 is the same
+    // exactly-once claim with the ordering made deterministic.
+    await expect.poll(async () => (await getTutorRequests()).length, { timeout: 15_000 }).toBe(1)
 
     // Wait for the original turn to reach a TERMINAL state (its session claim is released) so the
     // resend reconciles instead of hitting an ordinary busy 409. The dropped response cancels the
