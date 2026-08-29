@@ -77,9 +77,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     # `LYRA_DB_PATH`, somewhere the directory contract does not otherwise reach.
     private.harden_file(path)
     for suffix in _DB_SIDECAR_SUFFIXES:
-        sidecar = path.with_name(path.name + suffix)
-        if private.regular_file_present(sidecar):
-            private.harden_file(sidecar)
+        private.harden_file_if_present(path.with_name(path.name + suffix))
     return conn
 
 
