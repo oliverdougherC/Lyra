@@ -1,0 +1,76 @@
+name: WebKit acceptance (scheduled)
+
+on:
+  schedule:
+    - cron: '30 6 * * 1' # Monday 06:30 UTC
+  workflow_dispatch:
+
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  webkit-acceptance:
+    name: WebKit full-stack acceptance
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Python / backend ────────��──────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install backend dependencies
+        run: uv sync --extra dev
+
+      # ── Node / frontend ────────────────────────────────────────────────
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build production frontend
+        working-directory: frontend
+        run: pnpm build
+
+      - name: Install Playwright WebKit
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps webkit
+
+      # ── Run acceptance tests on WebKit ─────────────────────────────────
+      - name: Run WebKit acceptance tests
+        working-directory: frontend
+        env:
+          ACCEPTANCE_WEBKIT: '1'
+        run: pnpm exec playwright test --config playwright.acceptance.config.ts --project webkit
+
+      # ── Retain diagnostics on failure ──────────────────────────────────
+      - name: Upload acceptance report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webkit-acceptance-report
+          path: acceptance-report/
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload acceptance traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webkit-acceptance-traces
+          path: frontend/test-results/
+          retention-days: 14
+          if-no-files-found: ignore

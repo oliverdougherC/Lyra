@@ -44,6 +44,10 @@ export function Composer({
   autoFocus = false,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  // Set on a keyboard send while the textarea owns focus: `disabled={streaming}` makes
+  // the browser blur the control, and nothing else would give focus back when the turn
+  // settles -- leaving a keyboard-only student stranded after every Enter-send.
+  const restoreFocusAfterStream = useRef(false)
   const [hintDismissed, setHintDismissed] = useLocalStorageState(HINT_KEY, false, parseDismissed)
 
   // `preventScroll` because the caller places this composer itself. Letting the browser
@@ -51,6 +55,20 @@ export function Composer({
   useEffect(() => {
     if (autoFocus) textareaRef.current?.focus({ preventScroll: true })
   }, [autoFocus])
+
+  // When streaming ends, return focus to the textarea a keyboard send took it from --
+  // unless the student deliberately focused another interactive control meanwhile
+  // (then stealing focus back would be worse than the original loss).
+  useEffect(() => {
+    if (streaming) return
+    if (!restoreFocusAfterStream.current) return
+    restoreFocusAfterStream.current = false
+    const node = textareaRef.current
+    if (!node || node.disabled) return
+    const active = document.activeElement
+    if (active !== null && active !== document.body && active !== node) return
+    node.focus({ preventScroll: true })
+  }, [streaming])
 
   // Auto-grow up to three rows, then let the textarea scroll internally.
   useLayoutEffect(() => {
@@ -60,11 +78,17 @@ export function Composer({
     node.style.height = `${Math.min(node.scrollHeight, MAX_ROWS * LINE_HEIGHT_PX + 16)}px`
   }, [value])
 
-  const send = useCallback(() => {
-    if (streaming || disabledReason || value.trim().length === 0) return
-    if (!hintDismissed) setHintDismissed(true)
-    onSend()
-  }, [streaming, disabledReason, value, hintDismissed, setHintDismissed, onSend])
+  const send = useCallback(
+    (options?: { restoreFocusAfterStream?: boolean }) => {
+      if (streaming || disabledReason || value.trim().length === 0) return
+      // Each send owns the flag outright: a mouse send clears any leftover from an
+      // earlier keyboard send whose turn never actually streamed.
+      restoreFocusAfterStream.current = options?.restoreFocusAfterStream ?? false
+      if (!hintDismissed) setHintDismissed(true)
+      onSend()
+    },
+    [streaming, disabledReason, value, hintDismissed, setHintDismissed, onSend],
+  )
   const hasDraft = value.trim().length > 0
 
   if (disabledReason) {
@@ -118,7 +142,10 @@ export function Composer({
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault()
-              send()
+              // Keyboard send from the focused textarea: restore focus after the
+              // streaming turn. Button sends never set this, so a mouse send can
+              // never steal focus back.
+              send({ restoreFocusAfterStream: true })
             }
           }}
           className="max-h-[160px] min-h-0 flex-1 resize-none border-0 bg-transparent px-2 py-1.5 text-[0.9375rem] leading-6 shadow-none focus-visible:ring-0 disabled:cursor-text disabled:bg-transparent disabled:opacity-100"
@@ -144,7 +171,7 @@ export function Composer({
               'size-9 shrink-0 rounded-full transition-all duration-200',
               hasDraft ? 'shadow-sm' : 'bg-muted text-text-tertiary',
             )}
-            onClick={send}
+            onClick={() => send()}
             disabled={!hasDraft}
             aria-label="Send message"
           >

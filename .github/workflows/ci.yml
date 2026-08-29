@@ -110,15 +110,80 @@ jobs:
           path: python-audit-evidence.json
           if-no-files-found: warn
 
+  # Real-stack acceptance: production-shaped browser tests against the real FastAPI
+  # backend, SQLite, background workers, and a deterministic tutor fixture (PLA-292).
+  acceptance:
+    name: Full-stack acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Python / backend ───────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install backend dependencies
+        run: uv sync --extra dev
+
+      # ── Node / frontend ────────────────────────────────────────────────
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build production frontend
+        working-directory: frontend
+        run: pnpm build
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps chromium
+
+      # ── Run acceptance tests ───────────────────────────────────────────
+      - name: Run real-stack acceptance tests
+        working-directory: frontend
+        run: pnpm test:acceptance
+
+      # ── Retain diagnostics on failure ──────────────────────────────────
+      - name: Upload acceptance report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-report
+          path: acceptance-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload acceptance traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-traces
+          path: frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
   # Single, stable aggregate gate. This is the ONLY status check required to merge into
   # main (see docs/security-and-ci-gates.md). It depends on every real lane and fails
   # unless all of them succeeded, so the internal jobs above can be split or renamed
   # without silently dropping protection: the required check context stays "CI Gate".
-  # When PLA-292's bounded full-stack acceptance job lands, add it to `needs` below.
   ci-gate:
     name: CI Gate
     if: ${{ always() }}
-    needs: [backend, frontend, python-security]
+    needs: [backend, frontend, python-security, acceptance]
     runs-on: ubuntu-latest
     steps:
       - name: Verify all required lanes succeeded
@@ -138,4 +203,4 @@ jobs:
             echo "CI Gate: FAIL — not every required lane passed."
             exit 1
           fi
-          echo "CI Gate: PASS — backend, frontend, and Python security all succeeded."
+          echo "CI Gate: PASS — all required lanes succeeded (backend, frontend, python-security, acceptance)."
