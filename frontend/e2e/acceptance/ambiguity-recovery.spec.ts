@@ -125,6 +125,17 @@ test.describe('PLA-313 browser ambiguity recovery', () => {
       if (!dropped) {
         dropped = true
         await route.fetch() // deliver to the real backend so X durably commits; it keeps running
+        // Hold the abort until the backend's streaming generator has actually issued its
+        // model call. Aborting immediately races the generator: on a loaded machine the
+        // client disconnect can cancel it BEFORE the tutor fixture is called, making the
+        // "exactly one model call before the resend" check nondeterministic (0 vs 1).
+        // Waiting here pins the scenario to the one the test names -- the original call
+        // happened, its acceptance was lost, and the resend must REPLAY rather than
+        // re-run. The browser still never reads a byte of the response.
+        const modelCallDeadline = Date.now() + 10_000
+        while (Date.now() < modelCallDeadline && (await getTutorRequests()).length < 1) {
+          await new Promise((r) => setTimeout(r, 50))
+        }
         return route.abort() // acceptance response never reaches the browser
       }
       return route.continue()
