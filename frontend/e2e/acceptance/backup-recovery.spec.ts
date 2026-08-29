@@ -17,10 +17,15 @@ import { join, resolve } from 'node:path'
 import {
   apiGet,
   apiPut,
+  apiPost,
   createClass,
+  createSession,
+  createDraft,
   uploadDocument,
   waitForDocumentReady,
+  readSSEFrames,
   readAcceptanceState,
+  killPortListeners,
 } from './helpers'
 
 const PROJECT_ROOT = resolve(__dirname, '..', '..', '..')
@@ -362,5 +367,176 @@ print(json.dumps({
     expect(result.integrity).toBe('ok')
     expect(result.class_names).toContain('Backup Failure Test')
     expect(result.document_count).toBeGreaterThan(0)
+  })
+
+  test('disaster-recovery contract: restore a representative state and reopen it through product APIs', async () => {
+    // Build a REPRESENTATIVE pre-disaster state: a class, a ready document, a tutor session with a
+    // durable exchange, and a draft - the kind of data a student would lose without a backup.
+    const cls = await createClass('DR Class')
+    const doc = await uploadDocument(cls.id, resolve(TEST_DATA, 'sample.txt'), 'sample.txt')
+    const docData = (await doc.json()) as { id: number }
+    await waitForDocumentReady(docData.id, 30_000)
+
+    const session = await createSession(cls.id)
+    // A durable tutor exchange (the tutor endpoint is the acceptance fixture).
+    const chatRes = await apiPost(`/api/sessions/${session.id}/chat`, {
+      content: 'What is a derivative?',
+      mode: 'guide',
+    })
+    expect(chatRes.status).toBe(200)
+    await readSSEFrames(chatRes)
+
+    const draft = await createDraft(cls.id, 'DR Draft')
+
+    // Back up the live data directory through the real launcher backup().
+    const state = await readAcceptanceState()
+    expect(state).toBeTruthy()
+    const dataDir = state!.dataDir
+
+    const backupDir = await mkdtemp(join(tmpdir(), 'lyra-dr-'))
+    const archivePath = join(backupDir, 'dr-backup.tar.gz')
+    execSync(
+      `uv run python -c "
+import sys, os
+sys.path.insert(0, 'scripts')
+import lyra_launcher as launcher
+launcher.load_runtime = lambda: launcher.empty_runtime()
+launcher.stop_supervised_stack = lambda runtime: True
+launcher.say = lambda *a, **kw: None
+launcher.step = lambda *a, **kw: None
+launcher.ok = lambda *a, **kw: None
+os.environ['LYRA_DATA_DIR'] = '${dataDir}'
+os.environ['LYRA_DB_PATH'] = '${dataDir}/lyra.db'
+args = launcher.parse_args(['backup', '--archive', '${archivePath}'])
+rc = launcher.backup(args)
+sys.exit(rc)
+"`,
+      { cwd: PROJECT_ROOT, timeout: 30_000 },
+    )
+    expect(existsSync(archivePath)).toBe(true)
+
+    // Restore the archive into a FRESH data directory through the real launcher restore().
+    const restoreDir = join(backupDir, 'restored-data')
+    execSync(
+      `uv run python -c "
+import sys, os
+sys.path.insert(0, 'scripts')
+import lyra_launcher as launcher
+launcher.load_runtime = lambda: launcher.empty_runtime()
+launcher.stop_supervised_stack = lambda runtime: True
+launcher.say = lambda *a, **kw: None
+launcher.step = lambda *a, **kw: None
+launcher.ok = lambda *a, **kw: None
+os.environ['LYRA_DATA_DIR'] = '${restoreDir}'
+os.environ['LYRA_DB_PATH'] = '${restoreDir}/lyra.db'
+args = launcher.parse_args(['restore', '--archive', '${archivePath}', '--data-dir', '${restoreDir}'])
+rc = launcher.restore(args)
+sys.exit(rc)
+"`,
+      { cwd: PROJECT_ROOT, timeout: 30_000 },
+    )
+
+    // The DISASTER: the original data directory is gone. Recovery must come only from the archive.
+    // We prove the restored state is a real product by opening it in a SECOND backend instance on an
+    // alternate port and reading everything back through the PRODUCT APIs (not raw SQL).
+    const drPort = 18050
+    const { spawn } = await import('node:child_process')
+    // detached:true makes the child its own process-group leader (pgid == pid) so the finally
+    // block can signal the WHOLE group and reclaim the real uvicorn python grandchild that binds
+    // the port. Without it, only the `uv` wrapper dies and the grandchild survives as an orphan
+    // holding drPort -- which then poisons every subsequent run's DR test (port in use + a data
+    // dir already deleted by teardown). This mirrors the process-group discipline used everywhere
+    // else in the acceptance harness.
+    const proc = spawn(
+      'uv',
+      [
+        'run',
+        'python',
+        '-m',
+        'uvicorn',
+        'backend.main:app',
+        '--host',
+        '127.0.0.1',
+        '--port',
+        String(drPort),
+      ],
+      {
+        cwd: PROJECT_ROOT,
+        env: { ...process.env, LYRA_DATA_DIR: restoreDir, LYRA_PORT: String(drPort) },
+        stdio: 'ignore',
+        detached: true,
+      },
+    )
+
+    const drBase = `http://127.0.0.1:${drPort}`
+    const H = { 'Content-Type': 'application/json', 'X-Lyra-Client': 'acceptance-test' }
+    try {
+      // Wait for the restored backend to come up.
+      let up = false
+      const upDeadline = Date.now() + 30_000
+      while (Date.now() < upDeadline && !up) {
+        try {
+          const r = await fetch(`${drBase}/api/health/live`)
+          up = r.ok
+        } catch {
+          up = false
+        }
+        if (!up) await new Promise((r) => setTimeout(r, 300))
+      }
+      expect(up).toBe(true)
+
+      // The restored class is present and its document is intact.
+      const classesRes = await fetch(`${drBase}/api/classes`, { headers: H })
+      expect(classesRes.status).toBe(200)
+      const classes = (await classesRes.json()) as Array<{ id: number; name: string }>
+      const restoredClass = classes.find((c) => c.name === 'DR Class')
+      expect(restoredClass).toBeTruthy()
+
+      // The session's durable exchange is readable through the product API.
+      const msgsRes = await fetch(`${drBase}/api/sessions/${session.id}/messages`, { headers: H })
+      expect(msgsRes.status).toBe(200)
+      const msgs = (await msgsRes.json()) as Array<{ role: string; content: string }>
+      expect(msgs.some((m) => m.role === 'user' && m.content === 'What is a derivative?')).toBe(
+        true,
+      )
+
+      // The draft survived the disaster-recovery round trip.
+      const draftsRes = await fetch(`${drBase}/api/classes/${restoredClass!.id}/drafts`, {
+        headers: H,
+      })
+      expect(draftsRes.status).toBe(200)
+      const drafts = (await draftsRes.json()) as Array<{ id: number; title: string }>
+      expect(drafts.some((d) => d.id === draft.id && d.title === 'DR Draft')).toBe(true)
+    } finally {
+      // Tear down the second backend by process group so no orphan survives. The child was spawned
+      // detached, so -proc.pid signals its whole group (uv wrapper + uvicorn python grandchild).
+      if (proc.pid) {
+        try {
+          process.kill(-proc.pid, 'SIGTERM')
+        } catch {
+          /* not a group leader or gone */
+        }
+        const killDeadline = Date.now() + 5_000
+        while (Date.now() < killDeadline) {
+          let alive = true
+          try {
+            process.kill(proc.pid, 0)
+            alive = true
+          } catch {
+            alive = false
+          }
+          if (!alive) break
+          await new Promise((r) => setTimeout(r, 150))
+        }
+        try {
+          process.kill(-proc.pid, 'SIGKILL')
+        } catch {
+          /* already gone */
+        }
+      }
+      // Belt and suspenders: the zero-orphan gate forbids a leftover backend holding drPort (it would
+      // poison the next run). Kill whatever is still LISTENING on the port by PID, directly.
+      await killPortListeners(drPort)
+    }
   })
 })

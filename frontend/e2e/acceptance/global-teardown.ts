@@ -50,7 +50,76 @@ export default async function globalTeardown() {
     await cleanupFromStateFiles()
   }
 
+  // Final sweep: the process-group kills above should have reclaimed everything, but the
+  // zero-orphan gate requires proof, not trust. Any acceptance fixture still alive after
+  // teardown (a uvicorn that outlived its group signal, a fake-helper whose parent died)
+  // is killed here. The matchers are unique to acceptance fixtures -- production Lyra runs
+  // `backend.main:app`, never `acceptance.backend_harness:app` or `fake-helper.py` -- so a
+  // user's real server can never be touched.
+  await sweepOrphanedFixtures()
+
   console.log('  Teardown complete\n')
+}
+
+/* ------------------------------------------------------------------ */
+/*  Orphan fixture sweep                                               */
+/* ------------------------------------------------------------------ */
+
+// Command-line signatures that identify an acceptance fixture process and nothing else.
+const ORPHAN_PATTERNS = ['acceptance.backend_harness:app', 'e2e/acceptance/fake-helper.py']
+
+async function sweepOrphanedFixtures(): Promise<void> {
+  let listing: string
+  try {
+    listing = execSync('ps -axww -o pid=,command=', { encoding: 'utf-8', timeout: 5000 })
+  } catch {
+    return
+  }
+
+  const orphans: number[] = []
+  for (const line of listing.split('\n')) {
+    if (!ORPHAN_PATTERNS.some((p) => line.includes(p))) continue
+    // Skip this teardown process itself (its command line contains the pattern string).
+    const pidField = line.trim().split(/\s+/)[0]
+    if (!pidField || Number(pidField) === process.pid) continue
+    orphans.push(Number(pidField))
+  }
+
+  if (orphans.length === 0) return
+
+  for (const pid of orphans) {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      /* already gone */
+    }
+  }
+  console.log(`  Sweeping ${orphans.length} orphaned fixture process(es): ${orphans.join(', ')}`)
+
+  const deadline = Date.now() + SIGTERM_WAIT_MS
+  while (Date.now() < deadline) {
+    if (orphans.every((pid) => !isProcessAlive(pid))) break
+    await sleep(200)
+  }
+  for (const pid of orphans) {
+    if (!isProcessAlive(pid)) continue
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      /* already gone */
+    }
+  }
+  const killDeadline = Date.now() + SIGKILL_WAIT_MS
+  while (Date.now() < killDeadline) {
+    if (orphans.every((pid) => !isProcessAlive(pid))) break
+    await sleep(200)
+  }
+  const survivors = orphans.filter((pid) => isProcessAlive(pid))
+  if (survivors.length > 0) {
+    console.error(`  Orphan sweep: could not prove dead: ${survivors.join(', ')}`)
+  } else {
+    console.log('  Orphan sweep complete')
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -107,19 +176,36 @@ async function killAndWait(
     console.log(`  ${label} already exited`)
     return
   }
+  const pid = proc.pid
 
   const exitPromise = new Promise<void>((resolve) => {
     proc.on('exit', () => resolve())
     proc.on('error', () => resolve())
   })
 
-  try {
-    proc.kill('SIGTERM')
-    console.log(`  Sent SIGTERM to ${label} (pid ${proc.pid})`)
-  } catch {
+  // The child was spawned detached (its own process group, pgid == pid), so signal the
+  // whole group: that reclaims the real uvicorn python / next worker grandchild processes
+  // that outlive the `uv` / `pnpm exec` wrapper. Signalling the wrapper pid alone orphans
+  // them -- exactly the leakage the zero-orphan gate forbids.
+  const signalGroup = (sig: NodeJS.Signals): boolean => {
+    try {
+      process.kill(-pid, sig)
+      return true
+    } catch {
+      try {
+        proc.kill(sig)
+        return true
+      } catch {
+        return false
+      }
+    }
+  }
+
+  if (!signalGroup('SIGTERM')) {
     console.log(`  ${label} already stopped`)
     return
   }
+  console.log(`  Sent SIGTERM to ${label} group (pid ${pid})`)
 
   const termResult = await Promise.race([
     exitPromise.then(() => 'exited' as const),
@@ -128,16 +214,12 @@ async function killAndWait(
 
   if (termResult === 'timeout') {
     console.log(`  ${label} did not exit after SIGTERM, sending SIGKILL`)
-    try {
-      proc.kill('SIGKILL')
-    } catch {
-      /* already gone */
-    }
+    signalGroup('SIGKILL')
     await Promise.race([exitPromise, sleep(SIGKILL_WAIT_MS)])
   }
 
   if (proc.exitCode === null && proc.signalCode === null) {
-    console.error(`  ${label} (pid ${proc.pid}) could not be proven dead`)
+    console.error(`  ${label} (pid ${pid}) could not be proven dead`)
   } else {
     console.log(`  ${label} stopped`)
   }

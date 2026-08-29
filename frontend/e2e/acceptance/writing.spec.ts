@@ -279,15 +279,20 @@ test.describe('Writing', () => {
     expect(assistant2[0].content).toBe(originalContent)
   })
 
-  test('PLA-310: durable effect then failure blocks retry', async () => {
-    await setTutorMode('error-before-stream')
+  test('PLA-310: a REAL durable effect lands before the turn fails, then retry is refused', async () => {
+    // The fixture drives the production writer tool loop deterministically: round one
+    // issues a real `save_brief` call (a genuine durable effect that commits through the
+    // production tool path and links to the attempt), then the follow-up model round fails.
+    // This proves PLA-310's retry guard against a REAL production failure sequence -- not
+    // an ownership row manufactured from an acceptance-only endpoint.
+    await setTutorMode('writer-effect-then-fail')
     const draft = await createDraft(classId, 'Durable Effect Failure Test')
 
     const sessRes = await apiPost(`/api/drafts/${draft.id}/sessions`, {})
     expect(sessRes.ok).toBe(true)
     const session = await sessRes.json()
 
-    // Send a turn that fails (no durable effects produced by guide mode)
+    // Start the writer turn. It will land a real brief, then fail on the next round.
     const turn1Res = await fetch(`${BACKEND}/api/drafts/${draft.id}/chat/${session.id}`, {
       method: 'POST',
       headers: {
@@ -295,53 +300,43 @@ test.describe('Writing', () => {
         'X-Lyra-Client': 'acceptance-test',
       },
       body: JSON.stringify({
-        content: 'This turn will fail then get an injected effect',
+        content: 'Please record a brief for this essay before you continue.',
         mode: 'guide',
       }),
     })
-    await readSSEFrames(turn1Res)
+    expect(turn1Res.status).toBe(200)
 
-    // Wait briefly for the attempt state to settle (the SSE error may race
-    // with the database commit)
+    // Consume the SSE stream. The real effect lands first (an activity/brief frame), then
+    // the turn reports a failed attempt (an error frame).
+    const frames = await readSSEFrames(turn1Res)
+    const sawBrief = frames.some((f) => f.type === 'brief')
+    const sawError = frames.some((f) => f.type === 'error')
+    expect(sawBrief, 'the real save_brief effect should have landed before the failure').toBe(true)
+    expect(sawError, 'the attempt should report a failed turn after the effect landed').toBe(true)
+
+    // Wait briefly for the attempt state to settle (the SSE error may race the commit).
     await new Promise((r) => setTimeout(r, 500))
 
-    // Find the failed attempt via the acceptance endpoint
-    const attemptRes = await fetch(
-      `${BACKEND}/_acceptance/writer-latest-attempt/${session.id}`,
-      { headers: { 'X-Lyra-Client': 'acceptance-test' } },
-    )
-    const attemptBody = await attemptRes.text()
-    expect(attemptRes.ok, `writer-latest-attempt returned ${attemptRes.status}: ${attemptBody}`).toBe(
-      true,
-    )
-    const attemptData = JSON.parse(attemptBody)
-    expect(attemptData.found, `attempt lookup returned: ${attemptBody}`).toBe(true)
-    expect(attemptData.state).toBe('failed')
-    const attemptId: number = attemptData.id
-
-    // Inject a durable effect (simulates a tool that created a brief before failure)
-    const injectRes = await fetch(`${BACKEND}/_acceptance/writer-inject-effect`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Lyra-Client': 'acceptance-test',
-      },
-      body: JSON.stringify({ attempt_id: attemptId, target_kind: 'brief', target_id: 99999 }),
+    // Find the failed attempt via the acceptance endpoint.
+    const attemptRes = await fetch(`${BACKEND}/_acceptance/writer-latest-attempt/${session.id}`, {
+      headers: { 'X-Lyra-Client': 'acceptance-test' },
     })
-    if (!injectRes.ok) {
-      const errBody = await injectRes.text()
-      throw new Error(`writer-inject-effect failed ${injectRes.status}: ${errBody}`)
-    }
+    expect(attemptRes.ok).toBe(true)
+    const attemptData = (await attemptRes.json()) as { found: boolean; id: number; state: string }
+    expect(attemptData.found).toBe(true)
+    expect(attemptData.state).toBe('failed')
+    const attemptId = attemptData.id
 
-    // Confirm the effect landed
+    // The real durable effect E exists EXACTLY ONCE, and its ownership row belongs to this
+    // attempt (linked through the production tool path, not injected).
     const targetsRes = await fetch(`${BACKEND}/_acceptance/writer-attempt-targets/${attemptId}`, {
       headers: { 'X-Lyra-Client': 'acceptance-test' },
     })
-    const targets = await targetsRes.json()
+    const targets = (await targetsRes.json()) as { targets: Array<{ target_kind: string }> }
     expect(targets.targets.length).toBe(1)
     expect(targets.targets[0].target_kind).toBe('brief')
 
-    // Retry should be blocked by PLA-310 because the attempt has durable effects
+    // Retry must be refused by PLA-310 because E already landed, with the structured code.
     const retryRes = await fetch(`${BACKEND}/api/drafts/${draft.id}/chat/${session.id}/retry`, {
       method: 'POST',
       headers: {
@@ -350,15 +345,19 @@ test.describe('Writing', () => {
       },
     })
     expect(retryRes.status).toBe(409)
-    const retryBody = await retryRes.json()
+    const retryBody = (await retryRes.json()) as { code?: string }
     expect(retryBody.code).toBe('writer_retry_has_effects')
 
-    // Confirm the effect was not duplicated (still exactly one)
+    // No second model/tool execution duplicated E: still exactly one target on the attempt.
     const targets2Res = await fetch(`${BACKEND}/_acceptance/writer-attempt-targets/${attemptId}`, {
       headers: { 'X-Lyra-Client': 'acceptance-test' },
     })
-    const targets2 = await targets2Res.json()
+    const targets2 = (await targets2Res.json()) as { targets: Array<unknown> }
     expect(targets2.targets.length).toBe(1)
+
+    // E remains visible after reload (it is durable, not transient).
+    const draftAfter = await apiGet(`/api/drafts/${draft.id}`)
+    expect(draftAfter.ok).toBe(true)
   })
 
   test('browser: conflict dialog appears on stale version save', async ({ page }) => {

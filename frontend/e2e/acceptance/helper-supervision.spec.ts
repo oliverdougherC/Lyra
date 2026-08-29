@@ -75,7 +75,22 @@ async function cleanupOwnership(): Promise<void> {
   })
 }
 
+/** Full isolation reset: free the port (kill any listener) and clear ownership records. */
+async function fullCleanup(): Promise<void> {
+  await fetch(`${BACKEND}/_acceptance/helper/cleanup`, {
+    method: 'POST',
+    headers: LYRA_HEADERS,
+  })
+}
+
 test.describe('Helper supervision (PLA-301)', () => {
+  // Guarantee every test starts from a free port with no stale ownership record. A prior spec
+  // (e.g. the adoption scenarios) may have left a foreign helper on 19500; without this, the
+  // production supervisor would ADOPT it instead of spawning fresh, corrupting these assertions.
+  test.beforeEach(async () => {
+    await fullCleanup()
+  })
+
   test.afterEach(async () => {
     await stopHelper()
     await cleanupOwnership()

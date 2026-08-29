@@ -114,6 +114,11 @@ export default async function globalSetup() {
       PYTHONDONTWRITEBYTECODE: '1',
     }
 
+    // `detached: true` makes the child a new session/process-group leader (pgid == pid).
+    // Teardown then signals the whole group (-pid), which reclaims the real uvicorn
+    // python grandchild that outlives the `uv` wrapper. Without this, SIGTERM to the
+    // wrapper alone orphans the backend (and any helper it spawned) -- exactly the
+    // process leakage the zero-orphan gate forbids.
     backend = spawn(
       'uv',
       [
@@ -133,6 +138,7 @@ export default async function globalSetup() {
         cwd: PROJECT_ROOT,
         env: backendEnv as NodeJS.ProcessEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
       },
     ) as ChildProcess
 
@@ -169,6 +175,9 @@ export default async function globalSetup() {
     console.log('  Tutor endpoint configured')
 
     // ── 6. Production frontend ───────────────────────────────────────
+    // Same process-group rationale as the backend: `next start` spawns worker
+    // processes that outlive the `pnpm exec next` wrapper, so teardown signals the
+    // whole group rather than the wrapper pid alone.
     frontend = spawn(
       'pnpm',
       ['exec', 'next', 'start', '--hostname', '127.0.0.1', '--port', String(FRONTEND_PORT)],
@@ -176,6 +185,7 @@ export default async function globalSetup() {
         cwd: join(PROJECT_ROOT, 'frontend'),
         env: stripUndefined(process.env) as NodeJS.ProcessEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
       },
     ) as ChildProcess
 
@@ -265,18 +275,34 @@ function sleep(ms: number): Promise<void> {
 async function killChild(proc: ChildProcess, label: string): Promise<void> {
   if (!proc.pid) return
   if (proc.exitCode !== null || proc.signalCode !== null) return
+  const pid = proc.pid
 
   const exitPromise = new Promise<void>((resolve) => {
     proc.on('exit', () => resolve())
     proc.on('error', () => resolve())
   })
 
-  try {
-    proc.kill('SIGTERM')
-  } catch {
-    return
+  // The child was spawned detached, so its pid is a process-group leader (pgid == pid).
+  // Signal the whole group (-pid): that reclaims the real uvicorn python / next worker
+  // processes that outlive the `uv` / `pnpm exec` wrapper. Signalling the wrapper alone
+  // orphans them -- exactly the leakage the zero-orphan gate forbids. If the group is
+  // already gone, fall back to signalling the wrapper itself.
+  const signalGroup = (sig: NodeJS.Signals): boolean => {
+    try {
+      process.kill(-pid, sig)
+      return true
+    } catch {
+      try {
+        proc.kill(sig)
+        return true
+      } catch {
+        return false
+      }
+    }
   }
-  console.log(`  Sent SIGTERM to ${label} (pid ${proc.pid})`)
+
+  if (!signalGroup('SIGTERM')) return
+  console.log(`  Sent SIGTERM to ${label} group (pid ${pid})`)
 
   const termResult = await Promise.race([
     exitPromise.then(() => 'exited' as const),
@@ -285,17 +311,13 @@ async function killChild(proc: ChildProcess, label: string): Promise<void> {
 
   if (termResult === 'timeout') {
     console.log(`  ${label} did not exit after SIGTERM, sending SIGKILL`)
-    try {
-      proc.kill('SIGKILL')
-    } catch {
-      /* already gone */
-    }
+    signalGroup('SIGKILL')
     await Promise.race([exitPromise, sleep(3_000)])
   }
 
   if (proc.exitCode === null && proc.signalCode === null) {
     throw new Error(
-      `Setup cleanup: ${label} (pid ${proc.pid}) could not be proven dead after SIGTERM + SIGKILL`,
+      `Setup cleanup: ${label} (pid ${pid}) could not be proven dead after SIGTERM + SIGKILL`,
     )
   }
   console.log(`  ${label} stopped`)

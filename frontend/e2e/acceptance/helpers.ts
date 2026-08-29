@@ -23,7 +23,7 @@ export const BACKEND = `http://127.0.0.1:${BACKEND_PORT}`
 export const FRONTEND = `http://127.0.0.1:${FRONTEND_PORT}`
 export const TUTOR_CONTROL = `http://127.0.0.1:${TUTOR_PORT}/_control`
 
-const LYRA_HEADERS: Record<string, string> = {
+export const LYRA_HEADERS: Record<string, string> = {
   'Content-Type': 'application/json',
   'X-Lyra-Client': 'acceptance-test',
 }
@@ -527,41 +527,54 @@ export async function restartBackend(): Promise<void> {
   const state = await readAcceptanceState()
   if (!state) throw new Error('Cannot restart backend: no state file found')
 
-  // Kill the current backend: SIGTERM → wait → SIGKILL → wait → prove dead
-  try {
-    process.kill(state.backendPid, 'SIGTERM')
-  } catch {
-    /* already gone */
+  // Kill the current backend. It was spawned detached (its own process group, pgid == pid), so
+  // signal the WHOLE group: that reclaims the real uvicorn python grandchild and its fake-helper
+  // great-grandchild. Signalling only the `uv` wrapper pid orphans them -- the old helper keeps
+  // holding port 19500 and the new backend cannot bring up its own. This is the same orphan-leak
+  // class the teardown process-group fix addresses, applied to the in-run restart path.
+  const killGroup = (sig: NodeJS.Signals): void => {
+    try {
+      process.kill(-state.backendPid, sig)
+    } catch {
+      try {
+        process.kill(state.backendPid, sig)
+      } catch {
+        /* already gone */
+      }
+    }
   }
 
+  killGroup('SIGTERM')
   const deadline = Date.now() + 5_000
   while (Date.now() < deadline) {
+    let alive = true
     try {
       process.kill(state.backendPid, 0)
-      await sleep(100)
+      alive = true
     } catch {
-      break
+      alive = false
     }
+    if (!alive) break
+    await sleep(100)
   }
 
   // SIGKILL fallback if still alive
-  try {
-    process.kill(state.backendPid, 0)
-    process.kill(state.backendPid, 'SIGKILL')
+  if (isAlive(state.backendPid)) {
+    killGroup('SIGKILL')
     const killDeadline = Date.now() + 3_000
-    while (Date.now() < killDeadline) {
-      try {
-        process.kill(state.backendPid, 0)
-        await sleep(100)
-      } catch {
-        break
-      }
+    while (Date.now() < killDeadline && isAlive(state.backendPid)) {
+      await sleep(100)
     }
-  } catch {
-    /* already gone */
   }
 
-  // Wait for port to be free
+  // A SIGKILLed uvicorn never runs its atexit helper-reclaim, so the old fake-helper may still hold
+  // the helper port (19500, fixed by the harness). Sweep any acceptance fake-helper by its unique
+  // command-line signature (it can never match a production Lyra process) and wait for that port to
+  // be free before spawning fresh -- otherwise the new backend's helper cannot bind.
+  await sweepFakeHelpers()
+  await waitForPortFree(19_500, 10_000)
+
+  // Wait for the backend port to be free
   const portDeadline = Date.now() + 5_000
   while (Date.now() < portDeadline) {
     try {
@@ -575,7 +588,9 @@ export async function restartBackend(): Promise<void> {
     }
   }
 
-  // Spawn a new backend on the same port with the same data dir
+  // Spawn a new backend on the same port with the same data dir. Detached so it is its own process
+  // group leader: this run's teardown (and any later restart) can reclaim it and its helper tree by
+  // signalling -pid rather than orphaning the grandchild processes.
   const backendEnv: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) {
     if (v !== undefined) backendEnv[k] = v
@@ -604,11 +619,11 @@ export async function restartBackend(): Promise<void> {
       cwd: projectRoot,
       env: backendEnv as NodeJS.ProcessEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
-      detached: false,
+      detached: true,
     },
   )
 
-  // Wait for the new backend to be ready
+  // Wait for the new backend to be ready (its helper is up and the app reports ready).
   const readyDeadline = Date.now() + 60_000
   while (Date.now() < readyDeadline) {
     try {
@@ -642,6 +657,88 @@ export async function restartBackend(): Promise<void> {
   if (mem) {
     mem.backend = newBackend
   }
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Kill any lingering acceptance fake-helper by its unique command-line signature. */
+async function sweepFakeHelpers(): Promise<void> {
+  const { execSync } = await import('node:child_process')
+  let listing: string
+  try {
+    listing = execSync('ps -axww -o pid=,command=', { encoding: 'utf-8', timeout: 5000 })
+  } catch {
+    return
+  }
+  const pids: number[] = []
+  for (const line of listing.split('\n')) {
+    if (!line.includes('e2e/acceptance/fake-helper.py')) continue
+    const field = line.trim().split(/\s+/)[0]
+    if (field && Number(field) !== process.pid) pids.push(Number(field))
+  }
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+/** Wait until nothing is listening on the given port (a free bind attempt succeeds). */
+async function waitForPortFree(port: number, timeoutMs: number): Promise<void> {
+  const { createServer } = await import('node:net')
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const free = await new Promise<boolean>((resolve) => {
+      const srv = createServer()
+      srv.once('error', () => resolve(false))
+      srv.listen(port, '127.0.0.1', () => {
+        srv.close(() => resolve(true))
+      })
+    })
+    if (free || Date.now() >= deadline) return
+    await sleep(150)
+  }
+}
+
+/**
+ * Kill whatever process is LISTENING on the given port, by PID. Used as a deterministic
+ * safety net after a process-group kill to guarantee the port is freed (the zero-orphan gate
+ * forbids a leftover fixture holding a port, which would poison the next run). Targets only
+ * the listener on that specific port -- it can never match an unrelated process.
+ */
+export async function killPortListeners(port: number): Promise<void> {
+  const { execSync } = await import('node:child_process')
+  let pids: string[] = []
+  try {
+    pids = (
+      execSync(`lsof -tiTCP:${port} -sTCP:LISTEN`, { encoding: 'utf-8', timeout: 5000 }) || ''
+    )
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  } catch {
+    return // nothing listening (or lsof unavailable)
+  }
+  for (const pidStr of pids) {
+    const pid = Number(pidStr)
+    if (!Number.isFinite(pid) || pid === process.pid) continue
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      /* already gone */
+    }
+  }
+  // Give the kernel a moment to release the socket.
+  await sleep(150)
 }
 
 /* ------------------------------------------------------------------ */

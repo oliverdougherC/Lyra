@@ -30,6 +30,8 @@ type Mode =
   | 'consent-refusal'
   | 'empty-response'
   | 'barrier'
+  | 'partial-hold'
+  | 'writer-effect-then-fail'
 
 interface QueuedResponse {
   content: string
@@ -362,6 +364,67 @@ export class TutorFixture {
         }
         return
       }
+      case 'partial-hold': {
+        // Emit a few real content chunks, then hold the stream open until the client
+        // disconnects (a Stop/cancel closes the upstream socket). This is what lets a
+        // test prove a turn was genuinely in flight with partial output begun when it was
+        // cancelled. The held promise resolves on `close`, so the handler returns cleanly
+        // once the backend drops the connection -- no leaked socket, no forced destroy.
+        if (wantStream) {
+          this.streamPartialThenHold(res)
+        } else {
+          res.destroy()
+        }
+        return
+      }
+      case 'writer-effect-then-fail': {
+        // Deterministic writer failure sequence: the FIRST model round issues a real
+        // `save_brief` tool call (so a genuine durable effect lands through the production
+        // tool path and is linked to the attempt); the FOLLOWING round -- once the tool
+        // result has re-entered the transcript -- fails, so the turn settles as failed
+        // AFTER the effect already committed. This proves PLA-310's retry guard against a
+        // real production failure sequence, not an injected row.
+        const msgs = (body.messages ?? []) as Array<{ role: string }>
+        const hasToolResult = msgs.some((m) => m.role === 'tool')
+        if (!hasToolResult) {
+          json(res, 200, {
+            id: `chatcmpl-writer-effect-${Date.now()}`,
+            object: 'chat.completion',
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: 'assistant',
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: 'call_acceptance_save_brief',
+                      type: 'function',
+                      function: {
+                        name: 'save_brief',
+                        arguments: JSON.stringify({
+                          summary:
+                            'An acceptance-test essay on thermodynamics for the Fall 2026 readiness pass.',
+                          assignment_type: 'essay',
+                          audience: 'undergraduate',
+                          length_target: '500 words',
+                        }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+            usage: { prompt_tokens: 100, completion_tokens: 40, total_tokens: 140 },
+          })
+        } else {
+          json(res, 500, {
+            error: { message: 'Injected post-effect failure', type: 'server_error' },
+          })
+        }
+        return
+      }
     }
 
     // Default success: generate content based on the request
@@ -463,6 +526,33 @@ export class TutorFixture {
       // Destroy only after the partial chunk is flushed to the socket,
       // so the backend receives at least one token frame before disconnect.
       res.destroy()
+    })
+  }
+
+  /**
+   * Emit a few real content chunks, flush them to the socket, then hold the stream open
+   * until the client disconnects. Used to prove a turn was genuinely in flight with partial
+   * output begun when it was cancelled: the held promise resolves on `close`, so the
+   * handler returns cleanly once the backend drops the connection (no leaked socket).
+   */
+  private async streamPartialThenHold(res: ServerResponse): Promise<void> {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+    })
+    const id = `chatcmpl-partial-hold-${Date.now()}`
+    res.write(sseChunk(id, { role: 'assistant', content: '' }))
+    // A few real chunks so the backend has received token frames before we hold.
+    for (const word of ['Partial', 'regeneration', 'output', 'in', 'flight']) {
+      res.write(sseChunk(id, { content: ' ' + word }))
+    }
+    // Flush, then hold until the client goes away.
+    await new Promise<void>((resolve) => {
+      const done = () => resolve()
+      res.on('close', done)
+      // If the socket is already closed (client aborted before we got here), resolve
+      // immediately rather than holding forever.
+      if (res.writableEnded || res.destroyed) done()
     })
   }
 
