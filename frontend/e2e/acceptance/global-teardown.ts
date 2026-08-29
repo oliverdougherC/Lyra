@@ -20,6 +20,8 @@ const SIGKILL_WAIT_MS = 3_000
 export default async function globalTeardown() {
   console.log('\n  Tearing down acceptance stack...')
 
+  const failures: string[] = []
+
   const mem = (globalThis as Record<string, unknown>).__acceptanceState as
     | {
         tutor: TutorFixture
@@ -29,6 +31,37 @@ export default async function globalTeardown() {
         stateFile: string
       }
     | undefined
+
+  // Query the backend-failure ledger BEFORE killing the backend. This is the
+  // authoritative second line of defense: even if the zz- spec passed, teardown
+  // independently verifies zero unconsumed failures.
+  const backendPort = Number(process.env.ACCEPTANCE_BACKEND_PORT ?? 8000)
+  try {
+    const res = await fetch(`http://127.0.0.1:${backendPort}/_acceptance/backend-failures`, {
+      signal: AbortSignal.timeout(5_000),
+    })
+    if (res.ok) {
+      const snap = (await res.json()) as {
+        unconsumed_count: number
+        unconsumed: Array<Record<string, unknown>>
+        total_recorded: number
+        consumed: number
+      }
+      if (snap.unconsumed_count > 0) {
+        const lines = snap.unconsumed.slice(0, 5).map((f) => {
+          return `[${f.method}] ${f.route} -> ${f.kind} status=${f.status ?? '-'} exc=${f.exc_type ?? '-'}`
+        })
+        failures.push(
+          `${snap.unconsumed_count} unconsumed backend failure(s):\n    ${lines.join('\n    ')}`,
+        )
+      }
+      console.log(
+        `  Backend failure ledger: ${snap.total_recorded} recorded, ${snap.consumed} consumed, ${snap.unconsumed_count} unconsumed`,
+      )
+    }
+  } catch {
+    console.log('  Could not query backend failure ledger (backend may already be down)')
+  }
 
   if (mem) {
     await killAndWait(mem.frontend, 'frontend')
@@ -53,10 +86,21 @@ export default async function globalTeardown() {
   // Final sweep: the process-group kills above should have reclaimed everything, but the
   // zero-orphan gate requires proof, not trust. Any acceptance fixture still alive after
   // teardown (a uvicorn that outlived its group signal, a fake-helper whose parent died)
-  // is killed here. The matchers are unique to acceptance fixtures -- production Lyra runs
-  // `backend.main:app`, never `acceptance.backend_harness:app` or `fake-helper.py` -- so a
-  // user's real server can never be touched.
-  await sweepOrphanedFixtures()
+  // is killed here and the run is FAILED. The matchers are unique to acceptance fixtures --
+  // production Lyra runs `backend.main:app`, never `acceptance.backend_harness:app` or
+  // `fake-helper.py` -- so a user's real server can never be touched.
+  const orphanCount = await sweepOrphanedFixtures()
+  if (orphanCount > 0) {
+    failures.push(`${orphanCount} orphaned fixture process(es) required cleanup`)
+  }
+
+  if (failures.length > 0) {
+    console.error(`\n  TEARDOWN INVARIANT VIOLATIONS:\n    ${failures.join('\n    ')}\n`)
+    throw new Error(
+      `Acceptance teardown FAILED: ${failures.length} invariant violation(s).\n` +
+        failures.map((f) => `  - ${f}`).join('\n'),
+    )
+  }
 
   console.log('  Teardown complete\n')
 }
@@ -68,24 +112,23 @@ export default async function globalTeardown() {
 // Command-line signatures that identify an acceptance fixture process and nothing else.
 const ORPHAN_PATTERNS = ['acceptance.backend_harness:app', 'e2e/acceptance/fake-helper.py']
 
-async function sweepOrphanedFixtures(): Promise<void> {
+async function sweepOrphanedFixtures(): Promise<number> {
   let listing: string
   try {
     listing = execSync('ps -axww -o pid=,command=', { encoding: 'utf-8', timeout: 5000 })
   } catch {
-    return
+    return 0
   }
 
   const orphans: number[] = []
   for (const line of listing.split('\n')) {
     if (!ORPHAN_PATTERNS.some((p) => line.includes(p))) continue
-    // Skip this teardown process itself (its command line contains the pattern string).
     const pidField = line.trim().split(/\s+/)[0]
     if (!pidField || Number(pidField) === process.pid) continue
     orphans.push(Number(pidField))
   }
 
-  if (orphans.length === 0) return
+  if (orphans.length === 0) return 0
 
   for (const pid of orphans) {
     try {
@@ -116,10 +159,12 @@ async function sweepOrphanedFixtures(): Promise<void> {
   }
   const survivors = orphans.filter((pid) => isProcessAlive(pid))
   if (survivors.length > 0) {
-    console.error(`  Orphan sweep: could not prove dead: ${survivors.join(', ')}`)
+    console.error(`  Orphan sweep: ${survivors.length} survived SIGKILL: ${survivors.join(', ')}`)
   } else {
-    console.log('  Orphan sweep complete')
+    console.log(`  Orphan sweep: ${orphans.length} reclaimed, all verified dead`)
   }
+
+  return orphans.length
 }
 
 /* ------------------------------------------------------------------ */

@@ -1,21 +1,29 @@
 /**
  * PLA-315 real-browser beforeunload proof.
  *
- * The merged unit/component implementation of `installBeforeUnloadGuard()` is already
- * accepted. This spec proves the browser contract end to end against the production
- * draft page: the guard is wired to the real save engine's dirty state, and the native
- * "unsaved changes" dialog appears exactly when there is unconfirmed work in flight and
- * disappears once that work is confirmed by the server.
+ * Proves the complete durability sequence: the guard prevents loss of an in-flight
+ * edit, and releasing the held save makes it authoritative on the server.
  *
- * Mechanism (verified empirically against this Playwright/Chromium build): a page with
- * an armed beforeunload guard fires a `beforeunload` dialog on reload; `accept()`
- * proceeds with the unload, `dismiss()` cancels it. A clean page fires no dialog and
- * navigates immediately. We hold the ACTUAL autosave PATCH in flight (a route that does
- * not respond) so the production engine genuinely remains dirty/unconfirmed -- we do not
- * replace or stub the guard or the engine.
+ * Required causal chain:
+ *   type edit E
+ *   -> actual production autosave PATCH for E begins
+ *   -> deterministically hold THAT request via a Playwright route barrier
+ *   -> production save engine is dirty/unconfirmed
+ *   -> attempt hard reload/navigation
+ *   -> native beforeunload fires
+ *   -> DISMISS/CANCEL the unload
+ *   -> page remains alive with E in the editor
+ *   -> release the SAME held PATCH via the barrier
+ *   -> real backend confirms it
+ *   -> authoritative server body/version contains E
+ *   -> save engine settles clean
+ *   -> attempt hard unload again
+ *   -> NO beforeunload prompt (engine is clean)
+ *
+ * E is never retyped after the first input. The guard protects the SAME edit throughout.
  */
 
-import { test, expect } from '@playwright/test'
+import { test, expect, type Route } from '@playwright/test'
 import { apiGet, createClass, createDraft } from './helpers'
 
 test.describe('PLA-315 real-browser beforeunload', () => {
@@ -25,15 +33,27 @@ test.describe('PLA-315 real-browser beforeunload', () => {
     const cls = await createClass('BeforeUnload Class')
     const draft = await createDraft(cls.id, 'BeforeUnload Draft')
 
-    // Phase 1: deterministically hold the real autosave PATCH so the engine stays
-    // dirty/unconfirmed. The production onChange -> engine.schedule debounce arms an
-    // autosave ~1.5s after typing; this route swallows it and never responds, so the
-    // engine's write promise stays pending and isDirty() reports true.
-    let heldPatchSeen = false
-    await page.route(`**/api/drafts/${draft.id}/body`, async (route) => {
-      if (!heldPatchSeen && route.request().method() === 'PATCH') {
-        heldPatchSeen = true
-        // Hold forever: do not fulfill, do not continue. The request is in flight.
+    // Phase 1: set up a deterministic route barrier that holds the FIRST autosave
+    // PATCH and releases it only when we call releasePatch(). The route handler
+    // awaits a promise that we resolve externally, so the PATCH is genuinely in
+    // flight (the browser's fetch is pending, the engine's write promise is
+    // unresolved, isDirty() reports true).
+    let patchArrived: () => void
+    const patchArrivedPromise = new Promise<void>((r) => {
+      patchArrived = r
+    })
+    let releasePatch: () => void
+    const patchReleasePromise = new Promise<void>((r) => {
+      releasePatch = r
+    })
+    let firstPatchHeld = false
+
+    await page.route(`**/api/drafts/${draft.id}/body`, async (route: Route) => {
+      if (route.request().method() === 'PATCH' && !firstPatchHeld) {
+        firstPatchHeld = true
+        patchArrived!()
+        await patchReleasePromise
+        await route.continue()
         return
       }
       await route.continue()
@@ -43,42 +63,42 @@ test.describe('PLA-315 real-browser beforeunload', () => {
     const editor = page.locator('[aria-label="Draft document"]')
     await expect(editor).toBeVisible({ timeout: 15_000 })
 
-    // Type unsaved text into the real editor and wait past the autosave debounce so the
-    // (held) PATCH is genuinely in flight.
+    // Type unsaved text E into the real editor.
     await editor.click()
     await page.keyboard.type('Unsaved beforeunload probe text.', { delay: 15 })
-    await page.waitForTimeout(2_500)
-    expect(heldPatchSeen, 'autosave PATCH was not observed in flight').toBe(true)
 
-    // Attempt a real hard reload. The production guard is armed (engine dirty), so the
-    // browser must report the unload protection as a beforeunload dialog.
+    // Wait for the autosave debounce to fire and the (held) PATCH to arrive.
+    await patchArrivedPromise
+    expect(firstPatchHeld, 'autosave PATCH was not observed in flight').toBe(true)
+
+    // Phase 2: attempt a real hard reload. The production guard is armed (engine
+    // dirty with an unconfirmed write), so the browser fires a beforeunload dialog.
+    // We DISMISS it (cancel the unload) so the page stays alive with E.
     let sawProtection = false
-    const dialogPromise = page
-      .waitForEvent('dialog', { timeout: 10_000 })
-      .then(async (dialog) => {
-        expect(dialog.type()).toBe('beforeunload')
-        sawProtection = true
-        await dialog.accept() // proceed with the unload
-      })
-      .catch(() => undefined)
-    const reloadPromise = page.reload({ waitUntil: 'load', timeout: 15_000 }).catch(() => undefined)
-    await Promise.allSettled([dialogPromise, reloadPromise])
+    page.once('dialog', async (dialog) => {
+      expect(dialog.type()).toBe('beforeunload')
+      sawProtection = true
+      await dialog.dismiss()
+    })
+
+    // page.reload() with a dismissed beforeunload cancels the navigation.
+    await page.reload({ timeout: 5_000 }).catch(() => {
+      /* navigation cancelled by dismissed dialog */
+    })
 
     expect(
       sawProtection,
       'browser did not report unload protection while a save was in flight',
     ).toBe(true)
 
-    // Phase 2: the reload cleared the editor and the held route. Let the real autosave
-    // complete against the real server this time (no interception), then verify the
-    // authoritative server body/version contains the edit.
-    await page.unroute(`**/api/drafts/${draft.id}/body`)
-    const editor2 = page.locator('[aria-label="Draft document"]')
-    await expect(editor2).toBeVisible({ timeout: 15_000 })
-    await editor2.click()
-    await page.keyboard.type('Unsaved beforeunload probe text.', { delay: 15 })
+    // Phase 3: the page is still alive. The editor must still contain E -- the
+    // dismissed dialog preserved it. E is NOT retyped.
+    await expect(editor).toContainText('Unsaved beforeunload probe text.', { timeout: 5_000 })
 
-    // Wait until the server authoritatively holds the edit (autosave landed).
+    // Phase 4: release the held PATCH so it completes to the real server.
+    releasePatch!()
+
+    // Wait until the server authoritatively holds E (the real PATCH landed).
     const deadline = Date.now() + 15_000
     let serverBody = ''
     let bodyVersion = 0
@@ -90,10 +110,10 @@ test.describe('PLA-315 real-browser beforeunload', () => {
       await new Promise((r) => setTimeout(r, 300))
     }
     expect(serverBody).toContain('Unsaved beforeunload probe text.')
-    expect(bodyVersion > 0).toBe(true)
+    expect(bodyVersion).toBeGreaterThan(0)
 
-    // Give the engine a beat to settle to `saved` (its write promise resolves on the
-    // server ack), then attempt the same unload again: there must be NO prompt.
+    // Phase 5: the save engine should now settle to clean (the write promise
+    // resolved on the server ack). A second hard unload must produce NO prompt.
     await page.waitForTimeout(500)
     let sawSecondProtection = false
     page.once('dialog', async (dialog) => {

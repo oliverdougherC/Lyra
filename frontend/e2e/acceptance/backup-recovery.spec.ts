@@ -4,6 +4,11 @@
  * Proves: API key set/check/delete lifecycle, endpoint change resets
  * remote_ack (PLA-302), real launcher backup() creates a valid archive
  * and real launcher restore() recovers it with entity verification (PLA-307).
+ * The DR contract test builds representative state (class, document, tutor
+ * exchange, flashcard deck with generated cards, draft with non-empty body
+ * and snapshot revision), backs up, CORRUPTS the live state, restores into a
+ * fresh directory, and verifies every entity through product APIs -- proving
+ * the restore came from the archive, not the (now-corrupted) live database.
  * Uses the actual backup()/restore() functions with monkeypatched stack
  * management so the running acceptance stack is not torn down.
  */
@@ -18,14 +23,17 @@ import {
   apiGet,
   apiPut,
   apiPost,
+  apiPatch,
   createClass,
   createSession,
   createDraft,
   uploadDocument,
   waitForDocumentReady,
+  waitForStudyReady,
   readSSEFrames,
   readAcceptanceState,
   killPortListeners,
+  clearTutorState,
 } from './helpers'
 
 const PROJECT_ROOT = resolve(__dirname, '..', '..', '..')
@@ -370,15 +378,18 @@ print(json.dumps({
   })
 
   test('disaster-recovery contract: restore a representative state and reopen it through product APIs', async () => {
-    // Build a REPRESENTATIVE pre-disaster state: a class, a ready document, a tutor session with a
-    // durable exchange, and a draft - the kind of data a student would lose without a backup.
+    await clearTutorState()
+
+    // Build a REPRESENTATIVE pre-disaster state covering every entity type a student would
+    // lose without a backup: class, ready document, tutor session with a durable exchange,
+    // flashcard deck with generated cards, draft with non-empty body + snapshot/revision.
     const cls = await createClass('DR Class')
     const doc = await uploadDocument(cls.id, resolve(TEST_DATA, 'sample.txt'), 'sample.txt')
     const docData = (await doc.json()) as { id: number }
     await waitForDocumentReady(docData.id, 30_000)
 
+    // Durable tutor exchange.
     const session = await createSession(cls.id)
-    // A durable tutor exchange (the tutor endpoint is the acceptance fixture).
     const chatRes = await apiPost(`/api/sessions/${session.id}/chat`, {
       content: 'What is a derivative?',
       mode: 'guide',
@@ -386,7 +397,33 @@ print(json.dumps({
     expect(chatRes.status).toBe(200)
     await readSSEFrames(chatRes)
 
+    // Study artifact: a flashcard deck generated from the uploaded document.
+    const deckRes = await apiPost(`/api/classes/${cls.id}/decks`, {
+      title: 'DR Deck',
+      document_ids: [docData.id],
+      cards_per_topic: 2,
+    })
+    expect(deckRes.status).toBe(202)
+    const deck = (await deckRes.json()) as { id: number }
+    await waitForStudyReady('decks', deck.id, 30_000)
+
+    // Verify the deck has cards before backup (baseline).
+    const deckDetail = await (await apiGet(`/api/decks/${deck.id}`)).json()
+    expect(deckDetail.state).toBe('ready')
+    const preDeckCardCount = deckDetail.cards.length as number
+    expect(preDeckCardCount).toBeGreaterThan(0)
+
+    // Draft with a non-empty body AND a snapshot revision.
     const draft = await createDraft(cls.id, 'DR Draft')
+    const saveRes = await apiPatch(`/api/drafts/${draft.id}/body`, {
+      content: 'The derivative of f(x) measures the instantaneous rate of change.',
+      expected_version: 0,
+      snapshot: true,
+      note: 'Pre-disaster baseline',
+    })
+    expect(saveRes.ok).toBe(true)
+    const saveBody = (await saveRes.json()) as { version: number }
+    expect(saveBody.version).toBe(1)
 
     // Back up the live data directory through the real launcher backup().
     const state = await readAcceptanceState()
@@ -415,6 +452,16 @@ sys.exit(rc)
     )
     expect(existsSync(archivePath)).toBe(true)
 
+    // POST-BACKUP CORRUPTION: mutate the live state AFTER the backup so the restore
+    // cannot accidentally pass by reading the live database. Every verification below
+    // checks the ORIGINAL value, not the corrupted one.
+    await apiPatch(`/api/classes/${cls.id}`, { name: 'CORRUPTED DR Class' })
+    await apiPatch(`/api/drafts/${draft.id}/body`, {
+      content: 'CORRUPTED CONTENT AFTER BACKUP',
+      expected_version: 1,
+      snapshot: false,
+    })
+
     // Restore the archive into a FRESH data directory through the real launcher restore().
     const restoreDir = join(backupDir, 'restored-data')
     execSync(
@@ -436,17 +483,10 @@ sys.exit(rc)
       { cwd: PROJECT_ROOT, timeout: 30_000 },
     )
 
-    // The DISASTER: the original data directory is gone. Recovery must come only from the archive.
-    // We prove the restored state is a real product by opening it in a SECOND backend instance on an
-    // alternate port and reading everything back through the PRODUCT APIs (not raw SQL).
+    // Open the restored state in a SECOND backend instance on an alternate port and read
+    // everything back through the PRODUCT APIs (not raw SQL).
     const drPort = 18050
     const { spawn } = await import('node:child_process')
-    // detached:true makes the child its own process-group leader (pgid == pid) so the finally
-    // block can signal the WHOLE group and reclaim the real uvicorn python grandchild that binds
-    // the port. Without it, only the `uv` wrapper dies and the grandchild survives as an orphan
-    // holding drPort -- which then poisons every subsequent run's DR test (port in use + a data
-    // dir already deleted by teardown). This mirrors the process-group discipline used everywhere
-    // else in the acceptance harness.
     const proc = spawn(
       'uv',
       [
@@ -471,7 +511,6 @@ sys.exit(rc)
     const drBase = `http://127.0.0.1:${drPort}`
     const H = { 'Content-Type': 'application/json', 'X-Lyra-Client': 'acceptance-test' }
     try {
-      // Wait for the restored backend to come up.
       let up = false
       const upDeadline = Date.now() + 30_000
       while (Date.now() < upDeadline && !up) {
@@ -485,31 +524,64 @@ sys.exit(rc)
       }
       expect(up).toBe(true)
 
-      // The restored class is present and its document is intact.
+      // Class name is the ORIGINAL, not the post-backup corruption.
       const classesRes = await fetch(`${drBase}/api/classes`, { headers: H })
       expect(classesRes.status).toBe(200)
       const classes = (await classesRes.json()) as Array<{ id: number; name: string }>
       const restoredClass = classes.find((c) => c.name === 'DR Class')
-      expect(restoredClass).toBeTruthy()
+      expect(
+        restoredClass,
+        'restored class should have the pre-backup name, not CORRUPTED',
+      ).toBeTruthy()
+      expect(classes.some((c) => c.name === 'CORRUPTED DR Class')).toBe(false)
 
-      // The session's durable exchange is readable through the product API.
+      // The session's durable exchange is readable.
       const msgsRes = await fetch(`${drBase}/api/sessions/${session.id}/messages`, { headers: H })
       expect(msgsRes.status).toBe(200)
       const msgs = (await msgsRes.json()) as Array<{ role: string; content: string }>
       expect(msgs.some((m) => m.role === 'user' && m.content === 'What is a derivative?')).toBe(
         true,
       )
+      expect(msgs.some((m) => m.role === 'assistant')).toBe(true)
 
-      // The draft survived the disaster-recovery round trip.
-      const draftsRes = await fetch(`${drBase}/api/classes/${restoredClass!.id}/drafts`, {
-        headers: H,
-      })
-      expect(draftsRes.status).toBe(200)
-      const drafts = (await draftsRes.json()) as Array<{ id: number; title: string }>
-      expect(drafts.some((d) => d.id === draft.id && d.title === 'DR Draft')).toBe(true)
+      // The flashcard deck survived with its generated cards.
+      const restoredDeck = await fetch(`${drBase}/api/decks/${deck.id}`, { headers: H })
+      expect(restoredDeck.status).toBe(200)
+      const deckBody = (await restoredDeck.json()) as {
+        state: string
+        title: string
+        cards: unknown[]
+      }
+      expect(deckBody.state).toBe('ready')
+      expect(deckBody.title).toBe('DR Deck')
+      expect(deckBody.cards.length).toBe(preDeckCardCount)
+
+      // The draft body is the ORIGINAL content, not the post-backup corruption.
+      const draftRes = await fetch(`${drBase}/api/drafts/${draft.id}`, { headers: H })
+      expect(draftRes.status).toBe(200)
+      const draftBody = (await draftRes.json()) as {
+        title: string
+        body: string
+        body_version: number
+        part_id?: number
+      }
+      expect(draftBody.title).toBe('DR Draft')
+      expect(draftBody.body).toContain('instantaneous rate of change')
+      expect(draftBody.body).not.toContain('CORRUPTED')
+      expect(draftBody.body_version).toBe(1)
+
+      // The snapshot revision survived the round trip.
+      if (draftBody.part_id) {
+        const revsRes = await fetch(
+          `${drBase}/api/drafts/${draft.id}/parts/${draftBody.part_id}/revisions`,
+          { headers: H },
+        )
+        expect(revsRes.ok).toBe(true)
+        const revisions = (await revsRes.json()) as Array<{ note?: string }>
+        expect(revisions.length).toBeGreaterThanOrEqual(1)
+        expect(revisions.some((r) => r.note === 'Pre-disaster baseline')).toBe(true)
+      }
     } finally {
-      // Tear down the second backend by process group so no orphan survives. The child was spawned
-      // detached, so -proc.pid signals its whole group (uv wrapper + uvicorn python grandchild).
       if (proc.pid) {
         try {
           process.kill(-proc.pid, 'SIGTERM')
@@ -534,8 +606,6 @@ sys.exit(rc)
           /* already gone */
         }
       }
-      // Belt and suspenders: the zero-orphan gate forbids a leftover backend holding drPort (it would
-      // poison the next run). Kill whatever is still LISTENING on the port by PID, directly.
       await killPortListeners(drPort)
     }
   })

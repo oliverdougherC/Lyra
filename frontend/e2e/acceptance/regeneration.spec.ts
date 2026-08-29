@@ -99,8 +99,10 @@ test.describe('PLA-316 cancelled regeneration', () => {
     const stopBtn = page.getByRole('button', { name: 'Stop generating' })
     await expect(stopBtn).toBeVisible({ timeout: 15_000 })
 
-    // Give the fixture a moment to emit its partial frames so output has truly begun.
-    await new Promise((r) => setTimeout(r, 400))
+    // Wait for visible proof that partial tokens have been rendered. The fixture in
+    // partial-hold mode emits "Partial regeneration output in flight" before holding;
+    // seeing at least the first two words proves the stream is genuinely in flight.
+    await expect(page.getByText('Partial regeneration').first()).toBeVisible({ timeout: 10_000 })
 
     // 3. Cancel/Stop the regeneration through the product interaction. This aborts the
     //    SSE fetch; the backend's stream generator is cancelled and, because this is a

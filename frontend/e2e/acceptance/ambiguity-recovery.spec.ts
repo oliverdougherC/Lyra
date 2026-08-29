@@ -11,7 +11,7 @@
  * token streams. So by the time the browser would have seen the acceptance, X is already durable
  * server-side even if the response never reaches it.
  *
- * Three scenarios:
+ * Five scenarios:
  *   A. Browser loses the acceptance response (the accepted request's response is dropped at the
  *      transport layer before it reaches the page). Because the browser never received the 200,
  *      its composer keeps the ambiguity key X (a generic transport error must NOT clear it - only
@@ -26,6 +26,15 @@
  *      invocation after completed X" invariant.
  *   C. Reusing X for a DIFFERENT request is refused with a structured 409
  *      (`operation_id_mismatch`) so the client mints fresh instead of corrupting state.
+ *   D. The browser resends while the session claim is still held (tutor barrier mode keeps the
+ *      model call alive). The real backend returns a conversation-busy 409. ChatPane keeps text
+ *      AND X (a busy 409 must never discard the ambiguity key). After the original turn settles,
+ *      the same X reconciles. All three requests (transport-faulted, busy-rejected, reconciled)
+ *      carry the same X; exactly one user message and one assistant message are durable.
+ *   E. The browser preserves X through ambiguity recovery, then attempts X against a different
+ *      canonical request (mode changed by the acceptance interceptor). The real backend returns
+ *      a structured `operation_id_mismatch`. ChatPane preserves the text but retires X. The
+ *      next Send mints a fresh Y !== X that succeeds without duplication from X.
  */
 import { test, expect } from '@playwright/test'
 import type { Page } from '@playwright/test'
@@ -38,6 +47,8 @@ import {
   setTutorMode,
   clearTutorState,
   getTutorRequests,
+  waitForBarrier,
+  releaseBarrier,
 } from './helpers'
 
 const QUESTION = 'Explain Newton first law.'
@@ -294,5 +305,200 @@ test.describe('PLA-313 browser ambiguity recovery', () => {
       await fetch(`${BACKEND}/api/sessions/${session.id}/messages`, { headers: LYRA_HEADERS })
     ).json()) as Array<{ role: string }>
     expect(msgs.filter((m) => m.role === 'user').length).toBe(2) // QUESTION + the fresh one only
+  })
+
+  test('immediate resend while claim is held gets busy 409, then reconciles after settlement', async ({
+    page,
+  }) => {
+    const cls = await createClass('Busy409 Class')
+    const session = await createSession(cls.id)
+    await clearTutorState()
+    await setTutorMode('barrier')
+
+    const seenOpIds: string[] = []
+    let firstIntercepted = false
+
+    await page.route('**/api/sessions/*/chat', async (route) => {
+      const body = route.request().postDataJSON() as { operation_id?: string } | null
+      if (body?.operation_id) seenOpIds.push(body.operation_id)
+
+      if (!firstIntercepted) {
+        firstIntercepted = true
+        // Forward the request to the real backend from the test process. The response
+        // stream hangs at the barrier (fire-and-forget), keeping the session claim held.
+        // route.fetch() is not used because it buffers the full SSE body — the barrier
+        // would block it indefinitely.
+        fetch(`${BACKEND}/api/sessions/${session.id}/chat`, {
+          method: 'POST',
+          headers: LYRA_HEADERS,
+          body: route.request().postData()!,
+        }).catch(() => {})
+        return route.abort()
+      }
+      return route.continue()
+    })
+
+    await navigateToChat(page, cls.id)
+    await sendForced(page, QUESTION)
+
+    // The tutor barrier confirms the model call arrived: the session claim is held.
+    await waitForBarrier()
+
+    // The browser detected the transport fault and restored text + X.
+    await expect.poll(() => seenOpIds.length, { timeout: 10_000 }).toBe(1)
+    const opX = seenOpIds[0]
+    expect(opX).toBeTruthy()
+
+    await expect
+      .poll(async () => page.locator('#message-composer').inputValue(), { timeout: 15_000 })
+      .toBe(QUESTION)
+    await expect(page.locator('[aria-label="Send message"]')).toBeEnabled({ timeout: 10_000 })
+
+    // RESEND WHILE CLAIM IS HELD. The browser carries the preserved X. The server returns
+    // a conversation-busy 409 because the original processing loop still holds the claim.
+    await page.evaluate(() => {
+      const btn = document.querySelector('[aria-label="Send message"]') as HTMLButtonElement | null
+      if (btn && !btn.disabled) btn.click()
+    })
+
+    await expect.poll(() => seenOpIds.length, { timeout: 10_000 }).toBe(2)
+    expect(seenOpIds[1]).toBe(opX)
+
+    // After the busy 409, ChatPane must still have text + X (a busy 409 must NOT discard
+    // the ambiguity key — only a structured operation_id_mismatch may).
+    await expect
+      .poll(async () => page.locator('#message-composer').inputValue(), { timeout: 10_000 })
+      .toBe(QUESTION)
+
+    // Release the barrier. Switch to normal mode so any re-run completes cleanly.
+    await setTutorMode('normal')
+    await releaseBarrier('Newton first law: an object in motion stays in motion.')
+
+    // Wait for the original turn to settle (claim released).
+    const terminal = await waitTerminal(session.id)
+    expect(terminal).not.toBe('running')
+
+    // RESEND AFTER SETTLEMENT. The browser STILL carries X (preserved through the busy 409).
+    await expect(page.locator('[aria-label="Send message"]')).toBeEnabled({ timeout: 10_000 })
+    await page.evaluate(() => {
+      const btn = document.querySelector('[aria-label="Send message"]') as HTMLButtonElement | null
+      if (btn && !btn.disabled) btn.click()
+    })
+
+    await expect.poll(() => seenOpIds.length, { timeout: 15_000 }).toBe(3)
+    expect(seenOpIds[2]).toBe(opX)
+
+    // Wait for the reconciliation to settle.
+    await expect(page.locator('[aria-label="Send message"]')).toBeVisible({ timeout: 30_000 })
+
+    // Invariant: exactly ONE durable user message (all three requests carried the same X).
+    const after = await countMessages(session.id)
+    expect(after.user.length).toBe(1)
+    expect(after.user[0].content.trim()).toBe(QUESTION)
+
+    // Invariant: exactly ONE authoritative assistant publication.
+    await expect
+      .poll(async () => (await countMessages(session.id)).assistant.length, { timeout: 15_000 })
+      .toBe(1)
+
+    // The browser shows the settled exchange.
+    await expect(page.getByText(QUESTION, { exact: true }).first()).toBeVisible({ timeout: 10_000 })
+  })
+
+  test('browser ChatPane receives structured mismatch and next send mints fresh Y !== X', async ({
+    page,
+  }) => {
+    const cls = await createClass('BrowserMismatch Class')
+    const session = await createSession(cls.id)
+    await clearTutorState()
+    await setTutorMode('normal')
+
+    const seenOpIds: string[] = []
+    let dropFirst = true
+    let injectMismatch = false
+
+    await page.route('**/api/sessions/*/chat', async (route) => {
+      const body = route.request().postDataJSON() as {
+        operation_id?: string
+        mode?: string
+      } | null
+      if (body?.operation_id) seenOpIds.push(body.operation_id)
+
+      if (dropFirst) {
+        dropFirst = false
+        // Normal mode: the model responds immediately, so the SSE stream completes and
+        // route.fetch() returns after buffering the full response body.
+        await route.fetch()
+        return route.abort()
+      }
+
+      if (injectMismatch) {
+        injectMismatch = false
+        // Alter the mode so the server sees X against a different canonical request.
+        // X was committed with the original mode; changing it triggers a real
+        // operation_id_mismatch from the production reconciliation path.
+        const modified = { ...body, mode: body?.mode === 'guide' ? 'show' : 'guide' }
+        return route.continue({ postData: JSON.stringify(modified) })
+      }
+
+      return route.continue()
+    })
+
+    await navigateToChat(page, cls.id)
+    await sendForced(page, QUESTION)
+
+    // Capture X.
+    await expect.poll(() => seenOpIds.length, { timeout: 10_000 }).toBe(1)
+    const opX = seenOpIds[0]
+    expect(opX).toBeTruthy()
+
+    // Wait for the original turn to settle so X is fully committed.
+    const terminal = await waitTerminal(session.id)
+    expect(terminal).not.toBe('running')
+
+    // Browser restores text + X after the transport fault.
+    await expect
+      .poll(async () => page.locator('#message-composer').inputValue(), { timeout: 15_000 })
+      .toBe(QUESTION)
+    await expect(page.locator('[aria-label="Send message"]')).toBeEnabled({ timeout: 10_000 })
+
+    // The browser preserved X through ambiguity recovery. The next send carries X (text
+    // unchanged, so send() does not clear the key). The interceptor changes the mode,
+    // causing the server to see X against a different canonical request.
+    injectMismatch = true
+
+    await page.evaluate(() => {
+      const btn = document.querySelector('[aria-label="Send message"]') as HTMLButtonElement | null
+      if (btn && !btn.disabled) btn.click()
+    })
+
+    // The mismatch request went through — verify the browser sent the same X.
+    await expect.poll(() => seenOpIds.length, { timeout: 10_000 }).toBe(2)
+    expect(seenOpIds[1]).toBe(opX)
+
+    // ChatPane received the structured mismatch: it preserves the text but retires X.
+    await expect
+      .poll(async () => page.locator('#message-composer').inputValue(), { timeout: 10_000 })
+      .toBe(QUESTION)
+    await expect(page.locator('[aria-label="Send message"]')).toBeEnabled({ timeout: 10_000 })
+
+    // The next Send must mint a fresh Y !== X.
+    await page.evaluate(() => {
+      const btn = document.querySelector('[aria-label="Send message"]') as HTMLButtonElement | null
+      if (btn && !btn.disabled) btn.click()
+    })
+
+    await expect.poll(() => seenOpIds.length, { timeout: 15_000 }).toBe(3)
+    const opY = seenOpIds[2]
+    expect(opY).not.toBe(opX)
+
+    // The fresh request succeeds.
+    await expect(page.locator('[aria-label="Send message"]')).toBeVisible({ timeout: 30_000 })
+
+    // The mismatch refusal did NOT duplicate from X. Two user messages exist: the original
+    // committed under X (ambiguity recovered) and the fresh one under Y.
+    const after = await countMessages(session.id)
+    expect(after.user.length).toBe(2)
+    expect(after.assistant.length).toBe(2)
   })
 })

@@ -19,6 +19,7 @@ import {
   waitForBarrier,
   releaseBarrier,
   readSSEFrames,
+  getTutorRequests,
   BACKEND,
 } from './helpers'
 
@@ -314,18 +315,30 @@ test.describe('Writing', () => {
     expect(sawBrief, 'the real save_brief effect should have landed before the failure').toBe(true)
     expect(sawError, 'the attempt should report a failed turn after the effect landed').toBe(true)
 
-    // Wait briefly for the attempt state to settle (the SSE error may race the commit).
-    await new Promise((r) => setTimeout(r, 500))
+    // The model was called exactly TWICE: once for the tool call (save_brief), once for
+    // the follow-up round that fails. No more, no less.
+    const modelCalls = (await getTutorRequests()).length
+    expect(modelCalls).toBe(2)
 
-    // Find the failed attempt via the acceptance endpoint.
-    const attemptRes = await fetch(`${BACKEND}/_acceptance/writer-latest-attempt/${session.id}`, {
-      headers: { 'X-Lyra-Client': 'acceptance-test' },
-    })
-    expect(attemptRes.ok).toBe(true)
-    const attemptData = (await attemptRes.json()) as { found: boolean; id: number; state: string }
-    expect(attemptData.found).toBe(true)
-    expect(attemptData.state).toBe('failed')
-    const attemptId = attemptData.id
+    // Poll for the attempt state to settle rather than sleeping a fixed duration.
+    let attemptData: { found: boolean; id: number; state: string } | null = null
+    const settleDeadline = Date.now() + 10_000
+    while (Date.now() < settleDeadline) {
+      const attemptRes = await fetch(`${BACKEND}/_acceptance/writer-latest-attempt/${session.id}`, {
+        headers: { 'X-Lyra-Client': 'acceptance-test' },
+      })
+      if (attemptRes.ok) {
+        const data = (await attemptRes.json()) as { found: boolean; id: number; state: string }
+        if (data.found && data.state === 'failed') {
+          attemptData = data
+          break
+        }
+      }
+      await new Promise((r) => setTimeout(r, 200))
+    }
+    expect(attemptData, 'attempt should settle to failed state').toBeTruthy()
+    expect(attemptData!.state).toBe('failed')
+    const attemptId = attemptData!.id
 
     // The real durable effect E exists EXACTLY ONCE, and its ownership row belongs to this
     // attempt (linked through the production tool path, not injected).
@@ -335,6 +348,15 @@ test.describe('Writing', () => {
     const targets = (await targetsRes.json()) as { targets: Array<{ target_kind: string }> }
     expect(targets.targets.length).toBe(1)
     expect(targets.targets[0].target_kind).toBe('brief')
+
+    // The exact brief content matches the fixture's deterministic save_brief call.
+    const briefRes = await apiGet(`/api/drafts/${draft.id}/brief`)
+    expect(briefRes.ok).toBe(true)
+    const brief = (await briefRes.json()) as { summary?: string; assignment_type?: string }
+    expect(brief.summary).toBe(
+      'An acceptance-test essay on thermodynamics for the Fall 2026 readiness pass.',
+    )
+    expect(brief.assignment_type).toBe('essay')
 
     // Retry must be refused by PLA-310 because E already landed, with the structured code.
     const retryRes = await fetch(`${BACKEND}/api/drafts/${draft.id}/chat/${session.id}/retry`, {
@@ -348,16 +370,22 @@ test.describe('Writing', () => {
     const retryBody = (await retryRes.json()) as { code?: string }
     expect(retryBody.code).toBe('writer_retry_has_effects')
 
-    // No second model/tool execution duplicated E: still exactly one target on the attempt.
+    // No second model/tool execution duplicated E: still exactly one target on the attempt,
+    // and the model was NOT called again (the retry was refused before any model invocation).
     const targets2Res = await fetch(`${BACKEND}/_acceptance/writer-attempt-targets/${attemptId}`, {
       headers: { 'X-Lyra-Client': 'acceptance-test' },
     })
     const targets2 = (await targets2Res.json()) as { targets: Array<unknown> }
     expect(targets2.targets.length).toBe(1)
+    expect((await getTutorRequests()).length).toBe(modelCalls)
 
-    // E remains visible after reload (it is durable, not transient).
-    const draftAfter = await apiGet(`/api/drafts/${draft.id}`)
-    expect(draftAfter.ok).toBe(true)
+    // E remains visible through the product API after a simulated "reload" (re-fetch).
+    const briefAfterRetry = await apiGet(`/api/drafts/${draft.id}/brief`)
+    expect(briefAfterRetry.ok).toBe(true)
+    const briefReloaded = (await briefAfterRetry.json()) as { summary?: string }
+    expect(briefReloaded.summary).toBe(
+      'An acceptance-test essay on thermodynamics for the Fall 2026 readiness pass.',
+    )
   })
 
   test('browser: conflict dialog appears on stale version save', async ({ page }) => {

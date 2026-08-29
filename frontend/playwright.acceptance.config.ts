@@ -7,6 +7,11 @@
  * Next.js frontend.  Every browser request flows through the real application
  * stack, exercising the full composition.
  *
+ * Browser-support contract:
+ *   Chromium — required CI gate on every PR (ci.yml "acceptance" lane).
+ *   WebKit   — scheduled weekly on macOS (webkit-acceptance.yml), opt-in
+ *              locally via ACCEPTANCE_WEBKIT=1. Not a merge blocker.
+ *
  * Run:  pnpm test:acceptance
  * Local: ../scripts/run-acceptance.sh
  */
@@ -43,8 +48,13 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
-    // WebKit is deferred to PLA-147 (release rehearsal on supported Mac).
-    // Chromium covers the CI release gate; Safari-specific issues are
-    // documented in the PR rather than hidden behind a flaky lane.
+    ...(process.env.ACCEPTANCE_WEBKIT
+      ? [
+          {
+            name: 'webkit',
+            use: { ...devices['Desktop Safari'] },
+          },
+        ]
+      : []),
   ],
 })

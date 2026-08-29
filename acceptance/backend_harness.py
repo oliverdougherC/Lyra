@@ -203,9 +203,6 @@ class _AccountingApp:
             await self._inner(scope, receive, send)
             return
         method = str(scope.get("method", "")).upper()
-        # The acceptance control endpoints are harness plumbing, not production routes.
-        path = str(scope.get("path", ""))
-        is_control = path.startswith("/_acceptance/")
         status_seen: dict[str, int] = {}
 
         async def send_wrapper(message):
@@ -216,20 +213,16 @@ class _AccountingApp:
         try:
             await self._inner(scope, receive, send_wrapper)
         except Exception as exc:
-            # An exception escaping the app is an unhandled request failure by
-            # definition. Record it, then re-raise so the server's normal error
-            # handling (and its 5xx response) still happens.
-            if not is_control:
-                failure_accounting.record(
-                    method=method,
-                    route=_privacy_safe_route(scope),
-                    kind="unhandled_exception",
-                    status=status_seen.get("status"),
-                    exc_type=type(exc).__name__,
-                )
+            failure_accounting.record(
+                method=method,
+                route=_privacy_safe_route(scope),
+                kind="unhandled_exception",
+                status=status_seen.get("status"),
+                exc_type=type(exc).__name__,
+            )
             raise
         status = status_seen.get("status")
-        if not is_control and status is not None and 500 <= status < 600:
+        if status is not None and 500 <= status < 600:
             failure_accounting.record(
                 method=method,
                 route=_privacy_safe_route(scope),
@@ -255,6 +248,17 @@ from fastapi.responses import JSONResponse  # noqa: E402
 async def _get_backend_failures() -> JSONResponse:
     """Snapshot of the failure ledger (bounded, privacy-safe)."""
     return JSONResponse(failure_accounting.snapshot())
+
+
+@_production_app.post("/_acceptance/backend-failures/probe")
+async def _probe_backend_failure() -> JSONResponse:
+    """Deliberately produce one unhandled 500 for the accounting self-test.
+
+    The accounting layer (which no longer excludes /_acceptance/ routes) records
+    this as an unhandled_exception. The self-test then consumes it to prove the
+    accounting machinery is live.
+    """
+    raise RuntimeError("Deliberate acceptance accounting probe")
 
 
 @_production_app.post("/_acceptance/backend-failures/consume")
@@ -377,7 +381,7 @@ async def _start_helper(request: Request) -> JSONResponse:
     try:
         helper.start()
     except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+        return JSONResponse({"ok": False, "error": str(exc)})
     _fake_helper_instance = helper
     pid = helper._process.pid if helper._process else None
     token = _process_start_token(pid) if pid else None
@@ -732,7 +736,7 @@ async def _scenario_kill_foreign() -> JSONResponse:
     global _scn_foreign
     if _scn_foreign is None:
         return JSONResponse({"ok": True, "was_running": False})
-    await asyncio.to_thread(_stop_tree, _scn_foreign, True)
+    await asyncio.to_thread(_stop_tree, _scn_foreign, kill=True)
     _scn_foreign = None
     return JSONResponse({"ok": True, "was_running": True})
 

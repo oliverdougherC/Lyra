@@ -15,14 +15,46 @@
  */
 
 import { test, expect } from '@playwright/test'
-import { apiGet } from './helpers'
+import { apiGet, apiPost } from './helpers'
 
 test.describe('PLA-292 acceptance gate', () => {
+  test('accounting layer is live: probe -> record -> inspect -> consume -> clear', async () => {
+    const before = await (await apiGet('/_acceptance/backend-failures')).json()
+    const baseTotal = before.total_recorded as number
+    const baseUnconsumed = before.unconsumed_count as number
+
+    const probeRes = await apiPost('/_acceptance/backend-failures/probe')
+    expect(probeRes.status).toBe(500)
+
+    const after = await (await apiGet('/_acceptance/backend-failures')).json()
+    expect(after.total_recorded).toBe(baseTotal + 1)
+    expect(after.unconsumed_count).toBe(baseUnconsumed + 1)
+
+    const recorded = (after.unconsumed as Array<Record<string, unknown>>).find(
+      (f) => f.exc_type === 'RuntimeError' && f.route === '/_acceptance/backend-failures/probe',
+    )
+    expect(recorded, 'probe failure should appear in the ledger with bounded metadata').toBeTruthy()
+    expect(recorded!.kind).toBe('unhandled_exception')
+    expect(recorded!.method).toBe('POST')
+    expect(typeof recorded!.id).toBe('number')
+    expect(typeof recorded!.at).toBe('number')
+
+    const consumeRes = await apiPost('/_acceptance/backend-failures/consume', {
+      failure_id: recorded!.id,
+    })
+    expect(consumeRes.ok).toBe(true)
+    const consumeBody = await consumeRes.json()
+    expect(consumeBody.ok).toBe(true)
+
+    const final = await (await apiGet('/_acceptance/backend-failures')).json()
+    expect(final.unconsumed_count).toBe(baseUnconsumed)
+    expect(final.total_recorded).toBe(baseTotal + 1)
+    expect(final.consumed).toBe(before.consumed + 1)
+  })
+
   test('zero unexpected backend failures across the whole suite', async () => {
     const snap = await (await apiGet('/_acceptance/backend-failures')).json()
 
-    // Bounded, privacy-safe diagnostic: method + route template + status/exception class.
-    // No student content, paths, bodies, or credentials are ever in the ledger.
     if (snap.unconsumed_count > 0) {
       const lines = snap.unconsumed.slice(0, 10).map((f: Record<string, unknown>) => {
         return `  - [${f.method}] ${f.route} -> ${f.kind} status=${f.status ?? '-'} exc=${f.exc_type ?? '-'}`
@@ -36,9 +68,9 @@ test.describe('PLA-292 acceptance gate', () => {
       )
     }
 
-    // Sanity: the accounting layer was actually active (it recorded and consumed the
-    // expected failures the suite intentionally produced), so "zero unconsumed" is a real
-    // assertion, not a no-op because the ledger never turned on.
-    expect(snap.total_recorded).toBeGreaterThanOrEqual(0)
+    expect(
+      snap.total_recorded,
+      'accounting layer must have recorded at least the self-test probe',
+    ).toBeGreaterThan(0)
   })
 })
