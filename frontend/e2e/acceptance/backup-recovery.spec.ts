@@ -425,6 +425,18 @@ print(json.dumps({
     const saveBody = (await saveRes.json()) as { version: number }
     expect(saveBody.version).toBe(1)
 
+    // Persisted settings: write a harmless DB-backed setting with a distinctive value
+    // and record the backup-time reading. `context_window` lives in the settings row of
+    // the backed-up SQLite database (not in the keychain, which the backup contract does
+    // not cover), so the restored backend must reproduce this exact value.
+    const backupTimeContextWindow = 6144
+    const settingsPut = await apiPut('/api/settings', { context_window: backupTimeContextWindow })
+    expect(settingsPut.ok).toBe(true)
+    const backupTimeSettings = (await (await apiGet('/api/settings')).json()) as {
+      context_window: number
+    }
+    expect(backupTimeSettings.context_window).toBe(backupTimeContextWindow)
+
     // Back up the live data directory through the real launcher backup().
     const state = await readAcceptanceState()
     expect(state).toBeTruthy()
@@ -461,6 +473,14 @@ sys.exit(rc)
       expected_version: 1,
       snapshot: false,
     })
+    // Settings mutation after backup: the live backend must expose the changed value,
+    // so the restored backend's backup-time value below cannot come from live state.
+    const postBackupContextWindow = 2048
+    await apiPut('/api/settings', { context_window: postBackupContextWindow })
+    const mutatedSettings = (await (await apiGet('/api/settings')).json()) as {
+      context_window: number
+    }
+    expect(mutatedSettings.context_window).toBe(postBackupContextWindow)
 
     // Restore the archive into a FRESH data directory through the real launcher restore().
     const restoreDir = join(backupDir, 'restored-data')
@@ -570,6 +590,13 @@ sys.exit(rc)
       expect(draftBody.body).not.toContain('CORRUPTED')
       expect(draftBody.body_version).toBe(1)
 
+      // Persisted settings expose the BACKUP-TIME value, not the post-backup mutation.
+      const restoredSettingsRes = await fetch(`${drBase}/api/settings`, { headers: H })
+      expect(restoredSettingsRes.status).toBe(200)
+      const restoredSettings = (await restoredSettingsRes.json()) as { context_window: number }
+      expect(restoredSettings.context_window).toBe(backupTimeContextWindow)
+      expect(restoredSettings.context_window).not.toBe(postBackupContextWindow)
+
       // The snapshot revision survived the round trip.
       if (draftBody.part_id) {
         const revsRes = await fetch(
@@ -582,6 +609,9 @@ sys.exit(rc)
         expect(revisions.some((r) => r.note === 'Pre-disaster baseline')).toBe(true)
       }
     } finally {
+      // Return the LIVE backend's setting to the suite-wide baseline so later specs
+      // never observe this test's deliberate post-backup mutation.
+      await apiPut('/api/settings', { context_window: 8192 })
       if (proc.pid) {
         try {
           process.kill(-proc.pid, 'SIGTERM')

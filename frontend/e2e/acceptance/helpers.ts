@@ -519,7 +519,7 @@ export async function readAcceptanceState(): Promise<{
  * Used by restart-reconciliation tests.
  */
 export async function restartBackend(): Promise<void> {
-  const { spawn } = await import('node:child_process')
+  const { execSync, spawn } = await import('node:child_process')
   const { readdir, readFile, writeFile } = await import('node:fs/promises')
   const { resolve, join } = await import('node:path')
   const projectRoot = resolve(__dirname, '..', '..', '..')
@@ -600,6 +600,10 @@ export async function restartBackend(): Promise<void> {
   backendEnv.LYRA_PORT = String(state.backendPort)
   backendEnv.PYTHONDONTWRITEBYTECODE = '1'
 
+  // stdio is fully ignored: this worker process exits when its tests finish, and a piped
+  // stdout/stderr that nobody drains would fill its 64KB buffer and block the backend
+  // mid-suite (or EPIPE it when the worker exits). The replacement's logs are lost, but
+  // the backend-failure ledger still records anything that matters.
   const newBackend = spawn(
     'uv',
     [
@@ -618,45 +622,72 @@ export async function restartBackend(): Promise<void> {
     {
       cwd: projectRoot,
       env: backendEnv as NodeJS.ProcessEnv,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'ignore', 'ignore'],
       detached: true,
     },
   )
+  if (!newBackend.pid) throw new Error('restartBackend: replacement backend did not spawn')
 
   // Wait for the new backend to be ready (its helper is up and the app reports ready).
+  let becameReady = false
   const readyDeadline = Date.now() + 60_000
   while (Date.now() < readyDeadline) {
     try {
       const res = await fetch(`http://127.0.0.1:${state.backendPort}/api/health/ready`, {
         signal: AbortSignal.timeout(2000),
       })
-      if (res.ok) break
+      if (res.ok) {
+        becameReady = true
+        break
+      }
     } catch {
       // not ready yet
     }
     await sleep(500)
   }
+  if (!becameReady) {
+    throw new Error('restartBackend: replacement backend never became ready')
+  }
 
-  // Update the state file and globalThis with the new PID
+  // Persist the replacement's identity. The state FILE is authoritative for the current
+  // backend lifetime: this function runs in a Playwright WORKER process, so global
+  // teardown's in-memory ChildProcess (held by the setup/teardown process) can never be
+  // updated from here -- teardown must read this file and, on a PID change, own the
+  // replacement instead of the stale original. The birth token is REAL (same `ps lstart`
+  // format setup/teardown use) so teardown keeps PID-reuse safety across the handoff.
+  // Detached spawn makes the replacement its own process-group leader (pgid == pid).
+  const newToken = (() => {
+    try {
+      return execSync(`ps -p ${newBackend.pid} -o lstart=`, {
+        encoding: 'utf-8',
+        timeout: 2000,
+      }).trim()
+    } catch {
+      return null
+    }
+  })()
+  if (!newToken) {
+    throw new Error(
+      `restartBackend: could not read birth token for replacement backend pid ${newBackend.pid}`,
+    )
+  }
+
   const entries = await readdir(projectRoot)
   const stateFiles = entries.filter(
     (e) => e.startsWith('.acceptance-state-') && e.endsWith('.json'),
   )
-  if (stateFiles.length > 0) {
-    const filePath = join(projectRoot, stateFiles[0])
-    const raw = await readFile(filePath, 'utf-8')
-    const stateObj = JSON.parse(raw)
-    stateObj.backendPid = newBackend.pid
-    stateObj.backendStartToken = null
-    await writeFile(filePath, JSON.stringify(stateObj))
+  if (stateFiles.length === 0) {
+    throw new Error('restartBackend: acceptance state file disappeared; cannot record ownership')
   }
+  const filePath = join(projectRoot, stateFiles[0])
+  const raw = await readFile(filePath, 'utf-8')
+  const stateObj = JSON.parse(raw)
+  stateObj.backendPid = newBackend.pid
+  stateObj.backendStartToken = newToken
+  await writeFile(filePath, JSON.stringify(stateObj))
 
-  // Update in-memory state if available
-  const mem = (globalThis as Record<string, unknown>).__acceptanceState as
-    { backend: import('node:child_process').ChildProcess } | undefined
-  if (mem) {
-    mem.backend = newBackend
-  }
+  // Let the worker exit without waiting on the detached replacement.
+  newBackend.unref()
 }
 
 function isAlive(pid: number): boolean {

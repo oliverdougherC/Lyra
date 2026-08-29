@@ -324,10 +324,13 @@ class FakeHelperServer(LlamaServer):
         return _FAKE_HELPER_PATH
 
     def _argv(self, binary: Path) -> list[str]:
+        # The interpreter directly, not `uv run python`: fake-helper.py is stdlib-only,
+        # and the extra wrapper layer makes the recorded/owned PID a `uv` process whose
+        # real listener is a grandchild -- an unnecessary difference from the production
+        # llama-server shape (owned PID == serving process) that only complicates
+        # ownership assertions and reaping.
         args = [
-            "uv",
-            "run",
-            "python",
+            sys.executable,
             str(_FAKE_HELPER_PATH),
             "--port",
             str(self.port),
@@ -580,6 +583,33 @@ def _fresh_supervisor(display_name: str, model: str) -> FakeHelperServer:
     return FakeHelperServer(model_name=model, display_name=display_name)
 
 
+def _reap_dropped_child(process: "subprocess.Popen[bytes]") -> None:
+    """Fixture-only reaping for a crash-simulated supervisor's child.
+
+    The crash simulation drops the supervisor OBJECT inside this still-running Python
+    process, so the helper child keeps this process as its parent. After a genuinely
+    dead parent, init would reap the child the moment it exits; without that, the child
+    lingers as a ZOMBIE here -- its birth token still resolves, so production stop()
+    truthfully reports 'survived termination' and preserves the ownership record even
+    though the process is dead. A daemon thread blocking in wait() reproduces init's
+    reaping without touching any production ownership/adoption decision.
+    """
+    with contextlib.suppress(Exception):
+        process.wait()
+
+
+def _orphan_dropped_supervisor(sup: "FakeHelperServer") -> None:
+    """Make the crash simulation faithful before dropping a supervisor object."""
+    process = sup._process
+    if process is not None and process.poll() is None:
+        threading.Thread(
+            target=_reap_dropped_child,
+            args=(process,),
+            name="acceptance-dropped-child-reaper",
+            daemon=True,
+        ).start()
+
+
 @_production_app.post("/_acceptance/scenario/ensure-running")
 async def _scenario_ensure_running(request: Request) -> JSONResponse:
     """Run ensure_running() on a fresh production supervisor and report its decision.
@@ -599,7 +629,12 @@ async def _scenario_ensure_running(request: Request) -> JSONResponse:
         if reset_previous:
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(_scn_supervisor.stop)
-        # else: drop the reference without stopping -- its child survives (crash sim).
+        else:
+            # Drop the reference without stopping -- its child survives (crash sim).
+            # Hand the child to a fixture-only reaper first so it cannot linger as a
+            # zombie of this process once a later production stop() kills it (a real
+            # crashed parent's child would be reaped by init).
+            _orphan_dropped_supervisor(_scn_supervisor)
         _scn_supervisor = None
     sup = _fresh_supervisor(display_name, model)
     _scn_supervisor = sup
@@ -681,6 +716,17 @@ async def _scenario_kill_port() -> JSONResponse:
 
     killed = await asyncio.to_thread(_kill_until_free)
     return JSONResponse({"ok": True, "killed": killed})
+
+
+@_production_app.get("/_acceptance/scenario/record/{display_name}")
+async def _scenario_record(display_name: str) -> JSONResponse:
+    """Read the EXACT durable ownership record for a scenario display name.
+
+    The helper/status endpoint reports the record for "acceptance-helper" only; the
+    PLA-301 scenario tests own records under "acc-scenario", so their final
+    cleaned/reconciled assertions must read that exact record, not a neighbor's.
+    """
+    return JSONResponse({"ownership_record": _read_server_record(display_name)})
 
 
 @_production_app.get("/_acceptance/scenario/pid-alive/{pid}")

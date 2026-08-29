@@ -89,6 +89,12 @@ async function pidAlive(pid: number): Promise<boolean> {
   return Boolean(res.alive)
 }
 
+/** Read the EXACT durable ownership record for a scenario display name. */
+async function scenarioRecord(displayName: string): Promise<Record<string, unknown> | null> {
+  const res = await j('GET', `/_acceptance/scenario/record/${displayName}`)
+  return (res.ownership_record ?? null) as Record<string, unknown> | null
+}
+
 /** True when nothing is serving the helper port (the reclaim signal). */
 async function portNotServing(): Promise<boolean> {
   try {
@@ -151,6 +157,13 @@ test.describe('Helper supervision decisions (PLA-301)', () => {
     const firstPid = start.spawned_pid as number
     expect(firstPid).toBeTruthy()
 
+    // The EXACT acc-scenario ownership record exists and points at the owned process.
+    // (With the direct-interpreter spawn, the owned PID IS the serving listener.)
+    const recordAfterStart = await scenarioRecord('acc-scenario')
+    expect(recordAfterStart).not.toBeNull()
+    expect(recordAfterStart!.pid).toBe(firstPid)
+    expect(recordAfterStart!.model).toBe('adopt-model')
+
     // Simulate a backend crash WITHOUT graceful supervisor shutdown: the supervisor
     // object is dropped but its helper -- an independent process group with a durable
     // ownership record -- survives. A fresh production supervisor now runs
@@ -167,15 +180,8 @@ test.describe('Helper supervision decisions (PLA-301)', () => {
     expect(models.data.length).toBe(1)
 
     // Production stop() reclaims the adopted survivor. The termination path SIGTERMs the group,
-    // waits up to a 5s grace period, then SIGKILLs; under full-suite load that can take longer than
-    // a fixed sleep, so poll for the RECLAIM rather than asserting on one point in time.
-    //
-    // We assert on production-faithful signals, NOT a bare PID liveness check: `spawned_pid` is
-    // the `uv run python` wrapper PID (the real listener is its child), and on a busy machine that
-    // PID can be recycled by an unrelated process, making os.kill(pid,0) a false positive. The two
-    // authoritative signals that stop() reclaimed it are (a) the helper port stops serving, and
-    // (b) the durable ownership record is removed -- which production only does after confirming
-    // death via the birth token.
+    // waits up to a 5s grace period, then SIGKILLs; under full-suite load that can take longer
+    // than a fixed sleep, so poll for the RECLAIM rather than asserting on one point in time.
     await scenarioStop()
     const deadline = Date.now() + 15_000
     let portFree = false
@@ -187,9 +193,25 @@ test.describe('Helper supervision decisions (PLA-301)', () => {
       await sleep(250)
     }
     expect(portFree).toBe(true)
-    // The durable record is gone: production removed it only after confirming the process dead.
-    const status = await j('GET', '/_acceptance/helper/status')
-    expect(status.ownership_record ?? null).toBeNull()
+
+    // The owned process itself is dead -- not merely no longer serving. Poll briefly:
+    // the fixture reaper collects the crash-simulated child within milliseconds of the
+    // kill, but the PID only leaves the process table once that wait() completes.
+    let ownedDead = false
+    const pidDeadline = Date.now() + 5_000
+    while (Date.now() < pidDeadline) {
+      if (!(await pidAlive(firstPid))) {
+        ownedDead = true
+        break
+      }
+      await sleep(100)
+    }
+    expect(ownedDead).toBe(true)
+
+    // The EXACT acc-scenario durable record is gone: production removes it only after
+    // confirming death via the birth token. (Asserting /_acceptance/helper/status here
+    // would read the unrelated "acceptance-helper" record and prove nothing.)
+    expect(await scenarioRecord('acc-scenario')).toBeNull()
   })
 
   test('stale ownership: wrong birth token for a live foreign PID is not claimed or killed', async () => {

@@ -63,9 +63,47 @@ export default async function globalTeardown() {
     console.log('  Could not query backend failure ledger (backend may already be down)')
   }
 
+  const frontendPort = Number(process.env.ACCEPTANCE_FRONTEND_PORT ?? 3000)
+
   if (mem) {
-    await killAndWait(mem.frontend, 'frontend')
-    await killAndWait(mem.backend, 'backend')
+    // The persisted state file is authoritative for the CURRENT backend/frontend
+    // lifetime. An in-suite restartBackend() runs inside a Playwright WORKER process:
+    // it can replace the process and update the file, but it can never update this
+    // (setup/teardown) process's ChildProcess references. If the file records a
+    // different PID than the in-memory object, the in-memory object is stale -- its
+    // process is already dead -- and the file's PID (verified by birth token) owns the
+    // replacement. Preferring the stale object here is exactly how the replacement
+    // backend previously escaped ownership and had to be swept as an orphan.
+    const persisted = await readPersistedState(mem.stateFile)
+
+    if (persisted && mem.frontend?.pid && persisted.frontendPid !== mem.frontend.pid) {
+      console.log(
+        `  frontend pid changed in-suite (${mem.frontend.pid} -> ${persisted.frontendPid}); using persisted state`,
+      )
+      await verifyAndKill(persisted.frontendPid, persisted.frontendStartToken, 'frontend')
+    } else {
+      await killAndWait(mem.frontend, 'frontend')
+    }
+
+    if (persisted && mem.backend?.pid && persisted.backendPid !== mem.backend.pid) {
+      console.log(
+        `  backend was restarted in-suite (pid ${mem.backend.pid} -> ${persisted.backendPid}); using persisted state`,
+      )
+      await verifyAndKill(persisted.backendPid, persisted.backendStartToken, 'backend')
+    } else {
+      await killAndWait(mem.backend, 'backend')
+    }
+
+    // Prove the stop, don't assume it: the owned ports must stop serving and no member
+    // of the owned process groups (detached leaders, so pgid == recorded pid) may remain.
+    await verifyPortStopped(backendPort, 'backend', failures)
+    await verifyPortStopped(frontendPort, 'frontend', failures)
+    const ownedPgids = [
+      persisted?.backendPid ?? mem.backend?.pid,
+      persisted?.frontendPid ?? mem.frontend?.pid,
+    ].filter((p): p is number => typeof p === 'number')
+    verifyNoGroupMembers(ownedPgids, failures)
+
     try {
       await mem.tutor.stop()
       console.log('  Tutor fixture stopped')
@@ -165,6 +203,83 @@ async function sweepOrphanedFixtures(): Promise<number> {
   }
 
   return orphans.length
+}
+
+/* ------------------------------------------------------------------ */
+/*  Persisted state (authoritative for in-suite restarts)              */
+/* ------------------------------------------------------------------ */
+
+interface PersistedState {
+  dataDir: string
+  backendPid: number
+  frontendPid: number
+  backendStartToken: string | null
+  frontendStartToken: string | null
+}
+
+async function readPersistedState(path: string): Promise<PersistedState | null> {
+  try {
+    const raw = await readFile(path, 'utf-8')
+    return JSON.parse(raw) as PersistedState
+  } catch {
+    return null
+  }
+}
+
+/** Fail teardown if the given port is still serving after the owned process was stopped. */
+async function verifyPortStopped(port: number, label: string, failures: string[]): Promise<void> {
+  const deadline = Date.now() + 5_000
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1000) })
+      void res.body?.cancel()
+    } catch {
+      console.log(`  ${label} port ${port} no longer served`)
+      return
+    }
+    await sleep(250)
+  }
+  failures.push(`${label} port ${port} is still serving after teardown stop`)
+}
+
+/**
+ * Fail teardown if any process still belongs to an owned process group. The owned
+ * children were spawned detached (pgid == recorded leader pid), so a surviving member
+ * means the group signal did not reclaim the whole tree. Matching is restricted to
+ * fixture-shaped commands so a recycled pgid can never implicate an unrelated process.
+ */
+function verifyNoGroupMembers(pgids: number[], failures: string[]): void {
+  if (pgids.length === 0) return
+  let listing: string
+  try {
+    listing = execSync('ps -axww -o pid=,pgid=,command=', { encoding: 'utf-8', timeout: 5000 })
+  } catch {
+    return
+  }
+  const fixtureShapes = [
+    'acceptance.backend_harness:app',
+    'e2e/acceptance/fake-helper.py',
+    'uvicorn',
+    'next start',
+    'next-server',
+  ]
+  const survivors: string[] = []
+  for (const line of listing.split('\n')) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)
+    if (!m) continue
+    const [, pidStr, pgidStr, command] = m
+    if (Number(pidStr) === process.pid) continue
+    if (!pgids.includes(Number(pgidStr))) continue
+    if (!fixtureShapes.some((s) => command.includes(s))) continue
+    survivors.push(`pid ${pidStr} (pgid ${pgidStr}): ${command.slice(0, 120)}`)
+  }
+  if (survivors.length > 0) {
+    failures.push(
+      `${survivors.length} owned process-group member(s) survived teardown:\n    ${survivors.join('\n    ')}`,
+    )
+  } else {
+    console.log('  No owned process-group members remain')
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -273,6 +388,12 @@ async function killAndWait(
 /**
  * Verify that a PID from the state file still belongs to the process we
  * started (by comparing its birth token) before signalling it.
+ *
+ * Signals the whole process GROUP (-pid): every fixture recorded in the state file was
+ * spawned detached, so its pid is a group leader (pgid == pid) and the real uvicorn
+ * python / next worker grandchildren live in that group. Signalling the wrapper pid
+ * alone orphans them -- the exact leak the zero-orphan gate forbids. Falls back to the
+ * bare pid if the group is already gone.
  */
 async function verifyAndKill(
   pid: number,
@@ -292,13 +413,25 @@ async function verifyAndKill(
     }
   }
 
-  try {
-    process.kill(pid, 'SIGTERM')
-    console.log(`  Sent SIGTERM to ${label} (pid ${pid})`)
-  } catch {
+  const signalGroup = (sig: NodeJS.Signals): boolean => {
+    try {
+      process.kill(-pid, sig)
+      return true
+    } catch {
+      try {
+        process.kill(pid, sig)
+        return true
+      } catch {
+        return false
+      }
+    }
+  }
+
+  if (!signalGroup('SIGTERM')) {
     console.log(`  ${label} (pid ${pid}) already stopped`)
     return
   }
+  console.log(`  Sent SIGTERM to ${label} group (pid ${pid})`)
 
   const deadline = Date.now() + SIGTERM_WAIT_MS
   while (Date.now() < deadline) {
@@ -310,11 +443,7 @@ async function verifyAndKill(
   }
 
   console.log(`  ${label} did not exit after SIGTERM, sending SIGKILL`)
-  try {
-    process.kill(pid, 'SIGKILL')
-  } catch {
-    /* already gone */
-  }
+  signalGroup('SIGKILL')
 
   const killDeadline = Date.now() + SIGKILL_WAIT_MS
   while (Date.now() < killDeadline) {
