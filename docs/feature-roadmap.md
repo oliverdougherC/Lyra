@@ -118,8 +118,8 @@ making the product that already exists dependable during real study sessions.
 ### 4. Correctness and safety hardening
 
 A comprehensive code review in August 2026 identified school-readiness defects across the
-product surface. All were fixed, merged to `main`, and covered by deterministic tests in CI
-Gate. Linear tracks the individual issues.
+product surface. The release-blocking findings summarized below were fixed, merged to `main`,
+and covered by deterministic tests in CI Gate. Linear tracks the individual issues.
 
 - [x] Helper-process supervision: health-aware lifecycle, adopted-process reclamation, and clean
   shutdown.
@@ -193,7 +193,7 @@ Linear is the detailed state source of truth for open issues and blockers. The c
 sequence is:
 
 1. Complete and retain the real model-backed PLA-149 school-machine class-scale baseline.
-2. Confirm every Fall 2026 High/Urgent release blocker is closed.
+2. Confirm every other Fall 2026 High/Urgent blocker that must precede the soak is closed.
 3. Select one exact merged `main` SHA as the release candidate.
 4. Run PLA-147's supported-Mac release-candidate soak on that exact SHA.
 
