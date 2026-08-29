@@ -606,7 +606,6 @@ export function ChatPane({
           toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
           if (submittedTextRef.current !== null) {
             setDraft(submittedTextRef.current)
-            submittedTextRef.current = null
           }
           setOutcome('failed')
         }

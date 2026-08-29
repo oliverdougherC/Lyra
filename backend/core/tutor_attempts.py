@@ -133,6 +133,19 @@ def stop_attempt(conn: sqlite3.Connection, attempt_id: int, *, detail: str) -> N
     conn.commit()
 
 
+def find_completed_attempt(
+    conn: sqlite3.Connection, user_message_id: int
+) -> dict[str, object] | None:
+    """The most recent completed attempt on a user message, or None."""
+    row = conn.execute(
+        "select * from tutor_turn_attempts "
+        "where user_message_id = ? and state = ? "
+        "order by id desc limit 1",
+        (user_message_id, COMPLETED),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
 def latest_attempt_for_message(
     conn: sqlite3.Connection, user_message_id: int
 ) -> dict[str, object] | None:

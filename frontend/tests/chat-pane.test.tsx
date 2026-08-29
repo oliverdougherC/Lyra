@@ -861,4 +861,53 @@ describe('ChatPane idempotency (PLA-313)', () => {
     expect(secondId).toMatch(UUID_RE)
     expect(secondId).not.toBe(firstId)
   })
+
+  it('editing restored text after generic network error mints a new operation_id', async () => {
+    vi.mocked(streamChat)
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockImplementation(() => new Promise<void>(() => {}))
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+
+    await user.clear(composer)
+    await user.type(composer, 'Edited question')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const secondId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(secondId).toMatch(UUID_RE)
+    expect(secondId).not.toBe(firstId)
+  })
+
+  it('unchanged restored text after generic network error reuses the same operation_id', async () => {
+    vi.mocked(streamChat)
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockImplementation(() => new Promise<void>(() => {}))
+
+    const user = userEvent.setup()
+    renderWorkspace()
+
+    await user.type(await screen.findByLabelText('Message Lyra'), QUESTION)
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(1))
+    const firstId = vi.mocked(streamChat).mock.calls[0][1].operation_id
+
+    const composer = await screen.findByLabelText('Message Lyra')
+    await waitFor(() => expect(composer).toHaveValue(QUESTION))
+
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(streamChat).toHaveBeenCalledTimes(2))
+    const retryId = vi.mocked(streamChat).mock.calls[1][1].operation_id
+
+    expect(retryId).toBe(firstId)
+  })
 })

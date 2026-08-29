@@ -1601,3 +1601,166 @@ class TestOperationIdLogicalRequestBinding:
 
         r2 = _send_with_op(client, session_id, operation_id="op-same")
         assert r2.status_code == 200
+
+
+class TestOperationIdRetryLineage:
+    """PLA-313: operation_id must span the entire retry-attempt lineage.
+
+    Once any retry for logical operation X successfully publishes a reply, all later
+    submissions of X must replay that result with zero model calls.
+    """
+
+    def test_retry_lineage_replays_successful_retry(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """X → A fails → X → B completes with R → X → replay R."""
+        call_count = 0
+
+        def _counting_fail() -> StreamFactory:
+            async def stream(*a: object, **kw: object) -> AsyncIterator[StreamDelta]:
+                nonlocal call_count
+                call_count += 1
+                raise UpstreamError("Connection refused")
+                yield  # noqa: RET503  # type: ignore[misc]
+
+            return stream
+
+        def _counting_succeed(text: str) -> StreamFactory:
+            async def stream(*a: object, **kw: object) -> AsyncIterator[StreamDelta]:
+                nonlocal call_count
+                call_count += 1
+                yield StreamDelta("answer", text)
+
+            return stream
+
+        # Step 1: attempt A fails
+        monkeypatch.setattr(routes_chat, "stream_chat", _counting_fail())
+        r1 = _send_with_op(client, session_id, operation_id="lineage-1")
+        assert r1.status_code == 200
+        _ = r1.text
+        assert call_count == 1
+
+        # Step 2: retry B succeeds with "Reply R"
+        monkeypatch.setattr(routes_chat, "stream_chat", _counting_succeed("Reply R"))
+        r2 = _send_with_op(client, session_id, operation_id="lineage-1")
+        assert r2.status_code == 200
+        _ = r2.text
+        assert call_count == 2
+
+        # Step 3: same X again — must replay R with zero additional model calls
+        r3 = _send_with_op(client, session_id, operation_id="lineage-1")
+        assert r3.status_code == 200
+        frames = _parse_frames(r3)
+        token_texts = [f["text"] for f in frames if f["type"] == "token"]
+        assert "".join(token_texts) == "Reply R"
+        assert call_count == 2, "replay must not call the model a third time"
+
+        # Verify durable state
+        conn = connect()
+        try:
+            user_msgs = conn.execute(
+                "select id from messages where session_id = ? and role = 'user'",
+                (session_id,),
+            ).fetchall()
+            assert len(user_msgs) == 1, "exactly one durable user question"
+
+            attempts = conn.execute(
+                "select id, state from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchall()
+            assert len(attempts) == 2, "A (failed) + B (completed), no attempt C"
+
+            completed = [a for a in attempts if a["state"] == "completed"]
+            assert len(completed) == 1, "exactly one authoritative completed attempt"
+        finally:
+            conn.close()
+
+    def test_all_failed_allows_next_retry(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed → B failed → X may create legitimate next retry C."""
+        call_count = 0
+
+        def _counting_fail() -> StreamFactory:
+            async def stream(*a: object, **kw: object) -> AsyncIterator[StreamDelta]:
+                nonlocal call_count
+                call_count += 1
+                raise UpstreamError("Connection refused")
+                yield  # noqa: RET503  # type: ignore[misc]
+
+            return stream
+
+        # A fails
+        monkeypatch.setattr(routes_chat, "stream_chat", _counting_fail())
+        _send_with_op(client, session_id, operation_id="lineage-all-fail")
+        _ = client.get(f"/api/sessions/{session_id}/messages").json()
+        assert call_count == 1
+
+        # B also fails (retry of same op)
+        _send_with_op(client, session_id, operation_id="lineage-all-fail")
+        assert call_count == 2
+
+        # C: next retry is allowed because no attempt ever completed
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Finally."))
+        r3 = _send_with_op(client, session_id, operation_id="lineage-all-fail")
+        assert r3.status_code == 200
+        frames = _parse_frames(r3)
+        token_texts = [f["text"] for f in frames if f["type"] == "token"]
+        assert "".join(token_texts) == "Finally."
+
+        conn = connect()
+        try:
+            attempts = conn.execute(
+                "select id, state from tutor_turn_attempts where session_id = ?",
+                (session_id,),
+            ).fetchall()
+            assert len(attempts) == 3, "A + B (failed) + C (completed)"
+            assert sum(1 for a in attempts if a["state"] == "completed") == 1
+        finally:
+            conn.close()
+
+    def test_running_retry_blocks_duplicate(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed → B currently running → duplicate X does not create competing C."""
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_fail_immediately())
+        r1 = _send_with_op(client, session_id, operation_id="lineage-run")
+        assert r1.status_code == 200
+        _ = r1.text
+
+        # Simulate a running retry: insert attempt B directly in the DB
+        conn = connect()
+        try:
+            orig = conn.execute(
+                "select user_message_id from tutor_turn_attempts "
+                "where session_id = ? and operation_id = 'lineage-run'",
+                (session_id,),
+            ).fetchone()
+            conn.execute(
+                "insert into tutor_turn_attempts "
+                "(session_id, user_message_id, state, mode) "
+                "values (?, ?, 'running', 'guide')",
+                (session_id, orig["user_message_id"]),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        r2 = _send_with_op(client, session_id, operation_id="lineage-run")
+        assert r2.status_code == 409
+
+    def test_mismatch_still_rejected_after_retry(
+        self, client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Content mismatch is rejected even when the original attempt failed."""
+        monkeypatch.setattr(routes_chat, "stream_chat", _stream_fail_immediately())
+        r1 = _send_with_op(
+            client, session_id, content="original question", operation_id="lineage-mm"
+        )
+        assert r1.status_code == 200
+        _ = r1.text
+
+        r2 = _send_with_op(
+            client, session_id, content="different question", operation_id="lineage-mm"
+        )
+        assert r2.status_code == 409

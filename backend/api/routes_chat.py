@@ -873,8 +873,6 @@ def _open_turn(
             existing = tutor_attempts.find_by_operation_id(conn, session_id, request.operation_id)
             if existing is not None:
                 user_message_id = existing["user_message_id"]
-                attempt_id = existing["attempt_id"]
-                attempt_state = existing["state"]
 
                 # PLA-313 blocker 2: the operation_id is bound to the logical request
                 # that created it. A resubmit with different content/mode/document is
@@ -898,12 +896,13 @@ def _open_turn(
                 sessions.bind_turn(session_id, turn_token, user_message_id)
                 touch_class(conn, int(session["class_id"]))
 
-                if attempt_state == "completed":
-                    # PLA-313 blocker 1: the prior attempt already finished — replay
-                    # its stored reply with zero model calls, zero new messages, zero
-                    # new attempts. Return the content string; send_chat routes it to
-                    # _replay_turn.
-                    asst_id = existing.get("assistant_message_id")
+                # PLA-313: inspect the entire attempt lineage for this user
+                # message, not just the original attempt that carries the
+                # operation_id.  A retry attempt (operation_id=None) may have
+                # completed after the original failed/stopped.
+                completed = tutor_attempts.find_completed_attempt(conn, user_message_id)
+                if completed is not None:
+                    asst_id = completed.get("assistant_message_id")
                     reply_row = (
                         conn.execute(
                             "select content from messages where id = ?",
@@ -914,8 +913,12 @@ def _open_turn(
                     )
                     return str(reply_row["content"]) if reply_row else ""
 
-                # The prior attempt was running/failed/stopped; create a fresh attempt
-                # on the same user message (the retry path).
+                latest = tutor_attempts.latest_attempt_for_message(conn, user_message_id)
+                if latest is not None and str(latest["state"]) == tutor_attempts.RUNNING:
+                    raise ConflictError("Another turn is still in progress on this conversation.")
+
+                # All attempts failed/stopped — create a fresh retry attempt
+                # on the same user message.
                 cost = _plan_turn_cost(
                     conn, session_id, request.mode, request.content, frozenset(), config
                 )
