@@ -16,7 +16,7 @@ from backend.core.errors import ConfigurationError
 from backend.llm import llama_server
 from backend.llm.rerank_server import RerankServer
 from backend.rag import rerank as rerank_module
-from backend.rag.rerank import rerank
+from backend.rag.rerank import RerankStatus, rerank
 
 
 @pytest.fixture
@@ -332,7 +332,9 @@ def test_startup_warms_the_reranker_without_blocking_on_it(
 def test_no_passages_is_not_a_request(installed: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """Retrieval returning nothing is normal, and asking a model to rank nothing is not."""
     monkeypatch.setattr(rerank_module.httpx, "Client", _answers({"results": []}))
-    assert rerank("anything", []) is None
+    outcome = rerank("anything", [])
+    assert outcome.scores is None
+    assert outcome.status == RerankStatus.EMPTY_INPUT
 
 
 def test_scores_come_back_in_the_order_the_passages_went_out() -> None:
@@ -383,7 +385,9 @@ def test_a_server_failure_keeps_the_search_order(
     improvement and nothing else."""
     monkeypatch.setattr(rerank_module.httpx, "Client", _answers({"error": "no"}, status=500))
 
-    assert rerank("a question", ["one", "two"]) is None
+    outcome = rerank("a question", ["one", "two"])
+    assert outcome.scores is None
+    assert outcome.status == RerankStatus.UPSTREAM_ERROR
 
 
 def test_a_runtime_that_will_not_start_keeps_the_search_order(
@@ -391,7 +395,9 @@ def test_a_runtime_that_will_not_start_keeps_the_search_order(
 ) -> None:
     monkeypatch.setattr(rerank_module, "rerank_server", _Stub(available=True, starts=False))
 
-    assert rerank("a question", ["one", "two"]) is None
+    outcome = rerank("a question", ["one", "two"])
+    assert outcome.scores is None
+    assert outcome.status == RerankStatus.START_REFUSED
 
 
 def test_the_weights_being_absent_asks_the_server_for_nothing(
@@ -405,4 +411,90 @@ def test_the_weights_being_absent_asks_the_server_for_nothing(
 
     monkeypatch.setattr(rerank_module.httpx, "Client", fail)
 
-    assert rerank("a question", ["one", "two"]) is None
+    outcome = rerank("a question", ["one", "two"])
+    assert outcome.scores is None
+    assert outcome.status == RerankStatus.WEIGHTS_ABSENT
+
+
+# ----------------------------------------------------------------- adversarial evidence tests
+
+
+def test_timeout_is_distinguished_from_other_failures(
+    installed: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A timeout must produce TIMEOUT, not the generic UPSTREAM_ERROR."""
+
+    class TimeoutClient:
+        def __enter__(self) -> "TimeoutClient":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def post(self, url: str, json: dict[str, object]) -> object:
+            raise httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(rerank_module.httpx, "Client", lambda timeout: TimeoutClient())
+
+    outcome = rerank("a question", ["one", "two"])
+    assert outcome.scores is None
+    assert outcome.status == RerankStatus.TIMEOUT
+
+
+def test_malformed_response_is_distinguished_from_success(
+    installed: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 200 response with the wrong shape must be MALFORMED_RESPONSE, not APPLIED."""
+    monkeypatch.setattr(rerank_module.httpx, "Client", _answers({"results": [{"bad": "shape"}]}))
+
+    outcome = rerank("a question", ["one", "two"])
+    assert outcome.scores is None
+    assert outcome.status == RerankStatus.MALFORMED_RESPONSE
+
+
+def test_invalid_json_is_distinguished_from_upstream_error(
+    installed: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 200 response with non-JSON body must be INVALID_JSON, not UPSTREAM_ERROR."""
+
+    class InvalidJsonClient:
+        def __enter__(self) -> "InvalidJsonClient":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def post(self, url: str, json: dict[str, object]) -> httpx.Response:
+            return httpx.Response(
+                200,
+                content=b"not json at all",
+                request=httpx.Request("POST", url),
+            )
+
+    monkeypatch.setattr(rerank_module.httpx, "Client", lambda timeout: InvalidJsonClient())
+
+    outcome = rerank("a question", ["one", "two"])
+    assert outcome.scores is None
+    assert outcome.status == RerankStatus.INVALID_JSON
+
+
+def test_successful_rerank_returns_applied(
+    installed: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A well-formed response produces APPLIED with scores."""
+    monkeypatch.setattr(
+        rerank_module.httpx,
+        "Client",
+        _answers(
+            {
+                "results": [
+                    {"index": 0, "relevance_score": 1.0},
+                    {"index": 1, "relevance_score": -2.0},
+                ]
+            }
+        ),
+    )
+
+    outcome = rerank("a question", ["one", "two"])
+    assert outcome.scores == [1.0, -2.0]
+    assert outcome.status == RerankStatus.APPLIED

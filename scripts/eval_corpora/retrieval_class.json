@@ -1,0 +1,297 @@
+{
+  "about": [
+    "Deterministic, privacy-safe corpus for class-scale retrieval evaluation.",
+    "",
+    "Self-authored. No student data, no copyrighted material. Every document is",
+    "written to expose a specific retrieval failure mode at class scale: overlapping",
+    "vocabulary across documents, near-duplicate problem/solution pairs, and",
+    "structural ambiguity between sections that use the same terminology.",
+    "",
+    "The class is a fictional Physics 201 (Classical Mechanics) course with eight",
+    "documents: a syllabus, two lecture-note chapters, two problem sets, two answer",
+    "keys, and a formula reference sheet. The vocabulary overlaps extensively by",
+    "design: every document mentions forces, acceleration, Newton's laws, and free",
+    "body diagrams, but each one says something different about them.",
+    "",
+    "Provenance: all text authored for this project, 2026-08-27.",
+    "License: same as the repository."
+  ],
+  "corpus_version": "2.0.0",
+  "class_name": "PHYS201-Eval",
+  "documents": [
+    {
+      "stem": "phys201-syllabus",
+      "filename": "PHYS201-Syllabus-Fall2026.txt",
+      "doc_type": "syllabus",
+      "text": "PHYS 201: Classical Mechanics\nFall 2026 Course Syllabus\n\nInstructor: Dr. Kenji Nakamura\nOffice: Physics Building, Room 214\nOffice Hours: Mondays and Wednesdays 3-5pm\n\nPrerequisites\nCalculus I and II (MATH 151/152). Concurrent enrollment in MATH 251 (Multivariable Calculus) is recommended.\n\nCourse Description\nThis course covers Newtonian mechanics from first principles through rotational dynamics. Topics include kinematics in one and two dimensions, Newton's three laws of motion, applications of Newton's laws including friction and circular motion, work and energy, conservation of energy, linear momentum and collisions, rotational kinematics and dynamics, and static equilibrium.\n\nRequired Text\nHalliday, Resnick, and Walker, \"Fundamentals of Physics,\" 12th edition.\n\nGrading Policy\nHomework assignments: 25%\nMidterm Exam 1 (Chapters 1-6): 20%\nMidterm Exam 2 (Chapters 7-11): 20%\nFinal Exam (comprehensive): 30%\nLab participation: 5%\n\nSchedule\nMidterm 1: 2026-10-07\nMidterm 2: 2026-11-11\nFinal Exam: 2026-12-15\nHomework is due each Thursday at 11:59pm.\n\nAcademic Integrity\nAll submitted work must be your own. Collaboration on homework is encouraged for discussion but each student must write their own solutions independently.\n\nConventions\nThis course uses SI units throughout. Vectors are written in bold or with an arrow overhead. The gravitational acceleration near Earth's surface is taken as g = 9.8 m/s^2 unless stated otherwise.\n",
+      "sections": [
+        {
+          "id": "phys201-syllabus::header",
+          "heading": "PHYS 201: Classical Mechanics",
+          "anchor": "PHYS 201: Classical Mechanics"
+        },
+        {
+          "id": "phys201-syllabus::prerequisites",
+          "heading": "Prerequisites",
+          "anchor": "Prerequisites"
+        },
+        {
+          "id": "phys201-syllabus::course-description",
+          "heading": "Course Description",
+          "anchor": "Course Description"
+        },
+        {
+          "id": "phys201-syllabus::grading-policy",
+          "heading": "Grading Policy",
+          "anchor": "Grading Policy"
+        },
+        {
+          "id": "phys201-syllabus::schedule",
+          "heading": "Schedule",
+          "anchor": "Schedule"
+        },
+        {
+          "id": "phys201-syllabus::academic-integrity",
+          "heading": "Academic Integrity",
+          "anchor": "Academic Integrity"
+        },
+        {
+          "id": "phys201-syllabus::conventions",
+          "heading": "Conventions",
+          "anchor": "Conventions"
+        }
+      ]
+    },
+    {
+      "stem": "phys201-ch3-newtons-laws",
+      "filename": "PHYS201-Chapter3-NewtonsLaws.txt",
+      "doc_type": "lecture_notes",
+      "text": "Chapter 3: Newton's Laws of Motion\n\n3.1 Newton's First Law (The Law of Inertia)\n\nAn object at rest stays at rest, and an object in motion stays in motion with the same speed and direction, unless acted upon by an unbalanced external force. This law defines what we mean by an inertial reference frame: a frame in which objects not subject to forces move in straight lines at constant speed.\n\nThe concept of inertia is distinct from weight. A bowling ball on the International Space Station is weightless but its inertia is unchanged: stopping it still requires the same force impulse as on the ground.\n\n3.2 Newton's Second Law\n\nThe acceleration of an object is directly proportional to the net force acting on it and inversely proportional to its mass:\n\n  F_net = m * a\n\nThis is the workhorse equation of mechanics. Given all the forces on an object and its mass, we can predict its acceleration, and from the acceleration we can find its velocity and position as functions of time.\n\nImportant: F_net is the VECTOR SUM of all forces. Drawing a free body diagram is the essential first step before applying Newton's second law.\n\n3.3 Newton's Third Law\n\nFor every action there is an equal and opposite reaction. When object A exerts a force on object B, object B simultaneously exerts a force equal in magnitude and opposite in direction on object A.\n\nThird-law pairs act on DIFFERENT objects. A common error is to identify a weight and a normal force as a third-law pair; they act on the same object and are not a pair.\n\n3.4 Free Body Diagrams\n\nA free body diagram isolates one object and shows every force acting on it as an arrow. Steps:\n1. Identify the object of interest.\n2. Draw it as a dot or simple shape.\n3. Identify every force acting ON the object (not forces the object exerts).\n4. Draw each force as an arrow pointing away from the object.\n5. Choose a coordinate system and resolve forces into components.\n\nCommon forces to consider: gravity (mg, downward), normal force (perpendicular to surface), friction (parallel to surface, opposing motion or tendency of motion), tension (along a string or rope, away from object), applied/push/pull forces.\n\n3.5 Applications: Inclined Planes\n\nOn a frictionless incline of angle theta, the component of gravity along the plane is mg*sin(theta) and the normal force equals mg*cos(theta). With kinetic friction coefficient mu_k, the friction force is mu_k * N = mu_k * mg * cos(theta) opposing the direction of sliding.\n\nExample 3.1: A 5.0 kg block slides down a 30-degree frictionless incline. Find its acceleration.\nSolution: a = g*sin(30) = 9.8 * 0.5 = 4.9 m/s^2 down the incline.\n\n3.6 Applications: Circular Motion\n\nUniform circular motion requires a centripetal acceleration a_c = v^2/r directed toward the center. By Newton's second law, the net inward force must be F_c = m*v^2/r. This is NOT a new kind of force; it is the net effect of whatever real forces (gravity, tension, friction, normal force) point toward the center.\n\nExample 3.2: A 0.50 kg ball on a 1.2 m string moves in a horizontal circle at 3.0 m/s. Find the tension.\nSolution: The tension provides the centripetal force. T = m*v^2/r = 0.50 * 9.0 / 1.2 = 3.75 N.\n",
+      "sections": [
+        {
+          "id": "phys201-ch3-newtons-laws::3.1-first-law",
+          "heading": "3.1 Newton's First Law",
+          "anchor": "3.1 Newton's First Law"
+        },
+        {
+          "id": "phys201-ch3-newtons-laws::3.2-second-law",
+          "heading": "3.2 Newton's Second Law",
+          "anchor": "3.2 Newton's Second Law"
+        },
+        {
+          "id": "phys201-ch3-newtons-laws::3.3-third-law",
+          "heading": "3.3 Newton's Third Law",
+          "anchor": "3.3 Newton's Third Law"
+        },
+        {
+          "id": "phys201-ch3-newtons-laws::3.4-free-body-diagrams",
+          "heading": "3.4 Free Body Diagrams",
+          "anchor": "3.4 Free Body Diagrams"
+        },
+        {
+          "id": "phys201-ch3-newtons-laws::3.5-inclined-planes",
+          "heading": "3.5 Applications: Inclined Planes",
+          "anchor": "3.5 Applications: Inclined Planes"
+        },
+        {
+          "id": "phys201-ch3-newtons-laws::3.6-circular-motion",
+          "heading": "3.6 Applications: Circular Motion",
+          "anchor": "3.6 Applications: Circular Motion"
+        }
+      ]
+    },
+    {
+      "stem": "phys201-ch5-energy",
+      "filename": "PHYS201-Chapter5-WorkEnergy.txt",
+      "doc_type": "lecture_notes",
+      "text": "Chapter 5: Work, Energy, and Conservation of Energy\n\n5.1 Work Done by a Constant Force\n\nWork is defined as the dot product of force and displacement:\n\n  W = F * d * cos(theta)\n\nwhere theta is the angle between the force vector and the displacement vector. Work is a scalar quantity, measured in joules (J). When the force is perpendicular to the displacement (theta = 90 degrees), the work done is zero. The normal force on a block sliding on a horizontal surface does no work, because it is perpendicular to the motion.\n\n5.2 Kinetic Energy and the Work-Energy Theorem\n\nThe kinetic energy of an object is:\n\n  KE = (1/2) * m * v^2\n\nThe work-energy theorem states that the net work done on an object equals the change in its kinetic energy:\n\n  W_net = KE_final - KE_initial = (1/2)*m*v_f^2 - (1/2)*m*v_i^2\n\nThis is actually a consequence of Newton's second law, not an independent principle.\n\n5.3 Potential Energy\n\nGravitational potential energy near Earth's surface: PE = m*g*h, where h is measured from a chosen reference level. The choice of reference level is arbitrary; only changes in PE are physically meaningful.\n\nElastic potential energy stored in a spring: PE_spring = (1/2)*k*x^2, where k is the spring constant and x is the displacement from equilibrium.\n\n5.4 Conservation of Mechanical Energy\n\nWhen only conservative forces do work (gravity, spring force), the total mechanical energy is conserved:\n\n  KE_i + PE_i = KE_f + PE_f\n\nThis is often the easiest way to solve a problem. Instead of tracking forces and accelerations through every point of a trajectory, you compare the energy at two points.\n\nExample 5.1: A 2.0 kg ball is dropped from a height of 10 m. Find its speed just before hitting the ground.\nSolution: mgh = (1/2)mv^2, so v = sqrt(2gh) = sqrt(2 * 9.8 * 10) = 14.0 m/s.\n\n5.5 Work Done by Friction\n\nFriction is a non-conservative force. The work done by friction equals -mu_k * N * d, where d is the distance traveled. When friction is present:\n\n  KE_i + PE_i + W_friction = KE_f + PE_f\n\nThe friction term is always negative (friction removes mechanical energy and converts it to thermal energy).\n\n5.6 Power\n\nPower is the rate at which work is done: P = W/t = F * v * cos(theta). Measured in watts (W). One horsepower = 746 watts.\n\nExample 5.2: A 1500 kg car accelerates from rest to 25 m/s in 8.0 s on a level road. What average power does the engine deliver?\nSolution: W = change in KE = (1/2)(1500)(25^2) = 468750 J. P = W/t = 468750/8.0 = 58594 W = 58.6 kW.\n\n5.7 Forces on Inclined Planes (Energy Approach)\n\nThe same inclined-plane problems from Chapter 3 can be solved with energy methods. For a block sliding down a frictionless incline of height h, conservation of energy gives v = sqrt(2gh) at the bottom, regardless of the angle. This is a powerful check: the energy answer must agree with the force answer from Chapter 3.\n\nWith friction on the incline, W_friction = -mu_k * mg * cos(theta) * d, where d is the distance along the incline and d = h/sin(theta).\n",
+      "sections": [
+        {
+          "id": "phys201-ch5-energy::5.1-work",
+          "heading": "5.1 Work Done by a Constant Force",
+          "anchor": "5.1 Work Done by a Constant Force"
+        },
+        {
+          "id": "phys201-ch5-energy::5.2-work-energy-theorem",
+          "heading": "5.2 Kinetic Energy and the Work-Energy Theorem",
+          "anchor": "5.2 Kinetic Energy and the Work-Energy Theorem"
+        },
+        {
+          "id": "phys201-ch5-energy::5.3-potential-energy",
+          "heading": "5.3 Potential Energy",
+          "anchor": "5.3 Potential Energy"
+        },
+        {
+          "id": "phys201-ch5-energy::5.4-conservation",
+          "heading": "5.4 Conservation of Mechanical Energy",
+          "anchor": "5.4 Conservation of Mechanical Energy"
+        },
+        {
+          "id": "phys201-ch5-energy::5.5-friction-work",
+          "heading": "5.5 Work Done by Friction",
+          "anchor": "5.5 Work Done by Friction"
+        },
+        {
+          "id": "phys201-ch5-energy::5.6-power",
+          "heading": "5.6 Power",
+          "anchor": "5.6 Power"
+        },
+        {
+          "id": "phys201-ch5-energy::5.7-incline-energy",
+          "heading": "5.7 Forces on Inclined Planes (Energy Approach)",
+          "anchor": "5.7 Forces on Inclined Planes"
+        }
+      ]
+    },
+    {
+      "stem": "phys201-hw3",
+      "filename": "PHYS201-Homework3.txt",
+      "doc_type": "homework",
+      "text": "PHYS 201 - Homework Assignment 3: Newton's Laws\nDue: Thursday, September 24, 2026 at 11:59pm\n\nProblem 1: Free Body Diagram\nA 12 kg crate sits on a rough horizontal floor. A person pushes horizontally with a force of 45 N, but the crate does not move. The coefficient of static friction is mu_s = 0.50.\n(a) Draw a free body diagram of the crate showing all forces.\n(b) Find the normal force.\n(c) Find the maximum static friction force.\n(d) Find the actual friction force acting on the crate.\n(e) What minimum push force would start the crate sliding?\n\nProblem 2: Inclined Plane with Friction\nA 8.0 kg box is placed on a 25-degree incline. The coefficient of kinetic friction is mu_k = 0.30.\n(a) Draw a free body diagram of the box on the incline.\n(b) Determine whether the box slides (compare mg*sin(theta) to mu_s*mg*cos(theta), with mu_s = 0.40).\n(c) If it slides, find the acceleration.\n(d) If the box starts from rest, how fast is it moving after sliding 2.0 m down the incline?\n\nProblem 3: Atwood Machine\nTwo masses m1 = 4.0 kg and m2 = 6.0 kg are connected by a light string over a frictionless, massless pulley.\n(a) Draw free body diagrams for both masses.\n(b) Find the acceleration of the system.\n(c) Find the tension in the string.\n(d) If the system starts from rest with m2 elevated 1.5 m above the floor, how long until m2 hits the floor?\n\nProblem 4: Circular Motion\nA car rounds a flat (unbanked) curve of radius 85 m at a speed of 20 m/s.\n(a) What is the centripetal acceleration?\n(b) What minimum coefficient of static friction is needed to keep the car on the road?\n(c) If the road is wet and mu_s drops to 0.25, what is the maximum safe speed?\n",
+      "sections": [
+        {
+          "id": "phys201-hw3::problem-1",
+          "heading": "Problem 1: Free Body Diagram",
+          "anchor": "Problem 1: Free Body Diagram"
+        },
+        {
+          "id": "phys201-hw3::problem-2",
+          "heading": "Problem 2: Inclined Plane with Friction",
+          "anchor": "Problem 2: Inclined Plane with Friction"
+        },
+        {
+          "id": "phys201-hw3::problem-3",
+          "heading": "Problem 3: Atwood Machine",
+          "anchor": "Problem 3: Atwood Machine"
+        },
+        {
+          "id": "phys201-hw3::problem-4",
+          "heading": "Problem 4: Circular Motion",
+          "anchor": "Problem 4: Circular Motion"
+        }
+      ]
+    },
+    {
+      "stem": "phys201-hw3-solution",
+      "filename": "PHYS201-Homework3-Solutions.txt",
+      "doc_type": "solution",
+      "text": "PHYS 201 - Homework 3 Solutions: Newton's Laws\n\nProblem 1: Free Body Diagram\n(a) Forces on the crate: weight W = mg = 12*9.8 = 117.6 N downward, normal force N upward, applied force F = 45 N to the right, static friction f_s to the left.\n(b) The crate is in equilibrium vertically: N = mg = 117.6 N.\n(c) Maximum static friction: f_s_max = mu_s * N = 0.50 * 117.6 = 58.8 N.\n(d) The crate does not move, so the actual friction equals the applied force: f_s = 45 N (less than the maximum).\n(e) The crate starts sliding when F > f_s_max = 58.8 N. Minimum force = 58.8 N.\n\nProblem 2: Inclined Plane with Friction\n(a) Forces: weight mg down, normal N perpendicular to incline, friction f along incline (up the slope if sliding down).\n(b) Component of gravity along incline: mg*sin(25) = 8.0*9.8*sin(25) = 33.1 N.\n   Maximum static friction: mu_s*mg*cos(25) = 0.40*8.0*9.8*cos(25) = 28.4 N.\n   Since 33.1 > 28.4, the box slides.\n(c) Net force along incline: mg*sin(25) - mu_k*mg*cos(25) = 33.1 - 0.30*8.0*9.8*cos(25) = 33.1 - 21.3 = 11.8 N.\n   Acceleration: a = 11.8/8.0 = 1.48 m/s^2.\n(d) v^2 = v_0^2 + 2*a*d = 0 + 2*1.48*2.0 = 5.92, so v = 2.43 m/s.\n\nProblem 3: Atwood Machine\n(a) For m1: tension T upward, weight m1*g downward. For m2: tension T upward, weight m2*g downward.\n(b) Net force = (m2 - m1)*g = (6.0 - 4.0)*9.8 = 19.6 N. Total mass = m1 + m2 = 10.0 kg.\n   Acceleration: a = 19.6/10.0 = 1.96 m/s^2.\n(c) For m1 (accelerating upward): T - m1*g = m1*a, so T = m1*(g + a) = 4.0*(9.8 + 1.96) = 47.0 N.\n(d) d = (1/2)*a*t^2, so t = sqrt(2*d/a) = sqrt(2*1.5/1.96) = 1.24 s.\n\nProblem 4: Circular Motion\n(a) a_c = v^2/r = 20^2/85 = 4.71 m/s^2.\n(b) Friction provides centripetal force: mu_s*m*g = m*v^2/r, so mu_s = v^2/(r*g) = 400/(85*9.8) = 0.48.\n(c) v_max = sqrt(mu_s*r*g) = sqrt(0.25*85*9.8) = 14.4 m/s.\n",
+      "sections": [
+        {
+          "id": "phys201-hw3-solution::problem-1",
+          "heading": "Problem 1 Solution",
+          "anchor": "Problem 1: Free Body Diagram"
+        },
+        {
+          "id": "phys201-hw3-solution::problem-2",
+          "heading": "Problem 2 Solution",
+          "anchor": "Problem 2: Inclined Plane with Friction"
+        },
+        {
+          "id": "phys201-hw3-solution::problem-3",
+          "heading": "Problem 3 Solution",
+          "anchor": "Problem 3: Atwood Machine"
+        },
+        {
+          "id": "phys201-hw3-solution::problem-4",
+          "heading": "Problem 4 Solution",
+          "anchor": "Problem 4: Circular Motion"
+        }
+      ]
+    },
+    {
+      "stem": "phys201-hw5",
+      "filename": "PHYS201-Homework5.txt",
+      "doc_type": "homework",
+      "text": "PHYS 201 - Homework Assignment 5: Work and Energy\nDue: Thursday, October 8, 2026 at 11:59pm\n\nProblem 1: Work-Energy Theorem\nA 3.0 kg block starts from rest and is pulled 4.0 m along a rough horizontal surface by a constant horizontal force of 20 N. The coefficient of kinetic friction is mu_k = 0.25.\n(a) Find the work done by the applied force.\n(b) Find the work done by friction.\n(c) Find the net work done on the block.\n(d) Find the final speed of the block using the work-energy theorem.\n\nProblem 2: Conservation of Energy on an Incline\nA 5.0 kg block starts from rest at the top of a frictionless incline of height 3.0 m.\n(a) Find the speed of the block at the bottom using conservation of energy.\n(b) If the incline has kinetic friction with mu_k = 0.20 and the angle is 30 degrees, find the speed at the bottom.\n(c) Compare your answer to part (b) with what you would get using Newton's second law from Chapter 3. They must agree.\n\nProblem 3: Spring Potential Energy\nA 0.50 kg ball is placed against a spring (k = 200 N/m) compressed by 0.10 m on a frictionless horizontal surface.\n(a) Find the elastic potential energy stored in the spring.\n(b) Find the speed of the ball when it leaves the spring.\n(c) If the ball then slides up a frictionless ramp, how high does it reach?\n\nProblem 4: Power\nA 70 kg sprinter accelerates from rest to 10 m/s in 2.0 s on a level track.\n(a) Find the change in kinetic energy.\n(b) Find the average power output.\n(c) Express the answer in horsepower (1 hp = 746 W).\n",
+      "sections": [
+        {
+          "id": "phys201-hw5::problem-1",
+          "heading": "Problem 1: Work-Energy Theorem",
+          "anchor": "Problem 1: Work-Energy Theorem"
+        },
+        {
+          "id": "phys201-hw5::problem-2",
+          "heading": "Problem 2: Conservation of Energy on an Incline",
+          "anchor": "Problem 2: Conservation of Energy"
+        },
+        {
+          "id": "phys201-hw5::problem-3",
+          "heading": "Problem 3: Spring Potential Energy",
+          "anchor": "Problem 3: Spring Potential Energy"
+        },
+        {
+          "id": "phys201-hw5::problem-4",
+          "heading": "Problem 4: Power",
+          "anchor": "Problem 4: Power"
+        }
+      ]
+    },
+    {
+      "stem": "phys201-hw5-solution",
+      "filename": "PHYS201-Homework5-Solutions.txt",
+      "doc_type": "solution",
+      "text": "PHYS 201 - Homework 5 Solutions: Work and Energy\n\nProblem 1: Work-Energy Theorem\n(a) W_applied = F*d = 20*4.0 = 80 J.\n(b) Normal force N = mg = 3.0*9.8 = 29.4 N. Friction f = mu_k*N = 0.25*29.4 = 7.35 N.\n   W_friction = -f*d = -7.35*4.0 = -29.4 J.\n(c) W_net = W_applied + W_friction = 80 + (-29.4) = 50.6 J.\n(d) W_net = (1/2)*m*v^2, so v = sqrt(2*W_net/m) = sqrt(2*50.6/3.0) = 5.81 m/s.\n\nProblem 2: Conservation of Energy on an Incline\n(a) mgh = (1/2)mv^2, so v = sqrt(2gh) = sqrt(2*9.8*3.0) = 7.67 m/s.\n(b) Distance along incline: d = h/sin(30) = 3.0/0.5 = 6.0 m.\n   W_friction = -mu_k*mg*cos(30)*d = -0.20*5.0*9.8*cos(30)*6.0 = -50.9 J.\n   mgh + W_friction = (1/2)mv^2.\n   5.0*9.8*3.0 - 50.9 = (1/2)*5.0*v^2.\n   147.0 - 50.9 = 2.5*v^2.\n   v = sqrt(96.1/2.5) = sqrt(38.4) = 6.20 m/s.\n(c) From Chapter 3: a = g*sin(30) - mu_k*g*cos(30) = 4.9 - 1.70 = 3.20 m/s^2.\n   v^2 = 2*a*d = 2*3.20*6.0 = 38.4, v = 6.20 m/s. Agrees with the energy method.\n\nProblem 3: Spring Potential Energy\n(a) PE_spring = (1/2)*k*x^2 = (1/2)*200*0.01 = 1.0 J.\n(b) (1/2)*k*x^2 = (1/2)*m*v^2, so v = sqrt(k*x^2/m) = sqrt(200*0.01/0.50) = 2.0 m/s.\n(c) (1/2)*m*v^2 = m*g*h, so h = v^2/(2g) = 4.0/(2*9.8) = 0.204 m.\n\nProblem 4: Power\n(a) KE = (1/2)*m*v^2 = (1/2)*70*100 = 3500 J.\n(b) P = W/t = 3500/2.0 = 1750 W.\n(c) P = 1750/746 = 2.35 hp.\n",
+      "sections": [
+        {
+          "id": "phys201-hw5-solution::problem-1",
+          "heading": "Problem 1 Solution",
+          "anchor": "Problem 1: Work-Energy Theorem"
+        },
+        {
+          "id": "phys201-hw5-solution::problem-2",
+          "heading": "Problem 2 Solution",
+          "anchor": "Problem 2: Conservation of Energy"
+        },
+        {
+          "id": "phys201-hw5-solution::problem-3",
+          "heading": "Problem 3 Solution",
+          "anchor": "Problem 3: Spring Potential Energy"
+        },
+        {
+          "id": "phys201-hw5-solution::problem-4",
+          "heading": "Problem 4 Solution",
+          "anchor": "Problem 4: Power"
+        }
+      ]
+    },
+    {
+      "stem": "phys201-formula-sheet",
+      "filename": "PHYS201-Formula-Reference.txt",
+      "doc_type": "reference",
+      "text": "PHYS 201: Formula Reference Sheet\n\nKinematics\nv = v_0 + a*t\nx = x_0 + v_0*t + (1/2)*a*t^2\nv^2 = v_0^2 + 2*a*(x - x_0)\nAverage velocity: v_avg = (v + v_0) / 2\nFree fall: a = g = 9.8 m/s^2 (downward)\n\nForces and Newton's Laws\nF_net = m*a (Newton's second law)\nWeight: W = m*g\nNormal force: perpendicular to surface\nStatic friction: f_s <= mu_s * N\nKinetic friction: f_k = mu_k * N\nSpring force: F = -k*x (Hooke's law)\nCentripetal force: F_c = m*v^2/r\n\nWork and Energy\nWork: W = F*d*cos(theta)\nKinetic energy: KE = (1/2)*m*v^2\nGravitational PE: PE = m*g*h\nElastic PE: PE = (1/2)*k*x^2\nWork-energy theorem: W_net = delta(KE)\nConservation: KE_i + PE_i = KE_f + PE_f (conservative forces only)\nWith friction: KE_i + PE_i - f_k*d = KE_f + PE_f\nPower: P = W/t = F*v\n\nMomentum\nLinear momentum: p = m*v\nImpulse: J = F*delta(t) = delta(p)\nConservation of momentum: p_i = p_f (no external forces)\nElastic collision (1D): v_1f = ((m1-m2)/(m1+m2))*v_1i\nInelastic collision: m1*v_1i + m2*v_2i = (m1+m2)*v_f\n\nRotational Motion\nAngular velocity: omega = delta(theta)/delta(t)\nAngular acceleration: alpha = delta(omega)/delta(t)\nTorque: tau = r*F*sin(theta) = I*alpha\nMoment of inertia: I = sum(m*r^2)\nRotational KE: KE_rot = (1/2)*I*omega^2\nAngular momentum: L = I*omega\n\nUnit Conversions\n1 hp = 746 W\n1 rev = 2*pi rad\ng = 9.8 m/s^2\n",
+      "sections": [
+        {
+          "id": "phys201-formula-sheet::kinematics",
+          "heading": "Kinematics",
+          "anchor": "Kinematics"
+        },
+        {
+          "id": "phys201-formula-sheet::forces",
+          "heading": "Forces and Newton's Laws",
+          "anchor": "Forces and Newton's Laws"
+        },
+        {
+          "id": "phys201-formula-sheet::work-energy",
+          "heading": "Work and Energy",
+          "anchor": "Work and Energy"
+        },
+        {
+          "id": "phys201-formula-sheet::momentum",
+          "heading": "Momentum",
+          "anchor": "Momentum"
+        },
+        {
+          "id": "phys201-formula-sheet::rotational",
+          "heading": "Rotational Motion",
+          "anchor": "Rotational Motion"
+        },
+        {
+          "id": "phys201-formula-sheet::units",
+          "heading": "Unit Conversions",
+          "anchor": "Unit Conversions"
+        }
+      ]
+    }
+  ]
+}

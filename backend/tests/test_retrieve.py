@@ -13,6 +13,7 @@ import pytest
 import sqlite_vec
 
 from backend.rag import retrieve as retrieve_module
+from backend.rag.rerank import RerankOutcome, RerankStatus
 from backend.rag.retrieve import RetrievalResult, retrieve
 from backend.rag.tokens import estimate_tokens
 
@@ -529,9 +530,10 @@ def reranker(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     """
     asked: list[list[str]] = []
 
-    def reversed_scores(query: str, passages: list[str]) -> list[float]:
+    def reversed_scores(query: str, passages: list[str]) -> RerankOutcome:
         asked.append(list(passages))
-        return [float(index) for index in range(len(passages))]
+        scores = [float(index) for index in range(len(passages))]
+        return RerankOutcome(status=RerankStatus.APPLIED, scores=scores)
 
     monkeypatch.setattr(retrieve_module, "rerank", reversed_scores)
     monkeypatch.setattr(retrieve_module, "rerank_server", type("Stub", (), {"available": True})())
@@ -607,7 +609,11 @@ def test_a_reranker_that_fails_leaves_the_search_order_intact(
 ) -> None:
     """Reranking improves an ordering that already works, so its failure must cost the
     improvement and nothing else - including not serving the whole over-fetch."""
-    monkeypatch.setattr(retrieve_module, "rerank", lambda query, passages: None)
+    monkeypatch.setattr(
+        retrieve_module,
+        "rerank",
+        lambda query, passages: RerankOutcome(status=RerankStatus.UPSTREAM_ERROR, scores=None),
+    )
     monkeypatch.setattr(retrieve_module, "rerank_server", type("Stub", (), {"available": True})())
     notes = _insert_document(db, class_id, "lecture.pdf", _days_ago(1))
     nearest = _insert_chunk(db, class_id, notes, "The closest match by cosine.", 0.0)
@@ -618,6 +624,7 @@ def test_a_reranker_that_fails_leaves_the_search_order_intact(
 
     assert result.chunks[0].chunk_id == nearest
     assert len(result.chunks) == retrieve_module.K
+    assert result.rerank_status == RerankStatus.UPSTREAM_ERROR
 
 
 def test_without_a_reranker_the_served_list_is_still_cut_to_k(
@@ -639,3 +646,16 @@ def test_without_a_reranker_the_served_list_is_still_cut_to_k(
     result = retrieve(db, class_id, "anything", 100_000)
 
     assert len(result.chunks) == retrieve_module.K
+    assert result.rerank_status == RerankStatus.NOT_REQUESTED
+
+
+def test_successful_rerank_reports_applied_status(
+    db: sqlite3.Connection, class_id: int, reranker: list[list[str]]
+) -> None:
+    """A successful rerank run must carry APPLIED on the result."""
+    notes = _insert_document(db, class_id, "lecture.pdf", _days_ago(1))
+    _insert_chunk(db, class_id, notes, "The closest match.", 0.0)
+
+    result = retrieve(db, class_id, "anything", 1000)
+
+    assert result.rerank_status == RerankStatus.APPLIED

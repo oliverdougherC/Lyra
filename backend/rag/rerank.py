@@ -10,7 +10,10 @@ shape - returns None and the caller keeps the embedding order. A student whose o
 model did not download gets slightly worse search, not a broken class.
 """
 
+import enum
+import json
 import logging
+from dataclasses import dataclass
 
 import httpx
 
@@ -26,7 +29,38 @@ logger = logging.getLogger(__name__)
 _REQUEST_TIMEOUT_SECONDS = 120.0
 
 
-def rerank(query: str, passages: list[str]) -> list[float] | None:
+class RerankStatus(enum.Enum):
+    """What actually happened when reranking was attempted.
+
+    Bounded machine-readable categories, never prose. The harness reads these to
+    distinguish a real reranked measurement from a fallback-to-embedding-order one.
+    """
+
+    APPLIED = "applied"
+    NOT_REQUESTED = "not_requested"
+    WEIGHTS_ABSENT = "weights_absent"
+    START_REFUSED = "start_refused"
+    TIMEOUT = "timeout"
+    UPSTREAM_ERROR = "upstream_error"
+    INVALID_JSON = "invalid_json"
+    MALFORMED_RESPONSE = "malformed_response"
+    EMPTY_INPUT = "empty_input"
+
+
+@dataclass(frozen=True)
+class RerankOutcome:
+    """What the reranker did: scores when it worked, a reason when it did not.
+
+    The product contract is unchanged: ``scores is None`` means keep the embedding
+    order, ``scores`` is the list otherwise. The ``status`` field is evidence the eval
+    harness reads to tell intent from reality.
+    """
+
+    status: RerankStatus
+    scores: list[float] | None
+
+
+def rerank(query: str, passages: list[str]) -> RerankOutcome:
     """Score every passage against the query with the cross-encoder.
 
     Args:
@@ -35,21 +69,21 @@ def rerank(query: str, passages: list[str]) -> list[float] | None:
         passages: Chunk text, in any order.
 
     Returns:
-        One score per passage, positionally aligned with `passages`, or None when
-        reranking is unavailable. Scores are logits, so they are unbounded and routinely
-        negative; only their order is meaningful, and they must never be compared against
-        a cosine similarity or shown to anyone.
+        A ``RerankOutcome`` with scores positionally aligned with ``passages`` when
+        reranking succeeded, or ``scores=None`` with a status explaining why when it
+        did not. Scores are logits, unbounded and routinely negative; only their order
+        is meaningful.
     """
     if not passages:
-        return None
+        return RerankOutcome(status=RerankStatus.EMPTY_INPUT, scores=None)
     if not rerank_server.available:
-        return None
+        return RerankOutcome(status=RerankStatus.WEIGHTS_ABSENT, scores=None)
 
     try:
         rerank_server.ensure_running()
     except ConfigurationError:
         logger.warning("Reranking is configured but did not start; keeping the search order")
-        return None
+        return RerankOutcome(status=RerankStatus.START_REFUSED, scores=None)
 
     try:
         with httpx.Client(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
@@ -58,12 +92,23 @@ def rerank(query: str, passages: list[str]) -> list[float] | None:
                 json={"query": query, "documents": passages},
             )
             response.raise_for_status()
-            payload = response.json()
-    except (httpx.HTTPError, ValueError):
+    except httpx.TimeoutException:
+        logger.warning("The reranking server timed out; keeping the search order", exc_info=True)
+        return RerankOutcome(status=RerankStatus.TIMEOUT, scores=None)
+    except httpx.HTTPError:
         logger.warning("The reranking server failed; keeping the search order", exc_info=True)
-        return None
+        return RerankOutcome(status=RerankStatus.UPSTREAM_ERROR, scores=None)
 
-    return _scores(payload, len(passages))
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("The reranking server returned invalid JSON; keeping the search order")
+        return RerankOutcome(status=RerankStatus.INVALID_JSON, scores=None)
+
+    scores = _scores(payload, len(passages))
+    if scores is None:
+        return RerankOutcome(status=RerankStatus.MALFORMED_RESPONSE, scores=None)
+    return RerankOutcome(status=RerankStatus.APPLIED, scores=scores)
 
 
 def _scores(payload: object, expected: int) -> list[float] | None:
