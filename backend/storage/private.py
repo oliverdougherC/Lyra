@@ -79,6 +79,12 @@ _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+# Bounded retry count for the EEXIST → ENOENT race in _open_or_create_nofollow. SQLite's
+# transient WAL sidecars can disappear between the exclusive create seeing the entry and
+# the fallback open, and a retry safely re-creates the file. Three retries give four total
+# attempts — well above any legitimate concurrent-connection churn — without allowing a
+# pathological path to spin indefinitely.
+_SIDECAR_RACE_RETRIES = 3
 # openat-style descent (dir_fd) is what makes the component-by-component creation race-free.
 _HAS_OPENAT = _POSIX and os.open in os.supports_dir_fd and os.mkdir in os.supports_dir_fd
 # Errnos that mean "this filesystem does not implement POSIX modes", as opposed to a real
@@ -135,27 +141,46 @@ def ensure_private_file(path: Path) -> None:
     byte. Existing files are opened with `O_NOFOLLOW`, checked through the returned
     descriptor, and hardened through that same descriptor. This is the preparation an
     external writer such as SQLite needs *before* it opens a predictable pathname itself.
+
+    A bounded retry tolerates the race where another connection (typically SQLite managing
+    its WAL sidecars) removes the file between the exclusive create seeing EEXIST and the
+    fallback open. Only the specific EEXIST-then-ENOENT interleaving is retried; every
+    other failure propagates immediately and symlink substitution remains fail-closed.
     """
-    flags = os.O_RDWR | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK
     if not _POSIX:
         _refuse_existing_symlink(path)
-    try:
-        descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, FILE_MODE)
-    except FileExistsError:
-        try:
-            descriptor = os.open(path, flags)
-        except OSError as exc:
-            _raise_unsafe_open(path, exc, operation="secure")
-            raise
-    except OSError as exc:
-        _raise_unsafe_open(path, exc, operation="secure")
-        raise
-
+    descriptor = _open_or_create_nofollow(path)
     try:
         _assert_owned_entry(os.fstat(descriptor), path, is_dir=False)
         _fchmod_owned(descriptor, FILE_MODE, path)
     finally:
         os.close(descriptor)
+
+
+def _open_or_create_nofollow(path: Path) -> int:
+    """Open or exclusively create `path` without following symlinks, with bounded retry.
+
+    Tolerates the race where another process removes the file between the exclusive
+    create seeing EEXIST and the fallback open. Only FileNotFoundError after
+    FileExistsError triggers a retry; every other failure propagates immediately.
+    """
+    flags = os.O_RDWR | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK
+    for attempt in range(_SIDECAR_RACE_RETRIES + 1):
+        try:
+            return os.open(path, flags | os.O_CREAT | os.O_EXCL, FILE_MODE)
+        except FileExistsError:
+            try:
+                return os.open(path, flags)
+            except FileNotFoundError:
+                if attempt == _SIDECAR_RACE_RETRIES:
+                    raise
+            except OSError as exc:
+                _raise_unsafe_open(path, exc, operation="secure")
+                raise
+        except OSError as exc:
+            _raise_unsafe_open(path, exc, operation="secure")
+            raise
+    raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(path))
 
 
 def assert_safe_external_writer_parent(path: Path) -> None:
@@ -303,6 +328,35 @@ def harden_file(path: Path) -> None:
     its sidecars - a symlink here fails closed rather than chmodding the link's target.
     """
     _harden(path, FILE_MODE, is_dir=False)
+
+
+def harden_file_if_present(path: Path) -> None:
+    """Set a file to `0o600` if it exists, tolerating legitimate absence.
+
+    For transient files such as SQLite WAL sidecars that may be removed by another
+    connection at any moment. Opens with `O_NOFOLLOW` and hardens through the descriptor,
+    so a symlink at the path still fails closed. If the file is absent at open time,
+    returns silently - a sidecar SQLite has already removed needs no hardening. This
+    eliminates the TOCTOU in a separate existence check followed by a harden call.
+    """
+    if not _POSIX:
+        _chmod_best_effort(path, FILE_MODE)
+        return
+    try:
+        descriptor = _open_nofollow(path, is_dir=False)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise PrivacyContractError(
+                f"{path} is a symlink; refusing to chmod its target"
+            ) from exc
+        raise
+    try:
+        _assert_owned_entry(os.fstat(descriptor), path, is_dir=False)
+        _fchmod_owned(descriptor, FILE_MODE, path)
+    finally:
+        os.close(descriptor)
 
 
 def write_private_bytes(path: Path, data: bytes) -> None:
