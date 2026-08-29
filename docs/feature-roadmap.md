@@ -143,13 +143,14 @@ Gate. Linear tracks the individual issues.
   deterministic offline tests, and machine-readable evidence.
 - [x] Add a nonvisual browser smoke test for route hydration and runtime errors without coupling it
   to the ongoing visual redesign.
-- [ ] Add deterministic real-backend acceptance coverage that composes the real frontend, FastAPI,
-  migrations, SQLite, workers, and filesystem through the browser. The existing Playwright smoke
-  tests intercept application API traffic and do not prove this composition. When this job lands,
-  add it to `CI Gate`'s `needs` list. See Linear PLA-292.
-- [ ] Build a truthful class-scale retrieval evaluation that records requested and observed
-  execution paths separately. A requested optional path that fell back cannot be published as
-  that path's result. See Linear PLA-149.
+- [x] Add deterministic real-backend acceptance coverage that composes the real frontend, FastAPI,
+  migrations, SQLite, workers, and filesystem through the browser. The lane is a required part of
+  the aggregate `CI Gate`. The existing Playwright smoke tests intercept application API traffic
+  and do not prove this composition. See Linear PLA-292.
+- [ ] Run and retain the real model-backed school-machine retrieval baseline with the merged
+  evaluation harness, which records requested and observed execution paths separately. A
+  requested optional path that fell back cannot be published as that path's result. See Linear
+  PLA-149.
 - [x] Define a macOS Apple Silicon release checklist covering clean installation, first launch,
   restart recovery, offline/degraded use, and data preservation.
 - [ ] Execute the release-candidate soak on one exact merged SHA on a supported Mac after the
@@ -191,9 +192,10 @@ The stabilization release is ready only when all of the following are objectivel
 Linear is the detailed state source of truth for open issues and blockers. The current release
 sequence is:
 
-1. PLA-292 (real-stack acceptance) and PLA-149 (truthful retrieval evidence) in parallel.
-2. Merge both to `main` with green CI Gate.
-3. PLA-147 (supported-Mac release-candidate soak) on the exact merged SHA.
+1. Complete and retain the real model-backed PLA-149 school-machine class-scale baseline.
+2. Confirm every Fall 2026 High/Urgent release blocker is closed.
+3. Select one exact merged `main` SHA as the release candidate.
+4. Run PLA-147's supported-Mac release-candidate soak on that exact SHA.
 
 Source-checkout Fall readiness is distinct from later signed/native packaging work, which is
 tracked under **Later**.
