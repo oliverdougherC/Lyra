@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import scripts.eval_ingest as harness  # noqa: E402
 from backend.rag import retrieve as retrieval  # noqa: E402
 from backend.rag.rerank import RerankStatus  # noqa: E402
 from scripts.eval_ingest import (  # noqa: E402
@@ -32,7 +33,10 @@ from scripts.eval_ingest import (  # noqa: E402
     _ask,
     _check_compatibility,
     _classify_rerank_validity,
+    _link_models,
+    _question_line,
     _report_retrieval,
+    _reproducibility_metadata,
     _score_identity,
     _widened_k,
     cmd_compare,
@@ -1657,3 +1661,105 @@ def test_mrr_passage_median_rank_only_counts_hits() -> None:
         scores = _e2e_score(ws, data)
         assert scores["passage_median_rank"] == 5.0
         assert scores["passage_mrr"] == round((1 / 3 + 1 / 7) / 3, 4)
+
+
+# -------------------------------------------------- PLA-319: execution on an installed machine
+#
+# The harness merged while these code paths were untested on a real installation:
+# a question record no longer carries `rank`, the privacy contract refuses the
+# models directory symlink `_link_models` used to create, and the embedding
+# identity was read from an attribute the pydantic settings object never has.
+
+
+def test_question_line_reads_the_current_record_shape() -> None:
+    """Progress output reads document_rank/passage_rank, the keys _ask actually writes."""
+    record = {
+        "id": "q1",
+        "document_rank": 2,
+        "passage_rank": None,
+        "top_similarity": 0.71,
+    }
+    line = _question_line(record)
+
+    assert "doc 2" in line
+    assert "passage -" in line
+    assert "0.71" in line
+    # A record without rank keys must not raise: the line is a display, not the measurement.
+    assert "doc -" in _question_line({"id": "q2"})
+
+
+def test_link_models_shares_by_hard_link_not_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A models dir on the installation is shared file-by-file: same inode, no symlink."""
+    install = tmp_path / "install"
+    (install / "data" / "models" / "llama" / "b1").mkdir(parents=True)
+    weight = install / "data" / "models" / "nomic.gguf"
+    weight.write_bytes(b"w")
+    binary = install / "data" / "models" / "llama" / "b1" / "llama-server"
+    binary.write_bytes(b"b")
+    (install / "data" / "models" / ".DS_Store").write_bytes(b"h")
+
+    monkeypatch.setattr(harness, "ROOT", install)
+    ws = Workspace(tmp_path / "ws")
+
+    _link_models(ws)
+
+    models = ws.root / "models"
+    assert not models.is_symlink()
+    shared_weight = models / "nomic.gguf"
+    assert not shared_weight.is_symlink()
+    assert shared_weight.stat().st_ino == weight.stat().st_ino
+    shared_binary = models / "llama" / "b1" / "llama-server"
+    assert shared_binary.stat().st_ino == binary.stat().st_ino
+    # Hidden entries are not part of the share.
+    assert not (models / ".DS_Store").exists()
+
+
+def test_link_models_never_overwrites_a_preexisting_workspace_models_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace that already has a models directory is left exactly as it is."""
+    install = tmp_path / "install"
+    (install / "data" / "models").mkdir(parents=True)
+    (install / "data" / "models" / "nomic.gguf").write_bytes(b"w")
+
+    monkeypatch.setattr(harness, "ROOT", install)
+    ws = Workspace(tmp_path / "ws")
+    (ws.root / "models").mkdir(parents=True)
+    (ws.root / "models" / "other.gguf").write_bytes(b"own")
+
+    _link_models(ws)
+
+    assert not (ws.root / "models" / "nomic.gguf").exists()
+    assert (ws.root / "models" / "other.gguf").read_bytes() == b"own"
+
+
+def test_reproducibility_metadata_names_the_embedding_the_pipeline_uses(
+    tmp_path: Path,
+) -> None:
+    """The recorded embedding identity is the model ingestion actually ran.
+
+    Two identical real runs must therefore pass the fail-closed compatibility
+    check without --force, and a drifted identity must fail it.
+    """
+    import argparse
+
+    from backend.rag import embed
+
+    questions = tmp_path / "questions.json"
+    questions.write_text('{"corpus_version": "2.0.0", "questions": []}', encoding="utf-8")
+    corpus = tmp_path / "corpus.json"
+    corpus.write_text('{"corpus_version": "2.0.0", "documents": []}', encoding="utf-8")
+
+    args = argparse.Namespace(questions=str(questions), k=64, rerank=False, workspace=str(tmp_path))
+    meta = _reproducibility_metadata(args, corpus)
+
+    assert meta["embedding_model"] == embed.EMBEDDING_MODEL
+    assert meta["embedding_dim"] == embed.EMBEDDING_DIM
+    assert _check_compatibility(meta, dict(meta), allow_override=False) == []
+
+    drifted = dict(meta)
+    drifted["embedding_model"] = "some-other-embedder"
+    problems = _check_compatibility(meta, drifted, allow_override=False)
+    assert any("INCOMPATIBLE" in p and "embedding_model" in p for p in problems)

@@ -38,6 +38,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import sqlite3
@@ -63,7 +64,11 @@ from backend.core.app_settings import resolve_tutor_config  # noqa: E402
 from backend.llm import client  # noqa: E402
 from backend.llm.locality import is_local_endpoint  # noqa: E402
 from backend.rag import chunk as chunking  # noqa: E402
-from backend.rag import render, transcribe  # noqa: E402
+from backend.rag import (  # noqa: E402
+    embed,  # noqa: E402
+    render,
+    transcribe,
+)
 from backend.rag import retrieve as retrieval  # noqa: E402
 from backend.rag.chunk import MAX_CHUNK_TOKENS  # noqa: E402
 from backend.rag.rerank import RerankStatus  # noqa: E402
@@ -179,19 +184,45 @@ def prepare(workspace: Workspace, source_db: Path) -> sqlite3.Connection:
     return conn
 
 
+def _model_files(source_root: Path) -> list[Path]:
+    """Every shareable file under the installation's models directory, hidden entries skipped."""
+    files: list[Path] = []
+    for entry in sorted(source_root.rglob("*")):
+        if entry.name.startswith(".") or not entry.is_file():
+            continue
+        files.append(entry)
+    return files
+
+
 def _link_models(workspace: Workspace) -> None:
     """Share the real installation's model directory rather than downloading a second one.
 
     Everything else about the workspace is its own, but the embedding binary and its
-    weights are hundreds of megabytes and are identical by construction. Without this the
+    weights are identical by construction. Without this the
     workspace has no embedding server, every document fails at the embedding stage, and the
     harness reports a fault it created itself.
+
+    The share is per-file hard links into a real directory, not a directory symlink: the
+    privacy contract (``storage.private.secure_mkdir``) refuses a symlink component below
+    the data root, and ``ensure_directories`` runs right after this. A hard link is the
+    same inode as the canonical weight, so nothing is copied and the workspace cannot
+    drift from the installation it measures.
     """
     link = workspace.root / "models"
     real = ROOT / "data" / "models"
     if link.exists() or not real.is_dir():
         return
-    link.symlink_to(real, target_is_directory=True)
+    for source in _model_files(real):
+        destination = link / source.relative_to(real)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(source, destination)
+        except OSError as exc:
+            raise SystemExit(
+                f"Cannot share {source.name} into {link} by hard link ({exc}). The "
+                f"installation's model directory must live on the same volume as the "
+                f"workspace."
+            ) from exc
 
 
 def _copy_settings(conn: sqlite3.Connection, source_db: Path) -> None:
@@ -728,6 +759,15 @@ def _classify_rerank_validity(
     return True, False, False, set()
 
 
+def _question_line(record: dict[str, object]) -> str:
+    """One progress line per question, over the current record shape."""
+    return (
+        f"{record['id']}: doc {record.get('document_rank') or '-'}, "
+        f"passage {record.get('passage_rank') or '-'}, "
+        f"top similarity {record.get('top_similarity')}"
+    )
+
+
 def cmd_retrieve(args: argparse.Namespace) -> int:
     """Ask the question set and record where the right chunk landed in the ranking."""
     workspace = Workspace(Path(args.workspace).resolve())
@@ -760,10 +800,7 @@ def cmd_retrieve(args: argparse.Namespace) -> int:
             target = targets[stem] if stem is not None else NO_TARGET
             record = _ask(conn, class_id, stem, target, question, args.k)
             results.append(record)
-            print(
-                f"{record['id']}: rank {record['rank'] if record['rank'] else '-'}, "
-                f"top similarity {record['top_similarity']}"
-            )
+            print(_question_line(record))
 
     elapsed = time.monotonic() - started
 
@@ -1577,8 +1614,8 @@ def _reproducibility_metadata(
     """State sufficient to reproduce or compare a measurement."""
     meta: dict[str, object] = {
         "git_revision": _git_revision(),
-        "embedding_model": getattr(settings, "embedding_model", None),
-        "embedding_dim": getattr(settings, "embedding_dim", None),
+        "embedding_model": embed.EMBEDDING_MODEL,
+        "embedding_dim": embed.EMBEDDING_DIM,
         "rerank_model": (
             str(settings.rerank_model_path.name) if settings.rerank_installed else None
         ),
