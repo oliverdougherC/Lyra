@@ -1,13 +1,31 @@
-# Ex Libris: The Lyra Design System
+# Ex Libris: The Lyra Design System (Approved Brief)
+
+> **Status (2026-08-29): historical reference.** This document is the approved Ex Libris
+> design brief, workshopped against a live interactive prototype. The canonical, current
+> design-system reference is [design-system.md](design-system.md), which describes the
+> shipped implementation; where this brief and the shipped system differ, the shipped
+> system governs new work. This document is kept for provenance: the seven workshop
+> rounds, the approved prototype, and the rules of use distilled from them. The migration
+> this brief governed is recorded in
+> [exlibris-migration.md](exlibris-migration.md), and this brief's section numbers are
+> preserved in design-system.md so that "design system section N" comments in code
+> resolve against the canonical document.
+>
+> Where the shipped system diverges from this brief: the content column is 1320px, not
+> 1220px; EB Garamond also loads 500, which reading-surface headings set at; the quiet
+> accent text is `#48684b` in light; the rail carries recent work and an archived section
+> beyond navigation; the mobile posture ships as a fixed bottom shelf below 640px; the
+> Lyra mark (Vega) ships with a thinking animation; and the highlighter swipe, the gold
+> slab frame, and the group-sheet recipe remain defined budgets without shipped
+> implementations.
 
 Approved 2026-08-07 after seven workshop rounds against a live interactive prototype. The
-prototype is the visual reference and stays authoritative where prose is ambiguous:
+prototype is the visual reference for the workshop's spacing and hover behavior:
 https://claude.ai/code/artifact/caffc538-0960-4bf2-af4f-b8bce9c0b500. The earlier exploration
 page (Bench, Marginalia, and the first three Ex Libris drafts) survives in the workshop
 artifact's version history; note that its final revision still shows the pre-correction dark
-palette. This document supersedes the parchment system described in design-system.md for all
-new work; the migration plan in [exlibris-migration.md](exlibris-migration.md) governs the
-transition.
+palette. The pre-Ex-Libris parchment system this one superseded is historical; its
+retirement is recorded in exlibris-migration.md section 6.
 
 ## 1. The idea
 

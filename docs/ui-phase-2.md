@@ -6,6 +6,11 @@ The solver's screens, down to states, motion, and copy. Companion to
 disagree, design-system.md wins on tokens, solver-phase-2.md wins on behavior, and this document
 wins on layout.
 
+> **Historical note (2026-08-29).** This specification predates the Ex Libris migration.
+> The visual system it names - faces and palette included - was replaced;
+> [design-system.md](design-system.md) documents the shipped system and governs tokens, so
+> values named here from the older system are historical, not normative.
+
 Everything in [ui-phase-1.md](ui-phase-1.md) still holds. The principles, the shell, the keyboard
 map, the copy guidelines, and the definition of done are not restated here; only what Phase 2 adds
 or changes is.

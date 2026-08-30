@@ -1,11 +1,20 @@
 # Ex Libris Migration: Component Inventory and Transition Plan
 
-Written 2026-08-07, alongside [exlibris-design-system.md](exlibris-design-system.md). This
-plan moves the app from the parchment system to Ex Libris without colliding with the two
-active work streams (Phase 4 agent tools; the writer roadmap W1 to W6). It is sequenced
-against the ownership table in [ui-overhaul.md](ui-overhaul.md) section 7: the same items that
-were "safe now" for UX work are safe now for reskinning, and the same writer-coupled items
-remain the writer stream's to adopt.
+> **Status (2026-08-29): completed, kept as a historical record.** The migration this plan
+> sequences has landed; the app ships Ex Libris, and
+> [design-system.md](design-system.md) documents the system as it exists today. This
+> document is kept for the plan itself - the ground rules, the component inventory, the
+> screen order, and the per-screen checklist the conversion followed - and because its
+> "explicitly retired" list (section 6) remains an accurate record of what the pre-Ex-Libris
+> system left behind.
+
+Written 2026-08-07, alongside the approved brief in
+[exlibris-design-system.md](exlibris-design-system.md). This plan moved the app from the
+parchment system to Ex Libris without colliding with the two active work streams (Phase 4
+agent tools; the writer roadmap W1 to W6). It was sequenced against the ownership table in
+[ui-overhaul.md](ui-overhaul.md) section 7: the same items that were "safe now" for UX work
+were safe now for reskinning, and the same writer-coupled items remained the writer stream's
+to adopt.
 
 **Ground rules for the whole migration:**
 

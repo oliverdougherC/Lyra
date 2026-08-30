@@ -6,6 +6,10 @@ Companion to [rag-pipeline.md](rag-pipeline.md), which owns the pipeline and its
 disagree, design-system.md wins on tokens, rag-pipeline.md wins on behavior, and this document wins
 on layout.
 
+> **Historical note (2026-08-29).** This specification predates the Ex Libris migration;
+> [design-system.md](design-system.md) documents the shipped system and governs tokens.
+> Values named here from the older visual system are historical, not normative.
+
 Everything in [ui-phase-1.md](ui-phase-1.md) and [ui-phase-2.md](ui-phase-2.md) still holds. The
 principles, the shell, the keyboard map, the copy guidelines, and both definitions of done are not
 restated here; only what Phase 3 adds or changes is.

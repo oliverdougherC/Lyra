@@ -5,6 +5,12 @@ the companion to [design-system.md](design-system.md), which owns tokens and gen
 patterns. Where the two disagree, design-system.md wins on tokens and this document wins on layout
 and behavior.
 
+> **Historical note (2026-08-29).** This specification predates the Ex Libris migration.
+> The visual system it assumes - faces, palette, tokens - was replaced;
+> [design-system.md](design-system.md) documents the shipped Ex Libris system and still
+> governs tokens, so where this document names values from the older system they are
+> historical, not normative.
+
 Interface quality is a core pillar, and OCR was cut from Phase 1 to fund it. That trade only pays off
 if this specification is implemented completely rather than approximated.
 

@@ -3,14 +3,17 @@
 Design system section 3.3: every text pair clears 4.5:1 on its actual ground, stone
 included, in both modes; boundaries and the focus ring clear 3.0:1. This script recomputes
 every recorded pair from the stylesheet itself, so a value that drifts in globals.css fails
-the build rather than passing on a stale doc table. It gates every migration commit.
+the build rather than passing on a stale doc table. It gates every migration commit and runs
+in the CI frontend lane; the stylesheet resolves relative to this script, so it runs from
+any working directory.
 """
 
 import re
 import sys
 from pathlib import Path
 
-CSS = Path("frontend/src/styles/globals.css").read_text()
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CSS = (REPO_ROOT / "frontend" / "src" / "styles" / "globals.css").read_text()
 
 # Grounds a pair may be read against. "paper" is the content sheet; "stone" is the canvas
 # and rail. Both are named so text-on-stone is checked as explicitly as text-on-paper.
