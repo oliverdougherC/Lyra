@@ -1,0 +1,43 @@
+'use client'
+
+import { Button } from '@/components/ui/button'
+
+/**
+ * Route-segment error boundary (Next.js App Router special file). When anything
+ * below the root layout throws while rendering, this component replaces the
+ * failed segment; the rail and header above it keep working, so the student is
+ * never cut off from navigation. `retry()` re-fetches and re-renders the segment
+ * (stable contract since Next 16.3.0; the legacy alias is `reset()`).
+ *
+ * Privacy contract: the `error` prop is typed for the boundary contract only.
+ * Its `message`, `digest`, stack, and any application state it carries never
+ * reach the DOM. The copy below is fixed and says the same thing whatever
+ * threw, so the fallback can neither leak a draft, a course document, an API
+ * body, nor a path. Nothing here reports the error anywhere: Lyra keeps every
+ * byte of failure local (docs/privacy-and-data-location.md).
+ */
+export default function Error({
+  error,
+  retry,
+}: {
+  error: Error & { digest?: string }
+  retry: () => void
+}) {
+  // `error` is deliberately unused: reading it is how a fallback would leak.
+  void error
+
+  return (
+    <div role="alert" className="flex flex-1 items-center justify-center p-4">
+      <div className="w-full max-w-md rounded-lg border border-border-strong bg-card p-6 text-center shadow-md sm:p-8">
+        <h2 className="font-heading text-base font-medium tracking-tight">Something went wrong</h2>
+        <p className="mt-3 text-sm/relaxed text-muted-foreground">
+          An unexpected error stopped Lyra from drawing this page. Try again, or go back and reopen
+          it.
+        </p>
+        <Button className="mt-6" onClick={retry}>
+          Try again
+        </Button>
+      </div>
+    </div>
+  )
+}
