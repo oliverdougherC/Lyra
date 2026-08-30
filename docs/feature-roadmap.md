@@ -147,10 +147,15 @@ and covered by deterministic tests in CI Gate. Linear tracks the individual issu
   migrations, SQLite, workers, and filesystem through the browser. The lane is a required part of
   the aggregate `CI Gate`. The existing Playwright smoke tests intercept application API traffic
   and do not prove this composition. See Linear PLA-292.
-- [ ] Run and retain the real model-backed school-machine retrieval baseline with the merged
+- [x] Run and retain the real model-backed school-machine retrieval baseline with the merged
   evaluation harness, which records requested and observed execution paths separately. A
-  requested optional path that fell back cannot be published as that path's result. See Linear
-  PLA-149.
+  requested optional path that fell back cannot be published as that path's result. Measured
+  2026-08-29 on the school machine (Apple M4 Pro, macOS 27) with the real models: nomic
+  embed text v1.5 (768d) through the real ingestion path and bge-reranker-v2-m3 requested and
+  observed applied on every query, with no fallback; a second identical run reproduced every
+  metric and passed the harness's no-`--force` comparison gate. The harness evidence SHA is
+  the head of PR #60 (PLA-319), identical code once merged. Full commands, environment, and
+  artifacts are in the PLA-149 Linear record. See Linear PLA-149.
 - [x] Define a macOS Apple Silicon release checklist covering clean installation, first launch,
   restart recovery, offline/degraded use, and data preservation.
 - [ ] Execute the release-candidate soak on one exact merged SHA on a supported Mac after the
