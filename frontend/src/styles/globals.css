@@ -17,7 +17,8 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Lyra design tokens: the single source of truth, per docs/exlibris-design-system.md.
+/* Lyra design tokens: the single source of truth, per docs/design-system.md (the canonical
+   Ex Libris reference; the approved workshop brief is docs/exlibris-design-system.md).
    Ex Libris, the reading room (light). Stone is structure, paper is content, ink is print;
    the pen (hand) and the Mark (trust) are the only saturated colors, and they are earned. */
 :root {

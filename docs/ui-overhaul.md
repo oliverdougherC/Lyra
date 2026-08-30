@@ -2,10 +2,13 @@
 
 > **2026-08-07 addendum.** The visual language question this brief deliberately left open is
 > now settled: the Ex Libris design system, workshopped to an approved interactive prototype.
-> [exlibris-design-system.md](exlibris-design-system.md) specifies it;
-> [exlibris-migration.md](exlibris-migration.md) sequences the reskin against this brief's
-> section 7 table so both land as one rewrite per component, not two. The UX findings below
-> stand unchanged.
+> [exlibris-design-system.md](exlibris-design-system.md) is the approved brief (a historical
+> reference); [design-system.md](design-system.md) documents the shipped system and governs
+> new work; and [exlibris-migration.md](exlibris-migration.md) records the completed reskin,
+> sequenced against this brief's section 7 table so both landed as one rewrite per
+> component. The UX findings below stand unchanged. Note that the visual language this
+> brief describes - the parchment palette and its display face - is that pre-Ex-Libris
+> system, recorded here as the brief's baseline, not a description of the current app.
 
 Written 2026-08-07 from a walk through the running app with real course data (ECE 203, 36
 documents, two drafts carrying a finished review and a pending revision), a full inventory of
