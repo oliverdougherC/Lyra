@@ -80,18 +80,20 @@ def rerank(query: str, passages: list[str]) -> RerankOutcome:
         return RerankOutcome(status=RerankStatus.WEIGHTS_ABSENT, scores=None)
 
     try:
-        rerank_server.ensure_running()
-    except ConfigurationError:
-        logger.warning("Reranking is configured but did not start; keeping the search order")
-        return RerankOutcome(status=RerankStatus.START_REFUSED, scores=None)
-
-    try:
-        with httpx.Client(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
+        # Hold a lease across startup and the complete request so idle eviction cannot
+        # race an in-flight rerank. Releasing the lease starts the bounded idle timer.
+        with (
+            rerank_server.lease(),
+            httpx.Client(timeout=_REQUEST_TIMEOUT_SECONDS) as client,
+        ):
             response = client.post(
                 f"{rerank_server.base_url}/v1/rerank",
                 json={"query": query, "documents": passages},
             )
             response.raise_for_status()
+    except ConfigurationError:
+        logger.warning("Reranking is configured but did not start; keeping the search order")
+        return RerankOutcome(status=RerankStatus.START_REFUSED, scores=None)
     except httpx.TimeoutException:
         logger.warning("The reranking server timed out; keeping the search order", exc_info=True)
         return RerankOutcome(status=RerankStatus.TIMEOUT, scores=None)

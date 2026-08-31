@@ -69,6 +69,12 @@ def key_file(tmp_path: Path) -> Path:
     return settings.data_dir / ".api_key"
 
 
+def exa_key_file(tmp_path: Path) -> Path:
+    from backend.config import settings
+
+    return settings.data_dir / secrets.EXA_KEY_FILENAME
+
+
 # ---------------------------------------------------------------------------
 # Happy-path keychain operations
 # ---------------------------------------------------------------------------
@@ -787,3 +793,45 @@ def test_rollback_of_rollback_no_false_success_path(
         raised = True
 
     assert raised, "set_api_key must raise when both file unlink and keychain rollback fail"
+
+
+def test_exa_key_uses_a_separate_keychain_entry(isolated_secrets: FakeKeyring) -> None:
+    secrets.set_api_key("sk-tutor")
+    secrets.set_exa_api_key("exa-secret")
+
+    assert isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] == "sk-tutor"
+    assert isolated_secrets.store[(secrets.EXA_SERVICE, secrets.EXA_USERNAME)] == "exa-secret"
+    assert secrets.get_api_key() == "sk-tutor"
+    assert secrets.get_exa_api_key() == "exa-secret"
+
+
+def test_exa_key_demotion_uses_its_own_fallback_file(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    isolated_secrets.set_error = keyring.errors.KeyringError("locked for writes")
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+
+    secrets.set_exa_api_key("exa-file-secret")
+
+    assert exa_key_file(tmp_path).read_text().strip() == "exa-file-secret"
+    assert not key_file(tmp_path).exists()
+    assert secrets.get_exa_api_key() == "exa-file-secret"
+    assert secrets.exa_api_key_storage() == "file"
+
+
+def test_deleting_exa_key_does_not_delete_the_tutor_key(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    secrets.set_api_key("sk-tutor")
+    isolated_secrets.set_error = keyring.errors.KeyringError("locked for writes")
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+    isolated_secrets.get_error = None
+    secrets.set_exa_api_key("exa-file-secret")
+
+    secrets.delete_exa_api_key()
+
+    isolated_secrets.set_error = None
+    isolated_secrets.get_error = None
+    secrets.reset_keyring_probe()
+    assert secrets.get_api_key() == "sk-tutor"
+    assert secrets.get_exa_api_key() is None

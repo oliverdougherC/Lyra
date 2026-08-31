@@ -1,15 +1,51 @@
 """Loopback browser origins and hosts trusted by Lyra's local HTTP boundary."""
 
-ALLOWED_BROWSER_ORIGINS: tuple[str, ...] = (
+import os
+from urllib.parse import urlsplit
+
+_BASE_BROWSER_ORIGINS: tuple[str, ...] = (
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "tauri://localhost",
+    "http://tauri.localhost",
+)
+
+
+def configured_browser_origins(value: str | None) -> tuple[str, ...]:
+    """Parse explicit contributor/test origins, accepting loopback HTTP only."""
+    origins: list[str] = []
+    for raw in (value or "").split(","):
+        origin = raw.strip()
+        if not origin:
+            continue
+        parsed = urlsplit(origin)
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}
+            or parsed.port is None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or parsed.username is not None
+        ):
+            raise RuntimeError(
+                "LYRA_BROWSER_ORIGINS accepts loopback HTTP origins with ports only."
+            )
+        origins.append(origin.rstrip("/"))
+    return tuple(dict.fromkeys(origins))
+
+
+ALLOWED_BROWSER_ORIGINS = _BASE_BROWSER_ORIGINS + configured_browser_origins(
+    os.environ.get("LYRA_BROWSER_ORIGINS")
 )
 
 ALLOWED_BROWSER_ORIGIN_SET = frozenset(ALLOWED_BROWSER_ORIGINS)
 
 # The hostnames a request's `Host` header may name. This is a security boundary, not a
-# convenience list. Lyra ships an unauthenticated API and treats loopback binding as its
-# access boundary, and CORS does not close the DNS-rebinding case: a malicious page can
+# convenience list. Source mode treats loopback as an access boundary and packaged mode
+# adds session authentication; CORS still does not close the DNS-rebinding case: a page can
 # stay same-origin to a hostname it controls while that hostname is rebound to 127.0.0.1,
 # so the browser's own same-origin rules stop protecting the loopback API. What the page
 # cannot forge from JavaScript is the `Host` value the browser puts on the request, so a

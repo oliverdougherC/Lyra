@@ -345,7 +345,6 @@ def build_registry(
                 results=web_research.search_web(
                     query,
                     allowed=True,
-                    firecrawl_base_url=capabilities.firecrawl_base_url,
                     private_context=exposed_private.snapshot(),
                 )
             )
@@ -359,8 +358,7 @@ def build_registry(
             fetched = web_research.fetch_source(
                 url,
                 allowed=True,
-                firecrawl_base_url=capabilities.firecrawl_base_url,
-                scrape_enabled=capabilities.firecrawl_scrape_enabled,
+                source_content_enabled=capabilities.source_content_enabled,
             )
             source = source_ledger.upsert_source(
                 conn,

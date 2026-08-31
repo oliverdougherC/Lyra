@@ -77,13 +77,11 @@ def seed_workspace(root: Path, *, external_db: bool = False) -> tuple[Path, Path
 
     conn.execute(
         "update settings set endpoint_url = ?, model = ?, context_window = ?, "
-        "firecrawl_base_url = ?, allow_web_research = ?, parallel_requests = ?, "
-        "parallel_concurrency = ? where id = 1",
+        "allow_web_research = ?, parallel_requests = ?, parallel_concurrency = ? where id = 1",
         (
             "http://127.0.0.1:8080/v1",
             "qwen-local",
             16384,
-            "http://127.0.0.1:3002",
             1,
             1,
             3,
@@ -225,14 +223,13 @@ def assert_restored_workspace(data_dir: Path, db_path: Path) -> None:
     conn = sqlite3.connect(db_path)
     try:
         settings = conn.execute(
-            "select endpoint_url, model, context_window, firecrawl_base_url, "
-            "allow_web_research, parallel_requests, parallel_concurrency from settings where id = 1"
+            "select endpoint_url, model, context_window, allow_web_research, "
+            "parallel_requests, parallel_concurrency from settings where id = 1"
         ).fetchone()
         assert settings == (
             "http://127.0.0.1:8080/v1",
             "qwen-local",
             16384,
-            "http://127.0.0.1:3002",
             1,
             1,
             3,
@@ -1502,10 +1499,10 @@ def test_reconcile_stops_verified_unhealthy_checkout_process_before_restart(
     assert "backend" not in runtime["processes"]
 
 
-def test_firecrawl_uses_narrow_subprocess_contract(
+def test_bundled_service_invocation_uses_narrow_subprocess_contract(
     launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    helper = tmp_path / "infra" / "firecrawl.py"
+    helper = tmp_path / "infra" / "search.py"
     helper.parent.mkdir()
     helper.touch()
     calls: list[tuple[list[str], Path, bool]] = []
@@ -1514,10 +1511,11 @@ def test_firecrawl_uses_narrow_subprocess_contract(
         calls.append((command, cwd, check))
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(launcher, "FIRECRAWL_SCRIPT", helper)
     monkeypatch.setattr(launcher.subprocess, "run", fake_run)
 
-    assert launcher.firecrawl_command("doctor", required=True) == 0
+    service = launcher.BundledService("search", helper)
+
+    assert launcher.invoke_bundled_service(service, "doctor", required=True) == 0
     assert calls == [([launcher.sys.executable, str(helper), "doctor"], launcher.ROOT, False)]
 
 
@@ -1602,7 +1600,7 @@ def test_supervisor_stops_remaining_app_and_bundles_when_one_core_process_exits(
         "mode": "production",
         "desired_state": "running",
         "processes": {"backend": backend, "frontend": frontend},
-        "bundled_services": ["firecrawl"],
+        "bundled_services": ["search"],
     }
     stopped_components: list[tuple[str, int]] = []
     stopped_bundles: list[str] = []
@@ -1626,7 +1624,7 @@ def test_supervisor_stops_remaining_app_and_bundles_when_one_core_process_exits(
 
     assert launcher.supervise() == 0
     assert stopped_components == [("backend", launcher.BACKEND_PORT)]
-    assert stopped_bundles == ["firecrawl"]
+    assert stopped_bundles == ["search"]
 
 
 def test_failed_bundle_shutdown_stays_registered_for_retry(
@@ -1637,7 +1635,7 @@ def test_failed_bundle_shutdown_stays_registered_for_retry(
         "mode": "production",
         "desired_state": "running",
         "processes": {},
-        "bundled_services": ["firecrawl"],
+        "bundled_services": ["search"],
     }
     writes: list[dict[str, object]] = []
 
@@ -1655,8 +1653,8 @@ def test_failed_bundle_shutdown_stays_registered_for_retry(
 
     assert launcher.stop_supervised_stack(runtime) is False
     assert runtime["desired_state"] == "stopped"
-    assert runtime["bundled_services"] == ["firecrawl"]
-    assert writes[-1]["bundled_services"] == ["firecrawl"]
+    assert runtime["bundled_services"] == ["search"]
+    assert writes[-1]["bundled_services"] == ["search"]
 
 
 def test_failed_idempotent_rerun_does_not_stop_healthy_existing_stack(
@@ -1667,7 +1665,7 @@ def test_failed_idempotent_rerun_does_not_stop_healthy_existing_stack(
         "mode": "production",
         "desired_state": "running",
         "processes": {"backend": owned_record(), "frontend": owned_record()},
-        "bundled_services": ["firecrawl"],
+        "bundled_services": ["search"],
     }
     stopped: list[bool] = []
 
@@ -1691,10 +1689,8 @@ def test_failed_idempotent_rerun_does_not_stop_healthy_existing_stack(
     assert stopped == []
 
 
-def test_failed_bundle_start_degrades_without_stopping_existing_app(
-    launcher: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+def test_start_does_not_attempt_bundled_service_recovery_when_none_are_registered(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = {
         "version": launcher.STATE_VERSION,
@@ -1703,9 +1699,7 @@ def test_failed_bundle_start_degrades_without_stopping_existing_app(
         "processes": {"backend": owned_record(), "frontend": owned_record()},
         "bundled_services": [],
     }
-    stopped_stack: list[bool] = []
-    stopped_bundles: list[str] = []
-    preserved: list[set[str]] = []
+    attempted: list[bool] = []
 
     monkeypatch.setattr(launcher, "load_runtime", lambda: runtime)
     monkeypatch.setattr(launcher, "record_matches_process", lambda _record: True)
@@ -1716,39 +1710,14 @@ def test_failed_bundle_start_degrades_without_stopping_existing_app(
     monkeypatch.setattr(launcher, "atomic_write_json", lambda *_args: None)
     monkeypatch.setattr(
         launcher,
-        "invoke_bundled_service",
-        lambda _service, command, **_kwargs: 1 if command == "status" else 0,
-    )
-
-    def fail_start(_services: object, *, preserve_on_failure: set[str]) -> None:
-        preserved.append(set(preserve_on_failure))
-        stopped_bundles.append("firecrawl")
-        raise launcher.LauncherError("bundle recovery failed")
-
-    monkeypatch.setattr(launcher, "start_bundled_services", fail_start)
-    monkeypatch.setattr(
-        launcher,
-        "stop_bundled_services",
-        lambda services: stopped_bundles.extend(service.name for service in services) or True,
-    )
-    monkeypatch.setattr(
-        launcher,
-        "stop_supervised_stack",
-        lambda _runtime: stopped_stack.append(True) or True,
-    )
-    monkeypatch.setattr(
-        launcher,
-        "ensure_supervisor",
-        lambda _runtime: pytest.fail("degraded launches must not start the bundle supervisor"),
+        "start_bundled_services",
+        lambda *_args, **_kwargs: attempted.append(True),
     )
 
     assert launcher.start(launcher.parse_args(["--no-browser"])) == 0
 
-    assert preserved == [set()]
-    assert stopped_bundles == ["firecrawl"]
-    assert stopped_stack == []
+    assert attempted == []
     assert runtime["bundled_services"] == []
-    assert "continuing without web research" in capsys.readouterr().out
 
 
 def test_stop_respects_empty_bundle_registry_from_degraded_launch(
@@ -1774,7 +1743,7 @@ def test_stop_respects_empty_bundle_registry_from_degraded_launch(
     assert configured == [[]]
 
 
-def test_status_treats_running_degraded_stack_as_intentionally_skipped(
+def test_status_reports_running_core_stack_without_bundled_services(
     launcher: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = {
@@ -1792,17 +1761,13 @@ def test_status_treats_running_degraded_stack_as_intentionally_skipped(
         "component_state",
         lambda name, *_args: (f"{name}: running, launcher-owned, healthy", True),
     )
-    monkeypatch.setattr(
-        launcher,
-        "invoke_bundled_service",
-        lambda *_args, **_kwargs: pytest.fail("Firecrawl must stay skipped for degraded status"),
-    )
-
     assert launcher.status(launcher.parse_args(["status"])) == 0
 
 
-def test_status_reports_temporary_firecrawl_unavailability_without_failing_core_app(
-    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+def test_status_ignores_legacy_bundled_service_metadata(
+    launcher: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     runtime = {
         "version": launcher.STATE_VERSION,
@@ -1813,9 +1778,8 @@ def test_status_reports_temporary_firecrawl_unavailability_without_failing_core_
             "frontend": owned_record(),
             "supervisor": owned_record(),
         },
-        "bundled_services": ["firecrawl"],
+        "bundled_services": ["search"],
     }
-
     monkeypatch.setattr(launcher, "load_runtime", lambda: runtime)
     monkeypatch.setattr(launcher, "record_matches_process", lambda _record: True)
     monkeypatch.setattr(
@@ -1826,49 +1790,15 @@ def test_status_reports_temporary_firecrawl_unavailability_without_failing_core_
     monkeypatch.setattr(
         launcher,
         "invoke_bundled_service",
-        lambda _service, command, **_kwargs: 1 if command == "status" else 0,
+        lambda *_args, **_kwargs: pytest.fail("retired bundled services must not be probed"),
     )
 
     assert launcher.status(launcher.parse_args(["status"])) == 0
     output = capsys.readouterr().out
-    assert "temporarily unavailable" in output
-    assert "core Lyra remains usable without web research" in output
+    assert "unknown bundled service 'search' in runtime state; ignoring it" in output
 
 
-def test_status_reports_available_firecrawl_explicitly(
-    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    runtime = {
-        "version": launcher.STATE_VERSION,
-        "mode": "production",
-        "desired_state": "running",
-        "processes": {
-            "backend": owned_record(),
-            "frontend": owned_record(),
-            "supervisor": owned_record(),
-        },
-        "bundled_services": ["firecrawl"],
-    }
-
-    monkeypatch.setattr(launcher, "load_runtime", lambda: runtime)
-    monkeypatch.setattr(launcher, "record_matches_process", lambda _record: True)
-    monkeypatch.setattr(
-        launcher,
-        "component_state",
-        lambda name, *_args: (f"{name}: running, launcher-owned, healthy", True),
-    )
-    monkeypatch.setattr(
-        launcher,
-        "invoke_bundled_service",
-        lambda _service, command, **_kwargs: 0 if command == "status" else 0,
-    )
-
-    assert launcher.status(launcher.parse_args(["status"])) == 0
-    output = capsys.readouterr().out
-    assert "available; web research is enabled for this app session" in output
-
-
-def test_doctor_treats_running_degraded_stack_as_intentionally_skipped(
+def test_doctor_reports_running_core_stack_without_bundled_services(
     launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     runtime = {
@@ -1896,12 +1826,6 @@ def test_doctor_treats_running_degraded_stack_as_intentionally_skipped(
         "component_state",
         lambda name, *_args: (f"{name}: running, launcher-owned, healthy", True),
     )
-    monkeypatch.setattr(
-        launcher,
-        "invoke_bundled_service",
-        lambda *_args, **_kwargs: pytest.fail("Firecrawl doctor must stay skipped"),
-    )
-
     assert launcher.doctor(launcher.parse_args(["doctor"])) == 0
 
 
@@ -1929,10 +1853,10 @@ def test_doctor_fails_when_a_core_port_is_owned_by_another_process(
         ),
     )
 
-    assert launcher.doctor(launcher.parse_args(["doctor", "--skip-firecrawl"])) == 1
+    assert launcher.doctor(launcher.parse_args(["doctor"])) == 1
 
 
-def test_doctor_reports_temporary_firecrawl_unavailability_without_failing_core_app(
+def test_doctor_ignores_legacy_unavailable_bundled_service_metadata(
     launcher: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1947,8 +1871,11 @@ def test_doctor_reports_temporary_firecrawl_unavailability_without_failing_core_
             "frontend": owned_record(),
             "supervisor": owned_record(),
         },
-        "bundled_services": ["firecrawl"],
+        "bundled_services": ["search"],
     }
+    helper = tmp_path / "search.py"
+    helper.touch()
+    service = launcher.BundledService("search", helper)
     node_modules = tmp_path / "node_modules"
     node_modules.mkdir()
 
@@ -1966,6 +1893,11 @@ def test_doctor_reports_temporary_firecrawl_unavailability_without_failing_core_
         launcher,
         "component_state",
         lambda name, *_args: (f"{name}: running, launcher-owned, healthy", True),
+    )
+    monkeypatch.setattr(
+        launcher,
+        "bundled_services",
+        lambda: (service,),
     )
     monkeypatch.setattr(
         launcher,
@@ -1975,11 +1907,10 @@ def test_doctor_reports_temporary_firecrawl_unavailability_without_failing_core_
 
     assert launcher.doctor(launcher.parse_args(["doctor"])) == 0
     output = capsys.readouterr().out
-    assert "temporarily unavailable" in output
-    assert "core Lyra can still run without web research" in output
+    assert "search" not in output
 
 
-def test_doctor_reports_available_firecrawl_explicitly(
+def test_doctor_does_not_probe_legacy_available_bundled_service_metadata(
     launcher: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1994,8 +1925,11 @@ def test_doctor_reports_available_firecrawl_explicitly(
             "frontend": owned_record(),
             "supervisor": owned_record(),
         },
-        "bundled_services": ["firecrawl"],
+        "bundled_services": ["search"],
     }
+    helper = tmp_path / "search.py"
+    helper.touch()
+    service = launcher.BundledService("search", helper)
     node_modules = tmp_path / "node_modules"
     node_modules.mkdir()
 
@@ -2016,13 +1950,18 @@ def test_doctor_reports_available_firecrawl_explicitly(
     )
     monkeypatch.setattr(
         launcher,
+        "bundled_services",
+        lambda: (service,),
+    )
+    monkeypatch.setattr(
+        launcher,
         "invoke_bundled_service",
-        lambda _service, command, **_kwargs: 0 if command == "doctor" else 0,
+        lambda *_args, **_kwargs: pytest.fail("retired bundled services must not be probed"),
     )
 
     assert launcher.doctor(launcher.parse_args(["doctor"])) == 0
     output = capsys.readouterr().out
-    assert "firecrawl is available" in output.lower()
+    assert "search" not in output.lower()
 
 
 def test_main_reports_interrupt_without_stopping_detached_app(
@@ -2045,7 +1984,7 @@ def test_main_reports_interrupt_without_stopping_detached_app(
     monkeypatch.setattr(launcher, "LauncherLock", NoopLock)
     monkeypatch.setattr(launcher, "RUNTIME_DIR", tmp_path)
 
-    assert launcher.main(["--skip-firecrawl", "--no-browser"]) == 130
+    assert launcher.main(["--no-browser"]) == 130
     assert events == ["lock", "start", "unlock"]
 
 
@@ -2066,14 +2005,14 @@ def test_process_start_token_reads_linux_birth_tick(
     assert launcher.process_start_token(123) == "proc:987654"
 
 
-def test_firecrawl_missing_is_actionable_unless_explicitly_skipped(
+def test_missing_bundled_helper_is_actionable_when_required(
     launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(launcher, "FIRECRAWL_SCRIPT", tmp_path / "missing.py")
+    service = launcher.BundledService("search", tmp_path / "missing.py")
 
-    with pytest.raises(launcher.LauncherError, match="--skip-firecrawl"):
-        launcher.firecrawl_command("start", required=True)
-    assert launcher.firecrawl_command("status", required=False) == 1
+    with pytest.raises(launcher.LauncherError, match="missing"):
+        launcher.invoke_bundled_service(service, "start", required=True)
+    assert launcher.invoke_bundled_service(service, "status", required=False) == 1
 
 
 def test_subprocess_timeout_is_not_mistaken_for_a_valid_dependency_check(

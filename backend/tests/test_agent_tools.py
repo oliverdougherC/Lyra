@@ -11,6 +11,7 @@ import pytest
 from backend.core import (
     agent_store,
     agent_tools,
+    app_settings,
     classes,
     profiles,
     sessions,
@@ -52,11 +53,10 @@ def _workspace(
 
 
 def _enable_web(db: sqlite3.Connection, *, scrape: bool = True) -> None:
-    db.execute(
-        "update settings set allow_web_research = 1, firecrawl_scrape_enabled = ? where id = 1",
-        (int(scrape),),
+    app_settings.update_settings_row(
+        db,
+        {"allow_web_research": 1, "source_content_enabled": int(scrape)},
     )
-    db.commit()
 
 
 def _events(db: sqlite3.Connection, tool: str) -> list[sqlite3.Row]:

@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from backend.core.origins import (
     LOOPBACK_CLIENT_HEADER,
+    configured_browser_origins,
     mutation_origin_is_acceptable,
 )
 from backend.main import create_app
@@ -21,6 +22,8 @@ from backend.main import create_app
 TRUSTED_HOST = "127.0.0.1:8000"
 TRUSTED_ORIGIN = "http://localhost:3000"
 ALT_TRUSTED_ORIGIN = "http://127.0.0.1:3000"
+VITE_TRUSTED_ORIGIN = "http://127.0.0.1:5173"
+TAURI_TRUSTED_ORIGIN = "tauri://localhost"
 
 # -- Unit: mutation_origin_is_acceptable ------------------------------------------
 
@@ -30,7 +33,9 @@ def test_safe_methods_are_exempt(method: str) -> None:
     assert mutation_origin_is_acceptable(method, "https://evil.example", False) is None
 
 
-@pytest.mark.parametrize("origin", [TRUSTED_ORIGIN, ALT_TRUSTED_ORIGIN])
+@pytest.mark.parametrize(
+    "origin", [TRUSTED_ORIGIN, ALT_TRUSTED_ORIGIN, VITE_TRUSTED_ORIGIN, TAURI_TRUSTED_ORIGIN]
+)
 def test_trusted_browser_origin_is_accepted(origin: str) -> None:
     assert mutation_origin_is_acceptable("POST", origin, False) is True
 
@@ -56,6 +61,15 @@ def test_missing_origin_without_client_header_is_rejected() -> None:
 
 def test_missing_origin_with_client_header_is_accepted() -> None:
     assert mutation_origin_is_acceptable("POST", None, True) is True
+
+
+def test_configured_browser_origins_accept_loopback_only() -> None:
+    assert configured_browser_origins("http://127.0.0.1:13080,http://localhost:5174") == (
+        "http://127.0.0.1:13080",
+        "http://localhost:5174",
+    )
+    with pytest.raises(RuntimeError, match="loopback"):
+        configured_browser_origins("https://evil.example")
 
 
 @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
@@ -181,7 +195,9 @@ class TestMissingOriginPolicy:
 
 
 class TestTrustedOriginsPass:
-    @pytest.mark.parametrize("origin", [TRUSTED_ORIGIN, ALT_TRUSTED_ORIGIN])
+    @pytest.mark.parametrize(
+        "origin", [TRUSTED_ORIGIN, ALT_TRUSTED_ORIGIN, VITE_TRUSTED_ORIGIN, TAURI_TRUSTED_ORIGIN]
+    )
     def test_trusted_origin_reaches_handler(self, origin: str) -> None:
         r = _client().post(
             "/api/classes",

@@ -31,19 +31,19 @@ def no_real_dns(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
 
-def test_firecrawl_base_requires_loopback_and_a_clean_base_url() -> None:
-    details = web_policy.validate_firecrawl_base_url("http://loopback.example.test:3002")
+def test_loopback_service_base_requires_loopback_and_a_clean_base_url() -> None:
+    details = web_policy.validate_loopback_service_base_url("http://loopback.example.test:3002")
     assert details.normalized_url == "http://loopback.example.test:3002"
     assert details.port == 3002
 
     with pytest.raises(web_policy.LoopbackPolicyError):
-        web_policy.validate_firecrawl_base_url("http://public.example.test:3002")
+        web_policy.validate_loopback_service_base_url("http://public.example.test:3002")
 
     with pytest.raises(web_policy.LoopbackPolicyError):
-        web_policy.validate_firecrawl_base_url("http://split-loopback.example.test:3002")
+        web_policy.validate_loopback_service_base_url("http://split-loopback.example.test:3002")
 
     with pytest.raises(web_policy.LoopbackPolicyError):
-        web_policy.validate_firecrawl_base_url("http://loopback.example.test:3002/v2")
+        web_policy.validate_loopback_service_base_url("http://loopback.example.test:3002/v2")
 
 
 @pytest.mark.parametrize(
@@ -62,11 +62,11 @@ def test_firecrawl_base_requires_loopback_and_a_clean_base_url() -> None:
 )
 def test_public_targets_reject_non_public_or_malformed_urls(url: str) -> None:
     with pytest.raises(web_policy.URLPolicyError):
-        web_policy.validate_firecrawl_target_url(url)
+        web_policy.validate_public_source_url(url)
 
 
 def test_target_and_final_url_validators_accept_public_http_urls() -> None:
-    target = web_policy.validate_firecrawl_target_url("https://public.example.test/readme")
-    final = web_policy.validate_firecrawl_final_url("https://public.example.test/final")
+    target = web_policy.validate_public_source_url("https://public.example.test/readme")
+    final = web_policy.validate_public_source_final_url("https://public.example.test/final")
     assert target.normalized_url == "https://public.example.test/readme"
     assert final.normalized_url == "https://public.example.test/final"

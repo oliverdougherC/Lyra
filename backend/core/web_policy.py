@@ -1,9 +1,9 @@
-"""Shared URL policy for loopback-only service endpoints and public fetch targets.
+"""Shared URL policy for local service endpoints and public source URLs.
 
-The Phase 4 web boundary has two distinct checks:
+The web boundary has two distinct checks:
 
-- Firecrawl itself must stay on loopback.
-- Every target and final URL must stay public HTTP(S) without credentials.
+- service endpoints must stay on loopback;
+- source URLs must stay public HTTP(S) without credentials.
 
 The policy is intentionally conservative. Anything that cannot be proven safe is refused.
 """
@@ -44,8 +44,8 @@ class URLDetails:
     addresses: tuple[IPAddress, ...]
 
 
-def validate_firecrawl_base_url(url: str, *, resolver: Resolver | None = None) -> URLDetails:
-    """Accept only an HTTP(S) Firecrawl base URL that resolves entirely to loopback."""
+def validate_loopback_service_base_url(url: str, *, resolver: Resolver | None = None) -> URLDetails:
+    """Accept only an HTTP(S) base URL that resolves entirely to loopback."""
     active_resolver = resolver or socket.getaddrinfo
     parsed = _parse_http_url(url, allow_path=False, error_type=LoopbackPolicyError)
     port = _port_of(parsed)
@@ -57,7 +57,7 @@ def validate_firecrawl_base_url(url: str, *, resolver: Resolver | None = None) -
         error_type=LoopbackPolicyError,
     )
     if not addresses or any(not address.is_loopback for address in addresses):
-        raise LoopbackPolicyError("Firecrawl must point to a loopback address.")
+        raise LoopbackPolicyError("The service endpoint must point to a loopback address.")
     return URLDetails(
         normalized_url=_normalize_base_url(parsed),
         hostname=hostname,
@@ -66,13 +66,13 @@ def validate_firecrawl_base_url(url: str, *, resolver: Resolver | None = None) -
     )
 
 
-def validate_firecrawl_target_url(url: str, *, resolver: Resolver | None = None) -> URLDetails:
-    """Accept only an initial public HTTP(S) target URL."""
+def validate_public_source_url(url: str, *, resolver: Resolver | None = None) -> URLDetails:
+    """Accept only an initial public HTTP(S) source URL."""
     return _validate_public_http_url(url, resolver=resolver or socket.getaddrinfo)
 
 
-def validate_firecrawl_final_url(url: str, *, resolver: Resolver | None = None) -> URLDetails:
-    """Accept only a final public HTTP(S) URL returned by Firecrawl."""
+def validate_public_source_final_url(url: str, *, resolver: Resolver | None = None) -> URLDetails:
+    """Accept only a final public HTTP(S) source URL."""
     return _validate_public_http_url(url, resolver=resolver or socket.getaddrinfo)
 
 
@@ -105,7 +105,7 @@ def _parse_http_url(url: str, *, allow_path: bool, error_type: type[Exception]) 
     except ValueError as exc:
         raise error_type("The URL uses an invalid port.") from exc
     if not allow_path and (parsed.path not in ("", "/") or parsed.query or parsed.fragment):
-        raise error_type("Firecrawl must be configured as a base URL only.")
+        raise error_type("Service endpoints must be configured as a base URL only.")
     return parsed
 
 

@@ -1,10 +1,12 @@
 """Application settings and the on-disk layout they imply."""
 
+import sys
 from pathlib import Path
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from backend import desktop_paths
 from backend.storage import private
 
 
@@ -14,20 +16,41 @@ class Settings(BaseSettings):
     The tutor API key is deliberately absent: it lives in the OS keychain, never here.
     """
 
-    model_config = SettingsConfigDict(env_prefix="LYRA_", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="LYRA_", extra="ignore", populate_by_name=True)
 
+    packaged_mode: bool = Field(default=False, validation_alias="LYRA_PACKAGED")
     data_dir: Path = Path("data")
     # None means "derive from data_dir". Setting LYRA_DATA_DIR alone used to relocate
     # uploads, pages, text, and models while the database stayed at data/lyra.db - a split
     # that once wrote 596 chunks into the real database during a verification run. The
     # database now follows data_dir unless LYRA_DB_PATH points it somewhere explicitly.
     db_path: Path | None = None
+    cache_dir: Path | None = None
+    logs_dir: Path | None = None
+    resource_root: Path | None = None
+    models_dir_override: Path | None = Field(default=None, validation_alias="LYRA_MODELS_DIR")
+    source_data_dir: Path | None = None
+    source_db_path: Path | None = None
     llama_port: int = 8081
     host: str = "127.0.0.1"
     port: int = 8000
 
     @model_validator(mode="after")
-    def _derive_db_path(self) -> "Settings":
+    def _derive_paths(self) -> "Settings":
+        if "packaged_mode" not in self.model_fields_set and getattr(sys, "frozen", False):
+            self.packaged_mode = True
+        if self.packaged_mode:
+            if "data_dir" not in self.model_fields_set:
+                self.data_dir = desktop_paths.platform_application_support_dir()
+            if self.cache_dir is None:
+                self.cache_dir = desktop_paths.platform_cache_dir()
+            if self.logs_dir is None:
+                self.logs_dir = desktop_paths.platform_logs_dir()
+        else:
+            if self.logs_dir is None:
+                self.logs_dir = Path("logs")
+        if self.resource_root is None:
+            self.resource_root = desktop_paths.default_resource_root()
         if self.db_path is None:
             self.db_path = self.data_dir / "lyra.db"
         return self
@@ -43,11 +66,12 @@ class Settings(BaseSettings):
     @property
     def pages_dir(self) -> Path:
         """Rendered source pages, cached. Disposable: deleting it costs one re-render."""
-        return self.data_dir / "pages"
+        cache_dir = self.cache_dir or self.data_dir
+        return cache_dir / "pages"
 
     @property
     def models_dir(self) -> Path:
-        return self.data_dir / "models"
+        return self.models_dir_override or (self.data_dir / "models")
 
     @property
     def llama_dir(self) -> Path:
@@ -88,6 +112,11 @@ class Settings(BaseSettings):
         """Names the one-time permissions upgrade, so the tree is walked only once."""
         return self.data_dir / ".permissions-hardened"
 
+    def _root_marker(self, root: Path) -> Path:
+        if root == self.data_dir:
+            return self._hardened_marker
+        return root / ".permissions-hardened"
+
     def ensure_directories(self) -> None:
         """Create the data directories, private to the user, once on startup.
 
@@ -103,14 +132,32 @@ class Settings(BaseSettings):
         the user's home layout, not Lyra's to police - and are left alone.
         """
         private.assert_not_symlink(self.data_dir, "LYRA_DATA_DIR")
-        private.secure_mkdir(self.data_dir, root=self.data_dir)
-        for directory in (self.uploads_dir, self.text_dir, self.pages_dir, self.models_dir):
-            private.secure_mkdir(directory, root=self.data_dir)
-            private.harden_dir(directory)
-        private.harden_dir(self.data_dir)
-        self._harden_existing_tree_once()
+        cache_dir = self.cache_dir or self.data_dir
+        logs_dir = self.logs_dir
+        if logs_dir is None:
+            raise RuntimeError("LYRA_LOGS_DIR is not configured.")
+        private.assert_not_symlink(cache_dir, "LYRA_CACHE_DIR")
+        private.assert_not_symlink(logs_dir, "LYRA_LOGS_DIR")
+        private.assert_not_symlink(self.models_dir, "LYRA_MODELS_DIR")
 
-    def _harden_existing_tree_once(self) -> None:
+        for root in dict.fromkeys((self.data_dir, cache_dir, logs_dir, self.models_dir)):
+            private.secure_mkdir(root, root=root)
+            private.harden_dir(root)
+        for directory, root in (
+            (self.uploads_dir, self.data_dir),
+            (self.text_dir, self.data_dir),
+            (self.pages_dir, cache_dir),
+            (self.models_dir, self.models_dir),
+        ):
+            private.secure_mkdir(directory, root=root)
+            private.harden_dir(directory)
+        self._harden_root_once(self.data_dir, keep_file_modes=(self.models_dir,))
+        for root in dict.fromkeys((cache_dir, logs_dir, self.models_dir)):
+            if root != self.data_dir:
+                keep_modes = (self.models_dir,) if root == self.models_dir else ()
+                self._harden_root_once(root, keep_file_modes=keep_modes)
+
+    def _harden_root_once(self, root: Path, *, keep_file_modes: tuple[Path, ...] = ()) -> None:
         """Tighten a pre-existing data tree to the contract, at most once per installation.
 
         `models_dir` is kept out of the file pass: it holds a bundled executable, and a
@@ -122,10 +169,11 @@ class Settings(BaseSettings):
         must not let a link claim the migration ran, and the write below must not follow it
         to overwrite an outside file).
         """
-        if private.regular_file_present(self._hardened_marker):
+        marker = self._root_marker(root)
+        if private.regular_file_present(marker):
             return
-        private.harden_data_tree(self.data_dir, keep_file_modes=(self.models_dir,))
-        private.write_private_bytes(self._hardened_marker, b"")
+        private.harden_data_tree(root, keep_file_modes=keep_file_modes)
+        private.write_private_bytes(marker, b"")
 
 
 settings = Settings()

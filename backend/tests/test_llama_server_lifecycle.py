@@ -71,6 +71,35 @@ class _DeadProcess:
         return 1
 
 
+class _Clock:
+    def __init__(self, now: float = 0.0) -> None:
+        self.now = now
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _FakeTimer:
+    def __init__(self, delay: float, callback: object) -> None:
+        self.delay = delay
+        self._callback = callback
+        self.started = False
+        self.cancelled = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    def fire(self) -> None:
+        if not self.cancelled:
+            self._callback()  # type: ignore[misc]
+
+
 def _make_server(monkeypatch: pytest.MonkeyPatch) -> RerankServer:
     """A fresh server that believes nothing is listening yet."""
     instance = RerankServer()
@@ -90,6 +119,16 @@ def _set_ownership_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> Non
 def _isolated_ownership(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
     """Every test gets its own ownership directory to prevent cross-contamination."""
     _set_ownership_dir(monkeypatch, tmp_path)
+
+
+def test_packaged_ownership_defaults_to_application_support(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    data_dir = tmp_path / "Application Support" / "Lyra"  # type: ignore[operator]
+    monkeypatch.setattr(settings, "packaged_mode", True)
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    assert llama_server._default_runtime_dir() == data_dir / ".runtime"
 
 
 # ------------------------------------------------------------------ process identity
@@ -286,6 +325,163 @@ class TestHealthAwareness:
         assert instance._unhealthy_restarts == 0
 
 
+# ------------------------------------------------------------------ leases and idle eviction
+
+
+class TestLeasesAndIdleEviction:
+    def test_lease_blocks_idle_eviction_until_the_last_holder_releases(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_weights()
+        instance = RerankServer()
+        process = _AliveProcess()
+        clock = _Clock(100.0)
+        timers: list[_FakeTimer] = []
+        terminated: list[object] = []
+
+        monkeypatch.setattr(instance, "_process", process)
+        monkeypatch.setattr(instance, "ensure_running", lambda: None)
+        monkeypatch.setattr(instance, "_check_installed", lambda: None)
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+        monkeypatch.setattr(instance, "_monotonic", clock.monotonic)
+        monkeypatch.setattr(
+            instance,
+            "_timer_factory",
+            lambda delay, callback: timers.append(_FakeTimer(delay, callback)) or timers[-1],
+        )
+        monkeypatch.setattr(
+            llama_server,
+            "_terminate",
+            lambda helper: terminated.append(helper) or setattr(helper, "_killed", True),
+        )
+
+        with instance.lease():
+            with instance.lease():
+                assert instance.active_leases == 2
+                assert not timers
+            assert instance.active_leases == 1
+            assert not timers
+
+        assert instance.active_leases == 0
+        assert len(timers) == 1
+        assert timers[0].started is True
+        assert timers[0].delay == llama_server.DEFAULT_IDLE_TIMEOUT_SECONDS
+
+        timers[0].fire()
+        assert not terminated
+        assert len(timers) == 2
+
+        clock.advance(llama_server.DEFAULT_IDLE_TIMEOUT_SECONDS + 1)
+        timers[-1].fire()
+
+        assert terminated == [process]
+        assert instance.status().state == "idle_evicted"
+
+    def test_new_lease_cancels_pending_idle_timer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _install_weights()
+        instance = RerankServer()
+        process = _AliveProcess()
+        clock = _Clock(10.0)
+        timers: list[_FakeTimer] = []
+
+        monkeypatch.setattr(instance, "_process", process)
+        monkeypatch.setattr(instance, "ensure_running", lambda: None)
+        monkeypatch.setattr(instance, "_check_installed", lambda: None)
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+        monkeypatch.setattr(instance, "_monotonic", clock.monotonic)
+        monkeypatch.setattr(
+            instance,
+            "_timer_factory",
+            lambda delay, callback: timers.append(_FakeTimer(delay, callback)) or timers[-1],
+        )
+
+        with instance.lease():
+            pass
+
+        first = timers[-1]
+        assert first.started is True
+        with instance.lease():
+            assert first.cancelled is True
+            assert instance.active_leases == 1
+
+    def test_lease_counter_recovers_when_start_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        instance = RerankServer()
+        monkeypatch.setattr(
+            instance, "ensure_running", lambda: (_ for _ in ()).throw(ConfigurationError("nope"))
+        )
+
+        with pytest.raises(ConfigurationError, match="nope"), instance.lease():
+            pass
+
+        assert instance.active_leases == 0
+
+    def test_evict_if_idle_never_stops_a_compatible_external_server(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_weights()
+        instance = RerankServer()
+        clock = _Clock(500.0)
+        signals: list[object] = []
+
+        monkeypatch.setattr(instance, "_monotonic", clock.monotonic)
+        monkeypatch.setattr(instance, "_check_installed", lambda: None)
+        monkeypatch.setattr(instance, "_healthy", lambda: True)
+        monkeypatch.setattr(
+            instance,
+            "_served_model",
+            lambda: f"/external/{settings.rerank_model_path.name}",
+        )
+        monkeypatch.setattr(llama_server, "_terminate", lambda helper: signals.append(helper))
+        monkeypatch.setattr(
+            llama_server,
+            "_terminate_pid",
+            lambda pid, pgid, token, label: signals.append(pid),
+        )
+
+        with instance._lock:
+            instance._idle_since = clock.monotonic() - llama_server.DEFAULT_IDLE_TIMEOUT_SECONDS - 1
+
+        assert instance.evict_if_idle() is False
+        assert not signals
+        assert instance.status().state == "ready"
+
+    def test_stop_for_app_quit_cancels_idle_timer_and_stops_owned_process(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_weights()
+        instance = RerankServer()
+        process = _AliveProcess()
+        clock = _Clock(50.0)
+        timers: list[_FakeTimer] = []
+        terminated: list[object] = []
+
+        monkeypatch.setattr(instance, "_process", process)
+        monkeypatch.setattr(instance, "ensure_running", lambda: None)
+        monkeypatch.setattr(instance, "_check_installed", lambda: None)
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+        monkeypatch.setattr(instance, "_monotonic", clock.monotonic)
+        monkeypatch.setattr(
+            instance,
+            "_timer_factory",
+            lambda delay, callback: timers.append(_FakeTimer(delay, callback)) or timers[-1],
+        )
+        monkeypatch.setattr(
+            llama_server,
+            "_terminate",
+            lambda helper: terminated.append(helper) or setattr(helper, "_killed", True),
+        )
+
+        with instance.lease():
+            pass
+
+        timer = timers[-1]
+        instance.stop_for_app_quit()
+
+        assert timer.cancelled is True
+        assert terminated == [process]
+        assert instance.status().state == "stopped"
+
+
 # ------------------------------------------------------------------ adoption
 
 
@@ -418,6 +614,67 @@ class TestExternalServer:
 
         instance.stop()
         assert not signals
+
+
+# ------------------------------------------------------------------ status snapshots
+
+
+class TestHelperStatus:
+    def test_status_reports_not_installed_when_weights_are_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+
+        status = instance.status()
+        assert status.state == "not_installed"
+        assert status.lease_count == 0
+
+    def test_status_reports_loading_during_start(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_starting", True)
+
+        status = instance.status()
+
+        assert status.state == "loading"
+        assert status.owned is True
+
+    def test_status_reports_failed_during_cooldown(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _install_weights()
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_failure_message", "start failed")
+        monkeypatch.setattr(instance, "_failed_at", time.monotonic())
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+
+        status = instance.status()
+
+        assert status.state == "failed"
+        assert status.detail == "start failed"
+
+    def test_status_reports_incompatible_when_the_port_holds_the_wrong_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_weights()
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_healthy", lambda: True)
+        monkeypatch.setattr(instance, "_served_model", lambda: "/models/wrong.gguf")
+
+        status = instance.status()
+
+        assert status.state == "incompatible"
+        assert "wrong.gguf" in (status.detail or "")
+
+    def test_status_reports_idle_evicted_after_idle_shutdown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_weights()
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_last_stop_reason", "idle_evicted")
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+
+        status = instance.status()
+
+        assert status.state == "idle_evicted"
 
 
 # ------------------------------------------------------------------ wrong model / unrelated

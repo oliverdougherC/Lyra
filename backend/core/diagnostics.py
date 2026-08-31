@@ -101,13 +101,12 @@ def _tutor_section(row: sqlite3.Row) -> dict[str, object]:
 
 
 def _web_research_section(row: sqlite3.Row) -> dict[str, object]:
-    """Firecrawl configuration, again as flags rather than the base URL itself."""
-    base_url = row["firecrawl_base_url"]
-    configured = bool(base_url)
+    """Redacted Exa configuration without credentials or provider traffic."""
     return {
-        "firecrawl_configured": configured,
-        "firecrawl_is_local": is_local_endpoint(str(base_url)) if configured else None,
-        "scrape_enabled": bool(row["firecrawl_scrape_enabled"]),
+        "provider": "exa",
+        "source_content_enabled": bool(row["source_content_enabled"]),
+        "exa_key_present": secrets.has_exa_api_key(),
+        "exa_key_storage": secrets.exa_api_key_storage(),
     }
 
 

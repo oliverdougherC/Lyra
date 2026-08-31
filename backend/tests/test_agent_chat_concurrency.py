@@ -34,6 +34,7 @@ from backend.api import routes_agent_chat, routes_chat
 from backend.core import (
     agent_attempts,
     agent_store,
+    app_settings,
     profiles,
     sessions,
     source_ledger,
@@ -920,10 +921,10 @@ def test_source_and_profile_proposals_keep_attempt_ownership_across_retry_and_re
     session_id: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    db.execute(
-        "update settings set allow_web_research = 1, firecrawl_scrape_enabled = 1 where id = 1"
+    app_settings.update_settings_row(
+        db,
+        {"allow_web_research": 1, "source_content_enabled": 1},
     )
-    db.commit()
     run = 0
     revision_ids: list[int] = []
     original_finish = tool_audit.finish_event
@@ -1061,10 +1062,10 @@ def test_retrying_identical_research_proposals_does_not_reown_deduplicated_recor
     session_id: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    db.execute(
-        "update settings set allow_web_research = 1, firecrawl_scrape_enabled = 1 where id = 1"
+    app_settings.update_settings_row(
+        db,
+        {"allow_web_research": 1, "source_content_enabled": 1},
     )
-    db.commit()
     snapshot = "The identical evidence sentence."
 
     def fake_fetch(url: str, **kwargs: object) -> dict[str, object]:

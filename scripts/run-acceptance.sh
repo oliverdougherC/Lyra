@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 # Run the real-stack acceptance tests from a clean checkout.
 #
-# This script reproduces exactly what CI does:
+# This script reproduces the real-backend acceptance lane from CI:
 #   1. Installs backend and frontend dependencies.
 #   2. Builds the production frontend.
 #   3. Installs Playwright browsers.
@@ -13,14 +13,22 @@
 #   ./scripts/run-acceptance.sh --headed   # run with visible browser
 #   ./scripts/run-acceptance.sh --debug    # run with Playwright inspector
 #
-# The script checks for port conflicts and refuses to start if ports 3000,
-# 8000, or 18900 are already in use.
+# Optional env overrides:
+#   ACCEPTANCE_FRONTEND_PORT  default 3000
+#   ACCEPTANCE_BACKEND_PORT   default 8000
+#   ACCEPTANCE_TUTOR_PORT     default 18900
+#
+# The script checks for port conflicts and refuses to start if its selected
+# frontend, backend, or tutor-fixture ports are already in use.
 # ---------------------------------------------------------------------------
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+FRONTEND_PORT="${ACCEPTANCE_FRONTEND_PORT:-3000}"
+BACKEND_PORT="${ACCEPTANCE_BACKEND_PORT:-8000}"
+TUTOR_PORT="${ACCEPTANCE_TUTOR_PORT:-18900}"
 
 # ── Port guard ────────────────────────────────────────────────────────────
 check_port() {
@@ -32,9 +40,9 @@ check_port() {
   fi
 }
 
-check_port 3000 "frontend"
-check_port 8000 "backend"
-check_port 18900 "tutor fixture"
+check_port "$FRONTEND_PORT" "frontend"
+check_port "$BACKEND_PORT" "backend"
+check_port "$TUTOR_PORT" "tutor fixture"
 
 # ── Dependencies ──────────────────────────────────────────────────────────
 echo "Installing backend dependencies..."
@@ -56,4 +64,7 @@ echo ""
 echo "Running acceptance tests..."
 echo ""
 cd "$ROOT/frontend"
+ACCEPTANCE_FRONTEND_PORT="$FRONTEND_PORT" \
+ACCEPTANCE_BACKEND_PORT="$BACKEND_PORT" \
+ACCEPTANCE_TUTOR_PORT="$TUTOR_PORT" \
 pnpm exec playwright test --config playwright.acceptance.config.ts "$@"

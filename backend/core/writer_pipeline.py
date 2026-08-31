@@ -2137,7 +2137,6 @@ def _prepare_research_section(
             results = web_research.search_web(
                 job_text,
                 allowed=True,
-                firecrawl_base_url=capabilities.firecrawl_base_url,
                 private_context=search_private_context,
             )
             fetch_limit = writer_budgets.get_budget(job.depth).section_retries
@@ -2147,8 +2146,7 @@ def _prepare_research_section(
                 fetched = web_research.fetch_source(
                     str(candidate["url"]),
                     allowed=True,
-                    firecrawl_base_url=capabilities.firecrawl_base_url,
-                    scrape_enabled=capabilities.firecrawl_scrape_enabled,
+                    source_content_enabled=capabilities.source_content_enabled,
                 )
                 source = source_ledger.upsert_source(
                     conn,

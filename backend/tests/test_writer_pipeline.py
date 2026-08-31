@@ -1472,7 +1472,7 @@ def test_planned_research_reports_when_web_research_degrades_to_course_only(
     captured: dict[str, object] = {}
 
     def guarded_search(
-        query: str, *, allowed: bool, firecrawl_base_url: str, private_context: tuple[str, ...]
+        query: str, *, allowed: bool, private_context: tuple[str, ...]
     ) -> list[dict[str, str]]:
         captured["query"] = query
         captured["private_context"] = private_context

@@ -44,7 +44,6 @@ LOG_DIR = ROOT / "logs"
 BACKEND_LOG = LOG_DIR / "backend.log"
 FRONTEND_LOG = LOG_DIR / "frontend.log"
 SUPERVISOR_LOG = LOG_DIR / "supervisor.log"
-FIRECRAWL_SCRIPT = ROOT / "infra" / "firecrawl.py"
 
 BACKEND_PORT = 8000
 FRONTEND_PORT = 3000
@@ -1153,32 +1152,35 @@ def ensure_frontend_environment(metadata: dict[str, Any]) -> str:
 def frontend_build_inputs() -> list[Path]:
     inputs = [
         FRONTEND / ".env.local",
-        FRONTEND / "next.config.ts",
+        FRONTEND / "index.html",
         FRONTEND / "package.json",
         FRONTEND / "pnpm-lock.yaml",
-        FRONTEND / "postcss.config.mjs",
         FRONTEND / "tsconfig.json",
+        FRONTEND / "vite.config.ts",
     ]
+    public = FRONTEND / "public"
+    if public.is_dir():
+        inputs.extend(path for path in public.rglob("*") if path.is_file())
     source = FRONTEND / "src"
     if source.is_dir():
         inputs.extend(path for path in source.rglob("*") if path.is_file())
     return inputs
 
 
-def remove_next_cache() -> None:
-    target = FRONTEND / ".next"
+def remove_frontend_build_artifacts() -> None:
+    target = FRONTEND / "dist"
     if not target.exists():
         return
     if target.is_symlink() or target.resolve().parent != FRONTEND.resolve():
         raise LauncherError(f"refusing to remove unexpected build-cache path: {target}")
     shutil.rmtree(target)
-    ok("removed frontend/.next")
+    ok("removed frontend/dist")
 
 
 def ensure_frontend_build(pnpm: str, metadata: dict[str, Any]) -> None:
     fingerprint = sha256_files(frontend_build_inputs())
-    build_id = FRONTEND / ".next" / "BUILD_ID"
-    if build_id.is_file() and metadata.get("build_fingerprint") == fingerprint:
+    build_output = FRONTEND / "dist" / "index.html"
+    if build_output.is_file() and metadata.get("build_fingerprint") == fingerprint:
         ok("production frontend build is current")
         return
     step("Building the production frontend")
@@ -1200,13 +1202,9 @@ def ensure_frontend_build(pnpm: str, metadata: dict[str, Any]) -> None:
 
 
 def bundled_services() -> tuple[BundledService, ...]:
-    """Return the services shipped with this checkout.
+    """Return the optional helper services shipped with this checkout."""
 
-    Keeping this as a factory makes the helper paths patchable in tests and gives future
-    llama.cpp or vLLM integrations one explicit registration point.
-    """
-
-    return (BundledService("firecrawl", FIRECRAWL_SCRIPT),)
+    return ()
 
 
 def configured_bundled_services(names: Iterable[str]) -> tuple[BundledService, ...]:
@@ -1234,15 +1232,9 @@ def invoke_bundled_service(
                 helper_label = service.helper.relative_to(ROOT)
             except ValueError:
                 helper_label = service.helper
-            degraded_hint = (
-                " or use --skip-firecrawl for an explicit degraded launch"
-                if service.name == "firecrawl"
-                else ""
-            )
             raise LauncherError(
                 f"the bundled {service.name} helper is missing at "
                 f"{helper_label}; restore the complete Lyra checkout"
-                f"{degraded_hint}"
             )
         warn(f"bundled service {service.name} helper is missing: {service.helper}")
         return 1
@@ -1307,17 +1299,6 @@ def stop_configured_bundled_services(names: Iterable[str]) -> bool:
     services = configured_bundled_services(configured_names)
     all_known = len(services) == len(configured_names)
     return stop_bundled_services(services) and all_known
-
-
-def firecrawl_command(command: str, *, required: bool, wait: bool = True) -> int:
-    """Compatibility wrapper for callers and tests that target Firecrawl directly."""
-
-    return invoke_bundled_service(
-        BundledService("firecrawl", FIRECRAWL_SCRIPT),
-        command,
-        required=required,
-        wait=wait,
-    )
 
 
 def process_record(
@@ -1659,7 +1640,7 @@ def stop_supervised_stack(runtime: dict[str, Any]) -> bool:
 
 def start(args: argparse.Namespace) -> int:
     runtime = load_runtime()
-    selected_services = () if args.skip_firecrawl else bundled_services()
+    selected_services = bundled_services()
     previous_bundle_names = tuple(runtime["bundled_services"])
     previously_healthy_bundles: set[str] = set()
     bundle_start_attempted = False
@@ -1674,7 +1655,7 @@ def start(args: argparse.Namespace) -> int:
             step("Stopping the supervised stack before cleaning")
             if not stop_supervised_stack(runtime):
                 raise LauncherError("could not safely stop the existing app for --clean")
-            remove_next_cache()
+            remove_frontend_build_artifacts()
 
         # Recover only listeners that can be proven to be this checkout's exact Lyra
         # command. Every other port conflict remains untouched.
@@ -2073,12 +2054,6 @@ def core_stack_is_running(runtime: dict[str, Any]) -> bool:
     )
 
 
-def firecrawl_is_intentionally_skipped(runtime: dict[str, Any], args: argparse.Namespace) -> bool:
-    if args.skip_firecrawl:
-        return True
-    return core_stack_is_running(runtime) and not runtime["bundled_services"]
-
-
 def report_core_ports_without_state(*, indent: str = "") -> bool:
     """Report core-port state when ownership records cannot be trusted, signaling nothing.
 
@@ -2122,10 +2097,6 @@ def status(args: argparse.Namespace) -> int:
         )
         say(description)
         healthy = healthy and component_healthy
-    if firecrawl_is_intentionally_skipped(runtime, args):
-        say("firecrawl: intentionally skipped; web research is disabled for this app session")
-        return 0 if healthy else 1
-
     services = configured_bundled_services(
         runtime["bundled_services"] or [service.name for service in bundled_services()]
     )
@@ -2208,36 +2179,6 @@ def doctor(args: argparse.Namespace) -> int:
         if component_state_is_blocking(description):
             failures += 1
 
-    if firecrawl_is_intentionally_skipped(runtime, args):
-        say("firecrawl diagnostics:")
-        say("  intentionally skipped; web research is disabled for this app session")
-        return 0 if failures == 0 else 1
-
-    if not args.skip_firecrawl:
-        stack_running = core_stack_is_running(runtime)
-        for service in bundled_services():
-            say(f"{service.name} diagnostics:")
-            if not service.helper.is_file():
-                warn(f"bundled service {service.name} helper is missing:")
-                say(f"    {helper_label(service.helper)}")
-                failures += 1
-                continue
-            if invoke_bundled_service(service, "doctor", required=False) == 0:
-                ok(f"{service.name} is available")
-            else:
-                if stack_running and service.name in runtime["bundled_services"]:
-                    warn(
-                        f"{service.name} is temporarily unavailable; core Lyra can still run "
-                        "without web research"
-                    )
-                    continue
-                failures += 1
-        supervisor = runtime["processes"].get("supervisor")
-        if runtime["bundled_services"] and not (
-            isinstance(supervisor, dict) and record_matches_process(supervisor)
-        ):
-            warn("bundled services are configured but their supervisor is not running")
-            failures += 1
     return 0 if failures == 0 else 1
 
 
@@ -2246,15 +2187,6 @@ def logs(args: argparse.Namespace) -> int:
     for path in (BACKEND_LOG, FRONTEND_LOG, SUPERVISOR_LOG):
         path.touch(exist_ok=True)
     processes: list[subprocess.Popen[bytes]] = []
-    if not args.skip_firecrawl:
-        for service in bundled_services():
-            if service.helper.is_file():
-                processes.append(
-                    subprocess.Popen(  # noqa: S603
-                        [sys.executable, str(service.helper), "logs", "--follow"],
-                        cwd=ROOT,
-                    )
-                )
     tail_executable = shutil.which("tail")
     if not tail_executable:
         for path in (BACKEND_LOG, FRONTEND_LOG, SUPERVISOR_LOG):
@@ -2413,13 +2345,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default="start",
     )
     parser.add_argument("--dev", action="store_true", help="use hot-reloading dev servers")
-    parser.add_argument("--clean", action="store_true", help="rebuild the Next.js cache")
+    parser.add_argument("--clean", action="store_true", help="rebuild the frontend build output")
     parser.add_argument("--no-browser", action="store_true", help="do not open the app")
-    parser.add_argument(
-        "--skip-firecrawl",
-        action="store_true",
-        help="start or inspect Lyra without the bundled Firecrawl stack",
-    )
     parser.add_argument("--archive", type=Path, help="explicit backup archive path")
     parser.add_argument("--data-dir", type=Path, help="explicit restore target directory")
     parser.add_argument("--db-path", type=Path, help="explicit restore database path")

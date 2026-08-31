@@ -28,8 +28,7 @@ UPDATABLE_COLUMNS = frozenset(
         "allow_web_research",
         "parallel_requests",
         "parallel_concurrency",
-        "firecrawl_base_url",
-        "firecrawl_scrape_enabled",
+        "source_content_enabled",
     }
 )
 
@@ -78,7 +77,6 @@ def update_settings_row(conn: sqlite3.Connection, values: dict[str, object]) -> 
     if unknown:
         raise ValueError(f"Unknown settings column(s): {', '.join(unknown)}")
 
-    values = dict(values)
     if _changes_endpoint(conn, values):
         # Forgotten rather than re-probed here: probing is a network call and this is a
         # synchronous write on the settings screen. The next solve asks again.

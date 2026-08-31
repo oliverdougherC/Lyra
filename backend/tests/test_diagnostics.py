@@ -23,6 +23,8 @@ def _known_key_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """A fixed key-storage answer, so no test reaches the real OS keychain."""
     monkeypatch.setattr(secrets, "has_api_key", lambda: False)
     monkeypatch.setattr(secrets, "api_key_storage", lambda: "keychain")
+    monkeypatch.setattr(secrets, "has_exa_api_key", lambda: False)
+    monkeypatch.setattr(secrets, "exa_api_key_storage", lambda: "keychain")
 
 
 def test_redact_path_anchors_a_checkout_path_to_the_repo(tmp_path: Path) -> None:
@@ -84,6 +86,8 @@ def test_build_diagnostics_reports_key_presence_and_storage_only(db: sqlite3.Con
 
     # Exactly two facts about the key, and neither is its value.
     assert bundle["api_key"] == {"present": False, "storage": "keychain"}
+    assert bundle["web_research"]["exa_key_present"] is False
+    assert bundle["web_research"]["exa_key_storage"] == "keychain"
 
 
 def test_build_diagnostics_counts_content_without_naming_it(

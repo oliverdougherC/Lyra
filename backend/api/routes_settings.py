@@ -1,28 +1,22 @@
-"""Settings endpoints: stored configuration, plus live checks against the tutor endpoint.
+"""Settings endpoints: stored configuration, plus explicit tutor and Exa checks.
 
-The API key is write-only across this boundary. It is accepted on `PUT`, handed to the
-keychain, and never read back: responses carry only `api_key_set` and `api_key_storage`.
-Theme is not stored server-side at all; it lives in the browser.
+Secret values are write-only across this boundary. They are accepted on `PUT`, handed to
+the keychain abstraction, and never read back: responses carry only `*_key_set` and
+`*_key_storage`. Theme is not stored server-side at all; it lives in the browser.
 """
 
 import sqlite3
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
+from backend.core import exa
 from backend.core.app_settings import (
     get_settings_row,
     resolve_tutor_config,
     update_settings_row,
 )
-from backend.core.firecrawl import (
-    FirecrawlClient,
-    FirecrawlError,
-    FirecrawlMisconfiguredError,
-    FirecrawlTransientError,
-)
-from backend.core.web_policy import LoopbackPolicyError, validate_firecrawl_base_url
 from backend.llm import client
 from backend.llm.locality import hostname_of, is_local_endpoint
 from backend.storage import secrets
@@ -60,8 +54,8 @@ class SettingsRead(BaseModel):
     allow_web_research: bool
     parallel_requests: bool
     parallel_concurrency: int
-    firecrawl_base_url: str
-    firecrawl_scrape_enabled: bool
+    exa_api_key_set: bool
+    exa_api_key_storage: Literal["keychain", "file"]
 
 
 class SettingsUpdate(BaseModel):
@@ -77,22 +71,14 @@ class SettingsUpdate(BaseModel):
     allow_web_research: bool | None = None
     parallel_requests: bool | None = None
     parallel_concurrency: int | None = Field(default=None, ge=1)
-    firecrawl_base_url: str | None = None
-    firecrawl_scrape_enabled: bool | None = None
+    exa_api_key: str | None = Field(
+        default=None,
+        description="Routed to the keychain, never stored in the database. Empty string deletes.",
+    )
     api_key: str | None = Field(
         default=None,
         description="Routed to the keychain, never stored in the database. Empty string deletes.",
     )
-
-    @field_validator("firecrawl_base_url")
-    @classmethod
-    def _validate_firecrawl_base_url(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        try:
-            return validate_firecrawl_base_url(value).normalized_url
-        except (LoopbackPolicyError, ValueError) as exc:
-            raise ValueError(str(exc)) from exc
 
 
 class ConnectionTestResult(BaseModel):
@@ -123,11 +109,22 @@ class ModelList(BaseModel):
     models: list[str]
 
 
-class FirecrawlTestResult(BaseModel):
-    """Outcome of the loopback Firecrawl readiness probe."""
+class ExaTestResult(BaseModel):
+    """Outcome of an explicit Exa provider probe."""
 
     ok: bool
-    status: Literal["available", "temporarily_unavailable", "misconfigured"]
+    status: Literal[
+        "available",
+        "missing_key",
+        "invalid_key",
+        "permission_denied",
+        "quota_exhausted",
+        "rate_limited",
+        "timeout",
+        "offline",
+        "malformed_response",
+        "temporarily_unavailable",
+    ]
     message: str
 
 
@@ -160,8 +157,8 @@ def _settings_response(row: sqlite3.Row) -> SettingsRead:
         allow_web_research=bool(row["allow_web_research"]),
         parallel_requests=bool(row["parallel_requests"]),
         parallel_concurrency=int(row["parallel_concurrency"]),
-        firecrawl_base_url=str(row["firecrawl_base_url"]),
-        firecrawl_scrape_enabled=bool(row["firecrawl_scrape_enabled"]),
+        exa_api_key_set=secrets.has_exa_api_key(),
+        exa_api_key_storage=secrets.exa_api_key_storage(),
     )
 
 
@@ -174,21 +171,9 @@ def read_settings(conn: DbConn) -> SettingsRead:
 def write_settings(payload: SettingsUpdate, conn: DbConn) -> SettingsRead:
     current = get_settings_row(conn)
     values = payload.model_dump(exclude_unset=True)
-    for column in (
-        "allow_web_research",
-        "parallel_requests",
-        "parallel_concurrency",
-        "firecrawl_scrape_enabled",
-    ):
+    for column in ("allow_web_research", "parallel_requests", "parallel_concurrency"):
         if values.get(column) is None:
             values.pop(column, None)
-
-    if "firecrawl_base_url" in values:
-        base_url = values["firecrawl_base_url"]
-        if base_url is None:
-            values.pop("firecrawl_base_url")
-        else:
-            values["firecrawl_base_url"] = validate_firecrawl_base_url(str(base_url)).normalized_url
 
     if "api_key" in values:
         api_key = values.pop("api_key")
@@ -198,6 +183,13 @@ def write_settings(payload: SettingsUpdate, conn: DbConn) -> SettingsRead:
             secrets.delete_api_key()
         elif api_key is not None:
             secrets.set_api_key(api_key)
+
+    if "exa_api_key" in values:
+        exa_api_key = values.pop("exa_api_key")
+        if exa_api_key == "":
+            secrets.delete_exa_api_key()
+        elif exa_api_key is not None:
+            secrets.set_exa_api_key(exa_api_key)
 
     endpoint_changed = False
     if "endpoint_url" in values:
@@ -278,22 +270,69 @@ async def read_endpoint_models(conn: DbConn) -> ModelList:
     return ModelList(models=await client.list_models(config.endpoint_url, config.api_key))
 
 
-@router.post("/settings/test-firecrawl", response_model=FirecrawlTestResult)
-def test_firecrawl(conn: DbConn) -> FirecrawlTestResult:
-    """Probe only the configured loopback readiness endpoint; never a cloud service."""
-    row = get_settings_row(conn)
-    try:
-        FirecrawlClient(base_url=str(row["firecrawl_base_url"])).check_readiness()
-    except (FirecrawlMisconfiguredError, ValueError):
-        return FirecrawlTestResult(
+@router.post("/settings/test-exa", response_model=ExaTestResult)
+def test_exa(conn: DbConn) -> ExaTestResult:
+    """Probe Exa explicitly; never as part of application startup."""
+    del conn
+    key = secrets.get_exa_api_key()
+    if key is None:
+        return ExaTestResult(
             ok=False,
-            status="misconfigured",
-            message="Firecrawl is misconfigured; web research is disabled.",
+            status="missing_key",
+            message="No Exa API key is configured.",
         )
-    except (FirecrawlTransientError, FirecrawlError):
-        return FirecrawlTestResult(
+    try:
+        exa.ExaClient(api_key=key).check_readiness()
+    except exa.ExaQuotaExceededError:
+        return ExaTestResult(
+            ok=False,
+            status="quota_exhausted",
+            message="The Exa account or API key has exhausted its budget.",
+        )
+    except exa.ExaRateLimitError:
+        return ExaTestResult(
+            ok=False,
+            status="rate_limited",
+            message="Exa rate limited the request. Retry shortly.",
+        )
+    except exa.ExaAuthError:
+        return ExaTestResult(
+            ok=False,
+            status="invalid_key",
+            message="The Exa API key is invalid or not authorized.",
+        )
+    except exa.ExaPermissionError:
+        return ExaTestResult(
+            ok=False,
+            status="permission_denied",
+            message="The Exa API key cannot access the required search capability.",
+        )
+    except exa.ExaTimeoutError:
+        return ExaTestResult(
+            ok=False,
+            status="timeout",
+            message="Exa timed out before responding.",
+        )
+    except exa.ExaOfflineError:
+        return ExaTestResult(
+            ok=False,
+            status="offline",
+            message="Exa could not be reached.",
+        )
+    except exa.ExaSchemaError:
+        return ExaTestResult(
+            ok=False,
+            status="malformed_response",
+            message="Exa returned a malformed response.",
+        )
+    except (
+        exa.ExaConnectionInterruptedError,
+        exa.ExaTransientError,
+        exa.ExaError,
+    ):
+        return ExaTestResult(
             ok=False,
             status="temporarily_unavailable",
-            message="Firecrawl is temporarily unavailable; web research is disabled.",
+            message="Exa is temporarily unavailable; web research is disabled.",
         )
-    return FirecrawlTestResult(ok=True, status="available", message="Firecrawl is available.")
+    return ExaTestResult(ok=True, status="available", message="Exa is available.")

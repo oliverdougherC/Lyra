@@ -102,17 +102,19 @@ def _embed_all(texts: list[str], prefix: str) -> list[list[float]]:
     HTTP error was reported as an unreachable server, and one oversized chunk failed the
     whole document.
     """
-    embedding_server.ensure_running()
+    # Tokenization and every batch request share one residency lease. The idle
+    # coordinator must not reclaim the helper between a long input's tokenizer pass and
+    # its final embedding batch.
+    with embedding_server.lease():
+        groups = [_split_to_fit(prefix, text) for text in texts]
+        pieces = [prefix + piece for group in groups for piece in group]
 
-    groups = [_split_to_fit(prefix, text) for text in texts]
-    pieces = [prefix + piece for group in groups for piece in group]
+        vectors: list[list[float]] = []
+        for start in range(0, len(pieces), BATCH_SIZE):
+            batch = pieces[start : start + BATCH_SIZE]
+            vectors.extend(_parse_vectors(_request(batch), len(batch)))
 
-    vectors: list[list[float]] = []
-    for start in range(0, len(pieces), BATCH_SIZE):
-        batch = pieces[start : start + BATCH_SIZE]
-        vectors.extend(_parse_vectors(_request(batch), len(batch)))
-
-    return _regroup(groups, vectors)
+        return _regroup(groups, vectors)
 
 
 def _split_to_fit(prefix: str, text: str) -> list[str]:

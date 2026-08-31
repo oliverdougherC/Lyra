@@ -89,14 +89,14 @@ def test_web_tools_are_gated_then_snapshot_and_record_evidence(
     monkeypatch.setattr(
         writer_tools.web_research,
         "search_web",
-        lambda query, *, allowed, firecrawl_base_url, private_context=(): [
+        lambda query, *, allowed, private_context=(): [
             {"title": "Study", "url": "https://example.test/study"}
         ],
     )
     monkeypatch.setattr(
         writer_tools.web_research,
         "fetch_source",
-        lambda url, *, allowed, firecrawl_base_url, scrape_enabled: {
+        lambda url, *, allowed, source_content_enabled: {
             "url": url,
             "final_url": url,
             "title": "Study",
@@ -151,7 +151,7 @@ def test_web_search_refuses_overlap_with_private_draft_and_comment_context(
     db.commit()
 
     def guarded_search(
-        query: str, *, allowed: bool, firecrawl_base_url: str, private_context: tuple[str, ...]
+        query: str, *, allowed: bool, private_context: tuple[str, ...]
     ) -> list[dict[str, str]]:
         guarded = query_guard.guard_web_query(query, private_context=private_context)
         if isinstance(guarded, query_guard.QueryRefusal):

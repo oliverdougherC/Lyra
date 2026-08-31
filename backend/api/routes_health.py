@@ -1,8 +1,8 @@
-"""Process liveness and dependency-aware readiness probes.
+"""Process liveness plus configuration-only readiness probes.
 
 The launcher uses these endpoints to distinguish a running HTTP process from an
-application that can safely serve requests. Firecrawl is reported separately because
-Lyra remains usable for local documents when optional web research is unavailable.
+application that can safely serve requests. Optional Exa web research is reported from
+local configuration only: Lyra never probes Exa during launch or readiness checks.
 """
 
 from __future__ import annotations
@@ -17,12 +17,6 @@ from pydantic import BaseModel
 
 from backend.core.app_settings import get_settings_row
 from backend.core.diagnostics import build_diagnostics
-from backend.core.firecrawl import (
-    FirecrawlClient,
-    FirecrawlError,
-    FirecrawlMisconfiguredError,
-    FirecrawlTransientError,
-)
 from backend.storage.database import MIGRATIONS_DIR, connect
 
 logger = logging.getLogger("lyra.health")
@@ -56,8 +50,7 @@ class ReadyHealth(BaseModel):
 @dataclass(frozen=True)
 class _DatabaseProbe:
     component: ComponentHealth
-    firecrawl_base_url: str | None = None
-    firecrawl_scrape_enabled: bool | None = None
+    allow_web_research: bool | None = None
 
 
 @router.get("/live", response_model=LiveHealth)
@@ -68,12 +61,7 @@ def live() -> LiveHealth:
 
 @router.get("/diagnostics")
 def diagnostics() -> dict[str, object]:
-    """A structured, redacted snapshot of this install, safe to paste into a bug report.
-
-    Carries schema currency, tutor and web-research configuration, installed optional
-    models, content counts, and platform - never document text, the tutor key, or a private
-    path. See `core.diagnostics` for the rules it holds to.
-    """
+    """A structured, redacted snapshot of this install, safe to paste into a bug report."""
     conn = connect()
     try:
         return build_diagnostics(conn)
@@ -87,32 +75,19 @@ def diagnostics() -> dict[str, object]:
     responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ReadyHealth}},
 )
 def ready(response: Response) -> ReadyHealth:
-    """Report required database readiness and optional Firecrawl availability."""
+    """Report required database readiness and optional web-research configuration."""
     database = _check_database()
     components = {"database": database.component}
 
-    if database.firecrawl_base_url is None:
-        components["firecrawl"] = ComponentHealth(
+    if database.allow_web_research is None:
+        components["web_research"] = ComponentHealth(
             status="skipped",
             required=False,
-            message="Firecrawl was not checked because the database is not ready.",
-        )
-        components["web_scrape"] = ComponentHealth(
-            status="skipped",
-            required=False,
-            message="The web scrape policy was not checked because the database is not ready.",
+            message="Web research was not checked because the database is not ready.",
         )
     else:
-        components["firecrawl"] = _check_firecrawl(database.firecrawl_base_url)
-        enabled = database.firecrawl_scrape_enabled is True
-        components["web_scrape"] = ComponentHealth(
-            status="ready" if enabled else "not_ready",
-            required=False,
-            message=(
-                "Web scraping is enabled."
-                if enabled
-                else "Web scraping remains disabled until the redirect-safety gate passes."
-            ),
+        components["web_research"] = _web_research_component(
+            allow_web_research=database.allow_web_research
         )
 
     if database.component.status != "ready":
@@ -144,12 +119,9 @@ def _check_database() -> _DatabaseProbe:
                 required=True,
                 message="Database is ready.",
             ),
-            firecrawl_base_url=str(settings_row["firecrawl_base_url"]),
-            firecrawl_scrape_enabled=bool(settings_row["firecrawl_scrape_enabled"]),
+            allow_web_research=bool(settings_row["allow_web_research"]),
         )
     except Exception as exc:
-        # Health responses and logs intentionally omit exception text: sqlite errors commonly
-        # contain absolute paths, which this unauthenticated loopback API must not disclose.
         logger.warning("Database readiness probe failed (%s)", type(exc).__name__)
         return _DatabaseProbe(
             ComponentHealth(
@@ -163,33 +135,20 @@ def _check_database() -> _DatabaseProbe:
             conn.close()
 
 
-def _check_firecrawl(base_url: str) -> ComponentHealth:
-    """Probe optional web research without allowing it to fail Lyra readiness."""
-    try:
-        FirecrawlClient(base_url=base_url).check_readiness()
-    except (FirecrawlMisconfiguredError, ValueError):
+def _web_research_component(*, allow_web_research: bool) -> ComponentHealth:
+    if not allow_web_research:
         return ComponentHealth(
-            status="misconfigured",
+            status="not_ready",
             required=False,
-            message="Firecrawl is misconfigured; web research is disabled.",
-        )
-    except (FirecrawlTransientError, FirecrawlError):
-        return ComponentHealth(
-            status="temporarily_unavailable",
-            required=False,
-            message="Firecrawl is temporarily unavailable; web research is disabled.",
-        )
-    except Exception as exc:
-        logger.warning("Firecrawl readiness probe failed (%s)", type(exc).__name__)
-        return ComponentHealth(
-            status="temporarily_unavailable",
-            required=False,
-            message="Firecrawl is temporarily unavailable; web research is disabled.",
+            message="Web research is configured but currently disabled in Settings.",
         )
     return ComponentHealth(
         status="available",
         required=False,
-        message="Firecrawl is available.",
+        message=(
+            "Web research is enabled. Credential presence and connectivity are checked only "
+            "when Settings or an explicit Exa action requests them."
+        ),
     )
 
 

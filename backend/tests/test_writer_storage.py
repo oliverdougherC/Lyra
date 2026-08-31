@@ -61,8 +61,7 @@ def test_writer_capability_defaults_are_off_serial_and_class_overrides_are_tri_s
         allow_web_research=False,
         parallel_requests=False,
         parallel_concurrency=1,
-        firecrawl_base_url="http://127.0.0.1:3002",
-        firecrawl_scrape_enabled=False,
+        source_content_enabled=False,
     )
 
     effective = writer_budgets.update_class_capability_overrides(

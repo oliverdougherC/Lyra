@@ -1,9 +1,8 @@
-"""Storage for the single secret Lyra holds: the tutor endpoint API key.
+"""Independent storage for Lyra's tutor and Exa API credentials.
 
-The key lives in the OS keychain under service `lyra`, username `tutor-endpoint`. When
-the machine has no working keyring backend, it falls back to `data/.api_key`, created
-with mode `0o600`, and `api_key_storage()` reports `"file"` so the interface can say
-plainly that the key is stored unencrypted.
+Each value has its own OS-keychain username and replace/delete lifecycle. When the
+machine has no working keyring backend, the values fall back to separate owner-only files
+inside the data directory; the settings response reports that fallback honestly.
 
 **Transition invariant (PLA-302):** At any instant, at most one authoritative copy of the
 key exists. After a successful keychain write, the fallback file is removed before success
@@ -29,6 +28,9 @@ from backend.storage import private
 
 SERVICE = "lyra"
 USERNAME = "tutor-endpoint"
+EXA_SERVICE = "lyra"
+EXA_USERNAME = "exa-web-research"
+EXA_KEY_FILENAME = ".exa_api_key"
 
 _keyring_ok: bool | None = None
 
@@ -41,6 +43,11 @@ def _keyring() -> ModuleType:
 def _key_file() -> Path:
     """Fallback location, resolved per call so a relocated `data_dir` is honoured."""
     return settings.data_dir / ".api_key"
+
+
+def _exa_key_file() -> Path:
+    """Fallback location for the Exa key, resolved per call."""
+    return settings.data_dir / EXA_KEY_FILENAME
 
 
 def _keyring_usable() -> bool:
@@ -80,6 +87,12 @@ def _remove_keychain_entry() -> None:
     """Remove the keychain entry if it exists, tolerating absence."""
     with suppress(keyring.errors.PasswordDeleteError):
         _keyring().delete_password(SERVICE, USERNAME)
+
+
+def _remove_exa_keychain_entry() -> None:
+    """Remove the Exa keychain entry if it exists, tolerating absence."""
+    with suppress(keyring.errors.PasswordDeleteError):
+        _keyring().delete_password(EXA_SERVICE, EXA_USERNAME)
 
 
 def set_api_key(value: str) -> None:
@@ -178,6 +191,76 @@ def delete_api_key() -> None:
 
 def api_key_storage() -> Literal["keychain", "file"]:
     """Where a key would be stored right now, for the interface to state honestly."""
+    return "keychain" if _keyring_usable() else "file"
+
+
+def set_exa_api_key(value: str) -> None:
+    """Store the Exa API key, replacing any existing one."""
+    keychain_was_reachable = _keyring_usable()
+    if keychain_was_reachable:
+        try:
+            _keyring().set_password(EXA_SERVICE, EXA_USERNAME, value)
+        except keyring.errors.KeyringError:
+            _demote_to_file()
+        else:
+            try:
+                _exa_key_file().unlink(missing_ok=True)
+            except OSError:
+                try:
+                    _remove_exa_keychain_entry()
+                except keyring.errors.KeyringError:
+                    raise KeyError("Credential authority is ambiguous for the Exa key.") from None
+                raise
+            return
+
+    path = _exa_key_file()
+    private.secure_mkdir(path.parent, root=settings.data_dir)
+    private.write_private_text(path, value)
+    if keychain_was_reachable:
+        try:
+            _remove_exa_keychain_entry()
+        except keyring.errors.KeyringError:
+            _exa_key_file().unlink(missing_ok=True)
+            raise KeyError("Cannot guarantee single-authority Exa credential") from None
+
+
+def get_exa_api_key() -> str | None:
+    """The stored Exa API key, or None when none is set."""
+    if _keyring_usable():
+        try:
+            return _keyring().get_password(EXA_SERVICE, EXA_USERNAME) or None
+        except keyring.errors.KeyringError:
+            _demote_to_file()
+    try:
+        value = private.read_private_text(_exa_key_file(), encoding="utf-8").strip()
+    except OSError:
+        return None
+    return value or None
+
+
+def has_exa_api_key() -> bool:
+    """Whether an Exa key is stored."""
+    return get_exa_api_key() is not None
+
+
+def delete_exa_api_key() -> None:
+    """Forget the stored Exa key. Idempotent."""
+    keychain_entry_survived = False
+    if _keyring_usable():
+        try:
+            _keyring().delete_password(EXA_SERVICE, EXA_USERNAME)
+        except keyring.errors.PasswordDeleteError:
+            pass
+        except keyring.errors.KeyringError:
+            keychain_entry_survived = True
+            _demote_to_file()
+    _exa_key_file().unlink(missing_ok=True)
+    if keychain_entry_survived:
+        raise KeyError("Exa keychain entry could not be deleted")
+
+
+def exa_api_key_storage() -> Literal["keychain", "file"]:
+    """Where the Exa key would be stored right now."""
     return "keychain" if _keyring_usable() else "file"
 
 

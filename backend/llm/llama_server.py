@@ -55,8 +55,10 @@ import sys
 import threading
 import time
 from collections import deque
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import IO
+from typing import IO, Literal, Protocol
 
 import httpx
 
@@ -87,13 +89,52 @@ _HEALTH_RECHECK_SECONDS = 30.0
 # After this many consecutive unhealthy-terminate-restart cycles without a successful
 # health check in between, enter the failure cooldown rather than restarting forever.
 _MAX_UNHEALTHY_RESTARTS = 3
+DEFAULT_IDLE_TIMEOUT_SECONDS = 300.0
 
 # Durable ownership records so a restarted backend can distinguish its own surviving
 # child from PID reuse or an unrelated process.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-_RUNTIME_DIR = _PROJECT_ROOT / ".lyra"
+
+
+def _default_runtime_dir() -> Path:
+    if settings.packaged_mode:
+        return settings.data_dir / ".runtime"
+    return _PROJECT_ROOT / ".lyra"
+
+
+_RUNTIME_DIR = _default_runtime_dir()
 _OWNERSHIP_FILE = _RUNTIME_DIR / "server_ownership.json"
 _ownership_lock = threading.Lock()
+
+_STOP_REASON_STOPPED = "stopped"
+_STOP_REASON_IDLE_EVICTED = "idle_evicted"
+HelperState = Literal[
+    "stopped",
+    "loading",
+    "ready",
+    "idle_evicted",
+    "failed",
+    "incompatible",
+    "not_installed",
+]
+
+
+@dataclass(frozen=True)
+class HelperStatus:
+    """The helper's current lifecycle state, for UI, diagnostics, and tests."""
+
+    state: HelperState
+    lease_count: int
+    owned: bool
+    idle_timeout_seconds: float
+    idle_seconds: float | None = None
+    detail: str | None = None
+
+
+class _CancelableTimer(Protocol):
+    def start(self) -> None: ...
+
+    def cancel(self) -> None: ...
 
 
 # ------------------------------------------------------------------ process identity
@@ -230,7 +271,8 @@ def _save_ownership(data: dict) -> None:
     is durably published where supported so a power loss after the rename
     cannot revert to the previous content.
     """
-    _RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    _RUNTIME_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _RUNTIME_DIR.chmod(0o700)
     tmp = _OWNERSHIP_FILE.with_suffix(".tmp")
     payload = json.dumps(data, indent=2).encode()
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -390,6 +432,12 @@ def _drain(stream: IO[bytes], tail: "deque[str]") -> None:
         stream.close()
 
 
+def _idle_seconds(idle_since: float | None, monotonic: Callable[[], float]) -> float | None:
+    if idle_since is None:
+        return None
+    return max(0.0, monotonic() - idle_since)
+
+
 class LlamaServer:
     """One owned `llama-server` subprocess: spawn, adopt, verify, watch, stop.
 
@@ -414,7 +462,7 @@ class LlamaServer:
         self._start_failed_message = start_failed_message
         self._process: subprocess.Popen[bytes] | None = None
         self._binary: Path | None = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._stderr_tail: deque[str] = deque(maxlen=_STDERR_TAIL_LINES)
         self._stderr_thread: threading.Thread | None = None
         self._failure_message: str | None = None
@@ -424,6 +472,15 @@ class LlamaServer:
         self._adopted_start_token: str | None = None
         self._last_health_ok: float = 0.0
         self._unhealthy_restarts: int = 0
+        self._lease_count: int = 0
+        self._idle_since: float | None = None
+        self._idle_timer: _CancelableTimer | None = None
+        self._starting: bool = False
+        self._last_stop_reason: str | None = None
+        self._timer_factory: Callable[[float, Callable[[], None]], _CancelableTimer] = (
+            threading.Timer
+        )
+        self._monotonic: Callable[[], float] = time.monotonic
 
     # ------------------------------------------------------------------ facts
 
@@ -449,6 +506,152 @@ class LlamaServer:
     def base_url(self) -> str:
         return f"http://127.0.0.1:{self.port}"
 
+    @property
+    def idle_timeout_seconds(self) -> float:
+        """Default grace period before an unused owned helper is evicted."""
+        return DEFAULT_IDLE_TIMEOUT_SECONDS
+
+    @property
+    def active_leases(self) -> int:
+        with self._lock:
+            return self._lease_count
+
+    @contextlib.contextmanager
+    def lease(self) -> Iterator[None]:
+        """Hold the helper resident for one active request or job.
+
+        Callers wrap the exact request lifetime in this context. The helper may be evicted
+        after the last lease is released and the idle timeout passes; it is never evicted
+        while any lease remains active.
+        """
+        with self._lock:
+            self._lease_count += 1
+            self._idle_since = None
+            self._cancel_idle_timer_locked()
+            try:
+                self.ensure_running()
+            except Exception:
+                self._lease_count -= 1
+                raise
+        try:
+            yield
+        finally:
+            with self._lock:
+                if self._lease_count == 0:
+                    raise RuntimeError(f"{self._display_name} lease counter underflowed")
+                self._lease_count -= 1
+                if self._lease_count == 0:
+                    self._idle_since = self._monotonic()
+                    self._schedule_idle_timer_locked()
+
+    def evict_if_idle(self) -> bool:
+        """Stop an owned helper only if it is idle and its grace period expired."""
+        with self._lock:
+            self._idle_timer = None
+            if self._lease_count > 0:
+                return False
+            if self._idle_since is None:
+                return False
+            remaining = self.idle_timeout_seconds - (self._monotonic() - self._idle_since)
+            if remaining > 0:
+                self._schedule_idle_timer_locked(delay=remaining)
+                return False
+            if not self._owns_live_helper_locked():
+                return False
+        self._stop_internal(reason=_STOP_REASON_IDLE_EVICTED, include_durable_record=False)
+        return True
+
+    def stop_for_app_quit(self) -> None:
+        """Explicit shutdown hook for application quit/restart integration."""
+        self.stop()
+
+    def status(self) -> HelperStatus:
+        """Current helper state without mutating lifecycle ownership."""
+        with self._lock:
+            starting = self._starting
+            lease_count = self._lease_count
+            process = self._process
+            adopted_pid = self._adopted_pid
+            adopted_token = self._adopted_start_token
+            failure_message = self._failure_message
+            failed_at = self._failed_at
+            idle_since = self._idle_since
+            last_stop_reason = self._last_stop_reason
+
+        if starting:
+            return HelperStatus(
+                state="loading",
+                lease_count=lease_count,
+                owned=True,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+            )
+        if process is not None and process.poll() is None:
+            return HelperStatus(
+                state="ready",
+                lease_count=lease_count,
+                owned=True,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+                idle_seconds=_idle_seconds(idle_since, self._monotonic),
+            )
+        if adopted_pid is not None and _token_matches_pid(adopted_pid, adopted_token):
+            return HelperStatus(
+                state="ready",
+                lease_count=lease_count,
+                owned=True,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+                idle_seconds=_idle_seconds(idle_since, self._monotonic),
+            )
+        if self._healthy():
+            served = self._served_model()
+            expected = self._model_path().name
+            if served is not None and Path(served).name == expected:
+                return HelperStatus(
+                    state="ready",
+                    lease_count=lease_count,
+                    owned=False,
+                    idle_timeout_seconds=self.idle_timeout_seconds,
+                    idle_seconds=_idle_seconds(idle_since, self._monotonic),
+                )
+            detail = (
+                f"Port {self.port} is answering with {Path(served).name!r}."
+                if served is not None
+                else f"Port {self.port} is answering but the helper identity could not be verified."
+            )
+            return HelperStatus(
+                state="incompatible",
+                lease_count=lease_count,
+                owned=False,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+                detail=detail,
+            )
+        if (
+            failure_message is not None
+            and self._monotonic() - failed_at < _START_FAILURE_COOLDOWN_SECONDS
+        ):
+            return HelperStatus(
+                state="failed",
+                lease_count=lease_count,
+                owned=False,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+                detail=failure_message,
+            )
+        try:
+            self._check_installed()
+        except ConfigurationError as exc:
+            return HelperStatus(
+                state="not_installed",
+                lease_count=lease_count,
+                owned=False,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+                detail=exc.message,
+            )
+        return HelperStatus(
+            state="idle_evicted" if last_stop_reason == _STOP_REASON_IDLE_EVICTED else "stopped",
+            lease_count=lease_count,
+            owned=False,
+            idle_timeout_seconds=self.idle_timeout_seconds,
+        )
+
     # ------------------------------------------------------------------ lifecycle
 
     def ensure_running(self) -> None:
@@ -462,6 +665,8 @@ class LlamaServer:
                 the port is held by a server running a different model.
         """
         with self._lock:
+            self._cancel_idle_timer_locked()
+            self._idle_since = None
             # 0. Reconcile config drift before evaluating the current state.
             self._reconcile_stale_ownership()
 
@@ -600,7 +805,43 @@ class LlamaServer:
         Ownership is removed only when the process is confirmed dead or its PID
         has been reused.
         """
+        self._stop_internal(reason=_STOP_REASON_STOPPED, include_durable_record=True)
+
+    # ------------------------------------------------------------------ health
+
+    def _healthy(self) -> bool:
+        try:
+            with httpx.Client(timeout=_HEALTH_REQUEST_TIMEOUT_SECONDS) as client:
+                return client.get(f"{self.base_url}/health").status_code == 200
+        except httpx.HTTPError:
+            return False
+
+    def _owns_live_helper_locked(self) -> bool:
+        process = self._process
+        if process is not None and process.poll() is None:
+            return True
+        pid = self._adopted_pid
+        token = self._adopted_start_token
+        return pid is not None and _token_matches_pid(pid, token)
+
+    def _cancel_idle_timer_locked(self) -> None:
+        timer = self._idle_timer
+        self._idle_timer = None
+        if timer is not None:
+            timer.cancel()
+
+    def _schedule_idle_timer_locked(self, *, delay: float | None = None) -> None:
+        self._cancel_idle_timer_locked()
+        if self._lease_count > 0 or not self._owns_live_helper_locked():
+            return
+        timeout = self.idle_timeout_seconds if delay is None else delay
+        timer = self._timer_factory(timeout, self.evict_if_idle)
+        self._idle_timer = timer
+        timer.start()
+
+    def _stop_internal(self, *, reason: str, include_durable_record: bool) -> None:
         with self._lock:
+            self._cancel_idle_timer_locked()
             process = self._process
             self._process = None
             adopted_pid = self._adopted_pid
@@ -609,12 +850,14 @@ class LlamaServer:
             self._adopted_pid = None
             self._adopted_pgid = None
             self._adopted_start_token = None
+            self._idle_since = None
+            self._last_stop_reason = reason
         if process is not None:
             _terminate(process)
         if adopted_pid is not None:
             _terminate_pid(adopted_pid, adopted_pgid, adopted_token, self._display_name)
 
-        if process is None and adopted_pid is None:
+        if include_durable_record and process is None and adopted_pid is None:
             try:
                 record = _read_server_record(self._display_name)
             except ConfigurationError:
@@ -664,15 +907,6 @@ class LlamaServer:
                 )
             else:
                 _remove_server_record(self._display_name)
-
-    # ------------------------------------------------------------------ health
-
-    def _healthy(self) -> bool:
-        try:
-            with httpx.Client(timeout=_HEALTH_REQUEST_TIMEOUT_SECONDS) as client:
-                return client.get(f"{self.base_url}/health").status_code == 200
-        except httpx.HTTPError:
-            return False
 
     def _served_model(self) -> str | None:
         try:
@@ -810,6 +1044,7 @@ class LlamaServer:
         ):
             raise ConfigurationError(self._failure_message)
 
+        self._starting = True
         try:
             self._spawn_and_await(binary)
         except ConfigurationError as exc:
@@ -822,7 +1057,10 @@ class LlamaServer:
                 exc.message,
             )
             raise
+        finally:
+            self._starting = False
         self._failure_message = None
+        self._last_stop_reason = None
         self._last_health_ok = time.monotonic()
         self._unhealthy_restarts = 0
 

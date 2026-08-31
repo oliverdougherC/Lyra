@@ -45,14 +45,17 @@ def test_diagnostics_returns_a_redacted_bundle(
     _migrated_database(settings.db_path)
     monkeypatch.setattr(secrets, "has_api_key", lambda: False)
     monkeypatch.setattr(secrets, "api_key_storage", lambda: "keychain")
+    monkeypatch.setattr(secrets, "has_exa_api_key", lambda: False)
+    monkeypatch.setattr(secrets, "exa_api_key_storage", lambda: "keychain")
 
     response = client.get("/api/health/diagnostics")
 
     assert response.status_code == 200
     body = response.json()
     assert body["schema"]["current"] is True
-    # The key is reported as presence and storage location only, never as a value.
     assert body["api_key"] == {"present": False, "storage": "keychain"}
+    assert body["web_research"]["exa_key_present"] is False
+    assert body["web_research"]["exa_key_storage"] == "keychain"
 
 
 def test_live_does_not_probe_dependencies(
@@ -70,21 +73,17 @@ def test_live_does_not_probe_dependencies(
     assert response.json() == {"status": "ok"}
 
 
-def test_ready_reports_optional_firecrawl_outage_without_failing_lyra(
+def test_ready_does_not_open_the_keychain_or_probe_exa(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     db_path = tmp_path / "lyra.db"
     _migrated_database(db_path)
     monkeypatch.setattr(routes_health, "connect", lambda: connect(db_path))
-
-    class UnavailableFirecrawl:
-        def __init__(self, *, base_url: str) -> None:
-            assert base_url == "http://127.0.0.1:3002"
-
-        def check_readiness(self) -> dict[str, object]:
-            raise routes_health.FirecrawlError("contains upstream details")
-
-    monkeypatch.setattr(routes_health, "FirecrawlClient", UnavailableFirecrawl)
+    monkeypatch.setattr(
+        secrets,
+        "has_exa_api_key",
+        lambda: pytest.fail("readiness must not inspect provider credentials"),
+    )
 
     response = client.get("/api/health/ready")
 
@@ -97,71 +96,55 @@ def test_ready_reports_optional_firecrawl_outage_without_failing_lyra(
                 "required": True,
                 "message": "Database is ready.",
             },
-            "firecrawl": {
-                "status": "temporarily_unavailable",
-                "required": False,
-                "message": "Firecrawl is temporarily unavailable; web research is disabled.",
-            },
-            "web_scrape": {
+            "web_research": {
                 "status": "not_ready",
                 "required": False,
-                "message": "Web scraping remains disabled until the redirect-safety gate passes.",
+                "message": "Web research is configured but currently disabled in Settings.",
             },
         },
     }
-    assert "upstream details" not in response.text
 
 
-def test_ready_reports_misconfigured_firecrawl_without_failing_lyra(
+def test_ready_reports_web_research_disabled_even_when_a_key_exists(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     db_path = tmp_path / "lyra.db"
     _migrated_database(db_path)
     monkeypatch.setattr(routes_health, "connect", lambda: connect(db_path))
 
-    class MisconfiguredFirecrawl:
-        def __init__(self, *, base_url: str) -> None:
-            assert base_url == "http://127.0.0.1:3002"
-
-        def check_readiness(self) -> dict[str, object]:
-            raise routes_health.FirecrawlMisconfiguredError("wrong endpoint")
-
-    monkeypatch.setattr(routes_health, "FirecrawlClient", MisconfiguredFirecrawl)
-
     response = client.get("/api/health/ready")
 
     assert response.status_code == 200
-    assert response.json()["components"]["firecrawl"] == {
-        "status": "misconfigured",
+    assert response.json()["components"]["web_research"] == {
+        "status": "not_ready",
         "required": False,
-        "message": "Firecrawl is misconfigured; web research is disabled.",
+        "message": "Web research is configured but currently disabled in Settings.",
     }
-    assert "wrong endpoint" not in response.text
 
 
-def test_ready_reports_available_firecrawl_when_the_probe_passes(
+def test_ready_reports_web_research_ready_without_contacting_exa(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     db_path = tmp_path / "lyra.db"
     _migrated_database(db_path)
+    conn = connect(db_path)
+    try:
+        conn.execute("update settings set allow_web_research = 1 where id = 1")
+        conn.commit()
+    finally:
+        conn.close()
     monkeypatch.setattr(routes_health, "connect", lambda: connect(db_path))
-
-    class ReadyFirecrawl:
-        def __init__(self, *, base_url: str) -> None:
-            assert base_url == "http://127.0.0.1:3002"
-
-        def check_readiness(self) -> dict[str, object]:
-            return {"status": "ok"}
-
-    monkeypatch.setattr(routes_health, "FirecrawlClient", ReadyFirecrawl)
 
     response = client.get("/api/health/ready")
 
     assert response.status_code == 200
-    assert response.json()["components"]["firecrawl"] == {
+    assert response.json()["components"]["web_research"] == {
         "status": "available",
         "required": False,
-        "message": "Firecrawl is available.",
+        "message": (
+            "Web research is enabled. Credential presence and connectivity are checked only "
+            "when Settings or an explicit Exa action requests them."
+        ),
     }
 
 
@@ -179,8 +162,8 @@ def test_ready_returns_503_when_migrations_are_behind(
     monkeypatch.setattr(routes_health, "connect", lambda: connect(db_path))
     monkeypatch.setattr(
         routes_health,
-        "_check_firecrawl",
-        lambda _: pytest.fail("Firecrawl must be skipped when the database is not ready"),
+        "_web_research_component",
+        lambda **_: pytest.fail("web research must be skipped when the database is not ready"),
     )
 
     response = client.get("/api/health/ready")
@@ -194,17 +177,10 @@ def test_ready_returns_503_when_migrations_are_behind(
                 "required": True,
                 "message": "Database migrations are not current.",
             },
-            "firecrawl": {
+            "web_research": {
                 "status": "skipped",
                 "required": False,
-                "message": "Firecrawl was not checked because the database is not ready.",
-            },
-            "web_scrape": {
-                "status": "skipped",
-                "required": False,
-                "message": (
-                    "The web scrape policy was not checked because the database is not ready."
-                ),
+                "message": "Web research was not checked because the database is not ready.",
             },
         },
     }
