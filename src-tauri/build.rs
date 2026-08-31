@@ -1,4 +1,10 @@
-const COMMANDS: &[&str] = &["desktop_bootstrap", "retry_backend"];
+const COMMANDS: &[&str] = &[
+    "desktop_bootstrap",
+    "retry_backend",
+    "open_external_url",
+    "pick_import_directory",
+    "publish_desktop_import",
+];
 
 fn main() {
     tauri_build::try_build(

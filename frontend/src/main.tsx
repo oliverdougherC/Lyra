@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client'
 
 import GlobalErrorFallback from '@/app/global-error'
 import { AppRoot } from '@/app/root'
-import { initializeRuntimeConfig } from '@/lib/runtime'
+import { initializeRuntimeConfig, recoverDesktopBackend } from '@/lib/runtime'
 import { RouterProvider } from '@/router/hooks'
 
 class GlobalBoundary extends React.Component<
@@ -45,7 +45,9 @@ void bootstrap().catch((error: unknown) => {
   const container = document.getElementById('root')
   if (!container) return
   const safeError = error instanceof Error ? error : new Error('Desktop startup failed.')
-  createRoot(container).render(
-    <GlobalErrorFallback error={safeError} retry={() => window.location.reload()} />,
-  )
+  const retry = async () => {
+    const restarted = await recoverDesktopBackend().catch(() => false)
+    if (restarted) window.location.reload()
+  }
+  createRoot(container).render(<GlobalErrorFallback error={safeError} retry={() => void retry()} />)
 })

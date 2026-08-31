@@ -20,6 +20,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
+import { DesktopImportSection } from '@/components/settings/desktop-import-section'
 import { api, ApiError } from '@/lib/api'
 import { useClasses } from '@/lib/hooks/use-classes'
 import {
@@ -506,6 +507,13 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
             </AlertDescription>
           </Alert>
         </FieldGroup>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Import existing Lyra data"
+        description="Bring in a previous checkout through a staged, verified desktop import. The source stays untouched."
+      >
+        <DesktopImportSection />
       </SettingsSection>
 
       <SettingsSection

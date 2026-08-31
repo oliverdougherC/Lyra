@@ -35,6 +35,8 @@ import type {
   DeckCreate,
   DeckDetail,
   DeckSession,
+  DesktopImportPreview,
+  DesktopImportStatus,
   DocumentOutline,
   DocumentRead,
   DocumentStatus,
@@ -367,7 +369,9 @@ async function send(path: string, options: RequestOptions = {}): Promise<Respons
       signal: options.signal,
     })
   } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    if (options.signal?.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+      throw error
+    }
     // Restart only the child the trusted Rust shell owns. The failed request is not
     // replayed automatically: a mutation may have committed before its connection broke,
     // so the existing operation-id/CAS-aware UI retry remains authoritative.
@@ -527,6 +531,24 @@ export const api = {
 
   updateSettings: (body: SettingsUpdate) =>
     requestJson<SettingsRead>('/api/settings', { method: 'PUT', body }),
+
+  getDesktopImportStatus: (signal?: AbortSignal) =>
+    requestJson<DesktopImportStatus>('/api/desktop-import/status', { signal }),
+
+  previewDesktopImport: (selectionToken: string) =>
+    requestJson<DesktopImportPreview>('/api/desktop-import/preview', {
+      method: 'POST',
+      body: { selection_token: selectionToken },
+    }),
+
+  startDesktopImport: (selectionToken: string, operationId: string) =>
+    requestJson<DesktopImportStatus>('/api/desktop-import/start', {
+      method: 'POST',
+      body: { selection_token: selectionToken, operation_id: operationId },
+    }),
+
+  cancelDesktopImport: () =>
+    requestJson<DesktopImportStatus>('/api/desktop-import/cancel', { method: 'POST' }),
 
   getClassWriterSettings: (classId: number, signal?: AbortSignal) =>
     requestJson<ClassWriterSettingsRead>(`/api/classes/${classId}/writer-settings`, { signal }),

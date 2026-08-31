@@ -38,14 +38,41 @@ on a standalone browser server.
 The frontend is now a Vite/React application with client-side routing.
 
 - Route state is handled in the client.
-- Runtime bootstrap comes from either `VITE_API_BASE`, injected browser bootstrap data, or the
-  Tauri `desktop_bootstrap` command.
+- Browser development explicitly uses `VITE_API_BASE` or injected test bootstrap data. Packaged
+  builds fail closed unless the Tauri `desktop_bootstrap` command succeeds.
+- Hash routes keep a selected same-page citation in the reserved `lyra-anchor` query parameter.
+  Citation jumps therefore preserve the class/chat/draft/solution/study route, query parameters,
+  reload state, and browser/WebKit history instead of replacing the route fragment.
 - The UI talks only to the FastAPI API surface; it does not call tutor providers or Exa directly.
 
 The production browser suites exercise two different boundaries:
 
 - `pnpm test:e2e` checks the built frontend with Playwright smoke coverage.
 - `pnpm test:acceptance` starts the real backend, fake tutor fixture, and built frontend together.
+
+## Desktop trust boundaries
+
+The packaged bootstrap protocol is version `1`. Rust passes one inherited IPv4 loopback listener,
+its exact address, the parent PID, `X-Lyra-Session`, and a fresh 64-character lowercase-hex secret
+over stdin. Python rejects missing or extra fields and echoes the complete readiness contract;
+Rust validates it before exposing only `protocolVersion`, `apiBase`, `sessionHeaderName`, and
+`sessionSecret` to the webview. A cached child is reused only after an authenticated `/ready`
+request. Retry gracefully stops the old backend, reclaims verified helper ownership, and launches
+a new child with a new secret.
+
+The main webview denies top-level navigation away from the packaged origin and denies new windows.
+All rendered anchors are intercepted centrally. One typed `open_external_url` command revalidates
+normalized public HTTP(S) destinations in Rust and uses Tauri's opener plugin; file paths, generic
+shell execution, credentials-bearing URLs, unsafe schemes, and local/private/reserved hosts are not
+exposed.
+
+Desktop data import is a separate narrow boundary. Tauri's native directory picker writes a
+private selection record and returns only an opaque token and label to React. The backend creates a
+locked SQLite backup plus hashed file manifest in a resumable stage without changing live data.
+Publication occurs only after Tauri stops the backend: the fixed frozen sidecar
+`--publish-desktop-import` mode performs backup-first promotion with rollback and startup recovery,
+then Tauri relaunches the backend with a fresh bootstrap secret. Non-empty user destinations are
+refused and the selected source is never modified by the importer.
 
 ## Backend
 
@@ -96,7 +123,7 @@ state is never written into `Lyra.app`. Local helpers hold active leases and are
 minutes idle. Release evidence helpers include:
 
 - `scripts/desktop_resource_report.py` for deterministic resource inventories
-- `scripts/desktop_runtime_report.py` for the owned process tree, memory, CPU, package, and file-count sample
+- `scripts/desktop_runtime_report.py` for the retained Lyra/Tauri/WebKit process inventory, per-process resource sample, and explicit still-open physical gates
 - `scripts/packaged_soak_harness.py` for release-candidate soak preparation and manual evidence
 
 Those helpers support the migration; they do not claim the packaged app is signed, notarized, or

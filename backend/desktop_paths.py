@@ -58,12 +58,29 @@ def source_data_candidates(resource_root: Path) -> tuple[Path, ...]:
     roots: list[Path] = [resource_root]
     parents = list(resource_root.parents[:2])
     roots.extend(parents)
+    return _dedupe_data_candidates(root / "data" for root in roots)
+
+
+def selected_source_data_candidates(selected_root: Path) -> tuple[Path, ...]:
+    """Likely Lyra data roots for a user-picked folder.
+
+    A migration prompt may point at the checkout root (`Lyra/`) or directly at the data
+    directory (`Lyra/data/`). Both are legitimate user choices; the import flow checks the
+    direct pick first so a real data directory never gets shadowed by its `data/data`
+    child.
+    """
+
+    return _dedupe_data_candidates((selected_root, selected_root / "data"))
+
+
+def _dedupe_data_candidates(candidates: object) -> tuple[Path, ...]:
     seen: set[Path] = set()
-    candidates: list[Path] = []
-    for root in roots:
-        candidate = root / "data"
+    ordered: list[Path] = []
+    for candidate in candidates:
+        if not isinstance(candidate, Path):
+            candidate = Path(candidate)
         if candidate in seen:
             continue
         seen.add(candidate)
-        candidates.append(candidate)
-    return tuple(candidates)
+        ordered.append(candidate)
+    return tuple(ordered)

@@ -183,10 +183,10 @@ python scripts/packaged_soak_harness.py record \
 
 Purpose:
 
-- capture the package size and owned/correlated process tree for a running `Lyra.app`;
-- record RSS, sampled CPU, and open-file counts without command arguments or private paths;
+- capture the package size and retained Lyra/Tauri/WebKit/backend process tree for a running `Lyra.app`;
+- record per-process RSS, private-memory availability, sampled CPU, open-file counts, and connection/port counts without command arguments or private paths;
 - identify forbidden ordinary-idle services; and
-- bind the sample to the source commit used for the package build.
+- bind the sample to the source commit used for the package build while keeping unsatisfied physical gates explicit.
 
 ## Focused verification for this lane
 
@@ -237,9 +237,11 @@ Local artifact measurements:
 - frozen Python sidecar: approximately 92 MiB on disk;
 - `Lyra.app`: 136.9 MiB;
 - compressed review DMG: approximately 80 MiB; and
-- ordinary-idle sample: 5 Lyra/WebKit processes, no forbidden service processes.
+- preliminary 60-second settled-idle sample: 5 retained Lyra/WebKit/backend processes,
+  101.5 MiB aggregate RSS, 211.8 MiB aggregate private memory, and no forbidden service processes;
+- preliminary packaged quit: zero Lyra-owned processes, helpers, or backend listeners retained.
 
 The committed runtime report is from a 24 GiB development Mac and is deliberately labelled as
-local evidence. Remaining release gates are Developer ID signing, notarization/Gatekeeper on a
-clean Mac, the physical 8 GiB resource run, native backup/restore file selection, a live Exa smoke,
-and the full PLA-147 release-candidate soak.
+preliminary local evidence. Remaining release gates are Developer ID signing, notarization/Gatekeeper on a
+clean Mac, the physical 8 GiB resource run, sleep/wake, memory-pressure, native backup/restore file selection,
+a live Exa smoke, and the full PLA-147 release-candidate soak.

@@ -16,9 +16,15 @@ from typing import TextIO
 
 import uvicorn
 
-from backend.desktop_bootstrap import PackagedBootstrap, apply_bootstrap_environment, read_bootstrap
+from backend.desktop_bootstrap import (
+    PROTOCOL_VERSION,
+    SESSION_HEADER,
+    PackagedBootstrap,
+    apply_bootstrap_environment,
+    read_bootstrap,
+)
 
-_READINESS_MAX_BYTES = 256
+_READINESS_MAX_BYTES = 512
 _LOG_MAX_BYTES = 1_048_576
 _LOG_BACKUPS = 3
 
@@ -83,14 +89,41 @@ def _validate_loopback_socket(sock: socket.socket) -> None:
         raise ValueError("packaged bootstrap socket must be bound to loopback")
 
 
-def _readiness_line(sock: socket.socket) -> str:
+def _socket_listener_addr(sock: socket.socket) -> str:
+    address = sock.getsockname()
+    return f"{address[0]}:{address[1]}"
+
+
+def _socket_address_family(sock: socket.socket) -> str:
+    if sock.family == socket.AF_INET:
+        return "ipv4"
+    if sock.family == socket.AF_INET6:
+        return "ipv6"
+    raise ValueError("packaged bootstrap socket must be AF_INET or AF_INET6")
+
+
+def _validate_bootstrap_socket(bootstrap: PackagedBootstrap, sock: socket.socket) -> None:
+    actual = _socket_listener_addr(sock)
+    if bootstrap.listener_addr != actual:
+        raise ValueError("packaged bootstrap listener_addr did not match the inherited socket")
+    if bootstrap.protocol_version != PROTOCOL_VERSION:
+        raise ValueError("packaged bootstrap protocol_version is unsupported")
+    if bootstrap.session_header_name != SESSION_HEADER:
+        raise ValueError("packaged bootstrap session_header_name is unsupported")
+
+
+def _readiness_line(bootstrap: PackagedBootstrap, sock: socket.socket) -> str:
     address = sock.getsockname()
     payload = json.dumps(
         {
             "status": "ready",
+            "protocol_version": PROTOCOL_VERSION,
             "api_base": f"http://{address[0]}:{address[1]}",
-            "host": address[0],
-            "port": address[1],
+            "listener_addr": _socket_listener_addr(sock),
+            "address_family": _socket_address_family(sock),
+            "inherited_socket": True,
+            "session_header_name": bootstrap.session_header_name,
+            "session_secret": bootstrap.session_secret,
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -101,7 +134,12 @@ def _readiness_line(sock: socket.socket) -> str:
 
 
 async def _emit_readiness_when_started(
-    server: object, sock: socket.socket, stream: TextIO, *, interval_seconds: float = 0.01
+    server: object,
+    bootstrap: PackagedBootstrap,
+    sock: socket.socket,
+    stream: TextIO,
+    *,
+    interval_seconds: float = 0.01,
 ) -> None:
     for _ in range(30_000):
         if getattr(server, "started", False):
@@ -109,7 +147,7 @@ async def _emit_readiness_when_started(
         await asyncio.sleep(interval_seconds)
     else:
         raise RuntimeError("packaged backend never reported startup readiness")
-    stream.write(_readiness_line(sock) + "\n")
+    stream.write(_readiness_line(bootstrap, sock) + "\n")
     stream.flush()
 
 
@@ -128,6 +166,15 @@ async def _monitor_parent(
         await asyncio.sleep(interval_seconds)
 
 
+async def _monitor_shutdown_request(
+    server: uvicorn.Server,
+    shutdown_requested: asyncio.Event,
+) -> None:
+    await shutdown_requested.wait()
+    logging.getLogger(__name__).info("desktop shell requested graceful backend shutdown")
+    server.should_exit = True
+
+
 async def run_packaged_backend(
     bootstrap: PackagedBootstrap,
     *,
@@ -139,31 +186,49 @@ async def run_packaged_backend(
     from backend.main import create_app
 
     sock = adopt_inherited_socket(bootstrap.socket_fd)
+    _validate_bootstrap_socket(bootstrap, sock)
     output = stream or sys.stdout
+    app = create_app(session_secret=bootstrap.session_secret)
+    shutdown_requested = asyncio.Event()
+    app.state.request_shutdown = shutdown_requested.set
     config = uvicorn.Config(
-        create_app(session_secret=bootstrap.session_secret),
+        app,
         host="127.0.0.1",
         port=0,
         log_config=None,
         access_log=False,
     )
     server = server_factory(config)
-    reporter = asyncio.create_task(_emit_readiness_when_started(server, sock, output))
+    reporter = asyncio.create_task(_emit_readiness_when_started(server, bootstrap, sock, output))
     parent_monitor = asyncio.create_task(_monitor_parent(server, bootstrap.parent_pid))
+    shutdown_monitor = asyncio.create_task(_monitor_shutdown_request(server, shutdown_requested))
     try:
         await server.serve(sockets=[sock])
     finally:
         reporter.cancel()
         parent_monitor.cancel()
+        shutdown_monitor.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reporter
         with contextlib.suppress(asyncio.CancelledError):
             await parent_monitor
+        with contextlib.suppress(asyncio.CancelledError):
+            await shutdown_monitor
         sock.close()
     return 0
 
 
 def main(stdin_text: str | None = None, *, stream: TextIO | None = None) -> int:
+    if "--reclaim-helpers" in sys.argv[1:]:
+        os.environ.setdefault("LYRA_PACKAGED", "1")
+        from backend.llm import helper_reclaim
+
+        return helper_reclaim.main([], stream=stream)
+    if "--publish-desktop-import" in sys.argv[1:]:
+        os.environ.setdefault("LYRA_PACKAGED", "1")
+        from backend import desktop_import
+
+        return desktop_import.publish_staged_import(stream=stream)
     bootstrap = read_bootstrap(stdin_text)
     return asyncio.run(run_packaged_backend(bootstrap, stream=stream))
 

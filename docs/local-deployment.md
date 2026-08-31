@@ -121,9 +121,10 @@ The desktop migration includes three evidence helpers:
 
 - `scripts/desktop_resource_report.py` inventories a bundle or source component root without
   emitting absolute paths.
-- `scripts/desktop_runtime_report.py` records the owned process tree and a privacy-safe resource
-  sample for a running package.
+- `scripts/desktop_runtime_report.py` records the retained Lyra process tree, privacy-safe
+  per-process resource sample, and the physical gates still left open for a running package.
 - `scripts/packaged_soak_harness.py` prepares and records a manual packaged-app soak.
 
-The checked-in report is local 24 GB development-machine evidence. It does not replace the signed,
-notarized, clean-8-GB-Mac launch, restart, outage, and sustained-soak gates.
+The checked-in report is a preliminary 24 GiB development-machine sample. It does not replace the
+signed, notarized, clean-8-GiB-Mac launch, restart, sleep/wake, memory-pressure, live-provider,
+or sustained-soak gates.

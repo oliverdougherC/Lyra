@@ -74,30 +74,25 @@ function matchPattern(pattern: RoutePattern, pathname: string): boolean {
 
 class RouteBoundary extends React.Component<
   { routeKey: string; children: React.ReactNode },
-  { error: Error | null; retryKey: number }
+  { error: Error | null }
 > {
-  state = { error: null, retryKey: 0 }
+  state = { error: null }
 
   static getDerivedStateFromError(error: Error) {
-    return { error, retryKey: 0 }
+    return { error }
   }
 
   componentDidUpdate(prevProps: { routeKey: string }) {
     if (prevProps.routeKey !== this.props.routeKey && this.state.error) {
-      this.setState({ error: null, retryKey: 0 })
+      this.setState({ error: null })
     }
   }
 
   render() {
     if (this.state.error) {
-      return (
-        <RouteErrorFallback
-          error={this.state.error}
-          retry={() => this.setState((state) => ({ error: null, retryKey: state.retryKey + 1 }))}
-        />
-      )
+      return <RouteErrorFallback error={this.state.error} retry={() => window.location.reload()} />
     }
-    return <div key={this.state.retryKey}>{this.props.children}</div>
+    return this.props.children
   }
 }
 

@@ -60,8 +60,11 @@ def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, o
             raise RuntimeError("frozen backend pipes were not created")
         json.dump(
             {
+                "protocol_version": 1,
                 "socket_fd": listener.fileno(),
                 "parent_pid": os.getpid(),
+                "listener_addr": f"127.0.0.1:{listener.getsockname()[1]}",
+                "session_header_name": "X-Lyra-Session",
                 "session_secret": secret,
             },
             process.stdin,
@@ -88,20 +91,24 @@ def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, o
         except json.JSONDecodeError as exc:
             detail = _safe_failure_detail(readiness_line, profile=profile, secret=secret)
             raise RuntimeError(f"frozen backend returned malformed readiness: {detail}") from exc
-        if readiness.get("status") != "ready":
+        if (
+            readiness.get("status") != "ready"
+            or readiness.get("protocol_version") != 1
+            or readiness.get("session_header_name") != "X-Lyra-Session"
+            or readiness.get("session_secret") != secret
+            or readiness.get("inherited_socket") is not True
+            or readiness.get("listener_addr") != f"127.0.0.1:{listener.getsockname()[1]}"
+        ):
             raise RuntimeError("frozen backend returned invalid readiness")
-        connection = http.client.HTTPConnection(
-            str(readiness["host"]), int(readiness["port"]), timeout=5
-        )
+        host, _, port_text = str(readiness["listener_addr"]).partition(":")
+        connection = http.client.HTTPConnection(host, int(port_text), timeout=5)
         connection.request("GET", "/api/health/live")
         rejected = connection.getresponse()
         rejected.read()
         if rejected.status != 403:
             raise RuntimeError("frozen backend accepted an unauthenticated request")
         connection.close()
-        connection = http.client.HTTPConnection(
-            str(readiness["host"]), int(readiness["port"]), timeout=5
-        )
+        connection = http.client.HTTPConnection(host, int(port_text), timeout=5)
         connection.request("GET", "/api/health/live", headers={"X-Lyra-Session": secret})
         accepted = connection.getresponse()
         body = json.loads(accepted.read())

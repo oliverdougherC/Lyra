@@ -36,6 +36,7 @@ function mockFetch(response: Response | (() => Promise<Response>)) {
 
 beforeEach(() => {
   vi.unstubAllGlobals()
+  window.__LYRA_BOOTSTRAP__ = { apiBase: 'http://127.0.0.1:8000' }
 })
 
 describe('request construction', () => {
@@ -251,6 +252,44 @@ describe('abort handling', () => {
 
     const [, init] = spy.mock.calls[0]
     expect(init.signal).toBe(controller.signal)
+  })
+
+  it('passes the caller signal through to protected asset loads', async () => {
+    vi.resetModules()
+    window.__LYRA_BOOTSTRAP__ = {
+      apiBase: 'http://127.0.0.1:8000',
+      sessionHeader: 'secret-session',
+    }
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: vi.fn(() => 'blob:page'),
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      configurable: true,
+      value: vi.fn(),
+    })
+    const spy = mockFetch(new Response('page', { status: 200 }))
+    const controller = new AbortController()
+    const { loadProtectedAssetSource } = await import('@/lib/api')
+
+    const asset = await loadProtectedAssetSource('/api/documents/7/pages/1', controller.signal)
+    asset.release?.()
+
+    const [, init] = spy.mock.calls[0]
+    expect(init.signal).toBe(controller.signal)
+  })
+
+  it('treats a WebKit TypeError from an already-aborted signal as cancellation', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    mockFetch(async () => {
+      throw new TypeError('Load failed')
+    })
+
+    const error = await api.listClasses(controller.signal).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(TypeError)
+    expect(error).not.toBeInstanceOf(ApiError)
   })
 })
 

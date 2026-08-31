@@ -60,12 +60,14 @@ jobs:
           backend/tests/test_exa.py
           backend/tests/test_llama_server_lifecycle.py
           backend/tests/test_desktop_bootstrap.py
+          backend/tests/test_desktop_import.py
           backend/tests/test_desktop_migration.py
           backend/tests/test_desktop_paths.py
           backend/tests/test_desktop_resource_report.py
           backend/tests/test_packaged_soak_harness.py
           backend/tests/test_active_reference_absence.py
           backend/tests/test_packaged_python_smoke.py
+          backend/tests/test_helper_reclaim.py
 
   frontend:
     runs-on: ubuntu-latest
@@ -109,11 +111,17 @@ jobs:
       - name: Audit production dependencies
         run: pnpm audit --prod
 
-      - name: Install Playwright Chromium
-        run: pnpm exec playwright install --with-deps chromium
+      - name: Install Playwright Chromium and WebKit
+        run: pnpm exec playwright install --with-deps chromium webkit
 
       - name: Run frontend smoke tests
         run: pnpm test:e2e
+
+      - name: Run WebKit external-navigation tests
+        env:
+          PLAYWRIGHT_ENABLE_WEBKIT: '1'
+          PLAYWRIGHT_FRONTEND_PORT: '4187'
+        run: pnpm exec playwright test e2e/external-links.spec.ts --project=webkit
 
   acceptance:
     name: Full-stack acceptance

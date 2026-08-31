@@ -1,8 +1,22 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { FigureBlock } from '@/components/solutions/figure-block'
 import type { SolutionPart } from '@/types'
+
+const { immediateAssetUrl, loadProtectedAssetSource } = vi.hoisted(() => ({
+  immediateAssetUrl: vi.fn<(path: string) => string | null>(),
+  loadProtectedAssetSource: vi.fn(),
+}))
+
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
+  return {
+    ...actual,
+    immediateAssetUrl,
+    loadProtectedAssetSource,
+  }
+})
 
 function figurePart(overrides: Partial<SolutionPart> = {}): SolutionPart {
   return {
@@ -37,6 +51,11 @@ function figurePart(overrides: Partial<SolutionPart> = {}): SolutionPart {
 }
 
 describe('FigureBlock', () => {
+  beforeEach(() => {
+    immediateAssetUrl.mockImplementation((path) => `http://127.0.0.1:8000${path}`)
+    loadProtectedAssetSource.mockReset()
+  })
+
   it('draws the figure by its id and cites the page it came from', () => {
     render(<FigureBlock figure={figurePart()} />)
 
@@ -74,5 +93,43 @@ describe('FigureBlock', () => {
     render(<FigureBlock figure={figurePart()} />)
 
     expect(screen.getByRole('img').className).toContain('self-start')
+  })
+
+  it('releases a protected blob that resolves after the figure unmounts', async () => {
+    immediateAssetUrl.mockReturnValue(null)
+    const release = vi.fn()
+    let resolveSource: ((value: { url: string; release: () => void }) => void) | null = null
+    loadProtectedAssetSource.mockReturnValue(
+      new Promise<{ url: string; release: () => void }>((resolve) => {
+        resolveSource = resolve
+      }),
+    )
+
+    const view = render(<FigureBlock figure={figurePart()} />)
+    view.unmount()
+
+    await act(async () => {
+      resolveSource?.({ url: 'blob:late-figure', release })
+    })
+
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases the previous blob before showing a replacement figure', async () => {
+    immediateAssetUrl.mockReturnValue(null)
+    const firstRelease = vi.fn()
+    const secondRelease = vi.fn()
+    loadProtectedAssetSource
+      .mockResolvedValueOnce({ url: 'blob:first', release: firstRelease })
+      .mockResolvedValueOnce({ url: 'blob:second', release: secondRelease })
+
+    const view = render(<FigureBlock figure={figurePart({ content: '7', label: 'Figure 7' })} />)
+
+    await screen.findByRole('img', { name: 'Figure 7' })
+    view.rerender(<FigureBlock figure={figurePart({ content: '8', label: 'Figure 8' })} />)
+    await screen.findByRole('img', { name: 'Figure 8' })
+
+    expect(firstRelease).toHaveBeenCalledTimes(1)
+    expect(secondRelease).not.toHaveBeenCalled()
   })
 })

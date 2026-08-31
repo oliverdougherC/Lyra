@@ -13,7 +13,7 @@ import {
   SearchCheck,
 } from 'lucide-react'
 import dynamic from '@/router/dynamic'
-import { useParams } from '@/router/hooks'
+import { useParams, useRouteAnchor, useRouter } from '@/router/hooks'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
@@ -100,6 +100,18 @@ const DraftEditor = dynamic(
   {
     ssr: false,
     loading: () => <Skeleton className="h-96 w-full rounded-md" />,
+    error: (_error, retry) => (
+      <Alert variant="destructive">
+        <AlertTitle>Could not load the editor</AlertTitle>
+        <AlertDescription>
+          The writing surface failed to load. Retry opens a fresh copy of Lyra and tries that chunk
+          again.
+        </AlertDescription>
+        <Button className="mt-4" onClick={retry}>
+          Retry
+        </Button>
+      </Alert>
+    ),
   },
 )
 
@@ -157,6 +169,8 @@ export default function DraftWorkspacePage() {
   const params = useParams<{ id: string; artifactId: string }>()
   const classId = readId(params.id)
   const artifactId = readId(params.artifactId)
+  const router = useRouter()
+  const routeAnchor = useRouteAnchor()
   const queryClient = useQueryClient()
 
   const draft = useDraft(artifactId ?? Number.NaN)
@@ -671,11 +685,9 @@ export default function DraftWorkspacePage() {
           }}
           onSourceClick={(sourceId) => {
             setRailTab('sources')
-            window.setTimeout(() => {
-              const source = document.getElementById(`source-${sourceId}`)
-              source?.focus({ preventScroll: true })
-              source?.scrollIntoView({ block: 'center' })
-            }, 0)
+            const target = `source-${sourceId}`
+            if (routeAnchor === target) router.replaceAnchor(target)
+            else router.pushAnchor(target)
           }}
           onChange={(markdown) => {
             latestMarkdownRef.current = markdown

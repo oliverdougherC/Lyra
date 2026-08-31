@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ImageOff } from 'lucide-react'
 
 import { ProvenanceChip } from '@/components/solutions/provenance-chip'
@@ -26,35 +26,63 @@ export function FigureBlock({ figure, className }: FigureBlockProps) {
   const name = figure.label ?? 'Figure'
   const path = figurePath(Number(figure.content))
   const [src, setSrc] = useState<string | null>(() => immediateAssetUrl(path))
+  const shownRelease = useRef<(() => void) | undefined>(undefined)
 
   useEffect(() => {
     const directUrl = immediateAssetUrl(path)
+    shownRelease.current?.()
+    shownRelease.current = undefined
     if (directUrl) {
       setBroken(false)
       setSrc(directUrl)
       return
     }
 
-    let cancelled = false
-    let releaseShown: (() => void) | undefined
+    const controller = new AbortController()
     setBroken(false)
     setSrc(null)
 
-    void loadProtectedAssetSource(path)
+    void loadProtectedAssetSource(path, controller.signal)
       .then(({ url, release }) => {
-        if (cancelled) return
-        releaseShown = release
+        if (controller.signal.aborted) {
+          release?.()
+          return
+        }
+        shownRelease.current?.()
+        shownRelease.current = release
         setSrc(url)
       })
-      .catch(() => {
-        if (!cancelled) setBroken(true)
+      .catch((error) => {
+        if (
+          controller.signal.aborted ||
+          (error instanceof DOMException && error.name === 'AbortError')
+        ) {
+          return
+        }
+        setBroken(true)
       })
 
     return () => {
-      cancelled = true
-      releaseShown?.()
+      controller.abort()
+      shownRelease.current?.()
+      shownRelease.current = undefined
     }
   }, [path])
+
+  useEffect(
+    () => () => {
+      shownRelease.current?.()
+      shownRelease.current = undefined
+    },
+    [],
+  )
+
+  const handleError = () => {
+    shownRelease.current?.()
+    shownRelease.current = undefined
+    setSrc(null)
+    setBroken(true)
+  }
 
   return (
     <figure className={cn('figure-block flex flex-col gap-1.5', className)}>
@@ -81,7 +109,7 @@ export function FigureBlock({ figure, className }: FigureBlockProps) {
         <img
           src={src}
           alt={name}
-          onError={() => setBroken(true)}
+          onError={handleError}
           className="border-border bg-card h-auto max-w-full self-start rounded-md border"
         />
       )}

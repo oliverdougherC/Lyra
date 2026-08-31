@@ -12,9 +12,10 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Literal
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
+from backend.config import settings
 from backend.core.app_settings import get_settings_row
 from backend.core.diagnostics import build_diagnostics
 from backend.storage.database import MIGRATIONS_DIR, connect
@@ -94,6 +95,22 @@ def ready(response: Response) -> ReadyHealth:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return ReadyHealth(status="not_ready", components=components)
     return ReadyHealth(status="ready", components=components)
+
+
+@router.post("/shutdown", status_code=status.HTTP_202_ACCEPTED)
+async def shutdown(request: Request, background_tasks: BackgroundTasks) -> dict[str, str]:
+    """Gracefully stop the packaged backend so lifespan cleanup can reclaim helpers."""
+    if not settings.packaged_mode:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    callback = getattr(request.app.state, "request_shutdown", None)
+    if not callable(callback):
+        logger.warning("Packaged shutdown requested without a registered callback")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Shutdown is unavailable.",
+        )
+    background_tasks.add_task(callback)
+    return {"status": "stopping"}
 
 
 def _check_database() -> _DatabaseProbe:

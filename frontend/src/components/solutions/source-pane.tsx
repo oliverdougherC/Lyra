@@ -333,12 +333,12 @@ function PageImage({
   const failed = failedSrc === src
 
   useEffect(() => {
-    let cancelled = false
+    const controller = new AbortController()
     let releaseShown: (() => void) | undefined
     let adopted = false
     const image = new Image()
     const settle = () => {
-      if (cancelled || !image.src) return
+      if (controller.signal.aborted || !image.src) return
       const aspect = image.naturalHeight > 0 ? image.naturalWidth / image.naturalHeight : 0
       // Both updates land in one commit, so the page appears at the width it was measured
       // for rather than arriving and then being resized under the reader.
@@ -352,7 +352,7 @@ function PageImage({
 
     image.onload = settle
     image.onerror = () => {
-      if (!cancelled) {
+      if (!controller.signal.aborted) {
         releaseShown?.()
         setFailedSrc(src)
       }
@@ -362,21 +362,30 @@ function PageImage({
       image.src = directUrl
       if (image.complete && image.naturalWidth > 0) settle()
     } else {
-      void loadProtectedAssetSource(src)
+      void loadProtectedAssetSource(src, controller.signal)
         .then(({ url, release }) => {
-          if (cancelled) return
+          if (controller.signal.aborted) {
+            release?.()
+            return
+          }
           releaseShown = release
           image.src = url
           // A cached page is already complete before the handlers were attached.
           if (image.complete && image.naturalWidth > 0) settle()
         })
-        .catch(() => {
-          if (!cancelled) setFailedSrc(src)
+        .catch((error) => {
+          if (
+            controller.signal.aborted ||
+            (error instanceof DOMException && error.name === 'AbortError')
+          ) {
+            return
+          }
+          setFailedSrc(src)
         })
     }
 
     return () => {
-      cancelled = true
+      controller.abort()
       image.onload = null
       image.onerror = null
       if (!adopted) releaseShown?.()

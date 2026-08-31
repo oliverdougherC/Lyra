@@ -11,7 +11,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "./node_modules/.bin/vite build && playwright test",
+    "test:e2e": "VITE_API_BASE=http://127.0.0.1:8000 ./node_modules/.bin/vite build && playwright test",
     "test:acceptance": "playwright test --config playwright.acceptance.config.ts",
     "test:watch": "vitest",
     "format": "prettier --write .",

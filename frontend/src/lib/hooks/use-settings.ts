@@ -9,6 +9,7 @@ export const settingsKeys = {
   all: ['settings'] as const,
   models: ['settings', 'models'] as const,
   writerClass: (classId: number) => ['settings', 'writer-class', classId] as const,
+  desktopImport: ['settings', 'desktop-import'] as const,
 }
 
 export function useSettings() {
@@ -76,4 +77,43 @@ export function useTestVision() {
 
 export function useTestExa() {
   return useMutation({ mutationFn: () => api.testExa() })
+}
+
+export function useDesktopImportStatus() {
+  return useQuery({
+    queryKey: settingsKeys.desktopImport,
+    queryFn: ({ signal }) => api.getDesktopImportStatus(signal),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status
+      return status && ['queued', 'running', 'cancel_requested'].includes(status) ? 500 : false
+    },
+  })
+}
+
+export function usePreviewDesktopImport() {
+  return useMutation({
+    mutationFn: (selectionToken: string) => api.previewDesktopImport(selectionToken),
+  })
+}
+
+export function useStartDesktopImport() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      selectionToken,
+      operationId,
+    }: {
+      selectionToken: string
+      operationId: string
+    }) => api.startDesktopImport(selectionToken, operationId),
+    onSuccess: (status) => queryClient.setQueryData(settingsKeys.desktopImport, status),
+  })
+}
+
+export function useCancelDesktopImport() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.cancelDesktopImport(),
+    onSuccess: (status) => queryClient.setQueryData(settingsKeys.desktopImport, status),
+  })
 }

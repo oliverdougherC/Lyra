@@ -18,6 +18,7 @@ from backend.api import (
     routes_agent_chat,
     routes_chat,
     routes_classes,
+    routes_desktop_import,
     routes_documents,
     routes_drafts,
     routes_health,
@@ -49,7 +50,7 @@ from backend.core.origins import (
     mutation_origin_is_acceptable,
 )
 from backend.desktop_bootstrap import SESSION_HEADER
-from backend.desktop_migration import migrate_source_data_if_needed
+from backend.desktop_import import recover_desktop_import_publish
 from backend.llm.embed_server import embedding_server
 from backend.llm.ocr_server import ocr_server
 from backend.llm.rerank_server import rerank_server
@@ -68,13 +69,11 @@ _INVALID_SESSION = "Request rejected: the packaged session header is missing or 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.packaged_mode:
-        migrated = migrate_source_data_if_needed()
-        if migrated.status == "migrated":
-            logger.info(
-                "Migrated Lyra source data from %s into %s",
-                migrated.source,
-                migrated.target,
-            )
+        recovered = recover_desktop_import_publish()
+        if recovered["status"] == "ok":
+            logger.info("%s", recovered["message"])
+        elif recovered["status"] != "skipped":
+            logger.warning("%s", recovered["message"])
     settings.ensure_directories()
     conn = connect()
     try:
@@ -238,6 +237,7 @@ def create_app(*, session_secret: str | None = None) -> FastAPI:
     app.include_router(routes_classes.router)
     app.include_router(routes_health.router)
     app.include_router(routes_documents.router)
+    app.include_router(routes_desktop_import.router)
     app.include_router(routes_chat.router)
     app.include_router(routes_profile.router)
     app.include_router(routes_settings.router)

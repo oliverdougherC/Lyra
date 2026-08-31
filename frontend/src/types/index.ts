@@ -226,6 +226,51 @@ export interface SettingsUpdate {
   exa_api_key?: string
 }
 
+export interface DesktopImportPreview {
+  source_name: string
+  source_kind: string
+  schema_version?: number
+  class_count: number
+  document_count: number
+  total_entries: number
+  total_bytes: number
+  sample_entries: string[]
+  warnings: string[]
+  conflicts?: string[]
+  asset_summary?: DesktopImportAssetSummary | null
+  old_runtime_active?: boolean
+  source_lock?: string | null
+}
+
+export interface DesktopImportAssetSummary {
+  selected_models: number
+  selected_model_bytes: number
+  selected_caches: number
+  selected_cache_bytes: number
+  preserved_models: number
+  preserved_model_bytes: number
+  preserved_caches: number
+  preserved_cache_bytes: number
+}
+
+export interface DesktopImportStatus {
+  available: boolean
+  destination_ready: boolean
+  status: string
+  phase: string | null
+  message: string | null
+  source_name: string | null
+  copied_entries: number
+  total_entries: number
+  copied_bytes: number
+  total_bytes: number
+  cancel_requested: boolean
+  can_resume: boolean
+  requires_restart: boolean
+  preview: DesktopImportPreview | null
+  asset_summary?: DesktopImportAssetSummary | null
+}
+
 export interface WriterCapabilities {
   allow_web_research: boolean
   parallel_requests: boolean

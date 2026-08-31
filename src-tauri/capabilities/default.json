@@ -8,6 +8,9 @@
     "core:event:default",
     "core:window:default",
     "allow-desktop-bootstrap",
-    "allow-retry-backend"
+    "allow-retry-backend",
+    "allow-open-external-url",
+    "allow-pick-import-directory",
+    "allow-publish-desktop-import"
   ]
 }

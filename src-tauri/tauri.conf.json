@@ -11,6 +11,7 @@
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "Lyra",
         "width": 1400,
         "height": 960,
