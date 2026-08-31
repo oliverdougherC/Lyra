@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Lyra",
+  "version": "0.1.0",
+  "identifier": "com.lyra.desktop",
+  "build": {
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Lyra",
+        "width": 1400,
+        "height": 960,
+        "minWidth": 1080,
+        "minHeight": 720,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "capabilities": ["main-capability"],
+      "csp": "default-src 'self'; base-uri 'none'; connect-src 'self' http://127.0.0.1:*; font-src 'self' asset:; form-action 'self'; frame-ancestors 'none'; img-src 'self' asset: blob: data: http://127.0.0.1:*; media-src 'self' blob: http://127.0.0.1:*; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "resources": ["resources/lyra-backend/**/*"],
+    "icon": ["icons/icon.png"],
+    "macOS": {
+      "bundleName": "Lyra",
+      "bundleVersion": "1",
+      "infoPlist": "Info.plist",
+      "minimumSystemVersion": null
+    }
+  }
+}
