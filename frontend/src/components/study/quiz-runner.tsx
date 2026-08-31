@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ListChecks, MessageSquare } from 'lucide-react'
-import Link from 'next/link'
+import Link from '@/router/link'
 import { toast } from 'sonner'
 
 import { MathText } from '@/components/solutions/math-text'

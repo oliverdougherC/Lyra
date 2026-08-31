@@ -41,8 +41,33 @@ async function installApiMocks(page: Page) {
             allow_web_research: false,
             parallel_requests: true,
             parallel_concurrency: 2,
-            firecrawl_base_url: 'http://127.0.0.1:3002',
-            firecrawl_scrape_enabled: false,
+            exa_api_key_set: false,
+            exa_api_key_storage: 'file',
+          }),
+        })
+      },
+    ],
+    [
+      '/api/desktop-import/status',
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            available: false,
+            destination_ready: false,
+            status: 'idle',
+            phase: null,
+            message: null,
+            source_name: null,
+            copied_entries: 0,
+            total_entries: 0,
+            copied_bytes: 0,
+            total_bytes: 0,
+            cancel_requested: false,
+            can_resume: false,
+            requires_restart: false,
+            preview: null,
           }),
         })
       },
@@ -74,7 +99,7 @@ test.describe('nonvisual browser smoke', () => {
     const pageErrors: string[] = []
     page.on('pageerror', (error) => pageErrors.push(error.message))
 
-    await page.goto('/')
+    await page.goto('/#/')
     await page.waitForLoadState('networkidle')
 
     await expect(page.getByRole('heading', { name: 'Classes' })).toBeVisible()
@@ -88,10 +113,53 @@ test.describe('nonvisual browser smoke', () => {
     const pageErrors: string[] = []
     page.on('pageerror', (error) => pageErrors.push(error.message))
 
-    await page.goto('/settings')
+    await page.goto('/#/')
+    await page.getByRole('link', { name: 'Settings' }).first().click()
     await page.waitForLoadState('networkidle')
 
-    await expect(page.getByLabel('Breadcrumb').getByText('Settings')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+    expect(api.unexpectedRequests).toEqual([])
+    expect(pageErrors).toEqual([])
+  })
+
+  test('keeps the current route when a selected citation is encoded into the route URL, including back/forward and reload', async ({
+    page,
+  }) => {
+    const api = await installApiMocks(page)
+    const pageErrors: string[] = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
+
+    await page.goto('/#/')
+    await page.waitForLoadState('networkidle')
+    await page.getByRole('link', { name: 'Settings' }).first().click()
+    await page.waitForLoadState('networkidle')
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+
+    await page.evaluate(() => {
+      window.location.hash = '#/settings?tab=advanced'
+    })
+    await expect(page).toHaveURL(/#\/settings\?tab=advanced$/)
+
+    await page.evaluate(() => {
+      window.location.hash = '#/settings?tab=advanced&lyra-anchor=source-17'
+    })
+
+    await expect(page).toHaveURL(/#\/settings\?tab=advanced&lyra-anchor=source-17$/)
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+
+    await page.goBack()
+    await expect(page).toHaveURL(/#\/settings\?tab=advanced$/)
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+
+    await page.goForward()
+    await expect(page).toHaveURL(/#\/settings\?tab=advanced&lyra-anchor=source-17$/)
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    await expect(page).toHaveURL(/#\/settings\?tab=advanced&lyra-anchor=source-17$/)
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+
     expect(api.unexpectedRequests).toEqual([])
     expect(pageErrors).toEqual([])
   })

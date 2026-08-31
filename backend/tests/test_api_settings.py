@@ -1,6 +1,7 @@
 """Settings API contract, with a fake keychain and no DNS.
 
-The API key is the sensitive part: it is accepted, stored, and never echoed back.
+The tutor key and Exa key are the sensitive parts: they are accepted, stored, and never
+echoed back.
 """
 
 import socket
@@ -13,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.api import routes_settings
+from backend.core import exa
 from backend.core.app_settings import get_settings_row, update_settings_row
 from backend.llm import client as client_module
 from backend.storage import secrets
@@ -87,12 +89,15 @@ def client(db: sqlite3.Connection) -> Iterator[TestClient]:
         yield test_client
 
 
-def test_get_settings_never_exposes_the_key(client: TestClient) -> None:
+def test_get_settings_never_exposes_the_keys(client: TestClient) -> None:
     body = client.get("/api/settings").json()
 
     assert "api_key" not in body
+    assert "exa_api_key" not in body
     assert body["api_key_set"] is False
     assert body["api_key_storage"] == "keychain"
+    assert body["exa_api_key_set"] is False
+    assert body["exa_api_key_storage"] == "keychain"
 
 
 def test_put_stores_the_key_without_returning_it(
@@ -106,12 +111,31 @@ def test_put_stores_the_key_without_returning_it(
     assert "sk-secret" not in client.get("/api/settings").text
 
 
+def test_put_stores_the_exa_key_without_returning_it(
+    client: TestClient, fake_keyring: FakeKeyring
+) -> None:
+    body = client.put("/api/settings", json={"exa_api_key": "exa-secret"}).json()
+
+    assert fake_keyring.store[(secrets.EXA_SERVICE, secrets.EXA_USERNAME)] == "exa-secret"
+    assert body["exa_api_key_set"] is True
+    assert "exa_api_key" not in body
+    assert "exa-secret" not in client.get("/api/settings").text
+
+
 def test_empty_api_key_deletes_the_stored_one(client: TestClient) -> None:
     client.put("/api/settings", json={"api_key": "sk-secret"})
 
     body = client.put("/api/settings", json={"api_key": ""}).json()
 
     assert body["api_key_set"] is False
+
+
+def test_empty_exa_api_key_deletes_the_stored_one(client: TestClient) -> None:
+    client.put("/api/settings", json={"exa_api_key": "exa-secret"})
+
+    body = client.put("/api/settings", json={"exa_api_key": ""}).json()
+
+    assert body["exa_api_key_set"] is False
 
 
 def test_changing_the_endpoint_withdraws_the_acknowledgement(client: TestClient) -> None:
@@ -180,78 +204,165 @@ def test_writer_capability_settings_roundtrip(client: TestClient) -> None:
     assert updated["parallel_concurrency"] == 3
 
 
-def test_firecrawl_settings_are_loopback_only_and_readiness_is_explicit(
+def test_exa_settings_probe_reports_availability(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     defaults = client.get("/api/settings").json()
-    assert defaults["firecrawl_base_url"] == "http://127.0.0.1:3002"
-    assert defaults["firecrawl_scrape_enabled"] is False
+    assert defaults["allow_web_research"] is False
+    assert defaults["exa_api_key_set"] is False
 
-    rejected = client.put(
-        "/api/settings", json={"firecrawl_base_url": "https://firecrawl.example.com"}
-    )
-    assert rejected.status_code == 422
+    monkeypatch.setattr(routes_settings.secrets, "get_exa_api_key", lambda: "exa-secret")
 
-    class ReadyFirecrawl:
-        def __init__(self, *, base_url: str) -> None:
-            assert base_url == "http://127.0.0.1:3002"
+    class ReadyExa:
+        def __init__(self, *, api_key: str, **kwargs: object) -> None:
+            assert api_key == "exa-secret"
+            del kwargs
 
         def check_readiness(self) -> dict[str, object]:
             return {"status": "ok"}
 
-    monkeypatch.setattr(routes_settings, "FirecrawlClient", ReadyFirecrawl)
-    result = client.post("/api/settings/test-firecrawl")
+    monkeypatch.setattr(routes_settings.exa, "ExaClient", ReadyExa)
+    result = client.post("/api/settings/test-exa")
     assert result.status_code == 200
     assert result.json() == {
         "ok": True,
         "status": "available",
-        "message": "Firecrawl is available.",
+        "message": "Exa is available.",
     }
     assert client.put("/api/settings", json={"parallel_concurrency": 0}).status_code == 422
 
 
-def test_firecrawl_settings_probe_reports_temporary_unavailability(
+def test_exa_settings_probe_reports_missing_key(client: TestClient) -> None:
+    result = client.post("/api/settings/test-exa")
+
+    assert result.status_code == 200
+    assert result.json() == {
+        "ok": False,
+        "status": "missing_key",
+        "message": "No Exa API key is configured.",
+    }
+
+
+def test_exa_settings_probe_reports_temporary_unavailability(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    class UnavailableFirecrawl:
-        def __init__(self, *, base_url: str) -> None:
-            assert base_url == "http://127.0.0.1:3002"
+    monkeypatch.setattr(routes_settings.secrets, "get_exa_api_key", lambda: "exa-secret")
+
+    class UnavailableExa:
+        def __init__(self, *, api_key: str, **kwargs: object) -> None:
+            assert api_key == "exa-secret"
+            del kwargs
 
         def check_readiness(self) -> dict[str, object]:
-            raise routes_settings.FirecrawlTransientError("temporarily down")
+            raise routes_settings.exa.ExaTransientError("temporarily down")
 
-    monkeypatch.setattr(routes_settings, "FirecrawlClient", UnavailableFirecrawl)
+    monkeypatch.setattr(routes_settings.exa, "ExaClient", UnavailableExa)
 
-    result = client.post("/api/settings/test-firecrawl")
+    result = client.post("/api/settings/test-exa")
 
     assert result.status_code == 200
     assert result.json() == {
         "ok": False,
         "status": "temporarily_unavailable",
-        "message": "Firecrawl is temporarily unavailable; web research is disabled.",
+        "message": "Exa is temporarily unavailable; web research is disabled.",
     }
 
 
-def test_firecrawl_settings_probe_reports_misconfiguration(
+def test_exa_settings_probe_reports_invalid_key(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    class MisconfiguredFirecrawl:
-        def __init__(self, *, base_url: str) -> None:
-            assert base_url == "http://127.0.0.1:3002"
+    monkeypatch.setattr(routes_settings.secrets, "get_exa_api_key", lambda: "exa-secret")
+
+    class MisconfiguredExa:
+        def __init__(self, *, api_key: str, **kwargs: object) -> None:
+            assert api_key == "exa-secret"
+            del kwargs
 
         def check_readiness(self) -> dict[str, object]:
-            raise routes_settings.FirecrawlMisconfiguredError("wrong endpoint")
+            raise routes_settings.exa.ExaAuthError("wrong endpoint")
 
-    monkeypatch.setattr(routes_settings, "FirecrawlClient", MisconfiguredFirecrawl)
+    monkeypatch.setattr(routes_settings.exa, "ExaClient", MisconfiguredExa)
 
-    result = client.post("/api/settings/test-firecrawl")
+    result = client.post("/api/settings/test-exa")
 
     assert result.status_code == 200
     assert result.json() == {
         "ok": False,
-        "status": "misconfigured",
-        "message": "Firecrawl is misconfigured; web research is disabled.",
+        "status": "invalid_key",
+        "message": "The Exa API key is invalid or not authorized.",
     }
+
+
+def test_exa_settings_probe_reports_other_distinct_failures(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(routes_settings.secrets, "get_exa_api_key", lambda: "exa-secret")
+
+    class QuotaExa:
+        def __init__(self, *, api_key: str, **kwargs: object) -> None:
+            assert api_key == "exa-secret"
+            del kwargs
+
+        def check_readiness(self) -> dict[str, object]:
+            raise exa.ExaQuotaExceededError("no credits")
+
+    monkeypatch.setattr(routes_settings.exa, "ExaClient", QuotaExa)
+    assert client.post("/api/settings/test-exa").json()["status"] == "quota_exhausted"
+
+    class RateLimitedExa:
+        def __init__(self, *, api_key: str, **kwargs: object) -> None:
+            assert api_key == "exa-secret"
+            del kwargs
+
+        def check_readiness(self) -> dict[str, object]:
+            raise exa.ExaRateLimitError("slow down")
+
+    monkeypatch.setattr(routes_settings.exa, "ExaClient", RateLimitedExa)
+    assert client.post("/api/settings/test-exa").json()["status"] == "rate_limited"
+
+    class TimedOutExa:
+        def __init__(self, *, api_key: str, **kwargs: object) -> None:
+            assert api_key == "exa-secret"
+            del kwargs
+
+        def check_readiness(self) -> dict[str, object]:
+            raise exa.ExaTimeoutError("slow")
+
+    monkeypatch.setattr(routes_settings.exa, "ExaClient", TimedOutExa)
+    assert client.post("/api/settings/test-exa").json()["status"] == "timeout"
+
+    class OfflineExa:
+        def __init__(self, *, api_key: str, **kwargs: object) -> None:
+            assert api_key == "exa-secret"
+            del kwargs
+
+        def check_readiness(self) -> dict[str, object]:
+            raise exa.ExaOfflineError("offline")
+
+    monkeypatch.setattr(routes_settings.exa, "ExaClient", OfflineExa)
+    assert client.post("/api/settings/test-exa").json()["status"] == "offline"
+
+    class MalformedExa:
+        def __init__(self, *, api_key: str, **kwargs: object) -> None:
+            assert api_key == "exa-secret"
+            del kwargs
+
+        def check_readiness(self) -> dict[str, object]:
+            raise exa.ExaSchemaError("bad response")
+
+    monkeypatch.setattr(routes_settings.exa, "ExaClient", MalformedExa)
+    assert client.post("/api/settings/test-exa").json()["status"] == "malformed_response"
+
+    class PermissionDeniedExa:
+        def __init__(self, *, api_key: str, **kwargs: object) -> None:
+            assert api_key == "exa-secret"
+            del kwargs
+
+        def check_readiness(self) -> dict[str, object]:
+            raise exa.ExaPermissionError("feature disabled")
+
+    monkeypatch.setattr(routes_settings.exa, "ExaClient", PermissionDeniedExa)
+    assert client.post("/api/settings/test-exa").json()["status"] == "permission_denied"
 
 
 def test_repointing_the_endpoint_forgets_what_was_measured_about_tool_support(

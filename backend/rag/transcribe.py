@@ -134,19 +134,21 @@ async def transcribe_page_locally(image: bytes, *, transport: object | None = No
             hit the output ceiling - a repetition loop's partial text must fail the page
             rather than be filed as its transcription.
     """
-    ocr_server.ensure_running()
-    message = client.image_message(OCR_PROMPT, image)
-    text = await client.complete(
-        f"{ocr_server.base_url}/v1",
-        None,
-        None,
-        [message],  # type: ignore[arg-type]
-        transport=transport,
-        max_tokens=MAX_TRANSCRIPTION_TOKENS,
-        temperature=client.DETERMINISTIC_TEMPERATURE,
-        request_timeout=client.BACKGROUND_TIMEOUT,
-        fail_on_truncation=True,
-    )
+    # The specialist may take minutes on a scanned page. Keep its helper resident for
+    # the full async request; eviction begins only after the result or failure unwinds.
+    with ocr_server.lease():
+        message = client.image_message(OCR_PROMPT, image)
+        text = await client.complete(
+            f"{ocr_server.base_url}/v1",
+            None,
+            None,
+            [message],  # type: ignore[arg-type]
+            transport=transport,
+            max_tokens=MAX_TRANSCRIPTION_TOKENS,
+            temperature=client.DETERMINISTIC_TEMPERATURE,
+            request_timeout=client.BACKGROUND_TIMEOUT,
+            fail_on_truncation=True,
+        )
     return _strip_special(text)
 
 

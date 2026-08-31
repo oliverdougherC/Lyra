@@ -858,8 +858,7 @@ def _caps(*, web: bool) -> WriterCapabilities:
         allow_web_research=web,
         parallel_requests=False,
         parallel_concurrency=1,
-        firecrawl_base_url="http://127.0.0.1:9999",
-        firecrawl_scrape_enabled=False,
+        source_content_enabled=False,
     )
 
 

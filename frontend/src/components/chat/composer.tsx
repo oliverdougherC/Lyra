@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import Link from '@/router/link'
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import { ArrowUp, Square, X } from 'lucide-react'
 

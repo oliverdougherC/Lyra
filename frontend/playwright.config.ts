@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
-const port = 3000
+const port = Number(process.env.PLAYWRIGHT_FRONTEND_PORT ?? '4179')
+const enableWebkit = process.env.PLAYWRIGHT_ENABLE_WEBKIT === '1'
 
 export default defineConfig({
   testDir: './e2e',
@@ -10,14 +11,35 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
   use: {
-    ...devices['Desktop Chrome'],
     baseURL: `http://127.0.0.1:${port}`,
     trace: 'on-first-retry',
   },
+  projects: [
+    {
+      name: 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+      },
+    },
+    ...(enableWebkit
+      ? [
+          {
+            name: 'webkit',
+            use: {
+              ...devices['Desktop Safari'],
+              browserName: 'webkit' as const,
+            },
+          },
+        ]
+      : []),
+  ],
   webServer: {
-    command: `pnpm exec next start --hostname 127.0.0.1 --port ${port}`,
+    command: `./node_modules/.bin/vite preview --host 127.0.0.1 --port ${port} --strictPort`,
     port,
-    reuseExistingServer: !process.env.CI,
+    // Never attach the smoke suite to an unrelated listener. A developer may already
+    // have Lyra (or another app) on a common port; strict ownership is part of the
+    // desktop lifecycle contract, and tests should model it too.
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 })

@@ -21,6 +21,7 @@ and tested in isolation because it is the part a regression would most quietly b
 from __future__ import annotations
 
 import platform
+import re
 import sqlite3
 from pathlib import Path
 
@@ -32,6 +33,15 @@ from backend.storage.database import MIGRATIONS_DIR
 # The bundle format. Bumped when a field is added or its meaning changes, so a maintainer
 # reading a pasted bundle knows which fields to expect from it.
 BUNDLE_VERSION = 1
+_STARTUP_LOG_NAME = "desktop-startup.log"
+_STARTUP_LOG_MAX_LINES = 20
+_STARTUP_LOG_MAX_CHARS = 1_000
+_SENSITIVE_STARTUP_LINE = re.compile(
+    r"(?i)(authorization|api[_ -]?key|token|secret|password|bearer\s+\S+|"
+    r"(?:sk|exa)-[a-z0-9_-]{8,}|/(?:users|home|private)/|/var/folders/|"
+    r"content\s*[=:]|body\s*[=:]|prompt\s*[=:]|response\s*[=:]|html\s*[=:]|text\s*[=:]|"
+    r"document\s*[=:])"
+)
 
 
 def redact_path(value: str | Path, *, root: Path, home: Path) -> str:
@@ -101,14 +111,44 @@ def _tutor_section(row: sqlite3.Row) -> dict[str, object]:
 
 
 def _web_research_section(row: sqlite3.Row) -> dict[str, object]:
-    """Firecrawl configuration, again as flags rather than the base URL itself."""
-    base_url = row["firecrawl_base_url"]
-    configured = bool(base_url)
+    """Redacted Exa configuration without credentials or provider traffic."""
     return {
-        "firecrawl_configured": configured,
-        "firecrawl_is_local": is_local_endpoint(str(base_url)) if configured else None,
-        "scrape_enabled": bool(row["firecrawl_scrape_enabled"]),
+        "provider": "exa",
+        "source_content_enabled": bool(row["source_content_enabled"]),
+        "exa_key_present": secrets.has_exa_api_key(),
+        "exa_key_storage": secrets.exa_api_key_storage(),
     }
+
+
+def _desktop_section(*, root: Path, home: Path) -> dict[str, object]:
+    logs_dir = settings.logs_dir
+    if logs_dir is None:
+        return {"startup_log_present": False, "startup_log_path": None, "startup_log_tail": None}
+    path = logs_dir / _STARTUP_LOG_NAME
+    return {
+        "startup_log_present": path.is_file(),
+        "startup_log_path": redact_path(path, root=root, home=home),
+        "startup_log_tail": _read_startup_log_tail(path, root=root, home=home),
+    }
+
+
+def _read_startup_log_tail(path: Path, *, root: Path, home: Path) -> str | None:
+    if not path.is_file():
+        return None
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if not lines:
+        return None
+    safe_lines = [_sanitize_startup_log_line(line, root=root, home=home) for line in lines]
+    tail = "\n".join(safe_lines[-_STARTUP_LOG_MAX_LINES:])
+    safe = tail.replace(str(root), "<lyra>").replace(str(home), "~")
+    return safe[-_STARTUP_LOG_MAX_CHARS:] or None
+
+
+def _sanitize_startup_log_line(line: str, *, root: Path, home: Path) -> str:
+    safe = line.replace(str(root), "<lyra>").replace(str(home), "~")
+    if _SENSITIVE_STARTUP_LINE.search(safe):
+        return "<redacted sensitive startup diagnostics>"
+    return safe
 
 
 def build_diagnostics(conn: sqlite3.Connection, *, home: Path | None = None) -> dict[str, object]:
@@ -139,6 +179,7 @@ def build_diagnostics(conn: sqlite3.Connection, *, home: Path | None = None) -> 
             "rerank_installed": settings.rerank_installed,
             "ocr_installed": settings.ocr_installed,
         },
+        "desktop": _desktop_section(root=root, home=home_dir),
         "api_key": {"present": secrets.has_api_key(), "storage": secrets.api_key_storage()},
         "content": {
             "classes": _count(conn, "classes"),

@@ -3,11 +3,10 @@
 overrides:
   katex: 0.18.1
 
-# Packages whose postinstall scripts are required for the app to run.
-onlyBuiltDependencies:
-  - sharp
-  - unrs-resolver
-
 allowBuilds:
+  # These reviewed packages install platform-specific binaries used by the
+  # frontend toolchain. Every other dependency build remains denied by pnpm
+  # 11's strictDepBuilds default.
+  esbuild: true
   sharp: true
   unrs-resolver: true

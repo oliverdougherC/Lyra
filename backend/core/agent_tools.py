@@ -57,7 +57,7 @@ class AgentCapabilitySnapshot:
     budgeting and the executable registry, so a settings or grant change that lands between
     the two cannot make the registry the loop runs larger or different from the one the
     preflight charged for. It carries only the booleans that gate *schema inclusion* - not
-    the workspace row or the firecrawl endpoint, which each retained handler re-reads live
+    the workspace row, which each retained handler re-reads live
     at dispatch time. That separation is deliberate: freezing the snapshot fixes what the
     model is *offered*, while dispatch-time reauthorization still decides what it may
     *do*. A grant revoked after the snapshot is taken therefore still fails closed at the
@@ -65,7 +65,7 @@ class AgentCapabilitySnapshot:
     """
 
     allow_web_research: bool
-    firecrawl_scrape_enabled: bool
+    source_content_enabled: bool
     workspace_present: bool
     workspace_read_enabled: bool
     workspace_change_proposals_enabled: bool
@@ -84,7 +84,7 @@ def snapshot_agent_capabilities(conn: sqlite3.Connection, class_id: int) -> Agen
     workspace = agent_store.get_workspace_for_class(conn, class_id)
     return AgentCapabilitySnapshot(
         allow_web_research=bool(capabilities.allow_web_research),
-        firecrawl_scrape_enabled=bool(capabilities.firecrawl_scrape_enabled),
+        source_content_enabled=bool(capabilities.source_content_enabled),
         workspace_present=workspace is not None,
         workspace_read_enabled=bool(workspace["read_enabled"]) if workspace else False,
         workspace_change_proposals_enabled=(
@@ -265,16 +265,14 @@ def _research_authorization(
     class_id: int,
     session_id: int,
     *,
-    require_scrape: bool = False,
+    require_source_content: bool = False,
 ) -> object:
     _session_scope(conn, class_id, session_id)
     capabilities = get_writer_capabilities(conn, class_id)
     if not capabilities.allow_web_research:
         raise _RefusalError("Web research is disabled for this class.")
-    if require_scrape and not capabilities.firecrawl_scrape_enabled:
-        raise _RefusalError(
-            "Web source fetching is unavailable until the scrape safety gate passes."
-        )
+    if require_source_content and not capabilities.source_content_enabled:
+        raise _RefusalError("Web source fetching is disabled for this class.")
     return capabilities
 
 
@@ -522,7 +520,7 @@ def _add_research_tools(
 ) -> None:
     # Schema inclusion is decided by the frozen snapshot, not a fresh read, so the tools
     # offered match what the preflight budgeted. The handlers below still re-read the live
-    # web-research grant (and firecrawl gate) at dispatch through `_research_authorization`.
+    # web-research grant (and source-content gate) at dispatch through `_research_authorization`.
     if not snapshot.allow_web_research:
         return
 
@@ -530,7 +528,7 @@ def _add_research_tools(
         return _research_authorization(conn, class_id, session_id)
 
     def scrape_auth() -> object:
-        return _research_authorization(conn, class_id, session_id, require_scrape=True)
+        return _research_authorization(conn, class_id, session_id, require_source_content=True)
 
     def search_action(capabilities: WriterCapabilities, *, query: str) -> _Outcome:
         query = _text(query, "query", maximum=500)
@@ -540,7 +538,6 @@ def _add_research_tools(
         results = web_research.search_web(
             guarded.query,
             allowed=True,
-            firecrawl_base_url=capabilities.firecrawl_base_url,
             private_context=private_context,
         )
         return _Outcome(
@@ -575,15 +572,14 @@ def _add_research_tools(
         )
     )
 
-    if snapshot.firecrawl_scrape_enabled:
+    if snapshot.source_content_enabled:
 
         def fetch_action(capabilities: WriterCapabilities, *, url: str) -> _Outcome:
             url = _text(url, "url", maximum=source_ledger.MAX_URL_CHARS)
             fetched = web_research.fetch_source(
                 url,
                 allowed=True,
-                firecrawl_base_url=capabilities.firecrawl_base_url,
-                scrape_enabled=True,
+                source_content_enabled=True,
             )
             fetch_id = uuid.uuid4().hex
             source = FetchedSource(

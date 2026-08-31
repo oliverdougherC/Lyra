@@ -1,0 +1,1072 @@
+{
+  "privacy": {
+    "absolute_paths_emitted": false,
+    "absolute_symlink_targets_redacted": true,
+    "profile_contents_scanned": false
+  },
+  "roots": [
+    {
+      "categories": {
+        "directory": 40,
+        "executable": 2,
+        "image": 4,
+        "manifest": 1,
+        "other": 67,
+        "python-runtime": 1,
+        "shared-library": 15,
+        "sqlite-migration": 40
+      },
+      "dir_count": 40,
+      "entries": [
+        {
+          "category": "manifest",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Info.plist",
+          "sha256": "e00b765a1c8692672778bd9066d0d73b97b1d7091153e4cdf0b192fbb3b4f296",
+          "size_bytes": 981
+        },
+        {
+          "category": "executable",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/MacOS/lyra-desktop",
+          "sha256": "61c21189d84a3a3536b0092829f17717daedfe86aa80439307a94ced2fa04bed",
+          "size_bytes": 12180144
+        },
+        {
+          "category": "image",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/Lyra.icns",
+          "sha256": "13cd61b9fa831d424fd11bd0f43389267358ac8be5eceb427a0e7d254890934a",
+          "size_bytes": 33377
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/.gitkeep",
+          "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+          "size_bytes": 1
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/001_init.sql",
+          "sha256": "fa02b47f5fd9b48ceb25c19c1d198510810e7204e999e98c117c46506caab2c0",
+          "size_bytes": 3337
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/002_classes_archived.sql",
+          "sha256": "ec478786579b215798bba8f5516273874d6ab537cfd7fae032ad07510c6511e6",
+          "size_bytes": 68
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/003_message_thinking.sql",
+          "sha256": "40df5e71d7be0007ffe6901f1310d13ab87c39eaa7ffbf41db0c3bcc8324df4d",
+          "size_bytes": 389
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/004_message_thinking_ms.sql",
+          "sha256": "ec9346a47069f8cc36642f832052365922c7248d019c4305d90b159fd7c665b4",
+          "size_bytes": 418
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/005_artifacts.sql",
+          "sha256": "c38272b4744ed2b1ca026528bcb28cf3917b00ca9bb7fa65d8c0738cee00e282",
+          "size_bytes": 5269
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/006_solving.sql",
+          "sha256": "32602653ecb5af8cd32e5e7cf84d1da32e757a14901a489885953ed13668f9a8",
+          "size_bytes": 2035
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/007_session_artifact_part.sql",
+          "sha256": "22453a40e0b72d97a4bb6f74697cea3e335306aa100dfaefd89aa7e152f51b50",
+          "size_bytes": 626
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/008_provenance_bbox.sql",
+          "sha256": "81f2f17781733fac318222550eb63a6b7d24e5df09c969fca204510b98215a89",
+          "size_bytes": 700
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/009_profile_evidence.sql",
+          "sha256": "eaad2c07e802a047c07e06fa9df76c5fc87c2538906e284de135e50ca20c7bae",
+          "size_bytes": 3306
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/010_relocate_named_problems.sql",
+          "sha256": "2b84dc6342598839b7489203feaf269853fbbb56bfa020d661bdb521686242cd",
+          "size_bytes": 841
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/011_solve_parts.sql",
+          "sha256": "7121b2237cf0686b5caf6f0b339b9a9d47ed6b773ce7e419cd60c62e9e0cc7fa",
+          "size_bytes": 1139
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/012_section_path.sql",
+          "sha256": "80f4dbcf6c60958d8ec79482cec6c5cb574d4336111bf7515aa39355d438f676",
+          "size_bytes": 1906
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/013_document_pages.sql",
+          "sha256": "2553259cf7d0292d05fb1321fd89274a811b2244b821a16695de4b3b343146ce",
+          "size_bytes": 2053
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/014_document_figures.sql",
+          "sha256": "d4bd1cd7cafc1459a2ae6b1d648f615d47c8e036cd1e0396302299181bce3802",
+          "size_bytes": 1471
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/015_chunks_fts.sql",
+          "sha256": "1680b08d940c05de744d52cf57b9c876117d1c7dadc2018804bcc5b792e3d58e",
+          "size_bytes": 1484
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/016_study_artifacts.sql",
+          "sha256": "3ee8c8a9c6596bbd43295c06102240727bb5d749fb99d1bdeb6b0dd6d39b2e94",
+          "size_bytes": 5351
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/017_drafts.sql",
+          "sha256": "0b6ec6337c47758811084e0ca2489952fe1c812ec3ad4970c8e86baf352b2b81",
+          "size_bytes": 892
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/018_flatten_document_filenames.sql",
+          "sha256": "9e5e6024bade0c6f0e66a8b04f7697414ceb2deb4f7a9fd050e048afa5f80b86",
+          "size_bytes": 1132
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/019_draft_briefs.sql",
+          "sha256": "413a581cc9aab56a6b44e3630f9478ca706cee066fad2029794189a31afb6d8c",
+          "size_bytes": 1002
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/020_writer_sessions.sql",
+          "sha256": "e93d1c7574a0515c0289891ff142fbcdfe9e5411272aeb58f4495f9a2365a5b3",
+          "size_bytes": 1310
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/021_draft_comments.sql",
+          "sha256": "458a791a08a5e3122d580bf7a28d538c417effe816c6278a65340aa1e75f5525",
+          "size_bytes": 1284
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/022_writer_plans.sql",
+          "sha256": "d54d17d6cbcd9bf93be3a2c62b5538f467c78b74d13b06ebe7d7291913b42fad",
+          "size_bytes": 1917
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/023_writer_sources.sql",
+          "sha256": "8034c3fad03052b5a35e8b63286ab9fea2aa4f1b4bc5ebe504c8ee5fea732e29",
+          "size_bytes": 1697
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/024_writer_capabilities.sql",
+          "sha256": "fa5a2266158217e61d923a35b44f60813f7480190ce4ce9c842bb665fd2db1bf",
+          "size_bytes": 1065
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/025_writer_run_metadata.sql",
+          "sha256": "b9e322bb64e2b42a1e7ddb5a83269c7a9e7fbffd93820daf2f40daeef52ad435",
+          "size_bytes": 568
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/026_comment_section_refs.sql",
+          "sha256": "48295941db3f4ce320a6efa997077c0ebe9ea5f97c420d902b8e810e1f61a22e",
+          "size_bytes": 225
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/027_pending_edit_comments.sql",
+          "sha256": "822abcb00276b4b190ea10c88edba12d576df00aa00ca609d80d05afef0ff116",
+          "size_bytes": 648
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/028_phase4_agent.sql",
+          "sha256": "73dcaa89d036a3e8d495e0e81a2e60b6de8dd01a447fa16d2f655a56f9e2cc9c",
+          "size_bytes": 6741
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/029_profile_ledger_evidence.sql",
+          "sha256": "ddde45754e0696d9fa14b9dca9d4b58bfe54540f07848069866c7a3e545e50be",
+          "size_bytes": 563
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/030_writer_runs.sql",
+          "sha256": "0e6702401fca6125841a1bd6bd723fb2c33f613bc19c3675590f6722f3edbe29",
+          "size_bytes": 1073
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/031_live_draft_suggestions.sql",
+          "sha256": "0cf52fa57bc267f2c7f666b3bd78e348150d7d94c859d2077ee66be673459144",
+          "size_bytes": 1556
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/032_storage_intents.sql",
+          "sha256": "fc8a96e2dac3953b673c53753edd0207fa401b7d85d098a9351121f990220a5e",
+          "size_bytes": 1048
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/033_storage_intent_blocked.sql",
+          "sha256": "3ca0f05cb93c129da60a419f837c561e815b1dcc3e4cefac6efd9578c6e100bc",
+          "size_bytes": 769
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/034_draft_body_version.sql",
+          "sha256": "c0fe1fe01dfb4eff98fb656888c028f1efedf30db541402f6df6c51484dffaae",
+          "size_bytes": 954
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/035_study_durability.sql",
+          "sha256": "51e05f444de73479f8e67c9ca0d9c3ff48087eab120613262a6a4e728ca8f35b",
+          "size_bytes": 4264
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/036_agent_turn_attempts.sql",
+          "sha256": "19530056b0c8520c4f197bc29b8085dac223e4559d1160905f0388148d1df41b",
+          "size_bytes": 3236
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/037_writer_turn_attempts.sql",
+          "sha256": "f48b51e84bcfa7b8f7c5ea16b404d37f88455e962cf871408a9b9f72b4824500",
+          "size_bytes": 1850
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/038_tutor_turn_attempts.sql",
+          "sha256": "a294f3e7f5b34cd04497e5c5cb38a0506de6e6302e9d49693fc6bb01331fe780",
+          "size_bytes": 1302
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/039_chat_operation_id.sql",
+          "sha256": "c4e6cd8825b87e1c05f57fdd4067759461aea8be1fb39340fba9238c51b2b493",
+          "size_bytes": 838
+        },
+        {
+          "category": "sqlite-migration",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/backend/storage/migrations/040_remove_firecrawl_settings.sql",
+          "sha256": "8355275cbca7837ba1a5cee809a93a9a38cc977ec41bc78941a245ec740112b5",
+          "size_bytes": 306
+        },
+        {
+          "category": "python-runtime",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/base_library.zip",
+          "sha256": "168904dcd736b3f539a3294f02eee6788c351024d7782c829e35e7dce171e7ff",
+          "size_bytes": 1333490
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/certifi/cacert.pem",
+          "sha256": "9cc2a774b5198dcff14d9be1e66091f538975d867ce029a96bce15a55dfd730f",
+          "size_bytes": 240216
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/certifi/py.typed",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/click-8.4.2.dist-info/INSTALLER",
+          "sha256": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9",
+          "size_bytes": 2
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/click-8.4.2.dist-info/METADATA",
+          "sha256": "194c9dd81d567f9081f026c7e401060fbafa7bc147c8e0a58b3668b40a64c031",
+          "size_bytes": 2621
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/click-8.4.2.dist-info/RECORD",
+          "sha256": "f14e3990f101ef4a1dd09903eb3f859f233ec1d9bd9a00e4470f207568804d12",
+          "size_bytes": 1810
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/click-8.4.2.dist-info/REQUESTED",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/click-8.4.2.dist-info/WHEEL",
+          "sha256": "1b68144734c4b66791f27add5d425f3620775585718a03d0f9b110ba3a4d88db",
+          "size_bytes": 82
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/click-8.4.2.dist-info/licenses/LICENSE.txt",
+          "sha256": "9a8ad106a394e853bfe21f42f4e72d592819a22805d991b5f3275029292b658d",
+          "size_bytes": 1475
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexcache-0.3.dist-info/AUTHORS",
+          "sha256": "d77ff2d5d56354e790addb409bb0af6b965bc98a65ec2fc958dcca651fb98399",
+          "size_bytes": 83
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexcache-0.3.dist-info/INSTALLER",
+          "sha256": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9",
+          "size_bytes": 2
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexcache-0.3.dist-info/LICENSE",
+          "sha256": "a276fa944e6becfe51ae313094cb048f7aa6c2e5cc823138e8c1e74f73f79d61",
+          "size_bytes": 1584
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexcache-0.3.dist-info/METADATA",
+          "sha256": "13081e02b52beb171ca5b244ff8b412f03e8ac8c6eaad49fa83b559558de6b45",
+          "size_bytes": 6958
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexcache-0.3.dist-info/RECORD",
+          "sha256": "36c96a9fe853ed423ab17dde2a30e66ab68fb2489a3f874f7806a3e11f45c8f7",
+          "size_bytes": 1336
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexcache-0.3.dist-info/REQUESTED",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexcache-0.3.dist-info/WHEEL",
+          "sha256": "a2241587fe4f9d033413780f762cf4f5608d9b08870cc6867abfde96a0777283",
+          "size_bytes": 92
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexcache-0.3.dist-info/top_level.txt",
+          "sha256": "38ee8f841d407434dffd423977fc54a408ba83fe6aaa68e7cd74b327a10fa508",
+          "size_bytes": 10
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexparser-0.4.dist-info/AUTHORS",
+          "sha256": "8f5316068b6ab607680f9edc264f52a6c97e214d1af9c76d990e84a3aa37003d",
+          "size_bytes": 84
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexparser-0.4.dist-info/INSTALLER",
+          "sha256": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9",
+          "size_bytes": 2
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexparser-0.4.dist-info/LICENSE",
+          "sha256": "a276fa944e6becfe51ae313094cb048f7aa6c2e5cc823138e8c1e74f73f79d61",
+          "size_bytes": 1584
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexparser-0.4.dist-info/METADATA",
+          "sha256": "19ab3b2a5c81b171f64a09720ca2181d86c24029935e81c06fc778d8d9589c0d",
+          "size_bytes": 18658
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexparser-0.4.dist-info/RECORD",
+          "sha256": "118718b3baaef4f105c94e63bf33cb4d07f719927641e89cb6844cce6eb4c964",
+          "size_bytes": 1699
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexparser-0.4.dist-info/REQUESTED",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexparser-0.4.dist-info/WHEEL",
+          "sha256": "3fd8f0fa01237bc07207bfe15e82029c7b550ab13031087eeb7d2d2af4167a17",
+          "size_bytes": 91
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/flexparser-0.4.dist-info/top_level.txt",
+          "sha256": "bf8ebd244fb6c37e5eaeef804133370d6f481a7621fa06f8674b1c2c11487e5b",
+          "size_bytes": 11
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/httptools/parser/parser.cpython-312-darwin.so",
+          "sha256": "14b81337736d93ef99a09d9d7af5568e11633df6d0e7eecb5df75add425f295c",
+          "size_bytes": 207440
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/httptools/parser/url_parser.cpython-312-darwin.so",
+          "sha256": "cf2e6338c06e1a06ae7c4c4234d4277697e16697de6ab8188e9b1dd150cba506",
+          "size_bytes": 128608
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/keyring-25.7.0.dist-info/INSTALLER",
+          "sha256": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9",
+          "size_bytes": 2
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/keyring-25.7.0.dist-info/METADATA",
+          "sha256": "bd54de98fede6dc3e1f3cd89b4e37c95d8842a523bdbb9e52ab40edff1837163",
+          "size_bytes": 21447
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/keyring-25.7.0.dist-info/RECORD",
+          "sha256": "a16af9339f446b3881458b723c1413da2d2b18ece85a56ae0bc2581a1b54160a",
+          "size_bytes": 3236
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/keyring-25.7.0.dist-info/REQUESTED",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/keyring-25.7.0.dist-info/WHEEL",
+          "sha256": "ff309ddcdd65ebd02bc724dbf2bcc4a0ff53a5b61792a44548d383e4ebb19d3b",
+          "size_bytes": 91
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/keyring-25.7.0.dist-info/entry_points.txt",
+          "sha256": "f226f273dcc7d924f52436475a54191c450fc7d9156977d5cbccf969fffa3949",
+          "size_bytes": 334
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/keyring-25.7.0.dist-info/licenses/LICENSE",
+          "sha256": "5a57cb4db85e2a2dd88c290628908add57e3451449e0a9a71fdfb38776fd759d",
+          "size_bytes": 1076
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/keyring-25.7.0.dist-info/top_level.txt",
+          "sha256": "a218757647b6f3f35d48d919ea79154b020a90b2533b021f1309d72af6b7a648",
+          "size_bytes": 8
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/libmupdf.dylib",
+          "sha256": "ea7fba47794cd7805ce0e8dcde25d44c84f02ef7130e7da224c10a647837de2f",
+          "size_bytes": 33143056
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/libmupdfcpp.so",
+          "sha256": "b9cef1d11c2f567ff8d51772a21edc857e23d349b4ed82c37d43a72c653abcff",
+          "size_bytes": 1923456
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/libpython3.12.dylib",
+          "sha256": "c3eaf960595da3fccb4ed16d208e5290968377b3dd147507559159ff87490a95",
+          "size_bytes": 17952160
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint-0.25.3.dist-info/INSTALLER",
+          "sha256": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9",
+          "size_bytes": 2
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint-0.25.3.dist-info/METADATA",
+          "sha256": "d1dfed86fc256ac1954e723c0d063fb40421f18a3f00b1b0eadcd71732fbacc7",
+          "size_bytes": 10104
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint-0.25.3.dist-info/RECORD",
+          "sha256": "f7409f3b615f6c9de7b2811a91cd06330e808b9a5cadd8cec1fda3800f409999",
+          "size_bytes": 10888
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint-0.25.3.dist-info/REQUESTED",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint-0.25.3.dist-info/WHEEL",
+          "sha256": "41c708c5adba6e097513ab8ccb9f1d7865a2fb469e22491a9e01dcc64da459fc",
+          "size_bytes": 87
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint-0.25.3.dist-info/entry_points.txt",
+          "sha256": "0b62b4ed34d32c5fc9a5e5dc229e5185ba2ba534fab86867168eb5cb53fafbf0",
+          "size_bytes": 56
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint-0.25.3.dist-info/licenses/AUTHORS",
+          "sha256": "0a8feadb833471af8b602e31549456ae5020f67f18728a1b39ca40bbb119ecda",
+          "size_bytes": 2080
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint-0.25.3.dist-info/licenses/LICENSE",
+          "sha256": "46e43fb463fe2e0e28b32c900bbbdb6f376959df3936e1c134566860a55b2112",
+          "size_bytes": 1584
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint/constants_en.txt",
+          "sha256": "a713dd2974ee78de1fb89c9ac633afdc262938b07ea77a5275ae3091147b2e7b",
+          "size_bytes": 4844
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint/default_en.txt",
+          "sha256": "30292f8ce4601936a690747807aca876404b79852dfdd5ba5cfba414fe5602ae",
+          "size_bytes": 32534
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint/py.typed",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        },
+        {
+          "category": "image",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint/testsuite/baseline/test_basic_plot.png",
+          "sha256": "427b47dbd7909a1b8d7df2c46534620d95138882378f0ed65b4dd74479c1ac41",
+          "size_bytes": 17415
+        },
+        {
+          "category": "image",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint/testsuite/baseline/test_plot_with_non_default_format.png",
+          "sha256": "47811e153663d817d54e12ab915e442a22009e2da0059ea812d2e9f20bfdc5ed",
+          "size_bytes": 16617
+        },
+        {
+          "category": "image",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint/testsuite/baseline/test_plot_with_set_units.png",
+          "sha256": "217144293b9d842c22a2ae5d653a3a995b6c74230b303e0486a05e90a05794e1",
+          "size_bytes": 18176
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pint/xtranslated.txt",
+          "sha256": "ec4242bf905d33ebecb8292a3f4856edee6ea82cef3d670ede849203fbada426",
+          "size_bytes": 576
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pydantic-2.13.4.dist-info/INSTALLER",
+          "sha256": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9",
+          "size_bytes": 2
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pydantic-2.13.4.dist-info/METADATA",
+          "sha256": "d1e56c3412492512fb6b59a9dfc25ab7af2a8204585cd7bca000513023133394",
+          "size_bytes": 109397
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pydantic-2.13.4.dist-info/RECORD",
+          "sha256": "d0cbe0f34b294885175920bc8f2ece0b3ed6d9874347dc9cfb2caf4931329272",
+          "size_bytes": 9517
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pydantic-2.13.4.dist-info/REQUESTED",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pydantic-2.13.4.dist-info/WHEEL",
+          "sha256": "41c708c5adba6e097513ab8ccb9f1d7865a2fb469e22491a9e01dcc64da459fc",
+          "size_bytes": 87
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pydantic-2.13.4.dist-info/licenses/LICENSE",
+          "sha256": "a9e186f3ca16b5eef84318e7a701721351a00cb7b8ae3a4394b67b49e3529ef3",
+          "size_bytes": 1129
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pydantic_core/_pydantic_core.cpython-312-darwin.so",
+          "sha256": "77ba5be68e384a1bc2d11d5c77b7d17e69ea4fa99bc384b3c23df55ce93e86cb",
+          "size_bytes": 4144944
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pymupdf/_extra.so",
+          "sha256": "fdcfa86eb862ff5171c204683710b034bca4bcc28d1b8ea3a60fd88882ed3371",
+          "size_bytes": 221536
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pymupdf/_mupdf.so",
+          "sha256": "902e8d76f235a9edebddc5bd6caa9ad055a9970e875658f2f7c520182ae389f9",
+          "size_bytes": 13307552
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pymupdf/libmupdf.dylib",
+          "sha256": "ea7fba47794cd7805ce0e8dcde25d44c84f02ef7130e7da224c10a647837de2f",
+          "size_bytes": 33143056
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/pymupdf/libmupdfcpp.so",
+          "sha256": "b9cef1d11c2f567ff8d51772a21edc857e23d349b4ed82c37d43a72c653abcff",
+          "size_bytes": 1923456
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/INSTALLER",
+          "sha256": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9",
+          "size_bytes": 2
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/METADATA",
+          "sha256": "a3e38b9ee4326289d4864704f30e299ee769e2309ce9f4a75f0de1a50ad0a356",
+          "size_bytes": 4670
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/RECORD",
+          "sha256": "52a6b8ee0de15cf7fd99625f43b97cd2e3942ac86f16054ea90de48e66f29355",
+          "size_bytes": 1868
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/REQUESTED",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/WHEEL",
+          "sha256": "ff309ddcdd65ebd02bc724dbf2bcc4a0ff53a5b61792a44548d383e4ebb19d3b",
+          "size_bytes": 91
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/licenses/LICENSE",
+          "sha256": "458502e12d97bbf64438606a20044aa85eb05fb0a8a807bb35dbec253fd1fc04",
+          "size_bytes": 10278
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/top_level.txt",
+          "sha256": "08eddf0fdcb29403625e4acca38a872d5fe6a972f6b02e4914a82dd725804fe0",
+          "size_bytes": 19
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/setuptools/_vendor/jaraco/text/Lorem ipsum.txt",
+          "sha256": "37fedcffbf73c4eb9f058f47677cb33203a436ff9390e4d38a8e01c9dad28e0b",
+          "size_bytes": 1335
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/sqlite_vec/vec0.dylib",
+          "sha256": "1b03f45e82783ed1d8ba15f157389b681c8131db974c5b85b6d34a57dfd592a8",
+          "size_bytes": 161088
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/uvloop/loop.cpython-312-darwin.so",
+          "sha256": "f19fc3af50b94f8ec592476c7a9bef83eee4b8c6b1158a2bdee72579ff375335",
+          "size_bytes": 1923136
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/watchfiles/_rust_notify.cpython-312-darwin.so",
+          "sha256": "2b7deced5fc75d829372ca64cbea4c56716e1d1b0bcf0568b3375b4f0e7928cc",
+          "size_bytes": 911120
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/websockets-17.0.1.dist-info/INSTALLER",
+          "sha256": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9",
+          "size_bytes": 2
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/websockets-17.0.1.dist-info/METADATA",
+          "sha256": "67f6eda687dfcf4b9b8875668a6d2b62314cc4d74e9ff2e1695bac2bc0990880",
+          "size_bytes": 6342
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/websockets-17.0.1.dist-info/RECORD",
+          "sha256": "ed8fe77abd62c18aa1d6a663869fde16377055fbe328f8e43e173819b59b68a3",
+          "size_bytes": 5387
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/websockets-17.0.1.dist-info/REQUESTED",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/websockets-17.0.1.dist-info/WHEEL",
+          "sha256": "65d47419e480660d7ba329a734f3f7358ce8eba23b2db4806ef595c5328959fe",
+          "size_bytes": 136
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/websockets-17.0.1.dist-info/entry_points.txt",
+          "sha256": "0e7867e1d9b912c23864c02c1e574617a0b005766b1979d1edc9cadbe5d1ef36",
+          "size_bytes": 51
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/websockets-17.0.1.dist-info/licenses/LICENSE",
+          "sha256": "3d6a0c050d8bec52fabad502e45fb25bd02bcadbd70dea34d447b6a0ff4e6da8",
+          "size_bytes": 1514
+        },
+        {
+          "category": "other",
+          "kind": "file",
+          "mode": "0o644",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/websockets-17.0.1.dist-info/top_level.txt",
+          "sha256": "08ca5d2a49712acbd980283296dc5458e1e26d95d9d6e60856971af71b10f079",
+          "size_bytes": 11
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/websockets/speedups.cpython-312-darwin.so",
+          "sha256": "517eb6a718dc3dee99ffc37149eacb0b57d4813e9ff82d0f98af53e71c1040f7",
+          "size_bytes": 51216
+        },
+        {
+          "category": "shared-library",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/_internal/yaml/_yaml.cpython-312-darwin.so",
+          "sha256": "414ba1a51bdc164e8aa2768263541d504ad06e793988e2e38fcc2b0fcc8d7557",
+          "size_bytes": 379680
+        },
+        {
+          "category": "executable",
+          "kind": "file",
+          "mode": "0o755",
+          "path": "Contents/Resources/resources/lyra-backend/lyra-backend",
+          "sha256": "b552ecb3d11e7ffffea6a20d0190fddc7e4db3f61c59f9825ba3d1c632cd08b8",
+          "size_bytes": 19873680
+        }
+      ],
+      "exists": true,
+      "file_count": 130,
+      "label": "app",
+      "root_name": "Lyra.app",
+      "symlink_count": 0,
+      "total_bytes": 143581205
+    }
+  ],
+  "schema_version": 1,
+  "tool": "desktop_resource_report"
+}

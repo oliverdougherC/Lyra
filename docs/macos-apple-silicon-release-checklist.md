@@ -1,70 +1,59 @@
 # macOS Apple Silicon Release Checklist
 
-Use this checklist for a release candidate on a clean Apple Silicon Mac.
+Use this checklist for a packaged release candidate on a clean Apple Silicon Mac.
 
-## 1. Clean install
+This checklist does not imply the release is currently signed, notarized, or soak-complete. It is
+the evidence bar that must be met before those claims are made.
+
+## 1. Candidate artifact
+
+- [ ] Obtain the exact candidate `.app` bundle or `.dmg` artifact built from one merged commit.
+- [ ] Record the commit SHA, workflow run ID, and artifact name.
+- [ ] Run `python scripts/desktop_resource_report.py --root app=/path/to/Lyra.app --output ...`
+      and retain the JSON report.
+
+## 2. Clean first launch
 
 - [ ] Confirm the machine is Apple Silicon and running a supported macOS version.
-- [ ] Install Docker Desktop, Python 3.12+, Node.js 20.9+, and pnpm.
-- [ ] Run `./run doctor` from a clean checkout and verify the prerequisites pass.
-- [ ] Run `./run` once without manually cleaning up any processes.
-- [ ] Confirm Lyra opens in the browser and reports a healthy backend and frontend.
+- [ ] Launch the packaged app without any pre-created profile state.
+- [ ] Confirm the packaged frontend loads and the packaged Python backend reaches a usable state.
+- [ ] Confirm the app shows tutor locality and Exa configuration state honestly.
+- [ ] Confirm web research is unavailable by default until an Exa key is configured.
 
-## 2. First launch
+## 3. Core workflows
 
-- [ ] Open Settings and confirm the tutor endpoint, key storage, and Firecrawl state are shown.
-- [ ] Upload a document and confirm it ingests.
-- [ ] If the tutor endpoint is remote, acknowledge document-text sending in Settings only after
-      that behavior is expected.
+- [ ] Create a class, upload a document, and confirm ingestion succeeds.
+- [ ] Run chat, solution, study, and draft flows through the packaged app boundary.
+- [ ] If the tutor endpoint is remote, confirm the remote-acknowledgement path appears before
+      document text is sent.
+- [ ] If the tutor endpoint is loopback-local, confirm the local-path UI remains accurate.
 
-## 3. Restart recovery
+## 4. Restart and recovery
 
-- [ ] While jobs are running, stop the app and start it again with `./run`.
-- [ ] Confirm interrupted work is reconciled on startup instead of being silently lost.
-- [ ] Confirm `./run stop` only stops this checkout's owned services.
-- [ ] With the app stopped, replace `.lyra/runtime.json` with an empty/corrupt file and confirm
-      `./run status` still reports the ports without signaling and `./run` refuses with the
-      documented remediation (nothing is killed, `data/` untouched).
-- [ ] Edit `.lyra/runtime.json` to a `version` higher than the launcher's `STATE_VERSION` and
-      confirm `run`, `status`, `doctor`, and `stop` all refuse safely and tell you to use the
-      newer Lyra. Restore the file (or move it aside) afterward.
+- [ ] Prepare a soak run with `python scripts/packaged_soak_harness.py prepare ...`.
+- [ ] Restart the packaged app while durable work is in flight.
+- [ ] Confirm interrupted ingestion, solution, study, draft, or agent work reconciles honestly on
+      restart.
+- [ ] Confirm the restart path does not duplicate helper processes or silently lose work.
 
-## 4. Offline and degraded use
+## 5. Degraded dependencies
 
-- [ ] Run `./run --skip-firecrawl`.
-- [ ] Confirm local documents, chat, study, and draft work still function.
-- [ ] Confirm web research stays unavailable and the UI says so plainly.
-- [ ] Verify `./run status` and `./run doctor` report the degraded state honestly.
+- [ ] Confirm the app remains usable when Exa is unconfigured or temporarily unavailable.
+- [ ] Confirm a remote tutor outage lands in a truthful retryable state.
+- [ ] Confirm startup does not issue an unsolicited Exa request.
 
-## 5. Data preservation
+## 6. Data and privacy
 
-- [ ] Confirm the default workspace data lives under `data/`, including `data/lyra.db`,
-      `data/uploads/`, `data/text/`, `data/pages/`, and `data/models/`.
-- [ ] Confirm `.lyra/` is launcher metadata, not user content.
-- [ ] Run `./run backup --archive /absolute/path/lyra-backup.tgz` and confirm it succeeds only
-      after the launcher-owned stack is stopped.
-- [ ] Restore that archive with `./run restore --archive /absolute/path/lyra-backup.tgz
-      --data-dir /absolute/path/restored-data` and confirm class, document, artifact, and settings
-      data round-trip.
-- [ ] Confirm restore refuses an already-existing target directory instead of overwriting it.
-- [ ] Confirm the API key is absent from the backup when macOS Keychain is in use.
-- [ ] Confirm `./run --clean` only rebuilds the frontend cache and does not delete user data.
-- [ ] Confirm deleting a document removes its upload, extracted text, and rendered pages.
-- [ ] Confirm deleting a class removes only that class's uploads and derived files.
-- [ ] Confirm a stop-start cycle preserves the workspace without manual cleanup.
+- [ ] Record where the packaged runtime stores its profile, database, logs, and cached resources.
+- [ ] Confirm backups and restores still preserve the local data contract.
+- [ ] Confirm no document text, API keys, or private absolute paths leak into diagnostics.
+- [ ] Confirm deleting a document or class removes only the intended local data.
 
-## 6. Release CI and security evidence
+## 7. CI and release status
 
-See [Security and CI gates](security-and-ci-gates.md) for the full policy.
-
-- [ ] Confirm the release commit landed on `main` through a PR with a green `CI Gate`
-      (the required aggregate check), not a bypass.
-- [ ] Run the Python production vulnerability gate and record its evidence:
-      `uv run --extra security python scripts/python_security_gate.py --json-report python-audit-evidence.json`
-- [ ] Record the scanner version, the advisory-feed timestamp (when present), the exact
-      command, the result, and the commit SHA from that evidence in the release notes.
-- [ ] Confirm no `[[allowlist]]` exception in `security/python-audit-policy.toml` is
-      expired or newly due for review.
-- [ ] Confirm `pnpm audit --prod` (frontend production graph) passed in the same run.
-- [ ] Re-check the live `main` ruleset still requires `CI Gate` and still blocks deletion
-      and force-push: `gh api repos/oliverdougherC/Lyra/rulesets/20537110`.
+- [ ] Confirm the merge commit passed `CI Gate`.
+- [ ] Confirm the Python production dependency audit passed for the same commit.
+- [ ] Confirm the desktop artifact lane produced the package tested here.
+- [ ] Confirm signing and notarization status from actual release evidence; do not infer either from
+      a green build alone.
+- [ ] Confirm the release-candidate soak is complete before calling the package release-ready.

@@ -6,6 +6,7 @@ malformed reply is discarded whole rather than half-believed, and that a reply i
 back into the caller's order rather than read off in the order the server chose.
 """
 
+import contextlib
 import io
 
 import httpx
@@ -48,6 +49,12 @@ class _Stub:
     def ensure_running(self) -> None:
         if not self._starts:
             raise ConfigurationError("nope")
+
+    @contextlib.contextmanager
+    def lease(self):  # type: ignore[no-untyped-def]
+        """Match the production residency boundary without starting a real helper."""
+        self.ensure_running()
+        yield
 
 
 @pytest.fixture
@@ -289,9 +296,13 @@ async def test_shutdown_stops_every_llama_server(monkeypatch: pytest.MonkeyPatch
     from backend import main as main_module
 
     stopped: list[str] = []
-    monkeypatch.setattr(main_module.embedding_server, "stop", lambda: stopped.append("embedding"))
-    monkeypatch.setattr(main_module.ocr_server, "stop", lambda: stopped.append("ocr"))
-    monkeypatch.setattr(main_module.rerank_server, "stop", lambda: stopped.append("rerank"))
+    monkeypatch.setattr(
+        main_module.embedding_server, "stop_for_app_quit", lambda: stopped.append("embedding")
+    )
+    monkeypatch.setattr(main_module.ocr_server, "stop_for_app_quit", lambda: stopped.append("ocr"))
+    monkeypatch.setattr(
+        main_module.rerank_server, "stop_for_app_quit", lambda: stopped.append("rerank")
+    )
     # The workers are real threads and other tests' concern.
     monkeypatch.setattr(main_module, "start_worker", lambda: None)
     monkeypatch.setattr(main_module.solver, "start_worker", lambda: None)
@@ -302,31 +313,23 @@ async def test_shutdown_stops_every_llama_server(monkeypatch: pytest.MonkeyPatch
     assert sorted(stopped) == ["embedding", "ocr", "rerank"]
 
 
-def test_startup_warms_the_reranker_without_blocking_on_it(
+async def test_startup_does_not_warm_the_optional_reranker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The first question of the day should not pay the model-load stall inside its own
-    retrieval, and a warm-start failure must stay a log line, because lazily retrying is
-    the already-supported path."""
-    import time
-
+    """Opening Lyra must not load optional model weights before a feature uses them."""
     from backend import main as main_module
 
-    _install_weights()  # makes settings.rerank_installed true in this test's data dir
-    calls: list[bool] = []
+    _install_weights()
+    monkeypatch.setattr(
+        main_module.rerank_server,
+        "ensure_running",
+        lambda: pytest.fail("startup must not warm the optional reranker"),
+    )
+    monkeypatch.setattr(main_module, "start_worker", lambda: None)
+    monkeypatch.setattr(main_module.solver, "start_worker", lambda: None)
 
-    def record() -> None:
-        calls.append(True)
-        raise ConfigurationError("broken on purpose")
-
-    monkeypatch.setattr(main_module.rerank_server, "ensure_running", record)
-
-    main_module._warm_start_reranker()
-
-    deadline = time.monotonic() + 5.0
-    while not calls and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert calls == [True]
+    async with main_module.lifespan(None):  # type: ignore[arg-type]
+        pass
 
 
 def test_no_passages_is_not_a_request(installed: None, monkeypatch: pytest.MonkeyPatch) -> None:

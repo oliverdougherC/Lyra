@@ -27,8 +27,8 @@ const settings: SettingsRead = {
   allow_web_research: false,
   parallel_requests: false,
   parallel_concurrency: 1,
-  firecrawl_base_url: 'http://127.0.0.1:3002',
-  firecrawl_scrape_enabled: false,
+  exa_api_key_set: false,
+  exa_api_key_storage: 'file',
 }
 
 function createWrapper() {

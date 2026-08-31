@@ -9,6 +9,7 @@ server -- including one adopted after a backend restart -- is reclaimed on shutd
 
 import io
 import os
+import signal
 import time
 
 import pytest
@@ -71,6 +72,35 @@ class _DeadProcess:
         return 1
 
 
+class _Clock:
+    def __init__(self, now: float = 0.0) -> None:
+        self.now = now
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _FakeTimer:
+    def __init__(self, delay: float, callback: object) -> None:
+        self.delay = delay
+        self._callback = callback
+        self.started = False
+        self.cancelled = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    def fire(self) -> None:
+        if not self.cancelled:
+            self._callback()  # type: ignore[misc]
+
+
 def _make_server(monkeypatch: pytest.MonkeyPatch) -> RerankServer:
     """A fresh server that believes nothing is listening yet."""
     instance = RerankServer()
@@ -90,6 +120,16 @@ def _set_ownership_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> Non
 def _isolated_ownership(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
     """Every test gets its own ownership directory to prevent cross-contamination."""
     _set_ownership_dir(monkeypatch, tmp_path)
+
+
+def test_packaged_ownership_defaults_to_application_support(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    data_dir = tmp_path / "Application Support" / "Lyra"  # type: ignore[operator]
+    monkeypatch.setattr(settings, "packaged_mode", True)
+    monkeypatch.setattr(settings, "data_dir", data_dir)
+
+    assert llama_server._default_runtime_dir() == data_dir / ".runtime"
 
 
 # ------------------------------------------------------------------ process identity
@@ -286,6 +326,163 @@ class TestHealthAwareness:
         assert instance._unhealthy_restarts == 0
 
 
+# ------------------------------------------------------------------ leases and idle eviction
+
+
+class TestLeasesAndIdleEviction:
+    def test_lease_blocks_idle_eviction_until_the_last_holder_releases(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_weights()
+        instance = RerankServer()
+        process = _AliveProcess()
+        clock = _Clock(100.0)
+        timers: list[_FakeTimer] = []
+        terminated: list[object] = []
+
+        monkeypatch.setattr(instance, "_process", process)
+        monkeypatch.setattr(instance, "ensure_running", lambda: None)
+        monkeypatch.setattr(instance, "_check_installed", lambda: None)
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+        monkeypatch.setattr(instance, "_monotonic", clock.monotonic)
+        monkeypatch.setattr(
+            instance,
+            "_timer_factory",
+            lambda delay, callback: timers.append(_FakeTimer(delay, callback)) or timers[-1],
+        )
+        monkeypatch.setattr(
+            llama_server,
+            "_terminate",
+            lambda helper: terminated.append(helper) or setattr(helper, "_killed", True),
+        )
+
+        with instance.lease():
+            with instance.lease():
+                assert instance.active_leases == 2
+                assert not timers
+            assert instance.active_leases == 1
+            assert not timers
+
+        assert instance.active_leases == 0
+        assert len(timers) == 1
+        assert timers[0].started is True
+        assert timers[0].delay == llama_server.DEFAULT_IDLE_TIMEOUT_SECONDS
+
+        timers[0].fire()
+        assert not terminated
+        assert len(timers) == 2
+
+        clock.advance(llama_server.DEFAULT_IDLE_TIMEOUT_SECONDS + 1)
+        timers[-1].fire()
+
+        assert terminated == [process]
+        assert instance.status().state == "idle_evicted"
+
+    def test_new_lease_cancels_pending_idle_timer(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _install_weights()
+        instance = RerankServer()
+        process = _AliveProcess()
+        clock = _Clock(10.0)
+        timers: list[_FakeTimer] = []
+
+        monkeypatch.setattr(instance, "_process", process)
+        monkeypatch.setattr(instance, "ensure_running", lambda: None)
+        monkeypatch.setattr(instance, "_check_installed", lambda: None)
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+        monkeypatch.setattr(instance, "_monotonic", clock.monotonic)
+        monkeypatch.setattr(
+            instance,
+            "_timer_factory",
+            lambda delay, callback: timers.append(_FakeTimer(delay, callback)) or timers[-1],
+        )
+
+        with instance.lease():
+            pass
+
+        first = timers[-1]
+        assert first.started is True
+        with instance.lease():
+            assert first.cancelled is True
+            assert instance.active_leases == 1
+
+    def test_lease_counter_recovers_when_start_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        instance = RerankServer()
+        monkeypatch.setattr(
+            instance, "ensure_running", lambda: (_ for _ in ()).throw(ConfigurationError("nope"))
+        )
+
+        with pytest.raises(ConfigurationError, match="nope"), instance.lease():
+            pass
+
+        assert instance.active_leases == 0
+
+    def test_evict_if_idle_never_stops_a_compatible_external_server(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_weights()
+        instance = RerankServer()
+        clock = _Clock(500.0)
+        signals: list[object] = []
+
+        monkeypatch.setattr(instance, "_monotonic", clock.monotonic)
+        monkeypatch.setattr(instance, "_check_installed", lambda: None)
+        monkeypatch.setattr(instance, "_healthy", lambda: True)
+        monkeypatch.setattr(
+            instance,
+            "_served_model",
+            lambda: f"/external/{settings.rerank_model_path.name}",
+        )
+        monkeypatch.setattr(llama_server, "_terminate", lambda helper: signals.append(helper))
+        monkeypatch.setattr(
+            llama_server,
+            "_terminate_pid",
+            lambda pid, pgid, token, label: signals.append(pid),
+        )
+
+        with instance._lock:
+            instance._idle_since = clock.monotonic() - llama_server.DEFAULT_IDLE_TIMEOUT_SECONDS - 1
+
+        assert instance.evict_if_idle() is False
+        assert not signals
+        assert instance.status().state == "ready"
+
+    def test_stop_for_app_quit_cancels_idle_timer_and_stops_owned_process(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_weights()
+        instance = RerankServer()
+        process = _AliveProcess()
+        clock = _Clock(50.0)
+        timers: list[_FakeTimer] = []
+        terminated: list[object] = []
+
+        monkeypatch.setattr(instance, "_process", process)
+        monkeypatch.setattr(instance, "ensure_running", lambda: None)
+        monkeypatch.setattr(instance, "_check_installed", lambda: None)
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+        monkeypatch.setattr(instance, "_monotonic", clock.monotonic)
+        monkeypatch.setattr(
+            instance,
+            "_timer_factory",
+            lambda delay, callback: timers.append(_FakeTimer(delay, callback)) or timers[-1],
+        )
+        monkeypatch.setattr(
+            llama_server,
+            "_terminate",
+            lambda helper: terminated.append(helper) or setattr(helper, "_killed", True),
+        )
+
+        with instance.lease():
+            pass
+
+        timer = timers[-1]
+        instance.stop_for_app_quit()
+
+        assert timer.cancelled is True
+        assert terminated == [process]
+        assert instance.status().state == "stopped"
+
+
 # ------------------------------------------------------------------ adoption
 
 
@@ -418,6 +615,67 @@ class TestExternalServer:
 
         instance.stop()
         assert not signals
+
+
+# ------------------------------------------------------------------ status snapshots
+
+
+class TestHelperStatus:
+    def test_status_reports_not_installed_when_weights_are_absent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+
+        status = instance.status()
+        assert status.state == "not_installed"
+        assert status.lease_count == 0
+
+    def test_status_reports_loading_during_start(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_starting", True)
+
+        status = instance.status()
+
+        assert status.state == "loading"
+        assert status.owned is True
+
+    def test_status_reports_failed_during_cooldown(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _install_weights()
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_failure_message", "start failed")
+        monkeypatch.setattr(instance, "_failed_at", time.monotonic())
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+
+        status = instance.status()
+
+        assert status.state == "failed"
+        assert status.detail == "start failed"
+
+    def test_status_reports_incompatible_when_the_port_holds_the_wrong_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_weights()
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_healthy", lambda: True)
+        monkeypatch.setattr(instance, "_served_model", lambda: "/models/wrong.gguf")
+
+        status = instance.status()
+
+        assert status.state == "incompatible"
+        assert "wrong.gguf" in (status.detail or "")
+
+    def test_status_reports_idle_evicted_after_idle_shutdown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _install_weights()
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_last_stop_reason", "idle_evicted")
+        monkeypatch.setattr(instance, "_healthy", lambda: False)
+
+        status = instance.status()
+
+        assert status.state == "idle_evicted"
 
 
 # ------------------------------------------------------------------ wrong model / unrelated
@@ -895,6 +1153,87 @@ class TestFailureInjection:
         instance.stop()
 
 
+class TestTerminatePidProofOfDeath:
+    def test_terminate_pid_escalates_to_sigkill_when_sigterm_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = _Clock()
+        signals: list[tuple[int, signal.Signals]] = []
+
+        monkeypatch.setattr(llama_server.time, "monotonic", clock.monotonic)
+        monkeypatch.setattr(llama_server.time, "sleep", clock.advance)
+        monkeypatch.setattr(llama_server, "_SHUTDOWN_GRACE_SECONDS", 1.0)
+        monkeypatch.setattr(llama_server, "_POST_KILL_PROOF_SECONDS", 1.0)
+        monkeypatch.setattr(llama_server, "_TERMINATION_POLL_SECONDS", 0.25)
+        monkeypatch.setattr(os, "killpg", lambda pgid, sig: signals.append((pgid, sig)))
+        monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append((pid, sig)))
+
+        def token_matches(pid: int, token: str | None) -> bool:
+            return clock.now < 1.25
+
+        monkeypatch.setattr(llama_server, "_token_matches_pid", token_matches)
+
+        assert llama_server._terminate_pid(41, 42, "proc:owned", "reranking") is True
+        assert signals == [(42, signal.SIGTERM), (42, signal.SIGKILL)]
+
+    def test_terminate_pid_returns_false_when_process_survives_sigkill_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = _Clock()
+        signals: list[tuple[int, signal.Signals]] = []
+
+        monkeypatch.setattr(llama_server.time, "monotonic", clock.monotonic)
+        monkeypatch.setattr(llama_server.time, "sleep", clock.advance)
+        monkeypatch.setattr(llama_server, "_SHUTDOWN_GRACE_SECONDS", 1.0)
+        monkeypatch.setattr(llama_server, "_POST_KILL_PROOF_SECONDS", 0.5)
+        monkeypatch.setattr(llama_server, "_TERMINATION_POLL_SECONDS", 0.25)
+        monkeypatch.setattr(os, "killpg", lambda pgid, sig: signals.append((pgid, sig)))
+        monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append((pid, sig)))
+        monkeypatch.setattr(llama_server, "_token_matches_pid", lambda pid, token: True)
+
+        assert llama_server._terminate_pid(51, 52, "proc:owned", "reranking") is False
+        assert signals == [(52, signal.SIGTERM), (52, signal.SIGKILL)]
+
+    def test_terminate_pid_accepts_delayed_death_after_sigkill(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = _Clock()
+        signals: list[tuple[int, signal.Signals]] = []
+
+        monkeypatch.setattr(llama_server.time, "monotonic", clock.monotonic)
+        monkeypatch.setattr(llama_server.time, "sleep", clock.advance)
+        monkeypatch.setattr(llama_server, "_SHUTDOWN_GRACE_SECONDS", 1.0)
+        monkeypatch.setattr(llama_server, "_POST_KILL_PROOF_SECONDS", 1.0)
+        monkeypatch.setattr(llama_server, "_TERMINATION_POLL_SECONDS", 0.25)
+        monkeypatch.setattr(os, "killpg", lambda pgid, sig: signals.append((pgid, sig)))
+        monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append((pid, sig)))
+
+        def token_matches(pid: int, token: str | None) -> bool:
+            return clock.now < 1.5
+
+        monkeypatch.setattr(llama_server, "_token_matches_pid", token_matches)
+
+        assert llama_server._terminate_pid(61, 62, "proc:owned", "reranking") is True
+        assert signals == [(62, signal.SIGTERM), (62, signal.SIGKILL)]
+
+    def test_terminate_pid_never_signals_pid_reuse_or_foreign_process(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(llama_server, "_token_matches_pid", lambda pid, token: False)
+        monkeypatch.setattr(
+            os,
+            "killpg",
+            lambda pgid, sig: pytest.fail("stale ownership must not signal a foreign process"),
+        )
+        monkeypatch.setattr(
+            os,
+            "kill",
+            lambda pid, sig: pytest.fail("stale ownership must not signal a foreign process"),
+        )
+
+        assert llama_server._terminate_pid(71, 72, "proc:stale", "reranking") is True
+
+
 # Finding 1: stop() durable record ----------------------------------------
 
 
@@ -947,6 +1286,80 @@ class TestStopDurableRecord:
 
         assert not signals
         assert _read_server_record("reranking") is None
+
+    def test_stop_never_signals_stale_record_for_live_foreign_pid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _save_ownership(
+            {
+                "reranking": {
+                    "pid": os.getpid(),
+                    "start_token": "proc:stale-bogus-token",
+                    "pgid": os.getpgid(os.getpid()),
+                    "port": 8083,
+                    "model": "bge.gguf",
+                    "started_at": time.time(),
+                }
+            }
+        )
+
+        instance = RerankServer()
+        monkeypatch.setattr(
+            os,
+            "killpg",
+            lambda g, s: pytest.fail("stale foreign ownership must not be signaled"),
+        )
+        monkeypatch.setattr(
+            os,
+            "kill",
+            lambda p, s: pytest.fail("stale foreign ownership must not be signaled"),
+        )
+
+        instance.stop()
+
+        assert _read_server_record("reranking") is None
+
+    def test_stop_never_signals_other_service_record(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _record_server("embedding", os.getpid(), 8081, "nomic.gguf")
+
+        instance = RerankServer()
+        monkeypatch.setattr(
+            os,
+            "killpg",
+            lambda g, s: pytest.fail("stop() must ignore ownership records for other services"),
+        )
+        monkeypatch.setattr(
+            os,
+            "kill",
+            lambda p, s: pytest.fail("stop() must ignore ownership records for other services"),
+        )
+
+        instance.stop()
+
+        assert _read_server_record("embedding") is not None
+
+    def test_stop_never_signals_user_operated_compatible_server(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_healthy", lambda: True)
+        monkeypatch.setattr(
+            instance,
+            "_served_model",
+            lambda: f"/models/{settings.rerank_model_path.name}",
+        )
+        monkeypatch.setattr(
+            os,
+            "killpg",
+            lambda g, s: pytest.fail("user-operated compatible servers must not be signaled"),
+        )
+        monkeypatch.setattr(
+            os,
+            "kill",
+            lambda p, s: pytest.fail("user-operated compatible servers must not be signaled"),
+        )
+
+        instance.stop()
 
     def test_stop_skips_durable_record_when_tracked_process_exists(
         self, monkeypatch: pytest.MonkeyPatch

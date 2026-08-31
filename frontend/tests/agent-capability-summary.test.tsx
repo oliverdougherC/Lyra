@@ -8,7 +8,7 @@ const GRANTS: AgentGrantState[] = [
   {
     key: 'web',
     label: 'Web',
-    description: 'Allow public web search and fetch through Firecrawl.',
+    description: 'Allow public web search and fetch through Exa.',
     enabled: true,
     inherited: true,
   },
@@ -71,7 +71,7 @@ describe('CapabilitySummary', () => {
           {
             key: 'web',
             label: 'Web',
-            description: 'Allow public web search and fetch through Firecrawl.',
+            description: 'Allow public web search and fetch through Exa.',
             enabled: false,
           },
         ]}

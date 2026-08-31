@@ -23,6 +23,8 @@ def _known_key_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """A fixed key-storage answer, so no test reaches the real OS keychain."""
     monkeypatch.setattr(secrets, "has_api_key", lambda: False)
     monkeypatch.setattr(secrets, "api_key_storage", lambda: "keychain")
+    monkeypatch.setattr(secrets, "has_exa_api_key", lambda: False)
+    monkeypatch.setattr(secrets, "exa_api_key_storage", lambda: "keychain")
 
 
 def test_redact_path_anchors_a_checkout_path_to_the_repo(tmp_path: Path) -> None:
@@ -84,6 +86,8 @@ def test_build_diagnostics_reports_key_presence_and_storage_only(db: sqlite3.Con
 
     # Exactly two facts about the key, and neither is its value.
     assert bundle["api_key"] == {"present": False, "storage": "keychain"}
+    assert bundle["web_research"]["exa_key_present"] is False
+    assert bundle["web_research"]["exa_key_storage"] == "keychain"
 
 
 def test_build_diagnostics_counts_content_without_naming_it(
@@ -115,3 +119,29 @@ def test_build_diagnostics_redacts_a_home_data_directory(db: sqlite3.Connection)
 
     assert bundle["paths"]["data_dir"] == "~/data"
     assert str(settings.data_dir) not in json.dumps(bundle)
+
+
+def test_build_diagnostics_includes_a_redacted_startup_log_tail(
+    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    home = tmp_path / "home" / "student"
+    logs_dir = home / "logs"
+    logs_dir.mkdir(parents=True)
+    startup_log = logs_dir / "desktop-startup.log"
+    startup_log.write_text(
+        f"booting\n{home}/logs/desktop-startup.log\n<secret>\n"
+        "provider failed with sk-proj-sensitivevalue\n"
+        "/private/tmp/another-user/course.db\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "logs_dir", logs_dir)
+
+    bundle = diagnostics.build_diagnostics(db, home=home)
+
+    assert bundle["desktop"]["startup_log_present"] is True
+    assert bundle["desktop"]["startup_log_path"] == "~/logs/desktop-startup.log"
+    assert "~/logs/desktop-startup.log" in bundle["desktop"]["startup_log_tail"]
+    assert "<redacted sensitive startup diagnostics>" in bundle["desktop"]["startup_log_tail"]
+    assert "sk-proj-sensitivevalue" not in bundle["desktop"]["startup_log_tail"]
+    assert "another-user" not in bundle["desktop"]["startup_log_tail"]
+    assert str(home) not in json.dumps(bundle)

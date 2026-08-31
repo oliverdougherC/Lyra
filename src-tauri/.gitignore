@@ -1,0 +1,4 @@
+/resources/lyra-backend/*
+!/resources/lyra-backend/.gitkeep
+/gen/schemas/
+/target/

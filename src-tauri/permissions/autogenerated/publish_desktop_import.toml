@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-publish-desktop-import"
+description = "Enables the publish_desktop_import command without any pre-configured scope."
+commands.allow = ["publish_desktop_import"]
+
+[[permission]]
+identifier = "deny-publish-desktop-import"
+description = "Denies the publish_desktop_import command without any pre-configured scope."
+commands.deny = ["publish_desktop_import"]

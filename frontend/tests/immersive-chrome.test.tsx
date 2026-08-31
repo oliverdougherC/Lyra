@@ -7,7 +7,7 @@ import { AppHeader } from '@/components/layout/app-header'
 import { ImmersiveProvider, useImmersiveChrome } from '@/components/layout/page-chrome'
 import { SidebarProvider } from '@/components/ui/sidebar'
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/router/hooks', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
   useParams: () => ({}),
   useSearchParams: () => new URLSearchParams(),

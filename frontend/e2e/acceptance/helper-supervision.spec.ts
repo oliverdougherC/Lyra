@@ -135,7 +135,7 @@ test.describe('Helper supervision (PLA-301)', () => {
   test('supervisor stop terminates child and cleans ownership', async () => {
     const result = await startHelper()
     expect(result.ok).toBe(true)
-    const pid = result.pid!
+    expect(result.pid).toBeTruthy()
 
     // Stop through the production supervisor
     const stopResult = await stopHelper()

@@ -1,5 +1,9 @@
 # Integration Handoff: Study Tools, Hybrid Retrieval, and the Draft Workspace
 
+> Historical record. This handoff landed on 2026-08-06 and still explains why those workstreams
+> were built the way they were. It is not the live runtime or release contract for the desktop
+> migration branch.
+
 **Status: all three workstreams landed on `main` on 6 August 2026.** This document is retained as
 the decision and implementation record. Its imperative language describes the work as it was handed
 off; it is not an outstanding task list. Later writer work extends the completed draft workspace and

@@ -7,7 +7,7 @@
  * 4. Starts the real FastAPI backend (with deterministic embedding fixtures).
  * 5. Waits for the backend health endpoint.
  * 6. Configures the tutor endpoint + API key through PUT /api/settings.
- * 7. Starts the production Next.js frontend.
+ * 7. Builds the static frontend with the acceptance backend base URL and starts Vite preview.
  * 8. Waits for the frontend to respond.
  * 9. Writes a state file so global-teardown can stop everything.
  *
@@ -111,6 +111,7 @@ export default async function globalSetup() {
       LYRA_DATA_DIR: dataDir,
       LYRA_HOST: '127.0.0.1',
       LYRA_PORT: String(BACKEND_PORT),
+      LYRA_BROWSER_ORIGINS: `http://127.0.0.1:${FRONTEND_PORT}`,
       PYTHONDONTWRITEBYTECODE: '1',
     }
 
@@ -175,12 +176,20 @@ export default async function globalSetup() {
     console.log('  Tutor endpoint configured')
 
     // ── 6. Production frontend ───────────────────────────────────────
-    // Same process-group rationale as the backend: `next start` spawns worker
-    // processes that outlive the `pnpm exec next` wrapper, so teardown signals the
-    // whole group rather than the wrapper pid alone.
+    execSync('./node_modules/.bin/vite build', {
+      cwd: join(PROJECT_ROOT, 'frontend'),
+      env: {
+        ...stripUndefined(process.env),
+        VITE_API_BASE: `http://127.0.0.1:${BACKEND_PORT}`,
+      } as NodeJS.ProcessEnv,
+      stdio: 'pipe',
+    })
+
+    // Same process-group rationale as the backend: Vite preview runs as a wrapper
+    // process with children that should be reclaimed together in teardown.
     frontend = spawn(
-      'pnpm',
-      ['exec', 'next', 'start', '--hostname', '127.0.0.1', '--port', String(FRONTEND_PORT)],
+      './node_modules/.bin/vite',
+      ['preview', '--host', '127.0.0.1', '--port', String(FRONTEND_PORT), '--strictPort'],
       {
         cwd: join(PROJECT_ROOT, 'frontend'),
         env: stripUndefined(process.env) as NodeJS.ProcessEnv,

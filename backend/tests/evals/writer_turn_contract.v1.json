@@ -52,7 +52,7 @@
       "satisfied": true
     },
     {
-      "name": "missing_firecrawl_fallback",
+      "name": "missing_source_content_fallback",
       "request": "Research supporting evidence, but stick to course docs if the web is unavailable.",
       "intent": "research",
       "tools": ["search_course_material"],

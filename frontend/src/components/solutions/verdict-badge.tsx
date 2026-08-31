@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import Link from '@/router/link'
 
 import { StatusWord, TheMark } from '@/components/ex-libris'
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'

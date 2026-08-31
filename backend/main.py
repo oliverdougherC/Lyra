@@ -1,11 +1,11 @@
 """FastAPI application factory, middleware, and lifespan.
 
-Binds loopback only. There is no authentication, so the bind address is the security
-boundary and must never become `0.0.0.0`.
+The API always binds to loopback. Source-development mode retains the hardened Host and
+Origin boundary; packaged mode adds a per-launch session header on every request.
 """
 
+import hmac
 import logging
-import threading
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
@@ -18,6 +18,7 @@ from backend.api import (
     routes_agent_chat,
     routes_chat,
     routes_classes,
+    routes_desktop_import,
     routes_documents,
     routes_drafts,
     routes_health,
@@ -48,6 +49,8 @@ from backend.core.origins import (
     host_is_allowed,
     mutation_origin_is_acceptable,
 )
+from backend.desktop_bootstrap import SESSION_HEADER
+from backend.desktop_import import recover_desktop_import_publish
 from backend.llm.embed_server import embedding_server
 from backend.llm.ocr_server import ocr_server
 from backend.llm.rerank_server import rerank_server
@@ -60,10 +63,17 @@ _INVALID_ORIGIN = (
     "Request rejected: state-changing requests require a trusted browser origin"
     " or a non-browser client header."
 )
+_INVALID_SESSION = "Request rejected: the packaged session header is missing or invalid."
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    if settings.packaged_mode:
+        recovered = recover_desktop_import_publish()
+        if recovered["status"] == "ok":
+            logger.info("%s", recovered["message"])
+        elif recovered["status"] != "skipped":
+            logger.warning("%s", recovered["message"])
     settings.ensure_directories()
     conn = connect()
     try:
@@ -134,7 +144,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     solver.start_worker()
     study.start_worker()
     drafting.start_worker()
-    _warm_start_reranker()
     try:
         yield
     finally:
@@ -143,36 +152,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # this line ever reclaims them: a forgotten one outlives the app indefinitely,
         # holding hundreds of megabytes of weights. Each stop is a no-op when that
         # server never ran.
-        embedding_server.stop()
-        ocr_server.stop()
-        rerank_server.stop()
+        embedding_server.stop_for_app_quit()
+        ocr_server.stop_for_app_quit()
+        rerank_server.stop_for_app_quit()
 
 
-def _warm_start_reranker() -> None:
-    """Load the reranking model in the background, if it is installed.
-
-    `rag/rerank.py` starts it lazily, but lazily means the first question of the day
-    pays the whole model-load stall inside its own retrieval. A daemon thread pays it
-    here instead, off the event loop. Best-effort by design: reranking is optional, so
-    a failure is logged and the first search falls back to the embedding order exactly
-    as it would have anyway.
-    """
-    if not settings.rerank_installed:
-        return
-
-    def warm() -> None:
-        try:
-            rerank_server.ensure_running()
-        except Exception:
-            logger.warning(
-                "The reranking server did not warm-start; search will retry lazily",
-                exc_info=True,
-            )
-
-    threading.Thread(target=warm, name="rerank-warm-start", daemon=True).start()
-
-
-def create_app() -> FastAPI:
+def create_app(*, session_secret: str | None = None) -> FastAPI:
     app = FastAPI(title="Lyra", version="0.1.0", lifespan=lifespan)
 
     app.add_middleware(
@@ -206,12 +191,27 @@ def create_app() -> FastAPI:
             return JSONResponse(status_code=403, content={"detail": _INVALID_ORIGIN})
         return await call_next(request)
 
+    if settings.packaged_mode:
+        if not session_secret:
+            raise RuntimeError("Packaged mode requires a launch session secret.")
+
+        @app.middleware("http")
+        async def enforce_packaged_session(
+            request: Request, call_next: Callable[[Request], Awaitable[Response]]
+        ) -> Response:
+            provided = request.headers.get(SESSION_HEADER)
+            if request.method != "OPTIONS" and (
+                provided is None or not hmac.compare_digest(provided, session_secret)
+            ):
+                return JSONResponse(status_code=403, content={"detail": _INVALID_SESSION})
+            return await call_next(request)
+
     # Registered after the Origin guard so it wraps it (LIFO): a request whose `Host` is
     # not a Lyra loopback host is refused here before Origin, CORS, routing, or any route
     # body runs. CORS alone does not close DNS rebinding - a page can stay same-origin to
     # a name it controls while that name is rebound to 127.0.0.1 - and this API is
-    # unauthenticated with state-changing and, when granted, workspace/command routes, so
-    # the Host check is part of the loopback-only boundary rather than an optimization.
+    # state-changing and, when granted, workspace/command routes, so the Host check remains
+    # part of the loopback boundary even when packaged session authentication is active.
     # The refusal does not depend on `Origin`: a missing or acceptable-looking `Origin`
     # cannot rescue a bad Host.
     @app.middleware("http")
@@ -237,6 +237,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_classes.router)
     app.include_router(routes_health.router)
     app.include_router(routes_documents.router)
+    app.include_router(routes_desktop_import.router)
     app.include_router(routes_chat.router)
     app.include_router(routes_profile.router)
     app.include_router(routes_settings.router)
@@ -250,4 +251,6 @@ def create_app() -> FastAPI:
     return app
 
 
-app = create_app()
+# Source development imports this ASGI object directly. The packaged entrypoint creates
+# its authenticated app only after receiving the launch secret over stdin.
+app = create_app() if not settings.packaged_mode else None

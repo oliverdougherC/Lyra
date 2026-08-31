@@ -1,8 +1,8 @@
 'use client'
 
 import { GraduationCap, Settings } from 'lucide-react'
-import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import Link from '@/router/link'
+import { usePathname } from '@/router/hooks'
 
 import { cn } from '@/lib/utils'
 

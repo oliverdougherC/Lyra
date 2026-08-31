@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
+import { APP_FONT_FAMILIES } from '@/lib/fonts'
 
 /**
  * The public design spec tracks the shipped typography (PLA-145 regression check).
@@ -12,8 +13,8 @@ import { describe, expect, it } from 'vitest'
  * survived until a Linear issue caught it. This test binds the two at the narrow seam
  * that catches exactly that kind of drift:
  *
- *   - Every font family the app loads (parsed from the next/font/google import in
- *     layout.tsx) must be named in the canonical spec.
+ *   - Every font family the app declares in `src/lib/fonts.ts` must be named in the
+ *     canonical spec.
  *   - Faces the Ex Libris migration retired must not appear in the spec, where their
  *     presence means the spec still describes the old system as current.
  *
@@ -24,48 +25,41 @@ import { describe, expect, it } from 'vitest'
  */
 
 const ROOT = join(__dirname, '..')
-const LAYOUT = join(ROOT, 'src', 'app', 'layout.tsx')
 const SPEC = join(ROOT, '..', 'docs', 'design-system.md')
-
-// next/font identifiers are font family names with underscores (EB_Garamond); the spec
-// writes the family the way a reader meets it. An identifier missing from this table is
-// asserted under its own name, so a new face cannot slip through silently.
-const DISPLAY_NAMES: Record<string, string> = {
-  Caveat: 'Caveat',
-  Cinzel: 'Cinzel',
-  EB_Garamond: 'EB Garamond',
-  JetBrains_Mono: 'JetBrains Mono',
-}
+const HTML_SHELL = join(ROOT, 'index.html')
+const STARTUP_STYLES = join(ROOT, 'public', 'startup.css')
 
 // Faces the Ex Libris migration retired. If one of these ever reappears here it was
 // reloaded into the app: a new system, and this list is where that gets acknowledged.
 const RETIRED_FACES = ['DM Sans', 'Fraunces', 'Source Serif']
 
-function loadedFontIdentifiers(): string[] {
-  const layout = readFileSync(LAYOUT, 'utf8')
-  const match = /import\s*\{([^}]*)\}\s*from\s*'next\/font\/google'/.exec(layout)
-  if (!match) {
-    throw new Error('next/font/google import not found in src/app/layout.tsx')
-  }
-  return match[1]
-    .split(',')
-    .map((identifier) => identifier.trim())
-    .filter(Boolean)
-}
-
 describe('design-system.md tracks the shipped typography', () => {
   const spec = readFileSync(SPEC, 'utf8')
 
   it('names every font family the app loads', () => {
-    const displayNames = loadedFontIdentifiers().map(
-      (identifier) => DISPLAY_NAMES[identifier] ?? identifier,
-    )
-    const missing = displayNames.filter((name) => !spec.includes(name))
+    const missing = APP_FONT_FAMILIES.filter((name) => !spec.includes(name))
     expect(missing, `docs/design-system.md does not name: ${missing.join(', ')}`).toEqual([])
   })
 
   it('does not describe retired faces as current', () => {
     const stale = RETIRED_FACES.filter((face) => spec.includes(face))
     expect(stale, `retired faces named in the spec: ${stale.join(', ')}`).toEqual([])
+  })
+})
+
+describe('packaged startup shell', () => {
+  const html = readFileSync(HTML_SHELL, 'utf8')
+  const startupStyles = readFileSync(STARTUP_STYLES, 'utf8')
+
+  it('renders an accessible loading state before React mounts', () => {
+    expect(html).toContain('class="lyra-startup"')
+    expect(html).toContain('aria-busy="true"')
+    expect(html).toContain('Opening your study space')
+  })
+
+  it('keeps startup presentation in a CSP-compatible local stylesheet', () => {
+    expect(html).toContain('href="/startup.css"')
+    expect(html).not.toMatch(/\sstyle=/)
+    expect(startupStyles).toContain('/fonts/EBGaramond-500.ttf')
   })
 })

@@ -2,8 +2,8 @@
 
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
-import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import Link from '@/router/link'
+import { useParams } from '@/router/hooks'
 import { useEffect, useMemo } from 'react'
 
 import { LyraMark } from '@/components/chat/lyra-mark'

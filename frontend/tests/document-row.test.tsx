@@ -152,7 +152,7 @@ describe('DocumentRow, contextual actions', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Actions for lecture-2.pdf' }))
 
     const ask = await screen.findByRole('menuitem', { name: 'Ask about this' })
-    expect(ask).toHaveAttribute('href', '/classes/1/chat?session=new&document=7')
+    expect(ask).toHaveAttribute('href', '/#/classes/1/chat?session=new&document=7')
     expect(screen.getByRole('menuitem', { name: 'Make practice questions' })).toBeInTheDocument()
   })
 
@@ -247,7 +247,7 @@ describe('DocumentRow, text recognition', () => {
     expect(screen.queryByRole('button', { name: 'Read this document' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: /endpoint settings/ })).toHaveAttribute(
       'href',
-      '/settings',
+      '/#/settings',
     )
   })
 

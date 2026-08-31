@@ -1,8 +1,8 @@
 'use client'
 
 import { Plus, SquareCheckBig } from 'lucide-react'
-import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import Link from '@/router/link'
+import { useParams } from '@/router/hooks'
 
 import { SolutionRow } from '@/components/solutions/solution-row'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'

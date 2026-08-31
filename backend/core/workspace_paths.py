@@ -39,7 +39,6 @@ _IGNORED_DIRECTORY_NAMES = frozenset(
     {
         ".git",
         ".gnupg",
-        ".next",
         ".pytest_cache",
         ".ruff_cache",
         ".turbo",

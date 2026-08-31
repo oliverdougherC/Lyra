@@ -1,15 +1,38 @@
 'use client'
 
 import { BookOpen, ExternalLink, Globe2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useDraftSources } from '@/lib/hooks/use-drafts'
+import { useNavigationVersion, useRouteAnchor } from '@/router/hooks'
 import type { DraftSource } from '@/types'
 
 /** Course and web evidence shared by the writer and class agent. */
 export function SourceLedger({ classId }: { classId: number }) {
   const query = useDraftSources(classId)
+  const routeAnchor = useRouteAnchor()
+  const navigationVersion = useNavigationVersion()
+  const [announcement, setAnnouncement] = useState('')
+  const missingAnchor = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (query.isPending || query.isError) return
+    if (!routeAnchor?.startsWith('source-')) return
+    const target = document.getElementById(routeAnchor)
+    if (!target) {
+      if (missingAnchor.current !== routeAnchor) {
+        missingAnchor.current = routeAnchor
+        setAnnouncement('That source is no longer available.')
+      }
+      return
+    }
+    missingAnchor.current = null
+    target.focus({ preventScroll: true })
+    target.scrollIntoView({ block: 'center', inline: 'nearest' })
+    setAnnouncement(`Jumped to ${target.getAttribute('data-source-title') ?? 'that source'}.`)
+  }, [navigationVersion, query.isError, query.isPending, routeAnchor])
 
   if (query.isPending) {
     return (
@@ -44,6 +67,9 @@ export function SourceLedger({ classId }: { classId: number }) {
 
   return (
     <div className="flex flex-col gap-5">
+      <p key={navigationVersion} className="sr-only" aria-live="polite">
+        {announcement}
+      </p>
       <p className="text-text-secondary text-sm">
         Every source Lyra relied on, with the exact excerpts kept for claim checking.
       </p>
@@ -69,8 +95,9 @@ function SourceGroup({ title, sources }: { title: string; sources: DraftSource[]
           <li
             key={source.id}
             id={`source-${source.id}`}
+            data-source-title={source.title}
             tabIndex={-1}
-            className="border-border rounded-md border p-3"
+            className="border-border scroll-mt-4 rounded-md border p-3"
           >
             <div className="flex items-start gap-2">
               {source.source_type === 'web' ? (

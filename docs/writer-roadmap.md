@@ -19,7 +19,7 @@ The writer workspace now exists and includes:
 - comments and revision flows
 - suggestions and review
 - export
-- web research support when the tutor endpoint and Firecrawl allow it
+- optional Exa-backed web research support
 
 The main open work is reliability, not feature invention. The app still needs more error handling,
 stronger recovery, and more regression coverage around the writer flows.

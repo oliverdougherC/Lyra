@@ -1,6 +1,6 @@
 'use client'
 
-import { useParams, useSearchParams } from 'next/navigation'
+import { useParams, useSearchParams } from '@/router/hooks'
 
 import { ClassHub, readHubTab } from '@/components/classes/class-hub'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'

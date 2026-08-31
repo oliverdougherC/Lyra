@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Bot, FileText, SquareCheckBig } from 'lucide-react'
-import Link from 'next/link'
-import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import Link from '@/router/link'
+import { useParams, useRouter, useSearchParams } from '@/router/hooks'
 
 import { ChatPane } from '@/components/chat/chat-pane'
 import { AgentPanel } from '@/components/agent/agent-panel'

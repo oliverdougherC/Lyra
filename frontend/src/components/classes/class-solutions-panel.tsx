@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { Plus, SquareCheckBig } from 'lucide-react'
-import Link from 'next/link'
+import Link from '@/router/link'
 import { toast } from 'sonner'
 
 import { RenameDialog } from '@/components/classes/rename-dialog'

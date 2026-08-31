@@ -1,10 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ImageOff } from 'lucide-react'
 
 import { ProvenanceChip } from '@/components/solutions/provenance-chip'
-import { figureUrl } from '@/lib/api'
+import { figurePath, immediateAssetUrl, loadProtectedAssetSource } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import type { SolutionPart } from '@/types'
 
@@ -24,6 +24,65 @@ type FigureBlockProps = {
 export function FigureBlock({ figure, className }: FigureBlockProps) {
   const [broken, setBroken] = useState(false)
   const name = figure.label ?? 'Figure'
+  const path = figurePath(Number(figure.content))
+  const [src, setSrc] = useState<string | null>(() => immediateAssetUrl(path))
+  const shownRelease = useRef<(() => void) | undefined>(undefined)
+
+  useEffect(() => {
+    const directUrl = immediateAssetUrl(path)
+    shownRelease.current?.()
+    shownRelease.current = undefined
+    if (directUrl) {
+      setBroken(false)
+      setSrc(directUrl)
+      return
+    }
+
+    const controller = new AbortController()
+    setBroken(false)
+    setSrc(null)
+
+    void loadProtectedAssetSource(path, controller.signal)
+      .then(({ url, release }) => {
+        if (controller.signal.aborted) {
+          release?.()
+          return
+        }
+        shownRelease.current?.()
+        shownRelease.current = release
+        setSrc(url)
+      })
+      .catch((error) => {
+        if (
+          controller.signal.aborted ||
+          (error instanceof DOMException && error.name === 'AbortError')
+        ) {
+          return
+        }
+        setBroken(true)
+      })
+
+    return () => {
+      controller.abort()
+      shownRelease.current?.()
+      shownRelease.current = undefined
+    }
+  }, [path])
+
+  useEffect(
+    () => () => {
+      shownRelease.current?.()
+      shownRelease.current = undefined
+    },
+    [],
+  )
+
+  const handleError = () => {
+    shownRelease.current?.()
+    shownRelease.current = undefined
+    setSrc(null)
+    setBroken(true)
+  }
 
   return (
     <figure className={cn('figure-block flex flex-col gap-1.5', className)}>
@@ -35,6 +94,8 @@ export function FigureBlock({ figure, className }: FigureBlockProps) {
           <ImageOff className="size-4 shrink-0" aria-hidden />
           Figure not available
         </div>
+      ) : src === null ? (
+        <div className="border-border bg-card h-32 max-w-full self-start rounded-md border" />
       ) : (
         // Never wider than the reading column, and a wide figure scales down rather than
         // scrolling. Math scrolls because cutting an equation loses information; a figure
@@ -45,11 +106,10 @@ export function FigureBlock({ figure, className }: FigureBlockProps) {
         // the reading column is wider than a crop: the block diagrams on the acceptance
         // homework are 771px and were being blown up to 1215, which is a blurred picture of
         // a diagram made of hairlines. Scaling down loses nothing; scaling up invents.
-        // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={figureUrl(Number(figure.content))}
+          src={src}
           alt={name}
-          onError={() => setBroken(true)}
+          onError={handleError}
           className="border-border bg-card h-auto max-w-full self-start rounded-md border"
         />
       )}

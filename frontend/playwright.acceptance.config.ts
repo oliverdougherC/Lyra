@@ -4,7 +4,7 @@
  * Unlike the smoke tests in playwright.config.ts, these tests do NOT intercept
  * /api/** traffic.  The global setup starts the real FastAPI backend (with
  * deterministic embedding fixtures), a fake tutor endpoint, and the production
- * Next.js frontend.  Every browser request flows through the real application
+ * Vite frontend. Every browser request flows through the real application
  * stack, exercising the full composition.
  *
  * Browser-support contract:

@@ -20,8 +20,6 @@ import {
   waitForStudyReady,
   clearTutorState,
   setTutorMode,
-  waitForBarrier,
-  releaseBarrier,
   enableSourceBarrier,
   waitForSourceBarrier,
   releaseSourceBarrier,

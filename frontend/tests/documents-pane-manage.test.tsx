@@ -8,7 +8,7 @@ import { DocumentsPane } from '@/components/documents/documents-pane'
 import { api } from '@/lib/api'
 import type { ClassRead, DocumentRead } from '@/types'
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/router/hooks', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
   useParams: () => ({ id: '1' }),
   useSearchParams: () => new URLSearchParams(),

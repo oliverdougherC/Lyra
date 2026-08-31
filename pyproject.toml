@@ -33,6 +33,9 @@ dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0", "ruff==0.16.1"]
 # locally and in CI. Kept out of the audited production graph (scripts/python_security_gate.py
 # exports without extras), so we never scan the scanner. See docs/security-and-ci-gates.md.
 security = ["pip-audit==2.9.0"]
+packaging = [
+    "pyinstaller==6.22.2",
+]
 
 [tool.ruff]
 line-length = 100

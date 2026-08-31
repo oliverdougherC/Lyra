@@ -167,7 +167,7 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
     {
       key: 'web' as const,
       label: 'Web',
-      description: 'Search public sources through the loopback Firecrawl service.',
+      description: 'Search public sources and fetch public URLs through Exa.',
       enabled: writerSettings.data?.effective.allow_web_research ?? false,
       inherited: writerSettings.data?.overrides.allow_web_research === null,
     },

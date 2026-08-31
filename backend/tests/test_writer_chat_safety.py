@@ -1256,7 +1256,7 @@ class TestAtomicEffects:
         db.execute("update settings set allow_web_research = 1 where id = 1")
         db.commit()
 
-        def fake_fetch(url, *, allowed, firecrawl_base_url, scrape_enabled=False):
+        def fake_fetch(url, *, allowed, source_content_enabled=False):
             return {
                 "url": url,
                 "title": "Fake page",

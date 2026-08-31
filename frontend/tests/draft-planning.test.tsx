@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { PlanPanel } from '@/components/drafts/plan-panel'
 import { SourceLedger } from '@/components/drafts/source-ledger'
 import { api } from '@/lib/api'
+import { RouterProvider } from '@/router/hooks'
 import type { DraftPlan } from '@/types'
 
 function createWrapper() {
@@ -14,7 +15,11 @@ function createWrapper() {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
   return function TestWrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    return (
+      <RouterProvider>
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      </RouterProvider>
+    )
   }
 }
 

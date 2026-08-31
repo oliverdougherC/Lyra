@@ -7,7 +7,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, documentPageUrl } from '@/lib/api'
+import { api, documentPagePath, immediateAssetUrl, loadProtectedAssetSource } from '@/lib/api'
 import { truncateMiddle } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { DocumentRead, SolutionSource } from '@/types'
@@ -319,8 +319,13 @@ function PageImage({
   /** The height the page has to stand in, inside the gutter. Null before it is measured. */
   availableHeight?: number | null
 }) {
-  const src = documentPageUrl(documentId, page)
-  const [shown, setShown] = useState<{ src: string; page: number; aspect: number } | null>(null)
+  const src = documentPagePath(documentId, page)
+  const [shown, setShown] = useState<{
+    src: string
+    page: number
+    aspect: number
+    revoke?: () => void
+  } | null>(null)
   // Which page failed, rather than a flag that has to be cleared as each new load starts.
   // A flag would mean writing state from the effect body on every page turn, and the reset
   // is not information the effect owns: whether *this* page has failed is derivable.
@@ -328,31 +333,71 @@ function PageImage({
   const failed = failedSrc === src
 
   useEffect(() => {
-    let cancelled = false
+    const controller = new AbortController()
+    let releaseShown: (() => void) | undefined
+    let adopted = false
     const image = new Image()
     const settle = () => {
-      if (cancelled) return
+      if (controller.signal.aborted || !image.src) return
       const aspect = image.naturalHeight > 0 ? image.naturalWidth / image.naturalHeight : 0
       // Both updates land in one commit, so the page appears at the width it was measured
       // for rather than arriving and then being resized under the reader.
-      setShown({ src, page, aspect })
+      setShown((current) => {
+        current?.revoke?.()
+        return { src: image.src, page, aspect, revoke: releaseShown }
+      })
+      adopted = true
       if (aspect > 0) onDecoded?.(aspect)
     }
 
     image.onload = settle
     image.onerror = () => {
-      if (!cancelled) setFailedSrc(src)
+      if (!controller.signal.aborted) {
+        releaseShown?.()
+        setFailedSrc(src)
+      }
     }
-    image.src = src
-    // A cached page is already complete before the handlers were attached.
-    if (image.complete && image.naturalWidth > 0) settle()
+    const directUrl = immediateAssetUrl(src)
+    if (directUrl) {
+      image.src = directUrl
+      if (image.complete && image.naturalWidth > 0) settle()
+    } else {
+      void loadProtectedAssetSource(src, controller.signal)
+        .then(({ url, release }) => {
+          if (controller.signal.aborted) {
+            release?.()
+            return
+          }
+          releaseShown = release
+          image.src = url
+          // A cached page is already complete before the handlers were attached.
+          if (image.complete && image.naturalWidth > 0) settle()
+        })
+        .catch((error) => {
+          if (
+            controller.signal.aborted ||
+            (error instanceof DOMException && error.name === 'AbortError')
+          ) {
+            return
+          }
+          setFailedSrc(src)
+        })
+    }
 
     return () => {
-      cancelled = true
+      controller.abort()
       image.onload = null
       image.onerror = null
+      if (!adopted) releaseShown?.()
     }
   }, [src, page, onDecoded])
+
+  useEffect(
+    () => () => {
+      shown?.revoke?.()
+    },
+    [shown?.src, shown?.revoke],
+  )
 
   if (failed) {
     return (
@@ -390,9 +435,8 @@ function PageImage({
       {/* The sheet, with the bands riding on it: one layer for both, so a band is
           positioned against the page it marks rather than against the box around it. */}
       <div className="absolute inset-x-0 top-0">
-        {/* The backend serves these at an unknown intrinsic size and Next's loader would
-            proxy a localhost-only route. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {/* The backend serves these at an unknown intrinsic size, so the packaged runtime
+            fetches them with its authenticated API session and paints the decoded blob. */}
         <img src={shown.src} alt={`Page ${shown.page}`} className="block w-full" />
         {/* Laid over the page rather than drawn into it: the image is a faithful render of
             the student's own sheet, and marking it up would make the two columns disagree

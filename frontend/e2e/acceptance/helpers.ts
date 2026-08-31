@@ -598,6 +598,7 @@ export async function restartBackend(): Promise<void> {
   backendEnv.LYRA_DATA_DIR = state.dataDir
   backendEnv.LYRA_HOST = '127.0.0.1'
   backendEnv.LYRA_PORT = String(state.backendPort)
+  backendEnv.LYRA_BROWSER_ORIGINS = `http://127.0.0.1:${FRONTEND_PORT}`
   backendEnv.PYTHONDONTWRITEBYTECODE = '1'
 
   // stdio is fully ignored: this worker process exits when its tests finish, and a piped

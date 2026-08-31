@@ -7,6 +7,20 @@ import { SourcePane, type ProblemRegion } from '@/components/solutions/source-pa
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { DocumentRead, SolutionSource } from '@/types'
 
+const { immediateAssetUrl, loadProtectedAssetSource } = vi.hoisted(() => ({
+  immediateAssetUrl: vi.fn<(path: string) => string | null>(),
+  loadProtectedAssetSource: vi.fn(),
+}))
+
+vi.mock('@/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
+  return {
+    ...actual,
+    immediateAssetUrl,
+    loadProtectedAssetSource,
+  }
+})
+
 /**
  * Contract from docs/ui-phase-2.md: scrolling away from the anchored page does not change
  * the selection. The reader is allowed to look around, including while Lyra is still
@@ -81,6 +95,8 @@ async function decodePages(): Promise<void> {
 beforeEach(() => {
   pendingDecodes = []
   vi.stubGlobal('Image', FakeImage)
+  immediateAssetUrl.mockImplementation((path) => `http://127.0.0.1:8000${path}`)
+  loadProtectedAssetSource.mockReset()
 })
 
 afterEach(() => {
@@ -213,5 +229,30 @@ describe('SourcePane', () => {
     await decodePages()
 
     expect(screen.getByRole('button', { name: 'Fit' })).toBeInTheDocument()
+  })
+
+  it('releases a protected page blob that resolves after the reader moved on', async () => {
+    immediateAssetUrl.mockReturnValue(null)
+    const firstRelease = vi.fn()
+    const secondRelease = vi.fn()
+    let resolveFirst: ((value: { url: string; release: () => void }) => void) | null = null
+    loadProtectedAssetSource
+      .mockImplementationOnce(
+        () =>
+          new Promise<{ url: string; release: () => void }>((resolve) => {
+            resolveFirst = resolve
+          }),
+      )
+      .mockResolvedValueOnce({ url: 'blob:page-2', release: secondRelease })
+
+    const { reanchor } = renderPane({ documentId: 7, pageNumber: 1 })
+    reanchor({ documentId: 7, pageNumber: 2 })
+
+    await act(async () => {
+      resolveFirst?.({ url: 'blob:page-1', release: firstRelease })
+    })
+
+    expect(firstRelease).toHaveBeenCalledTimes(1)
+    expect(secondRelease).not.toHaveBeenCalled()
   })
 })

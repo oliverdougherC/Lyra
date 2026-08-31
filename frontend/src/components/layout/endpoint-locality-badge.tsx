@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import Link from '@/router/link'
 import { Globe, HardDrive } from 'lucide-react'
 
 import { useSettings } from '@/lib/hooks/use-settings'

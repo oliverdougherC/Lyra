@@ -1,0 +1,261 @@
+{
+  "aggregate": {
+    "connection_count": 2,
+    "cpu_percent": 0.1,
+    "forbidden_idle_processes": [],
+    "listening_ports": [
+      54903
+    ],
+    "open_file_count": 178,
+    "port_count": 772,
+    "private_memory_bytes": 222050098,
+    "private_memory_complete": true,
+    "process_count": 5,
+    "retained_process_count": 5,
+    "rss_bytes": 106463232,
+    "thread_count": 38,
+    "unexpected_process_count": 0
+  },
+  "captured_at": "2026-08-31T04:22:11+00:00",
+  "commit": "14837fcf2f6ae011960a3d90079611eeabea1d92",
+  "machine": {
+    "architecture": "arm64",
+    "cpu_count": 14,
+    "memory_bytes": 25769803776,
+    "release": "27.0.0",
+    "system": "Darwin"
+  },
+  "observations": {
+    "cold_launch": {
+      "reason": "requires physical packaged-app evidence not collected by this deterministic sample",
+      "status": "open",
+      "title": "Cold-launch sample"
+    },
+    "idle_60s": {
+      "evidence_scope": "deterministic local build evidence",
+      "helper_state": {
+        "backend": "running",
+        "embedding": "not-running",
+        "ocr": "not-running",
+        "rerank": "not-running"
+      },
+      "measurements": {
+        "aggregate_private_memory_bytes": 222050098,
+        "aggregate_rss_bytes": 106463232,
+        "cache_growth_bytes": null,
+        "cache_size_bytes": null,
+        "package_size_bytes": 143733029
+      },
+      "notes": [
+        "This sample is preliminary and local to the development machine.",
+        "Cache growth, post-task drift, idle-eviction, and quit cleanup remain open unless captured separately."
+      ],
+      "status": "preliminary",
+      "title": "Preliminary 60-second settled-idle sample",
+      "usable_shell": {
+        "elapsed_seconds": null,
+        "observed": false,
+        "status": "open"
+      }
+    },
+    "post_eviction": {
+      "reason": "requires physical packaged-app evidence not collected by this deterministic sample",
+      "status": "open",
+      "title": "Post-helper-eviction sample"
+    },
+    "post_quit": {
+      "evidence_scope": "packaged local build with isolated temporary profile",
+      "measurements": {
+        "backend_listener_count": 0,
+        "owned_helper_process_count": 0,
+        "retained_owned_process_count": 0
+      },
+      "notes": [
+        "Normal application quit reclaimed the Tauri shell, three associated WebKit services, frozen backend, and its ephemeral listener.",
+        "Two llama-server processes from a separate checkout/profile remained intentionally excluded and were not signaled."
+      ],
+      "status": "preliminary",
+      "title": "Preliminary packaged post-quit cleanup sample"
+    },
+    "post_task": {
+      "reason": "requires physical packaged-app evidence not collected by this deterministic sample",
+      "status": "open",
+      "title": "Post-task workload sample"
+    },
+    "warm_launch": {
+      "evidence_scope": "packaged local build with the same isolated temporary profile",
+      "helper_state": {
+        "backend": "running",
+        "embedding": "not-running",
+        "ocr": "not-running",
+        "rerank": "not-running"
+      },
+      "measurements": {
+        "aggregate_private_memory_bytes": 220561407,
+        "aggregate_rss_bytes": 307511296,
+        "forbidden_idle_processes": [],
+        "retained_process_count": 5,
+        "unexpected_process_count": 0
+      },
+      "notes": [
+        "This is a preliminary warm relaunch on a 24 GiB development machine, not the physical 8 GiB release gate.",
+        "The associated WebKit services were attributed through LaunchServices responsibility data."
+      ],
+      "status": "preliminary",
+      "title": "Preliminary warm-launch sample"
+    }
+  },
+  "package": {
+    "root_name": "Lyra.app",
+    "size_bytes": 143733029
+  },
+  "privacy": {
+    "command_arguments_collected": false,
+    "connection_details_redacted_to_counts_and_ports": true,
+    "file_paths_collected": false,
+    "prompts_or_document_text_collected": false,
+    "stable_device_identifier_collected": false,
+    "unrelated_processes_retained": false,
+    "webkit_attribution": "verified macOS LaunchServices responsibility when available; otherwise fail closed"
+  },
+  "process_tree": [
+    {
+      "connection_count": 0,
+      "cpu_percent": 0.0,
+      "elapsed_seconds": 229,
+      "executable": "lyra-desktop",
+      "listening_ports": [],
+      "open_file_count": 65,
+      "ownership_evidence_source": "root-pid",
+      "ownership_reason": "root-process",
+      "pid": 94562,
+      "port_count": 348,
+      "ppid": 94552,
+      "private_memory_bytes": 34707865,
+      "private_memory_source": "vmmap-physical-footprint",
+      "retained": true,
+      "role": "tauri-shell",
+      "rss_bytes": 61669376,
+      "thread_count": 21,
+      "unexpected": false
+    },
+    {
+      "connection_count": 0,
+      "cpu_percent": 0.0,
+      "elapsed_seconds": 228,
+      "executable": "com.apple.WebKit.GPU",
+      "listening_ports": [],
+      "open_file_count": 27,
+      "ownership_evidence_source": "lsappinfo-application-association",
+      "ownership_reason": "lsappinfo-verified-webkit-sibling",
+      "pid": 94565,
+      "port_count": 242,
+      "ppid": 1,
+      "private_memory_bytes": 20656947,
+      "private_memory_source": "vmmap-physical-footprint",
+      "retained": true,
+      "role": "webkit-gpu",
+      "rss_bytes": 7766016,
+      "thread_count": 5,
+      "unexpected": false
+    },
+    {
+      "connection_count": 0,
+      "cpu_percent": 0.0,
+      "elapsed_seconds": 228,
+      "executable": "com.apple.WebKit.WebContent",
+      "listening_ports": [],
+      "open_file_count": 23,
+      "ownership_evidence_source": "lsappinfo-application-association",
+      "ownership_reason": "lsappinfo-verified-webkit-sibling",
+      "pid": 94567,
+      "port_count": 59,
+      "ppid": 1,
+      "private_memory_bytes": 78538342,
+      "private_memory_source": "vmmap-physical-footprint",
+      "retained": true,
+      "role": "webkit-webcontent",
+      "rss_bytes": 5292032,
+      "thread_count": 2,
+      "unexpected": false
+    },
+    {
+      "connection_count": 0,
+      "cpu_percent": 0.0,
+      "elapsed_seconds": 227,
+      "executable": "com.apple.WebKit.Networking",
+      "listening_ports": [],
+      "open_file_count": 32,
+      "ownership_evidence_source": "lsappinfo-application-association",
+      "ownership_reason": "lsappinfo-verified-webkit-sibling",
+      "pid": 94569,
+      "port_count": 76,
+      "ppid": 1,
+      "private_memory_bytes": 7930880,
+      "private_memory_source": "vmmap-physical-footprint",
+      "retained": true,
+      "role": "webkit-networking",
+      "rss_bytes": 6619136,
+      "thread_count": 3,
+      "unexpected": false
+    },
+    {
+      "connection_count": 2,
+      "cpu_percent": 0.1,
+      "elapsed_seconds": 226,
+      "executable": "lyra-backend",
+      "listening_ports": [
+        54903
+      ],
+      "open_file_count": 31,
+      "ownership_evidence_source": "process-ancestry",
+      "ownership_reason": "descendant-of-owned-process",
+      "pid": 94606,
+      "port_count": 47,
+      "ppid": 94562,
+      "private_memory_bytes": 80216064,
+      "private_memory_source": "vmmap-physical-footprint",
+      "retained": true,
+      "role": "backend",
+      "rss_bytes": 25116672,
+      "thread_count": 7,
+      "unexpected": false
+    }
+  ],
+  "release_gates": {
+    "live_provider": {
+      "reason": "requires a live optional-provider exercise rather than mocked configuration",
+      "status": "open"
+    },
+    "memory_pressure": {
+      "reason": "requires physical memory-pressure evidence under constrained hardware",
+      "status": "open"
+    },
+    "packaged_soak": {
+      "reason": "requires the manual packaged-app soak plan to complete",
+      "status": "open"
+    },
+    "physical_8_gib": {
+      "reason": "requires a clean physical 8 GiB release-reference Mac",
+      "status": "open"
+    },
+    "sleep_wake": {
+      "reason": "requires physical background, sleep, wake, and relaunch evidence",
+      "status": "open"
+    }
+  },
+  "schema_version": 2,
+  "selection": {
+    "ownership_model": "ancestry-plus-verified-webkit-responsibility",
+    "retained_process_count": 5,
+    "root_pid": 94562,
+    "unexpected_retained_process_count": 0,
+    "webkit_ownership": {
+      "included_pid_count": 3,
+      "reason": "retained only WebKit services assigned to the root app by LaunchServices",
+      "source": "lsappinfo-application-association",
+      "status": "verified"
+    }
+  },
+  "tool": "desktop_runtime_report"
+}

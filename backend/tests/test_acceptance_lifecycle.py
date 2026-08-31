@@ -29,7 +29,6 @@ from backend.config import settings
 from backend.core import app_settings, artifacts, drafting, sessions, solver
 from backend.core.app_settings import TutorAccess, TutorConfig
 from backend.core.errors import LyraError
-from backend.core.firecrawl import FirecrawlError
 from backend.core.segmentation import SegmentedProblem
 from backend.llm.client import StreamDelta
 from backend.llm.tools import COMPLETED, TIMEOUT, UPSTREAM_FAILED, ToolLoopResult
@@ -198,33 +197,19 @@ def _draft(
     return artifact_id
 
 
-def test_ready_health_reports_firecrawl_degradation_without_failing_lyra(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+def test_ready_health_reports_web_research_configuration_without_probing_exa(
+    client: TestClient,
 ) -> None:
-    class UnavailableFirecrawl:
-        def __init__(self, *, base_url: str) -> None:
-            assert base_url == "http://127.0.0.1:3002"
-
-        def check_readiness(self) -> dict[str, object]:
-            raise FirecrawlError("hidden upstream detail")
-
-    monkeypatch.setattr(routes_health, "FirecrawlClient", UnavailableFirecrawl)
-
     response = client.get("/api/health/ready")
 
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ready"
     assert body["components"]["database"]["status"] == "ready"
-    assert body["components"]["firecrawl"] == {
-        "status": "temporarily_unavailable",
-        "required": False,
-        "message": "Firecrawl is temporarily unavailable; web research is disabled.",
-    }
-    assert body["components"]["web_scrape"] == {
+    assert body["components"]["web_research"] == {
         "status": "not_ready",
         "required": False,
-        "message": "Web scraping remains disabled until the redirect-safety gate passes.",
+        "message": "Web research is configured but currently disabled in Settings.",
     }
 
 

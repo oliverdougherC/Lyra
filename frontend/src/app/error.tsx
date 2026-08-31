@@ -3,11 +3,9 @@
 import { Button } from '@/components/ui/button'
 
 /**
- * Route-segment error boundary (Next.js App Router special file). When anything
- * below the root layout throws while rendering, this component replaces the
- * failed segment; the rail and header above it keep working, so the student is
- * never cut off from navigation. `retry()` re-fetches and re-renders the segment
- * (stable contract since Next 16.3.0; the legacy alias is `reset()`).
+ * Client-route error fallback. When a lazy route throws while rendering, this
+ * component replaces the failed route; the rail and header remain available so the
+ * student is never cut off from navigation. `retry()` remounts the route.
  *
  * Privacy contract: the `error` prop is typed for the boundary contract only.
  * Its `message`, `digest`, stack, and any application state it carries never

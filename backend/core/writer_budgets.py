@@ -92,8 +92,7 @@ class WriterCapabilities:
     allow_web_research: bool
     parallel_requests: bool
     parallel_concurrency: int
-    firecrawl_base_url: str
-    firecrawl_scrape_enabled: bool
+    source_content_enabled: bool
 
 
 _UNSET = object()
@@ -104,7 +103,7 @@ def get_writer_capabilities(conn: sqlite3.Connection, class_id: int) -> WriterCa
     classes.get_class(conn, class_id)
     global_row = conn.execute(
         "select allow_web_research, parallel_requests, parallel_concurrency, "
-        "firecrawl_base_url, firecrawl_scrape_enabled "
+        "source_content_enabled "
         "from settings where id = 1"
     ).fetchone()
     if global_row is None:
@@ -127,8 +126,7 @@ def get_writer_capabilities(conn: sqlite3.Connection, class_id: int) -> WriterCa
         allow_web_research=bool(resolved("allow_web_research")),
         parallel_requests=bool(resolved("parallel_requests")),
         parallel_concurrency=concurrency,
-        firecrawl_base_url=str(global_row["firecrawl_base_url"]),
-        firecrawl_scrape_enabled=bool(global_row["firecrawl_scrape_enabled"]),
+        source_content_enabled=bool(global_row["source_content_enabled"]),
     )
 
 

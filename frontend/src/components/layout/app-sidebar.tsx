@@ -2,8 +2,8 @@
 
 import { Suspense, useCallback, useState } from 'react'
 import { Archive, ChevronDown, Moon, RotateCcw, Settings, Sun } from 'lucide-react'
-import Link from 'next/link'
-import { usePathname, useSearchParams } from 'next/navigation'
+import Link from '@/router/link'
+import { usePathname, useSearchParams } from '@/router/hooks'
 
 import { CourseMark } from '@/components/classes/course-mark'
 import { LyraMark } from '@/components/chat/lyra-mark'
