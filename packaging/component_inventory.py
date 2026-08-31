@@ -10,7 +10,8 @@ SCHEMA_VERSION = 1
 ENTRY_MODULE = "backend.desktop_entry"
 SPEC_PATH = "packaging/lyra_backend.spec"
 DATA_GLOBS = ("backend/storage/migrations/*.sql",)
-DYNAMIC_LIB_PACKAGES = ("sqlite_vec", "pymupdf")
+DYNAMIC_LIB_PACKAGES = ("pymupdf",)
+EXTENSION_DATA_PACKAGES = ("sqlite_vec",)
 HIDDENIMPORT_PACKAGES = (
     "keyring.backends",
     "uvicorn",
@@ -29,6 +30,7 @@ def build_inventory() -> dict[str, object]:
         "spec_path": SPEC_PATH,
         "data_globs": list(DATA_GLOBS),
         "dynamic_lib_packages": list(DYNAMIC_LIB_PACKAGES),
+        "extension_data_packages": list(EXTENSION_DATA_PACKAGES),
         "hiddenimport_packages": list(HIDDENIMPORT_PACKAGES),
     }
 

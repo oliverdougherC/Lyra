@@ -10,6 +10,7 @@ inventory = runpy.run_path(str(Path(SPECPATH) / "component_inventory.py"))
 project_root = Path(SPECPATH).parent
 DATA_GLOBS = inventory["DATA_GLOBS"]
 DYNAMIC_LIB_PACKAGES = inventory["DYNAMIC_LIB_PACKAGES"]
+EXTENSION_DATA_PACKAGES = inventory["EXTENSION_DATA_PACKAGES"]
 ENTRY_MODULE = inventory["ENTRY_MODULE"]
 HIDDENIMPORT_PACKAGES = inventory["HIDDENIMPORT_PACKAGES"]
 
@@ -20,6 +21,17 @@ for pattern in DATA_GLOBS:
 binaries = []
 for package in DYNAMIC_LIB_PACKAGES:
     binaries.extend(collect_dynamic_libs(package))
+
+# sqlite-vec loads its platform extension by package-relative filename at runtime.
+# PyInstaller's dynamic-library classifier finds vec0.dylib on macOS but does not
+# consistently classify vec0.so on Linux, so retain it explicitly as package data.
+for package in EXTENSION_DATA_PACKAGES:
+    datas.extend(
+        collect_data_files(
+            package,
+            includes=["*.dylib", "*.so", "*.dll"],
+        )
+    )
 
 hiddenimports = []
 for package in HIDDENIMPORT_PACKAGES:

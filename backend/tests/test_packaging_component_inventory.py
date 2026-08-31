@@ -18,7 +18,7 @@ def test_inventory_includes_runtime_critical_packages() -> None:
 
     assert payload["entry_module"] == "backend.desktop_entry"
     assert "backend/storage/migrations/*.sql" in payload["data_globs"]
-    assert "sqlite_vec" in payload["dynamic_lib_packages"]
+    assert "sqlite_vec" in payload["extension_data_packages"]
     assert "pymupdf" in payload["dynamic_lib_packages"]
     assert "keyring.backends" in payload["hiddenimport_packages"]
     assert "sympy" in payload["hiddenimport_packages"]
