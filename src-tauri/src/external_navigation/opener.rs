@@ -38,6 +38,15 @@ impl fmt::Display for ExternalNavigationError {
 
 impl std::error::Error for ExternalNavigationError {}
 
+impl ExternalNavigationError {
+    pub(crate) fn code(&self) -> &'static str {
+        match self {
+            Self::BrowserOpenFailed => "open_failed",
+            _ => "blocked",
+        }
+    }
+}
+
 pub(crate) fn open_external_url<R: Runtime>(
     app: &AppHandle<R>,
     candidate: &str,
@@ -198,6 +207,15 @@ mod tests {
             normalize_public_http_url(" https://example.com", |_host, _port| Ok(Vec::new()))
                 .unwrap_err(),
             ExternalNavigationError::MalformedUrl,
+        );
+    }
+
+    #[test]
+    fn exposes_structured_renderer_categories() {
+        assert_eq!(ExternalNavigationError::UnsafeHost.code(), "blocked");
+        assert_eq!(
+            ExternalNavigationError::BrowserOpenFailed.code(),
+            "open_failed"
         );
     }
 

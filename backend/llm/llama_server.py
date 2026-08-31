@@ -71,6 +71,8 @@ _BINARY_NAMES = ("llama-server", "llama-server.exe")
 _HEALTH_POLL_SECONDS = 1.0
 _HEALTH_REQUEST_TIMEOUT_SECONDS = 5.0
 _SHUTDOWN_GRACE_SECONDS = 5.0
+_POST_KILL_PROOF_SECONDS = 1.0
+_TERMINATION_POLL_SECONDS = 0.25
 
 # How much of the child's stderr to keep. llama.cpp's real failure reason - a corrupt
 # GGUF, an unknown flag, an out-of-memory abort - is in its last few lines, and keeping
@@ -390,32 +392,45 @@ def _stop_tree(process: "subprocess.Popen[bytes]", *, kill: bool) -> None:
         process.terminate()
 
 
-def _terminate_pid(pid: int, pgid: int | None, token: str | None, label: str) -> None:
+def _wait_for_pid_exit(pid: int, token: str | None, *, timeout_seconds: float) -> bool:
+    """Poll a PID/token pair until ownership disappears or the timeout expires."""
+    if not _token_matches_pid(pid, token):
+        return True
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    while True:
+        if not _token_matches_pid(pid, token):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(_TERMINATION_POLL_SECONDS, remaining))
+
+
+def _terminate_pid(pid: int, pgid: int | None, token: str | None, label: str) -> bool:
     """Terminate an adopted process by PID, verifying identity before every signal.
 
     The birth token is re-checked before SIGTERM and again before SIGKILL, so a PID
-    that was recycled between the two signals is never hit.
+    that was recycled between the two signals is never hit. Returns True when the
+    owned process is confirmed gone (or was already gone/reused), False when it
+    still matches after the bounded post-SIGKILL proof window.
     """
     if not _token_matches_pid(pid, token):
         logger.info("Adopted %s (PID %d) already exited or was replaced", label, pid)
-        return
+        return True
     gid = pgid if pgid is not None else pid
     try:
         os.killpg(gid, signal.SIGTERM)
     except (OSError, ValueError):
         with contextlib.suppress(OSError, ValueError):
             os.kill(pid, signal.SIGTERM)
-    deadline = time.monotonic() + _SHUTDOWN_GRACE_SECONDS
-    while time.monotonic() < deadline:
-        if not _token_matches_pid(pid, token):
-            return
-        time.sleep(0.25)
-    if _token_matches_pid(pid, token):
-        try:
-            os.killpg(gid, signal.SIGKILL)
-        except (OSError, ValueError):
-            with contextlib.suppress(OSError, ValueError):
-                os.kill(pid, signal.SIGKILL)
+    if _wait_for_pid_exit(pid, token, timeout_seconds=_SHUTDOWN_GRACE_SECONDS):
+        return True
+    try:
+        os.killpg(gid, signal.SIGKILL)
+    except (OSError, ValueError):
+        with contextlib.suppress(OSError, ValueError):
+            os.kill(pid, signal.SIGKILL)
+    return _wait_for_pid_exit(pid, token, timeout_seconds=_POST_KILL_PROOF_SECONDS)
 
 
 def _drain(stream: IO[bytes], tail: "deque[str]") -> None:

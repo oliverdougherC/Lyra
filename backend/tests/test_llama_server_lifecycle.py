@@ -9,6 +9,7 @@ server -- including one adopted after a backend restart -- is reclaimed on shutd
 
 import io
 import os
+import signal
 import time
 
 import pytest
@@ -1152,6 +1153,87 @@ class TestFailureInjection:
         instance.stop()
 
 
+class TestTerminatePidProofOfDeath:
+    def test_terminate_pid_escalates_to_sigkill_when_sigterm_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = _Clock()
+        signals: list[tuple[int, signal.Signals]] = []
+
+        monkeypatch.setattr(llama_server.time, "monotonic", clock.monotonic)
+        monkeypatch.setattr(llama_server.time, "sleep", clock.advance)
+        monkeypatch.setattr(llama_server, "_SHUTDOWN_GRACE_SECONDS", 1.0)
+        monkeypatch.setattr(llama_server, "_POST_KILL_PROOF_SECONDS", 1.0)
+        monkeypatch.setattr(llama_server, "_TERMINATION_POLL_SECONDS", 0.25)
+        monkeypatch.setattr(os, "killpg", lambda pgid, sig: signals.append((pgid, sig)))
+        monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append((pid, sig)))
+
+        def token_matches(pid: int, token: str | None) -> bool:
+            return clock.now < 1.25
+
+        monkeypatch.setattr(llama_server, "_token_matches_pid", token_matches)
+
+        assert llama_server._terminate_pid(41, 42, "proc:owned", "reranking") is True
+        assert signals == [(42, signal.SIGTERM), (42, signal.SIGKILL)]
+
+    def test_terminate_pid_returns_false_when_process_survives_sigkill_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = _Clock()
+        signals: list[tuple[int, signal.Signals]] = []
+
+        monkeypatch.setattr(llama_server.time, "monotonic", clock.monotonic)
+        monkeypatch.setattr(llama_server.time, "sleep", clock.advance)
+        monkeypatch.setattr(llama_server, "_SHUTDOWN_GRACE_SECONDS", 1.0)
+        monkeypatch.setattr(llama_server, "_POST_KILL_PROOF_SECONDS", 0.5)
+        monkeypatch.setattr(llama_server, "_TERMINATION_POLL_SECONDS", 0.25)
+        monkeypatch.setattr(os, "killpg", lambda pgid, sig: signals.append((pgid, sig)))
+        monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append((pid, sig)))
+        monkeypatch.setattr(llama_server, "_token_matches_pid", lambda pid, token: True)
+
+        assert llama_server._terminate_pid(51, 52, "proc:owned", "reranking") is False
+        assert signals == [(52, signal.SIGTERM), (52, signal.SIGKILL)]
+
+    def test_terminate_pid_accepts_delayed_death_after_sigkill(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        clock = _Clock()
+        signals: list[tuple[int, signal.Signals]] = []
+
+        monkeypatch.setattr(llama_server.time, "monotonic", clock.monotonic)
+        monkeypatch.setattr(llama_server.time, "sleep", clock.advance)
+        monkeypatch.setattr(llama_server, "_SHUTDOWN_GRACE_SECONDS", 1.0)
+        monkeypatch.setattr(llama_server, "_POST_KILL_PROOF_SECONDS", 1.0)
+        monkeypatch.setattr(llama_server, "_TERMINATION_POLL_SECONDS", 0.25)
+        monkeypatch.setattr(os, "killpg", lambda pgid, sig: signals.append((pgid, sig)))
+        monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append((pid, sig)))
+
+        def token_matches(pid: int, token: str | None) -> bool:
+            return clock.now < 1.5
+
+        monkeypatch.setattr(llama_server, "_token_matches_pid", token_matches)
+
+        assert llama_server._terminate_pid(61, 62, "proc:owned", "reranking") is True
+        assert signals == [(62, signal.SIGTERM), (62, signal.SIGKILL)]
+
+    def test_terminate_pid_never_signals_pid_reuse_or_foreign_process(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(llama_server, "_token_matches_pid", lambda pid, token: False)
+        monkeypatch.setattr(
+            os,
+            "killpg",
+            lambda pgid, sig: pytest.fail("stale ownership must not signal a foreign process"),
+        )
+        monkeypatch.setattr(
+            os,
+            "kill",
+            lambda pid, sig: pytest.fail("stale ownership must not signal a foreign process"),
+        )
+
+        assert llama_server._terminate_pid(71, 72, "proc:stale", "reranking") is True
+
+
 # Finding 1: stop() durable record ----------------------------------------
 
 
@@ -1204,6 +1286,80 @@ class TestStopDurableRecord:
 
         assert not signals
         assert _read_server_record("reranking") is None
+
+    def test_stop_never_signals_stale_record_for_live_foreign_pid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _save_ownership(
+            {
+                "reranking": {
+                    "pid": os.getpid(),
+                    "start_token": "proc:stale-bogus-token",
+                    "pgid": os.getpgid(os.getpid()),
+                    "port": 8083,
+                    "model": "bge.gguf",
+                    "started_at": time.time(),
+                }
+            }
+        )
+
+        instance = RerankServer()
+        monkeypatch.setattr(
+            os,
+            "killpg",
+            lambda g, s: pytest.fail("stale foreign ownership must not be signaled"),
+        )
+        monkeypatch.setattr(
+            os,
+            "kill",
+            lambda p, s: pytest.fail("stale foreign ownership must not be signaled"),
+        )
+
+        instance.stop()
+
+        assert _read_server_record("reranking") is None
+
+    def test_stop_never_signals_other_service_record(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _record_server("embedding", os.getpid(), 8081, "nomic.gguf")
+
+        instance = RerankServer()
+        monkeypatch.setattr(
+            os,
+            "killpg",
+            lambda g, s: pytest.fail("stop() must ignore ownership records for other services"),
+        )
+        monkeypatch.setattr(
+            os,
+            "kill",
+            lambda p, s: pytest.fail("stop() must ignore ownership records for other services"),
+        )
+
+        instance.stop()
+
+        assert _read_server_record("embedding") is not None
+
+    def test_stop_never_signals_user_operated_compatible_server(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        instance = RerankServer()
+        monkeypatch.setattr(instance, "_healthy", lambda: True)
+        monkeypatch.setattr(
+            instance,
+            "_served_model",
+            lambda: f"/models/{settings.rerank_model_path.name}",
+        )
+        monkeypatch.setattr(
+            os,
+            "killpg",
+            lambda g, s: pytest.fail("user-operated compatible servers must not be signaled"),
+        )
+        monkeypatch.setattr(
+            os,
+            "kill",
+            lambda p, s: pytest.fail("user-operated compatible servers must not be signaled"),
+        )
+
+        instance.stop()
 
     def test_stop_skips_durable_record_when_tracked_process_exists(
         self, monkeypatch: pytest.MonkeyPatch

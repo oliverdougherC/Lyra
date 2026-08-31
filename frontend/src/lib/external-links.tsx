@@ -39,6 +39,13 @@ function tauriInvoke() {
   return window.__TAURI__?.core?.invoke ?? window.__TAURI_INTERNALS__?.invoke
 }
 
+function nativeExternalLinkError(error: unknown): ExternalLinkError {
+  if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'blocked') {
+    return new ExternalLinkError('blocked')
+  }
+  return new ExternalLinkError('open-failed')
+}
+
 function readBaseUrl() {
   return typeof window === 'undefined' ? 'https://tauri.localhost/' : window.location.href
 }
@@ -57,9 +64,7 @@ function parseIpv4(hostname: string): number[] | null {
   return octets
 }
 
-function isSafePublicIpv4(hostname: string): boolean {
-  const octets = parseIpv4(hostname)
-  if (!octets) return false
+function isSafePublicIpv4Octets(octets: number[]): boolean {
   const [first, second] = octets
   return !(
     first === 0 ||
@@ -74,20 +79,78 @@ function isSafePublicIpv4(hostname: string): boolean {
   )
 }
 
+function isSafePublicIpv4(hostname: string): boolean {
+  const octets = parseIpv4(hostname)
+  return octets ? isSafePublicIpv4Octets(octets) : false
+}
+
+function parseIpv6Part(part: string): number[] | null {
+  if (!part) return []
+
+  const segments: number[] = []
+  for (const token of part.split(':')) {
+    if (!token) return null
+    if (token.includes('.')) {
+      const octets = parseIpv4(token)
+      if (!octets) return null
+      segments.push((octets[0] << 8) | octets[1], (octets[2] << 8) | octets[3])
+      continue
+    }
+    if (!/^[\da-f]{1,4}$/i.test(token)) {
+      return null
+    }
+    segments.push(Number.parseInt(token, 16))
+  }
+  return segments
+}
+
+function parseIpv6(hostname: string) {
+  const normalized = stripIpv6Brackets(hostname).toLowerCase()
+  if (!normalized.includes(':')) return null
+
+  const halves = normalized.split('::')
+  if (halves.length > 2) return null
+
+  const head = parseIpv6Part(halves[0] ?? '')
+  const tail = parseIpv6Part(halves[1] ?? '')
+  if (!head || !tail) return null
+  if (head.length + tail.length > 8) return null
+
+  const segments =
+    halves.length === 2
+      ? [...head, ...Array.from({ length: 8 - head.length - tail.length }, () => 0), ...tail]
+      : head
+
+  if (segments.length !== 8) return null
+
+  const ipv4Mapped =
+    segments[0] === 0 &&
+    segments[1] === 0 &&
+    segments[2] === 0 &&
+    segments[3] === 0 &&
+    segments[4] === 0 &&
+    segments[5] === 0xffff
+      ? [segments[6] >> 8, segments[6] & 0xff, segments[7] >> 8, segments[7] & 0xff]
+      : null
+
+  return { segments, ipv4Mapped }
+}
+
 function isSafePublicIpv6(hostname: string): boolean {
-  const lower = stripIpv6Brackets(hostname).toLowerCase()
-  if (!lower.includes(':')) return false
+  const parsed = parseIpv6(hostname)
+  if (!parsed) return false
+  if (parsed.ipv4Mapped) return isSafePublicIpv4Octets(parsed.ipv4Mapped)
+
+  const [first, second] = parsed.segments
   return !(
-    lower === '::' ||
-    lower === '::1' ||
-    lower.startsWith('fe8:') ||
-    lower.startsWith('fe9:') ||
-    lower.startsWith('fea:') ||
-    lower.startsWith('feb:') ||
-    lower.startsWith('fc') ||
-    lower.startsWith('fd') ||
-    lower.startsWith('2001:db8:') ||
-    lower.startsWith('2001:0')
+    parsed.segments.every((segment) => segment === 0) ||
+    (parsed.segments.slice(0, 7).every((segment) => segment === 0) && parsed.segments[7] === 1) ||
+    (first & 0xff00) === 0xff00 ||
+    (first === 0x2001 && second === 0x0db8) ||
+    (first === 0x2001 && second <= 0x01ff) ||
+    (first & 0xfe00) === 0xfc00 ||
+    (first & 0xffc0) === 0xfe80 ||
+    (first & 0xffc0) === 0xfec0
   )
 }
 
@@ -112,22 +175,23 @@ export function classifyExternalHref(
   baseUrl = readBaseUrl(),
 ): ExternalHrefDecision {
   if (!rawHref) return { kind: 'internal' }
-  if (rawHref.startsWith('/') || rawHref.startsWith('./') || rawHref.startsWith('../')) {
+  if (
+    (rawHref.startsWith('/') && !rawHref.startsWith('//')) ||
+    rawHref.startsWith('./') ||
+    rawHref.startsWith('../')
+  ) {
     return { kind: 'internal' }
   }
   if (rawHref.startsWith('#') || rawHref.startsWith('?')) {
     return { kind: 'internal' }
   }
-
-  const hasScheme = ABSOLUTE_SCHEME.test(rawHref)
-  if (hasScheme && !rawHref.startsWith('http:') && !rawHref.startsWith('https:')) {
-    return { kind: 'blocked' }
-  }
-  if (!hasScheme && !rawHref.startsWith('//')) {
-    return { kind: 'internal' }
-  }
   if (rawHref.trim() !== rawHref) {
     return { kind: 'blocked' }
+  }
+
+  const hasScheme = ABSOLUTE_SCHEME.test(rawHref)
+  if (!hasScheme && !rawHref.startsWith('//')) {
+    return { kind: 'internal' }
   }
 
   let url: URL
@@ -153,7 +217,11 @@ export function classifyExternalHref(
 async function dispatchExternalUrl(url: string): Promise<void> {
   const invoke = tauriInvoke()
   if (invoke) {
-    await invoke(OPEN_EXTERNAL_URL_COMMAND, { url })
+    try {
+      await invoke(OPEN_EXTERNAL_URL_COMMAND, { url })
+    } catch (error) {
+      throw nativeExternalLinkError(error)
+    }
     return
   }
 
@@ -237,9 +305,13 @@ function handleLinkActivation(event: MouseEvent) {
     return
   }
 
-  void dispatchExternalUrl(decision.url).catch(() => {
+  void dispatchExternalUrl(decision.url).catch((error) => {
     restoreFocus(activeElement)
-    toast.error(OPEN_FAILED_MESSAGE)
+    toast.error(
+      error instanceof ExternalLinkError && error.kind === 'blocked'
+        ? BLOCKED_LINK_MESSAGE
+        : OPEN_FAILED_MESSAGE,
+    )
   })
 }
 

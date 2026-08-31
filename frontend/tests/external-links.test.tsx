@@ -35,6 +35,39 @@ describe('external links', () => {
     })
   })
 
+  it('normalizes protocol-relative and mixed-case public http links', () => {
+    expect(classifyExternalHref('//example.com/docs', 'http://127.0.0.1:4179/#/')).toEqual({
+      kind: 'external',
+      url: 'http://example.com/docs',
+    })
+    expect(classifyExternalHref('HTTPS://EXAMPLE.COM/Docs')).toEqual({
+      kind: 'external',
+      url: 'https://example.com/Docs',
+    })
+  })
+
+  it('blocks reserved IPv6 ranges and IPv4-mapped private or loopback addresses', () => {
+    for (const href of [
+      'https://[::]/',
+      'https://[::1]/',
+      'https://[fe80::1]/',
+      'https://[fc00::1]/',
+      'https://[2001:db8::1]/',
+      'https://[ff02::1]/',
+      'https://[::ffff:127.0.0.1]/',
+      'https://[::ffff:10.1.2.3]/',
+    ]) {
+      expect(classifyExternalHref(href)).toEqual({ kind: 'blocked' })
+    }
+  })
+
+  it('allows public IPv6 addresses', () => {
+    expect(classifyExternalHref('https://[2606:4700:4700::1111]/')).toEqual({
+      kind: 'external',
+      url: 'https://[2606:4700:4700::1111]/',
+    })
+  })
+
   it('routes markdown links through the typed Tauri command', async () => {
     const invoke = vi.fn().mockResolvedValue(undefined)
     window.__TAURI_INTERNALS__ = { invoke }
@@ -106,6 +139,49 @@ describe('external links', () => {
 
     expect(button).toHaveFocus()
     expect(toast.error).toHaveBeenCalledWith('Lyra can only open public http or https links.')
+  })
+
+  it('keeps native open failures distinct from blocked links', async () => {
+    const invoke = vi.fn().mockRejectedValue(new Error('native opener failed'))
+    window.__TAURI_INTERNALS__ = { invoke }
+
+    render(
+      <>
+        <ExternalLinkInterceptor />
+        <button type="button">Keep focus here</button>
+        <a href="https://example.com/docs">Public link</a>
+      </>,
+    )
+
+    const button = screen.getByRole('button', { name: 'Keep focus here' })
+    button.focus()
+    await userEvent.click(screen.getByRole('link', { name: 'Public link' }))
+
+    expect(invoke).toHaveBeenCalledWith('open_external_url', {
+      url: 'https://example.com/docs',
+    })
+    expect(button).toHaveFocus()
+    expect(toast.error).toHaveBeenCalledWith('That link could not be opened.')
+  })
+
+  it('maps structured native policy denials back to the blocked category', async () => {
+    const invoke = vi.fn().mockRejectedValue({
+      code: 'blocked',
+      message: 'Lyra can only open public http or https links.',
+    })
+    window.__TAURI_INTERNALS__ = { invoke }
+
+    render(
+      <>
+        <ExternalLinkInterceptor />
+        <a href="https://example.com/docs">Revalidated link</a>
+      </>,
+    )
+
+    await userEvent.click(screen.getByRole('link', { name: 'Revalidated link' }))
+
+    expect(toast.error).toHaveBeenCalledWith('Lyra can only open public http or https links.')
+    expect(toast.error).not.toHaveBeenCalledWith('That link could not be opened.')
   })
 
   it('falls back to the browser only in explicit development mode', async () => {

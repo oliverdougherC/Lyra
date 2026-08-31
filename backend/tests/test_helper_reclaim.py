@@ -66,6 +66,42 @@ def test_reclaim_owned_helpers_calls_every_selected_helper_and_continues(
     ]
 
 
+def test_reclaim_owned_helpers_fails_when_owned_helper_remains_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = _FakeHelper()
+    monkeypatch.setattr(helper_reclaim, "_HELPERS", {"reranking": helper})
+
+    states = {
+        ("reranking", 0): "live",
+        ("reranking", 1): "live",
+    }
+    seen: dict[str, int] = {}
+
+    def fake_record_state(service: str) -> str:
+        count = seen.get(service, 0)
+        seen[service] = count + 1
+        return states[(service, count)]
+
+    monkeypatch.setattr(helper_reclaim, "_record_state", fake_record_state)
+
+    payload = helper_reclaim.reclaim_owned_helpers()
+
+    assert helper.calls == 1
+    assert payload == {
+        "status": "error",
+        "services": [
+            {
+                "service": "reranking",
+                "before": "live",
+                "after": "live",
+                "ok": False,
+                "error": "still_live",
+            }
+        ],
+    }
+
+
 def test_main_emits_one_json_line_and_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
     stream = io.StringIO()
     captured: list[list[str] | None] = []
@@ -98,3 +134,28 @@ def test_main_returns_nonzero_when_any_helper_fails(monkeypatch: pytest.MonkeyPa
     )
 
     assert helper_reclaim.main([]) == 1
+
+
+def test_main_reports_live_helper_as_failed_json_and_nonzero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = _FakeHelper()
+    stream = io.StringIO()
+    monkeypatch.setattr(helper_reclaim, "_HELPERS", {"reranking": helper})
+    monkeypatch.setattr(helper_reclaim, "_record_state", lambda _service: "live")
+
+    exit_code = helper_reclaim.main(["--service", "reranking"], stream=stream)
+
+    assert exit_code == 1
+    assert json.loads(stream.getvalue()) == {
+        "status": "error",
+        "services": [
+            {
+                "service": "reranking",
+                "before": "live",
+                "after": "live",
+                "ok": False,
+                "error": "still_live",
+            }
+        ],
+    }

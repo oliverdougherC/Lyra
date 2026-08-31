@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -22,6 +22,7 @@ const MAX_READY_LINE_BYTES: usize = 512;
 const MAX_HTTP_STATUS_LINE_BYTES: usize = 1024;
 const READY_TIMEOUT: Duration = Duration::from_secs(20);
 const SHUTDOWN_GRACE_TIMEOUT: Duration = Duration::from_secs(8);
+const TERMINAL_FAILURE_DIAGNOSTIC_WAIT: Duration = Duration::from_millis(400);
 const MAX_STDERR_TAIL_BYTES: usize = 2048;
 const MAX_DIAGNOSTIC_CHARS: usize = 240;
 const STARTUP_LOG_NAME: &str = "desktop-startup.log";
@@ -55,12 +56,15 @@ struct ImportSelectionRecord<'a> {
 #[serde(rename_all = "camelCase")]
 struct CommandError {
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
 }
 
 impl From<LaunchError> for CommandError {
     fn from(value: LaunchError) -> Self {
         Self {
             message: value.to_string(),
+            code: None,
         }
     }
 }
@@ -69,6 +73,7 @@ impl From<external_navigation::ExternalNavigationError> for CommandError {
     fn from(value: external_navigation::ExternalNavigationError) -> Self {
         Self {
             message: value.to_string(),
+            code: Some(value.code()),
         }
     }
 }
@@ -115,8 +120,14 @@ struct ManagedBackend {
 
 #[derive(Debug)]
 enum LaunchError {
-    Io(std::io::Error),
-    Json(serde_json::Error),
+    Io {
+        source: std::io::Error,
+        diagnostics: Option<String>,
+    },
+    Json {
+        source: serde_json::Error,
+        diagnostics: Option<String>,
+    },
     MissingSidecar {
         expected: Vec<String>,
     },
@@ -127,6 +138,9 @@ enum LaunchError {
         reason: String,
         diagnostics: Option<String>,
     },
+    HelperReclaim {
+        diagnostics: Option<String>,
+    },
     Import(&'static str),
     Poisoned,
 }
@@ -134,8 +148,22 @@ enum LaunchError {
 impl fmt::Display for LaunchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Io(err) => write!(f, "desktop shell I/O failed: {err}"),
-            Self::Json(err) => write!(f, "desktop shell JSON failed: {err}"),
+            Self::Io {
+                source,
+                diagnostics,
+            } => write_diagnostic_suffix(
+                f,
+                &format!("desktop shell I/O failed: {source}"),
+                diagnostics.as_deref(),
+            ),
+            Self::Json {
+                source,
+                diagnostics,
+            } => write_diagnostic_suffix(
+                f,
+                &format!("desktop shell JSON failed: {source}"),
+                diagnostics.as_deref(),
+            ),
             Self::MissingSidecar { expected } => write!(
                 f,
                 "lyra-backend sidecar is not staged yet; expected one of {}",
@@ -152,6 +180,11 @@ impl fmt::Display for LaunchError {
             } => write_diagnostic_suffix(
                 f,
                 &format!("lyra-backend reported invalid readiness: {reason}"),
+                diagnostics.as_deref(),
+            ),
+            Self::HelperReclaim { diagnostics } => write_diagnostic_suffix(
+                f,
+                "owned helper reclamation invariant failed",
                 diagnostics.as_deref(),
             ),
             Self::Import(message) => write!(f, "desktop import failed: {message}"),
@@ -172,6 +205,14 @@ impl LaunchError {
 
     fn with_diagnostics(self, diagnostics: Option<String>) -> Self {
         match self {
+            Self::Io { source, .. } => Self::Io {
+                source,
+                diagnostics,
+            },
+            Self::Json { source, .. } => Self::Json {
+                source,
+                diagnostics,
+            },
             Self::ReadinessTimeout { .. } => Self::ReadinessTimeout { diagnostics },
             Self::InvalidReadiness { reason, .. } => Self::InvalidReadiness {
                 reason,
@@ -184,13 +225,19 @@ impl LaunchError {
 
 impl From<std::io::Error> for LaunchError {
     fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
+        Self::Io {
+            source: value,
+            diagnostics: None,
+        }
     }
 }
 
 impl From<serde_json::Error> for LaunchError {
     fn from(value: serde_json::Error) -> Self {
-        Self::Json(value)
+        Self::Json {
+            source: value,
+            diagnostics: None,
+        }
     }
 }
 
@@ -220,7 +267,7 @@ impl AppState {
                     return Ok(existing.bootstrap.clone());
                 }
                 log_event("backend health probe failed or process exited; preparing a restart");
-                stop_backend(existing);
+                stop_backend(existing)?;
                 lifecycle.backend = None;
             }
         }
@@ -228,7 +275,7 @@ impl AppState {
         if force_restart {
             if let Some(existing) = lifecycle.backend.as_mut() {
                 log_event("retry_backend requested; recycling owned backend");
-                stop_backend(existing);
+                stop_backend(existing)?;
             }
             lifecycle.backend = None;
         }
@@ -245,7 +292,9 @@ impl AppState {
         };
         if let Some(existing) = lifecycle.backend.as_mut() {
             log_event("desktop shell is stopping its owned backend");
-            stop_backend(existing);
+            if let Err(error) = stop_backend(existing) {
+                log_event(&format!("terminal backend cleanup failed: {error}"));
+            }
         }
         lifecycle.backend = None;
     }
@@ -255,7 +304,7 @@ impl AppState {
         let sidecar_path = if let Some(existing) = lifecycle.backend.as_mut() {
             let path = existing.sidecar_path.clone();
             log_event("desktop import publication is stopping the owned backend");
-            stop_backend(existing);
+            stop_backend(existing)?;
             path
         } else {
             resolve_sidecar_path(app)?
@@ -394,23 +443,15 @@ fn launch_backend(app: &AppHandle) -> Result<ManagedBackend, LaunchError> {
     let _listener_inheritance = InheritedFdGuard::for_listener(&listener)?;
 
     let mut child = command.spawn()?;
-    let launch_result = (|| {
-        write_bootstrap_request(&mut child, &bootstrap)?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| LaunchError::invalid_readiness("stdout pipe was not available"))?;
-        let stderr = child.stderr.take().ok_or(LaunchError::InvalidReadiness {
-            reason: "stderr pipe was not available".to_string(),
-            diagnostics: None,
-        })?;
-        let ready = await_readiness(stdout, stderr, &bootstrap)?;
-        Ok::<SidecarReady, LaunchError>(ready)
-    })();
-    let ready = match launch_result {
+    let ready = match bootstrap_child(&mut child, &bootstrap) {
         Ok(ready) => ready,
         Err(error) => {
-            stop_child(&mut child, None, Some(&sidecar));
+            if let Err(cleanup_error) = stop_child(&mut child, None, Some(&sidecar)) {
+                log_event(&format!(
+                    "startup cleanup failed after launch error: {cleanup_error}"
+                ));
+                return Err(cleanup_error);
+            }
             return Err(error);
         }
     };
@@ -426,6 +467,26 @@ fn launch_backend(app: &AppHandle) -> Result<ManagedBackend, LaunchError> {
             session_secret,
         },
     })
+}
+
+fn bootstrap_child(
+    child: &mut Child,
+    expected: &SidecarBootstrapRequest,
+) -> Result<SidecarReady, LaunchError> {
+    let stderr = child.stderr.take().ok_or(LaunchError::InvalidReadiness {
+        reason: "stderr pipe was not available".to_string(),
+        diagnostics: None,
+    })?;
+    let diagnostics = StartupDiagnostics::spawn(stderr, expected.session_secret.clone());
+    let result = (|| {
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| LaunchError::invalid_readiness("stdout pipe was not available"))?;
+        write_bootstrap_request(child, expected)?;
+        await_readiness(stdout, &diagnostics, expected)
+    })();
+    result.map_err(|error| diagnostics.finalize_failure(child, error))
 }
 
 fn write_bootstrap_request(
@@ -444,14 +505,11 @@ fn write_bootstrap_request(
 
 fn await_readiness(
     stdout: ChildStdout,
-    stderr: ChildStderr,
+    diagnostics: &StartupDiagnostics,
     expected: &SidecarBootstrapRequest,
 ) -> Result<SidecarReady, LaunchError> {
     let (tx, rx) = mpsc::channel();
-    let stderr_tail = Arc::new(Mutex::new(StderrTail::default()));
-    let stderr_reader = Arc::clone(&stderr_tail);
     let expected_for_thread = expected.clone();
-    let expected_secret = expected.session_secret.clone();
 
     std::thread::spawn(move || {
         let outcome = read_readiness(stdout)
@@ -459,20 +517,72 @@ fn await_readiness(
         let _ = tx.send(outcome);
     });
 
-    std::thread::spawn(move || drain_stderr(stderr, stderr_reader));
-
     match rx.recv_timeout(READY_TIMEOUT) {
         Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            Err(LaunchError::ReadinessTimeout { diagnostics: None }
-                .with_diagnostics(snapshot_diagnostics(&stderr_tail, &expected_secret)))
-        }
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(LaunchError::ReadinessTimeout {
+            diagnostics: diagnostics.snapshot(),
+        }),
         Err(mpsc::RecvTimeoutError::Disconnected) => Err(LaunchError::invalid_readiness(
             "readiness channel closed unexpectedly",
-        )
-        .with_diagnostics(snapshot_diagnostics(&stderr_tail, &expected_secret))),
+        )),
     }
-    .map_err(|error| error.with_diagnostics(snapshot_diagnostics(&stderr_tail, &expected_secret)))
+}
+
+struct StartupDiagnostics {
+    secret: String,
+    tail: Arc<Mutex<StderrTail>>,
+    drained: mpsc::Receiver<()>,
+}
+
+impl StartupDiagnostics {
+    fn spawn<R: Read + Send + 'static>(stderr: R, secret: String) -> Self {
+        let tail = Arc::new(Mutex::new(StderrTail::default()));
+        let stderr_tail = Arc::clone(&tail);
+        let (drained_tx, drained_rx) = mpsc::channel();
+        std::thread::spawn(move || drain_stderr(stderr, stderr_tail, drained_tx));
+        Self {
+            secret,
+            tail,
+            drained: drained_rx,
+        }
+    }
+
+    fn snapshot(&self) -> Option<String> {
+        snapshot_diagnostics(&self.tail, &self.secret)
+    }
+
+    fn finalize_failure(&self, child: &mut Child, error: LaunchError) -> LaunchError {
+        self.wait_for_terminal_signal(child);
+        error.with_diagnostics(self.snapshot())
+    }
+
+    fn wait_for_terminal_signal(&self, child: &mut Child) {
+        let deadline = Instant::now() + TERMINAL_FAILURE_DIAGNOSTIC_WAIT;
+        loop {
+            match self.drained.try_recv() {
+                Ok(()) | Err(mpsc::TryRecvError::Disconnected) => return,
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return;
+                    }
+                    let _ = self.drained.recv_timeout(remaining);
+                    return;
+                }
+                Ok(None) => {}
+                Err(_) => return,
+            }
+
+            if Instant::now() >= deadline {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 
 fn read_readiness<R: Read + Send + 'static>(stdout: R) -> Result<SidecarReady, LaunchError> {
@@ -531,7 +641,7 @@ impl StderrTail {
     }
 }
 
-fn drain_stderr(stderr: ChildStderr, tail: Arc<Mutex<StderrTail>>) {
+fn drain_stderr<R: Read>(stderr: R, tail: Arc<Mutex<StderrTail>>, drained: mpsc::Sender<()>) {
     let mut reader = BufReader::new(stderr);
     let mut buffer = [0_u8; 512];
     loop {
@@ -544,6 +654,7 @@ fn drain_stderr(stderr: ChildStderr, tail: Arc<Mutex<StderrTail>>) {
             }
         }
     }
+    let _ = drained.send(());
 }
 
 fn snapshot_diagnostics(tail: &Arc<Mutex<StderrTail>>, secret: &str) -> Option<String> {
@@ -871,29 +982,27 @@ fn child_is_running(child: &mut Child) -> Result<bool, LaunchError> {
     Ok(child.try_wait()?.is_none())
 }
 
-fn stop_backend(backend: &mut ManagedBackend) {
+fn stop_backend(backend: &mut ManagedBackend) -> Result<(), LaunchError> {
     stop_child(
         &mut backend.child,
         Some(&backend.bootstrap),
         Some(&backend.sidecar_path),
-    );
+    )
 }
 
 fn stop_child(
     child: &mut Child,
     bootstrap: Option<&BootstrapPayload>,
     sidecar_path: Option<&Path>,
-) {
+) -> Result<(), LaunchError> {
     if child.try_wait().ok().flatten().is_some() {
-        reclaim_helpers(sidecar_path);
-        return;
+        return reclaim_helpers(sidecar_path);
     }
     if let Some(bootstrap) = bootstrap {
         if request_graceful_shutdown(bootstrap).is_ok()
             && wait_for_exit(child, SHUTDOWN_GRACE_TIMEOUT)
         {
-            reclaim_helpers(sidecar_path);
-            return;
+            return reclaim_helpers(sidecar_path);
         }
     }
     #[cfg(unix)]
@@ -902,13 +1011,12 @@ fn stop_child(
     }
     {
         if wait_for_exit(child, SHUTDOWN_GRACE_TIMEOUT) {
-            reclaim_helpers(sidecar_path);
-            return;
+            return reclaim_helpers(sidecar_path);
         }
     }
     let _ = child.kill();
     let _ = child.wait();
-    reclaim_helpers(sidecar_path);
+    reclaim_helpers(sidecar_path)
 }
 
 fn wait_for_exit(child: &mut Child, timeout: Duration) -> bool {
@@ -1000,36 +1108,45 @@ fn parse_status_code(status_line: &str) -> Option<u16> {
         .and_then(|segment| segment.parse::<u16>().ok())
 }
 
-fn reclaim_helpers(sidecar_path: Option<&Path>) {
+fn reclaim_helpers(sidecar_path: Option<&Path>) -> Result<(), LaunchError> {
     let Some(sidecar_path) = sidecar_path else {
-        return;
+        return Ok(());
     };
     let mut sidecar_command = Command::new(sidecar_path);
     sidecar_command
         .arg("--reclaim-helpers")
         .env("LYRA_PACKAGED", "1");
-    if run_reclaim_command(&mut sidecar_command, "").is_ok() {
-        return;
-    }
+    let primary_error = match run_reclaim_command(&mut sidecar_command, "") {
+        Ok(()) => return Ok(()),
+        Err(detail) => detail,
+    };
     if !looks_like_dev_sidecar(sidecar_path) {
-        return;
+        return Err(LaunchError::HelperReclaim {
+            diagnostics: Some(primary_error),
+        });
     }
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .map(Path::to_path_buf);
     let Some(repo_root) = repo_root else {
-        return;
+        return Err(LaunchError::HelperReclaim {
+            diagnostics: Some(primary_error),
+        });
     };
     let mut command = Command::new("python3");
     command
         .arg("-m")
         .arg("backend.llm.helper_reclaim")
         .current_dir(repo_root);
-    let _ = run_reclaim_command(&mut command, "");
+    run_reclaim_command(&mut command, "").map_err(|detail| LaunchError::HelperReclaim {
+        diagnostics: Some(detail),
+    })
 }
 
-fn run_reclaim_command(command: &mut Command, secret: &str) -> Result<(), ()> {
-    let output = command.output().map_err(|_| ())?;
+fn run_reclaim_command(command: &mut Command, secret: &str) -> Result<(), String> {
+    let output = command
+        .output()
+        .map_err(|_| "helper reclaim command could not be started".to_string())?;
     if output.status.success() {
         return Ok(());
     }
@@ -1044,8 +1161,7 @@ fn run_reclaim_command(command: &mut Command, secret: &str) -> Result<(), ()> {
         secret,
     )
     .unwrap_or_else(|| "helper reclaim failed".to_string());
-    log_event(&format!("helper reclaim failed: {detail}"));
-    Err(())
+    Err(detail)
 }
 
 fn looks_like_dev_sidecar(sidecar_path: &Path) -> bool {
@@ -1183,12 +1299,12 @@ impl InheritedFdGuard {
         let fd = listener.as_raw_fd();
         let previous_flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
         if previous_flags < 0 {
-            return Err(LaunchError::Io(std::io::Error::last_os_error()));
+            return Err(std::io::Error::last_os_error().into());
         }
         let clear_close_on_exec = previous_flags & !libc::FD_CLOEXEC;
         let set_result = unsafe { libc::fcntl(fd, libc::F_SETFD, clear_close_on_exec) };
         if set_result < 0 {
-            return Err(LaunchError::Io(std::io::Error::last_os_error()));
+            return Err(std::io::Error::last_os_error().into());
         }
         Ok(Self { fd, previous_flags })
     }
@@ -1206,6 +1322,66 @@ impl Drop for InheritedFdGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const STARTUP_FIXTURE: &str = r#"
+import json
+import os
+import sys
+import time
+
+mode = os.environ["LYRA_FIXTURE_MODE"]
+delay = int(os.environ.get("LYRA_FIXTURE_DELAY_MS", "0")) / 1000.0
+stderr_text = os.environ.get("LYRA_FIXTURE_STDERR", "")
+
+def pause():
+    if delay > 0:
+        time.sleep(delay)
+
+if mode == "broken_pipe":
+    os.close(0)
+    if stderr_text:
+        sys.stderr.write(stderr_text)
+        sys.stderr.flush()
+    pause()
+    raise SystemExit(1)
+
+if mode == "stdout_close_then_stderr":
+    os.close(1)
+    sys.stdin.readline()
+    pause()
+    if stderr_text:
+        sys.stderr.write(stderr_text)
+        sys.stderr.flush()
+    raise SystemExit(1)
+
+if mode == "stderr_held_open":
+    os.close(1)
+    sys.stdin.readline()
+    if stderr_text:
+        sys.stderr.write(stderr_text)
+        sys.stderr.flush()
+    time.sleep(2)
+    raise SystemExit(1)
+
+if mode == "ready":
+    sys.stdin.readline()
+    readiness = {
+        "status": "ready",
+        "protocol_version": 1,
+        "api_base": "http://" + os.environ["LYRA_FIXTURE_LISTENER"],
+        "listener_addr": os.environ["LYRA_FIXTURE_LISTENER"],
+        "address_family": "ipv4",
+        "inherited_socket": True,
+        "session_header_name": os.environ["LYRA_FIXTURE_HEADER"],
+        "session_secret": os.environ["LYRA_FIXTURE_SECRET"],
+    }
+    sys.stdout.write(json.dumps(readiness) + "\n")
+    sys.stdout.flush()
+    pause()
+    raise SystemExit(0)
+
+raise SystemExit("unsupported startup fixture mode")
+"#;
 
     fn bootstrap_for_port(port: u16) -> BootstrapPayload {
         BootstrapPayload {
@@ -1247,6 +1423,42 @@ mod tests {
             session_header_name: SESSION_HEADER_NAME,
             session_secret: "a".repeat(64),
         }
+    }
+
+    fn python_command() -> &'static str {
+        ["python3", "python"]
+            .into_iter()
+            .find(|candidate| {
+                Command::new(candidate)
+                    .arg("--version")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok()
+            })
+            .expect("python is required for startup fixture tests")
+    }
+
+    fn spawn_startup_fixture(
+        bootstrap: &SidecarBootstrapRequest,
+        mode: &str,
+        stderr_text: &str,
+        delay_ms: u64,
+    ) -> Child {
+        let mut command = Command::new(python_command());
+        command
+            .arg("-c")
+            .arg(STARTUP_FIXTURE)
+            .env("LYRA_FIXTURE_MODE", mode)
+            .env("LYRA_FIXTURE_STDERR", stderr_text)
+            .env("LYRA_FIXTURE_DELAY_MS", delay_ms.to_string())
+            .env("LYRA_FIXTURE_LISTENER", &bootstrap.listener_addr)
+            .env("LYRA_FIXTURE_HEADER", bootstrap.session_header_name)
+            .env("LYRA_FIXTURE_SECRET", &bootstrap.session_secret)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        command.spawn().unwrap()
     }
 
     #[test]
@@ -1450,5 +1662,133 @@ mod tests {
 
         assert!(filename.starts_with("lyra-backend-"));
         assert!(!filename.contains(' '));
+    }
+
+    #[test]
+    fn write_bootstrap_request_attaches_traceback_to_broken_pipe_failures() {
+        let bootstrap = expected_bootstrap();
+        let mut child = spawn_startup_fixture(
+            &bootstrap,
+            "broken_pipe",
+            "Traceback: startup exploded before stdin\n",
+            125,
+        );
+        let stderr = child.stderr.take().unwrap();
+        let diagnostics = StartupDiagnostics::spawn(stderr, bootstrap.session_secret.clone());
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < deadline {
+            if diagnostics
+                .snapshot()
+                .is_some_and(|detail| detail.contains("Traceback: startup exploded before stdin"))
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let write_error = write_bootstrap_request(&mut child, &bootstrap).unwrap_err();
+        let error = diagnostics.finalize_failure(&mut child, write_error);
+        let _ = child.wait();
+        let message = error.to_string();
+
+        assert!(message.to_ascii_lowercase().contains("broken pipe"));
+        assert!(message.contains("Traceback: startup exploded before stdin"));
+    }
+
+    #[test]
+    fn bootstrap_child_waits_for_delayed_stderr_after_stdout_closes() {
+        let bootstrap = expected_bootstrap();
+        let mut child = spawn_startup_fixture(
+            &bootstrap,
+            "stdout_close_then_stderr",
+            "late stderr after stdout closed\n",
+            125,
+        );
+
+        let error = bootstrap_child(&mut child, &bootstrap).unwrap_err();
+        let _ = child.wait();
+        let message = error.to_string();
+
+        assert!(message.contains("stdout closed before a readiness line arrived"));
+        assert!(message.contains("late stderr after stdout closed"));
+    }
+
+    #[test]
+    fn bootstrap_child_bounds_wait_for_a_child_that_holds_stderr_open() {
+        let bootstrap = expected_bootstrap();
+        let mut child =
+            spawn_startup_fixture(&bootstrap, "stderr_held_open", "partial traceback\n", 0);
+
+        let started = Instant::now();
+        let error = bootstrap_child(&mut child, &bootstrap).unwrap_err();
+        let elapsed = started.elapsed();
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(elapsed < Duration::from_secs(2));
+        assert!(error.to_string().contains("partial traceback"));
+    }
+
+    #[test]
+    fn bootstrap_child_redacts_secrets_in_child_stderr() {
+        let bootstrap = expected_bootstrap();
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/private".to_string());
+        let stderr_text = format!(
+            "tail {home}/Library/Logs {} safe-context\n",
+            bootstrap.session_secret
+        );
+        let mut child =
+            spawn_startup_fixture(&bootstrap, "stdout_close_then_stderr", &stderr_text, 50);
+
+        let error = bootstrap_child(&mut child, &bootstrap).unwrap_err();
+        let _ = child.wait();
+        let message = error.to_string();
+
+        assert!(message.contains("<secret>"));
+        assert!(!message.contains(&bootstrap.session_secret));
+        if !home.is_empty() {
+            assert!(message.contains("<home>"));
+            assert!(!message.contains(&home));
+        }
+    }
+
+    #[test]
+    fn bootstrap_child_supports_retry_after_a_failed_attempt() {
+        let bootstrap = expected_bootstrap();
+        let mut failed = spawn_startup_fixture(
+            &bootstrap,
+            "stdout_close_then_stderr",
+            "first failure\n",
+            50,
+        );
+
+        let first_error = bootstrap_child(&mut failed, &bootstrap).unwrap_err();
+        let _ = failed.wait();
+        assert!(first_error.to_string().contains("first failure"));
+
+        let mut retried = spawn_startup_fixture(&bootstrap, "ready", "", 0);
+        let ready = bootstrap_child(&mut retried, &bootstrap).unwrap();
+        let _ = retried.wait();
+
+        assert_eq!(ready.listener_addr, bootstrap.listener_addr);
+        assert_eq!(ready.session_secret, bootstrap.session_secret);
+    }
+
+    #[test]
+    fn failed_helper_reclaim_is_a_terminal_invariant() {
+        let mut command = Command::new(python_command());
+        command.arg("-c").arg(
+            "import sys; print('{\"status\":\"error\",\"services\":[{\"service\":\"reranking\",\"after\":\"live\",\"ok\":false}]}'); sys.exit(1)",
+        );
+
+        let detail = run_reclaim_command(&mut command, "").unwrap_err();
+        let error = LaunchError::HelperReclaim {
+            diagnostics: Some(detail),
+        };
+        let message = error.to_string();
+
+        assert!(message.contains("owned helper reclamation invariant failed"));
+        assert!(message.contains("\"after\":\"live\""));
     }
 }

@@ -131,8 +131,18 @@ async function mountExternalLinkFixture(page: Page) {
       <button type="button" id="focus-anchor">Keep focus here</button>
       <div class="assistant-content">
         <a href="https://example.com/docs">Model markdown link</a>
+        <a href="//example.com/protocol-relative">Protocol-relative link</a>
+        <a href="HTTPS://EXAMPLE.COM/MixedCase">Mixed-case scheme link</a>
         <a href="https://example.com/paper" target="_blank" rel="noreferrer">Target blank link</a>
         <a href="http://127.0.0.1:8000/admin">Unsafe loopback link</a>
+        <a href="https://[::1]/">IPv6 loopback link</a>
+        <a href="https://[fe80::1]/">IPv6 link-local link</a>
+        <a href="https://[fd00::1]/">IPv6 ULA link</a>
+        <a href="https://[2001:db8::1]/">IPv6 documentation link</a>
+        <a href="https://[ff02::1]/">IPv6 multicast link</a>
+        <a href="https://[::ffff:127.0.0.1]/">Mapped loopback link</a>
+        <a href="https://[::ffff:10.1.2.3]/">Mapped private link</a>
+        <a href="https://[2606:4700:4700::1111]/">Public IPv6 link</a>
       </div>
     `
     document.body.appendChild(root)
@@ -172,6 +182,30 @@ test.describe('external link interception', () => {
     await expect
       .poll(async () => await readOpenCalls(page))
       .toEqual([{ command: 'open_external_url', args: { url: 'https://example.com/docs' } }])
+    expect(api.unexpectedRequests).toEqual([])
+  })
+
+  test('protocol-relative and mixed-case public links normalize through the typed opener command', async ({
+    page,
+  }) => {
+    const api = await installApiMocks(page)
+    await installTauriInvokeMock(page)
+    await page.goto('/#/')
+    await page.waitForLoadState('networkidle')
+
+    await mountExternalLinkFixture(page)
+
+    const before = page.url()
+    await page.getByRole('link', { name: 'Protocol-relative link' }).click()
+    await page.getByRole('link', { name: 'Mixed-case scheme link' }).click()
+
+    await expect(page).toHaveURL(before)
+    await expect
+      .poll(async () => await readOpenCalls(page))
+      .toEqual([
+        { command: 'open_external_url', args: { url: 'http://example.com/protocol-relative' } },
+        { command: 'open_external_url', args: { url: 'https://example.com/MixedCase' } },
+      ])
     expect(api.unexpectedRequests).toEqual([])
   })
 
@@ -215,6 +249,72 @@ test.describe('external link interception', () => {
     await expect(page.getByText('Lyra can only open public http or https links.')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Keep focus here' })).toBeFocused()
     await expect.poll(async () => await readOpenCalls(page)).toEqual([])
+    expect(api.unexpectedRequests).toEqual([])
+  })
+
+  test('IPv6 policy matches the native boundary and preserves route and focus', async ({
+    page,
+  }) => {
+    const api = await installApiMocks(page)
+    await installTauriInvokeMock(page)
+    await page.goto('/#/')
+    await page.waitForLoadState('networkidle')
+    await mountExternalLinkFixture(page)
+
+    const before = page.url()
+    const focusAnchor = page.getByRole('button', { name: 'Keep focus here' })
+    for (const name of [
+      'IPv6 loopback link',
+      'IPv6 link-local link',
+      'IPv6 ULA link',
+      'IPv6 documentation link',
+      'IPv6 multicast link',
+      'Mapped loopback link',
+      'Mapped private link',
+    ]) {
+      await focusAnchor.focus()
+      await page.getByRole('link', { name }).click()
+      await expect(page).toHaveURL(before)
+      await expect(focusAnchor).toBeFocused()
+    }
+
+    await expect.poll(async () => await readOpenCalls(page)).toEqual([])
+    await page.getByRole('link', { name: 'Public IPv6 link' }).click()
+    await expect(page).toHaveURL(before)
+    await expect
+      .poll(async () => await readOpenCalls(page))
+      .toEqual([
+        {
+          command: 'open_external_url',
+          args: { url: 'https://[2606:4700:4700::1111]/' },
+        },
+      ])
+    expect(api.unexpectedRequests).toEqual([])
+  })
+
+  test('native open failures use the open-failed category and preserve route and focus', async ({
+    page,
+  }) => {
+    const api = await installApiMocks(page)
+    await installTauriInvokeMock(page)
+    await page.goto('/#/')
+    await page.waitForLoadState('networkidle')
+    await mountExternalLinkFixture(page)
+    await page.evaluate(() => {
+      window.__lyraRejectExternalOpen__ = true
+    })
+
+    const before = page.url()
+    const focusAnchor = page.getByRole('button', { name: 'Keep focus here' })
+    await focusAnchor.focus()
+    await page.getByRole('link', { name: 'Model markdown link' }).click()
+
+    await expect(page).toHaveURL(before)
+    await expect(page.getByText('That link could not be opened.')).toBeVisible()
+    await expect(focusAnchor).toBeFocused()
+    await expect
+      .poll(async () => await readOpenCalls(page))
+      .toEqual([{ command: 'open_external_url', args: { url: 'https://example.com/docs' } }])
     expect(api.unexpectedRequests).toEqual([])
   })
 })

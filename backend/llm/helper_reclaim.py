@@ -43,12 +43,16 @@ def reclaim_owned_helpers(*, services: Sequence[str] | None = None) -> dict[str,
             before = _record_state(service)
             helper.stop_for_app_quit()
             after = _record_state(service)
+            ok = after != "live"
+            if not ok:
+                failures += 1
             results.append(
                 {
                     "service": service,
                     "before": before,
                     "after": after,
-                    "ok": True,
+                    "ok": ok,
+                    **({"error": "still_live"} if not ok else {}),
                 }
             )
         except ConfigurationError as exc:
