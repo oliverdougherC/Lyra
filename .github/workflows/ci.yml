@@ -252,6 +252,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare Tauri compile-time frontend fixture
+        run: |
+          mkdir -p frontend/dist
+          cp frontend/index.html frontend/dist/index.html
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:

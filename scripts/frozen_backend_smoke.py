@@ -15,6 +15,17 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
+_MAX_FAILURE_DETAIL_CHARS = 2_000
+
+
+def _safe_failure_detail(text: str, *, profile: Path, secret: str) -> str:
+    """Bound and redact contributor-only child diagnostics before CI prints them."""
+    detail = text.replace(secret, "<secret>").replace(str(profile), "<profile>")
+    home = str(Path.home())
+    if home:
+        detail = detail.replace(home, "<home>")
+    return detail[-_MAX_FAILURE_DETAIL_CHARS:]
+
 
 def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, object]:
     if not executable.is_file():
@@ -60,7 +71,20 @@ def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, o
         ready, _, _ = select.select([process.stdout], [], [], timeout_seconds)
         if not ready:
             raise TimeoutError("frozen backend readiness timed out")
-        readiness = json.loads(process.stdout.readline())
+        readiness_line = process.stdout.readline()
+        if not readiness_line:
+            returncode = process.poll()
+            child_error = process.stderr.read() if returncode is not None and process.stderr else ""
+            detail = _safe_failure_detail(child_error, profile=profile, secret=secret)
+            reason = detail or "no stderr"
+            raise RuntimeError(
+                f"frozen backend exited before readiness (code={returncode}): {reason}"
+            )
+        try:
+            readiness = json.loads(readiness_line)
+        except json.JSONDecodeError as exc:
+            detail = _safe_failure_detail(readiness_line, profile=profile, secret=secret)
+            raise RuntimeError(f"frozen backend returned malformed readiness: {detail}") from exc
         if readiness.get("status") != "ready":
             raise RuntimeError("frozen backend returned invalid readiness")
         connection = http.client.HTTPConnection(
