@@ -7,7 +7,7 @@ on:
   pull_request:
 
 env:
-  NEXT_TELEMETRY_DISABLED: '1'
+  CI: '1'
 
 jobs:
   backend:
@@ -28,13 +28,44 @@ jobs:
         run: uv sync --extra dev
 
       - name: Check backend formatting
-        run: uv run --extra dev ruff format --check backend scripts
+        run: uv run --extra dev ruff format --check backend scripts packaging
 
       - name: Lint backend
-        run: uv run --extra dev ruff check backend scripts
+        run: uv run --extra dev ruff check backend scripts packaging
 
       - name: Run backend tests
         run: uv run --extra dev pytest
+
+  backend-targeted:
+    name: Backend targeted regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Install backend dependencies
+        run: uv sync --extra dev
+
+      - name: Run targeted backend regression tests
+        run: >
+          uv run --extra dev pytest
+          backend/tests/test_acceptance_lifecycle.py
+          backend/tests/test_api_health.py
+          backend/tests/test_api_settings.py
+          backend/tests/test_exa.py
+          backend/tests/test_llama_server_lifecycle.py
+          backend/tests/test_desktop_bootstrap.py
+          backend/tests/test_desktop_migration.py
+          backend/tests/test_desktop_paths.py
+          backend/tests/test_desktop_resource_report.py
+          backend/tests/test_packaged_soak_harness.py
+          backend/tests/test_active_reference_absence.py
+          backend/tests/test_packaged_python_smoke.py
 
   frontend:
     runs-on: ubuntu-latest
@@ -68,6 +99,7 @@ jobs:
 
       - name: Run frontend unit tests
         run: pnpm test
+
       - name: Verify design contrast contract
         run: python ../scripts/check_contrast.py
 
@@ -83,10 +115,51 @@ jobs:
       - name: Run frontend smoke tests
         run: pnpm test:e2e
 
+  acceptance:
+    name: Full-stack acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Run real-stack acceptance tests
+        run: ./scripts/run-acceptance.sh
+
+      - name: Upload acceptance report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-report
+          path: acceptance-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Upload acceptance traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-traces
+          path: frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
   python-security:
-    # Locked Python production-dependency vulnerability gate (PLA-297). Audits the exact
-    # pinned production graph from uv.lock with the same command developers run locally:
-    #   uv run --extra security python scripts/python_security_gate.py
     name: Python production dependency audit
     runs-on: ubuntu-latest
     steps:
@@ -112,80 +185,183 @@ jobs:
           path: python-audit-evidence.json
           if-no-files-found: warn
 
-  # Real-stack acceptance: production-shaped browser tests against the real FastAPI
-  # backend, SQLite, background workers, and a deterministic tutor fixture (PLA-292).
-  acceptance:
-    name: Full-stack acceptance
+  packaged-python-smoke:
+    name: Frozen Python build and smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
-      # ── Python / backend ───────────────────────────────────────────────
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - uses: astral-sh/setup-uv@v6
 
-      - name: Install backend dependencies
-        run: uv sync --extra dev
+      - name: Install packaging dependencies
+        run: uv sync --extra packaging
 
-      # ── Node / frontend ────────────────────────────────────────────────
-      - uses: pnpm/action-setup@v4
+      - name: Build frozen backend
+        run: uv run --extra packaging pyinstaller --clean --noconfirm packaging/lyra_backend.spec
+
+      - name: Verify packaged resources and authenticated startup
+        run: |
+          uv run python scripts/packaged_python_smoke.py
+          uv run python scripts/frozen_backend_smoke.py dist/lyra-backend/lyra-backend
+
+  resource-report:
+    name: Component resource report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Generate deterministic component inventory
+        run: >
+          python scripts/desktop_resource_report.py
+          --root backend=backend
+          --root frontend=frontend
+          --root scripts=scripts
+          --output component-resource-report.json
+
+      - name: Upload component resource report
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-resource-report
+          path: component-resource-report.json
+          if-no-files-found: error
+
+  active-reference-absence:
+    name: Active reference absence scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Scan active docs and workflows
+        run: python scripts/check_active_references.py
+
+  rust-desktop:
+    name: Rust desktop checks
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+
+      - name: Lint Rust workspace
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --all-targets
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit Rust dependencies
+        working-directory: src-tauri
+        run: cargo audit
+
+  desktop-macos-artifact:
+    name: Desktop macOS artifact
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
         with:
           version: 11.17.0
 
-      - uses: actions/setup-node@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install backend packaging dependencies
+        run: uv sync --extra packaging
+
       - name: Install frontend dependencies
         working-directory: frontend
         run: pnpm install --frozen-lockfile
 
-      - name: Build production frontend
+      - name: Build and stage frozen backend
+        run: |
+          uv run --extra packaging pyinstaller --clean --noconfirm packaging/lyra_backend.spec
+          uv run python scripts/frozen_backend_smoke.py dist/lyra-backend/lyra-backend
+          uv run python packaging/stage_sidecar.py
+
+      - name: Build frontend
         working-directory: frontend
         run: pnpm build
 
-      - name: Install Playwright Chromium
+      - name: Build unsigned desktop app
         working-directory: frontend
-        run: pnpm exec playwright install --with-deps chromium
+        run: pnpm tauri:build --bundles app --no-sign --ci
 
-      # ── Run acceptance tests ───────────────────────────────────────────
-      - name: Run real-stack acceptance tests
-        working-directory: frontend
-        run: pnpm test:acceptance
+      - name: Build reviewable unsigned DMG
+        run: >
+          ./scripts/build_dmg.sh
+          src-tauri/target/release/bundle/macos/Lyra.app
+          src-tauri/target/release/bundle/dmg/Lyra_0.1.0_aarch64.dmg
 
-      # ── Retain diagnostics on failure ──────────────────────────────────
-      - name: Upload acceptance report
-        if: failure()
+      - name: Generate desktop resource report
+        run: |
+          bundle_root="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)"
+          if [ -z "${bundle_root}" ]; then
+            echo "::error::No .app bundle was produced."
+            exit 1
+          fi
+          python scripts/desktop_resource_report.py --root app="${bundle_root}" --output desktop-resource-report.json
+
+      - name: Upload desktop artifact evidence
         uses: actions/upload-artifact@v4
         with:
-          name: acceptance-report
-          path: acceptance-report/
-          retention-days: 7
-          if-no-files-found: ignore
+          name: lyra-desktop-macos
+          path: |
+            src-tauri/target/release/bundle/macos/*.app
+            src-tauri/target/release/bundle/dmg/*.dmg
+            desktop-resource-report.json
+          if-no-files-found: error
 
-      - name: Upload acceptance traces
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: acceptance-traces
-          path: frontend/test-results/
-          retention-days: 7
-          if-no-files-found: ignore
-
-  # Single, stable aggregate gate. This is the ONLY status check required to merge into
-  # main (see docs/security-and-ci-gates.md). It depends on every real lane and fails
-  # unless all of them succeeded, so the internal jobs above can be split or renamed
-  # without silently dropping protection: the required check context stays "CI Gate".
   ci-gate:
     name: CI Gate
     if: ${{ always() }}
-    needs: [backend, frontend, python-security, acceptance]
+    needs:
+      - backend
+      - backend-targeted
+      - frontend
+      - acceptance
+      - python-security
+      - packaged-python-smoke
+      - resource-report
+      - active-reference-absence
+      - rust-desktop
+      - desktop-macos-artifact
     runs-on: ubuntu-latest
     steps:
       - name: Verify all required lanes succeeded
@@ -202,7 +378,7 @@ jobs:
             fi
           done
           if [ "${failed}" -ne 0 ]; then
-            echo "CI Gate: FAIL — not every required lane passed."
+            echo "CI Gate: FAIL - not every required lane passed."
             exit 1
           fi
-          echo "CI Gate: PASS — all required lanes succeeded (backend, frontend, python-security, acceptance)."
+          echo "CI Gate: PASS - all required lanes succeeded."
