@@ -1,0 +1,87 @@
+@font-face {
+  font-family: 'EB Garamond';
+  src: url('/fonts/EBGaramond-500.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+.lyra-startup {
+  box-sizing: border-box;
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 32px;
+  background: #e9e4d8;
+  color: #28231a;
+  font-family: 'EB Garamond', Georgia, serif;
+}
+
+.dark .lyra-startup {
+  background: #201e19;
+  color: #eee9de;
+}
+
+.lyra-startup__card {
+  width: min(360px, 100%);
+  text-align: center;
+}
+
+.lyra-startup__wordmark {
+  margin: 0 0 20px;
+  color: #7f3f2a;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.28em;
+}
+
+.dark .lyra-startup__wordmark {
+  color: #d58a6d;
+}
+
+.lyra-startup h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.15;
+}
+
+.lyra-startup__card > p:last-of-type {
+  margin: 12px 0 24px;
+  color: #676056;
+  font-size: 16px;
+}
+
+.dark .lyra-startup__card > p:last-of-type {
+  color: #b9b1a4;
+}
+
+.lyra-startup__progress {
+  height: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(127 63 42 / 18%);
+}
+
+.lyra-startup__progress span {
+  display: block;
+  width: 42%;
+  height: 100%;
+  margin: 0 auto;
+  border-radius: inherit;
+  background: #7f3f2a;
+}
+
+.dark .lyra-startup__progress {
+  background: rgb(213 138 109 / 18%);
+}
+
+.dark .lyra-startup__progress span {
+  background: #d58a6d;
+}

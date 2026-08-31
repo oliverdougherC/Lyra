@@ -4,26 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="stylesheet" href="/startup.css" />
     <title>Lyra</title>
     <script src="/theme-init.js"></script>
   </head>
   <body class="flex h-full flex-col overflow-hidden">
     <div id="root" class="contents">
-      <main
-        aria-live="polite"
-        aria-busy="true"
-        style="
-          display: grid;
-          min-height: 100vh;
-          place-items: center;
-          background: #e9e4d8;
-          color: #28231a;
-          font:
-            500 16px Georgia,
-            serif;
-        "
-      >
-        Starting Lyra…
+      <main class="lyra-startup" aria-live="polite" aria-busy="true">
+        <section class="lyra-startup__card" aria-label="Starting Lyra">
+          <p class="lyra-startup__wordmark">LYRA</p>
+          <h1>Opening your study space</h1>
+          <p>Starting the private local service…</p>
+          <div class="lyra-startup__progress" aria-hidden="true"><span></span></div>
+        </section>
       </main>
     </div>
     <script type="module" src="/src/main.tsx"></script>

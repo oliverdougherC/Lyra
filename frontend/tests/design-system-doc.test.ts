@@ -26,6 +26,8 @@ import { APP_FONT_FAMILIES } from '@/lib/fonts'
 
 const ROOT = join(__dirname, '..')
 const SPEC = join(ROOT, '..', 'docs', 'design-system.md')
+const HTML_SHELL = join(ROOT, 'index.html')
+const STARTUP_STYLES = join(ROOT, 'public', 'startup.css')
 
 // Faces the Ex Libris migration retired. If one of these ever reappears here it was
 // reloaded into the app: a new system, and this list is where that gets acknowledged.
@@ -42,5 +44,22 @@ describe('design-system.md tracks the shipped typography', () => {
   it('does not describe retired faces as current', () => {
     const stale = RETIRED_FACES.filter((face) => spec.includes(face))
     expect(stale, `retired faces named in the spec: ${stale.join(', ')}`).toEqual([])
+  })
+})
+
+describe('packaged startup shell', () => {
+  const html = readFileSync(HTML_SHELL, 'utf8')
+  const startupStyles = readFileSync(STARTUP_STYLES, 'utf8')
+
+  it('renders an accessible loading state before React mounts', () => {
+    expect(html).toContain('class="lyra-startup"')
+    expect(html).toContain('aria-busy="true"')
+    expect(html).toContain('Opening your study space')
+  })
+
+  it('keeps startup presentation in a CSP-compatible local stylesheet', () => {
+    expect(html).toContain('href="/startup.css"')
+    expect(html).not.toMatch(/\sstyle=/)
+    expect(startupStyles).toContain('/fonts/EBGaramond-500.ttf')
   })
 })
