@@ -807,18 +807,24 @@ def _profile_preserve_bytes() -> int:
 
 
 def _copy_profile_into_stage() -> None:
+    """Mirror the current installation's preserved profile into the stage.
+
+    The staged copy must match the live profile exactly, so preserved files
+    that no longer exist in the live installation are removed from the stage.
+    """
     for directory in _PROFILE_PRESERVE_DIRECTORIES:
         source = settings.data_dir / directory
-        if not source.exists():
-            continue
         destination = _stage_data_path() / directory
         if destination.exists():
             shutil.rmtree(destination)
-        copy_tree_without_links(source, destination)
+        if source.exists():
+            copy_tree_without_links(source, destination)
     for filename in _PROFILE_PRESERVE_FILES:
         source = settings.data_dir / filename
+        destination = _stage_data_path() / filename
+        destination.unlink(missing_ok=True)
         if source.exists():
-            copy_regular_file(source, _stage_data_path() / filename)
+            copy_regular_file(source, destination)
 
 
 def _merge_destination_profile(stage_db: Path) -> None:
@@ -1530,6 +1536,33 @@ def _stage_ready_for_publish() -> bool:
     return _stage_db_path().exists()
 
 
+def _staged_total_bytes(manifest: dict[str, object]) -> int:
+    entry_bytes = sum(
+        int(entry.get("size") or 0) for entry in _manifest_entries_by_relative(manifest).values()
+    )
+    return entry_bytes + _stage_db_path().stat().st_size + _profile_preserve_bytes()
+
+
+def _refresh_current_profile_into_stage(manifest: dict[str, object]) -> dict[str, object]:
+    """Carry the live installation's current profile into the verified stage.
+
+    The install stays usable between staging and publication, so settings, API
+    keys, and downloaded models changed after staging must win over the frozen
+    staged copies. Reads only the live installation and the stage; the
+    originally selected import source is never reopened.
+    """
+    _copy_profile_into_stage()
+    _merge_destination_profile(_stage_db_path())
+    _truncate_sqlite_wal(_stage_db_path())
+    verify_sqlite(_stage_db_path())
+    manifest = dict(manifest)
+    manifest["staged_database"] = _staged_database_record(_stage_db_path())
+    manifest["total_bytes"] = _staged_total_bytes(manifest)
+    manifest["profile_refreshed_at"] = _utc_now()
+    _write_stage_manifest(manifest)
+    return manifest
+
+
 def _initialize_publish_recovery() -> dict[str, object]:
     record = {
         "version": PUBLISH_RECOVERY_VERSION,
@@ -1640,6 +1673,8 @@ def publish_staged_import(*, stream: TextIO | None = None) -> int:
                 if manifest is None:
                     raise RuntimeError("The staged desktop import manifest is missing.")
                 _assert_destination_ready()
+                _verify_staged_import(_stage_data_path(), _stage_db_path())
+                _refresh_current_profile_into_stage(manifest)
                 _verify_staged_import(_stage_data_path(), _stage_db_path())
                 _initialize_publish_recovery()
                 payload = _complete_publish_from_record()

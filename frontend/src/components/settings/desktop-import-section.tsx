@@ -184,8 +184,9 @@ export function DesktopImportSection() {
           ) : null}
           {staged ? (
             <p className="text-text-secondary sm:col-span-2">
-              Publication uses this verified staged copy only. If this install changed after
-              staging, discard it and stage again before restarting.
+              Publication uses this verified staged copy for imported classes and documents. This
+              install&apos;s current settings, API keys, and downloaded models are carried forward
+              at restart, including changes made after staging.
             </p>
           ) : null}
           {preview.warnings.map((warning) => (

@@ -586,14 +586,8 @@ def test_publish_cli_promotes_staged_import_and_preserves_scaffold(
 ) -> None:
     checkout = _seed_source_checkout(tmp_path)
     token = _register_selection("selected-source", checkout)
-    (settings.models_dir / "late-model.bin").write_text("kept", encoding="utf-8")
-    (settings.data_dir / ".api_key").write_text("current-secret", encoding="utf-8")
-    conn = connect()
-    try:
-        conn.execute("update settings set allow_web_research = 1 where id = 1")
-        conn.commit()
-    finally:
-        conn.close()
+    (settings.models_dir / "stale-model.bin").write_text("drop-me", encoding="utf-8")
+    (settings.data_dir / ".api_key").write_text("stale-secret", encoding="utf-8")
 
     started = client.post(
         "/api/desktop-import/start",
@@ -601,6 +595,20 @@ def test_publish_cli_promotes_staged_import_and_preserves_scaffold(
     )
     assert started.status_code == 200
     _wait_for_status("staged")
+
+    # The install stays usable after staging: every profile change made now
+    # must survive publication, even though the frozen stage predates it.
+    (settings.models_dir / "late-model.bin").write_text("kept", encoding="utf-8")
+    (settings.models_dir / "stale-model.bin").unlink()
+    (settings.data_dir / ".api_key").write_text("current-secret", encoding="utf-8")
+    (settings.data_dir / ".exa_api_key").write_text("current-exa-secret", encoding="utf-8")
+    conn = connect()
+    try:
+        conn.execute("update settings set allow_web_research = 1 where id = 1")
+        conn.commit()
+    finally:
+        conn.close()
+    shutil.rmtree(checkout)
 
     code, payload = _publish_cli(monkeypatch)
 
@@ -611,19 +619,26 @@ def test_publish_cli_promotes_staged_import_and_preserves_scaffold(
         "status": "ok",
     }
     assert (settings.uploads_dir / "1" / "1-lecture.pdf").read_bytes() == b"%PDF-1.7 source"
+    assert (settings.text_dir / "1.txt").read_text(encoding="utf-8") == "notes"
     assert (settings.models_dir / "late-model.bin").read_text(encoding="utf-8") == "kept"
+    assert (settings.models_dir / "stale-model.bin").exists() is False
     assert (settings.data_dir / ".api_key").read_text(encoding="utf-8") == "current-secret"
-    assert (
-        checkout / "data" / "uploads" / "1" / "1-lecture.pdf"
-    ).read_bytes() == b"%PDF-1.7 source"
+    assert (settings.data_dir / ".exa_api_key").read_text(encoding="utf-8") == "current-exa-secret"
     conn = connect()
     try:
         allow_web_research = conn.execute(
             "select allow_web_research from settings where id = 1"
         ).fetchone()[0]
+        class_names = [
+            row[0] for row in conn.execute("select name from classes order by id").fetchall()
+        ]
     finally:
         conn.close()
     assert allow_web_research == 1
+    assert class_names == ["Physics"]
+    assert desktop_import_module._publish_recovery_record_path().exists() is False
+    assert desktop_import_module._publish_recovery_root_path().exists() is False
+    assert desktop_import_module._stage_root_path().exists() is False
     status = desktop_import_module.desktop_import_manager.status()
     assert status.status == "completed"
     assert status.requires_restart is False
@@ -681,6 +696,215 @@ def test_publish_rollback_restores_live_scaffold_and_keeps_stage(
     status = desktop_import_module.desktop_import_manager.status()
     assert status.status == "staged"
     assert status.phase == "awaiting_publish"
+
+
+def test_publish_rollback_after_late_profile_refresh_keeps_live_profile(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _seed_source_checkout(tmp_path)
+    token = _register_selection("late-rollback-source", checkout)
+
+    started = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "late-rollback-pass"},
+    )
+    assert started.status_code == 200
+    _wait_for_status("staged")
+
+    (settings.models_dir / "late-model.bin").write_text("kept", encoding="utf-8")
+    (settings.data_dir / ".api_key").write_text("current-secret", encoding="utf-8")
+    monkeypatch.setattr(
+        desktop_import_module,
+        "_verify_live_import",
+        lambda: (_ for _ in ()).throw(RuntimeError("publish broke")),
+    )
+
+    code, payload = _publish_cli(monkeypatch)
+
+    assert code == 1
+    assert payload["status"] == "error"
+    assert payload["message"] == "publish broke"
+    assert (settings.models_dir / "late-model.bin").read_text(encoding="utf-8") == "kept"
+    assert (settings.data_dir / ".api_key").read_text(encoding="utf-8") == "current-secret"
+    assert (settings.uploads_dir / "1" / "1-lecture.pdf").exists() is False
+    assert desktop_import_module._stage_ready_for_publish() is True
+    status = desktop_import_module.desktop_import_manager.status()
+    assert status.status == "staged"
+    assert status.phase == "awaiting_publish"
+
+
+def test_publish_fails_closed_when_profile_refresh_breaks(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _seed_source_checkout(tmp_path)
+    token = _register_selection("refresh-failure-source", checkout)
+
+    started = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "refresh-failure-pass"},
+    )
+    assert started.status_code == 200
+    _wait_for_status("staged")
+
+    (settings.models_dir / "late-model.bin").write_text("kept", encoding="utf-8")
+    (settings.data_dir / ".api_key").write_text("current-secret", encoding="utf-8")
+    monkeypatch.setattr(
+        desktop_import_module,
+        "_merge_destination_profile",
+        lambda _stage_db: (_ for _ in ()).throw(RuntimeError("refresh broke")),
+    )
+
+    code, payload = _publish_cli(monkeypatch)
+
+    assert code == 1
+    assert payload["status"] == "error"
+    assert payload["message"] == "refresh broke"
+    assert (settings.models_dir / "late-model.bin").read_text(encoding="utf-8") == "kept"
+    assert (settings.data_dir / ".api_key").read_text(encoding="utf-8") == "current-secret"
+    assert (settings.uploads_dir / "1" / "1-lecture.pdf").exists() is False
+    assert settings.db_path.exists()
+    assert desktop_import_module._publish_recovery_record_path().exists() is False
+    assert desktop_import_module._publish_recovery_root_path().exists() is False
+    assert desktop_import_module._stage_root_path().exists()
+    status = desktop_import_module.desktop_import_manager.status()
+    assert status.status == "failed"
+
+
+def test_publish_fails_closed_when_post_refresh_verification_fails(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _seed_source_checkout(tmp_path)
+    token = _register_selection("reverify-failure-source", checkout)
+
+    started = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "reverify-failure-pass"},
+    )
+    assert started.status_code == 200
+    _wait_for_status("staged")
+
+    (settings.data_dir / ".api_key").write_text("current-secret", encoding="utf-8")
+    original_verify = desktop_import_module._verify_staged_import
+    calls = {"count": 0}
+
+    def fail_reverification(stage_data: Path, stage_db: Path) -> None:
+        calls["count"] += 1
+        if calls["count"] >= 2:
+            raise RuntimeError("reverify broke")
+        original_verify(stage_data, stage_db)
+
+    monkeypatch.setattr(desktop_import_module, "_verify_staged_import", fail_reverification)
+
+    code, payload = _publish_cli(monkeypatch)
+
+    assert code == 1
+    assert payload["status"] == "error"
+    assert payload["message"] == "reverify broke"
+    assert calls["count"] == 2
+    assert (settings.data_dir / ".api_key").read_text(encoding="utf-8") == "current-secret"
+    assert (settings.uploads_dir / "1" / "1-lecture.pdf").exists() is False
+    assert settings.db_path.exists()
+    assert desktop_import_module._publish_recovery_record_path().exists() is False
+    assert desktop_import_module._publish_recovery_root_path().exists() is False
+    assert desktop_import_module._stage_root_path().exists()
+
+
+def test_publish_refuses_when_current_install_gained_user_data(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _seed_source_checkout(tmp_path)
+    token = _register_selection("late-user-data-source", checkout)
+
+    started = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "late-user-data-pass"},
+    )
+    assert started.status_code == 200
+    _wait_for_status("staged")
+
+    conn = connect()
+    try:
+        conn.execute("insert into classes (name, code) values ('Late Class', 'LATE 1')")
+        conn.commit()
+    finally:
+        conn.close()
+    (settings.uploads_dir / "late-upload.pdf").write_bytes(b"%PDF-1.7 late")
+
+    code, payload = _publish_cli(monkeypatch)
+
+    assert code == 1
+    assert payload["status"] == "error"
+    assert "already contains Lyra data" in str(payload["message"])
+    conn = connect()
+    try:
+        class_names = [
+            row[0] for row in conn.execute("select name from classes order by id").fetchall()
+        ]
+    finally:
+        conn.close()
+    assert class_names == ["Late Class"]
+    assert (settings.uploads_dir / "late-upload.pdf").read_bytes() == b"%PDF-1.7 late"
+    assert (settings.uploads_dir / "1" / "1-lecture.pdf").exists() is False
+    assert desktop_import_module._stage_root_path().exists()
+    assert desktop_import_module._publish_recovery_record_path().exists() is False
+
+
+def test_publish_recovery_completes_with_refreshed_profile_after_interruption(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _seed_source_checkout(tmp_path)
+    token = _register_selection("refreshed-recovery-source", checkout)
+
+    started = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "refreshed-recovery-pass"},
+    )
+    assert started.status_code == 200
+    _wait_for_status("staged")
+
+    (settings.models_dir / "late-model.bin").write_text("kept", encoding="utf-8")
+    (settings.data_dir / ".api_key").write_text("current-secret", encoding="utf-8")
+    conn = connect()
+    try:
+        conn.execute("update settings set allow_web_research = 1 where id = 1")
+        conn.commit()
+    finally:
+        conn.close()
+    shutil.rmtree(checkout)
+
+    # Simulate the shell dying between the profile refresh and the swap: the
+    # stage is refreshed, recovery is initialized, and live data is backed up.
+    manifest = desktop_import_module._read_stage_manifest()
+    assert manifest is not None
+    desktop_import_module._refresh_current_profile_into_stage(manifest)
+    desktop_import_module._initialize_publish_recovery()
+    settings.data_dir.replace(desktop_import_module._publish_backup_data_path())
+    desktop_import_module._patch_publish_recovery_record(phase="live_data_backed_up")
+
+    code, payload = _publish_cli(monkeypatch)
+
+    assert code == 0
+    assert payload["status"] == "ok"
+    assert (settings.uploads_dir / "1" / "1-lecture.pdf").read_bytes() == b"%PDF-1.7 source"
+    assert (settings.models_dir / "late-model.bin").read_text(encoding="utf-8") == "kept"
+    assert (settings.data_dir / ".api_key").read_text(encoding="utf-8") == "current-secret"
+    conn = connect()
+    try:
+        allow_web_research = conn.execute(
+            "select allow_web_research from settings where id = 1"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert allow_web_research == 1
+    assert desktop_import_module._publish_recovery_record_path().exists() is False
+    assert desktop_import_module._publish_recovery_root_path().exists() is False
+    assert desktop_import_module._stage_root_path().exists() is False
+
+    repeat_code, repeat_payload = _publish_cli(monkeypatch)
+
+    assert repeat_code == 0
+    assert repeat_payload["status"] == "ok"
+    assert repeat_payload["message"] == "Desktop import was already published."
 
 
 def test_startup_recovery_finishes_an_interrupted_external_db_publish(
