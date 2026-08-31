@@ -114,8 +114,9 @@ def test_webkit_ownership_uses_lsappinfo_responsibility_and_excludes_unrelated_s
 3) "Other Web Content" ASN:0x0-0x2002:
     bundleID="com.apple.WebKit.WebContent"
     pid = 14 token=[sess=1 pid=14 uid:1,1,1 g:1,1 pV:3]
-""".strip()
+    """.strip()
 
+    monkeypatch.setattr(report.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(report, "_lsappinfo_snapshot", lambda: snapshot)
 
     ownership = report._webkit_ownership(10, rows)
