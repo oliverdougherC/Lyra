@@ -1,6 +1,6 @@
 # Lyra desktop resource summary
 
-- Commit: `c1787d0344caca6dcecf48cc88ecef38aec7a22d`
+- Commit: `14837fcf2f6ae011960a3d90079611eeabea1d92`
 - Machine: arm64, 24.0 GiB RAM
 - App bundle: 137.1 MiB
 - Preliminary 60-second settled idle: 5 retained processes, 101.5 MiB RSS, 211.8 MiB private memory
