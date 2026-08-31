@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import sqlite3
 from collections.abc import Sequence
 from importlib import resources
 from pathlib import Path
@@ -41,11 +42,21 @@ def run_smoke() -> dict[str, object]:
 
     prompts_module = _materialize(resources.files("backend.llm").joinpath("prompts.py"))
 
+    connection = sqlite3.connect(":memory:")
+    try:
+        if not hasattr(connection, "enable_load_extension"):
+            raise RuntimeError("packaging Python does not support loadable SQLite extensions")
+        connection.enable_load_extension(True)
+        connection.enable_load_extension(False)
+    finally:
+        connection.close()
+
     return {
         "modules": imported,
         "migration_count": len(migration_names),
         "latest_migration": migration_names[-1],
         "prompts_module": prompts_module.name,
+        "sqlite_load_extension": True,
     }
 
 

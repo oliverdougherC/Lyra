@@ -21,3 +21,4 @@ def test_run_smoke_reports_imports_and_resources() -> None:
     assert payload["migration_count"] >= 1
     assert str(payload["latest_migration"]).endswith(".sql")
     assert payload["prompts_module"] == "prompts.py"
+    assert payload["sqlite_load_extension"] is True

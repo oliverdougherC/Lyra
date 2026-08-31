@@ -191,14 +191,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - uses: astral-sh/setup-uv@v6
 
       - name: Install packaging dependencies
-        run: uv sync --extra packaging
+        run: |
+          uv python install 3.12
+          managed_python="$(uv python find --no-project --managed-python --resolve-links 3.12)"
+          uv sync --python "${managed_python}" --extra packaging
 
       - name: Build frozen backend
         run: uv run --extra packaging pyinstaller --clean --noconfirm packaging/lyra_backend.spec
@@ -284,11 +283,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
 
@@ -308,7 +302,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install backend packaging dependencies
-        run: uv sync --extra packaging
+        run: |
+          uv python install 3.12
+          managed_python="$(uv python find --no-project --managed-python --resolve-links 3.12)"
+          uv sync --python "${managed_python}" --extra packaging
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -341,7 +338,7 @@ jobs:
             echo "::error::No .app bundle was produced."
             exit 1
           fi
-          python scripts/desktop_resource_report.py --root app="${bundle_root}" --output desktop-resource-report.json
+          uv run python scripts/desktop_resource_report.py --root app="${bundle_root}" --output desktop-resource-report.json
 
       - name: Upload desktop artifact evidence
         uses: actions/upload-artifact@v4
