@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import sys
@@ -13,6 +14,8 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO
+
+import sqlite_vec
 
 from backend import desktop_paths
 from backend.api.routes_documents import _safe_filename
@@ -47,6 +50,10 @@ _PROFILE_PRESERVE_FILES = (".api_key", ".exa_api_key", ".permissions-hardened")
 _DESTINATION_AUXILIARY_PREFIXES = ("chunk_embeddings", "chunks_fts")
 _STAGED_STATUS = "staged"
 _AWAITING_PUBLISH_PHASE = "awaiting_publish"
+_SOURCE_DRIFT_MESSAGE = (
+    "The selected Lyra data changed while it was being staged. "
+    "Discard the staged attempt before starting a fresh import."
+)
 
 
 @dataclass(frozen=True)
@@ -109,6 +116,15 @@ class _SnapshotEntry:
     source: Path
     relative: str
     size: int
+
+
+@dataclass(frozen=True)
+class _ImportSpacePlan:
+    already_staged_bytes: int
+    missing_stage_bytes: int
+    publication_headroom_bytes: int
+    rollback_headroom_bytes: int
+    required_free_bytes: int
 
 
 class _ImportCancelledError(Exception):
@@ -205,6 +221,24 @@ class DesktopImportManager:
             self._save_state_locked(state)
             return self._public_status(state)
 
+    def reset(self) -> ImportStatus:
+        with self._lock:
+            state = self._load_state()
+            if state is not None and str(state.get("status") or "") in _RUNNING_STATES:
+                raise ConflictError("Cancel the running import before discarding its staged data.")
+            if _publish_recovery_record_path().exists() or _publish_recovery_root_path().exists():
+                raise ConflictError(
+                    "Lyra must finish publication recovery before staged data can be discarded."
+                )
+            had_state = state is not None or _stage_root_path().exists()
+            self._clear_staging_locked()
+            message = (
+                "Staged import discarded. Choose a folder to start again."
+                if had_state
+                else "No staged import was waiting. Choose a folder to start."
+            )
+            return self._idle_status(message=message)
+
     def _resume_locked(self, state: dict[str, object] | None) -> None:
         if state is None:
             return
@@ -277,24 +311,29 @@ class DesktopImportManager:
         source_db = source_data_dir / "lyra.db"
         private.assert_not_symlink(source_data_dir, "the selected import folder")
         private.assert_not_symlink(source_db, "the selected import database")
-        try:
-            lock_conn = sqlite3.connect(str(source_db), timeout=0, isolation_level=None)
-        except sqlite3.Error as exc:
-            raise RuntimeError("The selected Lyra database could not be opened.") from exc
-
+        lock_conn: sqlite3.Connection | None = None
         source_conn: sqlite3.Connection | None = None
+        read_only_family: dict[str, dict[str, object]] | None = None
         try:
-            lock_conn.execute("pragma busy_timeout = 0")
-            try:
-                lock_conn.execute("begin immediate")
-            except sqlite3.OperationalError as exc:
-                if "busy" in str(exc).lower() or "locked" in str(exc).lower():
-                    raise LyraError(
-                        "The selected Lyra data is still busy. Close the old app and try again."
-                    ) from exc
-                raise
-            source_conn = sqlite3.connect(str(source_db), timeout=0, isolation_level=None)
-            source_conn.execute("pragma busy_timeout = 0")
+            immutable_source = _source_is_read_only(source_db)
+            if not immutable_source:
+                try:
+                    lock_conn = sqlite3.connect(str(source_db), timeout=0, isolation_level=None)
+                except sqlite3.Error as exc:
+                    raise RuntimeError("The selected Lyra database could not be opened.") from exc
+                lock_conn.execute("pragma busy_timeout = 0")
+                try:
+                    lock_conn.execute("begin immediate")
+                except sqlite3.OperationalError as exc:
+                    if "busy" in str(exc).lower() or "locked" in str(exc).lower():
+                        raise LyraError(
+                            "The selected Lyra data is still busy. Close the old app and try again."
+                        ) from exc
+                    raise
+            if immutable_source:
+                source_conn, read_only_family = _open_copied_source_database(source_db)
+            else:
+                source_conn = _connect_source_readonly(source_db, immutable=False)
             snapshot = _snapshot_entries(source_data_dir)
             metadata = _source_metadata(source_conn)
             existing_manifest = _read_stage_manifest()
@@ -308,6 +347,7 @@ class DesktopImportManager:
                 source_name=source_name,
                 source_kind=source_kind,
                 metadata=metadata,
+                source_conn=source_conn,
             )
             _copy_profile_into_stage()
             _write_stage_manifest(manifest)
@@ -342,22 +382,26 @@ class DesktopImportManager:
             )
             if not _staged_database_matches(manifest):
                 _backup_database(source_conn, _stage_db_path())
+            if read_only_family is not None:
+                _assert_read_only_source_stable(source_db, read_only_family)
         finally:
-            with contextlib.suppress(sqlite3.Error):
-                lock_conn.rollback()
-            lock_conn.close()
             if source_conn is not None:
                 source_conn.close()
+            if lock_conn is not None:
+                with contextlib.suppress(sqlite3.Error):
+                    lock_conn.rollback()
+                lock_conn.close()
+            shutil.rmtree(_copied_source_database_root(), ignore_errors=True)
 
         if not _staged_database_matches(manifest):
             _rewrite_document_paths(_stage_db_path())
-            _merge_destination_profile(_stage_db_path())
             with connect(_stage_db_path()) as staged:
                 migrate(staged)
                 issues = staged.execute("pragma foreign_key_check").fetchall()
                 if issues:
                     raise RuntimeError("The imported database has broken references.")
                 staged.commit()
+            _merge_destination_profile(_stage_db_path())
             _truncate_sqlite_wal(_stage_db_path())
             verify_sqlite(_stage_db_path())
             manifest["staged_database"] = _staged_database_record(_stage_db_path())
@@ -400,37 +444,43 @@ class DesktopImportManager:
             self._save_state_locked(state)
 
     def _clear_staging_locked(self) -> None:
-        shutil.rmtree(_stage_root_path(), ignore_errors=True)
-        shutil.rmtree(_publish_recovery_root_path(), ignore_errors=True)
-        _publish_recovery_record_path().unlink(missing_ok=True)
+        if _stage_root_path().exists():
+            shutil.rmtree(_stage_root_path())
         self._state_path().unlink(missing_ok=True)
 
-    def _public_status(self, state: dict[str, object] | None) -> ImportStatus:
+    def _idle_status(self, *, message: str | None) -> ImportStatus:
         available = settings.packaged_mode
         conflicts = _destination_conflicts()
         destination_ready = not conflicts
+        default_message = (
+            None
+            if available and destination_ready
+            else "Import is only available before this installation has its own data."
+        )
+        return ImportStatus(
+            available=available,
+            destination_ready=destination_ready,
+            status="idle",
+            phase=None,
+            message=message if message is not None else default_message,
+            source_name=None,
+            copied_entries=0,
+            total_entries=0,
+            copied_bytes=0,
+            total_bytes=0,
+            cancel_requested=False,
+            can_resume=False,
+            requires_restart=False,
+            preview=None,
+            conflicts=conflicts,
+        )
+
+    def _public_status(self, state: dict[str, object] | None) -> ImportStatus:
         if state is None:
-            return ImportStatus(
-                available=available,
-                destination_ready=destination_ready,
-                status="idle",
-                phase=None,
-                message=(
-                    None
-                    if available and destination_ready
-                    else "Import is only available before this installation has its own data."
-                ),
-                source_name=None,
-                copied_entries=0,
-                total_entries=0,
-                copied_bytes=0,
-                total_bytes=0,
-                cancel_requested=False,
-                can_resume=False,
-                requires_restart=False,
-                preview=None,
-                conflicts=conflicts,
-            )
+            return self._idle_status(message=None)
+        available = settings.packaged_mode
+        conflicts = _destination_conflicts()
+        destination_ready = not conflicts
         preview_data = state.get("preview")
         preview = _preview_from_payload(preview_data) if isinstance(preview_data, dict) else None
         status = str(state.get("status") or "idle")
@@ -540,7 +590,7 @@ def _build_preview(selection_token: str) -> ImportPreview:
         + _database_family_size(source_db)
         + _profile_preserve_bytes()
     )
-    _assert_headroom(total_bytes)
+    _assert_headroom(total_bytes, source_data_dir=source_data_dir, snapshot=snapshot)
     return ImportPreview(
         source_name=str(record["label"]),
         source_kind=_classify_source_kind(source_data_dir, selected_root=selected_root),
@@ -550,7 +600,10 @@ def _build_preview(selection_token: str) -> ImportPreview:
         total_entries=len(snapshot),
         total_bytes=total_bytes,
         sample_entries=tuple(entry.relative for entry in snapshot[:PREVIEW_SAMPLE_LIMIT]),
-        warnings=("Lyra preserves this installation's own settings, keys, and downloaded models.",),
+        warnings=(
+            "Preview stays read-only; Lyra checks exclusive access again when staging starts.",
+            "Lyra preserves this installation's own settings, keys, and downloaded models.",
+        ),
         schema_version=int(metadata["schema_version"]),
         database_identity=_database_identity(source_db),
         conflicts=_destination_conflicts(),
@@ -562,7 +615,7 @@ def _build_preview(selection_token: str) -> ImportPreview:
 
 def _source_metadata_from_path(source_db: Path) -> dict[str, int]:
     try:
-        conn = sqlite3.connect(f"{source_db.resolve().as_uri()}?mode=ro", uri=True)
+        conn = _connect_source_readonly(source_db, immutable=True)
     except sqlite3.Error as exc:
         raise LyraError("The selected Lyra database could not be read.") from exc
     try:
@@ -576,12 +629,13 @@ def _source_metadata(conn: sqlite3.Connection) -> dict[str, int]:
     latest = _latest_migration_version()
     if schema_version > latest:
         raise LyraError("This data was created by a newer Lyra and cannot be imported here.")
-    interrupted = int(conn.execute("select count(*) from storage_intents").fetchone()[0])
-    if interrupted:
-        raise LyraError(
-            "The selected data still has interrupted file operations. "
-            "Open it once in the old Lyra and try again."
-        )
+    if schema_version >= 32 and _sqlite_table_exists(conn, "storage_intents"):
+        interrupted = int(conn.execute("select count(*) from storage_intents").fetchone()[0])
+        if interrupted:
+            raise LyraError(
+                "The selected data still has interrupted file operations. "
+                "Open it once in the old Lyra and try again."
+            )
     return {
         "schema_version": schema_version,
         "class_count": int(conn.execute("select count(*) from classes").fetchone()[0]),
@@ -658,11 +712,42 @@ def _snapshot_entries(source_data_dir: Path) -> list[_SnapshotEntry]:
     return entries
 
 
-def _assert_headroom(total_bytes: int) -> None:
+def _assert_headroom(
+    total_bytes: int,
+    *,
+    source_data_dir: Path | None = None,
+    snapshot: list[_SnapshotEntry] | None = None,
+) -> None:
     free = shutil.disk_usage(settings.data_dir.parent).free
-    required = total_bytes + max(64 * 1024 * 1024, total_bytes // 5)
-    if free < required:
+    plan = _import_space_plan(
+        total_bytes,
+        source_data_dir=source_data_dir,
+        snapshot=snapshot,
+    )
+    if free < plan.required_free_bytes:
         raise LyraError("There is not enough free disk space to import that Lyra data safely.")
+
+
+def _import_space_plan(
+    total_bytes: int,
+    *,
+    source_data_dir: Path | None = None,
+    snapshot: list[_SnapshotEntry] | None = None,
+) -> _ImportSpacePlan:
+    already_staged = min(
+        total_bytes,
+        _existing_stage_bytes_for_source(source_data_dir, snapshot=snapshot),
+    )
+    missing = max(0, total_bytes - already_staged)
+    publication_headroom = max(32 * 1024 * 1024, total_bytes // 10)
+    rollback_headroom = max(32 * 1024 * 1024, total_bytes // 10)
+    return _ImportSpacePlan(
+        already_staged_bytes=already_staged,
+        missing_stage_bytes=missing,
+        publication_headroom_bytes=publication_headroom,
+        rollback_headroom_bytes=rollback_headroom,
+        required_free_bytes=missing + publication_headroom + rollback_headroom,
+    )
 
 
 def _destination_is_ready() -> bool:
@@ -797,22 +882,8 @@ def _count_files_and_bytes(path: Path) -> tuple[int, int]:
 
 
 def _probe_source_lock(source_db: Path) -> tuple[str, bool | None]:
-    try:
-        conn = sqlite3.connect(str(source_db), timeout=0, isolation_level=None)
-    except sqlite3.Error:
-        return ("unavailable", None)
-    try:
-        conn.execute("pragma busy_timeout = 0")
-        try:
-            conn.execute("begin immediate")
-        except sqlite3.OperationalError as exc:
-            if "busy" in str(exc).lower() or "locked" in str(exc).lower():
-                return ("busy", True)
-            return ("unavailable", None)
-        conn.rollback()
-        return ("available", False)
-    finally:
-        conn.close()
+    del source_db
+    return ("read_only", None)
 
 
 def _database_identity(path: Path) -> str:
@@ -879,6 +950,7 @@ def _build_stage_manifest(
     source_name: str,
     source_kind: str,
     metadata: dict[str, int],
+    source_conn: sqlite3.Connection,
 ) -> dict[str, object]:
     return {
         "version": MANIFEST_VERSION,
@@ -891,7 +963,7 @@ def _build_stage_manifest(
             "document_count": int(metadata["document_count"]),
             "schema_version": int(metadata["schema_version"]),
         },
-        "source_database": _source_database_record(source_db),
+        "source_database": _source_database_record(source_db, conn=source_conn),
         "staged_database": None,
         "total_entries": len(snapshot),
         "total_bytes": _manifest_total_bytes(snapshot, source_db),
@@ -916,6 +988,7 @@ def _prepare_stage_manifest(
     source_name: str,
     source_kind: str,
     metadata: dict[str, int],
+    source_conn: sqlite3.Connection,
 ) -> dict[str, object]:
     if existing is None:
         return _build_stage_manifest(
@@ -925,8 +998,11 @@ def _prepare_stage_manifest(
             source_name=source_name,
             source_kind=source_kind,
             metadata=metadata,
+            source_conn=source_conn,
         )
-    _assert_manifest_matches_source(existing, source_db, snapshot, metadata)
+    _assert_manifest_matches_source(
+        existing, source_db, snapshot, metadata, source_conn=source_conn
+    )
     manifest = dict(existing)
     manifest.update(
         {
@@ -951,52 +1027,36 @@ def _assert_manifest_matches_source(
     source_db: Path,
     snapshot: list[_SnapshotEntry],
     metadata: dict[str, int],
+    *,
+    source_conn: sqlite3.Connection,
 ) -> None:
     layout = manifest.get("source_layout")
     if not isinstance(layout, dict):
-        raise LyraError(
-            "The selected Lyra data changed while it was being staged. Start the import again."
-        )
+        raise LyraError(_SOURCE_DRIFT_MESSAGE)
     if (
         int(layout.get("class_count") or -1) != int(metadata["class_count"])
         or int(layout.get("document_count") or -1) != int(metadata["document_count"])
         or int(layout.get("schema_version") or -1) != int(metadata["schema_version"])
     ):
-        raise LyraError(
-            "The selected Lyra data changed while it was being staged. Start the import again."
-        )
+        raise LyraError(_SOURCE_DRIFT_MESSAGE)
     expected_entries = _manifest_entries_by_relative(manifest)
     if len(expected_entries) != len(snapshot):
-        raise LyraError(
-            "The selected Lyra data changed while it was being staged. Start the import again."
-        )
+        raise LyraError(_SOURCE_DRIFT_MESSAGE)
     for entry in snapshot:
         recorded = expected_entries.get(entry.relative)
         if recorded is None:
-            raise LyraError(
-                "The selected Lyra data changed while it was being staged. Start the import again."
-            )
+            raise LyraError(_SOURCE_DRIFT_MESSAGE)
         if int(recorded.get("size") or -1) != entry.size:
-            raise LyraError(
-                "The selected Lyra data changed while it was being staged. Start the import again."
-            )
+            raise LyraError(_SOURCE_DRIFT_MESSAGE)
         if recorded.get("source_identity") != _source_identity(entry.source):
-            raise LyraError(
-                "The selected Lyra data changed while it was being staged. Start the import again."
-            )
+            raise LyraError(_SOURCE_DRIFT_MESSAGE)
         if str(recorded.get("sha256") or "") != _hash_file(entry.source):
-            raise LyraError(
-                "The selected Lyra data changed while it was being staged. Start the import again."
-            )
+            raise LyraError(_SOURCE_DRIFT_MESSAGE)
     recorded_db = manifest.get("source_database")
     if not isinstance(recorded_db, dict):
-        raise LyraError(
-            "The selected Lyra data changed while it was being staged. Start the import again."
-        )
-    if recorded_db != _source_database_record(source_db):
-        raise LyraError(
-            "The selected Lyra data changed while it was being staged. Start the import again."
-        )
+        raise LyraError(_SOURCE_DRIFT_MESSAGE)
+    if recorded_db != _source_database_record(source_db, conn=source_conn):
+        raise LyraError(_SOURCE_DRIFT_MESSAGE)
 
 
 def _manifest_entries_by_relative(manifest: dict[str, object]) -> dict[str, dict[str, object]]:
@@ -1010,19 +1070,23 @@ def _manifest_entries_by_relative(manifest: dict[str, object]) -> dict[str, dict
     return result
 
 
-def _source_database_record(source_db: Path) -> dict[str, object]:
+def _source_database_record(
+    source_db: Path,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> dict[str, object]:
     identity = _source_identity(source_db)
-    conn = connect(source_db)
     digest = hashlib.sha256()
+    owns_connection = conn is None
+    if conn is None:
+        conn = _connect_source_readonly(source_db, immutable=True)
     try:
-        conn.execute("begin")
         for statement in conn.iterdump():
             digest.update(statement.encode("utf-8"))
             digest.update(b"\n")
     finally:
-        with contextlib.suppress(sqlite3.Error):
-            conn.rollback()
-        conn.close()
+        if owns_connection:
+            conn.close()
     return {
         "logical_sha256": digest.hexdigest(),
         "source_identity": {
@@ -1030,6 +1094,141 @@ def _source_database_record(source_db: Path) -> dict[str, object]:
             "inode": identity["inode"],
         },
     }
+
+
+def _connect_source_readonly(
+    source_db: Path,
+    *,
+    immutable: bool,
+) -> sqlite3.Connection:
+    immutable_parameter = "&immutable=1" if immutable else ""
+    conn = sqlite3.connect(
+        f"{source_db.resolve().as_uri()}?mode=ro{immutable_parameter}",
+        uri=True,
+    )
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+    conn.execute("pragma query_only = on")
+    return conn
+
+
+def _source_is_read_only(source_db: Path) -> bool:
+    writable_bits = 0o222
+    return (
+        source_db.stat().st_mode & writable_bits == 0
+        or source_db.parent.stat().st_mode & writable_bits == 0
+        or not os.access(source_db, os.W_OK)
+        or not os.access(source_db.parent, os.W_OK)
+    )
+
+
+def _copied_source_database_root() -> Path:
+    return _stage_root_path() / ".source-database-snapshot"
+
+
+def _source_database_family_record(source_db: Path) -> dict[str, dict[str, object]]:
+    record: dict[str, dict[str, object]] = {}
+    for suffix in ("", "-wal"):
+        source = source_db.with_name(source_db.name + suffix)
+        if not source.exists():
+            continue
+        private.assert_not_symlink(source, "the selected import database")
+        if not source.is_file():
+            raise LyraError("The selected Lyra database contains an unsafe sidecar entry.")
+        record[suffix] = {
+            "size": source.stat().st_size,
+            "sha256": _hash_file(source),
+            "identity": _source_identity(source),
+        }
+    return record
+
+
+def _open_copied_source_database(
+    source_db: Path,
+) -> tuple[sqlite3.Connection, dict[str, dict[str, object]]]:
+    before = _source_database_family_record(source_db)
+    copy_root = _copied_source_database_root()
+    shutil.rmtree(copy_root, ignore_errors=True)
+    private.secure_mkdir(copy_root, root=_stage_root_path())
+    copied_db = copy_root / source_db.name
+    for suffix in before:
+        source = source_db.with_name(source_db.name + suffix)
+        shutil.copyfile(source, copied_db.with_name(copied_db.name + suffix))
+    _assert_read_only_source_stable(source_db, before)
+    conn = sqlite3.connect(str(copied_db), timeout=0, isolation_level=None)
+    conn.enable_load_extension(True)
+    sqlite_vec.load(conn)
+    conn.enable_load_extension(False)
+    conn.execute("pragma query_only = on")
+    return conn, before
+
+
+def _assert_read_only_source_stable(
+    source_db: Path,
+    expected: dict[str, dict[str, object]],
+) -> None:
+    if _source_database_family_record(source_db) != expected:
+        raise LyraError(
+            "The read-only Lyra database changed during snapshotting. "
+            "Close the old app and start a fresh import."
+        )
+
+
+def _sqlite_table_exists(conn: sqlite3.Connection, name: str) -> bool:
+    row = conn.execute(
+        "select 1 from sqlite_master where type = 'table' and name = ? limit 1",
+        (name,),
+    ).fetchone()
+    return row is not None
+
+
+def _existing_stage_bytes_for_source(
+    source_data_dir: Path | None,
+    *,
+    snapshot: list[_SnapshotEntry] | None = None,
+) -> int:
+    if source_data_dir is None:
+        return 0
+    manifest = _read_stage_manifest()
+    if manifest is None:
+        return 0
+    if Path(str(manifest.get("source_data_dir") or "")) != source_data_dir:
+        return 0
+    live_snapshot = snapshot if snapshot is not None else _snapshot_entries(source_data_dir)
+    _copied_entries, copied_bytes = _staged_progress(live_snapshot, manifest)
+    return copied_bytes + _staged_profile_bytes()
+
+
+def _staged_profile_bytes() -> int:
+    total = 0
+    for directory in _PROFILE_PRESERVE_DIRECTORIES:
+        source_root = settings.data_dir / directory
+        stage_root = _stage_data_path() / directory
+        if not source_root.is_dir() or not stage_root.is_dir():
+            continue
+        for source in sorted(source_root.rglob("*")):
+            if not source.is_file() or source.is_symlink():
+                continue
+            target = stage_root / source.relative_to(source_root)
+            if (
+                target.is_file()
+                and not target.is_symlink()
+                and target.stat().st_size == source.stat().st_size
+            ):
+                total += target.stat().st_size
+    for filename in _PROFILE_PRESERVE_FILES:
+        source = settings.data_dir / filename
+        target = _stage_data_path() / filename
+        if (
+            source.is_file()
+            and not source.is_symlink()
+            and target.is_file()
+            and not target.is_symlink()
+            and target.stat().st_size == source.stat().st_size
+        ):
+            total += target.stat().st_size
+    return total
 
 
 def _staged_database_record(stage_db: Path) -> dict[str, object]:
@@ -1342,20 +1541,6 @@ def _initialize_publish_recovery() -> dict[str, object]:
     return record
 
 
-def _sync_destination_profile_into_stage(manifest: dict[str, object]) -> dict[str, object]:
-    _copy_profile_into_stage()
-    _merge_destination_profile(_stage_db_path())
-    _truncate_sqlite_wal(_stage_db_path())
-    manifest = dict(manifest)
-    manifest["total_bytes"] = _manifest_total_bytes(
-        _snapshot_entries(Path(str(manifest["source_data_dir"]))),
-        Path(str(manifest["source_data_dir"])) / "lyra.db",
-    )
-    manifest["staged_database"] = _staged_database_record(_stage_db_path())
-    _write_stage_manifest(manifest)
-    return manifest
-
-
 def _complete_publish_from_record() -> dict[str, object]:
     record = _load_publish_recovery_record()
     if record is None:
@@ -1455,7 +1640,6 @@ def publish_staged_import(*, stream: TextIO | None = None) -> int:
                 if manifest is None:
                     raise RuntimeError("The staged desktop import manifest is missing.")
                 _assert_destination_ready()
-                manifest = _sync_destination_profile_into_stage(manifest)
                 _verify_staged_import(_stage_data_path(), _stage_db_path())
                 _initialize_publish_recovery()
                 payload = _complete_publish_from_record()

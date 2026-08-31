@@ -4,6 +4,15 @@ import { useState } from 'react'
 import { Database, FolderOpen, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
@@ -13,6 +22,7 @@ import {
   useCancelDesktopImport,
   useDesktopImportStatus,
   usePreviewDesktopImport,
+  useResetDesktopImport,
   useStartDesktopImport,
 } from '@/lib/hooks/use-settings'
 import {
@@ -38,13 +48,18 @@ export function DesktopImportSection() {
   const previewImport = usePreviewDesktopImport()
   const startImport = useStartDesktopImport()
   const cancelImport = useCancelDesktopImport()
+  const resetImport = useResetDesktopImport()
   const [selection, setSelection] = useState<DesktopImportSelection | null>(null)
   const [publishing, setPublishing] = useState(false)
+  const [confirmingReset, setConfirmingReset] = useState(false)
 
   const status = statusQuery.data
   const preview = previewImport.data ?? status?.preview ?? null
   const active = status && ['queued', 'running', 'cancel_requested'].includes(status.status)
   const staged = status?.status === 'staged' || status?.phase === 'awaiting_publish'
+  const canReset =
+    !active &&
+    (selection !== null || preview !== null || (status != null && status.status !== 'idle'))
   const progress = status?.total_bytes
     ? Math.min(100, Math.round((status.copied_bytes / status.total_bytes) * 100))
     : 0
@@ -82,6 +97,19 @@ export function DesktopImportSection() {
       toast.error('The staged import was not published. Your prior data was preserved.')
       await statusQuery.refetch()
       setPublishing(false)
+    }
+  }
+
+  async function reset() {
+    try {
+      const next = await resetImport.mutateAsync()
+      setSelection(null)
+      setConfirmingReset(false)
+      setPublishing(false)
+      previewImport.reset()
+      toast.success(next.message ?? 'Desktop import reset.')
+    } catch (error) {
+      toast.error(errorMessage(error, 'The staged import could not be discarded.'))
     }
   }
 
@@ -154,6 +182,12 @@ export function DesktopImportSection() {
               The old Lyra runtime appears active. Close it before importing.
             </p>
           ) : null}
+          {staged ? (
+            <p className="text-text-secondary sm:col-span-2">
+              Publication uses this verified staged copy only. If this install changed after
+              staging, discard it and stage again before restarting.
+            </p>
+          ) : null}
           {preview.warnings.map((warning) => (
             <p key={warning} className="text-text-secondary sm:col-span-2">
               {warning}
@@ -204,7 +238,43 @@ export function DesktopImportSection() {
             Restart and finish import
           </Button>
         ) : null}
+        {canReset ? (
+          <Button
+            variant="outline"
+            onClick={() => setConfirmingReset(true)}
+            disabled={resetImport.isPending}
+          >
+            {resetImport.isPending ? <Spinner /> : null}
+            {staged ? 'Discard staged import' : 'Reset import'}
+          </Button>
+        ) : null}
       </div>
+
+      <AlertDialog open={confirmingReset} onOpenChange={setConfirmingReset}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {staged ? 'Discard staged import?' : 'Reset desktop import?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This clears Lyra&apos;s staged copy and import status only. It does not modify the
+              original folder you picked, and it does not change this installation&apos;s current
+              live data.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep it</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              disabled={resetImport.isPending}
+              onClick={() => void reset()}
+            >
+              {resetImport.isPending ? <Spinner /> : null}
+              {staged ? 'Discard staged import' : 'Reset import'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

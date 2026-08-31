@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 import sqlite3
 import threading
 import time
@@ -21,6 +22,7 @@ from backend import desktop_import as desktop_import_module
 from backend.api import routes_desktop_import
 from backend.config import settings
 from backend.core.errors import LyraError
+from backend.storage import database as database_module
 from backend.storage.database import connect, migrate
 
 
@@ -48,7 +50,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         yield test_client
 
 
-def _seed_source_checkout(root: Path) -> Path:
+def _seed_source_checkout(root: Path, *, maximum_migration: int | None = None) -> Path:
     checkout = root / "checkout"
     source = checkout / "data"
     (source / "uploads" / "1").mkdir(parents=True)
@@ -63,7 +65,14 @@ def _seed_source_checkout(root: Path) -> Path:
 
     conn = connect(source / "lyra.db")
     try:
-        migrate(conn)
+        if maximum_migration is None:
+            migrate(conn)
+        else:
+            for migration_path in sorted(database_module.MIGRATIONS_DIR.glob("*.sql")):
+                version = int(migration_path.name.split("_", 1)[0])
+                if version > maximum_migration:
+                    break
+                database_module._apply_migration(conn, version, migration_path)
         class_id = int(
             conn.execute(
                 "insert into classes (name, code) values ('Physics', 'PHYS 101')"
@@ -139,10 +148,135 @@ def test_preview_accepts_a_checkout_root(client: TestClient, tmp_path: Path) -> 
     assert body["schema_version"] > 0
     assert body["database_identity"].startswith("lyra-db:")
     assert body["conflicts"] == []
-    assert body["old_runtime_active"] is False
-    assert body["source_lock"] == "available"
+    assert body["warnings"][0].startswith("Preview stays read-only")
+    assert body["old_runtime_active"] is None
+    assert body["source_lock"] == "read_only"
     assert body["asset_summary"]["selected_models"] == 1
     assert body["asset_summary"]["selected_caches"] == 1
+
+
+def test_preview_does_not_use_writable_sqlite_connect(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _seed_source_checkout(tmp_path)
+    token = _register_selection("readonly-source", checkout)
+    source_db = checkout / "data" / "lyra.db"
+    original_connect = desktop_import_module.connect
+
+    def fail_source_connect(db_path=None):
+        if db_path == source_db:
+            raise AssertionError("preview should stay read-only")
+        return original_connect(db_path)
+
+    monkeypatch.setattr(desktop_import_module, "connect", fail_source_connect)
+
+    response = client.post("/api/desktop-import/preview", json={"selection_token": token})
+
+    assert response.status_code == 200
+
+
+def test_preview_does_not_mutate_a_read_only_source(client: TestClient, tmp_path: Path) -> None:
+    checkout = _seed_source_checkout(tmp_path)
+    source = checkout / "data"
+    source_db = source / "lyra.db"
+    family = [source_db.with_name(source_db.name + suffix) for suffix in ("", "-wal", "-shm")]
+    token = _register_selection("filesystem-readonly-source", checkout)
+
+    for path in family:
+        if path.exists():
+            path.chmod(0o444)
+    source.chmod(0o555)
+    before = {
+        path.name: (path.stat().st_size, path.stat().st_mtime_ns, path.stat().st_mode & 0o777)
+        for path in family
+        if path.exists()
+    }
+    try:
+        response = client.post("/api/desktop-import/preview", json={"selection_token": token})
+        started = client.post(
+            "/api/desktop-import/start",
+            json={"selection_token": token, "operation_id": "read-only-stage"},
+        )
+        _wait_for_status("staged")
+        after = {
+            path.name: (path.stat().st_size, path.stat().st_mtime_ns, path.stat().st_mode & 0o777)
+            for path in family
+            if path.exists()
+        }
+        assert response.status_code == 200
+        assert started.status_code == 200
+        assert after == before
+        assert source.stat().st_mode & 0o777 == 0o555
+    finally:
+        source.chmod(0o700)
+        for path in family:
+            if path.exists():
+                path.chmod(0o600)
+
+
+def test_read_only_snapshot_fails_if_an_existing_writer_changes_the_wal(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _seed_source_checkout(tmp_path)
+    source = checkout / "data"
+    source_db = source / "lyra.db"
+    writer = sqlite3.connect(str(source_db), isolation_level=None, check_same_thread=False)
+    writer.execute("pragma journal_mode = wal")
+    family = [source_db.with_name(source_db.name + suffix) for suffix in ("", "-wal", "-shm")]
+    token = _register_selection("readonly-live-writer", checkout)
+    original_copy = desktop_import_module.copy_regular_file
+    wrote = threading.Event()
+
+    def write_during_copy(source_path: Path, destination: Path) -> None:
+        if source_path.name == "1-lecture.pdf" and not wrote.is_set():
+            writer.execute("insert into classes (name, code) values ('Late', 'LATE 1')")
+            writer.commit()
+            wrote.set()
+        original_copy(source_path, destination)
+
+    monkeypatch.setattr(desktop_import_module, "copy_regular_file", write_during_copy)
+    for path in family:
+        if path.exists():
+            path.chmod(0o444)
+    source.chmod(0o555)
+    try:
+        started = client.post(
+            "/api/desktop-import/start",
+            json={"selection_token": token, "operation_id": "readonly-live-writer-pass"},
+        )
+        failed = _wait_for_status("failed")
+        assert started.status_code == 200
+        assert wrote.is_set()
+        assert "read-only Lyra database changed" in str(failed.message)
+    finally:
+        source.chmod(0o700)
+        for path in family:
+            if path.exists():
+                path.chmod(0o600)
+        writer.close()
+
+
+def test_pre_032_data_is_staged_and_migrated_safely(client: TestClient, tmp_path: Path) -> None:
+    checkout = _seed_source_checkout(tmp_path, maximum_migration=31)
+    token = _register_selection("legacy-source", checkout)
+
+    preview = client.post("/api/desktop-import/preview", json={"selection_token": token})
+    started = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "legacy-stage"},
+    )
+
+    assert preview.status_code == 200
+    assert preview.json()["schema_version"] == 31
+    assert started.status_code == 200
+    _wait_for_status("staged")
+    with sqlite3.connect(str(desktop_import_module._stage_db_path())) as staged:
+        assert staged.execute("pragma user_version").fetchone()[0] == (
+            desktop_import_module._latest_migration_version()
+        )
+        assert staged.execute(
+            "select 1 from sqlite_master where type = 'table' and name = 'storage_intents'"
+        ).fetchone() == (1,)
 
 
 def test_import_stages_without_publishing_and_preserves_the_source(
@@ -285,7 +419,7 @@ def test_cancel_then_resume_recopies_same_size_stage_corruption(
     assert stage_file.read_bytes() == b"%PDF-1.7 source"
 
 
-def test_resume_refuses_same_size_source_drift(
+def test_source_drift_requires_discard_then_allows_fresh_same_folder_import(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     checkout = _seed_source_checkout(tmp_path)
@@ -322,7 +456,129 @@ def test_resume_refuses_same_size_source_drift(
     assert resumed.status_code == 200
 
     failed = _wait_for_status("failed")
-    assert "changed while it was being staged" in str(failed.message)
+    assert "Discard the staged attempt" in str(failed.message)
+
+    discarded = client.post("/api/desktop-import/reset")
+    restarted = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "third-pass"},
+    )
+
+    assert discarded.status_code == 200
+    assert "discarded" in discarded.json()["message"]
+    assert restarted.status_code == 200
+    staged = _wait_for_status("staged")
+    assert staged.phase == "awaiting_publish"
+    stage_file = (
+        settings.data_dir.parent
+        / ".desktop-import-stage"
+        / "data"
+        / "uploads"
+        / "1"
+        / "1-lecture.pdf"
+    )
+    assert stage_file.read_bytes() == b"Y" * len(b"%PDF-1.7 source")
+
+
+def test_resume_headroom_counts_only_missing_stage_bytes(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _seed_source_checkout(tmp_path)
+    token = _register_selection("headroom-source", checkout)
+    started_copy = threading.Event()
+    release_copy = threading.Event()
+    original = desktop_import_module.copy_regular_file
+
+    def slow_copy(source: Path, destination: Path) -> None:
+        original(source, destination)
+        if source.name == "1-lecture.pdf" and not started_copy.is_set():
+            started_copy.set()
+            release_copy.wait(timeout=2)
+
+    monkeypatch.setattr(desktop_import_module, "copy_regular_file", slow_copy)
+
+    started = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "headroom-pass-1"},
+    )
+    assert started.status_code == 200
+    assert started_copy.wait(timeout=2)
+    cancelled = client.post("/api/desktop-import/cancel")
+    assert cancelled.status_code == 200
+    release_copy.set()
+    _wait_for_status("cancelled")
+
+    snapshot = desktop_import_module._snapshot_entries(checkout / "data")
+    total_bytes = desktop_import_module._manifest_total_bytes(
+        snapshot,
+        checkout / "data" / "lyra.db",
+    )
+    plan = desktop_import_module._import_space_plan(
+        total_bytes,
+        source_data_dir=checkout / "data",
+        snapshot=snapshot,
+    )
+    real_usage = shutil.disk_usage(settings.data_dir.parent)
+    fake_usage = type(real_usage)(
+        real_usage.total,
+        max(0, real_usage.total - (plan.required_free_bytes + 1)),
+        plan.required_free_bytes + 1,
+    )
+    monkeypatch.setattr(desktop_import_module.shutil, "disk_usage", lambda _path: fake_usage)
+
+    resumed = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "headroom-pass-2"},
+    )
+
+    assert resumed.status_code == 200
+    _wait_for_status("staged")
+
+
+def test_large_partial_resume_fits_constrained_free_space(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    total_bytes = 5 * 1024**3
+    already_staged = total_bytes - 256 * 1024**2
+    source_data_dir = tmp_path / "large-source"
+    source_data_dir.mkdir()
+    live_model = settings.models_dir / "large-model.gguf"
+    with live_model.open("wb") as model_file:
+        model_file.truncate(already_staged)
+    staged_model = desktop_import_module._stage_data_path() / "models" / live_model.name
+    staged_model.parent.mkdir(parents=True)
+    with staged_model.open("wb") as model_file:
+        model_file.truncate(already_staged)
+    desktop_import_module._write_stage_manifest(
+        {
+            "version": desktop_import_module.MANIFEST_VERSION,
+            "source_data_dir": str(source_data_dir),
+            "entries": [],
+            "staged_database": None,
+        }
+    )
+    plan = desktop_import_module._import_space_plan(
+        total_bytes,
+        source_data_dir=source_data_dir,
+        snapshot=[],
+    )
+    usage = shutil.disk_usage(settings.data_dir.parent)
+    constrained = type(usage)(
+        usage.total,
+        max(0, usage.total - plan.required_free_bytes),
+        plan.required_free_bytes,
+    )
+    monkeypatch.setattr(desktop_import_module.shutil, "disk_usage", lambda _path: constrained)
+
+    desktop_import_module._assert_headroom(
+        total_bytes,
+        source_data_dir=source_data_dir,
+        snapshot=[],
+    )
+
+    assert plan.already_staged_bytes == already_staged
+    assert plan.missing_stage_bytes == 256 * 1024**2
+    assert plan.required_free_bytes < total_bytes
 
 
 def test_publish_cli_promotes_staged_import_and_preserves_scaffold(
@@ -330,14 +586,6 @@ def test_publish_cli_promotes_staged_import_and_preserves_scaffold(
 ) -> None:
     checkout = _seed_source_checkout(tmp_path)
     token = _register_selection("selected-source", checkout)
-
-    started = client.post(
-        "/api/desktop-import/start",
-        json={"selection_token": token, "operation_id": "publish-pass"},
-    )
-    assert started.status_code == 200
-    _wait_for_status("staged")
-
     (settings.models_dir / "late-model.bin").write_text("kept", encoding="utf-8")
     (settings.data_dir / ".api_key").write_text("current-secret", encoding="utf-8")
     conn = connect()
@@ -346,6 +594,13 @@ def test_publish_cli_promotes_staged_import_and_preserves_scaffold(
         conn.commit()
     finally:
         conn.close()
+
+    started = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "publish-pass"},
+    )
+    assert started.status_code == 200
+    _wait_for_status("staged")
 
     code, payload = _publish_cli(monkeypatch)
 
@@ -372,6 +627,27 @@ def test_publish_cli_promotes_staged_import_and_preserves_scaffold(
     status = desktop_import_module.desktop_import_manager.status()
     assert status.status == "completed"
     assert status.requires_restart is False
+
+
+def test_publish_cli_uses_verified_stage_after_source_removal(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkout = _seed_source_checkout(tmp_path)
+    token = _register_selection("removed-source", checkout)
+
+    started = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "source-removed-pass"},
+    )
+    assert started.status_code == 200
+    _wait_for_status("staged")
+    shutil.rmtree(checkout)
+
+    code, payload = _publish_cli(monkeypatch)
+
+    assert code == 0
+    assert payload["status"] == "ok"
+    assert (settings.uploads_dir / "1" / "1-lecture.pdf").read_bytes() == b"%PDF-1.7 source"
 
 
 def test_publish_rollback_restores_live_scaffold_and_keeps_stage(
@@ -462,3 +738,49 @@ def test_non_pristine_destination_reports_conflicts(client: TestClient, db) -> N
     body = response.json()
     assert body["destination_ready"] is False
     assert body["conflicts"]
+
+
+def test_reset_discards_stage_idempotently(client: TestClient, tmp_path: Path) -> None:
+    checkout = _seed_source_checkout(tmp_path)
+    token = _register_selection("reset-source", checkout)
+
+    started = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "reset-pass"},
+    )
+    assert started.status_code == 200
+    _wait_for_status("staged")
+
+    first = client.post("/api/desktop-import/reset")
+    second = client.post("/api/desktop-import/reset")
+
+    assert first.status_code == 200
+    assert first.json()["status"] == "idle"
+    assert "discarded" in first.json()["message"]
+    assert second.status_code == 200
+    assert second.json()["status"] == "idle"
+    assert "No staged import was waiting" in second.json()["message"]
+    assert desktop_import_module._stage_root_path().exists() is False
+    assert (checkout / "data" / "uploads" / "1" / "1-lecture.pdf").read_bytes() == (
+        b"%PDF-1.7 source"
+    )
+
+
+def test_reset_preserves_in_progress_publication_recovery(
+    client: TestClient, tmp_path: Path
+) -> None:
+    checkout = _seed_source_checkout(tmp_path)
+    token = _register_selection("recovery-reset-source", checkout)
+    started = client.post(
+        "/api/desktop-import/start",
+        json={"selection_token": token, "operation_id": "recovery-reset-pass"},
+    )
+    assert started.status_code == 200
+    _wait_for_status("staged")
+    desktop_import_module._initialize_publish_recovery()
+
+    response = client.post("/api/desktop-import/reset")
+
+    assert response.status_code == 409
+    assert desktop_import_module._stage_root_path().exists()
+    assert desktop_import_module._publish_recovery_record_path().exists()

@@ -110,6 +110,11 @@ def cancel_import() -> DesktopImportStatusRead:
     return _status_read(desktop_import_manager.cancel())
 
 
+@router.post("/reset", response_model=DesktopImportStatusRead)
+def reset_import() -> DesktopImportStatusRead:
+    return _status_read(desktop_import_manager.reset())
+
+
 def _preview_read(preview: ImportPreview) -> DesktopImportPreviewRead:
     return DesktopImportPreviewRead(
         source_name=preview.source_name,

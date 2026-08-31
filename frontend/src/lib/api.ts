@@ -550,6 +550,9 @@ export const api = {
   cancelDesktopImport: () =>
     requestJson<DesktopImportStatus>('/api/desktop-import/cancel', { method: 'POST' }),
 
+  resetDesktopImport: () =>
+    requestJson<DesktopImportStatus>('/api/desktop-import/reset', { method: 'POST' }),
+
   getClassWriterSettings: (classId: number, signal?: AbortSignal) =>
     requestJson<ClassWriterSettingsRead>(`/api/classes/${classId}/writer-settings`, { signal }),
 

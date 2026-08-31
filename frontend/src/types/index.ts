@@ -230,6 +230,7 @@ export interface DesktopImportPreview {
   source_name: string
   source_kind: string
   schema_version?: number
+  database_identity?: string | null
   class_count: number
   document_count: number
   total_entries: number
@@ -238,7 +239,7 @@ export interface DesktopImportPreview {
   warnings: string[]
   conflicts?: string[]
   asset_summary?: DesktopImportAssetSummary | null
-  old_runtime_active?: boolean
+  old_runtime_active?: boolean | null
   source_lock?: string | null
 }
 
@@ -268,7 +269,12 @@ export interface DesktopImportStatus {
   can_resume: boolean
   requires_restart: boolean
   preview: DesktopImportPreview | null
+  schema_version?: number
+  database_identity?: string | null
+  conflicts?: string[]
   asset_summary?: DesktopImportAssetSummary | null
+  old_runtime_active?: boolean | null
+  source_lock?: string | null
 }
 
 export interface WriterCapabilities {

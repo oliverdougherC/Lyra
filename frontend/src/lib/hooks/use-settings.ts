@@ -117,3 +117,11 @@ export function useCancelDesktopImport() {
     onSuccess: (status) => queryClient.setQueryData(settingsKeys.desktopImport, status),
   })
 }
+
+export function useResetDesktopImport() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => api.resetDesktopImport(),
+    onSuccess: (status) => queryClient.setQueryData(settingsKeys.desktopImport, status),
+  })
+}

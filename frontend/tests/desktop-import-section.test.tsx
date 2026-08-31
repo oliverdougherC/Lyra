@@ -7,6 +7,7 @@ import {
   useCancelDesktopImport,
   useDesktopImportStatus,
   usePreviewDesktopImport,
+  useResetDesktopImport,
   useStartDesktopImport,
 } from '@/lib/hooks/use-settings'
 import { pickDesktopImportDirectory } from '@/lib/runtime'
@@ -16,6 +17,7 @@ vi.mock('@/lib/hooks/use-settings', () => ({
   usePreviewDesktopImport: vi.fn(),
   useStartDesktopImport: vi.fn(),
   useCancelDesktopImport: vi.fn(),
+  useResetDesktopImport: vi.fn(),
 }))
 
 vi.mock('@/lib/runtime', () => ({
@@ -82,6 +84,25 @@ describe('DesktopImportSection', () => {
       isPending: false,
       mutate: vi.fn(),
     } as never)
+    vi.mocked(useResetDesktopImport).mockReturnValue({
+      isPending: false,
+      mutateAsync: vi.fn().mockResolvedValue({
+        available: true,
+        destination_ready: true,
+        status: 'idle',
+        phase: null,
+        message: 'Staged import discarded. Choose a folder to start again.',
+        source_name: null,
+        copied_entries: 0,
+        total_entries: 0,
+        copied_bytes: 0,
+        total_bytes: 0,
+        cancel_requested: false,
+        can_resume: false,
+        requires_restart: false,
+        preview: null,
+      }),
+    } as never)
     vi.mocked(pickDesktopImportDirectory).mockResolvedValue({
       selectionToken: 'e'.repeat(64),
       label: 'Old Lyra',
@@ -104,5 +125,39 @@ describe('DesktopImportSection', () => {
     expect(vi.mocked(useStartDesktopImport)().mutateAsync).toHaveBeenCalledWith(
       expect.objectContaining({ selectionToken: 'e'.repeat(64) }),
     )
+  })
+
+  it('confirms before discarding a staged import', async () => {
+    vi.mocked(useDesktopImportStatus).mockReturnValue({
+      data: {
+        available: true,
+        destination_ready: true,
+        status: 'staged',
+        phase: 'awaiting_publish',
+        message: 'Import staged. Quit and relaunch Lyra to publish it safely.',
+        source_name: 'Old Lyra',
+        copied_entries: 12,
+        total_entries: 12,
+        copied_bytes: 1024,
+        total_bytes: 1024,
+        cancel_requested: false,
+        can_resume: false,
+        requires_restart: true,
+        preview,
+      },
+      isPending: false,
+      isError: false,
+      refetch: vi.fn(),
+    } as never)
+
+    const user = userEvent.setup()
+    render(<DesktopImportSection />)
+
+    await user.click(screen.getByRole('button', { name: 'Discard staged import' }))
+    expect(screen.getByRole('alertdialog')).toHaveTextContent('Discard staged import?')
+    expect(vi.mocked(useResetDesktopImport)().mutateAsync).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Discard staged import' }))
+    expect(vi.mocked(useResetDesktopImport)().mutateAsync).toHaveBeenCalledTimes(1)
   })
 })
