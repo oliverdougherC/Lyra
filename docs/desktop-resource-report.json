@@ -31,7 +31,7 @@
           "kind": "file",
           "mode": "0o755",
           "path": "Contents/MacOS/lyra-desktop",
-          "sha256": "4d90442ace2cf7cd74486f3f12de634eb60d276607508eed99d1d4d5a015d39a",
+          "sha256": "61c21189d84a3a3536b0092829f17717daedfe86aa80439307a94ced2fa04bed",
           "size_bytes": 12180144
         },
         {

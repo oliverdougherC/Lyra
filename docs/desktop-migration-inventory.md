@@ -218,12 +218,12 @@ harness and physical steps.
 
 ## Final local verification
 
-Exact package source commit: `eaebb680eca7ce4dbe5d5b6a34a3da6efb31ff48`.
+Exact package source commit: `0d075921224988e86b9bc229ec931b76e51b2384`.
 
 | Check | Result |
 | --- | --- |
 | Backend | 2,581 passed, 1 skipped; Ruff passed |
-| Frontend | ESLint and TypeScript passed; 703 unit tests and 3 Playwright smoke tests passed |
+| Frontend | ESLint and TypeScript passed; 705 unit tests and 3 Playwright smoke tests passed |
 | Real-stack acceptance | 104 passed with zero unconsumed backend failures |
 | Rust shell | format, Clippy with warnings denied, and 3 unit tests passed |
 | Dependency audits | Python and frontend had no known vulnerabilities; Rust audit exited zero with 17 allowed upstream warnings |
