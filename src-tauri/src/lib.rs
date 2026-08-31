@@ -726,17 +726,21 @@ fn validate_api_base(api_base: &str, expected_listener_addr: &str) -> Result<(),
 }
 
 fn sanitize_diagnostics(raw: &str, secret: &str) -> Option<String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    sanitize_diagnostics_with_home(raw, secret, &home)
+}
+
+fn sanitize_diagnostics_with_home(raw: &str, secret: &str, home: &str) -> Option<String> {
     let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.is_empty() {
         return None;
     }
-    let home = std::env::var("HOME").unwrap_or_default();
     let mut safe = collapsed;
     if !secret.is_empty() {
         safe = safe.replace(secret, "<secret>");
     }
     if !home.is_empty() {
-        safe = safe.replace(&home, "<home>");
+        safe = safe.replace(home, "<home>");
     }
     if contains_sensitive_startup_text(&safe) {
         return Some("<redacted sensitive startup diagnostics>".to_string());
@@ -1629,10 +1633,12 @@ raise SystemExit("unsupported startup fixture mode")
 
     #[test]
     fn redacts_unicode_diagnostics() {
-        std::env::set_var("HOME", "/Users/private");
-        let detail = sanitize_diagnostics(
+        // Passes the home directory explicitly: mutating the process-global
+        // HOME here races with concurrently running redaction tests.
+        let detail = sanitize_diagnostics_with_home(
             "prefix /Users/private/Library/Logs aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa café",
             &"a".repeat(64),
+            "/Users/private",
         )
         .unwrap();
 
