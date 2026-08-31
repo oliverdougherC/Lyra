@@ -1,39 +1,41 @@
 # Lyra
 
-Lyra is a local-first AI study companion for students. It runs on your machine, keeps class
-materials organized by class, and gives you help with documents, chat, solutions, study tools,
-and writing.
+Lyra is a desktop-first, local-first AI study workspace for one student and their own course
+material. `Lyra.app` combines a thin `Tauri 2` shell, a static `Vite/React` frontend, and a frozen
+Python backend, with SQLite storage, optional Exa-backed web research, and a tutor endpoint that can
+be either loopback-local or remote.
 
 ## What it does now
 
-- Create a class workspace.
-- Upload PDFs, text files, Markdown, and images the app can process.
-- Chat with your class material in a class-scoped workspace.
-- Generate and review solutions.
-- Build study decks and quizzes from processed documents.
-- Draft and review writing in a dedicated workspace.
-- Configure an OpenAI-compatible tutor endpoint and optional web research.
+- Create class workspaces and organize course documents by class.
+- Chat against uploaded material in a class-scoped workspace.
+- Generate solutions, flashcards, quizzes, and draft-writing artifacts.
+- Run a bounded general class agent with reviewable file and command proposals.
+- Configure an OpenAI-compatible tutor endpoint and optional Exa web research.
 
 ## Privacy and network behavior
 
 Lyra does not use accounts, telemetry, analytics, or update checks.
 
-Its backend binds to loopback, and local embeddings, OCR, and document processing stay on your
-machine. Content only leaves the machine when you deliberately use a non-local tutor endpoint or
-web research. If the tutor endpoint is remote, Lyra shows that fact in Settings and asks before
-sending document text. If you skip Firecrawl, web research is unavailable.
+Course files, extracted text, rendered pages, embeddings, and the SQLite database stay on the local
+machine. Network traffic happens only when the user deliberately:
 
-Lyra still needs a tutor endpoint in Settings. A bundled local model is not shipped yet.
+- configures a tutor endpoint and sends a request to it; or
+- enables web research and uses Exa.
+
+Remote tutor endpoints are first-class and explicitly labeled. Lyra treats non-loopback endpoints as
+remote, requires acknowledgement before document text is sent there, and keeps Exa disabled until an
+API key is configured.
 
 ## Release posture
 
-Lyra currently runs from a source checkout. macOS on Apple Silicon is the first supported release
-target; other platforms may work, but they are not yet part of the release gate. Expect the data
-format and setup process to keep evolving until the first packaged release.
+This branch produces reviewable Apple Silicon `.app` and DMG artifacts. They are not a finished
+signed release: Developer ID signing, notarization, the physical clean-8-GB-Mac run, and the final
+release-candidate soak remain explicit gates.
 
-## Quick start
+## Contributor quick start
 
-Start the full app from the repository root:
+Run the development stack from the repository root:
 
 ```bash
 ./run
@@ -42,47 +44,47 @@ Start the full app from the repository root:
 Useful commands:
 
 ```bash
-./run doctor         # Check prerequisites and local health
-./run status         # Show owned services and health
-./run logs           # Show recent logs
-./run stop           # Stop only services owned by this checkout
-./run --skip-firecrawl
-./run --dev
+./run doctor
+./run status
+./run logs
+./run stop
+./scripts/run-acceptance.sh
 ```
 
-Run `./run doctor` first if you are unsure whether your machine is ready. The launcher checks
-Python 3.12+, Node.js 20.9+, pnpm, Docker, disk space, and the required ports before it starts.
-Use `./run --skip-firecrawl` when you want a degraded launch without web research.
+`./run` is only the contributor lifecycle for this checkout. It starts the backend and Vite
+frontend so focused changes can be developed quickly; it is not an alternative installed product.
+For the real-backend browser suite, use `./scripts/run-acceptance.sh`.
 
 ## Project layout
 
 ```text
-backend/   FastAPI app, document pipeline, retrieval, settings, storage
-frontend/  Next.js app, UI components, hooks, and styles
-docs/      Public docs, roadmaps, and historical handoff records
-scripts/   Launcher, setup, and evaluation helpers
+backend/   FastAPI app, storage, retrieval, tutor orchestration, tests
+frontend/  Vite/React app, routes, components, browser tests
+docs/      Live product docs plus labelled historical records
+scripts/   Verification helpers, acceptance entrypoints, packaging evidence tools
+packaging/ PyInstaller spec, component inventory, sidecar staging
+src-tauri/ Thin native shell, capabilities, CSP, and lifecycle ownership
 ```
 
 ## Documentation
 
-User docs
+User and release docs
 
-- [Local deployment](docs/local-deployment.md) - setup, launch, recovery, and degraded mode
-- [Troubleshooting](docs/troubleshooting.md) - common failures a student can fix locally
-- [Privacy and data location](docs/privacy-and-data-location.md) - what stays local and what can
-  leave the machine
-- [macOS Apple Silicon release checklist](docs/macos-apple-silicon-release-checklist.md) - release
-  gate for clean install, recovery, and data preservation
-- [Feature roadmap](docs/feature-roadmap.md) - current priorities and completed surfaces
+- [Architecture](docs/architecture.md)
+- [Local deployment](docs/local-deployment.md)
+- [Privacy and data location](docs/privacy-and-data-location.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [macOS Apple Silicon release checklist](docs/macos-apple-silicon-release-checklist.md)
+- [Feature roadmap](docs/feature-roadmap.md)
+- [Security and CI gates](docs/security-and-ci-gates.md)
 
 Contributor docs
 
-- [Architecture](docs/architecture.md) - components, data flow, and API boundaries
-- [Code conventions](docs/conventions.md) - style, structure, and testing rules
-- [Contributing, testing, and migrations](docs/contributing-testing-migrations.md) - change
-  workflow, verification, and schema updates
-- [RAG pipeline](docs/rag-pipeline.md) - parsing, chunking, embedding, and retrieval
-- [Design system](docs/design-system.md) - tokens, components, and motion rules
+- [Code conventions](docs/conventions.md)
+- [Contributing, testing, and migrations](docs/contributing-testing-migrations.md)
+- [RAG pipeline](docs/rag-pipeline.md)
+- [Design system](docs/design-system.md)
+- [Desktop migration inventory](docs/desktop-migration-inventory.md)
 
 Historical records
 
@@ -94,9 +96,3 @@ Historical records
 - [Phase 4 writer integration](docs/phase-4-writer-integration.md)
 - [Writer overhaul](docs/writer-overhaul.md)
 - [Writer roadmap archive](docs/writer-roadmap.md)
-
-## For contributors
-
-If you are changing the app, start with [docs/architecture.md](docs/architecture.md) and
-[docs/conventions.md](docs/conventions.md). If you are changing the launcher or local startup
-behavior, read [docs/local-deployment.md](docs/local-deployment.md) first.

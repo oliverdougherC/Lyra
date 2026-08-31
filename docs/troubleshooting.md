@@ -1,82 +1,69 @@
 # Troubleshooting
 
-This guide covers problems a student can usually fix without reading source code.
+This guide covers the problems a student or contributor can usually fix without reading source code.
 
 ## First checks
 
-- Run `./run doctor` to check Python, Node.js, pnpm, Docker, disk space, and required ports.
-- Run `./run status` to see whether Lyra already owns a healthy stack.
-- Run `./run logs` after a failed start or a bad restart.
-- Run `./run stop` before retrying when the launcher thinks this checkout still owns stale
-  processes.
+- Quit and reopen `Lyra.app` once. The shell will restart only the backend it owns.
+- If startup fails, use the fixed recovery screen and keep `~/Library/Logs/Lyra/backend.log` for a
+  bug report. It is bounded and redacts the home-directory prefix.
+- Confirm `~/Library/Application Support/Lyra` remains present; replacing or deleting the app does
+  not delete course data or optional models.
 
-## If `./run` will not start
+## Contributor checkout diagnostics
 
-- Start Docker Desktop or Docker Engine.
-- Free ports `3000`, `8000`, and `3002`, or stop the other Lyra checkout that owns them.
-- Install Python 3.12+, Node.js 20.9+, and pnpm.
-- Try `./run --no-browser` if browser launch is the only failing step.
+`./run doctor`, `./run status`, `./run logs`, and `./run stop` remain contributor tools for the
+source test stack. Python, Node, pnpm, and fixed development ports are not installed-app
+prerequisites.
 
 ## If the app starts but looks wrong
 
-- Use `./run stop`, then start again with `./run`.
-- Use `./run --clean` if the frontend cache looks stale.
-- Check `./run logs` for the last launcher, backend, or frontend error.
+- Reopen `Lyra.app`. If only a source build looks stale, rebuild the Vite assets and `.app`.
 
 ## If web research is unavailable
 
-- Use `./run --skip-firecrawl` to start Lyra in degraded mode.
-- Local documents, chat, study tools, and drafts still work.
-- Firecrawl-backed search and scrape stay unavailable until the bundled stack is healthy.
-
-## If work was interrupted
-
-- Start Lyra again with `./run`.
-- Interrupted ingestion, solve, study, draft, tool, and command work is reconciled during startup.
-- If a document or class was deleted while a run was in flight, rerun the action instead of
-  waiting for the old job.
-
-## If the launcher reports an unreadable or unsupported runtime state
-
-- This means `.lyra/runtime.json`, the launcher's own ownership file, is corrupt, truncated,
-  or was written by a different version of Lyra. It is not your documents or database, which
-  live under `data/` and are never touched by this recovery.
-- The launcher will not stop or kill any process while it cannot trust that file, so nothing
-  is signaled on your behalf.
-- Run `./run status` first. Even with an unreadable state it still reports what is listening on
-  ports 3000 and 8000 without touching those processes.
-- If an old Lyra is still running, stop it with the launcher that started it. If the message
-  says the state was written by a newer Lyra, use that newer version to stop it; do not
-  downgrade to manage it.
-- Once nothing is running, move `.lyra/runtime.json` aside and run `./run` again.
-
-## If backup or restore fails
-
-- Run `./run stop` and retry the backup if it reports that the database is still busy. That message
-  means another process still has the SQLite file open for writing.
-- Choose a new archive path if `./run backup` says the target already exists.
-- Restore into a path that does not already exist. Lyra refuses in-place overwrite on purpose.
-- If the backup came from a checkout that used `LYRA_DB_PATH` outside `LYRA_DATA_DIR`, pass an
-  explicit `--db-path` on restore and create that parent directory first.
-- If restore says the archive failed validation or SQLite `quick_check`, discard that restore
-  attempt and keep the original backup file. Lyra stages the restore first, so the requested target
-  paths stay untouched when validation fails.
-- If restore says the external database path could not be finalized, Lyra already rolled back the
-  requested targets. Retry with fresh explicit paths after fixing the filesystem problem.
-
-## If you are filing a bug report
-
-- Run `./run diagnostics` to write `logs/diagnostics.json`, a structured snapshot of this
-  install: schema currency, tutor and web-research configuration, which optional models are
-  present, content counts, and platform.
-- The file is safe to attach. It carries no document text, no tutor API key, and no private
-  path: the endpoint URL is reduced to whether it is local, the key to present-or-absent, and
-  absolute paths to a `<lyra>` or `~` anchor.
-- It works even when the app will not start: `./run diagnostics` builds the same snapshot
-  offline when the backend is not reachable.
+- Open Settings and confirm an Exa API key is configured.
+- Confirm `allow_web_research` is enabled for the workspace you are testing.
+- Use the explicit Exa connection test in Settings if configuration looks right but searches still
+  fail.
+- Missing or failed Exa configuration disables web research without making documents, chat, study,
+  or drafts unavailable.
 
 ## If the tutor endpoint is remote
 
-- Open Settings and confirm the endpoint is the one you meant to use.
-- If the endpoint is not local, turn on the acknowledgement before sending document text.
-- If you only need local documents, use a local endpoint or leave the endpoint unset.
+- Open Settings and confirm the endpoint host is the one you intended.
+- If the endpoint is non-local, acknowledge remote document-text sending before using features that
+  send course material upstream.
+- If you only want local operation, point Lyra at a loopback endpoint instead.
+
+## If acceptance fails locally
+
+- Stop any existing stack with `./run stop`.
+- Re-run `./scripts/run-acceptance.sh` from the repository root.
+- If the script reports a port collision, clear the conflicting process before retrying.
+
+## If work was interrupted
+
+- Reopen `Lyra.app` (or restart the contributor stack when testing from source).
+- Interrupted ingestion, solution, study, draft, and agent work is reconciled on startup.
+- If the interrupted action was explicitly cancelled or its source was deleted, rerun the action
+  instead of waiting for the old job to finish.
+
+## If backup or restore fails
+
+- For this migration review build, the proven atomic backup/restore engine remains available to
+  contributors through `./run backup` and `./run restore`; the native file-selector surface is a
+  remaining packaged-flow gate and must not be reported as complete.
+- Choose a new archive path if backup says the target already exists.
+- Restore into a path that does not already exist.
+- If restore fails validation, keep the original archive and retry only after fixing the filesystem
+  or path issue it reported.
+
+## If you are filing a bug report
+
+- Export the packaged resource/runtime reports when reproducing a desktop issue; contributors may
+  also run `./run diagnostics` for the source stack.
+- The diagnostics bundle is redacted: no document text, no API keys, and no raw absolute private
+  paths.
+- If you are validating packaged-desktop evidence rather than checkout startup, pair that with
+  `scripts/desktop_resource_report.py` output or a `scripts/packaged_soak_harness.py` run record.

@@ -1,108 +1,98 @@
 # Contributing, Testing, and Migrations
 
-This guide is for code and schema changes.
+This guide is for code, workflow, and schema changes on the desktop migration branch.
 
 ## Before you change anything
 
 - Read [Architecture](architecture.md) and [Code conventions](conventions.md).
-- If you are changing startup or recovery behavior, also read
-  [Local deployment](local-deployment.md).
-- Know the merge gate: `main` is protected by a repository ruleset and every change lands
-  through a PR whose **`CI Gate` check is green**. That aggregate requires backend
-  format/lint/tests, frontend format/lint/typecheck/unit/build, the frontend production
-  audit, the browser/E2E lane, and the Python production vulnerability gate. See
-  [Security and CI gates](security-and-ci-gates.md).
+- Read [Security and CI gates](security-and-ci-gates.md) before changing workflows or release
+  assumptions.
+- Treat historical handoff docs as evidence, not as live requirements.
 
-## Test matrix
+## Core local checks
 
-Backend logic:
+Backend:
 
 ```bash
-source .venv/bin/activate
-python -m pytest backend/tests
+uv run --extra dev ruff format --check backend scripts
+uv run --extra dev ruff check backend scripts
+uv run --extra dev pytest
 ```
 
-Frontend logic:
+Frontend:
 
 ```bash
 cd frontend
-pnpm run lint
-pnpm run typecheck
-pnpm run test
-pnpm run build
+pnpm format:check
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm audit --prod
+pnpm test:e2e
 ```
 
-Frontend formatting:
+Real-backend browser acceptance:
 
 ```bash
-cd frontend
-pnpm run format:check
+./scripts/run-acceptance.sh
 ```
 
-Python production dependency security (mandatory before release; same command CI runs):
+Python security gate:
 
 ```bash
 uv run --extra security python scripts/python_security_gate.py
 ```
 
-This audits the exact locked production graph from `uv.lock` and fails on known
-High/Critical advisories. It fails closed if the scanner or advisory feed is unavailable —
-an outage is never reported as clean. See [Security and CI gates](security-and-ci-gates.md)
-for the policy and the temporary-exception process.
-
-Launcher or readiness logic:
+Desktop and packaging checks:
 
 ```bash
-source .venv/bin/activate
-python -m pytest \
-  backend/tests/test_lyra_launcher.py \
-  backend/tests/test_api_health.py \
-  backend/tests/test_database.py
+python scripts/check_active_references.py
+uv run --extra dev python scripts/packaged_python_smoke.py
+uv run --extra packaging pyinstaller --clean --noconfirm packaging/lyra_backend.spec
+uv run python scripts/frozen_backend_smoke.py dist/lyra-backend/lyra-backend
+uv run python packaging/stage_sidecar.py
+python scripts/desktop_resource_report.py --root backend=backend --root frontend=frontend
 ```
 
-Run the smallest command set that covers your change, then add the
-feature-specific tests that exercise the code path you touched.
+## Rust and desktop-shell checks
+
+Run these when the branch contains `src-tauri/Cargo.toml`:
+
+```bash
+cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --workspace --all-targets
+(cd src-tauri && cargo audit)
+```
+
+Do not add Rust/Tauri claims to the live docs unless those checks and the desktop artifact job have
+real evidence behind them.
 
 ## Migrations
 
-- Add new schema changes as a numbered SQL file in `backend/storage/migrations/`.
+- Add new schema changes as numbered SQL files in `backend/storage/migrations/`.
 - Never edit a migration that has already shipped.
-- Keep the filename prefix increasing by one so `migrate()` can apply files in order.
-- Treat `pragma user_version` as the migration checkpoint, not a value to hand-edit.
+- Keep `pragma user_version` aligned only through checked-in migrations.
+- Treat the desktop runtime migration and the SQLite schema as separate concerns; packaging does not
+  authorize rewriting on-disk data contracts.
 
-After a schema change, run the database and readiness tests plus the feature
-tests that cover the new tables or columns. If the change affects startup,
-also run `./run doctor`.
+## Release evidence helpers
 
-## Launcher runtime state
+Three scripts support the packaged-desktop release path:
 
-The launcher's `.lyra/runtime.json` is a **separate** versioned contract from the SQLite
-schema, keyed by `STATE_VERSION` in `scripts/lyra_launcher.py`. Do not conflate it with
-`pragma user_version`: the schema governs user data, the runtime state governs process
-ownership. See
-[Local deployment: Runtime state versioning and recovery](local-deployment.md#runtime-state-versioning-and-recovery)
-for the field inventory, the recovery contract, and the compatibility boundaries that must
-stay manual.
+- `scripts/desktop_resource_report.py`
+- `scripts/desktop_runtime_report.py`
+- `scripts/packaged_soak_harness.py`
 
-- `STATE_VERSION` has only ever been `1`. Never edit the shape a shipped launcher already wrote.
-- To evolve it, bump `STATE_VERSION`, extend `SUPPORTED_STATE_VERSIONS`, and add a forward reader
-  for the older shape. Loading a version this checkout does not support must keep refusing
-  safely (no process is ever signaled from an untrusted state).
-- Cover any new field or version transition in
-  `backend/tests/test_lyra_launcher.py` (the PLA-146 "runtime state-version skew" section), and
-  never weaken an ownership check to make recovery more automatic.
+Use them to inventory bundle contents and prepare manual soak runs. They are evidence helpers, not a
+substitute for the actual packaged-app launch and restart checks.
 
-## Release verification
+## Completion standard
 
-Before you call a change done, verify the behavior at the level the change touched.
+Before calling a change done:
 
-- Backend-only change:
-  `source .venv/bin/activate && python -m pytest backend/tests`
-- Frontend-only change:
-  `cd frontend && pnpm run lint`, `cd frontend && pnpm run typecheck`, and the relevant frontend
-  tests
-- Launcher change:
-  `source .venv/bin/activate && python -m pytest backend/tests/test_lyra_launcher.py
-  backend/tests/test_api_health.py backend/tests/test_database.py` and `./run doctor`
-- Data-flow or migration change:
-  the schema tests, the affected feature tests, and one full start and stop cycle with `./run`
+- run the smallest relevant local check set;
+- keep `CI Gate` green conceptually when editing workflow assumptions;
+- update live docs if you changed the current runtime contract;
+- keep historical docs clearly labelled when they still mention retired surfaces.

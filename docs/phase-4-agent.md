@@ -1,5 +1,9 @@
 # Phase 4 Agent Specification
 
+> Historical specification. This records the 2026-08-07 checkout-era implementation and its
+> former provider topology. The live desktop/Exa contract is in `README.md`, `architecture.md`,
+> and `desktop-migration-inventory.md`.
+
 **Status:** Implemented on 2026-08-07; automated close-out is green. Final phase acceptance still
 requires a real pinned Firecrawl instance and the recorded breakpoint/theme browser pass described
 in P4.7. See [phase-4-handoff.md](phase-4-handoff.md).

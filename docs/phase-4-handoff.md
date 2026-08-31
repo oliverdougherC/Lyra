@@ -1,5 +1,10 @@
 # Phase 4 Agent Handoff
 
+> Historical record. This document describes the completed 2026-08-07 Firecrawl/checkout-era
+> agent release and its evidence. The live desktop-migration contract now lives in
+> `README.md`, `docs/architecture.md`, `docs/security-and-ci-gates.md`, and
+> `docs/desktop-migration-inventory.md`.
+
 **Status:** complete on 2026-08-07. The implementation, local deployment drill, live Firecrawl
 checks, evidence flow, and responsive visual acceptance all passed.
 

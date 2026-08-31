@@ -1,5 +1,9 @@
 # Phase 4 Writer Integration Boundary
 
+> Historical compatibility record. It describes the 2026-08-07 provider topology; the live
+> desktop/Exa contract is defined by `README.md`, `architecture.md`, and
+> `desktop-migration-inventory.md`.
+
 **Status:** P4.0 complete, 2026-08-07. The writer owner finished W1-W6 before shared integration;
 Phase 4 retained its public contracts, replaced its direct web transport with the shared Firecrawl
 adapter, and extended its source ledger additively.

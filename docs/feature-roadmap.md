@@ -1,296 +1,81 @@
 # Feature Roadmap
 
-This is Lyra's live product roadmap. It replaces the old phase-by-phase build plan, which no longer
-matched the application after study tools, the draft workspace, the writer overhaul, and the
-general agent landed in a different order than originally planned.
+This is Lyra's live roadmap for the desktop migration branch.
 
-The historical phase documents are still valuable implementation records. They are evidence of
-what shipped and why, not the queue for what should be built next.
+Historical phase documents remain useful evidence, but they are not the current queue. The current
+queue is about finishing a dependable desktop runtime around the product that already exists.
 
 ## Direction
 
-Lyra is a local-first study workspace for one student and their own course material. It should make
-the common work of studying, solving, and writing faster without hiding uncertainty or taking
-ownership of the student's files.
+Lyra should be a local-first study workspace for one student and their own course material, with a
+desktop runtime that is honest about what stays local, what may go remote, and what is still not
+release-ready.
 
-The current product rule is simple: reliability before breadth. A feature is not finished merely
-because its happy path exists. It must survive restarts, dependency outages, malformed model output,
-and ordinary user mistakes without corrupting work or presenting a generic failure as success.
-
-New work is evaluated in this order:
+Work is prioritized in this order:
 
 1. Protect student data and privacy.
-2. Prevent or recover from user-facing failure.
-3. Make degraded behavior explicit and useful.
-4. Add regression coverage and operational evidence.
-5. Only then expand the product surface.
+2. Make failure and degraded behavior explicit.
+3. Preserve durable work across restart and outage paths.
+4. Prove behavior with CI and release evidence.
+5. Only then broaden the product surface.
 
-## Completed
+## Current product surface
 
-These are current product surfaces, not promises about every edge case. Open hardening work is
-tracked under **Now**.
+- Class workspaces, documents, profile facts, and retrieval
+- Class-scoped chat and agent turns
+- Solution generation and follow-up
+- Flashcard decks and quizzes
+- Draft writing, review, and revision history
+- Loopback or remote OpenAI-compatible tutor endpoints
+- Optional Exa-backed web research
 
-### Class workspace and course context
+## Now: desktop migration stabilization
 
-- Create, rename, archive, restore, and delete class workspaces.
-- Upload and manage course documents, including moving a document between classes.
-- Extract, chunk, embed, and retrieve text with page and section provenance.
-- Combine vector and lexical retrieval, with optional reranking and citation-aware context.
-- Maintain a student-visible class profile whose inferred facts can be corrected.
+### 1. Desktop runtime and packaging
 
-### Tutor and solutions
+- [x] Move the frontend to Vite/React runtime assumptions.
+- [x] Add packaged-runtime evidence helpers for resource inventory and soak preparation.
+- [x] Land the `src-tauri/` desktop shell and package wiring on the migration branch.
+- [x] Prove packaged Python sidecar startup from a built desktop artifact, not just from the source
+  checkout.
+- [x] Add a macOS Apple Silicon app and DMG artifact lane to CI.
+- [ ] Confirm that artifact lane passes on the pushed branch tip.
+- [ ] Complete the real release-candidate soak on one exact merged commit.
+- [ ] Finish signing and notarization only after the packaged runtime itself is stable.
 
-- Hold class-scoped conversations grounded in uploaded material.
-- Use Guide, Show, and Solve assistance modes.
-- Parse assignments into problems, correct the parse before solving, and generate solutions in the
-  background.
-- Record which solution steps were checked by deterministic tools and which remain model-derived.
-- Ask follow-up questions about a solution and export the result.
+### 2. Privacy, safety, and network honesty
 
-### Study tools
+- [x] Keep embeddings, OCR, and reranking local.
+- [x] Treat remote tutor endpoints as explicit, acknowledged remote operation.
+- [x] Keep Exa disabled until configured and avoid probing it during startup.
+- [x] Bound and audit web research requests before they leave the machine.
+- [x] Preserve the same privacy contract in the packaged runtime.
+- [ ] Verify the contract again during the physical clean-machine release soak.
 
-- Generate flashcard decks and quizzes from class material.
-- Review cards with a persisted scheduler.
-- Track quiz attempts and expose topic-level weaknesses from recorded answers.
+### 3. CI and evidence
 
-### Writing workspace
+- [x] Keep backend formatting, lint, tests, and Python security in `CI Gate`.
+- [x] Keep frontend format/lint/typecheck/unit/build/browser/acceptance coverage in `CI Gate`.
+- [x] Add active-reference absence checks so live docs and workflows stop drifting back to
+  retired runtime language.
+- [x] Add packaged-Python smoke and deterministic resource-report evidence lanes.
+- [x] Make Rust/Tauri fmt, clippy, test, audit, and the macOS artifact job execute when the checked-in
+  shell is present.
+- [ ] Confirm the new hosted lanes pass after the branch is pushed.
 
-- Create and edit drafts with revision history.
-- Capture an assignment brief, maintain a document plan, and work section by section.
-- Chat with a writing assistant that can read the draft, course sources, comments, and plan.
-- Run longer drafting and review passes, produce review comments, and propose changes for approval.
-- Track sources and excerpts, distinguish course evidence from web evidence, and export drafts.
-- Use optional web research through a loopback-only Firecrawl service.
+### 4. Release documentation
 
-The archived writer plan is in [writer-roadmap.md](writer-roadmap.md). The decision record and
-implementation shape are in [writer-overhaul.md](writer-overhaul.md) and
-[phase-4-writer-integration.md](phase-4-writer-integration.md).
+- [x] Rewrite live docs around Vite, Exa, remote-or-loopback tutor operation, and the desktop
+  migration target.
+- [x] Separate live docs from historical records.
+- [x] Record local exact-commit packaged launch, process, resource, and failure evidence.
+- [ ] Record signed/notarized clean-machine evidence and keep the Apple Silicon checklist current.
 
-### Agent and local operation
+## Later
 
-- Use a general class agent with bounded tool profiles, visible activity, confirmation gates, and
-  auditable workspace changes.
-- Configure an OpenAI-compatible tutor endpoint, with an explicit warning before private material
-  is sent to a non-local endpoint.
-- Launch the frontend, backend, and optional Firecrawl dependency from one repository command.
-- Inspect liveness, readiness, logs, ownership, and degraded service state from the launcher.
-
-## Now: stabilization release
-
-No new major feature should enter this section until these gates are closed. This work is about
-making the product that already exists dependable during real study sessions.
-
-### 1. Data integrity and privacy
-
-- [x] Make each SQLite migration atomic and advance its version only after a successful commit.
-- [x] Add a bounded SQLite busy timeout so brief write contention does not become an immediate
-  `database is locked` failure.
-- [x] Prevent private draft, brief, plan, comment, and conversation text from being copied into web
-  search queries.
-- [x] Keep raw writer search queries out of persisted activity labels.
-- [x] Complete restart, interruption, and rollback tests for every long-running artifact type.
-- [x] Document and test backup and restore of the local data directory before a public release.
-
-### 2. Long-running workflow durability
-
-- [x] Persist writer and reviewer job inputs instead of keeping the only executable copy in process
-  memory.
-- [x] Resume writer and reviewer work from the last durable section or review boundary after a
-  restart. Mid-model-call resumption is not a goal; the interrupted call may run again.
-- [x] Add explicit cancellation with truthful partial-progress reporting.
-- [x] Preserve structured warning state, including course-only fallback when web research fails.
-- [x] Audit ingestion, solutions, study generation, and recognition against the same lifecycle
-  contract: queued, running, recoverable interruption, cancelled, completed, or failed.
-
-### 3. Recoverable failures and degraded dependencies
-
-- [x] Keep incomplete agent replies out of conversation history so a retry starts from a valid
-  transcript.
-- [x] Budget long agent conversations against the configured model context window.
-- [x] Distinguish retryable agent failures from invalid configuration or permanent upstream errors.
-- [x] Retry only transient Firecrawl failures, with a small bounded delay.
-- [x] Treat Firecrawl as optional for core readiness while reporting unavailable and misconfigured
-  states separately.
-- [x] Make degraded launch without web research explicit in `status` and `doctor`.
-- [x] Exercise tutor disconnects, malformed model output, Firecrawl outages, cancellation, and
-  process restarts through end-to-end fault tests.
-
-### 4. Correctness and safety hardening
-
-A comprehensive code review in August 2026 identified school-readiness defects across the
-product surface. The release-blocking findings summarized below were fixed, merged to `main`,
-and covered by deterministic tests in CI Gate. Linear tracks the individual issues.
-
-- [x] Helper-process supervision: health-aware lifecycle, adopted-process reclamation, and clean
-  shutdown.
-- [x] Credential safety: atomic transitions with no stale fallback resurfacing after keychain
-  recovery.
-- [x] Browser and API boundaries: untrusted-origin rejection on every state-changing loopback
-  request, and exact workspace-hunk review before application.
-- [x] Writer-chat durability: turn serialization, failed-turn recovery, and context-window
-  enforcement.
-- [x] Tutor and study lifecycle: causal retry without duplication, flashcard review idempotency,
-  study artifact ready-state gating, and atomic backup publication.
-
-### 5. Release gates and evidence
-
-- [x] Run backend formatting, lint, and tests in CI.
-- [x] Run frontend formatting, lint, type checking, unit tests, production build, and production
-  dependency audit in CI.
-- [x] Enforce a required aggregate `CI Gate` check on `main` through a repository ruleset. See
-  [security-and-ci-gates.md](security-and-ci-gates.md) for the full policy.
-- [x] Add a locked Python production-dependency vulnerability gate with a documented policy,
-  deterministic offline tests, and machine-readable evidence.
-- [x] Add a nonvisual browser smoke test for route hydration and runtime errors without coupling it
-  to the ongoing visual redesign.
-- [x] Add deterministic real-backend acceptance coverage that composes the real frontend, FastAPI,
-  migrations, SQLite, workers, and filesystem through the browser. The lane is a required part of
-  the aggregate `CI Gate`. The existing Playwright smoke tests intercept application API traffic
-  and do not prove this composition. See Linear PLA-292.
-- [x] Run and retain the real model-backed school-machine retrieval baseline with the merged
-  evaluation harness, which records requested and observed execution paths separately. A
-  requested optional path that fell back cannot be published as that path's result. Measured
-  2026-08-29 on the school machine (Apple M4 Pro, macOS 27) with the real models: nomic
-  embed text v1.5 (768d) through the real ingestion path and bge-reranker-v2-m3 requested and
-  observed applied on every query, with no fallback; a second identical run reproduced every
-  metric and passed the harness's no-`--force` comparison gate. The harness evidence SHA is
-  the head of PR #60 (PLA-319), identical code once merged. Full commands, environment, and
-  artifacts are in the PLA-149 Linear record. See Linear PLA-149.
-- [x] Define a macOS Apple Silicon release checklist covering clean installation, first launch,
-  restart recovery, offline/degraded use, and data preservation.
-- [ ] Execute the release-candidate soak on one exact merged SHA on a supported Mac after the
-  real-backend acceptance and retrieval evaluation gates are green. This is the final Go/No-Go
-  rehearsal. See Linear PLA-147.
-- [x] Keep production dependency audits free of known high and critical advisories.
-
-### 6. Documentation and supportability
-
-- [x] Replace the internal top-level README with a user-facing overview and quick start.
-- [x] Separate live roadmap material from historical phase and handoff records.
-- [x] Add a troubleshooting guide for the failures a student can resolve without reading source
-  code.
-- [x] Add a concise privacy and data-location reference covering the tutor endpoint, Firecrawl,
-  local files, key storage, and deletion.
-- [x] Add contribution guidance for bug reproduction, tests, migrations, and release verification.
-
-### Stabilization exit criteria
-
-The stabilization release is ready only when all of the following are objectively verified:
-
-- a clean macOS Apple Silicon setup can launch through `./run` without manual process cleanup;
-- the required `CI Gate` is enforced on `main` and green on the release-candidate commit;
-- the real-backend acceptance lane proves school-critical user journeys through the shipped
-  application boundary without mocked API interception (PLA-292);
-- no High or Urgent issue is open in the Fall 2026 school-readiness milestone;
-- a truthful class-scale retrieval baseline exists with evidence that separates requested from
-  observed execution paths (PLA-149);
-- the app remains useful when optional web research is unavailable;
-- a restart does not silently discard queued work or corrupt a partially completed artifact;
-- cancellation and upstream failures settle into an honest, retryable state;
-- backup and restore round-trip representative application data;
-- the release-candidate soak passes on a supported Mac against the exact candidate commit,
-  covering sustained study, writing, restart, dependency outage, and resource stability (PLA-147);
-- no known high-severity correctness, privacy, or production dependency issue is open; and
-- the README, local deployment guide, privacy notes, and troubleshooting steps match the shipped
-  behavior.
-
-Linear is the detailed state source of truth for open issues and blockers. The current release
-sequence is:
-
-1. Complete and retain the real model-backed PLA-149 school-machine class-scale baseline.
-2. Confirm every other Fall 2026 High/Urgent blocker that must precede the soak is closed.
-3. Select one exact merged `main` SHA as the release candidate.
-4. Run PLA-147's supported-Mac release-candidate soak on that exact SHA.
-
-Source-checkout Fall readiness is distinct from later signed/native packaging work, which is
-tracked under **Later**.
-
-## Next: measured quality
-
-After stabilization, improve the quality of existing answers and artifacts with repeatable
-measurements rather than adding unrelated surfaces.
-
-Quality evidence must distinguish requested from observed execution paths. A measurement that
-labels a fallback or degraded run as the intended path is invalid regardless of the quality score.
-
-### Retrieval and document quality
-
-- Detect text layers that are present but unusable, such as photographed pages containing only mail
-  headers or scattered equation characters.
-- Add a page-selective recognition quality gate so lossy pages can be re-read without retranscribing
-  a good document wholesale.
-- Extend class-scale retrieval evaluations beyond the initial release baseline, covering additional
-  document types, query patterns, and the full hybrid/reranked path matrix.
-- Revisit embedding or reranking changes only when a recorded failure case justifies re-indexing or
-  added latency.
-
-### Solver and study quality
-
-- Expand the real-course solver evaluation beyond the existing engineering-course corpus.
-- Track parsing, reasoning, deterministic verification, and final-answer accuracy separately.
-- Test flashcard and quiz grounding, duplicate control, scheduling, and weakness reporting over
-  complete course workspaces.
-
-### Writer quality
-
-- Build a small, versioned evaluation set for planning, source use, citation placement, revision
-  quality, comment usefulness, and instruction following.
-- Test long-horizon passes across restarts and retries, including drafts with existing student prose.
-- Measure whether review passes find seeded problems without duplicating comments or rewriting
-  unrelated sections.
-- Improve transitions, argument pressure-testing, and citation support only when the evaluation can
-  show the change helped.
-
-### Operational quality
-
-- Add structured local diagnostics that are useful in bug reports without exposing document text,
-  prompts, API keys, or private paths.
-- Exercise migrations and launcher recovery against upgrades from released versions, not only fresh
-  databases.
-- Extend soak evidence beyond the initial release rehearsal to cover upgrade paths, multi-session
-  resource drift, and sustained operational stability.
-
-## Later: distribution and deliberate expansion
-
-These are valid directions, but none outranks the stabilization and measurement work above.
-
-- Bundle a local inference engine and supported model choices so Lyra can deliver its privacy posture
-  without requiring a separately managed tutor endpoint.
-- Add memory-aware model recommendations and per-feature capability checks.
-- Package Lyra as a signed native application with one supervised lifecycle and a safe update path.
-- Add bulk course import after the document lifecycle is fully recoverable.
-- Add practice-problem and study-guide workflows by reusing the existing artifact, provenance, and
-  job contracts.
-- Explore deadline and calendar views after the class profile and extraction data are consistently
-  accurate.
-- Consider code-aware class assistance only after its filesystem boundary, prompt-injection threat
-  model, preview, and confirmation requirements are specified and tested.
-
-## Explicitly out of scope
-
-The following are not current product goals:
-
-- accounts, multi-user collaboration, or cloud sync;
-- telemetry, behavioral analytics, or silent update checks;
-- hosted third-party model accounts managed by Lyra;
-- social feeds or public sharing;
-- a plugin marketplace;
-- voice interaction or video lecture processing; and
-- filesystem writes or command execution that bypass preview and explicit confirmation.
-
-The responsive web interface remains important, but a separate mobile application is not planned.
-
-## Maintaining this roadmap
-
-- Move an item to **Completed** only when the behavior exists and its release evidence is recorded.
-- Keep defects and hardening work in **Now** until their verification gates pass.
-- Do not use historical phase numbers as current priority.
-- Record measurement details in focused handoff or evaluation documents and link them here instead
-  of turning this file into an implementation log.
-- When scope changes, revise the roadmap in the same change so the public plan never trails the
-  product again.
-- When a release gate changes state, update this roadmap and the Linear project baseline in the
-  same change so they stay consistent.
-- Linear is the detailed work-state source of truth. The roadmap communicates stable product
-  direction and objectively verified gates; it does not duplicate volatile issue counts or
-  per-ticket implementation detail.
+- Bundle supported local tutor model choices so a separate tutor server is optional rather than
+  required.
+- Add memory-aware model recommendations and stricter per-feature capability checks.
+- Expand release validation beyond one candidate soak to cover upgrades and sustained multi-session
+  resource stability.
+- Finish signed distribution and update-path design after the packaged runtime itself is proven.
