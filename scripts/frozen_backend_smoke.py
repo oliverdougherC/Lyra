@@ -75,6 +75,9 @@ def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, o
         if not readiness_line:
             returncode = process.poll()
             child_error = process.stderr.read() if returncode is not None and process.stderr else ""
+            backend_log = profile / "logs" / "backend.log"
+            if not child_error and backend_log.is_file():
+                child_error = backend_log.read_text(encoding="utf-8", errors="replace")
             detail = _safe_failure_detail(child_error, profile=profile, secret=secret)
             reason = detail or "no stderr"
             raise RuntimeError(
