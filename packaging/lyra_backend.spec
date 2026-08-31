@@ -4,7 +4,12 @@ import runpy
 from pathlib import Path
 
 from PyInstaller.building.build_main import Analysis, COLLECT, EXE, PYZ
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    get_package_paths,
+)
 
 inventory = runpy.run_path(str(Path(SPECPATH) / "component_inventory.py"))
 project_root = Path(SPECPATH).parent
@@ -26,12 +31,15 @@ for package in DYNAMIC_LIB_PACKAGES:
 # PyInstaller's dynamic-library classifier finds vec0.dylib on macOS but does not
 # consistently classify vec0.so on Linux, so retain it explicitly as package data.
 for package in EXTENSION_DATA_PACKAGES:
-    datas.extend(
-        collect_data_files(
-            package,
-            includes=["*.dylib", "*.so", "*.dll"],
-        )
-    )
+    _, package_dir = get_package_paths(package)
+    extensions = [
+        path
+        for path in Path(package_dir).glob("vec0.*")
+        if path.suffix in {".dylib", ".so", ".dll"}
+    ]
+    if not extensions:
+        raise RuntimeError(f"{package} did not provide a loadable vec0 extension")
+    datas.extend((str(path), package) for path in extensions)
 
 hiddenimports = []
 for package in HIDDENIMPORT_PACKAGES:
