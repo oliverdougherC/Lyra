@@ -1,7 +1,7 @@
 'use client'
 
 import { CheckCircle2, HelpCircle } from 'lucide-react'
-import Link from 'next/link'
+import Link from '@/router/link'
 
 import { FactRow } from '@/components/profile/fact-row'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'

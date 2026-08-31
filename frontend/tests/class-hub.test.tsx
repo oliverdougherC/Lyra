@@ -11,7 +11,7 @@ import type { ClassProfile, ClassRead, DocumentRead, SessionRead, SolutionRead }
 const replace = vi.fn()
 const push = vi.fn()
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/router/hooks', () => ({
   useRouter: () => ({ replace, push, prefetch: vi.fn() }),
   useParams: () => ({ id: '1' }),
   useSearchParams: () => new URLSearchParams(),
@@ -118,18 +118,18 @@ describe('ClassHub', () => {
     // The most recent work links straight back into itself, whatever kind it is.
     expect(await screen.findByRole('link', { name: /Fourier week/ })).toHaveAttribute(
       'href',
-      '/classes/1/chat?session=4',
+      '/#/classes/1/chat?session=4',
     )
     expect(screen.getByRole('link', { name: /Homework 2/ })).toHaveAttribute(
       'href',
-      '/classes/1/solutions/8',
+      '/#/classes/1/solutions/8',
     )
 
     // The fixture's syllabus.pdf failed ingestion, and a failure is a continuation item:
     // it is the thing most worth the student's next click.
     expect(screen.getByRole('link', { name: /One document could not be used/ })).toHaveAttribute(
       'href',
-      '/classes/1?tab=documents',
+      '/#/classes/1?tab=documents',
     )
     expect(screen.getByText('Needs attention')).toBeInTheDocument()
 
@@ -137,12 +137,12 @@ describe('ClassHub', () => {
     expect(screen.getByRole('button', { name: 'Practice this material' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Solve a problem set' })).toHaveAttribute(
       'href',
-      '/classes/1/solutions/new',
+      '/#/classes/1/solutions/new',
     )
     expect(screen.getByRole('button', { name: 'Start writing' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Add documents' })).toHaveAttribute(
       'href',
-      '/classes/1?tab=documents',
+      '/#/classes/1?tab=documents',
     )
   })
 
@@ -171,7 +171,7 @@ describe('ClassHub', () => {
     })
     expect(
       await screen.findByRole('link', { name: /One document could not be used/ }),
-    ).toHaveAttribute('href', '/classes/1?tab=documents')
+    ).toHaveAttribute('href', '/#/classes/1?tab=documents')
     expect(screen.getByText('Needs attention')).toBeInTheDocument()
     expect(screen.queryByText(/Nothing uploaded yet/)).not.toBeInTheDocument()
     unsupportedView.unmount()
@@ -265,6 +265,6 @@ describe('ClassHub', () => {
     render(<ClassHub classId={1} tab="overview" />, { wrapper })
 
     const links = await screen.findAllByRole('link', { name: /New chat/ })
-    for (const link of links) expect(link).toHaveAttribute('href', '/classes/1/chat?session=new')
+    for (const link of links) expect(link).toHaveAttribute('href', '/#/classes/1/chat?session=new')
   })
 })

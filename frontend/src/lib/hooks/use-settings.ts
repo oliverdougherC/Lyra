@@ -74,6 +74,6 @@ export function useTestVision() {
   })
 }
 
-export function useTestFirecrawl() {
-  return useMutation({ mutationFn: () => api.testFirecrawl() })
+export function useTestExa() {
+  return useMutation({ mutationFn: () => api.testExa() })
 }

@@ -2,8 +2,8 @@
 
 import { useState } from 'react'
 import { FileWarning, MoreVertical, Pencil, PenLine, Plus, Trash2 } from 'lucide-react'
-import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import Link from '@/router/link'
+import { useRouter } from '@/router/hooks'
 import { toast } from 'sonner'
 
 import { RenameDialog } from '@/components/classes/rename-dialog'

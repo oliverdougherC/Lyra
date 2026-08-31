@@ -2,8 +2,8 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { ChevronRight, UserRound } from 'lucide-react'
-import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import Link from '@/router/link'
+import { usePathname } from '@/router/hooks'
 
 import { Dentil } from '@/components/ex-libris'
 import { EndpointLocalityBadge } from '@/components/layout/endpoint-locality-badge'

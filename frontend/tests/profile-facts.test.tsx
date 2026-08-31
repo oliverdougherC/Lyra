@@ -7,7 +7,7 @@ import { ProfileFacts } from '@/components/profile/profile-facts'
 import { api } from '@/lib/api'
 import type { ClassProfile } from '@/types'
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/router/hooks', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
   useParams: () => ({ id: '1' }),
   useSearchParams: () => new URLSearchParams(),
@@ -49,7 +49,7 @@ describe('ProfileFacts', () => {
     expect(screen.getByText(/different model loaded/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /model and context window/ })).toHaveAttribute(
       'href',
-      '/settings#model',
+      '/#/settings#model',
     )
   })
 

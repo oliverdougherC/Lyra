@@ -29,7 +29,7 @@ const SECRET_FRAGMENTS = [
 
 /**
  * The boundaries may print nothing from the exception. The scan covers the whole
- * document, including the head that `global-error` owns outright.
+ * document, including the inline fallback styles.
  */
 function assertNoSecrets() {
   const text = document.documentElement.textContent ?? ''
@@ -65,23 +65,16 @@ describe('app/error.tsx, the route-segment boundary', () => {
   })
 })
 
-describe('app/global-error.tsx, the document boundary', () => {
+describe('app/global-error.tsx, the bootstrap boundary', () => {
   beforeEach(() => {
     localStorage.clear()
     document.documentElement.classList.remove('dark')
   })
-  it('provides its own document: <html>, <head>, and <body>', () => {
-    render(<GlobalErrorBoundary error={sensitiveError()} retry={() => {}} />)
-    // React 19 resolves a client component's hoisted <html>/<head>/<body> against
-    // the real document, which is exactly what a browser sees for this component:
-    // the boundary owns the whole document.
+  it('provides standalone styles and recovery UI without replacing the Vite document', () => {
+    const { container } = render(<GlobalErrorBoundary error={sensitiveError()} retry={() => {}} />)
     expect(document.documentElement.tagName).toBe('HTML')
-    expect(document.documentElement.getAttribute('lang')).toBe('en')
-    // The document must stand alone: a title and its own styles, and the
-    // recovery UI inside the body it declares.
-    expect(document.head.querySelector('title')?.textContent).toBe('Lyra')
-    expect(document.head.querySelector('style')).toBeTruthy()
-    const alert = document.body.querySelector('[role="alert"]')
+    expect(container.querySelector('style')).toBeTruthy()
+    const alert = container.querySelector('[role="alert"]')
     expect(alert).toBeTruthy()
     expect(alert!.querySelector('button')).toBeTruthy()
   })

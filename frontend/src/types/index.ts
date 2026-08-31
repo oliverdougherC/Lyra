@@ -207,10 +207,8 @@ export interface SettingsRead {
   /** Whether independent writer stages may issue bounded concurrent requests. */
   parallel_requests: boolean
   parallel_concurrency: number
-  /** Loopback-only Firecrawl service used for public web search and snapshots. */
-  firecrawl_base_url: string
-  /** Enabled only after the installed Firecrawl build passes the redirect safety gate. */
-  firecrawl_scrape_enabled: boolean
+  exa_api_key_set: boolean
+  exa_api_key_storage: ApiKeyStorage
 }
 
 export interface SettingsUpdate {
@@ -222,10 +220,10 @@ export interface SettingsUpdate {
   allow_web_research?: boolean
   parallel_requests?: boolean
   parallel_concurrency?: number
-  firecrawl_base_url?: string
-  firecrawl_scrape_enabled?: boolean
   /** Sent once and never read back. An empty string deletes the stored key. */
   api_key?: string
+  /** Sent once and never read back. An empty string deletes the stored key. */
+  exa_api_key?: string
 }
 
 export interface WriterCapabilities {
@@ -253,9 +251,19 @@ export interface ConnectionTestResult {
   message: string
 }
 
-export interface FirecrawlTestResult {
+export interface ExaTestResult {
   ok: boolean
-  status: 'available' | 'temporarily_unavailable' | 'misconfigured'
+  status:
+    | 'available'
+    | 'missing_key'
+    | 'invalid_key'
+    | 'permission_denied'
+    | 'quota_exhausted'
+    | 'rate_limited'
+    | 'timeout'
+    | 'offline'
+    | 'malformed_response'
+    | 'temporarily_unavailable'
   message: string
 }
 

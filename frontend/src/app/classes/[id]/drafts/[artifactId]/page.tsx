@@ -12,8 +12,8 @@ import {
   Printer,
   SearchCheck,
 } from 'lucide-react'
-import dynamic from 'next/dynamic'
-import { useParams } from 'next/navigation'
+import dynamic from '@/router/dynamic'
+import { useParams } from '@/router/hooks'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
@@ -308,8 +308,6 @@ export default function DraftWorkspacePage() {
     const was = wasPassRunningRef.current
     wasPassRunningRef.current = passRunning
     if (was && !passRunning) void syncEditorFromServer()
-    // syncEditorFromServer is a stable closure over refs; the transition is the trigger.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [passRunning])
 
   // Flush on the way out: a hidden tab is the last moment a write can still be sent, and

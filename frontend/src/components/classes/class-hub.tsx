@@ -2,8 +2,8 @@
 
 import { useState } from 'react'
 import { Archive, MoreVertical, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
-import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import Link from '@/router/link'
+import { useRouter } from '@/router/hooks'
 import { toast } from 'sonner'
 
 import { HandUnderline } from '@/components/ex-libris'
@@ -220,23 +220,38 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
           aria-label="Class sections"
           className="shrink-0 overflow-x-auto overflow-y-hidden"
         >
-          <HubTab value="overview" label="Overview" count={null} active={tab === 'overview'} />
-          <HubTab value="chats" label="Chats" count={chatCount} active={tab === 'chats'} />
-          <HubTab
+          <HubTabButton
+            value="overview"
+            label="Overview"
+            count={null}
+            active={tab === 'overview'}
+          />
+          <HubTabButton value="chats" label="Chats" count={chatCount} active={tab === 'chats'} />
+          <HubTabButton
             value="solutions"
             label="Solutions"
             count={solutionCount}
             active={tab === 'solutions'}
           />
-          <HubTab value="study" label="Study" count={studyCount} active={tab === 'study'} />
-          <HubTab value="drafts" label="Drafts" count={draftCount} active={tab === 'drafts'} />
-          <HubTab
+          <HubTabButton value="study" label="Study" count={studyCount} active={tab === 'study'} />
+          <HubTabButton
+            value="drafts"
+            label="Drafts"
+            count={draftCount}
+            active={tab === 'drafts'}
+          />
+          <HubTabButton
             value="documents"
             label="Documents"
             count={documentCount}
             active={tab === 'documents'}
           />
-          <HubTab value="profile" label="Profile" count={factCount} active={tab === 'profile'} />
+          <HubTabButton
+            value="profile"
+            label="Profile"
+            count={factCount}
+            active={tab === 'profile'}
+          />
         </TabsList>
 
         <TabsContent value="overview">
@@ -309,7 +324,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
  * collection tab including zero, so the strip is consistent rather than counting only some
  * of its tabs (ui-overhaul 3.2).
  */
-function HubTab({
+function HubTabButton({
   value,
   label,
   count,

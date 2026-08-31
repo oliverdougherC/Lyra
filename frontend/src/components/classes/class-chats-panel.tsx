@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { MessageSquare, MoreVertical, Pencil, Plus, SquareCheckBig, Trash2 } from 'lucide-react'
-import Link from 'next/link'
+import Link from '@/router/link'
 import { toast } from 'sonner'
 
 import {

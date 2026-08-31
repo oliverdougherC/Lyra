@@ -1,7 +1,7 @@
 'use client'
 
 import { FileText, Lightbulb, X } from 'lucide-react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter } from '@/router/hooks'
 import { useMemo, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 

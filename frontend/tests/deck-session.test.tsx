@@ -8,7 +8,7 @@ import { DeckSession } from '@/components/study/deck-session'
 import { api } from '@/lib/api'
 import type { CardStateRead, DeckSession as DeckSessionRead, SessionCard } from '@/types'
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/router/hooks', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
   useParams: () => ({ id: '1', artifactId: '8' }),
   useSearchParams: () => new URLSearchParams(),

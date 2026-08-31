@@ -59,8 +59,8 @@ type DraftEditorProps = {
 /**
  * The draft document, as a Milkdown Crepe surface.
  *
- * Loaded by the workspace through `next/dynamic` with `ssr: false` - the editor is a DOM
- * creature and cannot be rendered on the server. The feature set is deliberately small:
+ * Loaded lazily by the draft route so the editor is absent from the class-list startup
+ * bundle. The feature set is deliberately small:
  * the toolbar, the block handle, lists, tables, links, and math, with no image block,
  * because a draft is prose and the class's documents already hold the figures. The code
  * editor is in only because math depends on it, not because a draft wants one. There is no

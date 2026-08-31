@@ -41,8 +41,8 @@ async function installApiMocks(page: Page) {
             allow_web_research: false,
             parallel_requests: true,
             parallel_concurrency: 2,
-            firecrawl_base_url: 'http://127.0.0.1:3002',
-            firecrawl_scrape_enabled: false,
+            exa_api_key_set: false,
+            exa_api_key_storage: 'file',
           }),
         })
       },
@@ -74,7 +74,7 @@ test.describe('nonvisual browser smoke', () => {
     const pageErrors: string[] = []
     page.on('pageerror', (error) => pageErrors.push(error.message))
 
-    await page.goto('/')
+    await page.goto('/#/')
     await page.waitForLoadState('networkidle')
 
     await expect(page.getByRole('heading', { name: 'Classes' })).toBeVisible()
@@ -88,10 +88,11 @@ test.describe('nonvisual browser smoke', () => {
     const pageErrors: string[] = []
     page.on('pageerror', (error) => pageErrors.push(error.message))
 
-    await page.goto('/settings')
+    await page.goto('/#/')
+    await page.getByRole('link', { name: 'Settings' }).first().click()
     await page.waitForLoadState('networkidle')
 
-    await expect(page.getByLabel('Breadcrumb').getByText('Settings')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
     expect(api.unexpectedRequests).toEqual([])
     expect(pageErrors).toEqual([])
   })

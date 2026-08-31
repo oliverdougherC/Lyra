@@ -3,19 +3,14 @@
 import { useEffect } from 'react'
 
 /**
- * Global error boundary (Next.js App Router special file). This component replaces the
- * whole document when the root layout or template itself fails, so everything the normal
- * root layout provides is absent: globals.css, the loaded fonts, providers, and the
- * pre-paint theme script in <head>. The Next.js contract requires this file to render
- * its own <html> and <body> and to carry its own styles, so it depends on nothing but
- * React.
+ * Global Vite/bootstrap error fallback. This component is intentionally independent of
+ * application providers and remote data so backend startup failures always have a local,
+ * recoverable screen.
  *
  * The palette mirrors docs/exlibris-design-system.md (stone ground, paper sheet, ink,
  * the pen) for both themes. The theme is applied on mount rather than by a pre-paint
- * <head> script: in this flow the initial HTML is a minimal seed document and React
- * does not run inline scripts it hoists client-side, so an inline script would never
- * execute. THEME_STORAGE_KEY mirrors the key in @/lib/theme; tests/error-boundaries.
- * test.tsx seeds it through the canonical export so the two cannot drift silently.
+ * <head> script. THEME_STORAGE_KEY mirrors the key in @/lib/theme; the error-boundary
+ * tests seed it through the canonical export so the two cannot drift silently.
  *
  * Privacy contract: the `error` prop is typed for the boundary contract only. Its
  * `message`, `digest`, stack, and any application state never reach the DOM, and
@@ -142,21 +137,15 @@ export default function GlobalError({
   }, [])
 
   return (
-    // global-error must include html and body tags
-    <html lang="en" suppressHydrationWarning>
-      <head>
-        <title>Lyra</title>
-        <style>{GLOBAL_ERROR_STYLES}</style>
-      </head>
-      <body>
-        <div role="alert" className="gb-card">
-          <h1>Something went wrong</h1>
-          <p>An unexpected error stopped Lyra from loading. Try again to reload.</p>
-          <button type="button" className="gb-button" onClick={retry}>
-            Try again
-          </button>
-        </div>
-      </body>
-    </html>
+    <>
+      <style>{GLOBAL_ERROR_STYLES}</style>
+      <div role="alert" className="gb-card">
+        <h1>Something went wrong</h1>
+        <p>An unexpected error stopped Lyra from loading. Try again to reload.</p>
+        <button type="button" className="gb-button" onClick={retry}>
+          Try again
+        </button>
+      </div>
+    </>
   )
 }

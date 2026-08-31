@@ -10,7 +10,7 @@ import type { DeckSummary, StudyArtifactRead, StudyStatus } from '@/types'
 // The artifact id used for deck tests vs quiz tests.
 let artifactId = '8'
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/router/hooks', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
   useParams: () => ({ id: '1', artifactId }),
   useSearchParams: () => new URLSearchParams(),
@@ -157,7 +157,7 @@ describe('StudySessionPage', () => {
 
     expect(await screen.findByText('No topics found')).toBeInTheDocument()
     const backLink = screen.getByRole('link', { name: /Back to study tools/ })
-    expect(backLink).toHaveAttribute('href', '/classes/1?tab=study')
+    expect(backLink).toHaveAttribute('href', '/#/classes/1?tab=study')
     expect(screen.queryByTestId('deck-session')).not.toBeInTheDocument()
   })
 
@@ -173,7 +173,7 @@ describe('StudySessionPage', () => {
 
     expect(await screen.findByText('This was cancelled')).toBeInTheDocument()
     const backLink = screen.getByRole('link', { name: /Back to study tools/ })
-    expect(backLink).toHaveAttribute('href', '/classes/1?tab=study')
+    expect(backLink).toHaveAttribute('href', '/#/classes/1?tab=study')
     expect(screen.queryByTestId('deck-session')).not.toBeInTheDocument()
   })
 
@@ -276,6 +276,6 @@ describe('StudySessionPage', () => {
 
     expect(await screen.findByText('That study tool is not in this class')).toBeInTheDocument()
     const backLink = screen.getByRole('link', { name: /Back to study tools/ })
-    expect(backLink).toHaveAttribute('href', '/classes/1?tab=study')
+    expect(backLink).toHaveAttribute('href', '/#/classes/1?tab=study')
   })
 })

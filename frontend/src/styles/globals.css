@@ -1,3 +1,65 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@layer theme, base, katex, components, utilities;
+
+@font-face {
+  font-family: 'Cinzel';
+  src: url('/fonts/Cinzel-600.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'EB Garamond';
+  src: url('/fonts/EBGaramond-400.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'EB Garamond';
+  src: url('/fonts/EBGaramond-500.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'EB Garamond';
+  src: url('/fonts/EBGaramond-600.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'EB Garamond';
+  src: url('/fonts/EBGaramond-Italic-400.ttf') format('truetype');
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Caveat';
+  src: url('/fonts/Caveat-500.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/JetBrainsMono-400.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
 /* KaTeX sits between `base` and `components`: it must beat Tailwind's preflight and lose
    to our own overrides. Naming the layers here, ahead of Tailwind's own layer statement,
    is what pins that order; otherwise the bundled import lands last and wins everything.
@@ -8,13 +70,6 @@
    vanished, in chat and in drafts alike. Behind `components` it would beat the overrides
    at .katex-display below, which is what this ordering was written for in the first
    place. Between the two, both hold. */
-@layer theme, base, katex, components, utilities;
-
-@import 'tailwindcss';
-@import 'tw-animate-css';
-@import 'shadcn/tailwind.css';
-@import 'katex/dist/katex.min.css' layer(katex);
-
 @custom-variant dark (&:is(.dark *));
 
 /* Lyra design tokens: the single source of truth, per docs/design-system.md (the canonical
@@ -277,7 +332,8 @@
   h1,
   h2,
   h3 {
-    @apply font-heading tracking-tight;
+    font-family: var(--font-heading), ui-serif, Georgia, serif;
+    letter-spacing: -0.025em;
   }
 
   /* Selection in the house accent rather than the browser's blue: the one default that

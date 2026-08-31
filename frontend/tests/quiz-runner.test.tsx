@@ -8,7 +8,7 @@ import { QuizRunner } from '@/components/study/quiz-runner'
 import { api } from '@/lib/api'
 import type { AttemptAnswer, QuizDetail, QuizQuestion, QuizQuestionRead } from '@/types'
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/router/hooks', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
   useParams: () => ({ id: '1', artifactId: '9' }),
   useSearchParams: () => new URLSearchParams(),

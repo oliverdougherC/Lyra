@@ -11,7 +11,7 @@ import type { DeckSummary, StudyArtifactRead, StudyListRead } from '@/types'
 
 const push = vi.fn()
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/router/hooks', () => ({
   useRouter: () => ({ replace: vi.fn(), push, prefetch: vi.fn() }),
   useParams: () => ({ id: '1' }),
   useSearchParams: () => new URLSearchParams(),
@@ -236,12 +236,12 @@ describe('ClassStudyPanel', () => {
     render(<ClassStudyPanel classId={1} />, { wrapper })
 
     const deckLink = await screen.findByRole('link', { name: /Signals flashcards/ })
-    expect(deckLink).toHaveAttribute('href', '/classes/1/study/8')
+    expect(deckLink).toHaveAttribute('href', '/#/classes/1/study/8')
     expect(deckLink).toHaveTextContent('new 3 · learning 2 · mastered 1')
     expect(screen.getByText('4 due')).toBeInTheDocument()
 
     const quizLink = screen.getByRole('link', { name: /Week 4 quiz/ })
-    expect(quizLink).toHaveAttribute('href', '/classes/1/study/9')
+    expect(quizLink).toHaveAttribute('href', '/#/classes/1/study/9')
     expect(quizLink).toHaveTextContent('10 questions')
   })
 

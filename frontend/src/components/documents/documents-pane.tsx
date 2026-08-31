@@ -3,7 +3,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { FileText, FolderInput, PanelRightClose, Search, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter } from '@/router/hooks'
 import { toast } from 'sonner'
 
 import { BatchLoader } from '@/components/documents/batch-loader'

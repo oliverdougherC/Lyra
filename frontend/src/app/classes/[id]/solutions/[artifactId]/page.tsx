@@ -2,7 +2,7 @@
 
 import { useQueryClient } from '@tanstack/react-query'
 import { Maximize2, Minimize2 } from 'lucide-react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter } from '@/router/hooks'
 import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 

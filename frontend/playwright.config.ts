@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test'
 
-const port = 3000
+const port = Number(process.env.PLAYWRIGHT_FRONTEND_PORT ?? '4179')
 
 export default defineConfig({
   testDir: './e2e',
@@ -15,9 +15,12 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   webServer: {
-    command: `pnpm exec next start --hostname 127.0.0.1 --port ${port}`,
+    command: `./node_modules/.bin/vite preview --host 127.0.0.1 --port ${port} --strictPort`,
     port,
-    reuseExistingServer: !process.env.CI,
+    // Never attach the smoke suite to an unrelated listener. A developer may already
+    // have Lyra (or another app) on a common port; strict ownership is part of the
+    // desktop lifecycle contract, and tests should model it too.
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 })

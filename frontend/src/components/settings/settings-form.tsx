@@ -26,7 +26,7 @@ import {
   useClassWriterSettings,
   useSettings,
   useTestConnection,
-  useTestFirecrawl,
+  useTestExa,
   useTestTools,
   useTestVision,
   useUpdateSettings,
@@ -104,31 +104,30 @@ function SettingsSection({
 function SettingsSections({ settings }: { settings: SettingsRead }) {
   const updateSettings = useUpdateSettings()
   const testConnection = useTestConnection()
-  const testFirecrawl = useTestFirecrawl()
+  const testExa = useTestExa()
   const testTools = useTestTools()
   const testVision = useTestVision()
   const { theme, setTheme } = useTheme()
 
   const [endpoint, setEndpoint] = useState(settings.endpoint_url ?? '')
   const [apiKey, setApiKey] = useState('')
+  const [exaApiKey, setExaApiKey] = useState('')
   const [contextWindow, setContextWindow] = useState(String(settings.context_window))
   const [parallelConcurrency, setParallelConcurrency] = useState(
     String(settings.parallel_concurrency),
   )
-  const [firecrawlBaseUrl, setFirecrawlBaseUrl] = useState(settings.firecrawl_base_url)
   const [models, setModels] = useState<string[]>([])
   const [test, setTest] = useState<TestState>({ status: 'idle' })
 
   // A save writes the canonical values back into the cache, and the inputs have to follow.
   // Adjusting during render rather than in an effect avoids a frame showing the stale text.
-  const serverEcho = `${settings.endpoint_url ?? ''}|${settings.context_window}|${settings.parallel_concurrency}|${settings.firecrawl_base_url}`
+  const serverEcho = `${settings.endpoint_url ?? ''}|${settings.context_window}|${settings.parallel_concurrency}`
   const [lastEcho, setLastEcho] = useState(serverEcho)
   if (serverEcho !== lastEcho) {
     setLastEcho(serverEcho)
     setEndpoint(settings.endpoint_url ?? '')
     setContextWindow(String(settings.context_window))
     setParallelConcurrency(String(settings.parallel_concurrency))
-    setFirecrawlBaseUrl(settings.firecrawl_base_url)
   }
 
   // A successful test is what proves the endpoint answers, so the model select stays locked
@@ -377,64 +376,64 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
       >
         <FieldGroup>
           <Field>
-            <FieldLabel htmlFor="firecrawl-base-url">Local Firecrawl URL</FieldLabel>
+            <FieldLabel htmlFor="exa-api-key">Exa API key</FieldLabel>
             <div className="flex flex-wrap gap-2">
               <Input
-                id="firecrawl-base-url"
+                id="exa-api-key"
                 className="min-w-64 flex-1"
-                inputMode="url"
+                type="password"
                 autoComplete="off"
-                value={firecrawlBaseUrl}
-                onChange={(event) => setFirecrawlBaseUrl(event.target.value)}
-                onBlur={() => {
-                  const next = firecrawlBaseUrl.trim()
-                  if (next && next !== settings.firecrawl_base_url) {
-                    void save({ firecrawl_base_url: next })
-                  }
-                }}
+                placeholder={settings.exa_api_key_set ? 'Set. Type to replace.' : 'Not set'}
+                value={exaApiKey}
+                onChange={(event) => setExaApiKey(event.target.value)}
               />
               <Button
                 variant="outline"
-                disabled={testFirecrawl.isPending || !firecrawlBaseUrl.trim()}
+                disabled={exaApiKey.length === 0 || updateSettings.isPending}
                 onClick={async () => {
-                  if (!(await save({ firecrawl_base_url: firecrawlBaseUrl.trim() }))) return
-                  testFirecrawl.mutate()
+                  if (await save({ exa_api_key: exaApiKey }, 'Exa key saved.')) setExaApiKey('')
                 }}
               >
-                {testFirecrawl.isPending ? <Spinner /> : null}
-                Test Firecrawl
+                Save key
               </Button>
+              {settings.exa_api_key_set ? (
+                <Button
+                  variant="ghost"
+                  onClick={() => void save({ exa_api_key: '' }, 'Exa key removed.')}
+                >
+                  Remove
+                </Button>
+              ) : null}
             </div>
             <FieldDescription>
-              Must resolve entirely to this machine. Lyra uses only bounded search and scrape
-              endpoints; it never sends headers, cookies, actions, browser profiles, or proxy
-              settings.
+              {settings.exa_api_key_set ? 'Set. ' : 'Not set. '}
+              {settings.exa_api_key_storage === 'keychain'
+                ? 'Stored in your operating system keychain and never sent back to this screen.'
+                : 'No keychain was available, so it is kept in a file inside your data directory with owner-only permissions.'}
             </FieldDescription>
-            {testFirecrawl.data ? (
-              <p
-                className={
-                  testFirecrawl.data.ok ? 'text-success-text text-sm' : 'text-danger-text text-sm'
-                }
-              >
-                {testFirecrawl.data.message}
-              </p>
-            ) : null}
           </Field>
 
-          <Field orientation="horizontal">
-            <div className="min-w-0 flex-1">
-              <FieldLabel htmlFor="firecrawl-scrape-enabled">Enable source snapshots</FieldLabel>
-              <FieldDescription>
-                Keep this off until the installed Firecrawl release passes the documented
-                public-to-private redirect safety check. Search metadata can work independently.
-              </FieldDescription>
+          <Field>
+            <FieldLabel>Exa connection</FieldLabel>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={() => testExa.mutate()}
+                disabled={testExa.isPending || !settings.exa_api_key_set}
+              >
+                {testExa.isPending ? <Spinner /> : null}
+                Test Exa
+              </Button>
+              <ExaTestOutcome
+                hasKey={settings.exa_api_key_set}
+                pending={testExa.isPending}
+                result={testExa.data}
+              />
             </div>
-            <Switch
-              id="firecrawl-scrape-enabled"
-              checked={settings.firecrawl_scrape_enabled}
-              disabled={!testFirecrawl.data?.ok}
-              onCheckedChange={(checked) => void save({ firecrawl_scrape_enabled: checked })}
-            />
+            <FieldDescription>
+              Web research is optional and never probed on launch. When you test or use it, Exa
+              receives only the public search query and any public URLs Lyra is asked to retrieve.
+            </FieldDescription>
           </Field>
 
           <Field orientation="horizontal">
@@ -496,6 +495,16 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               A bound, not a target. Lyra only fans out stages that do not depend on one another.
             </FieldDescription>
           </Field>
+
+          <Alert>
+            <Info />
+            <AlertTitle>Exa receives public web requests only</AlertTitle>
+            <AlertDescription>
+              Lyra does not send your uploaded document text, private class facts, filesystem paths,
+              credentials, or prior private conversation content to Exa. Missing or failed Exa
+              configuration disables web research without making the rest of Lyra unhealthy.
+            </AlertDescription>
+          </Alert>
         </FieldGroup>
       </SettingsSection>
 
@@ -642,8 +651,9 @@ function PrivacySection({ settings, onSave }: PrivacySectionProps) {
         <div>
           <p className="font-medium">Leaves this machine</p>
           <p className="text-muted-foreground">
-            Only requests to the tutor endpoint above: your question, the retrieved passages, and
-            the conversation so far.
+            Tutor requests go only to the endpoint above: your question, the retrieved passages, and
+            the conversation so far. Web research is separate: if you enable it, Exa receives only
+            public search queries and requested public URLs.
           </p>
         </div>
         <div>
@@ -723,6 +733,43 @@ function TestOutcome({ state }: { state: TestState }) {
     )
   }
   return <span className="text-danger-text text-sm">{result.message}</span>
+}
+
+function ExaTestOutcome({
+  hasKey,
+  pending,
+  result,
+}: {
+  hasKey: boolean
+  pending: boolean
+  result: { ok: boolean; status: string; message: string } | undefined
+}) {
+  if (pending) return <span className="text-muted-foreground text-sm">Testing Exa...</span>
+  if (!hasKey) {
+    return <span className="text-muted-foreground text-sm">Add a key to test Exa.</span>
+  }
+  if (!result) {
+    return <span className="text-muted-foreground text-sm">Not tested yet.</span>
+  }
+  if (result.ok) {
+    return (
+      <span className="text-success-text flex items-center gap-1.5 text-sm">
+        <Check className="size-4" />
+        {result.message}
+      </span>
+    )
+  }
+  return (
+    <span
+      className={
+        result.status === 'temporarily_unavailable'
+          ? 'text-info-text text-sm'
+          : 'text-danger-text text-sm'
+      }
+    >
+      {result.message}
+    </span>
+  )
 }
 
 function SettingsSkeleton() {

@@ -260,8 +260,7 @@ function verifyNoGroupMembers(pgids: number[], failures: string[]): void {
     'acceptance.backend_harness:app',
     'e2e/acceptance/fake-helper.py',
     'uvicorn',
-    'next start',
-    'next-server',
+    'vite preview',
   ]
   const survivors: string[] = []
   for (const line of listing.split('\n')) {

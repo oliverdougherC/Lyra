@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import Link from '@/router/link'
 import { useRef } from 'react'
 import { Archive, ArrowRight, MoreVertical, Pencil, Plus, Trash2 } from 'lucide-react'
 

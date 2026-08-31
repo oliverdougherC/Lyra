@@ -7,7 +7,7 @@ import { ClassDraftsPanel } from '@/components/classes/class-drafts-panel'
 import { api } from '@/lib/api'
 import type { DraftRead } from '@/types'
 
-vi.mock('next/navigation', () => ({
+vi.mock('@/router/hooks', () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn(), prefetch: vi.fn() }),
   useParams: () => ({ id: '1' }),
   useSearchParams: () => new URLSearchParams(),
@@ -78,11 +78,11 @@ describe('ClassDraftsPanel', () => {
 
     expect(await screen.findByRole('link', { name: /Essay on feedback systems/ })).toHaveAttribute(
       'href',
-      '/classes/1/drafts/8',
+      '/#/classes/1/drafts/8',
     )
     expect(screen.getByRole('link', { name: /Lab report/ })).toHaveAttribute(
       'href',
-      '/classes/1/drafts/9',
+      '/#/classes/1/drafts/9',
     )
     expect(screen.getAllByText(/Edited /)).toHaveLength(2)
   })

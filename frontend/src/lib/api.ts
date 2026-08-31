@@ -52,8 +52,8 @@ import type {
   DraftRead,
   DraftSource,
   DraftStatus,
+  ExaTestResult,
   FigureRead,
-  FirecrawlTestResult,
   LiveDraftSuggestion,
   LiveDraftSuggestionBlock,
   MessageRead,
@@ -84,25 +84,24 @@ import type {
   WriteRequest,
   WriterChatRequest,
 } from '@/types'
-
-export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? 'http://127.0.0.1:8000'
+import { getImmediateRuntimeConfig, getRuntimeConfig, recoverDesktopBackend } from '@/lib/runtime'
 
 /**
- * The URL of one rendered source page. An `<img src>` rather than a fetch, so the browser
- * caches it and the pane does not hold page images in memory.
+ * The path of one rendered source page. Kept relative to the API base so the packaged
+ * runtime can inject the loopback session contract centrally at fetch time.
  */
-export function documentPageUrl(documentId: number, pageNumber: number): string {
-  return `${API_BASE}/api/documents/${documentId}/pages/${pageNumber}`
+export function documentPagePath(documentId: number, pageNumber: number): string {
+  return `/api/documents/${documentId}/pages/${pageNumber}`
 }
 
 /**
- * The URL of one figure, cropped out of its page.
+ * The path of one figure, cropped out of its page.
  *
  * Addressed by its own id rather than under its document, so a solution can draw a figure
  * knowing only what its `artifact_part` stores.
  */
-export function figureUrl(figureId: number): string {
-  return `${API_BASE}/api/figures/${figureId}`
+export function figurePath(figureId: number): string {
+  return `/api/figures/${figureId}`
 }
 
 /** A backend response that was not 2xx. `status === 0` means the request never landed. */
@@ -178,7 +177,7 @@ function draftBodyErrorFactory(status: number, payload: unknown | undefined): Er
 }
 
 const UNREACHABLE =
-  'Could not reach the Lyra server. It runs locally, so check that ./run or ./run --dev is still running.'
+  'Could not reach the Lyra service. It runs locally when started from source, so check ./run or ./run --dev. If you opened Lyra.app, try reopening it.'
 
 type RequestOptions = {
   method?: string
@@ -346,14 +345,20 @@ function normalizeLiveDraftSuggestion(payload: unknown): LiveDraftSuggestion | n
 
 async function send(path: string, options: RequestOptions = {}): Promise<Response> {
   const isFormData = options.body instanceof FormData
+  const runtime = await getRuntimeConfig()
+  const headers: Record<string, string> = {}
+  if (options.body !== undefined && !isFormData) {
+    headers['content-type'] = 'application/json'
+  }
+  if (runtime.sessionHeader) {
+    headers['X-Lyra-Session'] = runtime.sessionHeader
+  }
+  const requestHeaders = Object.keys(headers).length > 0 ? headers : undefined
   let response: Response
   try {
-    response = await fetch(`${API_BASE}${path}`, {
+    response = await fetch(`${runtime.apiBase}${path}`, {
       method: options.method ?? 'GET',
-      headers:
-        options.body !== undefined && !isFormData
-          ? { 'content-type': 'application/json' }
-          : undefined,
+      headers: requestHeaders,
       body: isFormData
         ? (options.body as FormData)
         : options.body !== undefined
@@ -363,6 +368,10 @@ async function send(path: string, options: RequestOptions = {}): Promise<Respons
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error
+    // Restart only the child the trusted Rust shell owns. The failed request is not
+    // replayed automatically: a mutation may have committed before its connection broke,
+    // so the existing operation-id/CAS-aware UI retry remains authoritative.
+    await recoverDesktopBackend().catch(() => false)
     throw new ApiError(0, UNREACHABLE)
   }
 
@@ -382,6 +391,29 @@ async function send(path: string, options: RequestOptions = {}): Promise<Respons
 async function requestJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const response = await send(path, options)
   return (await response.json()) as T
+}
+
+export async function fetchProtectedAsset(path: string, signal?: AbortSignal): Promise<Blob> {
+  const response = await send(path, { signal })
+  return response.blob()
+}
+
+export function immediateAssetUrl(path: string): string | null {
+  const runtime = getImmediateRuntimeConfig()
+  if (!runtime || runtime.sessionHeader) return null
+  return `${runtime.apiBase}${path}`
+}
+
+export async function loadProtectedAssetSource(
+  path: string,
+  signal?: AbortSignal,
+): Promise<{ url: string; release?: () => void }> {
+  const directUrl = immediateAssetUrl(path)
+  if (directUrl) return { url: directUrl }
+
+  const blob = await fetchProtectedAsset(path, signal)
+  const url = URL.createObjectURL(blob)
+  return { url, release: () => URL.revokeObjectURL(url) }
 }
 
 export const api = {
@@ -513,8 +545,7 @@ export const api = {
   testVision: () =>
     requestJson<VisionSupportResult>('/api/settings/test-vision', { method: 'POST' }),
 
-  testFirecrawl: () =>
-    requestJson<FirecrawlTestResult>('/api/settings/test-firecrawl', { method: 'POST' }),
+  testExa: () => requestJson<ExaTestResult>('/api/settings/test-exa', { method: 'POST' }),
 
   getAgentWorkspace: (classId: number, signal?: AbortSignal) =>
     requestJson<AgentWorkspaceRead | null>(`/api/classes/${classId}/workspace`, { signal }),
