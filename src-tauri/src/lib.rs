@@ -41,6 +41,7 @@ impl From<LaunchError> for CommandError {
 struct SidecarBootstrapRequest {
     handshake_version: u8,
     socket_fd: i32,
+    parent_pid: u32,
     listener_addr: String,
     session_header_name: &'static str,
     session_secret: String,
@@ -212,6 +213,7 @@ fn launch_backend(app: &AppHandle) -> Result<ManagedBackend, LaunchError> {
     let bootstrap = SidecarBootstrapRequest {
         handshake_version: 1,
         socket_fd: listener_fd,
+        parent_pid: std::process::id(),
         listener_addr,
         session_header_name: SESSION_HEADER_NAME,
         session_secret: session_secret.clone(),

@@ -48,7 +48,11 @@ def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, o
         if process.stdin is None or process.stdout is None:
             raise RuntimeError("frozen backend pipes were not created")
         json.dump(
-            {"socket_fd": listener.fileno(), "session_secret": secret},
+            {
+                "socket_fd": listener.fileno(),
+                "parent_pid": os.getpid(),
+                "session_secret": secret,
+            },
             process.stdin,
         )
         process.stdin.write("\n")

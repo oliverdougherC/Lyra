@@ -19,6 +19,7 @@ from backend.desktop_bootstrap import (
 )
 from backend.desktop_entry import (
     _emit_readiness_when_started,
+    _monitor_parent,
     _readiness_line,
     adopt_inherited_socket,
 )
@@ -29,13 +30,15 @@ TEST_SESSION = "not-a-real-session-secret"  # noqa: S105
 
 def test_read_bootstrap_requires_socket_fd_and_secret() -> None:
     with pytest.raises(ValueError, match="socket_fd"):
-        read_bootstrap('{"session_secret":"secret"}')
+        read_bootstrap('{"parent_pid":1,"session_secret":"secret"}')
+    with pytest.raises(ValueError, match="parent_pid"):
+        read_bootstrap('{"socket_fd":4,"session_secret":"secret"}')
     with pytest.raises(ValueError, match="session_secret"):
-        read_bootstrap('{"socket_fd":4,"session_secret":"   "}')
+        read_bootstrap('{"socket_fd":4,"parent_pid":1,"session_secret":"   "}')
 
 
 def test_apply_bootstrap_environment_sets_packaged_flags(monkeypatch: pytest.MonkeyPatch) -> None:
-    bootstrap = read_bootstrap('{"socket_fd":4,"session_secret":"desktop-token"}')
+    bootstrap = read_bootstrap('{"socket_fd":4,"parent_pid":1,"session_secret":"desktop-token"}')
     original_packaged = os.environ.get(PACKAGED_ENV)
     original_session = os.environ.get("LYRA_SESSION_SECRET")
 
@@ -128,3 +131,18 @@ async def test_readiness_helper_emits_one_bounded_json_line() -> None:
     payload = stream.getvalue().strip()
     assert payload == expected
     assert len(payload.encode("utf-8")) <= 256
+
+
+@pytest.mark.asyncio
+async def test_parent_monitor_requests_shutdown_when_shell_disappears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Server:
+        should_exit = False
+
+    server = Server()
+    monkeypatch.setattr(os, "getppid", lambda: 99)
+
+    await _monitor_parent(server, 42, interval_seconds=0)
+
+    assert server.should_exit is True

@@ -14,6 +14,7 @@ PACKAGED_ENV = "LYRA_PACKAGED"
 @dataclass(frozen=True)
 class PackagedBootstrap:
     socket_fd: int
+    parent_pid: int
     session_secret: str
 
 
@@ -30,10 +31,17 @@ def read_bootstrap(stdin_text: str | None = None) -> PackagedBootstrap:
     socket_fd = payload.get("socket_fd")
     if isinstance(socket_fd, bool) or not isinstance(socket_fd, int) or socket_fd < 0:
         raise ValueError("packaged bootstrap must provide a non-negative integer socket_fd")
+    parent_pid = payload.get("parent_pid")
+    if isinstance(parent_pid, bool) or not isinstance(parent_pid, int) or parent_pid <= 0:
+        raise ValueError("packaged bootstrap must provide a positive integer parent_pid")
     session_secret = payload.get("session_secret")
     if not isinstance(session_secret, str) or not session_secret.strip():
         raise ValueError("packaged bootstrap must provide a non-empty session_secret")
-    return PackagedBootstrap(socket_fd=socket_fd, session_secret=session_secret.strip())
+    return PackagedBootstrap(
+        socket_fd=socket_fd,
+        parent_pid=parent_pid,
+        session_secret=session_secret.strip(),
+    )
 
 
 def apply_bootstrap_environment(bootstrap: PackagedBootstrap) -> None:

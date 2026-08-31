@@ -113,6 +113,21 @@ async def _emit_readiness_when_started(
     stream.flush()
 
 
+async def _monitor_parent(
+    server: uvicorn.Server,
+    parent_pid: int,
+    *,
+    interval_seconds: float = 0.25,
+) -> None:
+    """Stop the sidecar if its native-shell parent disappears unexpectedly."""
+    while not server.should_exit:
+        if os.getppid() != parent_pid:
+            logging.getLogger(__name__).warning("desktop shell parent exited; stopping backend")
+            server.should_exit = True
+            return
+        await asyncio.sleep(interval_seconds)
+
+
 async def run_packaged_backend(
     bootstrap: PackagedBootstrap,
     *,
@@ -134,12 +149,16 @@ async def run_packaged_backend(
     )
     server = server_factory(config)
     reporter = asyncio.create_task(_emit_readiness_when_started(server, sock, output))
+    parent_monitor = asyncio.create_task(_monitor_parent(server, bootstrap.parent_pid))
     try:
         await server.serve(sockets=[sock])
     finally:
         reporter.cancel()
+        parent_monitor.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reporter
+        with contextlib.suppress(asyncio.CancelledError):
+            await parent_monitor
         sock.close()
     return 0
 
