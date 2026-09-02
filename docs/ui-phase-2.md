@@ -394,10 +394,10 @@ no empty-state copy at all: the header names the step and the cursor is already 
 paragraph explaining that you may type in the box you are typing in was spending a third of the
 thread's height to say nothing.
 
-**The conversation is scoped to the step.** Guide is written to teach a problem end to end, and left
-alone on a step it answers the question and then asks how to do the next one. An anchored session
-answers what was asked, at most one leading question to get there, and stops; the walkthrough is the
-student's to ask for. The rule is in `format_step_context`, described in solver-phase-2.md.
+**The conversation is scoped to the step.** The tutor is written to teach, and left alone on a
+step it answers the question and then drifts into the next one. An anchored session answers what
+was asked, and stops; the walkthrough is the student's to ask for. The rule is in
+`format_step_context`, described in solver-phase-2.md.
 
 ### Export
 

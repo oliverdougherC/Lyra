@@ -389,8 +389,9 @@ A two-option named control above the conversation, not a `switch`, because both 
 and neither is a default-off state. It uses the line-tab treatment: the active option has a 2px sage
 rule rather than a filled segment. Tooltips and per-session behavior remain unchanged.
 
-- **Guide:** Socratic. Lyra asks leading questions and withholds the final answer.
-- **Show:** direct. Lyra explains the full solution.
+- **Guide:** Lyra teaches toward understanding - explains directly, works examples, scaffolds,
+  and asks only when it helps (see `docs/tutor-prompt-contract.md`).
+- **Show:** direct. Lyra gives the full worked result.
 
 ### Retrieval Notice
 

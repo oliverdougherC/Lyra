@@ -832,7 +832,7 @@ async def _replay_turn(
 def _refuse_writer_session(session: dict[str, object]) -> None:
     """The tutor never answers in a writer conversation.
 
-    Sending a tutor turn here would flip the session's mode and put a Socratic reply in
+    Sending a tutor turn here would flip the session's mode and put a tutor reply in
     the middle of a working transcript. Nothing in the interface offers this; the guard
     exists so a stale client or a hand-written request cannot do it either.
     """

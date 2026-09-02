@@ -632,15 +632,15 @@ It reuses the chat stack entirely. `chat_sessions` gains a nullable `artifact_pa
 - retrieves normally on top of the pinned context, so the exchange still reaches the course material
 - appears in the sidebar under its class like any other conversation, named from its first message
 
-**The conversation is scoped to the step, which is narrower than the mode it runs in.** Guide is
-written to teach a problem end to end, and turned loose on a step it does exactly that: the student
-asks why one line follows from the one above it, answers the leading question correctly, and is told
-"perfect, now how do we do the next step?" They did not ask to be walked through the problem. So an
-anchored session carries an extra rule with its pinned step: answer what was asked, at most one
-leading question to get there, then stop. Never continue into the next step, and never offer the
-walkthrough. The student can ask for it, and then it is theirs to ask for rather than Lyra's to
-start. The rule travels with the step rather than living in the mode prompts, because it is a
-property of where the question was asked from: Show has the same appetite for finishing the problem.
+**The conversation is scoped to the step, which is narrower than the mode it runs in.** The mode
+prompts are written to teach, and turned loose on one step of a solution they keep teaching past
+the step: the student asks why one line follows from the one above it, gets the answer, and the
+reply drifts into the next step or offers to walk through the rest. They did not ask to be walked
+through the problem. So an anchored session carries an extra rule with its pinned step: answer what
+was asked, then stop. Never continue into the next step, and never offer the walkthrough. The
+student can ask for it, and then it is theirs to ask for rather than Lyra's to start. The rule
+travels with the step rather than living in the mode prompts, because it is a property of where the
+question was asked from: Show has the same appetite for finishing the problem.
 
 No new streaming protocol, no second message store, no parallel prompt builder.
 

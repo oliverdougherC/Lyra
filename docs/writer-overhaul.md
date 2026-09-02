@@ -78,8 +78,8 @@ Lost in translation:
 - **No pipelines.** Kuhn's seeding pipeline (research, then skeleton, as code dispatching agent
   tasks) demonstrated that a long document is drafted in passes, not in one shot. Lyra has no
   multi-pass anything.
-- **Guide/Show makes no sense here.** The tutor's Socratic mode toggle is about not doing the
-  student's homework for them. A draft is the student's own writing; the assistant's job is to
+- **Guide/Show makes no sense here.** The tutor's mode toggle is about how directly the tutor
+  teaches a subject. A draft is the student's own writing; the assistant's job is to
   help produce and improve it. Two modes where there should be one assistant.
 - **Export regressed to `window.print()`.** Kuhn rendered markdown through Typst to a typeset
   PDF. The print stylesheet is a fine stopgap and not a deliverable.
