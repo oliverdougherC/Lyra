@@ -250,7 +250,7 @@ def test_timeout_and_upstream_failures_are_retryable_and_leave_no_assistant_mess
 # classifies it without a DNS lookup.
 REMOTE_ENDPOINT = "http://203.0.113.10:8081/v1"
 
-PROFILES = ("research", "code", "command")
+PROFILES = ("research", "code", "command", "agent")
 
 
 def _use_remote_endpoint(db: sqlite3.Connection, *, acknowledged: bool) -> None:
@@ -1094,3 +1094,193 @@ def test_a_failure_building_the_runtime_registry_persists_no_user_turn(
     assert calls == []
     assert sessions.list_messages(db, session_id) == []
     assert sessions.get_session(db, session_id)["title"] is None
+
+
+# Contextual agent profile (PLA-401): the student never names a profile. The contextual
+# turn plans across research, workspace, and command work on its own, and asks for the
+# just-in-time access it needs instead of presenting a grant dashboard.
+
+
+def test_the_contextual_turn_defaults_to_the_agent_profile(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A POST without a profile runs under the contextual agent: the attempt records
+    # `agent`, and the loop receives the union registry of the snapshot's admitted
+    # families rather than one of the legacy isolated profiles.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Read the starter project and explain how the pieces fit together"},
+    )
+
+    assert response.status_code == 200, response.text
+    registry = captured["registry"]
+    # No workspace is attached and web research is off: the agent offers the plain
+    # reasoning tools and exactly one actionable request - attach a folder.
+    assert "request_workspace_access" in registry
+    assert "read_workspace_file" not in registry
+    assert "search_web" not in registry
+    row = db.execute(
+        "select profile from agent_turn_attempts where session_id = ? order by id desc limit 1",
+        (session_id,),
+    ).fetchone()
+    assert row is not None and row["profile"] == "agent"
+
+
+def test_the_agent_registry_unions_the_families_the_snapshot_admits(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    # Web on, workspace attached with every grant: the contextual registry is the union of
+    # the admitted families, and no access request is offered - everything the snapshot
+    # admits is already held, and the student never sees a grant dashboard.
+    _enable_web_research(db)
+    monkeypatch.setattr(
+        routes_agent_chat.agent_tools.agent_store,
+        "get_workspace_for_class",
+        lambda conn, cid: _fake_workspace(tmp_path, read=True, change=True, commands=True),
+    )
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Run the tests"},
+    )
+
+    assert response.status_code == 200, response.text
+    registry = captured["registry"]
+    for name in (
+        "search_web",
+        "read_workspace_file",
+        "create_workspace_change",
+        "create_command_request",
+    ):
+        assert name in registry
+    assert "request_workspace_access" not in registry  # nothing is missing
+
+
+def test_an_access_request_is_asked_once_per_scope_per_turn(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    # Attached workspace with no grants: read is missing, so the request card exists. The
+    # model asks once and is told the student decides; a second ask in the same turn is
+    # refused as a repeat, so the student sees one card, not a pile.
+    holder = {"ws": _fake_workspace(tmp_path, read=False)}
+    monkeypatch.setattr(
+        routes_agent_chat.agent_tools.agent_store,
+        "get_workspace_for_class",
+        lambda conn, cid: holder["ws"],
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        registry = kwargs["registry"]
+        captured["registry"] = registry
+        first = registry["request_workspace_access"].handler(
+            scope="read", reason="read the project files"
+        )
+        second = registry["request_workspace_access"].handler(
+            scope="read", reason="read the project files"
+        )
+        captured["first"], captured["second"] = first, second
+        return tools.ToolLoopResult(content="done")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", fake_loop)
+    session_id = int(sessions.create_session(db, class_id)["id"])
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Read the project"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert captured["first"].ok is True  # the student is asked once
+    assert captured["second"].ok is False  # a repeat in the same turn is refused
+    assert "already requested" in str(captured["second"].error)
+    # One run-local activity event per scope, so the conversation shows one card.
+    events = [e for e in response.json()["activity"] if e["target_kind"] == "capability_request"]
+    assert len(events) == 1
+
+
+def test_a_scope_granted_mid_turn_is_available_not_requested(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+) -> None:
+    # The request was frozen into this turn's registry by the snapshot (no read grant). If
+    # the student grants read before the model asks, the live re-read reports the scope as
+    # already available instead of asking for it twice.
+    holder = {"ws": _fake_workspace(tmp_path, read=False)}
+    monkeypatch.setattr(
+        routes_agent_chat.agent_tools.agent_store,
+        "get_workspace_for_class",
+        lambda conn, cid: holder["ws"],
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        registry = kwargs["registry"]
+        captured["registry"] = registry
+        holder["ws"] = _fake_workspace(tmp_path, read=True)  # granted mid-turn
+        captured["dispatch"] = registry["request_workspace_access"].handler(
+            scope="read", reason="read the project files"
+        )
+        return tools.ToolLoopResult(content="done")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", fake_loop)
+    session_id = int(sessions.create_session(db, class_id)["id"])
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Read the project"},
+    )
+
+    assert response.status_code == 200, response.text
+    dispatch = captured["dispatch"]
+    assert dispatch.ok is False
+    assert "already available" in str(dispatch.error)
+
+
+def test_legacy_profiles_do_not_gain_the_access_request_tool(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The isolated legacy profiles keep their exact registries: only the contextual agent
+    # asks for access just-in-time, so nothing about the old surfaces changes shape.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Research this", "profile": "research"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert "request_workspace_access" not in captured["registry"]
+
+
+def test_the_agent_prompt_keeps_the_conversations_guide_show_contract(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The agent turn rides the conversation's Guide/Show mode (Workstream A), so the mode
+    # toggle keeps its meaning in agent work too.
+    session_id = int(sessions.create_session(db, class_id)["id"])  # guide by default
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Help me understand this"},
+    )
+
+    assert response.status_code == 200, response.text
+    prompt = str(captured["messages"][0]["content"])
+    assert "guide mode" in prompt
+
+    sessions.set_session_mode(db, session_id, "show")
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Show me the working"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert "show mode" in str(captured["messages"][0]["content"])

@@ -56,7 +56,9 @@ it('saves the explicit web-research and parallel capability switches', async () 
   render(<SettingsForm />, { wrapper: createWrapper() })
 
   await userEvent.click(await screen.findByRole('switch', { name: 'Allow web research' }))
-  await userEvent.click(screen.getByRole('switch', { name: 'Parallel writer requests' }))
+  // Parallel writer tuning moved behind the Advanced disclosure, so the test opens it first.
+  await userEvent.click(await screen.findByRole('button', { name: /Advanced/ }))
+  await userEvent.click(await screen.findByRole('switch', { name: 'Parallel writer requests' }))
 
   expect(update).toHaveBeenCalledWith({ allow_web_research: true })
   expect(update).toHaveBeenCalledWith({ parallel_requests: true })
@@ -102,7 +104,10 @@ it('surfaces an inheritance-aware web-research override for each class', async (
   })
   render(<SettingsForm />, { wrapper: createWrapper() })
 
-  await userEvent.click(await screen.findByRole('combobox', { name: 'History 201 web research' }))
+  await userEvent.click(await screen.findByRole('button', { name: /Advanced/ }))
+  await userEvent.click(
+    await screen.findByRole('combobox', { name: 'History 201 web research' }),
+  )
   await userEvent.click(screen.getByRole('option', { name: 'Allow' }))
 
   expect(update).toHaveBeenCalledWith(7, { allow_web_research: true })

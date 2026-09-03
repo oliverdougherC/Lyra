@@ -575,10 +575,20 @@ export const api = {
   getAgentWorkspace: (classId: number, signal?: AbortSignal) =>
     requestJson<AgentWorkspaceRead | null>(`/api/classes/${classId}/workspace`, { signal }),
 
-  attachAgentWorkspace: (classId: number, rootPath: string, displayName?: string) =>
+  attachAgentWorkspace: (
+    classId: number,
+    rootPath: string,
+    options?: { displayName?: string; readEnabled?: boolean },
+  ) =>
     requestJson<AgentWorkspaceRead>(`/api/classes/${classId}/workspace`, {
       method: 'PUT',
-      body: { root_path: rootPath, display_name: displayName },
+      body: {
+        root_path: rootPath,
+        display_name: options?.displayName,
+        // A just-in-time attach reads the minimum it was asked for: the folder is
+        // inspectable. Deeper grants (change proposals, commands) are requested separately.
+        read_enabled: options?.readEnabled ?? false,
+      },
     }),
 
   detachAgentWorkspace: async (classId: number) => {
@@ -597,10 +607,11 @@ export const api = {
       { signal },
     ),
 
-  sendAgentChat: (classId: number, sessionId: number, content: string, profile: AgentProfile) =>
+  sendAgentChat: (classId: number, sessionId: number, content: string, profile?: AgentProfile) =>
     requestJson<AgentChatResult>(`/api/classes/${classId}/sessions/${sessionId}/agent-chat`, {
       method: 'POST',
-      body: { content, profile },
+      // The contextual turn omits the profile: the backend plans it (Workstream C).
+      body: profile ? { content, profile } : { content },
       errorFactory: agentChatErrorFactory,
     }),
 

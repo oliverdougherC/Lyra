@@ -369,6 +369,27 @@ async fn pick_import_directory(
 }
 
 #[tauri::command]
+async fn pick_workspace_directory(
+    app: AppHandle,
+) -> Result<Option<String>, CommandError> {
+    // The contextual agent's just-in-time attach: a normal native folder selection, no
+    // path pasting. The path only ever reaches the backend's bounded-attach endpoint,
+    // which re-validates the root (device/inode) server-side before anything is read.
+    let selection = app
+        .dialog()
+        .file()
+        .set_title("Choose a folder Lyra can work with")
+        .blocking_pick_folder();
+    let Some(selection) = selection else {
+        return Ok(None);
+    };
+    let path = selection
+        .into_path()
+        .map_err(|_| LaunchError::Import("the selected folder was not a local directory"))?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
 fn publish_desktop_import(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -400,6 +421,7 @@ pub fn run() {
             retry_backend,
             open_external_url,
             pick_import_directory,
+            pick_workspace_directory,
             publish_desktop_import
         ])
         .build(tauri::generate_context!())

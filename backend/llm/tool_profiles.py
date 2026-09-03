@@ -24,15 +24,17 @@ type Capability = Literal[
     "profile_proposal",
     "draft_proposal",
     "comment_proposal",
+    "access_request",
 ]
 type Effect = Literal["pure", "network_read", "filesystem_read", "database_proposal"]
 type Trust = Literal["computed", "public_web", "workspace", "database"]
-type ProfileName = Literal["compute", "research", "code", "command", "writer"]
+type ProfileName = Literal["compute", "research", "code", "command", "agent", "writer"]
 
 PROFILE_COMPUTE: ProfileName = "compute"
 PROFILE_RESEARCH: ProfileName = "research"
 PROFILE_CODE: ProfileName = "code"
 PROFILE_COMMAND: ProfileName = "command"
+PROFILE_AGENT: ProfileName = "agent"
 PROFILE_WRITER: ProfileName = "writer"
 
 DECLARED_PROFILES: tuple[ProfileName, ...] = (
@@ -40,6 +42,7 @@ DECLARED_PROFILES: tuple[ProfileName, ...] = (
     PROFILE_RESEARCH,
     PROFILE_CODE,
     PROFILE_COMMAND,
+    PROFILE_AGENT,
     PROFILE_WRITER,
 )
 
@@ -50,6 +53,7 @@ _ALLOWED_COMBINATIONS: Mapping[Capability, tuple[Effect, Trust]] = {
     "workspace_read": ("filesystem_read", "workspace"),
     "change_proposal": ("database_proposal", "database"),
     "command_proposal": ("database_proposal", "database"),
+    "access_request": ("pure", "computed"),
     "source_proposal": ("database_proposal", "database"),
     "profile_proposal": ("database_proposal", "database"),
     "draft_proposal": ("database_proposal", "database"),
@@ -60,6 +64,21 @@ PROFILE_CAPABILITY_MATRIX: Mapping[ProfileName, frozenset[Capability]] = Mapping
         PROFILE_COMPUTE: frozenset({"compute"}),
         PROFILE_RESEARCH: frozenset({"compute", "web_read", "source_proposal", "profile_proposal"}),
         PROFILE_CODE: frozenset({"compute", "workspace_read", "change_proposal"}),
+        # The contextual agent turn plans across research, workspace, and command
+        # proposals on its own: one conversation, every granted capability, nothing
+        # the snapshot does not admit. Each tool still reauthorizes at dispatch.
+        PROFILE_AGENT: frozenset(
+            {
+                "compute",
+                "web_read",
+                "source_proposal",
+                "profile_proposal",
+                "workspace_read",
+                "change_proposal",
+                "command_proposal",
+                "access_request",
+            }
+        ),
         PROFILE_COMMAND: frozenset({"compute", "command_proposal"}),
         PROFILE_WRITER: frozenset(
             {

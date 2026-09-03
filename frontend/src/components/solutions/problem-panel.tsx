@@ -1,6 +1,6 @@
 'use client'
 
-import { AlertCircle, History, MoreHorizontal, RefreshCw, XCircle } from 'lucide-react'
+import { AlertCircle, ChevronRight, History, MoreHorizontal, RefreshCw, XCircle } from 'lucide-react'
 import { Fragment } from 'react'
 
 import { MathText } from '@/components/solutions/math-text'
@@ -9,6 +9,7 @@ import { SolutionStep } from '@/components/solutions/solution-step'
 import { ToolCallTrace } from '@/components/solutions/tool-call-trace'
 import { VerdictBadge } from '@/components/solutions/verdict-badge'
 import { AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -397,18 +398,51 @@ function Working({
         </p>
       ) : null}
 
-      {/* Grounding is a count of steps carrying provenance, not a score, and it belongs
-          beside the checks rather than under the title: read first it looks like a mark
-          out of ten for work the student has not started reading yet. */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <ToolCallTrace checks={problem.checks} />
-        {steps.length > 0 ? (
-          <span className="text-text-tertiary text-xs print:hidden">
+      <CheckedDisclosure problem={problem} steps={steps} grounded={grounded} />
+    </>
+  )
+}
+
+/**
+ * The machinery behind a verdict, one disclosure deep.
+ *
+ * The worked answer is the primary content. What changes what the student should trust is
+ * already on the page - a refutation is never quiet, a failed solve says so in red. What
+ * does not is the audit itself: which checks ran, their raw arguments and results, and how
+ * many steps the working was grounded in. That is the debugging surface, and it sits
+ * under "How Lyra checked this" rather than in the reading flow.
+ */
+function CheckedDisclosure({
+  problem,
+  steps,
+  grounded,
+}: {
+  problem: SolutionPart
+  steps: SolutionPart[]
+  grounded: number
+}) {
+  const checks = problem.checks
+  const hasGrounding = steps.length > 0 && grounded > 0
+  if (checks.length === 0 && !hasGrounding) return null
+
+  return (
+    <Collapsible className="print:hidden">
+      <CollapsibleTrigger className="text-text-tertiary hover:text-text-secondary focus-visible:ring-ring flex items-center gap-1 rounded-sm text-xs focus-visible:ring-2 focus-visible:outline-none [&[data-state=open]>svg]:rotate-90">
+        <ChevronRight className="size-3 transition-transform duration-200" aria-hidden />
+        How Lyra checked this
+        {checks.length > 0 ? (
+          <span aria-hidden>· {formatCount(checks.length, 'check')} run</span>
+        ) : null}
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-2 flex flex-col gap-3">
+        {checks.length > 0 ? <ToolCallTrace checks={checks} /> : null}
+        {hasGrounding ? (
+          <span className="text-text-tertiary text-xs">
             {grounded} of {formatCount(steps.length, 'step')} grounded in your material
           </span>
         ) : null}
-      </div>
-    </>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 

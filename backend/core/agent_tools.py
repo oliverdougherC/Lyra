@@ -43,9 +43,9 @@ from backend.llm.tools import REGISTRY as COMPUTE_REGISTRY
 from backend.llm.tools import ToolDefinition
 from backend.tools.result import ToolResult, failure, success
 
-type AgentProfile = Literal["research", "code", "command"]
+type AgentProfile = Literal["research", "code", "command", "agent"]
 
-PROFILES: tuple[AgentProfile, ...] = ("research", "code", "command")
+PROFILES: tuple[AgentProfile, ...] = ("research", "code", "command", "agent")
 FETCH_PREVIEW_CHARS = source_ledger.MAX_RELIED_EXCERPT_CHARS
 
 
@@ -141,6 +141,10 @@ class AgentRunActivity:
     workspace_change_ids: list[int] = field(default_factory=list)
     command_request_ids: list[int] = field(default_factory=list)
     profile_fact_ids: list[int] = field(default_factory=list)
+    # Scopes requested through `request_workspace_access` during this run. A scope is
+    # asked at most once per turn: the student sees one card per missing capability,
+    # and a repeat call in the same turn is told so instead of producing another card.
+    requested_scopes: set[str] = field(default_factory=set)
 
     def note(
         self,
@@ -490,7 +494,23 @@ def build_agent_registry(
             _annotated(wrapped, capability="compute", effect="pure", trust="computed")
         )
 
-    if profile == "research":
+    if profile == "agent":
+        # The contextual turn plans across research, workspace, and command work on its
+        # own: every group is added and self-gates on the same frozen snapshot, so the
+        # exposed registry is the union of what the snapshot admits - no more, no less.
+        _add_research_tools(
+            conn,
+            class_id,
+            session_id,
+            definitions,
+            activity,
+            tuple(private_context),
+            snapshot,
+        )
+        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot)
+        _add_command_tools(conn, class_id, session_id, definitions, activity, snapshot)
+        _add_access_request_tools(conn, class_id, session_id, definitions, activity, snapshot)
+    elif profile == "research":
         _add_research_tools(
             conn,
             class_id,
@@ -1255,6 +1275,133 @@ def _add_command_tools(
             effect="database_proposal",
             trust="database",
         )
+    )
+
+
+ACCESS_SCOPES: tuple[str, ...] = ("attach", "read", "propose_changes", "run_commands")
+
+ACCESS_SCOPE_DESCRIPTIONS: Mapping[str, str] = {
+    "attach": "Attach a local folder Lyra can work with",
+    "read": "Read files in the attached folder",
+    "propose_changes": "Prepare file edits for the student's hunk-by-hunk review",
+    "run_commands": "Prepare exact verification commands for the student's approval",
+}
+
+
+def _access_scope_available(workspace: dict[str, object] | None, scope: str) -> bool:
+    """Whether a scope is already granted, read from the live workspace row."""
+    if scope == "attach":
+        return workspace is not None
+    if workspace is None:
+        return False
+    return {
+        "read": bool(workspace["read_enabled"]),
+        "propose_changes": bool(workspace["change_proposals_enabled"]),
+        "run_commands": bool(workspace["commands_enabled"]),
+    }[scope]
+
+
+def _add_access_request_tools(
+    conn: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    definitions: list[tool_profiles.AnnotatedToolDefinition],
+    activity: AgentRunActivity,
+    snapshot: AgentCapabilitySnapshot,
+) -> None:
+    """Just-in-time access requests for the capabilities the snapshot shows as missing.
+
+    The student never manages grant state as a dashboard: when a task needs a capability
+    Lyra does not yet hold, the model asks once through this tool and the student sees a
+    single request card in the conversation. Exposure is decided by the frozen snapshot -
+    only the scopes that are currently missing are offered, so the model is not even
+    tempted to ask for what it already holds. Each dispatch re-reads the live state, so a
+    scope granted mid-turn is reported as available instead of requested again, and the
+    one-request-per-scope-per-turn rule lives in the run-local collector. The tool has no
+    host effect: a grant only ever happens through the ordinary attach/grant endpoints,
+    and only when the student acts.
+    """
+    scopes: list[str] = []
+    if not snapshot.workspace_present:
+        scopes.append("attach")
+    elif not snapshot.workspace_read_enabled:
+        scopes.append("read")
+    if snapshot.workspace_present and not snapshot.workspace_change_proposals_enabled:
+        scopes.append("propose_changes")
+    if snapshot.workspace_present and not snapshot.workspace_commands_enabled:
+        scopes.append("run_commands")
+    if not scopes:
+        return
+
+    def request_action(_authorization: object, *, scope: str, reason: str) -> _Outcome:
+        scope = _text(scope, "scope", maximum=32)
+        if scope not in scopes:
+            raise _RefusalError(f"Unknown access scope: {scope}")
+        _text(reason, "reason", maximum=400)
+        workspace = agent_store.get_workspace_for_class(conn, class_id)
+        if _access_scope_available(workspace, scope):
+            raise _RefusalError(
+                f"{ACCESS_SCOPE_DESCRIPTIONS[scope]} is already available; use it."
+            )
+        if scope in activity.requested_scopes:
+            raise _RefusalError(
+                "You already requested this access this turn. The student has not answered "
+                "yet; do not ask again and say plainly what still needs approval."
+            )
+        activity.requested_scopes.add(scope)
+        return _Outcome(
+            success(
+                scope=scope,
+                requested=True,
+                note=(
+                    "The student has been asked to approve this access. It is not available "
+                    "this turn; if it is approved it is available from the next turn. "
+                    "Continue with what you can and say plainly what still needs approval."
+                ),
+            ),
+            {"scope": scope},
+            target_kind="capability_request",
+            target_id=scope,
+        )
+
+    definition = _definition(
+        "request_workspace_access",
+        "Request a workspace access the task needs but is not currently granted. The "
+        "student sees the request and decides; nothing is granted without their action.",
+        _audited_handler(
+            conn,
+            class_id=class_id,
+            session_id=session_id,
+            name="request_workspace_access",
+            capability="access_request",
+            effect="pure",
+            activity=activity,
+            authorize=lambda: _session_scope(conn, class_id, session_id),
+            action=request_action,
+        ),
+        properties={
+            "scope": {
+                "type": "string",
+                "enum": scopes,
+                "description": (
+                    "attach: connect a local folder. read: read files in the attached "
+                    "folder. propose_changes: prepare file edits for the student's review. "
+                    "run_commands: prepare verification commands for the student's approval."
+                ),
+            },
+            "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 400,
+                "description": (
+                    "One or two sentences, in the student's words, of why this is needed now."
+                ),
+            },
+        },
+        required=("scope", "reason"),
+    )
+    definitions.append(
+        _annotated(definition, capability="access_request", effect="pure", trust="computed")
     )
 
 

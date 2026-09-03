@@ -4,13 +4,17 @@ import { useQueryClient } from '@tanstack/react-query'
 import {
   Camera,
   FileDown,
+  History,
   Maximize2,
   Minimize2,
+  MoreHorizontal,
   PanelLeftClose,
   PanelRightClose,
   Pencil,
   Printer,
   SearchCheck,
+  Sparkles,
+  Wand2,
 } from 'lucide-react'
 import dynamic from '@/router/dynamic'
 import { useParams, useRouteAnchor, useRouter } from '@/router/hooks'
@@ -21,7 +25,15 @@ import { ChatPane } from '@/components/chat/chat-pane'
 import { BriefCard } from '@/components/drafts/brief-card'
 import type { AnchorThread } from '@/components/drafts/comment-highlights'
 import { CommentList } from '@/components/drafts/comment-list'
-import { DraftEntryActions } from '@/components/drafts/draft-entry-actions'
+import { useDraftDocumentShortcut } from '@/components/drafts/draft-entry-actions'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import type { DraftEditorHandle } from '@/components/drafts/draft-editor'
 import { LiveDraftSuggestionPanel } from '@/components/drafts/live-draft-suggestion'
 import { PlanPanel } from '@/components/drafts/plan-panel'
@@ -121,7 +133,10 @@ function readId(value: string | string[] | undefined): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
 }
 
-type RailTab = 'live' | 'suggestion' | 'plan' | 'sources' | 'comments' | 'history' | 'chat'
+type RailTab = 'live' | 'suggestion' | 'work' | 'comments' | 'chat'
+
+/** The consolidated work surface's sections: one tab, not three permanent ones. */
+type WorkSection = 'plan' | 'sources' | 'history'
 
 /**
  * Where the tools sit, and whether the application is on screen at all.
@@ -218,6 +233,15 @@ export default function DraftWorkspacePage() {
   const [reviewOpen, setReviewOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [railTab, setRailTab] = useState<RailTab>('chat')
+  const [workSection, setWorkSection] = useState<WorkSection>('plan')
+  // Plan, sources, and history are the draft's working surfaces, not the conversation.
+  // They share one "work" tab in the rail picker instead of three permanent entries; the
+  // contextual ones (a live draft, a pending suggestion, review comments) still take the
+  // rail over when they are the point.
+  const openWork = (section: WorkSection) => {
+    setWorkSection(section)
+    setRailTab('work')
+  }
   /**
    * The writer conversation on screen: the one this visit created, else the draft's
    * newest. Held locally so the first message's session lands here the moment it exists
@@ -356,6 +380,9 @@ export default function DraftWorkspacePage() {
       },
     })
   }, [artifactId])
+  // The whole-document shortcut stays one keystroke away from anywhere on the page even
+  // though its action moved into the More menu: a menu item has to be found.
+  useDraftDocumentShortcut(openDraftDocument)
 
   // The pending edit as the panel last resolved it, falling back to the query. The
   // override keeps the panel on what the server just answered instead of waiting a round
@@ -559,6 +586,28 @@ export default function DraftWorkspacePage() {
     }
   }
 
+  /** Export the typeset PDF. The export reads the body server-side, so do not export
+      stale text: a save failure or conflict leaves the export unstarted with the save
+      state shown. */
+  async function exportDraft() {
+    if (exporting) return
+    if (!(await ensureBodySaved())) return
+    setExporting(true)
+    try {
+      const pdf = await api.exportDraftPdf(artifact.id)
+      const url = URL.createObjectURL(pdf)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${artifact.title}.pdf`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (caught) {
+      toast.error(caught instanceof ApiError ? caught.message : 'Could not export the PDF.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   // Reconcile a stale-version conflict by keeping the student's own writing: rebase onto
   // what the server holds now and write the local text over it. Nothing on screen is lost.
   function onKeepMyVersion() {
@@ -684,7 +733,7 @@ export default function DraftWorkspacePage() {
             }, 0)
           }}
           onSourceClick={(sourceId) => {
-            setRailTab('sources')
+            openWork('sources')
             const target = `source-${sourceId}`
             if (routeAnchor === target) router.replaceAnchor(target)
             else router.pushAnchor(target)
@@ -752,7 +801,6 @@ export default function DraftWorkspacePage() {
               {activeLiveSuggestion ? (
                 <SelectItem value="live">Draft · Live draft</SelectItem>
               ) : null}
-              <SelectItem value="plan">Draft · Plan</SelectItem>
               {edit ? <SelectItem value="suggestion">Review · Suggestion</SelectItem> : null}
               {(commentThreads.data?.length ?? 0) > 0 || reviewing || railTab === 'comments' ? (
                 <SelectItem value="comments">
@@ -760,9 +808,8 @@ export default function DraftWorkspacePage() {
                   {commentThreads.data?.length ? ` (${commentThreads.data.length})` : ''}
                 </SelectItem>
               ) : null}
-              <SelectItem value="sources">Research · Sources</SelectItem>
-              <SelectItem value="history">Workspace · History</SelectItem>
-              <SelectItem value="chat">Assistant · Chat</SelectItem>
+              <SelectItem value="work">Details · plan, sources, history</SelectItem>
+              <SelectItem value="chat">Assistant</SelectItem>
             </SelectContent>
           </Select>
           {wide ? (
@@ -780,7 +827,7 @@ export default function DraftWorkspacePage() {
               draftId={artifact.id}
               suggestion={activeLiveSuggestion}
               onFinalized={onLiveSuggestionFinalized}
-              onOpenPlan={() => setRailTab('plan')}
+              onOpenPlan={() => openWork('plan')}
             />
           </TabsContent>
         ) : null}
@@ -803,21 +850,51 @@ export default function DraftWorkspacePage() {
           </TabsContent>
         ) : null}
 
-        <TabsContent value="plan" className="min-h-0 flex-1 overflow-y-auto p-4">
-          <PlanPanel
-            draftId={artifact.id}
-            running={generating || startPass.isPending}
-            onRun={async () => {
-              // The pass reads the body server-side; do not start it over stale text.
-              if (!(await ensureBodySaved())) return
-              await startPass.mutateAsync({ depth: 'standard' })
-              toast.success('Lyra is continuing from the saved plan.')
-            }}
-          />
-        </TabsContent>
-
-        <TabsContent value="sources" className="min-h-0 flex-1 overflow-y-auto p-4">
-          <SourceLedger classId={classId} />
+        <TabsContent value="work" className="min-h-0 flex-1 overflow-y-auto">
+          <div className="flex h-full flex-col gap-4 p-4">
+            <Select
+              value={workSection}
+              onValueChange={(value) => setWorkSection(value as WorkSection)}
+            >
+              <SelectTrigger size="sm" className="w-full" aria-label="Draft details section">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="plan">Plan</SelectItem>
+                <SelectItem value="sources">Sources</SelectItem>
+                <SelectItem value="history">History</SelectItem>
+              </SelectContent>
+            </Select>
+            {workSection === 'plan' ? (
+              <PlanPanel
+                draftId={artifact.id}
+                running={generating || startPass.isPending}
+                onRun={async () => {
+                  // The pass reads the body server-side; do not start it over stale text.
+                  if (!(await ensureBodySaved())) return
+                  await startPass.mutateAsync({ depth: 'standard' })
+                  toast.success('Lyra is continuing from the saved plan.')
+                }}
+              />
+            ) : workSection === 'sources' ? (
+              <SourceLedger classId={classId} />
+            ) : (
+              <div className="flex flex-col gap-3">
+                <p className="text-text-secondary text-sm">
+                  Snapshots and accepted suggestions, newest first. Restoring one writes a new
+                  version, so nothing is ever lost.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="self-start"
+                  onClick={() => setHistoryOpen(true)}
+                >
+                  View history
+                </Button>
+              </div>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="comments" className="min-h-0 flex-1 overflow-y-auto p-4">
@@ -827,22 +904,6 @@ export default function DraftWorkspacePage() {
           />
         </TabsContent>
 
-        <TabsContent value="history" className="min-h-0 flex-1 overflow-y-auto p-4">
-          <div className="flex flex-col gap-3">
-            <p className="text-text-secondary text-sm">
-              Snapshots and accepted suggestions, newest first. Restoring one writes a new version,
-              so nothing is ever lost.
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="self-start"
-              onClick={() => setHistoryOpen(true)}
-            >
-              View history
-            </Button>
-          </div>
-        </TabsContent>
 
         {/* forceMount: a conversation survives a look at the history tab. */}
         <TabsContent
@@ -941,7 +1002,6 @@ export default function DraftWorkspacePage() {
         />
         <SaveStateIndicator state={saveState} detail={saveDetail} />
         <div className="ml-auto flex items-center gap-1.5">
-          <DraftEntryActions onDraftDocument={openDraftDocument} onDraftPassage={openWrite} />
           <Button
             variant="ghost"
             size="sm"
@@ -952,60 +1012,52 @@ export default function DraftWorkspacePage() {
             <SearchCheck className="size-4" />
             Review
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => void onSnapshot()}
-            disabled={updateBody.isPending}
-            title="Save a history point"
-          >
-            <Camera className="size-4" />
-            Snapshot
-          </Button>
-          {/* Export when the machine can typeset; Print as the honest fallback when it
-              cannot. One slot, because both are "get this out of the app". */}
-          {exportability.data?.available ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              disabled={exporting}
-              title="Export a typeset PDF"
-              onClick={async () => {
-                // The export reads the body server-side; do not export stale text. A save
-                // failure or conflict leaves the export unstarted with the save state shown.
-                if (!(await ensureBodySaved())) return
-                setExporting(true)
-                try {
-                  const pdf = await api.exportDraftPdf(artifact.id)
-                  const url = URL.createObjectURL(pdf)
-                  const link = document.createElement('a')
-                  link.href = url
-                  link.download = `${artifact.title}.pdf`
-                  link.click()
-                  URL.revokeObjectURL(url)
-                } catch (caught) {
-                  toast.error(
-                    caught instanceof ApiError ? caught.message : 'Could not export the PDF.',
-                  )
-                } finally {
-                  setExporting(false)
-                }
-              }}
-            >
-              {exporting ? <Spinner className="size-4" /> : <FileDown className="size-4" />}
-              Export PDF
-            </Button>
-          ) : (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => window.print()}
-              title={exportability.data?.message ?? 'Print this draft'}
-            >
-              <Printer className="size-4" />
-              Print
-            </Button>
-          )}
+          {/* The infrequent operations live in one menu instead of a permanent row: the
+              header keeps the two things this desk is for - reviewing and drafting - and
+              snapshots, history, and export wait under More. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" aria-label="More draft actions">
+                <MoreHorizontal className="size-4" />
+                More
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem onSelect={openDraftDocument}>
+                <Sparkles />
+                Draft the document
+                <DropdownMenuShortcut>Ctrl+/</DropdownMenuShortcut>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={openWrite}>
+                <Wand2 />
+                Draft a passage
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() => void onSnapshot()}
+                disabled={updateBody.isPending}
+              >
+                <Camera />
+                Snapshot
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setHistoryOpen(true)}>
+                <History />
+                History
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {exportability.data?.available ? (
+                <DropdownMenuItem onSelect={() => void exportDraft()} disabled={exporting}>
+                  {exporting ? <Spinner className="size-4" /> : <FileDown className="size-4" />}
+                  Export PDF
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem onSelect={() => window.print()}>
+                  <Printer />
+                  Print
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
           {/* Last, and the only icon-only control in the row: it is the one button here
               that acts on the window rather than on the draft. It stays on screen in both
               states, so the way out of the mode is never something to go looking for. */}

@@ -46,8 +46,9 @@ export function useAgentWorkspace(classId: number) {
 export function useAttachAgentWorkspace(classId: number) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ rootPath, displayName }: { rootPath: string; displayName?: string }) =>
-      api.attachAgentWorkspace(classId, rootPath, displayName),
+    mutationFn: ({ rootPath, displayName, readEnabled }:
+      { rootPath: string; displayName?: string; readEnabled?: boolean }) =>
+      api.attachAgentWorkspace(classId, rootPath, { displayName, readEnabled }),
     onSuccess: (workspace) => queryClient.setQueryData(agentKeys.workspace(classId), workspace),
   })
 }
@@ -108,7 +109,7 @@ export function useRefreshAgentSession(classId: number, sessionId: number | null
 export function useSendAgentChat(classId: number, sessionId: number | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ content, profile }: { content: string; profile: AgentProfile }) => {
+    mutationFn: ({ content, profile }: { content: string; profile?: AgentProfile }) => {
       if (sessionId === null) throw new Error('Start a conversation before using agent tools.')
       return api.sendAgentChat(classId, sessionId, content, profile)
     },

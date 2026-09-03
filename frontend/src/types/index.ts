@@ -395,7 +395,7 @@ export interface AgentConfirmationRead {
   expires_at: string
 }
 
-export type AgentProfile = 'research' | 'code' | 'command'
+export type AgentProfile = 'research' | 'code' | 'command' | 'agent'
 
 export interface AgentChatActivity {
   audit_id: string
