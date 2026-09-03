@@ -435,9 +435,7 @@ def test_access_dismissal_is_bounded_and_session_scoped(
     assert response.status_code == 200, response.text
     assert response.json()["scope"] == "read"
 
-    listed = client.get(
-        f"/api/classes/{class_id}/sessions/{session_id}/agent/access-dismissals"
-    )
+    listed = client.get(f"/api/classes/{class_id}/sessions/{session_id}/agent/access-dismissals")
     assert listed.status_code == 200
     assert [item["scope"] for item in listed.json()["dismissals"]] == ["read"]
 
@@ -449,9 +447,7 @@ def test_access_dismissal_is_bounded_and_session_scoped(
     assert db.execute("select count(*) from agent_access_dismissals").fetchone()[0] == 1
 
     other_session = int(sessions.create_session(db, class_id)["id"])
-    other = client.get(
-        f"/api/classes/{class_id}/sessions/{other_session}/agent/access-dismissals"
-    )
+    other = client.get(f"/api/classes/{class_id}/sessions/{other_session}/agent/access-dismissals")
     assert other.status_code == 200
     assert other.json()["dismissals"] == []
 
@@ -462,7 +458,5 @@ def test_access_dismissal_is_bounded_and_session_scoped(
         (class_id, session_id),
     )
     db.commit()
-    expired = client.get(
-        f"/api/classes/{class_id}/sessions/{session_id}/agent/access-dismissals"
-    )
+    expired = client.get(f"/api/classes/{class_id}/sessions/{session_id}/agent/access-dismissals")
     assert expired.json()["dismissals"] == []

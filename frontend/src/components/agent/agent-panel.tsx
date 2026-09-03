@@ -201,9 +201,7 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
     }
     const dismissed = dismissals.data ?? new Set<string>()
     return [...latest.entries()]
-      .filter(
-        ([scope, event]) => !dismissed.has(scope) && !accessScopeSatisfied(workspace.data, scope),
-      )
+      .filter(([scope]) => !dismissed.has(scope) && !accessScopeSatisfied(workspace.data, scope))
       .map(([scope, event]) => {
         const summary = event.result_summary
         const reason = summary && typeof summary.reason === 'string' ? summary.reason : null
