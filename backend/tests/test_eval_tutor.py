@@ -9,18 +9,23 @@ time.
 Nothing here reaches an endpoint or the student's own database.
 """
 
+import argparse
 import json
 import sqlite3
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.api import routes_chat  # noqa: E402
+from backend.core.app_settings import TutorConfig  # noqa: E402
 from backend.llm.prompts import TUTOR_PROMPT_CONTRACT_VERSION, build_system_prompt  # noqa: E402
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk  # noqa: E402
+from scripts import eval_tutor  # noqa: E402
 from scripts.eval_tutor import (  # noqa: E402
     DIMENSIONS,
     GRADING_SCHEMA,
@@ -99,6 +104,27 @@ def test_explain_convolution_keeps_its_regression_contract() -> None:
     # The two failure shapes the old prompt produced, written as behaviors.
     assert "question" in joined_must_not
     assert "withhold" in joined_must_not
+
+
+def test_the_convolution_cases_encode_the_correct_integral() -> None:
+    """The ground truth the grader judges correctness against must itself be correct.
+
+    x(t) = u(t) - u(t-1) convolved with h(t) = e^{-t} u(t) gives, on 0 <= t <= 1,
+    the integral from 0 to t of e^{-(t-tau)} d(tau) = 1 - e^{-t}. An early draft of
+    the corpus encoded e^{-t}(1 - e^{-t}) there, so a tutor reply that did the math
+    right would have failed the correctness dimension; this pins the value in both
+    convolution cases.
+    """
+    _, cases = _header_cases()
+    by_id = {case.id: case for case in cases}
+    for case_id in ("attempt-where-did-i-go-wrong", "show-convolution-worked"):
+        case = by_id[case_id]
+        ground_truth = " ".join((*case.must, *case.may, case.notes))
+        assert "1 - e^{-t}" in ground_truth, case_id
+        assert "e^{-t}(1 - e^{-t})" not in ground_truth, case_id
+    # The t >= 1 branch was correct all along and the fix must not touch it.
+    case = by_id["show-convolution-worked"]
+    assert "e^{-t}(e - 1)" in " ".join((*case.must, case.notes))
 
 
 def test_case_messages_match_the_chat_routes_assembly(
@@ -289,3 +315,112 @@ def test_the_grader_schema_pins_all_seven_dimensions() -> None:
             "minimum": 0,
             "maximum": 2,
         }
+
+
+def test_a_run_of_only_failed_cases_still_leaves_a_gradeable_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed case is a terminal result, not a missing one.
+
+    When every selected case fails, `run` still writes the runs.json that `grade`
+    consumes, and the run's meta carries a locality class, not the endpoint URL.
+    """
+
+    async def _down(endpoint, api_key, model, case, messages):
+        raise ConnectionError("endpoint down")
+
+    config = TutorConfig("http://127.0.0.1:1234/v1", None, "tutor-model", 16384)
+    monkeypatch.setattr(eval_tutor, "_run_one", _down)
+    monkeypatch.setattr(eval_tutor, "_endpoint_config", lambda path: config)
+
+    args = argparse.Namespace(
+        corpus=str(CORPUS),
+        workspace=str(tmp_path),
+        source_db="/ignored",
+        case=["what-is-a-derivative"],
+    )
+    assert eval_tutor.cmd_run(args) == 0
+
+    runs = json.loads((tmp_path / "runs.json").read_text(encoding="utf-8"))
+    record = runs["cases"]["what-is-a-derivative"]
+    assert record["status"] == "error"
+    assert "endpoint down" in record["error"]
+
+    meta_text = (tmp_path / "meta.json").read_text(encoding="utf-8")
+    meta = json.loads(meta_text)
+    assert "http://127.0.0.1:1234/v1" not in meta_text
+    assert "endpoint" not in meta
+    assert meta["endpoint_locality"] == "local"
+    assert meta["model"] == "tutor-model"
+    assert meta["context_window"] == 16384
+
+    grade_args = argparse.Namespace(
+        corpus=str(CORPUS),
+        workspace=str(tmp_path),
+        source_db="/ignored",
+        case=None,
+        judge_source_db=None,
+        judge_model=None,
+    )
+    assert eval_tutor.cmd_grade(grade_args) == 0
+    grades = json.loads((tmp_path / "grades.json").read_text(encoding="utf-8"))
+    assert grades["what-is-a-derivative"]["verdict"] == "not_run"
+
+
+def test_grade_records_the_judge_it_uses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The judge is provenance, not a guess: grade_meta says which model graded, and
+    whether it was the tutor's own.
+    """
+    config = TutorConfig("http://127.0.0.1:1234/v1", None, "tutor-model", 16384)
+    monkeypatch.setattr(eval_tutor, "_endpoint_config", lambda path: config)
+    seen_models: list[str | None] = []
+
+    async def _grade(endpoint, api_key, model, case, reply):
+        seen_models.append(model)
+        return _grading(case)
+
+    monkeypatch.setattr(eval_tutor, "_grade_one", _grade)
+    (tmp_path / "runs.json").write_text(
+        json.dumps(
+            {
+                "cases": {
+                    "what-is-a-derivative": {
+                        "status": "ok",
+                        "generated_at": "2026-09-02T00:00:00",
+                        "response": "A derivative is the instantaneous rate of change.",
+                        "system_prompt_tokens": 100,
+                        "user": "What is a derivative?",
+                        "mode": "guide",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def grade_args(judge_model: str | None) -> argparse.Namespace:
+        return argparse.Namespace(
+            corpus=str(CORPUS),
+            workspace=str(tmp_path),
+            source_db="/ignored",
+            case=None,
+            judge_source_db=None,
+            judge_model=judge_model,
+        )
+
+    # The default judge is the tutor's own configuration, and that is recorded.
+    assert eval_tutor.cmd_grade(grade_args(None)) == 0
+    meta = json.loads((tmp_path / "grade_meta.json").read_text(encoding="utf-8"))
+    assert meta["tutor"] == {"model": "tutor-model", "locality": "local"}
+    assert meta["judge"]["model"] == "tutor-model"
+    assert meta["judge"]["same_as_tutor"] is True
+    assert seen_models == ["tutor-model"]
+
+    # A re-grade with an explicit judge updates the entry and records the switch.
+    assert eval_tutor.cmd_grade(grade_args("judge-model")) == 0
+    meta = json.loads((tmp_path / "grade_meta.json").read_text(encoding="utf-8"))
+    assert meta["judge"]["model"] == "judge-model"
+    assert meta["judge"]["same_as_tutor"] is False
+    assert seen_models[-1] == "judge-model"
+    grades = json.loads((tmp_path / "grades.json").read_text(encoding="utf-8"))
+    assert grades["what-is-a-derivative"]["verdict"] == "pass"

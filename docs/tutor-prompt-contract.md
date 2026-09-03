@@ -107,19 +107,26 @@ Prompt *behavior* is not proved by exact-string tests; it is held to a versioned
 contract:
 
 - **`scripts/eval_corpora/tutor_semantic.json`** - the corpus. `corpus_version`
-  (`1.0.0`) and `prompt_contract_version` (must equal
+  (`1.1.0`) and `prompt_contract_version` (must equal
   `TUTOR_PROMPT_CONTRACT_VERSION`). Thirteen cases covering at minimum the request shapes
   PLA-401 names: explain convolution, what is a derivative, why can they cancel these
   terms, I have no idea how to start, here's my attempt, is my answer correct, just tell me
   the answer, explain that more simply, don't ask me questions, intuition not derivation,
   five minutes before an exam - plus Show-mode contrast cases.
 - **`scripts/eval_tutor.py`** - the harness. `run` sends each case through the same
-  building blocks the route uses; `grade` asks a grader model for per-item judgments on
-  the case's `must`/`must_not` behaviors and on the seven semantic qualities (directness,
-  proportionality, prerequisite setup, questioning, withholding, correctness,
-  narrow-window readability); the **pass/fail verdict is computed deterministically**
-  (all `must` met, no `must_not` violated, correctness not a hard failure) rather than
-  taken from the grader. `report` prints the matrix and exits nonzero below `--fail-under`.
+  building blocks the route uses and durably records every terminal result - ok, empty,
+  and failed cases alike land in `runs.json`, so a run in which every case failed still
+  leaves a record `grade` can consume. The run metadata carries a locality class (local
+  or remote, via the same conservative rule as the consent gate), the model identity, and
+  the context-window configuration - never the endpoint URL itself. `grade` asks a
+  grader model for per-item judgments on the case's `must`/`must_not` behaviors and on
+  the seven semantic qualities (directness, proportionality, prerequisite setup,
+  questioning, withholding, correctness, pedagogical usefulness); the judge defaults to
+  the tutor's own endpoint and model, and `grade_meta` records that - or the separate
+  `--judge-source-db` / `--judge-model` configuration when one is given - so a report
+  says what graded it. The **pass/fail verdict is computed deterministically** (all
+  `must` met, no `must_not` violated, correctness not a hard failure) rather than taken
+  from the grader. `report` prints the matrix and exits nonzero below `--fail-under`.
 - **`backend/tests/test_eval_tutor.py`** - the deterministic contract tests: the corpus
   loads versioned against the current contract, every required request shape is covered,
   the convolution regression case keeps its contract, the harness assembles the same

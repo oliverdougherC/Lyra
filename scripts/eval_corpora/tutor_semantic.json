@@ -36,7 +36,7 @@
     "contract version moves, the corpus needs a re-read: a case written against the",
     "Socratic contract grades the teaching contract with the wrong ruler."
   ],
-  "corpus_version": "1.0.0",
+  "corpus_version": "1.1.0",
   "prompt_contract_version": "2",
   "dimensions": [
     "directness",
@@ -45,7 +45,7 @@
     "questioning",
     "withholding",
     "correctness",
-    "narrow_window_readability"
+    "pedagogical_usefulness"
   ],
   "cases": [
     {
@@ -167,9 +167,9 @@
         "Praises the attempt with no diagnosis of the error"
       ],
       "may": [
-        "Gives the corrected value for 0 <= t <= 1, y(t) = e^{-t}(1 - e^{-t}), and notes that for t >= 1 the upper limit becomes 1"
+        "Gives the corrected value for 0 <= t <= 1, y(t) = 1 - e^{-t}, and notes that for t >= 1 the upper limit becomes 1"
       ],
-      "notes": "The attempt treats e^{-(t-tau)} as e^{-t}. Correctly: for 0 <= t <= 1, y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = e^{-t}(1 - e^{-t}); for t >= 1 the integral runs 0 to 1, giving e^{-t}(e - 1)."
+      "notes": "The attempt treats e^{-(t-tau)} as e^{-t}. Correctly: for 0 <= t <= 1, y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = 1 - e^{-t}; for t >= 1 the integral runs 0 to 1, giving e^{-t}(e - 1)."
     },
     {
       "id": "is-my-answer-correct",
@@ -316,14 +316,14 @@
       "history": [],
       "context": [],
       "must": [
-        "Delivers the complete worked result: y(t) is 0 for t < 0, e^{-t}(1 - e^{-t}) for 0 <= t <= 1, and e^{-t}(e - 1) for t >= 1, with every step shown in order",
+        "Delivers the complete worked result: y(t) is 0 for t < 0, 1 - e^{-t} for 0 <= t <= 1, and e^{-t}(e - 1) for t >= 1, with every step shown in order",
         "Names the rule or definition each step relies on: the integral form, where the integrand is nonzero, and the evaluation of the integral"
       ],
       "must_not": [
         "Withholds the final result or leaves it as an exercise",
         "Turns the reply into a quiz for the student"
       ],
-      "notes": "x(t) = u(t) - u(t-1) is 1 on [0,1]. For 0 <= t <= 1: y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = e^{-t}(1 - e^{-t}). For t >= 1: the integral runs 0 to 1, giving e^{-t}(e - 1). For t < 0 the integrand is zero by causality."
+      "notes": "x(t) = u(t) - u(t-1) is 1 on [0,1]. For 0 <= t <= 1: y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = 1 - e^{-t}. For t >= 1: the integral runs 0 to 1, giving e^{-t}(e - 1). For t < 0 the integrand is zero by causality."
     },
     {
       "id": "show-what-is-a-derivative",

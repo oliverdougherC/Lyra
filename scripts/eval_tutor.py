@@ -10,8 +10,8 @@ of the reply, and a paraphrase, a different valid ordering, or LaTeX where plain
 expected all count the same.
 
 Every reply is graded on the seven semantic qualities the corpus names (directness,
-proportionality, prerequisite setup, questioning, withholding, correctness, narrow-window
-readability), plus the case's own `must` / `must_not` behaviors. The grader is a model
+proportionality, prerequisite setup, questioning, withholding, correctness, pedagogical
+usefulness), plus the case's own `must` / `must_not` behaviors. The grader is a model
 call with a constrained reply; the pass/fail verdict, though, is computed here from the
 grader's per-item judgments, so a case's outcome is checkable arithmetic rather than a
 second model's opinion.
@@ -27,7 +27,8 @@ on a small local model, and a number from one model tells you nothing about that
 Usage:
 
     python scripts/eval_tutor.py run    [--corpus P] [--workspace W] [--source-db D] [--case ID]
-    python scripts/eval_tutor.py grade  [--corpus P] [--workspace W] [--source-db D] [--case ID]
+    python scripts/eval_tutor.py grade  [--corpus P] [--workspace W] [--source-db D]
+                                       [--judge-source-db D] [--judge-model M] [--case ID]
     python scripts/eval_tutor.py report [--corpus P] [--workspace W] [--fail-under 1.0]
     (--case is repeatable.)
 """
@@ -45,9 +46,10 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.core.app_settings import resolve_tutor_config  # noqa: E402
+from backend.core.app_settings import TutorConfig, resolve_tutor_config  # noqa: E402
 from backend.llm import client  # noqa: E402
 from backend.llm.client import JsonSchema  # noqa: E402
+from backend.llm.locality import is_local_endpoint  # noqa: E402
 from backend.llm.prompts import (  # noqa: E402
     TUTOR_PROMPT_CONTRACT_VERSION,
     build_system_prompt,
@@ -69,7 +71,7 @@ DIMENSIONS: tuple[str, ...] = (
     "questioning",
     "withholding",
     "correctness",
-    "narrow_window_readability",
+    "pedagogical_usefulness",
 )
 
 
@@ -222,9 +224,11 @@ given the mode the reply ran in, the conversation so far, the student's request,
 tutor's reply, and the case's ground-truth notes.
 
 Grade the reply's behavior, never its wording. Paraphrases, LaTeX where plain text was
-expected, and different valid orderings all count the same. A reply that shows a required
-behavior counts even if it says useful extra things; a reply that shows a forbidden
-behavior fails that item even if most of the reply is fine.
+expected, and different valid orderings all count the same. A different valid formalism,
+notation, or layout for the same content counts the same too: the case's items decide
+what the reply must teach, and they never require one particular presentation of it. A
+reply that shows a required behavior counts even if it says useful extra things; a reply
+that shows a forbidden behavior fails that item even if most of the reply is fine.
 
 Score each of the seven dimensions on 0, 1, or 2, where 2 is clean:
 - directness: 2 = the student's actual request is answered early and on its own terms;
@@ -246,9 +250,11 @@ Score each of the seven dimensions on 0, 1, or 2, where 2 is clean:
 - correctness: 2 = no mathematical or factual error; 1 = a minor error that does not
   change the conclusion; 0 = a substantive error. Judge against the ground-truth notes;
   do not solve the problem yourself beyond what the notes state.
-- narrow_window_readability: 2 = readable and usable in a narrow study window - short
-  enough to hold, scannable, nothing buried; 1 = longer or denser than the window the
-  request implies, but still usable; 0 = a wall of text the request cannot hold.
+- pedagogical_usefulness: 2 = the reply teaches - it is organized around the idea, it
+  gives the reason behind the result when understanding was the ask, and it leaves the
+  student able to continue without a hand; 1 = on point and correct, but a list of
+  statements the student cannot act on or build on; 0 = inert or misleading - skipping
+  it costs the student nothing, or it leaves a wrong mental model behind.
 
 Then answer the case's items, numbered as given. For each `must` item report whether the
 reply meets it; for each `must_not` item report whether the reply violates it. One
@@ -398,7 +404,7 @@ class Workspace:
         self.report(name).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def _endpoint_config(source_db: Path) -> tuple[str, str | None, str | None]:
+def _endpoint_config(source_db: Path) -> TutorConfig:
     """The configured tutor endpoint, read from the app's database.
 
     A plain connection is enough: `resolve_tutor_config` only reads the settings row, and
@@ -412,7 +418,17 @@ def _endpoint_config(source_db: Path) -> tuple[str, str | None, str | None]:
         config = resolve_tutor_config(conn)
     finally:
         conn.close()
-    return config.endpoint_url, config.api_key, config.model
+    return config
+
+
+def _locality(endpoint: str) -> str:
+    """The locality class a report may carry for an endpoint: local or remote.
+
+    The URL itself never enters a report - the class is all a later reader can check -
+    and `is_local_endpoint` is the same conservative rule the app's consent gate applies
+    (anything not provably loopback is remote).
+    """
+    return "local" if is_local_endpoint(endpoint) else "remote"
 
 
 async def _run_one(
@@ -445,7 +461,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     """Send every selected case to the configured endpoint and record the replies."""
     corpus_path = Path(args.corpus).resolve()
     header, cases = load_corpus(corpus_path)
-    endpoint, api_key, model = _endpoint_config(Path(args.source_db).resolve())
+    config = _endpoint_config(Path(args.source_db).resolve())
     selected = _selected(cases, args.case)
 
     workspace = Workspace(Path(args.workspace).resolve())
@@ -453,27 +469,34 @@ def cmd_run(args: argparse.Namespace) -> int:
     cases_run = runs.get("cases")
     cases_run = cases_run if isinstance(cases_run, dict) else {}
 
-    for case in selected:
-        messages = case_messages(case)
-        try:
-            reply, system_tokens = asyncio.run(_run_one(endpoint, api_key, model, case, messages))
-        except Exception as exc:  # noqa: BLE001 - a failed case is a datum, not a crash
-            print(f"{case.id}: run failed: {exc}")
-            cases_run[case.id] = {"status": "error", "error": str(exc)[:300]}
-            continue
-        if not reply.strip():
-            print(f"{case.id}: empty reply")
-            cases_run[case.id] = {"status": "error", "error": "empty reply"}
-            continue
-        cases_run[case.id] = {
-            "status": "ok",
-            "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "response": reply,
-            "system_prompt_tokens": system_tokens,
-            "user": case.user,
-            "mode": case.mode,
-        }
-        print(f"{case.id}: {len(reply)} chars, system prompt {system_tokens} tokens")
+    try:
+        for case in selected:
+            messages = case_messages(case)
+            try:
+                reply, system_tokens = asyncio.run(
+                    _run_one(config.endpoint_url, config.api_key, config.model, case, messages)
+                )
+            except Exception as exc:  # noqa: BLE001 - a failed case is a datum, not a crash
+                print(f"{case.id}: run failed: {exc}")
+                cases_run[case.id] = {"status": "error", "error": str(exc)[:300]}
+                continue
+            if not reply.strip():
+                print(f"{case.id}: empty reply")
+                cases_run[case.id] = {"status": "error", "error": "empty reply"}
+                continue
+            cases_run[case.id] = {
+                "status": "ok",
+                "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                "response": reply,
+                "system_prompt_tokens": system_tokens,
+                "user": case.user,
+                "mode": case.mode,
+            }
+            print(f"{case.id}: {len(reply)} chars, system prompt {system_tokens} tokens")
+    finally:
+        # One terminal write, guaranteed: ok, empty, and failed cases all land in
+        # runs.json, so a run in which every case failed still leaves a record
+        # `grade` can consume, and an interrupted run keeps the cases it finished.
         workspace.write("runs", {**runs, "cases": cases_run})
 
     workspace.write(
@@ -483,8 +506,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             "corpus_version": header["corpus_version"],
             "prompt_contract_version": header["prompt_contract_version"],
             "expected_contract_version": TUTOR_PROMPT_CONTRACT_VERSION,
-            "endpoint": endpoint,
-            "model": model,
+            "model": config.model,
+            "context_window": config.context_window,
+            "endpoint_locality": _locality(config.endpoint_url),
         },
     )
     if header["prompt_contract_version"] != TUTOR_PROMPT_CONTRACT_VERSION:
@@ -517,7 +541,7 @@ def cmd_grade(args: argparse.Namespace) -> int:
     """Grade every recorded reply, and compute each verdict deterministically."""
     corpus_path = Path(args.corpus).resolve()
     header, cases = load_corpus(corpus_path)
-    endpoint, api_key, model = _endpoint_config(Path(args.source_db).resolve())
+    config = _endpoint_config(Path(args.source_db).resolve())
     workspace = Workspace(Path(args.workspace).resolve())
     if not workspace.report("runs").exists():
         raise SystemExit("No runs.json. Run `run` first.")
@@ -525,30 +549,55 @@ def cmd_grade(args: argparse.Namespace) -> int:
     cases_run = runs.get("cases")
     cases_run = cases_run if isinstance(cases_run, dict) else {}
 
+    # The judge defaults to the tutor's own configuration - the model that answered is
+    # the one that grades - and that default is recorded in grade_meta rather than
+    # assumed. `--judge-source-db` points at a second configured endpoint;
+    # `--judge-model` picks another model on the resolved endpoint.
+    judge_endpoint, judge_api_key, judge_model = config.endpoint_url, config.api_key, config.model
+    if args.judge_source_db:
+        judge_config = _endpoint_config(Path(args.judge_source_db).resolve())
+        judge_endpoint, judge_api_key, judge_model = (
+            judge_config.endpoint_url,
+            judge_config.api_key,
+            judge_config.model,
+        )
+    if args.judge_model:
+        judge_model = args.judge_model
+
     by_id = {case.id: case for case in cases}
     grades: dict[str, object] = {}
-    for case_id, record in cases_run.items():
-        if case_id not in by_id:
-            print(f"{case_id}: not in the corpus, skipped")
-            continue
-        case = by_id[case_id]
-        if args.case and case_id not in args.case:
-            continue
-        if not isinstance(record, dict) or record.get("status") != "ok":
-            grades[case_id] = {"verdict": "not_run", "grading": record}
-            continue
-        reply = str(record.get("response") or "")
-        try:
-            grading = asyncio.run(_grade_one(endpoint, api_key, model, case, reply))
-        except Exception as exc:  # noqa: BLE001
-            grading = {"grader_failed": str(exc)[:300]}
-        verdict = verdict_for(case, grading) if "unreadable" not in grading else "fail"
-        grades[case_id] = {
-            "verdict": verdict,
-            "grading": grading,
-            "generated_at": record.get("generated_at"),
-        }
-        print(f"{case_id}: {verdict}")
+    if workspace.report("grades").exists():
+        existing = workspace.read("grades")
+        if isinstance(existing, dict):
+            grades.update(existing)
+    try:
+        for case_id, record in cases_run.items():
+            if case_id not in by_id:
+                print(f"{case_id}: not in the corpus, skipped")
+                continue
+            case = by_id[case_id]
+            if args.case and case_id not in args.case:
+                continue
+            if not isinstance(record, dict) or record.get("status") != "ok":
+                grades[case_id] = {"verdict": "not_run", "grading": record}
+                continue
+            reply = str(record.get("response") or "")
+            try:
+                grading = asyncio.run(
+                    _grade_one(judge_endpoint, judge_api_key, judge_model, case, reply)
+                )
+            except Exception as exc:  # noqa: BLE001
+                grading = {"grader_failed": str(exc)[:300]}
+            verdict = verdict_for(case, grading) if "unreadable" not in grading else "fail"
+            grades[case_id] = {
+                "verdict": verdict,
+                "grading": grading,
+                "generated_at": record.get("generated_at"),
+            }
+            print(f"{case_id}: {verdict}")
+    finally:
+        # One terminal write, always: merging with any earlier grades means re-grading
+        # a case updates its entry instead of dropping the others.
         workspace.write("grades", grades)
 
     workspace.write(
@@ -556,8 +605,16 @@ def cmd_grade(args: argparse.Namespace) -> int:
         {
             "corpus_version": header["corpus_version"],
             "prompt_contract_version": header["prompt_contract_version"],
-            "endpoint": endpoint,
-            "model": model,
+            "tutor": {
+                "model": config.model,
+                "locality": _locality(config.endpoint_url),
+            },
+            "judge": {
+                "model": judge_model,
+                "locality": _locality(judge_endpoint),
+                "same_as_tutor": judge_endpoint == config.endpoint_url
+                and judge_model == config.model,
+            },
             "graded_at": datetime.now(UTC).isoformat(timespec="seconds"),
         },
     )
@@ -579,7 +636,12 @@ def cmd_report(args: argparse.Namespace) -> int:
     for case in cases:
         record = grades.get(case.id)
         if not isinstance(record, dict) or record.get("verdict") in (None, "not_run"):
-            rows.append((case.id, "not_run", []))
+            error = ""
+            if isinstance(record, dict):
+                grading = record.get("grading")
+                if isinstance(grading, dict):
+                    error = str(grading.get("error") or grading.get("grader_failed") or "")
+            rows.append((case.id, "not_run" + (f" ({error[:40]})" if error else ""), []))
             continue
         grading = record.get("grading")
         grading = grading if isinstance(grading, dict) else {}
@@ -601,10 +663,19 @@ def cmd_report(args: argparse.Namespace) -> int:
         rows.append((case.id, str(record.get("verdict") or "fail"), scores))
 
     width = max(len(case.id) for case in cases)
+    judge = grade_meta.get("judge")
+    judge = judge if isinstance(judge, dict) else {}
+    judge_model = str(judge.get("model") or grade_meta.get("model") or "unknown")
+    judge_label = judge_model
+    if judge.get("locality"):
+        judge_label += f" [{judge['locality']}"
+        if judge.get("same_as_tutor"):
+            judge_label += ", same as tutor"
+        judge_label += "]"
     header_row = (
         f"tutor semantic eval (corpus {header['corpus_version']}, "
         f"contract {header['prompt_contract_version']}, "
-        f"model {grade_meta.get('model') or 'unknown'})"
+        f"judge {judge_label})"
     )
     print(header_row)
     dimension_head = "  ".join(f"{dimension[:4]:>4}" for dimension in DIMENSIONS)
@@ -633,8 +704,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("run", "grade"):
-        entry = sub.add_parser(name)
+    def _common(entry: argparse.ArgumentParser) -> None:
         entry.add_argument("--corpus", default=str(DEFAULT_CORPUS))
         entry.add_argument("--workspace", default=str(DEFAULT_WORKSPACE))
         entry.add_argument("--source-db", default=str(DEFAULT_SOURCE_DB))
@@ -644,7 +714,24 @@ def main() -> int:
             default=None,
             help="Grade or run only this case id; repeatable.",
         )
-        entry.set_defaults(func=cmd_run if name == "run" else cmd_grade)
+
+    run = sub.add_parser("run")
+    _common(run)
+    run.set_defaults(func=cmd_run)
+
+    grade = sub.add_parser("grade")
+    _common(grade)
+    grade.add_argument(
+        "--judge-source-db",
+        default=None,
+        help="Grade with the tutor configuration of a second Lyra database.",
+    )
+    grade.add_argument(
+        "--judge-model",
+        default=None,
+        help="Grade with this model (default: the tutor's own model, recorded as such).",
+    )
+    grade.set_defaults(func=cmd_grade)
 
     entry = sub.add_parser("report")
     entry.add_argument("--corpus", default=str(DEFAULT_CORPUS))
