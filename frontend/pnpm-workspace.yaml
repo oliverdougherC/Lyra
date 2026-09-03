@@ -8,7 +8,7 @@ overrides:
   # in via @hookform/resolvers -> ajv 8.20.0 (fast-uri: ^3.0.1), which pnpm
   # resolves to a locked 3.1.5; pin the patched 3.x line without touching the
   # declared ajv range.
-  fast-uri: 3.1.7
+  'fast-uri@': 3.1.7
 
 allowBuilds:
   # These reviewed packages install platform-specific binaries used by the
