@@ -624,6 +624,10 @@ export const api = {
       { signal },
     ),
 
+  // `operationId` is the browser's PLA-313 idempotency key for this logical Send: minted
+  // once, carried on every ambiguous resubmit, discarded only for a genuinely new message
+  // (or a structured `operation_id_mismatch`). A completed operation replays its stored
+  // reply; a failed one re-runs the same durable question.
   sendAgentChat: (
     classId: number,
     sessionId: number,
@@ -631,6 +635,8 @@ export const api = {
     profile?: AgentProfile,
     documentId?: number | null,
     mode?: ChatMode,
+    operationId?: string,
+    signal?: AbortSignal,
   ) =>
     requestJson<AgentChatResult>(`/api/classes/${classId}/sessions/${sessionId}/agent-chat`, {
       method: 'POST',
@@ -643,29 +649,71 @@ export const api = {
         // The student's Guide/Show choice rides the turn and is persisted on the session,
         // so the agent's shared mode contract follows the same toggle as the tutor.
         ...(mode ? { mode } : null),
+        ...(operationId ? { operation_id: operationId } : null),
       },
+      signal,
       errorFactory: agentChatErrorFactory,
     }),
 
   // Retry the conversation's last failed agent turn, reusing its user message (PLA-295).
   // The server reuses the original message rather than appending a duplicate, and replays a
-  // reply that already committed instead of running the model again.
-  retryAgentChat: (classId: number, sessionId: number) =>
+  // reply that already committed instead of running the model again. The scope body is a
+  // backstop only: the attempt's persisted scope (source and mode) wins.
+  retryAgentChat: (
+    classId: number,
+    sessionId: number,
+    scope?: { mode?: ChatMode; documentId?: number | null },
+    signal?: AbortSignal,
+  ) =>
     requestJson<AgentChatResult>(`/api/classes/${classId}/sessions/${sessionId}/agent-chat/retry`, {
       method: 'POST',
+      body:
+        scope == null
+          ? undefined
+          : {
+              ...(scope.mode ? { mode: scope.mode } : null),
+              ...(scope.documentId != null ? { document_id: scope.documentId } : null),
+            },
+      signal,
       errorFactory: agentChatErrorFactory,
     }),
 
   // Answer the conversation's last agent question again, replacing the reply it has (PLA-316
   // class affordance). Unlike retry, this re-runs even a completed turn and supersedes the old
-  // reply on the server, so the transcript carries exactly one answer.
-  regenerateAgentChat: (classId: number, sessionId: number) =>
+  // reply on the server, so the transcript carries exactly one answer. A manual regeneration
+  // carries the CURRENT Guide/Show selection and source scope (like the tutor's); a body-less
+  // regeneration - the just-in-time continuation after an access approval - continues the
+  // turn's persisted scope.
+  regenerateAgentChat: (
+    classId: number,
+    sessionId: number,
+    scope?: { mode?: ChatMode; documentId?: number | null },
+    signal?: AbortSignal,
+  ) =>
     requestJson<AgentChatResult>(
       `/api/classes/${classId}/sessions/${sessionId}/agent-chat/regenerate`,
       {
         method: 'POST',
+        body:
+          scope == null
+            ? undefined
+            : {
+                ...(scope.mode ? { mode: scope.mode } : null),
+                ...(scope.documentId != null ? { document_id: scope.documentId } : null),
+              },
+        signal,
         errorFactory: agentChatErrorFactory,
       },
+    ),
+
+  // Explicit stop for the non-streaming agent turn: the handler cannot see its client's
+  // disconnect, so the server cancels the in-flight task itself - settling the durable
+  // attempt as stopped and releasing the session claim - and the work actually stops.
+  // Stopping a session with no turn in flight is a no-op, not an error.
+  stopAgentChat: (classId: number, sessionId: number, signal?: AbortSignal) =>
+    requestJson<{ stopped: boolean }>(
+      `/api/classes/${classId}/sessions/${sessionId}/agent-chat/stop`,
+      { method: 'POST', signal },
     ),
 
   listAgentWorkspaceChanges: (classId: number, sessionId: number, signal?: AbortSignal) =>

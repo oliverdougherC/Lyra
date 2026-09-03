@@ -19,7 +19,6 @@ Handlers close over a connection owned by the caller (the streaming generator or
 worker), never a request-scoped one: the loop outlives the request that started it.
 """
 
-import json
 import sqlite3
 from dataclasses import dataclass, fields
 
@@ -36,6 +35,7 @@ from backend.core import (
     writer_plans,
 )
 from backend.core.errors import LyraError
+from backend.core.query_guard import PrivateContextLedger
 from backend.core.writer_budgets import (
     DEPTHS,
     WriterCapabilities,
@@ -61,8 +61,6 @@ SEARCH_BUDGET_TOKENS = 1_500
 # enough to decide whether to lean on it; the full chunk arrives when writing does.
 _EXCERPT_CHARS = 700
 _FETCH_PREVIEW_CHARS = source_ledger.MAX_RELIED_EXCERPT_CHARS
-_PRIVATE_CONTEXT_CHUNK_CHARS = 8_000
-_PRIVATE_CONTEXT_MAX_ITEMS = 128
 
 _NO_SECTION = (
     "No section matches {ref!r}. Address sections by their outline number or title; "
@@ -161,38 +159,9 @@ def _body_part(conn: sqlite3.Connection, artifact_id: int) -> dict[str, object]:
     raise LookupError(f"Draft {artifact_id} has no body part.")
 
 
-class _PrivateContextLedger:
-    """Private text already exposed to this run, chunked for overlap checks."""
-
-    def __init__(self, *values: object) -> None:
-        self._items: list[str] = []
-        self._seen: set[str] = set()
-        self.add(*values)
-
-    def add(self, *values: object) -> None:
-        for value in values:
-            self._add_one(value)
-
-    def snapshot(self) -> tuple[str, ...]:
-        return tuple(self._items)
-
-    def _add_one(self, value: object) -> None:
-        if value is None:
-            return
-        if isinstance(value, (dict, list)):
-            text = json.dumps(value, ensure_ascii=False)
-        else:
-            text = str(value).strip()
-        if not text:
-            return
-        for start in range(0, len(text), _PRIVATE_CONTEXT_CHUNK_CHARS):
-            if len(self._items) >= _PRIVATE_CONTEXT_MAX_ITEMS:
-                return
-            chunk = text[start : start + _PRIVATE_CONTEXT_CHUNK_CHARS].strip()
-            if not chunk or chunk in self._seen:
-                continue
-            self._seen.add(chunk)
-            self._items.append(chunk)
+# The shared run-local ledger lives in `query_guard` so the class agent's tools add to the
+# same class the writer's tools use.
+_PrivateContextLedger = PrivateContextLedger
 
 
 def _seed_private_context(

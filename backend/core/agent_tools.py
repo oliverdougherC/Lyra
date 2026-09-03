@@ -36,7 +36,7 @@ from backend.core import (
     workspace_paths,
 )
 from backend.core.errors import LyraError
-from backend.core.query_guard import QueryRefusal, guard_web_query
+from backend.core.query_guard import PrivateContextLedger, QueryRefusal, guard_web_query
 from backend.core.writer_budgets import WriterCapabilities, get_writer_capabilities
 from backend.llm import tool_profiles
 from backend.llm.tools import REGISTRY as COMPUTE_REGISTRY
@@ -433,7 +433,7 @@ def build_agent_registry(
     session_id: int,
     profile: AgentProfile,
     *,
-    private_context: Sequence[str] = (),
+    private_context: PrivateContextLedger | Sequence[str] = (),
     snapshot: AgentCapabilitySnapshot | None = None,
 ) -> tuple[dict[str, ToolDefinition], AgentRunActivity]:
     """Build the smallest raw registry allowed for one class-agent turn.
@@ -445,12 +445,24 @@ def build_agent_registry(
     route does this so the registry the loop runs is provably the one its preflight
     budgeted. Omitting `snapshot` reads the state live here, which is the behaviour every
     caller outside the fit-checked agent route relies on.
+
+    `private_context` is the run-local material the web-query guard must recognize. A
+    `PrivateContextLedger` is used live: `search_web` snapshots it at dispatch time, so
+    workspace contents a read tool returns mid-turn are visible to later searches in the
+    same turn. A plain sequence is frozen at build time, which is what the read-only
+    preflight probe passes (it measures schemas with an empty context) and what legacy
+    callers pass.
     """
     if profile not in PROFILES:
         raise ValueError(f"Unknown agent profile: {profile}")
     _session_scope(conn, class_id, session_id)
     if snapshot is None:
         snapshot = snapshot_agent_capabilities(conn, class_id)
+    ledger = (
+        private_context
+        if isinstance(private_context, PrivateContextLedger)
+        else PrivateContextLedger(*private_context)
+    )
     activity = AgentRunActivity()
     definitions: list[tool_profiles.AnnotatedToolDefinition] = []
 
@@ -497,17 +509,20 @@ def build_agent_registry(
     if profile == "agent":
         # The contextual turn plans across research, workspace, and command work on its
         # own: every group is added and self-gates on the same frozen snapshot, so the
-        # exposed registry is the union of what the snapshot admits - no more, no less.
+        # exposed registry is the union of what the snapshot admits - no more, no less. The
+        # same run-local ledger is shared by every group, so private material one tool
+        # returns (a workspace read) is visible to the guard a later tool (a web search)
+        # consults in the same turn.
         _add_research_tools(
             conn,
             class_id,
             session_id,
             definitions,
             activity,
-            tuple(private_context),
+            ledger,
             snapshot,
         )
-        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot)
+        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot, ledger)
         _add_command_tools(conn, class_id, session_id, definitions, activity, snapshot)
         _add_access_request_tools(conn, class_id, session_id, definitions, activity, snapshot)
     elif profile == "research":
@@ -517,11 +532,11 @@ def build_agent_registry(
             session_id,
             definitions,
             activity,
-            tuple(private_context),
+            ledger,
             snapshot,
         )
     elif profile == "code":
-        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot)
+        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot, ledger)
     else:
         _add_command_tools(conn, class_id, session_id, definitions, activity, snapshot)
 
@@ -535,7 +550,7 @@ def _add_research_tools(
     session_id: int,
     definitions: list[tool_profiles.AnnotatedToolDefinition],
     activity: AgentRunActivity,
-    private_context: tuple[str, ...],
+    private_context: PrivateContextLedger,
     snapshot: AgentCapabilitySnapshot,
 ) -> None:
     # Schema inclusion is decided by the frozen snapshot, not a fresh read, so the tools
@@ -552,13 +567,18 @@ def _add_research_tools(
 
     def search_action(capabilities: WriterCapabilities, *, query: str) -> _Outcome:
         query = _text(query, "query", maximum=500)
-        guarded = guard_web_query(query, private_context=private_context)
+        # Snapshot the run-local ledger at dispatch time, not at registry build: a
+        # workspace read or search that ran earlier in this same turn has already added
+        # its contents to the ledger, and the guard must recognize them before this public
+        # query reaches the network.
+        current_private_context = private_context.snapshot()
+        guarded = guard_web_query(query, private_context=current_private_context)
         if isinstance(guarded, QueryRefusal):
             raise _RefusalError(guarded.message)
         results = web_research.search_web(
             guarded.query,
             allowed=True,
-            private_context=private_context,
+            private_context=current_private_context,
         )
         return _Outcome(
             success(results=results, count=len(results)),
@@ -915,6 +935,7 @@ def _add_code_tools(
     definitions: list[tool_profiles.AnnotatedToolDefinition],
     activity: AgentRunActivity,
     snapshot: AgentCapabilitySnapshot,
+    private_context: PrivateContextLedger | None = None,
 ) -> None:
     # The frozen snapshot decides which workspace schemas are exposed; each handler still
     # re-reads the live workspace row and its grants at dispatch via `_workspace_authorization`.
@@ -1014,6 +1035,18 @@ def _add_code_tools(
                         maximum=2**31 - 1,
                     )
             result = _primitive(Path(str(workspace_row["root_path"])), **arguments)
+            # This text is now visible to the model, so feed the bounded returned content
+            # into the run-local private ledger: a web query later in the same turn must be
+            # guarded against what a read or search in this turn just surfaced. File names
+            # from a plain listing are deliberately not added - they carry no private prose
+            # and the guard already refuses path-shaped queries outright.
+            if private_context is not None:
+                if _name == "read_workspace_file":
+                    private_context.add(result.get("content"))
+                elif _name == "search_workspace":
+                    for match in result.get("matches", []):
+                        if isinstance(match, Mapping):
+                            private_context.add(match.get("text"), match.get("path"))
             return _Outcome(
                 success(**result),
                 {

@@ -271,16 +271,24 @@ test.describe('One ordinary class conversation (PLA-401)', () => {
     expect(await readFile(join(workspaceDir, 'parser.py'), 'utf-8')).toBe(PARSER_BASE)
 
     await changeCard.getByRole('button', { name: /Accept remaining/i }).click()
-    await expect(changeCard.getByText('Applied')).toBeVisible({ timeout: 30_000 })
+    // The applied edit settles out of the live band (outstanding work only); its result
+    // lives in the collapsed Details audit.
+    await expect(changeCard).toBeHidden({ timeout: 30_000 })
+    await page
+      .locator('[aria-label="Agent work"]')
+      .getByRole('button', { name: /Details/i })
+      .click()
+    await expect(page.getByText('Applied', { exact: true })).toBeVisible()
     expect(await readFile(join(workspaceDir, 'parser.py'), 'utf-8')).toBe(PARSER_SKELETON)
 
     // Nothing runs until the student confirms and runs the exact command.
     await commandCard.getByRole('button', { name: /Confirm and run/i }).click()
-    await expect(commandCard.locator('[aria-label="Command output"]')).toContainText(
-      'tests passed',
-      { timeout: 30_000 },
-    )
-    await expect(commandCard.getByText('Exit 0')).toBeVisible()
+    // The finished command settles into the audit (expanded above): its output and exit
+    // code stay readable after the fact, without occupying the live band.
+    await expect(commandCard).toBeHidden({ timeout: 30_000 })
+    const settledWork = page.getByLabel('Settled work')
+    await expect(settledWork.getByText('tests passed')).toBeVisible({ timeout: 30_000 })
+    await expect(settledWork.getByText('Exit 0')).toBeVisible()
 
     // The composer remains the one place to talk to Lyra, and it is usable again.
     const composer = page.locator('#message-composer')

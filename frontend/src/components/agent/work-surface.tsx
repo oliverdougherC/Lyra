@@ -4,9 +4,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import { AgentActivityFeed } from '@/components/agent/activity-cards'
-import { CommandConfirmationCard } from '@/components/agent/command-confirmation'
+import { CommandConfirmationCard, CommandStateBadge } from '@/components/agent/command-confirmation'
 import { AttachPathEntry, useWorkspaceAttach } from '@/components/agent/workspace-attach'
-import { WorkspaceChangeReviewRail } from '@/components/agent/workspace-change-review'
+import {
+  ChangeStateBadge,
+  WorkspaceChangeReviewRail,
+} from '@/components/agent/workspace-change-review'
 import { SourceLedger } from '@/components/drafts/source-ledger'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -302,13 +305,32 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
     disabledReason: event.error_message ?? undefined,
   }))
 
-  const pendingChanges = changes.data ?? []
-  const pendingCommands = commands.data ?? []
+  // The list endpoints return every row in the session scope, so the split matters: the
+  // primary band carries only live work - a pending or partially-applied edit, a pending or
+  // running command - because a terminal row is history, not a request the student still
+  // owes, and surfacing it as outstanding work makes finished changes look actionable
+  // forever. The terminal rows are not lost: they settle into the collapsed Details/audit
+  // trail as read-only results (with the command's output), so a just-completed result is
+  // still findable without re-asserting itself in the top band.
+  const pendingChanges = (changes.data ?? []).filter(
+    (change) => change.state === 'pending' || change.state === 'partially_applied',
+  )
+  const pendingCommands = (commands.data ?? []).filter(
+    (command) => command.state === 'pending' || command.state === 'running',
+  )
+  const settledChanges = (changes.data ?? []).filter(
+    (change) => change.state !== 'pending' && change.state !== 'partially_applied',
+  )
+  const settledCommands = (commands.data ?? []).filter(
+    (command) => command.state !== 'pending' && command.state !== 'running',
+  )
   const hasActivity = (activity.data ?? []).length > 0
+  const settledCount = settledChanges.length + settledCommands.length
   const hasWork =
     pendingRequests.length > 0 ||
     pendingChanges.length > 0 ||
     pendingCommands.length > 0 ||
+    settledCount > 0 ||
     failedTurn !== null ||
     hasActivity ||
     // The bounded path entry is live state the student is in the middle of: the surface
@@ -434,7 +456,7 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
         />
       ))}
 
-      {hasActivity ? (
+      {hasActivity || settledCount > 0 ? (
         <Collapsible open={detailsOpen} onOpenChange={setDetailsOpen}>
           <CollapsibleTrigger asChild>
             <button
@@ -444,12 +466,60 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
             >
               <span>Details</span>
               <span className="text-text-tertiary text-xs">
-                {(activity.data ?? []).length} activity events
+                {[
+                  (activity.data ?? []).length > 0
+                    ? `${(activity.data ?? []).length} activity events`
+                    : null,
+                  settledCount > 0
+                    ? `${settledCount} settled ${settledCount === 1 ? 'result' : 'results'}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
               </span>
             </button>
           </CollapsibleTrigger>
           <CollapsibleContent className="flex flex-col gap-4 pt-3">
             <AgentActivityFeed entries={activityEntries} />
+            {settledCount > 0 ? (
+              // The settled results, read-only: what was done (path / argv), how it ended
+              // (the same badge language as the live cards), and - for a command - what it
+              // printed. This is the audit trail the primary band deliberately does not
+              // carry: finished work stays findable without staying actionable.
+              <div className="flex flex-col gap-3" aria-label="Settled work">
+                {settledChanges.map((change) => (
+                  <div key={change.id} className="flex items-center justify-between gap-2">
+                    <span className="break-all font-mono text-xs">{change.path}</span>
+                    <ChangeStateBadge state={change.state} />
+                  </div>
+                ))}
+                {settledCommands.map((command) => (
+                  <div key={command.id} className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="break-all font-mono text-xs">{command.argv.join(' ')}</span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        {command.exit_code !== null ? (
+                          <span className="text-text-tertiary text-xs">
+                            Exit {command.exit_code}
+                          </span>
+                        ) : null}
+                        <CommandStateBadge state={command.state} />
+                      </span>
+                    </div>
+                    {command.stdout_text ? (
+                      <pre className="scrollbar-none max-h-32 overflow-auto font-mono text-[0.75rem]">
+                        {command.stdout_text}
+                      </pre>
+                    ) : null}
+                    {command.stderr_text ? (
+                      <pre className="scrollbar-none max-h-32 overflow-auto font-mono text-[0.75rem]">
+                        {command.stderr_text}
+                      </pre>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <SourceLedger classId={classId} />
           </CollapsibleContent>
         </Collapsible>

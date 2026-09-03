@@ -8,7 +8,18 @@ import { AgentWorkSurface } from '@/components/agent/work-surface'
 import { WorkspaceAttachProvider, WorkspaceContextChip } from '@/components/agent/workspace-attach'
 import { api } from '@/lib/api'
 import * as runtime from '@/lib/runtime'
-import type { AgentAuditEventRead, MessageRead } from '@/types'
+
+// The Details audit embeds the class source ledger, which needs the app router. These
+// tests exercise the work surface itself, so stub the ledger rather than stand up routing.
+vi.mock('@/components/drafts/source-ledger', () => ({
+  SourceLedger: () => null,
+}))
+import type {
+  AgentAuditEventRead,
+  AgentCommandRequestRead,
+  AgentWorkspaceChangeRead,
+  MessageRead,
+} from '@/types'
 
 const CLASS_ID = 9
 const SESSION_ID = 11
@@ -343,7 +354,119 @@ describe('the contextual agent work surface (PLA-401)', () => {
     ).toBeInTheDocument()
     expect(screen.getByText(/each still need their own approval/)).toBeInTheDocument()
   })
+
+  it('keeps terminal work out of the primary band', async () => {
+    // The list endpoints return every row in scope, so a finished change (applied or
+    // rejected) or a settled command (completed or rejected) is history, not an
+    // outstanding request. Only live work - a pending or partially-applied edit, a
+    // pending or running command - belongs in the band the student is asked to act on.
+    vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace())
+    vi.spyOn(api, 'listAgentWorkspaceChanges').mockResolvedValue([
+      change({ id: 1, state: 'applied', path: 'main.py' }),
+      change({ id: 2, state: 'rejected', path: 'util.py' }),
+      change({ id: 3, state: 'pending', path: 'lib.py', rationale: 'Add the new helper.' }),
+    ])
+    vi.spyOn(api, 'listAgentCommands').mockResolvedValue([
+      command({ id: 1, state: 'completed', argv: ['pytest'] }),
+      command({ id: 2, state: 'pending', argv: ['python', 'run.py'] }),
+    ])
+    const { wrapper } = createWrapper()
+
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+
+    // The live work is present and actionable.
+    expect(await screen.findByText('lib.py')).toBeInTheDocument()
+    expect(screen.getByText('Add the new helper.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Confirm and run' })).toBeInTheDocument()
+    // The terminal rows are not surfaced as outstanding work in the band.
+    expect(screen.queryByText('main.py')).not.toBeInTheDocument()
+    expect(screen.queryByText('util.py')).not.toBeInTheDocument()
+    expect(screen.queryAllByText('pytest')).toHaveLength(0)
+    // ...but they are not lost: the collapsed Details/audit carries them as settled
+    // results, findable without being actionable.
+    const details = screen.getByRole('button', { name: /Details/i })
+    fireEvent.click(details)
+    expect(await screen.findByText('main.py')).toBeInTheDocument()
+    expect(screen.getByText('Applied', { exact: true })).toBeInTheDocument()
+    expect(screen.getByText('util.py')).toBeInTheDocument()
+    expect(screen.getByText('Rejected', { exact: true })).toBeInTheDocument()
+    expect(screen.getByText('pytest')).toBeInTheDocument()
+    expect(screen.getByText('Completed', { exact: true })).toBeInTheDocument()
+  })
+
+  it('keeps settled-only history as a collapsed audit, not as live band work', async () => {
+    // With every edit and command settled, the primary band carries nothing actionable:
+    // the surface remains only to host the collapsed Details audit (where the settled
+    // results live), not to present finished work as an action the student still owes.
+    vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace())
+    vi.spyOn(api, 'listAgentWorkspaceChanges').mockResolvedValue([
+      change({ id: 1, state: 'applied', path: 'main.py' }),
+      change({ id: 2, state: 'rejected', path: 'util.py' }),
+    ])
+    vi.spyOn(api, 'listAgentCommands').mockResolvedValue([
+      command({ id: 1, state: 'completed', argv: ['pytest'] }),
+      command({ id: 2, state: 'rejected', argv: ['pytest', '-x'] }),
+    ])
+    const { wrapper } = createWrapper()
+
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+
+    await waitFor(() => expect(api.listAgentWorkspaceChanges).toHaveBeenCalled())
+    // The collapsed audit strip is present...
+    const details = screen.getByRole('button', { name: /Details/i })
+    expect(details).toBeInTheDocument()
+    // ...with nothing live in the band: no actions, and the settled rows stay
+    // inside the collapsed section.
+    expect(screen.queryByRole('button', { name: /Accept remaining/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Confirm and run' })).not.toBeInTheDocument()
+    expect(screen.queryByText('main.py')).not.toBeInTheDocument()
+    expect(screen.queryByText('util.py')).not.toBeInTheDocument()
+    // Expanding the audit shows the settled results, read-only.
+    fireEvent.click(details)
+    expect(await screen.findByText('main.py')).toBeInTheDocument()
+    expect(screen.getByText('Applied', { exact: true })).toBeInTheDocument()
+    expect(screen.getByText('pytest')).toBeInTheDocument()
+    expect(screen.getByText('Completed', { exact: true })).toBeInTheDocument()
+  })
 })
+
+function change(overrides: Partial<AgentWorkspaceChangeRead>): AgentWorkspaceChangeRead {
+  return {
+    id: 1,
+    workspace_id: 1,
+    session_id: SESSION_ID,
+    path: 'main.py',
+    rationale: null,
+    state: 'pending',
+    current_hash: 'hash-main',
+    current_content: 'print("before")',
+    proposed_content: 'print("after")',
+    hunks: [{ index: 1, hash: 'hunk-1', lines: ['-print("before")', '+print("after")'] }],
+    created_at: '2026-09-02T00:00:00Z',
+    updated_at: '2026-09-02T00:00:00Z',
+    ...overrides,
+  }
+}
+
+function command(overrides: Partial<AgentCommandRequestRead>): AgentCommandRequestRead {
+  return {
+    id: 1,
+    workspace_id: 1,
+    session_id: SESSION_ID,
+    argv: ['pytest'],
+    relative_cwd: '.',
+    reason: 'Verify the change.',
+    expected_signal: null,
+    timeout_seconds: 60,
+    state: 'pending',
+    confirmed_at: null,
+    exit_code: null,
+    stdout_text: null,
+    stderr_text: null,
+    truncated: false,
+    ...overrides,
+  }
+}
 
 function message(overrides: Partial<MessageRead>): MessageRead {
   return {

@@ -1219,17 +1219,19 @@ def _join_blocks(*blocks: str | None) -> str:
     return "\n\n".join(block for block in blocks if block)
 
 
-def _fit_retrieval_to_prompt(
-    preparation: TurnPreparation, result: RetrievalResult
+def fit_retrieval_to_budget(
+    base_system: str, retrieval_budget: int, result: RetrievalResult
 ) -> RetrievalResult:
     """Keep the ranked retrieval prefix whose rendered block fits its exact remainder.
 
-    Retrieval ranks and initially trims chunk bodies against `retrieval_budget`. The prompt
-    also labels every kept chunk with its source and adds a context heading, so this final
-    boundary check charges that formatting rather than letting it sit outside the window.
-    Chunks are removed from the end, preserving the same highest-ranked-first policy.
+    The shared final boundary for the tutor and agent routes: retrieval ranks and initially
+    trims chunk bodies against the budget, and the prompt also labels every kept chunk with
+    its source and adds a context heading, so this pass charges that formatting rather than
+    letting it sit outside the budget. `base_system` is the system material that will carry
+    the block beside it (the tutor's system prompt plus any pinned step; the agent's full
+    system prompt), and the block's cost is measured as the growth it adds to it. Chunks are
+    removed from the end, preserving the same highest-ranked-first policy.
     """
-    base_system = _join_blocks(preparation.system_prompt, preparation.anchor)
     base_tokens = estimate_tokens(base_system)
     chunks = result.chunks
     kept_count = len(chunks)
@@ -1238,7 +1240,7 @@ def _fit_retrieval_to_prompt(
             [_context_entry(chunk) for chunk in chunks[:kept_count]]
         )
         rendered_tokens = estimate_tokens(_join_blocks(base_system, context_block)) - base_tokens
-        if rendered_tokens <= preparation.retrieval_budget:
+        if rendered_tokens <= retrieval_budget:
             break
         kept_count -= 1
 
@@ -1260,6 +1262,17 @@ def _fit_retrieval_to_prompt(
         trimmed=result.trimmed or len(dropped) * 2 > len(chunks),
         omitted_document_count=omitted_document_count,
         omitted_document_ids=omitted_document_ids,
+    )
+
+
+def _fit_retrieval_to_prompt(
+    preparation: TurnPreparation, result: RetrievalResult
+) -> RetrievalResult:
+    """The tutor's final pass: the fitted prefix for its system prompt and anchor."""
+    return fit_retrieval_to_budget(
+        _join_blocks(preparation.system_prompt, preparation.anchor),
+        preparation.retrieval_budget,
+        result,
     )
 
 

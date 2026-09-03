@@ -12,11 +12,12 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from backend.api.routes_chat import require_document_allowed
-from backend.core import agent_attempts, agent_tools, sessions
+from backend.api.routes_chat import fit_retrieval_to_budget, require_document_allowed
+from backend.core import agent_attempts, agent_tools, profiles, sessions
 from backend.core.app_settings import TutorConfig, resolve_tutor_access
 from backend.core.classes import touch_class
-from backend.core.errors import LyraError, NotFoundError
+from backend.core.errors import ConflictError, LyraError, NotFoundError
+from backend.core.query_guard import PrivateContextLedger
 from backend.llm import prompts as llm_prompts
 from backend.llm import tools as llm_tools
 from backend.llm.tools import (
@@ -35,8 +36,9 @@ from backend.llm.turn_budget import (
     input_ceiling,
     mandatory_history_tokens,
     plan_budget,
+    trim_history,
 )
-from backend.rag.retrieve import RetrievedChunk, retrieve
+from backend.rag.retrieve import RetrievalResult, RetrievedChunk, retrieve
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import get_db
 
@@ -44,6 +46,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agent"])
 DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
+
 
 _SYSTEM_PROMPTS: dict[agent_tools.AgentProfile, str] = {
     "research": (
@@ -123,14 +126,21 @@ class AgentChatRequest(BaseModel):
     # Omitted for the contextual turn: Lyra plans the profile internally. Legacy
     # callers may still name one of the isolated profiles.
     profile: Literal["research", "code", "command", "agent"] | None = None
-    # The source the student scoped for this turn, like the tutor's document scoping.
-    # When set, retrieved chunks from that document ground the turn as fixed system
-    # material; when absent the agent works from its tools and prior history.
+    # The source scope for this turn, like the tutor's document scoping: a FILTER on
+    # retrieval, not a switch. Absent (the composer's "All material" default) means
+    # class-wide retrieval, exactly as in the ordinary tutor route; a selected document
+    # restricts retrieval to that document. The retrieved chunks ground the turn as
+    # fixed system material and seed the web-query guard's private context.
     document_id: int | None = None
     # The presentation mode the student is asking under (Guide/Show), like the tutor's.
     # Persisted on the session when present, so the conversation - tutor turns and agent
     # turns alike - keeps one mode, and the agent's shared mode contract follows it.
     mode: llm_prompts.ChatMode | None = None
+    # The client-generated idempotency key (PLA-313): minted once by the browser for one
+    # logical Send, resubmitted unchanged when the transport is ambiguous. A completed
+    # operation replays its stored reply; a mismatched reuse is refused with
+    # `operation_id_mismatch`; a busy 409 never discards the key.
+    operation_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     @property
     def resolved_profile(self) -> Literal["research", "code", "command", "agent"]:
@@ -144,6 +154,24 @@ class AgentChatRequest(BaseModel):
         if not clean:
             raise ValueError("Message cannot be blank.")
         return clean
+
+
+class AgentTurnScopeRequest(BaseModel):
+    """The optional body a retry or regenerate may carry.
+
+    Retry: the scope a turn was originally asked under is persisted on its attempt and
+    wins; these fields only backstop attempts that predate the persisted scope.
+    Regenerate: an explicit body uses the CURRENT Guide/Show selection and source scope,
+    exactly like the tutor's regeneration; an absent body (the just-in-time continuation
+    after an access approval) falls back to the persisted scope of the turn it continues.
+    """
+
+    mode: llm_prompts.ChatMode | None = None
+    document_id: int | None = None
+
+
+# One shared empty scope body: retry and regenerate both default their optional body to it.
+_EMPTY_SCOPE = AgentTurnScopeRequest()
 
 
 class AgentChatResult(BaseModel):
@@ -164,14 +192,18 @@ class AgentTurnCost:
 
     The coarse, content-only half of the preflight: it sums the estimated content of the
     generation reserve, the system prompt, the tool schema, the current message, and the
-    newest history the assembly always keeps, in the shared `TurnReserve` inequality. Unlike
-    a tutor turn, an agent turn injects no retrieval block and pins no solution step, so its
-    fixed material is the system prompt plus the tool-definition overhead sent on every
-    round. When even this content-only sum overruns the window, no trimming can help and the
-    turn is refused early. It deliberately charges neither message framing nor the estimator
-    safety margin - the authoritative gate (`_require_request_fits`) does that on the
-    assembled request in the exact wire shape - so this never refuses a turn that gate would
-    accept; it just fails the grossly-oversized case sooner.
+    newest history the assembly always keeps, in the shared `TurnReserve` inequality. An
+    agent turn's fixed material is the system prompt (tutor prompt plus agent layer) plus
+    the tool-definition overhead sent on every round; it pins no solution step, and - like
+    the tutor's coarse check - it does not charge the retrieval block here either: that
+    block is budgeted out of the prompt room after history is kept (`_plan_agent_turn`),
+    exactly as the tutor's `_prepare_turn` does, and the authoritative wire gate
+    (`_require_request_fits`) then re-proves the fully assembled request. When even this
+    content-only sum overruns the window, no trimming can help and the turn is refused
+    early. It deliberately charges neither message framing nor the estimator safety margin
+    - the authoritative gate (`_require_request_fits`) does that on the assembled request
+    in the exact wire shape - so this never refuses a turn that gate would accept; it just
+    fails the grossly-oversized case sooner.
 
     Attributes:
         context_window: The endpoint's configured window, the ceiling the turn must fit.
@@ -220,13 +252,15 @@ class AgentTurnCost:
 class AgentTurnPlan:
     """Everything an accepted agent turn needs, computed before any mutation.
 
-    `messages` is the assembled first request; `private_context` is the student's own
-    words that the web-query guard must recognize, aligned with `messages`' history so
-    the guard and the prompt cannot disagree about what was said. `registry` is the
-    executable tool registry the loop runs, built here - before any mutation - from the
-    same frozen capability snapshot the schema budget was measured against, so the tools
-    sent are exactly the tools charged for; `activity` is its audit collector, carried so
-    the response reads the events the handlers wrote. `context_budget` lets the tool loop
+    `messages` is the assembled first request - the full tutor system prompt plus the
+    agent capability layer and the fitted retrieval block as its system message. `retrieval`
+    carries the fitted result so the route persists the retrieval metadata the reply owes
+    (trim + omission) and the run-local private-context ledger (shared with the registry)
+    already saw exactly the chunks that ride the prompt. `registry` is the executable tool
+    registry the loop runs, built here - before any mutation - from the same frozen
+    capability snapshot the schema budget was measured against, so the tools sent are
+    exactly the tools charged for; `activity` is its audit collector, carried so the
+    response reads the events the handlers wrote. `context_budget` lets the tool loop
     re-check the growing transcript against the same window, reserve, and safety margin the
     preflight proved the first request against.
     """
@@ -236,7 +270,7 @@ class AgentTurnPlan:
     content: str
     system_prompt: str
     messages: list[dict[str, object]]
-    private_context: tuple[str, ...]
+    retrieval: RetrievalResult
     cost: AgentTurnCost
     context_budget: ContextBudget
     registry: dict[str, llm_tools.ToolDefinition]
@@ -250,27 +284,31 @@ def _scoped_session(conn: sqlite3.Connection, class_id: int, session_id: int) ->
     return session
 
 
-def _availability_prompt(
-    profile: agent_tools.AgentProfile,
-    registry: dict[str, object],
-    mode: str | None = None,
-) -> str:
+def _agent_layer_prompt(registry: dict[str, object]) -> str:
+    """The contextual agent's capability layer: the base agent instructions plus the
+    per-family availability notes for this turn.
+
+    Per-family availability is appended so the model can say plainly what it cannot do
+    this turn without being told a family is off when it is on. This layer is appended on
+    top of the full tutor system prompt (`build_system_prompt`) and describes only the
+    tools - the identity, the base rules, the Guide/Show contract, and the class/user facts
+    all come from the one shared tutoring prompt, so there is nothing to re-define here.
+    """
+    prompt = _SYSTEM_PROMPTS["agent"]
+    for tool, label in _AGENT_AVAILABILITY:
+        if tool not in registry:
+            prompt += (
+                f" {label} is not available in this conversation right now. Say that "
+                "plainly if the task needs it."
+            )
+    return prompt
+
+
+def _availability_prompt(profile: agent_tools.AgentProfile, registry: dict[str, object]) -> str:
+    """The legacy isolated profiles' system prompt: their own base instructions plus a
+    capability note. The contextual `agent` profile assembles its prompt in
+    `_plan_agent_turn` on top of the full tutor prompt instead."""
     prompt = _SYSTEM_PROMPTS[profile]
-    if profile == "agent":
-        # Per-family availability, so the model can say plainly what it cannot do this
-        # turn without being told a family is off when it is on.
-        for tool, label in _AGENT_AVAILABILITY:
-            if tool not in registry:
-                prompt += (
-                    f" {label} is not available in this conversation right now. Say that "
-                    "plainly if the task needs it."
-                )
-        # The agent turn inherits the conversation's Guide/Show contract through the
-        # shared tutoring prompt (llm_prompts.mode_contract). The agent layer contributes
-        # only tool/capability instructions; the mode semantics live in one place, so
-        # the tutoring and agent surfaces cannot drift apart.
-        prompt += f" {llm_prompts.mode_contract('show' if mode == 'show' else 'guide')}"
-        return prompt
     required_tool, capability = _PROFILE_REQUIREMENTS[profile]
     if required_tool not in registry:
         prompt += f" {capability} is currently disabled or unavailable. Say that plainly."
@@ -376,44 +414,59 @@ def _source_context_entry(chunk: RetrievedChunk) -> dict[str, object]:
     }
 
 
-def _retrieve_source_block(
+def _retrieve_turn_context(
     conn: sqlite3.Connection,
     class_id: int,
     query: str,
     budget_tokens: int,
-    document_id: int,
-) -> str:
-    """A scoped source's best chunks for the turn, as the prompt's context block.
+    document_id: int | None,
+) -> RetrievalResult:
+    """The class material the turn grounds on, ranked and fitted to its budget.
 
-    Retrieval never crosses classes: a document id that does not belong to this class, or
-    has no indexed chunks, yields no chunks and therefore an empty block, so the turn
-    proceeds exactly as if no source had been scoped.
+    Same retrieval semantics and budgeting contract as the ordinary tutor route:
+    `document_id` is a filter, not a switch. `None` - the composer's "All material"
+    default - retrieves across ALL ready material for the class; a selected document
+    restricts retrieval to that document's own chunks. Retrieval never crosses classes:
+    a document id that does not belong to this class, or has no indexed chunks, yields no
+    chunks, and an empty result is a valid turn (the block stays absent and the turn
+    proceeds on history, facts, and tools). The returned result carries the trim and
+    omission metadata the reply persists, and its chunks are the private context the
+    web-query guard must recognize.
     """
     if budget_tokens <= 0:
-        return ""
-    result = retrieve(conn, class_id, query, budget_tokens, document_id=document_id)
-    if not result.chunks:
-        return ""
-    return llm_prompts.format_context_block(
-        [_source_context_entry(chunk) for chunk in result.chunks]
-    )
+        return RetrievalResult(
+            chunks=[],
+            trimmed=False,
+            omitted_document_count=0,
+        )
+    return retrieve(conn, class_id, query, budget_tokens, document_id=document_id)
 
 
 def _plan_agent_turn(
     conn: sqlite3.Connection,
     class_id: int,
     session_id: int,
-    payload: AgentChatRequest,
     config: TutorConfig,
     *,
+    profile: agent_tools.AgentProfile,
+    content: str,
+    mode: llm_prompts.ChatMode,
+    document_id: int | None,
+    user_message_id: int | None = None,
     exclude_message_ids: frozenset[int] = frozenset(),
 ) -> AgentTurnPlan:
     """Cost, fit-check, and assemble one agent turn without mutating anything.
 
-    `exclude_message_ids` names messages that must not enter this turn's history. It is
-    empty for a fresh send, whose current message is not persisted yet; on a retry it holds
-    the id of the reused user message, so the original prompt appears exactly once - as the
-    current message - and never a second time as history (PLA-295).
+    `user_message_id` and `exclude_message_ids` name messages that must not enter this
+    turn's history: the fresh send's current message (persisted just before the plan), and,
+    on a retry or regeneration, the reused question and any superseded reply, so the
+    original prompt appears exactly once - as the current message - and never a second time
+    as history (PLA-295).
+
+    The turn context (`mode`, `document_id`) is the scope the turn is asked under, resolved
+    by the caller: a fresh send carries what the student chose; a retry carries the scope
+    its stored attempt recorded; a regeneration carries the current selection when its
+    body names one, else the stored scope.
 
     Read-only by construction: it inspects the session, the tool definitions the class
     grants, and the prior history, then either raises (an oversized turn, refused before
@@ -425,62 +478,114 @@ def _plan_agent_turn(
     change landing mid-turn cannot make the registry the loop runs larger or different from
     the one this preflight charged for. The probe registry (built with an empty private
     context) makes the tool schema and availability wording measurable before history is
-    trimmed; the executable registry is then built from the *same* snapshot with the real
-    private context so the web-query guard sees the student's own words - identical schemas
-    by construction, because the snapshot is frozen and the schemas do not depend on the
-    private context. Both builds write nothing (audit rows appear only when a handler runs),
-    and the executable build happens here, before any mutation, so a failure to construct it
-    cannot leave a persisted user turn behind. Dispatch-time reauthorization still runs when
-    each handler executes, so a grant revoked after this snapshot fails closed at the tool;
-    a grant newly enabled after it waits for the next turn.
+    trimmed; the executable registry is then built from the *same* snapshot around the run-
+    local private-context ledger seeded with everything private the model sees before tool
+    execution - identical schemas by construction, because the snapshot is frozen and the
+    schemas do not depend on the private context. Both builds write nothing (audit rows
+    appear only when a handler runs), and the executable build happens here, before any
+    mutation, so a failure to construct it cannot leave a persisted user turn behind.
+    Dispatch-time reauthorization still runs when each handler executes, so a grant revoked
+    after this snapshot fails closed at the tool; a grant newly enabled after it waits for
+    the next turn.
     """
-    profile = payload.resolved_profile
-    content = payload.content
     budget = plan_budget(config.context_window)
 
     snapshot = agent_tools.snapshot_agent_capabilities(conn, class_id)
     probe_registry, _probe_activity = agent_tools.build_agent_registry(
         conn, class_id, session_id, profile, private_context=(), snapshot=snapshot
     )
-    session_mode = str(sessions.get_session(conn, session_id)["mode"])
-    system_prompt = _availability_prompt(profile, probe_registry, session_mode)
-    # A scoped source is fixed system material, like the tutor's retrieval block: charged
-    # up front and never trimmed, so the history assembly leaves it the room it needs.
-    # Absent, or empty, it changes nothing and the turn is identical to the tools-only
-    # path.
-    if payload.document_id is not None:
-        context_block = _retrieve_source_block(
-            conn, class_id, content, budget.retrieval, payload.document_id
-        )
-        if context_block:
-            system_prompt = f"{system_prompt}\n\n{context_block}"
     tool_tokens = schema_tokens(tool_schemas(probe_registry))
+
+    # The system prompt the turn answers under. The contextual turn - the ordinary class
+    # conversation - builds on the FULL tutor system prompt: base rules, the mode contract
+    # the turn runs under, active class facts, and user facts, all owned by
+    # `build_system_prompt` (and by it alone). The agent layer adds only what the tools
+    # change: capability availability, trust boundaries, JIT access, and proposal/command
+    # semantics. Legacy isolated profiles keep their own prompts.
+    if profile == "agent":
+        tutor_prompt = llm_prompts.build_system_prompt(
+            mode,
+            profiles.select_user_facts(conn),
+            profiles.select_active_facts(conn, class_id),
+        )
+        base_system = f"{tutor_prompt}\n\n{_agent_layer_prompt(probe_registry)}"
+    else:
+        tutor_prompt = ""
+        base_system = _availability_prompt(profile, probe_registry)
+
+    messages = sessions.list_messages(conn, session_id)
     earlier = tuple(
         HistoryMessage(role=message["role"], content=str(message["content"]))
-        for message in sessions.list_messages(conn, session_id)
+        for message in messages
         if int(message["id"]) not in exclude_message_ids
+        and (user_message_id is None or int(message["id"]) != user_message_id)
     )
     cost = AgentTurnCost(
         context_window=config.context_window,
         generation=budget.generation,
-        system_tokens=estimate_tokens(system_prompt),
+        system_tokens=estimate_tokens(base_system),
         tool_tokens=tool_tokens,
         question_tokens=estimate_tokens(content),
         earlier=earlier,
     )
     _require_agent_turn_fits(cost)
 
-    # The whole prompt room is history's, since the agent retrieves through its tools rather
-    # than injecting a retrieval block. History is trimmed and the request is charged with
-    # the canonical wire-shape estimator under the margin-reduced window, so the fit proved
-    # here is the fit the loop then guards against.
+    # Budget the prompt room the same way the tutor's `_prepare_turn` does, in this route's
+    # margin-reduced units: history keeps its own share, capped at the room the window
+    # actually leaves, and retrieval spends what the window still holds once history is
+    # kept - unused history room is lent to retrieval, the reverse never happening. The
+    # retrieval block then rides the system prompt as fixed material, charged by the
+    # authoritative gate exactly like the tutor's.
     ceiling = input_ceiling(config.context_window, budget.generation)
-    messages, history = _assemble_within_ceiling(
-        system_prompt, earlier, content, message_ceiling=ceiling - tool_tokens
+    message_ceiling = max(0, ceiling - tool_tokens)
+    system_tokens = estimate_tokens(base_system)
+    question_tokens = estimate_tokens(content)
+    prompt_room = max(0, message_ceiling - system_tokens - question_tokens)
+    history_budget = max(0, min(budget.history - question_tokens, prompt_room))
+    trimmed_history, history_used = trim_history(
+        [{"role": message.role, "content": message.content} for message in earlier],
+        history_budget,
     )
-    _require_request_fits(messages, tool_tokens, ceiling)
+    retrieval_budget = max(0, prompt_room - history_used)
 
-    private_context = tuple(str(message["content"]) for message in history) + (content,)
+    # Class-wide retrieval by default: the composer's "All material" scope is
+    # `document_id=None`, and like the tutor route that means retrieve across ALL ready
+    # material for the class. A selected document filters retrieval to that document.
+    retrieval = _retrieve_turn_context(conn, class_id, content, retrieval_budget, document_id)
+    # The shared final pass charges the block's source labels and heading against the same
+    # budget the chunks were drawn to, dropping lowest-ranked chunks from the end.
+    retrieval = fit_retrieval_to_budget(base_system, retrieval_budget, retrieval)
+    context_block = llm_prompts.format_context_block(
+        [_source_context_entry(chunk) for chunk in retrieval.chunks]
+    )
+    system_prompt = f"{base_system}\n\n{context_block}" if context_block else base_system
+
+    kept_history = tuple(
+        HistoryMessage(role=str(message["role"]), content=str(message["content"]))
+        for message in trimmed_history
+    )
+    messages_out, kept = _assemble_within_ceiling(
+        system_prompt, kept_history, content, message_ceiling=message_ceiling
+    )
+    _require_request_fits(messages_out, tool_tokens, ceiling)
+
+    # The run-local private context the web-query guard must recognize: the private
+    # material the model sees before tool execution - the conversation history that
+    # reached the *assembled* prompt (the kept set, so guard and prompt cannot disagree
+    # about what was said), the question, the tutor prompt's active facts (which ride the
+    # system message), and the retrieved document chunks (which ride it too). Tools that
+    # return private text later (workspace reads/searches) add their bounded results to
+    # this same ledger as they run, so a later search_web in the turn is guarded against
+    # what the turn has seen by then.
+    private_context = PrivateContextLedger(
+        *(str(message["content"]) for message in kept),
+        content,
+    )
+    if tutor_prompt:
+        private_context.add(tutor_prompt)
+    for chunk in retrieval.chunks:
+        private_context.add(chunk.content)
+
     registry, activity = agent_tools.build_agent_registry(
         conn,
         class_id,
@@ -500,8 +605,8 @@ def _plan_agent_turn(
         profile=profile,
         content=content,
         system_prompt=system_prompt,
-        messages=messages,
-        private_context=private_context,
+        messages=messages_out,
+        retrieval=retrieval,
         cost=cost,
         context_budget=context_budget,
         registry=registry,
@@ -571,6 +676,73 @@ def _replay_completed_attempt(
     )
 
 
+# The one in-flight agent turn per session, by (turn_token, task). A non-streaming handler
+# cannot observe its client's disconnect, so the UI's Stop takes an explicit /stop which
+# cancels this task: the cancellation lands in the tool loop's awaits, settles the attempt
+# as stopped, and releases the claim through the route's finally - the model/tool work
+# actually stops, and nothing hidden keeps running after the UI says it stopped.
+#
+# The stored task is a dedicated turn task created by the route, NOT the HTTP request task
+# itself: cancelling the request task directly makes the starlette HTTP middleware raise
+# "No response returned." (a logged 500), because the middleware's inner task dies before
+# it ever sees a response. Cancelling the turn task instead lets the route catch the
+# cancellation at its `await` and complete the request with a bounded stopped body - a
+# no-op send if the client already went away.
+_inflight: dict[int, tuple[int, asyncio.Task]] = {}
+
+
+def _register_inflight(session_id: int, turn_token: int, task: asyncio.Task) -> None:
+    _inflight[session_id] = (turn_token, task)
+
+
+def _unregister_inflight(session_id: int, turn_token: int) -> None:
+    current = _inflight.get(session_id)
+    if current is not None and current[0] == turn_token:
+        del _inflight[session_id]
+
+
+def _inflight_task(session_id: int) -> asyncio.Task | None:
+    current = _inflight.get(session_id)
+    return current[1] if current is not None else None
+
+
+async def _await_turn_or_stopped(turn_task: asyncio.Task) -> AgentChatResult | JSONResponse:
+    """Await the turn task, translating a stopped turn into a bounded response.
+
+    When /stop cancels the turn task, the attempt is already settled as stopped inside
+    `_run_agent_turn` and the claim is released by the route's finally. The route must still
+    complete the HTTP request with a response: dying without one makes the starlette HTTP
+    middleware raise "No response returned." (a logged 500). The body is a no-op if the
+    client already disconnected; an API client that stopped its turn but kept its request
+    open reads a plain "stopped" result.
+
+    When this REQUEST task is itself cancelled (a client disconnect, a server shutdown) the
+    turn task keeps running on its own: it is cancelled here too so no hidden model or tool
+    work survives, and the cancellation is re-raised so the request task is torn down
+    honestly rather than reporting a normal completion.
+    """
+    try:
+        return await turn_task
+    except asyncio.CancelledError:
+        if not turn_task.done():
+            turn_task.cancel()
+        current = asyncio.current_task()
+        if current is not None and current.cancelling() > 0:
+            # This request task is being torn down; let the cancellation propagate (the
+            # turn task settles itself as it is cancelled, and startup reconciliation is
+            # the bounded fallback if the process does not get that far).
+            raise
+        # The /stop path: the child was cancelled, this task is not, so its settlement is
+        # already complete; surface a bounded "stopped" body and complete normally.
+        return JSONResponse(
+            status_code=200,
+            content={
+                "detail": "This turn was stopped.",
+                "stopped": "stopped",
+            },
+        )
+
+
 async def _run_agent_turn(
     conn: sqlite3.Connection,
     class_id: int,
@@ -579,6 +751,7 @@ async def _run_agent_turn(
     *,
     payload: AgentChatRequest | None,
     regenerate: bool = False,
+    scope: AgentTurnScopeRequest | None = None,
 ) -> AgentChatResult | JSONResponse:
     """Plan, persist, and run one agent turn (a fresh send, or a retry when payload is None).
 
@@ -599,6 +772,7 @@ async def _run_agent_turn(
     access = resolve_tutor_access(conn)
     require_document_allowed(access)
     config = access.config
+    session_mode = str(sessions.get_session(conn, session_id)["mode"])
 
     superseded: tuple[int, ...] = ()
     if payload is None:
@@ -621,6 +795,49 @@ async def _run_agent_turn(
         content = target.content
         profile = target.profile or "agent"
         user_message_id = target.user_message_id
+        latest = target.latest
+        # The source scope the turn is asked under. Retry preserves the scope the turn was
+        # originally asked with - persisted on its attempt - and the request body only
+        # backstops attempts that predate the persisted scope. Regeneration uses the
+        # CURRENT Guide/Show selection and source scope when its body names them, exactly
+        # like the tutor's regeneration; a body-less regeneration (the just-in-time
+        # continuation after an access approval) continues the persisted scope.
+        if regenerate:
+            mode = (
+                scope.mode if scope is not None and scope.mode is not None else latest.get("mode")
+            )
+            document_id = (
+                scope.document_id
+                if scope is not None and "document_id" in scope.model_fields_set
+                else latest.get("document_id")
+            )
+        else:
+            mode = latest.get("mode") or (scope.mode if scope is not None else None)
+            stored_doc = latest.get("document_id")
+            document_id = (
+                stored_doc
+                if stored_doc is not None
+                else (scope.document_id if scope is not None else None)
+            )
+        # Last resort for both: the conversation's current toggle, so a turn with no
+        # recorded mode anywhere (an attempt predating the persisted scope) still gets a
+        # real Guide/Show contract rather than a guess.
+        mode = "show" if (mode or session_mode) == "show" else "guide"
+        if regenerate and scope is not None and scope.mode is not None:
+            # The student's manual regeneration toggles the conversation's mode, like the
+            # tutor's: the turn and the session agree on the toggle. A body-less JIT
+            # continuation never touches the toggle.
+            sessions.set_session_mode(conn, session_id, mode)
+        # One durable attempt brackets this run of the model (PLA-295), persisting the turn
+        # context it answers under so the next retry or continuation keeps the same scope.
+        attempt_id = agent_attempts.create_attempt(
+            conn,
+            session_id=session_id,
+            user_message_id=user_message_id,
+            profile=profile,
+            mode=mode,
+            document_id=document_id,
+        )
         # The current message is the reused user message; excluding it (and any superseded reply)
         # from history is what keeps the original prompt appearing exactly once in model context,
         # and keeps a discarded reply from being shown to the model as history.
@@ -628,15 +845,22 @@ async def _run_agent_turn(
             conn,
             class_id,
             session_id,
-            AgentChatRequest(content=content, profile=profile),  # type: ignore[arg-type]
             config,
-            exclude_message_ids=frozenset({user_message_id, *superseded}),
+            profile=profile,
+            content=content,
+            mode=mode,
+            document_id=document_id,
+            user_message_id=user_message_id,
+            exclude_message_ids=frozenset(superseded),
         )
+        sessions.bind_turn(session_id, turn_token, user_message_id)
+        touch_class(conn, class_id)
     else:
-        # The privacy gate proved the endpoint may receive this turn's private material; the
-        # preflight proves the turn fits the endpoint's window. Both read only the session,
-        # the tool definitions, and the prior history, so an oversized or refused turn leaves
-        # no persisted title, message, attempt, or tool effect behind.
+        # A fresh logical send. The privacy gate proved the endpoint may receive this
+        # turn's private material; the preflight proves the turn fits the endpoint's window.
+        # Both read only the session, the tool definitions, and the prior history, so an
+        # oversized or refused turn leaves no persisted title, message, attempt, or tool
+        # effect behind.
         content = payload.content
         profile = payload.resolved_profile
         # The student's mode toggle rides the turn like the tutor's does: persist it before
@@ -644,18 +868,115 @@ async def _run_agent_turn(
         # shapes agree on which presentation the student asked for.
         if payload.mode is not None:
             sessions.set_session_mode(conn, session_id, payload.mode)
-        plan = _plan_agent_turn(conn, class_id, session_id, payload, config)
-        sessions.set_session_title_if_unset(conn, session_id, content)
-        user_message_id = sessions.add_message(conn, session_id, "user", content)
+        mode = "show" if (payload.mode or session_mode) == "show" else "guide"
+        document_id = payload.document_id
 
-    sessions.bind_turn(session_id, turn_token, user_message_id)
-    touch_class(conn, class_id)
-    # One durable attempt brackets this run of the model (PLA-295). It is created after the
-    # user message is persisted (fresh) or resolved (retry) and before the loop runs, so
-    # every attempt has a row and a failed run leaves a truthful, retryable record.
-    attempt_id = agent_attempts.create_attempt(
-        conn, session_id=session_id, user_message_id=user_message_id, profile=profile
-    )
+        # PLA-313 idempotency: if this operation_id already committed a user message and
+        # attempt in this session, reuse them instead of inserting a duplicate - a
+        # completed lineage replays its stored reply, a busy lineage is refused (the 409
+        # never discards the client's key), and an all-failed lineage re-runs the same
+        # turn under a fresh attempt, exactly as the tutor's `_open_turn` does.
+        user_message_id: int | None = None
+        attempt_id: int | None = None
+        if payload.operation_id:
+            existing = agent_attempts.find_by_operation_id(conn, session_id, payload.operation_id)
+            if existing is not None:
+                stored_message_id = int(existing["user_message_id"])
+                stored_row = conn.execute(
+                    "select content from messages where id = ?", (stored_message_id,)
+                ).fetchone()
+                stored_content = str(stored_row["content"]) if stored_row else ""
+                # The operation_id is bound to the logical request that minted it. A
+                # resubmit with different content/mode/document is a client bug, not a
+                # retry - refuse it with a structured code the client can tell apart from
+                # the ordinary conversation-busy 409, which must not discard the key.
+                mismatch = stored_content.strip() != content.strip()
+                if not mismatch and payload.mode is not None:
+                    mismatch = str(existing.get("mode") or "guide") != payload.mode
+                if not mismatch:
+                    mismatch = existing.get("document_id") != document_id
+                if mismatch:
+                    raise ConflictError(
+                        "This operation ID was already used for a different request. "
+                        "Submit with a new operation ID.",
+                        extra={"code": "operation_id_mismatch"},
+                    )
+                sessions.bind_turn(session_id, turn_token, stored_message_id)
+                touch_class(conn, class_id)
+                completed = agent_attempts.find_completed_attempt(conn, stored_message_id)
+                if completed is not None:
+                    # Completed: replay the stored reply with zero model/tool work.
+                    return _replay_completed_attempt(
+                        conn,
+                        session_id,
+                        agent_attempts.RetryTarget(
+                            user_message_id=stored_message_id,
+                            content=stored_content,
+                            profile="agent",
+                            latest=completed,
+                        ),
+                    )
+                latest_lineage = agent_attempts.latest_attempt_for_message(conn, stored_message_id)
+                if latest_lineage is not None and latest_lineage["state"] == agent_attempts.RUNNING:
+                    # Still in flight: the 409 is serialization, not mismatch - the client
+                    # keeps the operation ID for the resubmit after settlement.
+                    raise ConflictError("Another turn is still in progress on this conversation.")
+                # All attempts on this message failed or stopped: the logical send is the
+                # stored one, re-run now under the scope it was originally asked with.
+                user_message_id = stored_message_id
+                stored_mode = existing.get("mode")
+                if stored_mode is not None:
+                    mode = "show" if stored_mode == "show" else "guide"
+                stored_document = existing.get("document_id")
+                if stored_document is not None:
+                    document_id = stored_document
+        plan = _plan_agent_turn(
+            conn,
+            class_id,
+            session_id,
+            config,
+            profile=profile,
+            content=content,
+            mode=mode,
+            document_id=document_id,
+            user_message_id=user_message_id,
+        )
+        sessions.set_session_title_if_unset(conn, session_id, content)
+        if user_message_id is None:
+            # First arrival of this logical send: the user message and its attempt land in
+            # one transaction, so a crash can never leave a question without its attempt
+            # (or an attempt without its question).
+            conn.execute("begin immediate")
+            try:
+                user_message_id = sessions.insert_message(conn, session_id, "user", content)
+                attempt_id = agent_attempts.create_attempt(
+                    conn,
+                    session_id=session_id,
+                    user_message_id=user_message_id,
+                    profile=profile,
+                    mode=mode,
+                    document_id=document_id,
+                    operation_id=payload.operation_id,
+                    commit=False,
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            sessions.bind_turn(session_id, turn_token, user_message_id)
+            touch_class(conn, class_id)
+        else:
+            # Re-running an all-failed operation: the stored message keeps its original
+            # attempt lineage; this run gets its own attempt row (operation_id unset, like
+            # every retry), so the evidence of the failed run stays beside the new one.
+            attempt_id = agent_attempts.create_attempt(
+                conn,
+                session_id=session_id,
+                user_message_id=user_message_id,
+                profile=profile,
+                mode=mode,
+                document_id=document_id,
+            )
     # The registry and its audit collector were built by the preflight, from the frozen
     # capability snapshot the schema budget was measured against (PLA-290), so the tools
     # sent here are exactly the tools charged for. The attempt is bound to that collector
@@ -733,6 +1054,8 @@ async def _run_agent_turn(
             session_id,
             "assistant",
             answer,
+            retrieval_trimmed=plan.retrieval.trimmed,
+            omitted_document_count=plan.retrieval.omitted_document_count,
             tool_activity=tool_activity,
         )
         agent_attempts.mark_completed(conn, attempt_id, message_id)
@@ -806,14 +1129,23 @@ async def send_agent_chat(
     # agent or tutor turn on this session is refused here with a deterministic 409 before
     # this turn reads history, persists, or sends anything.
     turn_token = sessions.begin_turn(session_id)
+    # The turn runs in its own task (registered under the turn token, not this request
+    # task): /stop cancels that task, and this request still completes with a bounded body
+    # rather than the middleware's "No response returned." 500.
+    turn_task = asyncio.create_task(
+        _run_agent_turn(conn, class_id, session_id, turn_token, payload=payload)
+    )
+    _register_inflight(session_id, turn_token, turn_task)
     try:
-        return await _run_agent_turn(conn, class_id, session_id, turn_token, payload=payload)
+        return await _await_turn_or_stopped(turn_task)
     finally:
         # Release on every ending: a consent or impossible-context refusal, a planning or
         # registry-build failure, a tool-loop/upstream/timeout failure, a context or output
-        # limit, cancellation or client disconnect (CancelledError propagates through here),
-        # and any unexpected exception. `end_turn` is idempotent and token-owned, so it can
-        # never free a claim a newer turn has since taken.
+        # limit, a stopped turn, and any unexpected exception. `end_turn` is idempotent and
+        # token-owned, so it can never free a claim a newer turn has since taken. The
+        # in-flight entry goes with the token, so a Stop that races a finished turn cancels
+        # nothing.
+        _unregister_inflight(session_id, turn_token)
         sessions.end_turn(session_id, turn_token)
 
 
@@ -822,12 +1154,16 @@ async def send_agent_chat(
     response_model=AgentChatResult,
 )
 async def retry_agent_chat(
+    conn: DbConn,
     class_id: int,
     session_id: int,
-    conn: DbConn,
+    payload: AgentTurnScopeRequest = _EMPTY_SCOPE,
 ) -> AgentChatResult | JSONResponse:
     """Retry the conversation's last failed agent turn, reusing its user message (PLA-295).
 
+    The retry answers the SAME logical turn: the source scope (selected document) and the
+    Guide/Show mode the turn was originally asked with are persisted on its attempt and win
+    over the optional body, which only backstops attempts that predate the persisted scope.
     Serialized against a normal new turn and against a second Retry by the same per-session
     claim: whichever request wins the slot runs, the other is refused with a 409, so at
     most one retry attempt runs at a time. A retry of a turn that already completed - the
@@ -835,9 +1171,16 @@ async def retry_agent_chat(
     """
     _scoped_session(conn, class_id, session_id)
     turn_token = sessions.begin_turn(session_id)
+    # Same dedicated-task shape as a fresh send: Stop cancels the turn task, and the retry
+    # request itself settles with a bounded body instead of a middleware 500.
+    turn_task = asyncio.create_task(
+        _run_agent_turn(conn, class_id, session_id, turn_token, payload=None, scope=payload)
+    )
+    _register_inflight(session_id, turn_token, turn_task)
     try:
-        return await _run_agent_turn(conn, class_id, session_id, turn_token, payload=None)
+        return await _await_turn_or_stopped(turn_task)
     finally:
+        _unregister_inflight(session_id, turn_token)
         sessions.end_turn(session_id, turn_token)
 
 
@@ -846,12 +1189,17 @@ async def retry_agent_chat(
     response_model=AgentChatResult,
 )
 async def regenerate_agent_chat(
+    conn: DbConn,
     class_id: int,
     session_id: int,
-    conn: DbConn,
+    payload: AgentTurnScopeRequest = _EMPTY_SCOPE,
 ) -> AgentChatResult | JSONResponse:
     """Answer the conversation's last agent question again, replacing the reply it has.
 
+    A manual regeneration carries the CURRENT Guide/Show selection and source scope in its
+    body and uses them, exactly like the tutor's regeneration (a body that names no mode or
+    document falls back to the turn's persisted scope, so a body-less just-in-time
+    continuation after an access approval re-answers the turn exactly as it was asked).
     Unlike Retry, this re-runs the turn even when the last attempt completed, and supersedes
     the existing reply: the discarded rows are removed the moment the new reply commits, so a
     regeneration that fails or is stopped leaves the student with the answer they already had
@@ -860,9 +1208,39 @@ async def regenerate_agent_chat(
     """
     _scoped_session(conn, class_id, session_id)
     turn_token = sessions.begin_turn(session_id)
-    try:
-        return await _run_agent_turn(
-            conn, class_id, session_id, turn_token, payload=None, regenerate=True
+    # Same dedicated-task shape as a fresh send: Stop cancels the turn task, and the
+    # regeneration request itself settles with a bounded body instead of a middleware 500.
+    turn_task = asyncio.create_task(
+        _run_agent_turn(
+            conn, class_id, session_id, turn_token, payload=None, regenerate=True, scope=payload
         )
+    )
+    _register_inflight(session_id, turn_token, turn_task)
+    try:
+        return await _await_turn_or_stopped(turn_task)
     finally:
+        _unregister_inflight(session_id, turn_token)
         sessions.end_turn(session_id, turn_token)
+
+
+@router.post("/classes/{class_id}/sessions/{session_id}/agent-chat/stop")
+async def stop_agent_chat(
+    class_id: int,
+    session_id: int,
+    conn: DbConn,
+) -> dict[str, bool]:
+    """Cancel this conversation's in-flight agent turn, if there is one.
+
+    The non-streaming handler cannot see its own client's disconnect, so the UI's Stop is
+    explicit: cancel the in-flight task, which lands in the tool loop's awaits, settles the
+    durable attempt as stopped, and releases the per-session claim - the model/tool work
+    actually stops. Stopping a session with no in-flight turn is not an error: there is
+    simply nothing to stop. The in-flight turn's own finally block releases the claim, so
+    this endpoint takes no claim itself.
+    """
+    _scoped_session(conn, class_id, session_id)
+    task = _inflight_task(session_id)
+    if task is not None and not task.done():
+        task.cancel()
+        return {"stopped": True}
+    return {"stopped": False}

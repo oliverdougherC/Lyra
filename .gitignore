@@ -68,4 +68,5 @@ python-audit-evidence.json
 
 # Acceptance test transient state
 .acceptance-state.json
+.acceptance-state-*.json
 acceptance-report/

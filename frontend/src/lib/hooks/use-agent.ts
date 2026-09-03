@@ -153,9 +153,25 @@ export function useRefreshAgentSession(classId: number, sessionId: number | null
 export function useSendAgentChat(classId: number, sessionId: number | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ content, profile }: { content: string; profile?: AgentProfile }) => {
+    mutationFn: ({
+      content,
+      profile,
+      operationId,
+    }: {
+      content: string
+      profile?: AgentProfile
+      operationId?: string
+    }) => {
       if (sessionId === null) throw new Error('Start a conversation before using agent tools.')
-      return api.sendAgentChat(classId, sessionId, content, profile)
+      return api.sendAgentChat(
+        classId,
+        sessionId,
+        content,
+        profile,
+        undefined,
+        undefined,
+        operationId,
+      )
     },
     onSuccess: async () => {
       if (sessionId === null) return

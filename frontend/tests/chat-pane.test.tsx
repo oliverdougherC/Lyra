@@ -21,6 +21,9 @@ vi.mock('@/lib/api', async () => {
       getSettings: vi.fn(),
       getClassProfile: vi.fn(),
       sendAgentChat: vi.fn(),
+      retryAgentChat: vi.fn(),
+      regenerateAgentChat: vi.fn(),
+      stopAgentChat: vi.fn(),
     },
     streamChat: vi.fn(),
     streamRegenerate: vi.fn(),
@@ -1050,5 +1053,130 @@ describe('ChatPane contextual agent (PLA-401)', () => {
 
     // The full reply lands in the conversation, in place.
     expect(await screen.findByText('Here is how the starter works.')).toBeInTheDocument()
+  })
+
+  it('mints one operation ID per agent send and clears it once the turn settles', async () => {
+    vi.mocked(api.sendAgentChat).mockClear()
+    const transcript: MessageRead[] = []
+    vi.mocked(api.listMessages).mockImplementation(async () => transcript)
+    vi.mocked(api.sendAgentChat).mockImplementation(async () => {
+      transcript.push(
+        message({ id: transcript.length + 1, role: 'user', content: 'A' }),
+        message({ id: transcript.length + 1, role: 'assistant', content: 'Reply A' }),
+      )
+      return {
+        message_id: transcript.at(-1)!.id,
+        content: 'Reply A',
+        stopped: 'complete',
+        detail: 'Complete.',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      }
+    })
+    const user = userEvent.setup()
+    renderAgentPane()
+
+    const box = await screen.findByLabelText('Message Lyra')
+    await user.type(box, 'First question')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+    const firstOp = vi.mocked(api.sendAgentChat).mock.calls[0][6]
+    expect(firstOp).toEqual(expect.any(String))
+
+    // A different question mints a fresh key; the settled first one has been cleared.
+    await user.type(box, 'Second question')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
+    const secondOp = vi.mocked(api.sendAgentChat).mock.calls[1][6]
+    expect(secondOp).toEqual(expect.any(String))
+    expect(secondOp).not.toBe(firstOp)
+  })
+
+  it('keeps the operation ID and restores the text when nothing durable landed', async () => {
+    vi.mocked(api.sendAgentChat).mockClear()
+    vi.mocked(api.listMessages).mockImplementation(async () => [])
+    vi.mocked(api.sendAgentChat).mockRejectedValue(
+      new ApiError(0, 'Could not reach the Lyra service.'),
+    )
+    const user = userEvent.setup()
+    renderAgentPane()
+
+    const box = await screen.findByLabelText('Message Lyra')
+    await user.type(box, 'Lost in the wire')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+    const firstOp = vi.mocked(api.sendAgentChat).mock.calls[0][6]
+
+    // Nothing durable: the question goes back in the box, and re-sending the same words
+    // carries the same operation ID so the server reconciles instead of duplicating.
+    await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe('Lost in the wire'))
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(api.sendAgentChat).mock.calls[1][6]).toBe(firstOp)
+  })
+
+  it('does not offer to re-send a turn whose reply is already durable', async () => {
+    // The transport failed, but the server did commit the question and its reply: the
+    // reconciliation must leave the composer empty rather than invite a duplicate send.
+    vi.mocked(api.sendAgentChat).mockClear()
+    vi.mocked(api.listMessages).mockImplementation(async () => [
+      message({ id: 1, role: 'user', content: 'Durable question' }),
+      message({ id: 2, role: 'assistant', content: 'Durable reply' }),
+    ])
+    vi.mocked(api.sendAgentChat).mockRejectedValue(
+      new ApiError(0, 'Could not reach the Lyra service.'),
+    )
+    const user = userEvent.setup()
+    renderAgentPane()
+
+    const box = await screen.findByLabelText('Message Lyra')
+    await user.type(box, 'Durable question')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+
+    // The reply shows in the transcript, and the composer is left empty.
+    expect(await screen.findByText('Durable reply')).toBeInTheDocument()
+    await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe(''))
+  })
+
+  it('stops the in-flight agent turn through the explicit stop endpoint', async () => {
+    vi.mocked(api.sendAgentChat).mockClear()
+    vi.mocked(api.stopAgentChat).mockClear()
+    let releaseSend: (() => void) | undefined
+    vi.mocked(api.listMessages).mockResolvedValue([])
+    vi.mocked(api.sendAgentChat).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseSend = () =>
+            resolve({
+              message_id: 9,
+              content: 'Too late',
+              stopped: 'complete',
+              detail: 'Complete.',
+              activity: [],
+              source_ids: [],
+              workspace_change_ids: [],
+              command_request_ids: [],
+              profile_fact_ids: [],
+            })
+        }),
+    )
+    vi.mocked(api.stopAgentChat).mockResolvedValue({ stopped: true })
+    const user = userEvent.setup()
+    renderAgentPane()
+
+    const box = await screen.findByLabelText('Message Lyra')
+    await user.type(box, 'Take a while')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+
+    // The turn is in flight: Stop hits the explicit endpoint (the handler cannot see a
+    // fetch abort) and the turn settles as stopped rather than running on unseen.
+    await user.click(await screen.findByLabelText('Stop generating'))
+    await waitFor(() => expect(vi.mocked(api.stopAgentChat)).toHaveBeenCalledWith(1, 7))
+    releaseSend?.()
   })
 })

@@ -323,4 +323,106 @@ test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
     expect(users[0].agent_attempt?.state).toBe('failed')
     expect(msgs.filter((m) => m.role === 'assistant').length).toBe(0)
   })
+
+  test('the browser mints one operation ID per agent send and a fresh one per new message', async ({
+    page,
+  }) => {
+    // PLA-313 in the real product: the ordinary composer carries a browser-minted
+    // operation ID on every agent turn. One logical Send keeps its ID across ambiguous
+    // resubmits (the unit tests cover the retention), and a new message mints a new one.
+    const cls = await createClass('Operation Class')
+    await createSession(cls.id)
+    await clearTutorState()
+    await setTutorMode('normal')
+
+    const operationIds: Array<string | null> = []
+    await page.route('**/api/classes/*/sessions/*/agent-chat', async (route) => {
+      if (route.request().method() === 'POST') {
+        const body = route.request().postDataJSON() as { operation_id?: string } | null
+        operationIds.push(body?.operation_id ?? null)
+      }
+      return route.continue()
+    })
+
+    await navigateToChat(page, cls.id)
+    await sendForced(page, 'First question for the operation ledger.')
+    await expect.poll(async () => operationIds.length, { timeout: 15_000 }).toBe(1)
+    expect(operationIds[0]).toEqual(expect.any(String))
+    expect(typeof operationIds[0]).toBe('string')
+    expect((operationIds[0] as string).length).toBeGreaterThan(0)
+
+    await page.waitForTimeout(1500)
+    await sendForced(page, 'A different question, a different key.')
+    await expect.poll(async () => operationIds.length, { timeout: 15_000 }).toBe(2)
+    expect(operationIds[1]).toEqual(expect.any(String))
+    expect(operationIds[1]).not.toBe(operationIds[0])
+  })
+
+  test('Stop cancels the in-flight agent turn on the real stack and the session stays usable', async ({
+    page,
+  }) => {
+    // The non-streaming agent handler cannot see its client's disconnect, so the product's
+    // Stop is explicit: it posts /agent-chat/stop, the backend cancels the in-flight task,
+    // settles the durable attempt as stopped, and releases the session claim. Proven with the
+    // turn held at the tutor fixture's barrier and the real Stop button in the product UI.
+    const cls = await createClass('Stop Class')
+    const session = await createSession(cls.id)
+    await clearTutorState()
+    await setTutorMode('barrier')
+
+    let stopHits = 0
+    await page.route('**/api/classes/*/sessions/*/agent-chat/stop', async (route) => {
+      stopHits += 1
+      return route.continue()
+    })
+
+    await navigateToChat(page, cls.id)
+    await sendForced(page, 'A turn that will be stopped.')
+    // The turn's model call is held at the barrier: the session claim is live.
+    await waitForBarrier()
+
+    // The real Stop button, not a backend call: the UI posts the explicit stop.
+    await page.getByLabel('Stop generating').click()
+    await expect.poll(async () => stopHits, { timeout: 15_000 }).toBe(1)
+
+    // The durable attempt settled as stopped (not failed, not running), and no reply
+    // was published by the half-run turn.
+    let stopped = false
+    await expect
+      .poll(
+        async () => {
+          const msgs = (await (
+            await fetch(`${BACKEND}/api/sessions/${session.id}/messages`, {
+              headers: LYRA_HEADERS,
+            })
+          ).json()) as Array<{ role: string; agent_attempt?: { state: string } | null }>
+          stopped =
+            msgs.some((m) => m.role === 'user' && m.agent_attempt?.state === 'stopped') &&
+            msgs.filter((m) => m.role === 'assistant').length === 0
+          return stopped
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true)
+
+    // Let the held fixture request settle (it was cancelled mid-flight), switch the fixture
+    // back to normal responses, and the claim is free: the very next turn in the same
+    // conversation runs to completion.
+    await releaseBarrier('It stopped, but the next one lands.')
+    await setTutorMode('normal')
+    await sendForced(page, 'Can you continue now?')
+    await expect
+      .poll(
+        async () => {
+          const msgs = (await (
+            await fetch(`${BACKEND}/api/sessions/${session.id}/messages`, {
+              headers: LYRA_HEADERS,
+            })
+          ).json()) as Array<{ role: string }>
+          return msgs.filter((m) => m.role === 'assistant').length
+        },
+        { timeout: 20_000 },
+      )
+      .toBeGreaterThanOrEqual(1)
+  })
 })

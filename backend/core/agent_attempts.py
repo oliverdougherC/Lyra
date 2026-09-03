@@ -59,19 +59,76 @@ def create_attempt(
     session_id: int,
     user_message_id: int,
     profile: str,
+    mode: str | None = None,
+    document_id: int | None = None,
+    operation_id: str | None = None,
+    commit: bool = True,
 ) -> int:
     """Record a running attempt on one user message and return its id.
 
     Called after the user message is persisted (or, on a retry, resolved) and before the
     tool loop runs, so every run of the model is bracketed by a durable row.
+
+    `mode` and `document_id` persist the turn context the attempt was asked under (the
+    Guide/Show choice and the selected source scope), so a retry or a just-in-time
+    continuation can re-run the turn with the scope it was originally asked with.
+    `operation_id` is the client-generated idempotency key (PLA-313), bound to this session
+    by a unique index: a fresh send stores it, and a retry attempt on an existing message
+    stores None, exactly like the tutor's attempt lifecycle.
+
+    `commit=False` leaves the insert uncommitted so the caller can land it in the same
+    transaction as the user message insert (the fresh-send path); retry and legacy callers
+    keep the default, which commits the attempt row on its own.
     """
     cursor = conn.execute(
-        "insert into agent_turn_attempts (session_id, user_message_id, profile, state) "
-        "values (?, ?, ?, ?)",
-        (session_id, user_message_id, profile, RUNNING),
+        "insert into agent_turn_attempts "
+        "(session_id, user_message_id, profile, state, mode, document_id, operation_id) "
+        "values (?, ?, ?, ?, ?, ?, ?)",
+        (session_id, user_message_id, profile, RUNNING, mode, document_id, operation_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return int(cursor.lastrowid or 0)
+
+
+def find_by_operation_id(
+    conn: sqlite3.Connection, session_id: int, operation_id: str
+) -> dict[str, object] | None:
+    """Find an existing attempt by its client-generated operation_id (PLA-313).
+
+    Returns a dict with `user_message_id`, `attempt_id`, `state`,
+    `assistant_message_id`, `mode`, and `document_id` when a prior attempt committed
+    with the same operation_id in this session; None otherwise. Mirrors the tutor's
+    `tutor_attempts.find_by_operation_id`.
+    """
+    row = conn.execute(
+        "select user_message_id, id as attempt_id, state, "
+        "assistant_message_id, mode, document_id "
+        "from agent_turn_attempts "
+        "where session_id = ? and operation_id = ? "
+        "order by id desc limit 1",
+        (session_id, operation_id),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def find_completed_attempt(
+    conn: sqlite3.Connection, user_message_id: int
+) -> dict[str, object] | None:
+    """The most recent completed attempt on a user message, or None.
+
+    Scans the whole lineage, not just the attempt that carries the operation_id: a retry
+    attempt (`operation_id=None`) may have completed after the original failed, and the
+    replay must hand back that completed reply. Mirrors the tutor's
+    `tutor_attempts.find_completed_attempt`.
+    """
+    row = conn.execute(
+        "select * from agent_turn_attempts "
+        "where user_message_id = ? and state = ? "
+        "order by id desc limit 1",
+        (user_message_id, COMPLETED),
+    ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def mark_completed(conn: sqlite3.Connection, attempt_id: int, assistant_message_id: int) -> None:

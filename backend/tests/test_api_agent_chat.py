@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI, Request
@@ -14,9 +16,16 @@ from fastapi.testclient import TestClient
 
 from backend.api import routes_agent_chat
 from backend.api.routes_agent_chat import AgentTurnCost
-from backend.core import agent_store, app_settings, sessions
+from backend.core import (
+    agent_store,
+    agent_tools,
+    app_settings,
+    sessions,
+    web_research,
+)
 from backend.core.app_settings import TutorAccess, TutorConfig
 from backend.core.errors import LyraError
+from backend.core.query_guard import PrivateContextLedger
 from backend.core.writer_budgets import WriterCapabilities
 from backend.llm import prompts as llm_prompts
 from backend.llm import tools
@@ -52,7 +61,11 @@ def client(db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 
     @app.exception_handler(LyraError)
     async def handle_lyra_error(request: Request, exc: LyraError) -> JSONResponse:
-        return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+        # Mirrors backend.main: structured `extra` fields ride the body beside `detail`.
+        content: dict[str, object] = {"detail": exc.message}
+        if exc.extra:
+            content.update(exc.extra)
+        return JSONResponse(status_code=exc.status, content=content)
 
     app.include_router(routes_agent_chat.router)
     app.dependency_overrides[get_db] = _request_db
@@ -167,9 +180,13 @@ def test_agent_turn_uses_budgeted_history_and_aligns_private_context(
     # The registry that runs the turn is built from the private context that survived the
     # trim - the last build wins, and it is the one aligned with the assembled prompt. The
     # read-only preflight probe (built first, with an empty private context) is what makes
-    # the tool schemas measurable before history is trimmed.
+    # the tool schemas measurable before history is trimmed. The ledger the execution
+    # registry receives snapshots to exactly the prompt's private material: the history
+    # that reached the prompt, plus the question.
     assert seen[0] == ()
-    assert seen[-1] == tuple(rendered) + ("Newest question",)
+    last_context = seen[-1]
+    assert isinstance(last_context, PrivateContextLedger)
+    assert last_context.snapshot() == tuple(rendered) + ("Newest question",)
 
 
 def test_a_scoped_source_grounds_the_agent_turn(
@@ -223,20 +240,89 @@ def test_a_scoped_source_grounds_the_agent_turn(
     assert "signals.pdf" in system_prompt
 
 
-def test_an_unscoped_agent_turn_does_not_retrieve(
+def test_an_unscoped_agent_turn_retrieves_class_wide_like_the_tutor(
     client: TestClient,
     db: sqlite3.Connection,
     class_id: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Without a scoped source the turn works from tools and history; retrieval never runs."""
+    """A turn without a selected document retrieves class-wide, exactly like the tutor.
+
+    An absent `document_id` is the composer's "all material" scope: the whole class's
+    indexed material is in play, and the best-matching chunks ground the turn as fixed
+    system material. Retrieval is not a scoped-only feature that stays switched off.
+    """
     session_id = int(sessions.create_session(db, class_id)["id"])
-    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Tools-only answer."))
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Grounded answer."))
 
-    def fail_retrieve(*args: object, **kwargs: object) -> RetrievalResult:
-        raise AssertionError("retrieval must not run for an unscoped agent turn")
+    chunk = RetrievedChunk(
+        chunk_id=1,
+        document_id=7,
+        content="Convolution combines two signals.",
+        token_count=6,
+        page_number=1,
+        section_title="Convolution",
+        section_path="ch2/convolution",
+        section_number="2.1",
+        problem_number=None,
+        part_index=None,
+        filename="signals.pdf",
+        similarity=0.9,
+        score=0.9,
+    )
+    seen_documents: list[int | None] = []
 
-    monkeypatch.setattr(routes_agent_chat, "retrieve", fail_retrieve)
+    def fake_retrieve(  # noqa: ANN001
+        conn: object,
+        class_id_: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        seen_documents.append(document_id)
+        return RetrievalResult(chunks=[chunk], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", fake_retrieve)
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Explain convolution"},  # no document_id: "all material"
+    )
+
+    assert response.status_code == 200, response.text
+    # Class-wide, not skipped: the retrieval ran with no document filter.
+    assert seen_documents == [None]
+    system_prompt = str(captured["messages"][0]["content"])
+    assert "Convolution combines two signals." in system_prompt
+    assert "signals.pdf" in system_prompt
+
+
+def test_an_empty_retrieval_is_a_valid_agent_turn(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A class-wide search that matches nothing is a valid turn, not an error.
+
+    The turn proceeds on history, the prompt contract, and tools: no source section is
+    rendered, and the answer still commits as an ordinary class-conversation reply.
+    """
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="From history and tools."))
+    seen_documents: list[int | None] = []
+
+    def fake_retrieve(  # noqa: ANN001
+        conn: object,
+        class_id_: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        seen_documents.append(document_id)
+        return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", fake_retrieve)
 
     response = client.post(
         f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
@@ -244,7 +330,11 @@ def test_an_unscoped_agent_turn_does_not_retrieve(
     )
 
     assert response.status_code == 200, response.text
+    assert seen_documents == [None]
+    # No source section rendered for a matchless search; the answer still lands.
     assert "signals.pdf" not in str(captured["messages"][0]["content"])
+    messages = sessions.list_messages(db, session_id)
+    assert [message["role"] for message in messages] == ["user", "assistant"]
 
 
 def test_an_incomplete_agent_turn_returns_a_retry_contract_without_storing_a_reply(
@@ -744,8 +834,10 @@ def test_a_20000_character_prompt_is_refused_at_the_default_window_but_fits_a_la
     # generation reserve and the tool schema, that does not fit the default 8,192 window, so
     # it is refused; a 16,384 window has room, so the same message is answered. The refusal
     # is the current message being charged: without it, the fixed material fits the small
-    # window with thousands of tokens to spare.
-    prompt = "q" * 20_000
+    # window with thousands of tokens to spare. Worded (not one unbroken run), because the
+    # question now also rides the retrieval query and an un-splittable run is an embedding
+    # failure, not a turn-shape problem.
+    prompt = "word " * 4_000
     fixed_without_question = (
         2048 + estimate_tokens(routes_agent_chat._SYSTEM_PROMPTS["code"]) + 1055
     )
@@ -769,8 +861,9 @@ def test_a_20000_character_prompt_is_refused_at_the_default_window_but_fits_a_la
         json={"content": prompt, "profile": "code"},
     )
     assert ok.status_code == 200, ok.text
-    # The whole message survived into the prompt - it is never silently truncated.
-    assert captured["messages"][-1] == {"role": "user", "content": prompt}
+    # The whole message survived into the prompt - it is never silently truncated
+    # (the request's documented strip is the only change, exactly as in the tutor route).
+    assert captured["messages"][-1] == {"role": "user", "content": prompt.strip()}
 
 
 def test_oversized_tool_overhead_refuses_the_turn_before_any_effect(
@@ -1456,3 +1549,517 @@ def test_the_agent_prompt_keeps_the_conversations_guide_show_contract(
     assert llm_prompts.mode_contract("show") in prompt
     # Only one contract rides the turn: the guide contract does not linger in show work.
     assert llm_prompts.mode_contract("guide") not in prompt
+
+
+# ---------------------------------------------------------------------------
+# Final-parity regressions: full tutor system contract, private-context guard,
+# scope persistence through retry/regenerate, and operation IDs.
+# ---------------------------------------------------------------------------
+
+
+def _facts(db: sqlite3.Connection, class_id: int) -> None:
+    """One active class fact, one active user fact, and one unconfirmed proposal."""
+    db.execute(
+        "insert into profile_facts (class_id, kind, label, value, confidence, confirmed) "
+        "values (?, 'note', 'style', 'prefers visual proofs', 'high', 1)",
+        (class_id,),
+    )
+    db.execute(
+        "insert into profile_facts (class_id, kind, label, value, confidence, confirmed) "
+        "values (null, 'note', 'goal', 'audits changes before merging', 'high', 1)"
+    )
+    db.execute(
+        "insert into profile_facts (class_id, kind, label, value, confidence, confirmed) "
+        "values (?, 'note', 'rumor', 'unconfirmed scheduling detail', 'low', 0)",
+        (class_id,),
+    )
+    db.commit()
+
+
+def test_the_agent_turn_builds_on_the_full_tutor_system_prompt(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The contextual agent turn rides the FULL tutor system prompt - base rules, the mode
+    # contract, and the active facts - with only the capability layer added on top. Active
+    # class and user facts enter; an unconfirmed proposal does not.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    _facts(db, class_id)
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Help me"},
+    )
+
+    assert response.status_code == 200, response.text
+    prompt = str(captured["messages"][0]["content"])
+    assert "prefers visual proofs" in prompt
+    assert "audits changes before merging" in prompt
+    # The unconfirmed, low-confidence proposal is not active material.
+    assert "unconfirmed scheduling detail" not in prompt
+
+
+def test_the_guide_show_contract_appears_exactly_once_in_the_agent_prompt(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Guide/Show is owned by the shared tutoring prompt. The agent layer adds capability
+    # wording, never a second restatement of the contract: it appears exactly once.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Help me", "mode": "guide"},
+    )
+
+    assert response.status_code == 200, response.text
+    prompt = str(captured["messages"][0]["content"])
+    assert prompt.count(llm_prompts.mode_contract("guide")) == 1
+    assert llm_prompts.mode_contract("show") not in prompt
+
+
+def test_a_retrieved_chunk_seeds_the_web_query_guard_before_the_network(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # A turn that retrieves private material must guard a later search_web against it,
+    # refusing before the network is touched. The retrieved chunk enters the run-local
+    # ledger at planning; the guard reads the ledger at dispatch.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    app_settings.update_settings_row(db, {"allow_web_research": 1})
+    chunk_text = (
+        "The Meridian ledger holds four thousand one hundred and twelve unposted "
+        "entries for the autumn close."
+    )
+    chunk = RetrievedChunk(
+        chunk_id=1,
+        document_id=7,
+        content=chunk_text,
+        token_count=16,
+        page_number=1,
+        section_title=None,
+        section_path=None,
+        section_number=None,
+        problem_number=None,
+        part_index=None,
+        filename="notes.md",
+        similarity=0.9,
+        score=0.9,
+    )
+
+    def fake_retrieve(  # noqa: ANN001
+        conn: object,
+        class_id_: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        return RetrievalResult(chunks=[chunk], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", fake_retrieve)
+
+    network_calls: list[str] = []
+
+    def recording_search(query: str, **kwargs: object) -> list[dict[str, str]]:
+        network_calls.append(query)
+        return []
+
+    monkeypatch.setattr(web_research, "search_web", recording_search)
+
+    async def tool_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        registry = kwargs["registry"]
+        # The model asks for exactly the private material it just saw retrieved.
+        outcome = registry["search_web"].handler(
+            query="the meridian ledger holds unposted entries for the autumn close"
+        )
+        assert outcome.ok is False
+        return tools.ToolLoopResult(content="Search refused by policy.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", tool_loop)
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Summarize the ledger status"},
+    )
+
+    assert response.status_code == 200, response.text
+    # The overlap was caught by the guard, never by the network.
+    assert network_calls == []
+
+
+def test_a_workspace_read_mid_turn_seeds_the_web_query_guard(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # Content a workspace read surfaces mid-turn is private from that point on: a search_web
+    # later in the same turn that repeats it is refused before the network, even though the
+    # material was not present when the turn was planned.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    app_settings.update_settings_row(db, {"allow_web_research": 1})
+    root = tmp_path / "repo"
+    root.mkdir()
+    file_text = (
+        "Internal note: the Meridian ledger holds four thousand one hundred and twelve "
+        "unposted entries for the autumn close."
+    )
+    (root / "ledger.md").write_text(file_text, encoding="utf-8")
+    agent_store.attach_workspace(db, class_id, root_path=str(root))
+    agent_store.update_workspace_grants(db, class_id, read_enabled=True)
+
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "retrieve",
+        lambda conn, class_id_, query, budget_tokens, document_id=None: RetrievalResult(
+            chunks=[], trimmed=False, omitted_document_count=0
+        ),
+    )
+
+    network_calls: list[str] = []
+
+    def recording_search(query: str, **kwargs: object) -> list[dict[str, str]]:
+        network_calls.append(query)
+        return []
+
+    monkeypatch.setattr(web_research, "search_web", recording_search)
+
+    async def tool_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        registry = kwargs["registry"]
+        read = registry["read_workspace_file"].handler(relative_path="ledger.md")
+        assert read.ok is True
+        # A later search repeats what the read just surfaced.
+        outcome = registry["search_web"].handler(
+            query="the meridian ledger holds unposted entries for the autumn close"
+        )
+        assert outcome.ok is False
+        return tools.ToolLoopResult(content="Search refused by policy.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", tool_loop)
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Check the ledger and tell me its status"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert network_calls == []
+
+
+def test_the_guarded_context_is_never_persisted(
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # The ledger is run-local: the private material it guards with is never written to the
+    # database. A refused search leaves an audit row naming the refusal, but the corpus it
+    # compared against - document text, workspace file contents - appears nowhere durable.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    app_settings.update_settings_row(db, {"allow_web_research": 1})
+    root = tmp_path / "repo"
+    root.mkdir()
+    file_text = (
+        "Internal note: the Meridian ledger holds four thousand one hundred and twelve "
+        "unposted entries for the autumn close."
+    )
+    (root / "ledger.md").write_text(file_text, encoding="utf-8")
+    agent_store.attach_workspace(db, class_id, root_path=str(root))
+    agent_store.update_workspace_grants(db, class_id, read_enabled=True)
+
+    registry, _ = agent_tools.build_agent_registry(db, class_id, session_id, "agent")
+    registry["read_workspace_file"].handler(relative_path="ledger.md")
+    result = registry["search_web"].handler(
+        query="the meridian ledger holds unposted entries for the autumn close"
+    )
+
+    assert result.ok is False
+    # Nothing durable carries the private corpus.
+    blob = " ".join(
+        str(row["arguments_json"])
+        for row in db.execute("select arguments_json from tool_audit_events")
+    )
+    assert "four thousand one hundred and twelve" not in blob
+    for table in ("messages", "agent_turn_attempts", "tool_audit_events"):
+        rows = db.execute(f"select * from {table}").fetchall()  # noqa: S608 - fixed table names
+        for row in rows:
+            for key in row.keys():  # noqa: SIM118 - sqlite3.Row keys
+                value = row[key]
+                if isinstance(value, (str, bytes)):
+                    assert "four thousand one hundred and twelve" not in str(value)
+
+
+def test_a_retry_reuses_the_scope_the_turn_was_asked_under(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Retry re-answers the same logical turn: the source scope (document filter) and the
+    # Guide/Show mode are persisted on the attempt and win over the (absent) body.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    seen_documents: list[int | None] = []
+
+    def fake_retrieve(  # noqa: ANN001
+        conn: object,
+        class_id_: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        seen_documents.append(document_id)
+        return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", fake_retrieve)
+
+    # A send scoped to a document, in show mode, that fails.
+    async def failing_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        return tools.ToolLoopResult(content="", stopped=tools.TIMEOUT, detail="slow")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", failing_loop)
+    refused = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Explain the close", "mode": "show", "document_id": 7},
+    )
+    assert refused.status_code == 504, refused.text
+
+    # The retry runs the same scope: the document filter and the mode the turn was asked with.
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Answered."))
+    retry = client.post(f"/api/classes/{class_id}/sessions/{session_id}/agent-chat/retry")
+    assert retry.status_code == 200, retry.text
+    assert seen_documents == [7, 7]
+    prompt = str(captured["messages"][0]["content"])
+    assert llm_prompts.mode_contract("show") in prompt
+    assert llm_prompts.mode_contract("guide") not in prompt
+
+
+def test_a_regeneration_uses_the_current_selection(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A manual regeneration carries the CURRENT Guide/Show selection and source scope (like
+    # the tutor's) and uses them; it re-answers and supersedes, leaving one reply.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    seen_documents: list[int | None] = []
+
+    def fake_retrieve(  # noqa: ANN001
+        conn: object,
+        class_id_: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        seen_documents.append(document_id)
+        return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", fake_retrieve)
+
+    _stub_loop(monkeypatch, tools.ToolLoopResult(content="First reply."))
+    r1 = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Explain the close", "mode": "guide"},
+    )
+    assert r1.status_code == 200, r1.text
+
+    # The student now regenerates in show mode, scoped to a document.
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Second reply."))
+    r2 = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat/regenerate",
+        json={"mode": "show", "document_id": 7},
+    )
+    assert r2.status_code == 200, r2.text
+    assert seen_documents == [None, 7]
+    prompt = str(captured["messages"][0]["content"])
+    assert llm_prompts.mode_contract("show") in prompt
+    assert llm_prompts.mode_contract("guide") not in prompt
+    # One reply: the superseded one is removed the moment the new one commits.
+    messages = sessions.list_messages(db, session_id)
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert messages[-1]["content"] == "Second reply."
+
+
+def test_an_operation_id_replays_the_completed_turn_without_rerunning(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # PLA-313: a completed send re-submitted with the same operation_id replays the stored
+    # reply - zero model/tool work, exactly one durable user message and one reply.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    calls = 0
+
+    async def counting_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        nonlocal calls
+        calls += 1
+        return tools.ToolLoopResult(content="Once.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", counting_loop)
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "retrieve",
+        lambda conn, class_id_, query, budget_tokens, document_id=None: RetrievalResult(
+            chunks=[], trimmed=False, omitted_document_count=0
+        ),
+    )
+    url = f"/api/classes/{class_id}/sessions/{session_id}/agent-chat"
+
+    r1 = client.post(url, json={"content": "Explain", "operation_id": "op-1"})
+    assert r1.status_code == 200, r1.text
+    r2 = client.post(url, json={"content": "Explain", "operation_id": "op-1"})
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["message_id"] == r1.json()["message_id"]
+    assert calls == 1, "the replay must not re-run the model"
+
+    user_msgs = db.execute(
+        "select id from messages where session_id = ? and role = 'user'", (session_id,)
+    ).fetchall()
+    asst_msgs = db.execute(
+        "select id from messages where session_id = ? and role = 'assistant'", (session_id,)
+    ).fetchall()
+    assert len(user_msgs) == 1
+    assert len(asst_msgs) == 1
+
+
+def test_an_operation_id_mismatch_is_structured(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Reusing an operation_id for a genuinely different request is a client bug, refused with
+    # a structured code the client can tell apart from the ordinary conversation-busy 409.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+
+    async def counting_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        return tools.ToolLoopResult(content="Answer.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", counting_loop)
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "retrieve",
+        lambda conn, class_id_, query, budget_tokens, document_id=None: RetrievalResult(
+            chunks=[], trimmed=False, omitted_document_count=0
+        ),
+    )
+    url = f"/api/classes/{class_id}/sessions/{session_id}/agent-chat"
+
+    r1 = client.post(url, json={"content": "question A", "operation_id": "op-code"})
+    assert r1.status_code == 200, r1.text
+    r2 = client.post(url, json={"content": "question B", "operation_id": "op-code"})
+    assert r2.status_code == 409
+    assert r2.json()["code"] == "operation_id_mismatch"
+
+
+def test_a_failed_operation_reruns_without_a_duplicate_message(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A send whose only attempt failed, re-submitted with the same operation_id and content,
+    # re-runs the turn under a fresh attempt but keeps the single durable user message.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    state = {"count": 0}
+
+    async def flaky_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        state["count"] += 1
+        if state["count"] == 1:
+            return tools.ToolLoopResult(content="", stopped=tools.TIMEOUT, detail="slow")
+        return tools.ToolLoopResult(content="Recovered.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", flaky_loop)
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "retrieve",
+        lambda conn, class_id_, query, budget_tokens, document_id=None: RetrievalResult(
+            chunks=[], trimmed=False, omitted_document_count=0
+        ),
+    )
+    url = f"/api/classes/{class_id}/sessions/{session_id}/agent-chat"
+
+    r1 = client.post(url, json={"content": "Explain", "operation_id": "op-fail"})
+    assert r1.status_code == 504, r1.text
+    r2 = client.post(url, json={"content": "Explain", "operation_id": "op-fail"})
+    assert r2.status_code == 200, r2.text
+    assert r2.json()["content"] == "Recovered."
+    assert state["count"] == 2
+    user_msgs = db.execute(
+        "select id from messages where session_id = ? and role = 'user'", (session_id,)
+    ).fetchall()
+    assert len(user_msgs) == 1, "the re-run must not append a duplicate question"
+
+
+async def test_the_stop_endpoint_cancels_the_inflight_turn(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The non-streaming handler cannot see its own client disconnect, so the UI's Stop is
+    # explicit: it cancels the in-flight task, which settles the durable attempt as stopped
+    # and releases the per-session claim - no hidden side effect, the turn is retryable. A
+    # session with nothing in flight is simply "nothing to stop".
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    db.execute(
+        "update settings set endpoint_url = 'http://127.0.0.1:8080/v1', tools_supported = 1 "
+        "where id = 1"
+    )
+    db.commit()
+    started = asyncio.Event()
+
+    async def blocking_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        started.set()
+        await asyncio.sleep(30)
+        return tools.ToolLoopResult(content="too late")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", blocking_loop)
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "retrieve",
+        lambda conn, class_id_, query, budget_tokens, document_id=None: RetrievalResult(
+            chunks=[], trimmed=False, omitted_document_count=0
+        ),
+    )
+
+    conn_a, conn_b = connect(), connect()
+    try:
+        turn = asyncio.ensure_future(
+            routes_agent_chat.send_agent_chat(
+                class_id,
+                session_id,
+                routes_agent_chat.AgentChatRequest(content="Take a while"),
+                conn_a,
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=5.0)
+
+        # Explicit stop on the in-flight turn.
+        stopped = await routes_agent_chat.stop_agent_chat(class_id, session_id, conn_b)
+        assert stopped == {"stopped": True}
+
+        # The stopped turn settles: attempt stopped, claim released, no hidden work left.
+        # The request itself completes normally with a bounded "stopped" body - it never
+        # surfaces as a bare cancellation, because a cancelled request task would leave the
+        # HTTP middleware with no response and log a 500.
+        turn_result = await asyncio.wait_for(asyncio.shield(turn), timeout=5.0)
+    finally:
+        conn_a.close()
+        conn_b.close()
+
+    assert isinstance(turn_result, JSONResponse)
+    assert json.loads(turn_result.body)["stopped"] == "stopped"
+    assert sessions.active_turn(session_id) is None
+    row = db.execute("select state from agent_turn_attempts order by id desc limit 1").fetchone()
+    assert row["state"] == "stopped"
+
+    # Nothing in flight now: a further stop is a no-op, not an error.
+    conn_c = connect()
+    try:
+        again = await routes_agent_chat.stop_agent_chat(class_id, session_id, conn_c)
+    finally:
+        conn_c.close()
+    assert again == {"stopped": False}

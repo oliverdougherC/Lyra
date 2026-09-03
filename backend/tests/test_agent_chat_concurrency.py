@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -409,8 +410,9 @@ def test_a_planning_failure_releases_the_session_and_persists_no_user_turn(
 async def test_cancellation_mid_loop_releases_the_session(
     db: sqlite3.Connection, class_id: int, session_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A client disconnect cancels the handler coroutine at the loop await; the finally must
-    release the claim so the session is usable again."""
+    """A stop cancels the in-flight turn mid tool-loop. The route must settle the attempt
+    as stopped, release the session claim, and still complete the request with a bounded
+    response - a request task that dies without one makes the HTTP middleware log a 500."""
     entered = asyncio.Event()
 
     async def hangs(*args: object, **kwargs: object) -> tools.ToolLoopResult:
@@ -426,11 +428,16 @@ async def test_cancellation_mid_loop_releases_the_session(
             routes_agent_chat.send_agent_chat(class_id, session_id, payload, conn)
         )
         await asyncio.wait_for(entered.wait(), timeout=5.0)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        # Stop the in-flight turn through the real endpoint (it cancels the turn task, not
+        # the request task, so the request itself can still settle with a response).
+        stopped = await routes_agent_chat.stop_agent_chat(class_id, session_id, conn)
+        assert stopped == {"stopped": True}
+        # The request completes with a bounded "stopped" body, not a bare cancellation.
+        result = await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
     finally:
         conn.close()
+    assert isinstance(result, JSONResponse)
+    assert json.loads(result.body)["stopped"] == "stopped"
     assert sessions.active_turn(session_id) is None
     # The cancelled turn is settled truthfully, not left reading as forever in flight, so
     # the transcript can offer Retry instead of a perpetual spinner.
@@ -1468,7 +1475,7 @@ async def test_two_retries_cannot_overlap(
     )
 
     def retry(conn: sqlite3.Connection):
-        return routes_agent_chat.retry_agent_chat(class_id, session_id, conn)
+        return routes_agent_chat.retry_agent_chat(conn, class_id, session_id)
 
     first, second = await _run_two_overlapping(class_id, session_id, monkeypatch, retry, retry)
     # One retry ran; the other hit the shared claim and was refused deterministically.
@@ -1491,7 +1498,7 @@ async def test_a_retry_racing_a_new_turn_obeys_the_shared_claim(
     )
 
     def retry(conn: sqlite3.Connection):
-        return routes_agent_chat.retry_agent_chat(class_id, session_id, conn)
+        return routes_agent_chat.retry_agent_chat(conn, class_id, session_id)
 
     def new_turn(conn: sqlite3.Connection):
         return routes_agent_chat.send_agent_chat(

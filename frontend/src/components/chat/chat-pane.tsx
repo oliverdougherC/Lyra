@@ -244,6 +244,10 @@ export function ChatPane({
   const submittedTextRef = useRef<string | null>(null)
   const operationIdRef = useRef<string | null>(null)
   const responseAcceptedRef = useRef(false)
+  // Whether the turn in flight is a contextual agent turn. Stop must do more than abort a
+  // local fetch for these: the non-streaming handler cannot see its client's disconnect,
+  // so the server-side cancellation (attempt settled, claim released) is explicit.
+  const agentTurnRef = useRef(false)
 
   const newestSession = useMemo(
     () => (sessions && sessions.length > 0 ? [...sessions].sort((a, b) => b.id - a.id)[0] : null),
@@ -449,6 +453,7 @@ export function ChatPane({
       turnSessionRef.current = turnSessionId
       setDetached(false)
       settledRef.current = false
+      agentTurnRef.current = Boolean(agent)
       outcomeRef.current = 'active'
       revealDrainedRef.current = false
       streamTextRef.current = ''
@@ -554,9 +559,16 @@ export function ChatPane({
           try {
             const result =
               kind === 'tutor-retry'
-                ? await api.retryAgentChat(classId, turnSessionId)
+                ? await api.retryAgentChat(classId, turnSessionId, undefined, controller.signal)
                 : kind === 'regenerate'
-                  ? await api.regenerateAgentChat(classId, turnSessionId)
+                  ? await api.regenerateAgentChat(
+                      classId,
+                      turnSessionId,
+                      // A manual regeneration uses the CURRENT selection, like the tutor's;
+                      // a body-less one (the just-in-time continuation) keeps the stored scope.
+                      { mode: activeMode, documentId: agentDocumentId },
+                      controller.signal,
+                    )
                   : await api.sendAgentChat(
                       classId,
                       turnSessionId,
@@ -564,8 +576,21 @@ export function ChatPane({
                       undefined,
                       agentDocumentId,
                       activeMode,
+                      // PLA-313: one operation ID per logical Send. It is minted by `send`
+                      // and retained across ambiguous failures so a resubmit reconciles
+                      // instead of duplicating.
+                      operationIdRef.current ?? undefined,
+                      controller.signal,
                     )
             onEvent({ type: 'done', message_id: result.message_id })
+            if (kind === 'send') {
+              // The operation is durably settled: the reply committed (or the failure is
+              // durable), so the key is spent. A retry or regeneration must never clear a
+              // key an earlier ambiguous send still owns.
+              responseAcceptedRef.current = true
+              submittedTextRef.current = null
+              operationIdRef.current = null
+            }
           } catch (err) {
             // The turn's truth is durable on the server either way: a failed attempt row, or
             // a committed reply whose acceptance the transport lost. Refresh the transcript
@@ -574,6 +599,29 @@ export function ChatPane({
             await invalidateAgentTurnCaches(queryClient, classId, turnSessionId).catch(
               () => undefined,
             )
+            // PLA-313 reconciliation after an ambiguous transport failure: decide from the
+            // durable state what actually landed. A committed user message with a reply
+            // means the turn is durable - the transcript already shows both, so the
+            // composer must not offer to send the question again. A landed question with a
+            // failed or stopped attempt leaves the text restorable: re-sending the same
+            // words carries the same operation ID, so the server re-runs the turn under the
+            // stored message instead of appending a duplicate.
+            if (kind === 'send' && err instanceof ApiError && err.status !== 409) {
+              const durable = await api.listMessages(turnSessionId).catch(() => null)
+              if (durable !== null) {
+                const lastUser = [...durable]
+                  .reverse()
+                  .find((item) => item.role === 'user' && item.content === content)
+                if (
+                  lastUser &&
+                  durable.some((item) => item.role === 'assistant' && item.id > lastUser.id)
+                ) {
+                  // Durable question + stored reply: show it, do not re-send it. The
+                  // operation ID stays minted so an identical later Send replays it.
+                  submittedTextRef.current = null
+                }
+              }
+            }
             throw err
           }
           await invalidateAgentTurnCaches(queryClient, classId, turnSessionId).catch(
@@ -780,8 +828,15 @@ export function ChatPane({
       revealDrainedRef.current = true
       setRevealDrained(true)
     }
+    // The contextual agent's turn is non-streaming: its server handler cannot see this
+    // fetch being aborted, so the explicit /stop is what actually cancels the work -
+    // settling the durable attempt as stopped and releasing the session claim, with the
+    // turn left retryable. The local abort still stands down the UI either way.
+    if (agentTurnRef.current && turnSessionRef.current !== null) {
+      void api.stopAgentChat(classId, turnSessionRef.current).catch(() => undefined)
+    }
     abortRef.current.abort()
-  }, [setOutcome])
+  }, [classId, setOutcome])
 
   /**
    * Called by the streaming renderer whenever its reveal queue drains. Mid-stream

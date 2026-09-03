@@ -245,7 +245,7 @@ function HunkCard({
   )
 }
 
-function ChangeStateBadge({ state }: { state: WorkspaceChangeReview['state'] }) {
+export function ChangeStateBadge({ state }: { state: WorkspaceChangeReview['state'] }) {
   return (
     <Badge
       variant={

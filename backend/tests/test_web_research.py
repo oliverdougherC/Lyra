@@ -195,7 +195,14 @@ def test_fetch_source_surfaces_per_url_crawl_failure() -> None:
         )
 
 
-def test_missing_exa_key_is_distinct_from_disabled() -> None:
+def test_missing_exa_key_is_distinct_from_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The key lookup is pinned to "none stored" so the test is hermetic: on a developer
+    # machine the keyring holds a real Exa key, and the autouse data-dir fixture cannot
+    # isolate it.
+    monkeypatch.setattr(web_research.secrets, "get_exa_api_key", lambda: None)
+
     with pytest.raises(web_research.WebResearchDisabledError, match="disabled for this class"):
         web_research.search_web("evidence", allowed=False, resolver=_public_resolver)
 
