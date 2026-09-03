@@ -1,21 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Bot } from 'lucide-react'
 import { useParams, useRouter, useSearchParams } from '@/router/hooks'
 
-import { AgentPanel } from '@/components/agent/agent-panel'
+import { AgentWorkSurface } from '@/components/agent/work-surface'
 import { ChatPane } from '@/components/chat/chat-pane'
 import { SourceContext } from '@/components/chat/source-context'
 import { useFullBleed } from '@/components/layout/page-chrome'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { readChatHandoff, stripChatHandoff } from '@/lib/handoff'
 import { useClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
-import { useLocalStorageState } from '@/lib/hooks/use-local-storage-state'
-import { useMediaQuery } from '@/lib/hooks/use-media-query'
 
 function readClassId(value: string | string[] | undefined): number | null {
   const raw = Array.isArray(value) ? value[0] : value
@@ -31,18 +27,14 @@ function readSessionId(value: string | null): number | null {
   return Number.isSafeInteger(sessionId) && sessionId > 0 ? sessionId : null
 }
 
-function parseOpen(raw: string): boolean {
-  return raw === 'true'
-}
-
 /**
- * The class conversation, alone in the window.
+ * The class conversation, alone in the window - and the agent's only surface.
  *
  * The workspace is the page here: the whole window is the workbench, and the only
  * question it owns is which material the answer reads. The documents column moved out to
- * the class Files tab. The agent column stays as a temporary compatibility bridge (see
- * below): its replacement is the contextual agent in #65, and until that is merged the
- * existing entry point must keep working.
+ * the class Files tab. The contextual agent works in this same conversation: it plans a
+ * task's tools on its own, asks just-in-time for the access a task needs, and returns its
+ * edits, commands, and activity through the work surface above the transcript.
  */
 export default function ClassWorkspacePage() {
   const params = useParams<{ id: string }>()
@@ -66,17 +58,6 @@ export default function ClassWorkspacePage() {
     const query = stripped.toString()
     router.replace(`/classes/${classId}/chat${query ? `?${query}` : ''}`, { scroll: false })
   }, [classId, router, searchParams])
-
-  // ── Temporary Agent compatibility bridge (removed by #65) ─────────────────────────
-  // This page used to be the agent's only door: a header toggle opening the AgentPanel
-  // column, a workspace tab below 1024px. #64 removes the surrounding chrome (documents
-  // column, Solve button) but not this door, because #65's contextual agent does not exist
-  // yet and main must never lose a working capability. It is kept deliberately un-
-  // prominent - the same ghost button and column it was - and #65 deletes it when the
-  // replacement entry point lands.
-  const compact = useMediaQuery('(max-width: 1023px)')
-  const agentStorageKey = `lyra-workspace-agent-open-${classId ?? 'unknown'}`
-  const [agentOpen, setAgentOpen] = useLocalStorageState(agentStorageKey, false, parseOpen)
 
   // The conversation is part of the URL so sidebar chats are linkable and reloadable.
   // The URL is the only source of truth here: mirroring it into state meant every
@@ -150,11 +131,15 @@ export default function ClassWorkspacePage() {
   )
 
   // The conversation is part of the URL so sidebar chats are linkable and reloadable.
+  // It speaks to the contextual agent: one ordinary conversation surface, the same way a
+  // student types a question - the agent plans the work, asks just-in-time for access,
+  // and returns its results through the work surface above the transcript.
   const chat = (
     <ChatPane
       key={classId}
       classId={classId}
       className={className}
+      agent
       selectedDocumentId={selectedDocumentId}
       sessionId={sessionId}
       draft={draftSession}
@@ -162,62 +147,17 @@ export default function ClassWorkspacePage() {
       initialSend={handoff.send}
       sourceControl={sourceControl}
       onSessionIdChange={handleSessionIdChange}
-      headerActions={
-        // The bridge's door on the desktop layout: the toggle the pre-#64 workspace had.
-        compact ? null : (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8"
-            aria-expanded={agentOpen}
-            aria-controls="agent-pane-body"
-            onClick={() => setAgentOpen(!agentOpen)}
-          >
-            <Bot aria-hidden className="size-3.5" />
-            Agent
-          </Button>
-        )
-      }
     />
   )
 
-  if (compact) {
-    // Below the rail line the agent is a pane of the workspace, exactly as it was before
-    // this pass: Chat and Agent share the window, one at a time.
-    return (
-      <div className="flex min-h-0 flex-1 flex-col">
-        <Tabs defaultValue="chat" className="min-h-0 flex-1 gap-0 overflow-hidden bg-background">
-          <TabsList variant="line" aria-label="Workspace panes" className="px-4">
-            <TabsTrigger value="chat">Chat</TabsTrigger>
-            <TabsTrigger value="agent">Agent</TabsTrigger>
-          </TabsList>
-          <TabsContent
-            value="chat"
-            className="mt-0 min-h-0 flex-1 overflow-hidden rounded-none border-0"
-          >
-            {chat}
-          </TabsContent>
-          <TabsContent
-            value="agent"
-            className="mt-0 min-h-0 flex-1 overflow-hidden rounded-none border-0"
-          >
-            <AgentPanel classId={classId} sessionId={sessionId} />
-          </TabsContent>
-        </Tabs>
-      </div>
-    )
-  }
-
-  // The conversation is the page; the agent column is the bridge's other half, docked to
-  // its right, as before this pass.
+  // One column: the agent's contextual work surface - thin when idle, expanding for live
+  // work - sits above the transcript it belongs to. No tabs, no docked column, no toggle:
+  // the conversation is the surface, and the agent's access requests, edits, commands, and
+  // activity are part of it.
   return (
-    <div className="flex min-h-0 flex-1 overflow-hidden bg-background">
-      <div className="min-w-0 flex-1">{chat}</div>
-      {agentOpen ? (
-        <div id="agent-pane-body" className="w-[420px] shrink-0 border-l">
-          <AgentPanel classId={classId} sessionId={sessionId} onClose={() => setAgentOpen(false)} />
-        </div>
-      ) : null}
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
+      <AgentWorkSurface classId={classId} sessionId={sessionId} />
+      <div className="min-h-0 flex-1">{chat}</div>
     </div>
   )
 }

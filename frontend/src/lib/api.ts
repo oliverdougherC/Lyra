@@ -623,11 +623,22 @@ export const api = {
       { signal },
     ),
 
-  sendAgentChat: (classId: number, sessionId: number, content: string, profile?: AgentProfile) =>
+  sendAgentChat: (
+    classId: number,
+    sessionId: number,
+    content: string,
+    profile?: AgentProfile,
+    documentId?: number | null,
+  ) =>
     requestJson<AgentChatResult>(`/api/classes/${classId}/sessions/${sessionId}/agent-chat`, {
       method: 'POST',
-      // The contextual turn omits the profile: the backend plans it (Workstream C).
-      body: profile ? { content, profile } : { content },
+      // The contextual turn omits the profile: the backend plans it (Workstream C). A scoped
+      // source, when the student selects one, grounds the turn like the tutor's context.
+      body: {
+        content,
+        ...(profile ? { profile } : null),
+        ...(documentId != null ? { document_id: documentId } : null),
+      },
       errorFactory: agentChatErrorFactory,
     }),
 

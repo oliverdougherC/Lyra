@@ -36,6 +36,7 @@ from backend.llm.turn_budget import (
     mandatory_history_tokens,
     plan_budget,
 )
+from backend.rag.retrieve import RetrievedChunk, retrieve
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import get_db
 
@@ -122,6 +123,10 @@ class AgentChatRequest(BaseModel):
     # Omitted for the contextual turn: Lyra plans the profile internally. Legacy
     # callers may still name one of the isolated profiles.
     profile: Literal["research", "code", "command", "agent"] | None = None
+    # The source the student scoped for this turn, like the tutor's document scoping.
+    # When set, retrieved chunks from that document ground the turn as fixed system
+    # material; when absent the agent works from its tools and prior history.
+    document_id: int | None = None
 
     @property
     def resolved_profile(self) -> Literal["research", "code", "command", "agent"]:
@@ -354,6 +359,42 @@ def _require_request_fits(
         raise LyraError(_TOO_LARGE_MESSAGE)
 
 
+def _source_context_entry(chunk: RetrievedChunk) -> dict[str, object]:
+    """The dict shape `format_context_block` labels a retrieved chunk from."""
+    return {
+        "content": chunk.content,
+        "filename": chunk.filename,
+        "page_number": chunk.page_number,
+        "section_title": chunk.section_title,
+        "section_path": chunk.section_path,
+        "section_number": chunk.section_number,
+        "problem_number": chunk.problem_number,
+    }
+
+
+def _retrieve_source_block(
+    conn: sqlite3.Connection,
+    class_id: int,
+    query: str,
+    budget_tokens: int,
+    document_id: int,
+) -> str:
+    """A scoped source's best chunks for the turn, as the prompt's context block.
+
+    Retrieval never crosses classes: a document id that does not belong to this class, or
+    has no indexed chunks, yields no chunks and therefore an empty block, so the turn
+    proceeds exactly as if no source had been scoped.
+    """
+    if budget_tokens <= 0:
+        return ""
+    result = retrieve(conn, class_id, query, budget_tokens, document_id=document_id)
+    if not result.chunks:
+        return ""
+    return llm_prompts.format_context_block(
+        [_source_context_entry(chunk) for chunk in result.chunks]
+    )
+
+
 def _plan_agent_turn(
     conn: sqlite3.Connection,
     class_id: int,
@@ -399,6 +440,16 @@ def _plan_agent_turn(
     )
     session_mode = str(sessions.get_session(conn, session_id)["mode"])
     system_prompt = _availability_prompt(profile, probe_registry, session_mode)
+    # A scoped source is fixed system material, like the tutor's retrieval block: charged
+    # up front and never trimmed, so the history assembly leaves it the room it needs.
+    # Absent, or empty, it changes nothing and the turn is identical to the tools-only
+    # path.
+    if payload.document_id is not None:
+        context_block = _retrieve_source_block(
+            conn, class_id, content, budget.retrieval, payload.document_id
+        )
+        if context_block:
+            system_prompt = f"{system_prompt}\n\n{context_block}"
     tool_tokens = schema_tokens(tool_schemas(probe_registry))
     earlier = tuple(
         HistoryMessage(role=message["role"], content=str(message["content"]))

@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatPane } from '@/components/chat/chat-pane'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { ApiError, api, streamChat } from '@/lib/api'
-import type { ChatEvent, MessageRead } from '@/types'
+import type { ChatEvent, DocumentRead, MessageRead, SessionRead, SettingsRead } from '@/types'
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
@@ -20,6 +20,7 @@ vi.mock('@/lib/api', async () => {
       listDocuments: vi.fn(),
       getSettings: vi.fn(),
       getClassProfile: vi.fn(),
+      sendAgentChat: vi.fn(),
     },
     streamChat: vi.fn(),
     streamRegenerate: vi.fn(),
@@ -926,5 +927,129 @@ describe('ChatPane idempotency (PLA-313)', () => {
     const retryId = vi.mocked(streamChat).mock.calls[1][1].operation_id
 
     expect(retryId).toBe(firstId)
+  })
+})
+
+
+describe('ChatPane contextual agent (PLA-401)', () => {
+  function renderAgentPane() {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    })
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ChatPane
+            classId={1}
+            className="ECE 203"
+            agent
+            selectedDocumentId={5}
+            sessionId={7}
+            onSessionIdChange={() => {}}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    )
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.listSessions).mockResolvedValue([])
+    const document: DocumentRead = {
+      id: 5,
+      class_id: 1,
+      filename: 'notes.pdf',
+      mime: 'application/pdf',
+      byte_size: 1024,
+      state: 'ready',
+      stage_detail: null,
+      pages_total: 1,
+      pages_done: 1,
+      pages_skipped: 0,
+      pages_failed: 0,
+      recognize: false,
+      error_message: null,
+      created_at: '2026-08-04T12:00:00Z',
+    }
+    vi.mocked(api.listDocuments).mockResolvedValue([document])
+    vi.mocked(api.getClassProfile).mockResolvedValue({
+      facts: [],
+      extraction_skipped_reason: null,
+    })
+    const settings: SettingsRead = {
+      endpoint_url: 'http://localhost:1234/v1',
+      model: 'local',
+      context_window: 8192,
+      extraction_enabled: false,
+      remote_ack: false,
+      api_key_set: false,
+      api_key_storage: 'file',
+      endpoint_is_local: true,
+      endpoint_host: 'localhost',
+      embedding_model: null,
+      embedding_dim: null,
+      tools_supported: true,
+      tools_message: null,
+      vision_supported: null,
+      vision_message: null,
+      allow_web_research: false,
+      parallel_requests: false,
+      parallel_concurrency: 1,
+      exa_api_key_set: false,
+      exa_api_key_storage: 'file',
+    }
+    vi.mocked(api.getSettings).mockResolvedValue(settings)
+    const session: SessionRead = {
+      id: 7,
+      class_id: 1,
+      title: null,
+      mode: 'guide',
+      artifact_part_id: null,
+      created_at: '2026-08-04T12:00:00Z',
+    }
+    vi.mocked(api.createSession).mockResolvedValue(session)
+  })
+
+  it('sends the turn to the agent endpoint with the scoped source and no profile', async () => {
+    const transcript: MessageRead[] = []
+    vi.mocked(api.listMessages).mockImplementation(async () => transcript)
+    vi.mocked(api.sendAgentChat).mockImplementation(async () => {
+      transcript.push(
+        message({ id: 1, role: 'user', content: 'Read my starter code and explain how it works' }),
+        message({ id: 42, role: 'assistant', content: 'Here is how the starter works.' }),
+      )
+      return {
+        message_id: 42,
+        content: 'Here is how the starter works.',
+        stopped: 'complete',
+        detail: 'Complete.',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      }
+    })
+    const user = userEvent.setup()
+    renderAgentPane()
+
+    await user.type(
+      await screen.findByLabelText('Message Lyra'),
+      'Read my starter code and explain how it works',
+    )
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+
+    // One ordinary conversation surface: the turn goes to the agent endpoint, carries the
+    // scoped source, and names no profile (the agent plans its own work).
+    const [classId, sessionId, content, profile, documentId] =
+      vi.mocked(api.sendAgentChat).mock.calls[0]
+    expect(classId).toBe(1)
+    expect(sessionId).toBe(7)
+    expect(content).toBe('Read my starter code and explain how it works')
+    expect(profile).toBeUndefined()
+    expect(documentId).toBe(5)
+
+    // The full reply lands in the conversation, in place.
+    expect(await screen.findByText('Here is how the starter works.')).toBeInTheDocument()
   })
 })

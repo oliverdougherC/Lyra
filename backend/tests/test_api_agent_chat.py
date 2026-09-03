@@ -20,6 +20,7 @@ from backend.core.errors import LyraError
 from backend.core.writer_budgets import WriterCapabilities
 from backend.llm import prompts as llm_prompts
 from backend.llm import tools
+from backend.rag.retrieve import RetrievalResult, RetrievedChunk
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect, get_db
 
@@ -169,6 +170,81 @@ def test_agent_turn_uses_budgeted_history_and_aligns_private_context(
     # the tool schemas measurable before history is trimmed.
     assert seen[0] == ()
     assert seen[-1] == tuple(rendered) + ("Newest question",)
+
+
+def test_a_scoped_source_grounds_the_agent_turn(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A source scoped in the composer grounds the agent turn as fixed system material."""
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Grounded answer."))
+
+    chunk = RetrievedChunk(
+        chunk_id=1,
+        document_id=7,
+        content="Convolution combines two signals.",
+        token_count=6,
+        page_number=1,
+        section_title="Convolution",
+        section_path="ch2/convolution",
+        section_number="2.1",
+        problem_number=None,
+        part_index=None,
+        filename="signals.pdf",
+        similarity=0.9,
+        score=0.9,
+    )
+    retrieved: list[int] = []
+
+    def fake_retrieve(  # noqa: ANN001
+        conn: object,
+        class_id_: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        retrieved.append(document_id)
+        return RetrievalResult(chunks=[chunk], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", fake_retrieve)
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Explain convolution", "document_id": 7},
+    )
+
+    assert response.status_code == 200, response.text
+    assert retrieved == [7]
+    system_prompt = str(captured["messages"][0]["content"])
+    assert "Convolution combines two signals." in system_prompt
+    assert "signals.pdf" in system_prompt
+
+
+def test_an_unscoped_agent_turn_does_not_retrieve(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without a scoped source the turn works from tools and history; retrieval never runs."""
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Tools-only answer."))
+
+    def fail_retrieve(*args: object, **kwargs: object) -> RetrievalResult:
+        raise AssertionError("retrieval must not run for an unscoped agent turn")
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", fail_retrieve)
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Explain convolution"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert "signals.pdf" not in str(captured["messages"][0]["content"])
 
 
 def test_an_incomplete_agent_turn_returns_a_retry_contract_without_storing_a_reply(

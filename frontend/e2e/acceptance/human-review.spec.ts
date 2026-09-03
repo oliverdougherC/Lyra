@@ -1,13 +1,13 @@
 /**
  * Workspace hunk confirmation boundary through the real browser (PLA-303).
  *
- * Proves: workspace change proposals display hunks in the agent panel,
+ * Proves: workspace change proposals display hunks in the contextual work surface,
  * the student can accept or reject through the browser UI, accepted hunks
  * land on disk, and stale hunks (file changed after proposal) are rejected
  * rather than silently applied.
  *
  * Uses the real workspace attach, change-proposal, and confirmation APIs
- * through the agent panel at /classes/{classId}/chat?session={sessionId}.
+ * through the contextual work surface at /classes/{classId}/chat?session={sessionId}.
  */
 
 import { test, expect } from '@playwright/test'
@@ -24,16 +24,6 @@ import {
   clearTutorState,
   BACKEND,
 } from './helpers'
-
-async function openAgentPanel(page: import('@playwright/test').Page): Promise<void> {
-  const agentBtn = page.getByRole('button', { name: 'Agent' })
-  if (await agentBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-    const expanded = await agentBtn.getAttribute('aria-expanded')
-    if (expanded !== 'true') {
-      await agentBtn.click()
-    }
-  }
-}
 
 test.describe('Workspace hunk confirmation boundary (PLA-303)', () => {
   let classId: number
@@ -92,8 +82,7 @@ test.describe('Workspace hunk confirmation boundary (PLA-303)', () => {
     await page.goto(`/classes/${classId}/chat?session=${session.id}`)
     await page.waitForLoadState('networkidle')
 
-    // Open the agent panel
-    await openAgentPanel(page)
+    // The contextual work surface renders the change card directly - there is no panel to open.
 
     // The workspace change review card should be visible
     const changeCard = page.locator('[aria-label="Workspace change for greet.py"]')
@@ -135,8 +124,6 @@ test.describe('Workspace hunk confirmation boundary (PLA-303)', () => {
 
     await page.goto(`/classes/${classId}/chat?session=${session.id}`)
     await page.waitForLoadState('networkidle')
-
-    await openAgentPanel(page)
 
     const changeCard = page.locator('[aria-label="Workspace change for greet.py"]')
     await expect(changeCard).toBeVisible({ timeout: 15_000 })
@@ -183,8 +170,6 @@ test.describe('Workspace hunk confirmation boundary (PLA-303)', () => {
     // Navigate to the review page so the hunks are displayed
     await page.goto(`/classes/${classId}/chat?session=${session.id}`)
     await page.waitForLoadState('networkidle')
-
-    await openAgentPanel(page)
 
     const changeCard = page.locator('[aria-label="Workspace change for greet.py"]')
     await expect(changeCard).toBeVisible({ timeout: 15_000 })

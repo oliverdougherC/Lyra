@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { AgentPanel } from '@/components/agent/agent-panel'
+import { AgentWorkSurface } from '@/components/agent/work-surface'
 import { api } from '@/lib/api'
 import * as runtime from '@/lib/runtime'
 import type { AgentAuditEventRead } from '@/types'
@@ -65,14 +65,14 @@ beforeEach(() => {
   vi.spyOn(api, 'listMessages').mockResolvedValue([])
 })
 
-describe('the contextual agent panel (PLA-401)', () => {
+describe('the contextual agent work surface (PLA-401)', () => {
   it('asks for missing access as one compact card, and approving uses the ordinary grant path', async () => {
     vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace({ read_enabled: false }))
     vi.spyOn(api, 'listAgentActivity').mockResolvedValue([accessEvent({ target_id: 'read' })])
     const update = vi.spyOn(api, 'updateAgentWorkspaceGrants').mockResolvedValue(workspace())
     const { wrapper } = createWrapper()
     const attachSpy = vi.spyOn(api, 'attachAgentWorkspace')
-    render(<AgentPanel classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
 
     const card = await screen.findByText('Read the attached folder')
     expect(card).toBeInTheDocument()
@@ -93,7 +93,7 @@ describe('the contextual agent panel (PLA-401)', () => {
     const update = vi.spyOn(api, 'updateAgentWorkspaceGrants').mockResolvedValue(workspace())
     const { wrapper } = createWrapper()
 
-    render(<AgentPanel classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
 
     await screen.findByText('Prepare file edits')
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
@@ -110,7 +110,7 @@ describe('the contextual agent panel (PLA-401)', () => {
     const attach = vi.spyOn(api, 'attachAgentWorkspace').mockResolvedValue(workspace())
     const { wrapper } = createWrapper()
 
-    render(<AgentPanel classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
 
     // The workspace is absent, so the compact attach affordance is the entry point - not a
     // grant card, and not a setup section.
@@ -138,42 +138,12 @@ describe('the contextual agent panel (PLA-401)', () => {
     ])
     const { wrapper } = createWrapper()
 
-    render(<AgentPanel classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
 
     // All three scopes are granted, so the cards are derived away: no dashboard.
-    expect(await screen.findByText('Ask Lyra')).toBeInTheDocument()
     expect(screen.queryByText('Read the attached folder')).toBeNull()
     expect(screen.queryByText('Prepare file edits')).toBeNull()
     expect(screen.queryByText('Prepare verification commands')).toBeNull()
-  })
-
-  it('sends the contextual turn without a profile in the payload', async () => {
-    const send = vi.spyOn(api, 'sendAgentChat').mockResolvedValue({
-      message_id: 1,
-      content: 'Done.',
-      stopped: 'complete',
-      detail: 'Complete.',
-      activity: [],
-      source_ids: [],
-      workspace_change_ids: [],
-      command_request_ids: [],
-      profile_fact_ids: [],
-    })
-    const { wrapper } = createWrapper()
-
-    render(<AgentPanel classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
-
-    const textarea = await screen.findByLabelText('Ask Lyra')
-    fireEvent.change(textarea, { target: { value: 'Read the starter project' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
-    await waitFor(() => expect(send).toHaveBeenCalled())
-    const [classId, sessionId, content, profile] = vi.mocked(send).mock.calls[0]
-    expect([classId, sessionId, content]).toEqual([
-      CLASS_ID,
-      SESSION_ID,
-      'Read the starter project',
-    ])
-    expect(profile).toBeUndefined()
   })
 
   it('hides a dismissed request for the rest of the session without granting it', async () => {
@@ -189,7 +159,7 @@ describe('the contextual agent panel (PLA-401)', () => {
     }))
     const { wrapper } = createWrapper()
 
-    render(<AgentPanel classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
 
     await screen.findByText('Read the attached folder')
     fireEvent.click(screen.getByRole('button', { name: 'Not now' }))
@@ -215,7 +185,7 @@ describe('the contextual agent panel (PLA-401)', () => {
     ])
     const { wrapper } = createWrapper()
 
-    render(<AgentPanel classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
 
     // The model's reason is the card's main line - not a generic status phrase.
     expect(
@@ -224,9 +194,7 @@ describe('the contextual agent panel (PLA-401)', () => {
       ),
     ).toBeInTheDocument()
     // What granting enables, and what still needs its own review.
-    expect(
-      screen.getByText(/Lyra can list and read the text files in the folder\./),
-    ).toBeInTheDocument()
+    expect(screen.getByText(/Lyra can list and read the text files in the folder\./)).toBeInTheDocument()
     expect(screen.getByText(/each still need their own approval/)).toBeInTheDocument()
   })
 })

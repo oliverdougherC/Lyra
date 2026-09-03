@@ -68,6 +68,14 @@ type ChatPaneProps = {
   selectedDocumentId: number | null
   /** Present in the draft workspace: this pane speaks to the writer, not the tutor. */
   writer?: WriterVariant
+  /**
+   * The ordinary class conversation speaks to the contextual agent, not the tutor:
+   * turns go to the non-streaming agent endpoint, which plans the work itself and
+   * answers in place. The agent's just-in-time work (access requests, edits to review,
+   * commands to approve, the activity trail) is surfaced by the surrounding
+   * `AgentWorkSurface`, which re-fetches when the transcript grows.
+   */
+  agent?: boolean
   /** The conversation to show; `null` falls back to the newest one. */
   sessionId?: number | null
   /**
@@ -152,6 +160,7 @@ export function ChatPane({
   className = 'Class',
   selectedDocumentId,
   writer,
+  agent = false,
   sessionId: sessionIdProp = null,
   draft: isDraft = false,
   initialAsk = null,
@@ -526,6 +535,22 @@ export function ChatPane({
       }
 
       try {
+        if (agent) {
+          // The contextual agent answers in place: one non-streaming turn that plans the
+          // work, runs its tools, and returns the full reply. Its durable artifacts (access
+          // requests, proposed edits, commands, activity) are surfaced by the surrounding
+          // work surface, which re-fetches when this transcript grows.
+          const agentDocumentId = scopedDocument?.id ?? null
+          const result = await api.sendAgentChat(
+            classId,
+            turnSessionId,
+            content,
+            undefined,
+            agentDocumentId,
+          )
+          onEvent({ type: 'done', message_id: result.message_id })
+          return
+        }
         const documentId = scopedDocument?.id ?? null
         await (kind === 'writer-retry' && writer
           ? streamWriterChatRetry(writer.artifactId, turnSessionId, onEvent, controller.signal)
@@ -632,7 +657,9 @@ export function ChatPane({
       }
     },
     [
+      agent,
       activeMode,
+      classId,
       detached,
       pendingTurn,
       persisted,
@@ -893,8 +920,9 @@ export function ChatPane({
   // A segmented control rather than underlined tabs. These do not navigate anywhere — they
   // change how the next answer is written — and in the header bar there is no pane rule for
   // an underline to sit on, so the honest idiom is a switch with a travelling thumb.
-  // The writer has no modes: there is one assistant, so there is nothing to toggle.
-  const modeToggle = writer ? null : (
+  // The writer and the contextual agent have no pedagogy modes: the agent plans its own
+  // work, so there is nothing to toggle.
+  const modeToggle = writer || agent ? null : (
     <div
       className="border-border/70 bg-muted/70 flex items-center rounded-full border p-0.5"
       role="group"

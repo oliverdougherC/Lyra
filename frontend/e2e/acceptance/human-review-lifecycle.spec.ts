@@ -34,16 +34,6 @@ const INITIAL = 'line one\n'
 const STATE_B = 'externally modified current state B\n'
 const FINAL_C = 'reviewed and accepted final state C\n'
 
-async function openAgentPanel(page: import('@playwright/test').Page): Promise<void> {
-  const agentBtn = page.getByRole('button', { name: 'Agent' })
-  if (await agentBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-    const expanded = await agentBtn.getAttribute('aria-expanded')
-    if (expanded !== 'true') {
-      await agentBtn.click()
-    }
-  }
-}
-
 /** Read the current on-disk content of the lifecycle file. */
 function disk(ws: string): Promise<string> {
   return readFile(join(ws, 'lifecycle.py'), 'utf-8')
@@ -95,10 +85,10 @@ test.describe('PLA-303 full human-review lifecycle', () => {
     })
     expect(changeA.status).toBe(201)
 
-    // 2. Display proposal A in the review UI (pending, hunks visible).
+    // 2. Display proposal A in the review UI (pending, hunks visible). The work surface
+    // renders the card directly - there is no panel to open.
     await page.goto(`/classes/${classId}/chat?session=${session.id}`)
     await page.waitForLoadState('networkidle')
-    await openAgentPanel(page)
 
     const card = page.locator('[aria-label="Workspace change for lifecycle.py"]')
     await expect(card).toBeVisible({ timeout: 15_000 })
@@ -154,8 +144,10 @@ test.describe('PLA-303 full human-review lifecycle', () => {
     })
     expect(changeC.status).toBe(201)
 
-    // Refresh the agent panel so the freshly created proposal is fetched and displayed.
-    await page.getByRole('button', { name: 'Refresh agent activity' }).click()
+    // Reload the conversation so the freshly created proposal is re-fetched and displayed:
+    // the work surface re-mounts and re-fetches its durable artifacts.
+    await page.reload()
+    await page.waitForLoadState('networkidle')
 
     // The newly reviewed proposal (derived from B) is displayed as pending with hunks.
     // Both cards share the same aria-label (and both render the action buttons), so scope
