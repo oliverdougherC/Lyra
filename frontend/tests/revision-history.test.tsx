@@ -74,6 +74,24 @@ beforeEach(() => {
   vi.spyOn(api, 'listPartRevisions').mockResolvedValue(REVISIONS)
 })
 
+describe('RevisionHistory: provenance is visibly distinct per version', () => {
+  it("labels model-written versions as generated and student-written versions as the student's own", async () => {
+    const wrapper = createWrapper()
+
+    render(<RevisionHistory artifactId={3} part={PART} noun="draft" onClose={vi.fn()} />, {
+      wrapper,
+    })
+
+    // Every version row is labeled by its origin: Lyra's whole-document work reads as
+    // model work, the student's corrections as their own. The distinction is factual and
+    // quiet - a label on the row, not a warning - and it must stay visible in the
+    // rendered history, not only in the data.
+    await screen.findByText('Generated')
+    expect(screen.getByText('Generated')).toBeInTheDocument()
+    expect(screen.getByText('Your edit')).toBeInTheDocument()
+  })
+})
+
 describe('RevisionHistory: version-aware draft restore', () => {
   it('confirms the current body first and restores against the version it reports', async () => {
     const restore = vi.spyOn(api, 'restorePartRevision').mockResolvedValue(restoredPart())

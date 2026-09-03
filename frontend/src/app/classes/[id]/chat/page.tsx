@@ -4,10 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from '@/router/hooks'
 
 import { AgentWorkSurface } from '@/components/agent/work-surface'
-import {
-  WorkspaceAttachProvider,
-  WorkspaceContextChip,
-} from '@/components/agent/workspace-attach'
+import { WorkspaceAttachProvider, WorkspaceContextChip } from '@/components/agent/workspace-attach'
 import { ChatPane } from '@/components/chat/chat-pane'
 import { SourceContext } from '@/components/chat/source-context'
 import { useFullBleed } from '@/components/layout/page-chrome'
@@ -163,7 +160,12 @@ export default function ClassWorkspacePage() {
   return (
     <WorkspaceAttachProvider classId={classId}>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
-        <AgentWorkSurface classId={classId} sessionId={sessionId} />
+        {/* Live agent work is a band over the transcript. When much is pending it scrolls
+            within its own band rather than squeezing the conversation: the answer and the
+            composer keep their allocation in every window. */}
+        <div className="max-h-[40svh] min-h-0 overflow-y-auto">
+          <AgentWorkSurface classId={classId} sessionId={sessionId} />
+        </div>
         <div className="min-h-0 flex-1">{chat}</div>
       </div>
     </WorkspaceAttachProvider>

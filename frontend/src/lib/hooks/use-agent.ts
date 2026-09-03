@@ -21,7 +21,15 @@ export const agentKeys = {
     ['agent', 'dismissals', classId, sessionId] as const,
 }
 
-async function invalidateAgentTurnCaches(
+/**
+ * Refresh everything one agent turn can have touched: the transcript, the class session list,
+ * and the work-surface queries (workspace, activity, changes, commands, dismissals), plus the
+ * cached surfaces that read from the same rows (profile, draft sources). Call it when an
+ * agent turn settles outside the mutation hooks - the chat pane's inline agent turns settle
+ * by hand, so a failed attempt row or a committed-but-lost reply would otherwise stay hidden
+ * behind a stale cache.
+ */
+export async function invalidateAgentTurnCaches(
   queryClient: ReturnType<typeof useQueryClient>,
   classId: number,
   sessionId: number,

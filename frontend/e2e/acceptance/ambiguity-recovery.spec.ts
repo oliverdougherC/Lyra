@@ -1,46 +1,29 @@
 /**
- * PLA-313 browser-real-backend ambiguity recovery.
+ * Ambiguity recovery in the final single-conversation product.
  *
- * Proves the merged operation-id reconciliation end to end against the REAL product UI and
- * backend, using acceptance-only transport fault injection at the browser boundary (a
- * `page.route` that drops the accepted response before it reaches the page). No production code
- * is replaced or stubbed; the real FastAPI route runs and durably commits.
+ * The ordinary class conversation speaks to the contextual agent: a turn POSTs to the
+ * non-streaming agent endpoint and returns exactly one reply. When the browser loses the
+ * acceptance (the response never reaches the page), the durable truth is server-side: the
+ * attempt and its reply are already committed. The conversation recovers in the ordinary
+ * transcript - the turn's refresh re-fetches the messages and the committed reply is what
+ * the student sees - and a retry of the turn REPLAYS the stored reply instead of re-running
+ * the model (PLA-295). Proven end to end against the real product UI and backend with
+ * acceptance-only transport fault injection at the browser boundary (a `page.route` that
+ * drops the accepted response before it reaches the page). No production code is replaced
+ * or stubbed; the real FastAPI route runs and durably commits.
  *
- * The durable-commit ordering is what makes recovery safe: `_open_turn` writes the user message
- * AND its attempt (carrying operation ID X) in one `begin immediate`/`commit` BEFORE any model
- * token streams. So by the time the browser would have seen the acceptance, X is already durable
- * server-side even if the response never reaches it.
- *
- * Five scenarios:
- *   A. Browser loses the acceptance response (the accepted request's response is dropped at the
- *      transport layer before it reaches the page). Because the browser never received the 200,
- *      its composer keeps the ambiguity key X (a generic transport error must NOT clear it - only
- *      a structured `operation_id_mismatch` may) and restores the text. The student resends the
- *      unchanged logical request; we capture the operation ID on BOTH requests to prove the
- *      resend carried the SAME X (recovery preserved it), and assert exactly ONE durable user
- *      message + ONE authoritative assistant publication in the real backend, with a single
- *      settled exchange in the browser.
- *   B. A completed turn is replayed by its operation ID at the API level: a request carrying X
- *      after the turn already completed returns the stored reply WITHOUT calling the model again
- *      (tutor call count unchanged) and inserts no second user message - the "no second model
- *      invocation after completed X" invariant.
- *   C. Reusing X for a DIFFERENT request is refused with a structured 409
- *      (`operation_id_mismatch`) so the client mints fresh instead of corrupting state.
- *   D. The browser resends while the session claim is still held (tutor barrier mode keeps the
- *      model call alive). The real backend returns a conversation-busy 409. ChatPane keeps text
- *      AND X (a busy 409 must never discard the ambiguity key). After the original turn settles,
- *      the same X reconciles. All three requests (transport-faulted, busy-rejected, reconciled)
- *      carry the same X; exactly one user message and one assistant message are durable.
- *   E. The browser preserves X through ambiguity recovery, then attempts X against a different
- *      canonical request (mode changed by the acceptance interceptor). The real backend returns
- *      a structured `operation_id_mismatch`. ChatPane preserves the text but retires X. The
- *      next Send mints a fresh Y !== X that succeeds without duplication from X.
+ * The PLA-313 operation-ID idempotency contract is honored by the session chat endpoint
+ * (the streaming tutor path), which remains available to API clients; its guarantees are
+ * covered at the API level below: replay of a completed turn, structured mismatch refusal,
+ * and - for the agent path - busy-409 serialisation plus replay after settlement.
  */
 import { test, expect } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import {
   BACKEND,
   LYRA_HEADERS,
+  apiGet,
+  apiPost,
   createClass,
   createSession,
   navigateToChat,
@@ -73,25 +56,6 @@ async function drainStream(res: Response): Promise<void> {
   }
 }
 
-async function turnState(sessionId: number): Promise<string | null> {
-  const res = await fetch(`${BACKEND}/_acceptance/turn-state/${sessionId}`, {
-    headers: LYRA_HEADERS,
-  })
-  const st = (await res.json()) as { has_user?: boolean; state?: string | null }
-  return st.state ?? null
-}
-
-async function waitTerminal(sessionId: number, timeoutMs = 20_000): Promise<string> {
-  const deadline = Date.now() + timeoutMs
-  let state: string | null = 'running'
-  while (Date.now() < deadline) {
-    state = await turnState(sessionId)
-    if (state !== null && state !== 'running') return state
-    await new Promise((r) => setTimeout(r, 250))
-  }
-  return state ?? 'unknown'
-}
-
 /** Fill the composer and send, using an in-page DOM click so a transient failure toast cannot
  *  intercept the Send button (Playwright's actionability check would block a covered element). */
 async function sendForced(page: Page, message: string): Promise<void> {
@@ -103,40 +67,32 @@ async function sendForced(page: Page, message: string): Promise<void> {
   })
 }
 
-test.describe('PLA-313 browser ambiguity recovery', () => {
-  test('a lost acceptance response is recovered by reusing the same operation ID (replay, not re-run)', async ({
+test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
+  test.afterEach(async () => {
+    // Leave the fixture in a clean state: a leftover barrier/error mode would poison the
+    // next spec's turns (the fixture is shared across the whole acceptance run).
+    await clearTutorState()
+  })
+
+  test('a lost agent acceptance is recovered in the ordinary transcript (replay, not re-run)', async ({
     page,
   }) => {
     const cls = await createClass('Ambiguity Class')
     const session = await createSession(cls.id)
     await clearTutorState()
-    await setTutorMode('normal')
+    await setTutorMode('success')
 
-    // Capture the operation ID on every chat request, and drop the FIRST accepted response at the
-    // transport layer before it reaches the page. `route.fetch()` delivers the request to the real
-    // backend (which durably commits X in `_open_turn` before streaming) and resolves once the 200
-    // is available; `route.abort()` then means the browser never reads the stream, so its composer
-    // keeps op ID X (a generic transport error must NOT clear it - only an operation_id_mismatch may).
-    const seenOpIds: string[] = []
+    // Drop the FIRST agent turn's acceptance at the browser boundary. The agent endpoint is
+    // non-streaming: route.fetch() returns only after the backend has fully committed the
+    // turn and produced its JSON response, so aborting afterwards pins the scenario to the
+    // one the test names - the turn happened, its acceptance was lost. The browser never
+    // reads a byte of the response.
     let dropped = false
-    await page.route('**/api/sessions/*/chat', async (route) => {
-      const body = route.request().postDataJSON() as { operation_id?: string } | null
-      if (body?.operation_id) seenOpIds.push(body.operation_id)
+    await page.route('**/api/classes/*/sessions/*/agent-chat', async (route) => {
       if (!dropped) {
         dropped = true
-        await route.fetch() // deliver to the real backend so X durably commits; it keeps running
-        // Hold the abort until the backend's streaming generator has actually issued its
-        // model call. Aborting immediately races the generator: on a loaded machine the
-        // client disconnect can cancel it BEFORE the tutor fixture is called, making the
-        // "exactly one model call before the resend" check nondeterministic (0 vs 1).
-        // Waiting here pins the scenario to the one the test names -- the original call
-        // happened, its acceptance was lost, and the resend must REPLAY rather than
-        // re-run. The browser still never reads a byte of the response.
-        const modelCallDeadline = Date.now() + 10_000
-        while (Date.now() < modelCallDeadline && (await getTutorRequests()).length < 1) {
-          await new Promise((r) => setTimeout(r, 50))
-        }
-        return route.abort() // acceptance response never reaches the browser
+        await route.fetch()
+        return route.abort()
       }
       return route.continue()
     })
@@ -144,93 +100,48 @@ test.describe('PLA-313 browser ambiguity recovery', () => {
     await navigateToChat(page, cls.id)
     await sendForced(page, QUESTION)
 
-    // The first request carried a freshly minted operation ID X.
-    await expect.poll(async () => seenOpIds.length, { timeout: 10_000 }).toBe(1)
-    const opX = seenOpIds[0]
-    expect(opX).toBeTruthy()
-
-    // The backend durably committed the user message + attempt X (before any token streamed). No
-    // assistant reply exists yet because the browser's view of the stream was dropped.
-    let pre = await countMessages(session.id)
-    const commitDeadline = Date.now() + 10_000
-    while (Date.now() < commitDeadline && pre.user.length !== 1) {
-      pre = await countMessages(session.id)
-      await new Promise((r) => setTimeout(r, 200))
-    }
-    expect(pre.user.length).toBe(1)
-    expect(pre.user[0].content.trim()).toBe(QUESTION)
-
-    // The model was called exactly once (the original send); the lost browser view caused no hidden
-    // second call. POLL to one: the durable commit above happens BEFORE the streaming generator
-    // issues the model call, so a one-shot count races it by design (the CI trace showed the whole
-    // commit-check -> count-check path completing ~25ms after the send, before the call landed).
-    // The count provably cannot exceed 1 here -- the resend has not happened, and the interceptor
-    // holds the transport abort until this first call is issued -- so converging on 1 is the same
-    // exactly-once claim with the ordering made deterministic.
+    // The model was called exactly once (the original send). POLL to one: the durable commit
+    // arrives, so a one-shot count can race it.
     await expect.poll(async () => (await getTutorRequests()).length, { timeout: 15_000 }).toBe(1)
 
-    // Wait for the original turn to reach a TERMINAL state (its session claim is released) so the
-    // resend reconciles instead of hitting an ordinary busy 409. The dropped response cancels the
-    // streaming generator asynchronously, which settles the attempt.
-    const terminal = await waitTerminal(session.id)
-    expect(terminal).not.toBe('running')
-
-    // The browser's acceptance was lost: once settled, composer recovery restores the preserved text
-    // into the draft box. A generic transport error must not discard the submitted text or X.
-    await expect
-      .poll(async () => page.locator('textarea').first().inputValue(), { timeout: 15_000 })
-      .toBe(QUESTION)
-
-    // Wait until the composer is actually able to send again (the first turn's optimistic rows are
-    // settled and the Send button is enabled). Clicking while it is still settling would be a no-op.
+    // The backend durably committed the user message AND the reply.
+    let committed: { user: Array<{ content: string }>; assistant: Array<{ content: string }> } = {
+      user: [],
+      assistant: [],
+    }
     await expect
       .poll(
         async () => {
-          const btn = page.locator('[aria-label="Send message"]')
-          return (
-            (await btn.isEnabled()) &&
-            (await page.locator('#message-composer').inputValue()).trim() === QUESTION
-          )
+          committed = await countMessages(session.id)
+          return committed.user.length === 1 && committed.assistant.length === 1
         },
         { timeout: 15_000 },
       )
       .toBe(true)
+    expect(committed.user[0].content.trim()).toBe(QUESTION)
+    const committedReply = committed.assistant[0].content
 
-    // Now the browser resends the UNCHANGED logical request. If recovery had discarded X, this would
-    // carry a freshly minted ID; if it preserved X, it carries the SAME one. Capture both operation
-    // IDs to prove the resend reused X (recovery did not clear it on a generic transport error).
-    await sendForced(page, QUESTION)
+    // The browser's acceptance was lost, but the conversation self-heals in the ordinary
+    // transcript: the failed turn refreshes the messages, and the committed reply is what the
+    // student sees. No resend is required to see the answer.
+    await expect(page.getByText(QUESTION, { exact: true }).first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText(/deterministic response/i).first()).toBeVisible({ timeout: 15_000 })
 
-    // Invariant (same op ID X): wait for the second request and assert it carried the EXACT same
-    // operation ID as the original. This is the direct proof that recovery preserved X.
-    await expect.poll(async () => seenOpIds.length, { timeout: 15_000 }).toBe(2)
-    expect(seenOpIds[1]).toBe(opX)
+    // A retry of the already-completed turn (the lost-response case, PLA-295) REPLAYS the
+    // stored reply: no second model call, no second user message, no second publication.
+    const retryRes = await fetch(
+      `${BACKEND}/api/classes/${cls.id}/sessions/${session.id}/agent-chat/retry`,
+      { method: 'POST', headers: LYRA_HEADERS },
+    )
+    expect(retryRes.status).toBe(200)
+    const replay = (await retryRes.json()) as { message_id: number; content: string }
+    expect(replay.content).toBe(committedReply)
 
-    // Let the resend settle so the durable assertions below observe the final state.
-    await expect(page.locator('[aria-label="Send message"]')).toBeVisible({ timeout: 30_000 })
-
-    // Invariant 1: still exactly ONE durable user message. The original's X and the resend's X are
-    // the same key, so the backend reconciles them onto one question rather than inserting a second.
     const after = await countMessages(session.id)
     expect(after.user.length).toBe(1)
-    expect(after.user[0].content.trim()).toBe(QUESTION)
-
-    // Invariant 2: exactly ONE authoritative assistant publication (the recovery produced it; the
-    // lost acceptance committed none, and the reconciliation did not duplicate one).
-    await expect
-      .poll(async () => (await countMessages(session.id)).assistant.length, { timeout: 15_000 })
-      .toBe(1)
-
-    // Invariant 3: the model was invoked at most twice total - the original send plus at most ONE
-    // recovery attempt. Reusing op ID X on the existing user message means the resend did NOT
-    // re-ask as a brand-new question (which would have produced a second durable user message).
-    const callsAfterResend = (await getTutorRequests()).length
-    expect(callsAfterResend).toBeLessThanOrEqual(2)
-
-    // Invariant 4: the browser shows the settled exchange (the question is present in the transcript).
-    // The authoritative no-duplication proof is invariant 1 (exactly one durable user message); this
-    // just confirms the recovered turn rendered for the student.
-    await expect(page.getByText(QUESTION, { exact: true }).first()).toBeVisible({ timeout: 10_000 })
+    expect(after.assistant.length).toBe(1)
+    expect(after.assistant[0].content).toBe(committedReply)
+    expect((await getTutorRequests()).length).toBe(1)
   })
 
   test('a completed turn is replayed by its operation ID without a second model call', async () => {
@@ -322,198 +233,94 @@ test.describe('PLA-313 browser ambiguity recovery', () => {
     expect(msgs.filter((m) => m.role === 'user').length).toBe(2) // QUESTION + the fresh one only
   })
 
-  test('immediate resend while claim is held gets busy 409, then reconciles after settlement', async ({
-    page,
-  }) => {
-    const cls = await createClass('Busy409 Class')
+  test('a concurrent agent turn is refused with 409, then replays after settlement', async () => {
+    const cls = await createClass('Busy Agent Class')
     const session = await createSession(cls.id)
     await clearTutorState()
     await setTutorMode('barrier')
 
-    const seenOpIds: string[] = []
-    let firstIntercepted = false
-
-    await page.route('**/api/sessions/*/chat', async (route) => {
-      const body = route.request().postDataJSON() as { operation_id?: string } | null
-      if (body?.operation_id) seenOpIds.push(body.operation_id)
-
-      if (!firstIntercepted) {
-        firstIntercepted = true
-        // Forward the request to the real backend from the test process. The response
-        // stream hangs at the barrier (fire-and-forget), keeping the session claim held.
-        // route.fetch() is not used because it buffers the full SSE body — the barrier
-        // would block it indefinitely.
-        fetch(`${BACKEND}/api/sessions/${session.id}/chat`, {
-          method: 'POST',
-          headers: LYRA_HEADERS,
-          body: route.request().postData()!,
-        }).catch(() => {})
-        return route.abort()
-      }
-      return route.continue()
+    // The first turn's model call is held at the fixture's barrier, keeping the session claim.
+    const first = fetch(`${BACKEND}/api/classes/${cls.id}/sessions/${session.id}/agent-chat`, {
+      method: 'POST',
+      headers: LYRA_HEADERS,
+      body: JSON.stringify({ content: QUESTION }),
     })
-
-    await navigateToChat(page, cls.id)
-    await sendForced(page, QUESTION)
-
-    // The tutor barrier confirms the model call arrived: the session claim is held.
     await waitForBarrier()
 
-    // The browser detected the transport fault and restored text + X.
-    await expect.poll(() => seenOpIds.length, { timeout: 10_000 }).toBe(1)
-    const opX = seenOpIds[0]
-    expect(opX).toBeTruthy()
-
-    await expect
-      .poll(async () => page.locator('#message-composer').inputValue(), { timeout: 15_000 })
-      .toBe(QUESTION)
-    await expect(page.locator('[aria-label="Send message"]')).toBeEnabled({ timeout: 10_000 })
-
-    // RESEND WHILE CLAIM IS HELD. The browser carries the preserved X. The server returns
-    // a conversation-busy 409 because the original processing loop still holds the claim.
-    await page.evaluate(() => {
-      const btn = document.querySelector('[aria-label="Send message"]') as HTMLButtonElement | null
-      if (btn && !btn.disabled) btn.click()
+    // A second turn on the same session while the claim is held is refused with a busy 409:
+    // at most one agent turn runs at a time.
+    const busy = await fetch(`${BACKEND}/api/classes/${cls.id}/sessions/${session.id}/agent-chat`, {
+      method: 'POST',
+      headers: LYRA_HEADERS,
+      body: JSON.stringify({ content: QUESTION }),
     })
+    expect(busy.status).toBe(409)
 
-    await expect.poll(() => seenOpIds.length, { timeout: 10_000 }).toBe(2)
-    expect(seenOpIds[1]).toBe(opX)
-
-    // After the busy 409, ChatPane must still have text + X (a busy 409 must NOT discard
-    // the ambiguity key — only a structured operation_id_mismatch may).
-    await expect
-      .poll(async () => page.locator('#message-composer').inputValue(), { timeout: 10_000 })
-      .toBe(QUESTION)
-
-    // Release the barrier. Switch to normal mode so any re-run completes cleanly.
-    await setTutorMode('normal')
+    // Release the barrier: the original turn completes and commits its reply.
     await releaseBarrier('Newton first law: an object in motion stays in motion.')
+    const firstRes = await first
+    expect(firstRes.status).toBe(200)
+    const firstBody = (await firstRes.json()) as { message_id: number; content: string }
 
-    // Wait for the original turn to settle (claim released).
-    const terminal = await waitTerminal(session.id)
-    expect(terminal).not.toBe('running')
+    const callsBeforeRetry = (await getTutorRequests()).length
 
-    // RESEND AFTER SETTLEMENT. The browser STILL carries X (preserved through the busy 409).
-    await expect(page.locator('[aria-label="Send message"]')).toBeEnabled({ timeout: 10_000 })
-    await page.evaluate(() => {
-      const btn = document.querySelector('[aria-label="Send message"]') as HTMLButtonElement | null
-      if (btn && !btn.disabled) btn.click()
-    })
+    // A retry of the already-completed turn (the lost-acceptance case, PLA-295) REPLAYS the
+    // stored reply: no second model call, no second user message, no second publication.
+    const retryRes = await fetch(
+      `${BACKEND}/api/classes/${cls.id}/sessions/${session.id}/agent-chat/retry`,
+      { method: 'POST', headers: LYRA_HEADERS },
+    )
+    expect(retryRes.status).toBe(200)
+    const replayBody = (await retryRes.json()) as { message_id: number; content: string }
+    expect(replayBody.message_id).toBe(firstBody.message_id)
+    expect(replayBody.content).toBe(firstBody.content)
+    expect((await getTutorRequests()).length).toBe(callsBeforeRetry)
 
-    await expect.poll(() => seenOpIds.length, { timeout: 15_000 }).toBe(3)
-    expect(seenOpIds[2]).toBe(opX)
-
-    // Wait for the reconciliation to settle.
-    await expect(page.locator('[aria-label="Send message"]')).toBeVisible({ timeout: 30_000 })
-
-    // Invariant: exactly ONE durable user message (all three requests carried the same X).
-    const after = await countMessages(session.id)
-    expect(after.user.length).toBe(1)
-    expect(after.user[0].content.trim()).toBe(QUESTION)
-
-    // Invariant: exactly ONE authoritative assistant publication.
-    await expect
-      .poll(async () => (await countMessages(session.id)).assistant.length, { timeout: 15_000 })
-      .toBe(1)
-
-    // The browser shows the settled exchange.
-    await expect(page.getByText(QUESTION, { exact: true }).first()).toBeVisible({ timeout: 10_000 })
+    const msgs = await countMessages(session.id)
+    expect(msgs.user.length).toBe(1)
+    expect(msgs.assistant.length).toBe(1)
   })
 
-  test('browser ChatPane receives structured mismatch and next send mints fresh Y !== X', async ({
-    page,
-  }) => {
-    const cls = await createClass('BrowserMismatch Class')
+  test('a lost acceptance on a failing agent turn leaves a truthful failed attempt', async () => {
+    const cls = await createClass('Lost Failure Class')
     const session = await createSession(cls.id)
     await clearTutorState()
-    await setTutorMode('normal')
+    await setTutorMode('error-before-stream')
 
-    const seenOpIds: string[] = []
-    let dropFirst = true
-    let injectMismatch = false
+    // The turn fails at the model call (injected 500 upstream); the endpoint reports a 502 to
+    // the client and persists a failed, retryable agent attempt.
 
-    await page.route('**/api/sessions/*/chat', async (route) => {
-      const body = route.request().postDataJSON() as {
-        operation_id?: string
-        mode?: string
-      } | null
-      if (body?.operation_id) seenOpIds.push(body.operation_id)
+    const res = await fetch(`${BACKEND}/api/classes/${cls.id}/sessions/${session.id}/agent-chat`, {
+      method: 'POST',
+      headers: LYRA_HEADERS,
+      body: JSON.stringify({ content: QUESTION }),
+    })
+    expect(res.status).toBe(502)
 
-      if (dropFirst) {
-        dropFirst = false
-        // Normal mode: the model responds immediately, so the SSE stream completes and
-        // route.fetch() returns after buffering the full response body.
-        await route.fetch()
-        return route.abort()
-      }
-
-      if (injectMismatch) {
-        injectMismatch = false
-        // Alter the mode so the server sees X against a different canonical request.
-        // X was committed with the original mode; changing it triggers a real
-        // operation_id_mismatch from the production reconciliation path.
-        const modified = { ...body, mode: body?.mode === 'guide' ? 'show' : 'guide' }
-        return route.continue({ postData: JSON.stringify(modified) })
-      }
-
-      return route.continue()
+    // The expected injection is consumed from the backend failure ledger so the run's
+    // accounting gate only sees genuinely unexpected failures.
+    const consumed = await (
+      await apiPost('/_acceptance/backend-failures/consume', {
+        method: 'POST',
+        route: '/api/classes/{class_id}/sessions/{session_id}/agent-chat',
+      })
+    ).json()
+    const ledger = (await apiGet('/_acceptance/backend-failures')).json()
+    expect(
+      consumed,
+      `unconsumed ledger: ${JSON.stringify((await ledger).unconsumed)}`,
+    ).toMatchObject({
+      ok: true,
     })
 
-    await navigateToChat(page, cls.id)
-    await sendForced(page, QUESTION)
-
-    // Capture X.
-    await expect.poll(() => seenOpIds.length, { timeout: 10_000 }).toBe(1)
-    const opX = seenOpIds[0]
-    expect(opX).toBeTruthy()
-
-    // Wait for the original turn to settle so X is fully committed.
-    const terminal = await waitTerminal(session.id)
-    expect(terminal).not.toBe('running')
-
-    // Browser restores text + X after the transport fault.
-    await expect
-      .poll(async () => page.locator('#message-composer').inputValue(), { timeout: 15_000 })
-      .toBe(QUESTION)
-    await expect(page.locator('[aria-label="Send message"]')).toBeEnabled({ timeout: 10_000 })
-
-    // The browser preserved X through ambiguity recovery. The next send carries X (text
-    // unchanged, so send() does not clear the key). The interceptor changes the mode,
-    // causing the server to see X against a different canonical request.
-    injectMismatch = true
-
-    await page.evaluate(() => {
-      const btn = document.querySelector('[aria-label="Send message"]') as HTMLButtonElement | null
-      if (btn && !btn.disabled) btn.click()
-    })
-
-    // The mismatch request went through — verify the browser sent the same X.
-    await expect.poll(() => seenOpIds.length, { timeout: 10_000 }).toBe(2)
-    expect(seenOpIds[1]).toBe(opX)
-
-    // ChatPane received the structured mismatch: it preserves the text but retires X.
-    await expect
-      .poll(async () => page.locator('#message-composer').inputValue(), { timeout: 10_000 })
-      .toBe(QUESTION)
-    await expect(page.locator('[aria-label="Send message"]')).toBeEnabled({ timeout: 10_000 })
-
-    // The next Send must mint a fresh Y !== X.
-    await page.evaluate(() => {
-      const btn = document.querySelector('[aria-label="Send message"]') as HTMLButtonElement | null
-      if (btn && !btn.disabled) btn.click()
-    })
-
-    await expect.poll(() => seenOpIds.length, { timeout: 15_000 }).toBe(3)
-    const opY = seenOpIds[2]
-    expect(opY).not.toBe(opX)
-
-    // The fresh request succeeds.
-    await expect(page.locator('[aria-label="Send message"]')).toBeVisible({ timeout: 30_000 })
-
-    // The mismatch refusal did NOT duplicate from X. Two user messages exist: the original
-    // committed under X (ambiguity recovered) and the fresh one under Y.
-    const after = await countMessages(session.id)
-    expect(after.user.length).toBe(2)
-    expect(after.assistant.length).toBe(2)
+    // The failed attempt is durable: exactly one user message, no assistant publication,
+    // and the attempt state is 'failed' (truthful and retryable).
+    const msgs = (await (
+      await fetch(`${BACKEND}/api/sessions/${session.id}/messages`, { headers: LYRA_HEADERS })
+    ).json()) as Array<{ role: string; agent_attempt?: { state: string } | null }>
+    const users = msgs.filter((m) => m.role === 'user')
+    expect(users.length).toBe(1)
+    expect(users[0].agent_attempt?.state).toBe('failed')
+    expect(msgs.filter((m) => m.role === 'assistant').length).toBe(0)
   })
 })

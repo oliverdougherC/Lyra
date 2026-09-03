@@ -5,10 +5,7 @@ import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AgentWorkSurface } from '@/components/agent/work-surface'
-import {
-  WorkspaceAttachProvider,
-  WorkspaceContextChip,
-} from '@/components/agent/workspace-attach'
+import { WorkspaceAttachProvider, WorkspaceContextChip } from '@/components/agent/workspace-attach'
 import { api } from '@/lib/api'
 import * as runtime from '@/lib/runtime'
 import type { AgentAuditEventRead, MessageRead } from '@/types'
@@ -143,7 +140,7 @@ describe('the contextual agent work surface (PLA-401)', () => {
 
   it('shows the attached workspace as a compact chip beside the composer, and detaches from it', async () => {
     vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace())
-    const detach = vi.spyOn(api, 'detachAgentWorkspace').mockResolvedValue(null)
+    const detach = vi.spyOn(api, 'detachAgentWorkspace').mockResolvedValue(undefined)
     const { wrapper } = createWrapper()
 
     render(
@@ -226,7 +223,11 @@ describe('the contextual agent work surface (PLA-401)', () => {
     ])
     vi.spyOn(api, 'listMessages').mockResolvedValue([
       message({
-        agent_attempt: { state: 'stopped', stopped_reason: null, detail: 'Waiting for folder access' },
+        agent_attempt: {
+          state: 'stopped',
+          stopped_reason: null,
+          detail: 'Waiting for folder access',
+        },
       }),
       message({
         id: 2,
@@ -243,6 +244,7 @@ describe('the contextual agent work surface (PLA-401)', () => {
       detail: '',
       activity: [],
       source_ids: [],
+      profile_fact_ids: [],
       workspace_change_ids: [],
       command_request_ids: [],
     })
@@ -271,12 +273,18 @@ describe('the contextual agent work surface (PLA-401)', () => {
     vi.spyOn(api, 'listAgentActivity').mockResolvedValue([
       accessEvent({
         target_id: 'attach',
-        result_summary: { scope: 'attach', reason: 'To inspect this starter project, Lyra needs to open the folder.' },
+        result_summary: {
+          scope: 'attach',
+          reason: 'To inspect this starter project, Lyra needs to open the folder.',
+        },
       }),
       accessEvent({
         id: 'ev-2',
         target_id: 'propose_changes',
-        result_summary: { scope: 'propose_changes', reason: 'To add the parser skeleton, Lyra needs to edit files.' },
+        result_summary: {
+          scope: 'propose_changes',
+          reason: 'To add the parser skeleton, Lyra needs to edit files.',
+        },
       }),
     ])
     vi.spyOn(api, 'listMessages').mockResolvedValue([
@@ -299,9 +307,11 @@ describe('the contextual agent work surface (PLA-401)', () => {
     const reason = await screen.findByText('To add the parser skeleton, Lyra needs to edit files.')
     const scope = reason.closest('[data-access-request]')
     if (!scope) throw new Error('expected the edit-scope access card')
-    fireEvent.click(within(scope).getByRole('button', { name: /not now/i }))
+    fireEvent.click(within(scope as HTMLElement).getByRole('button', { name: /not now/i }))
     const dismiss = vi.spyOn(api, 'dismissAgentAccess')
-    await waitFor(() => expect(dismiss).toHaveBeenCalledWith(CLASS_ID, SESSION_ID, 'propose_changes'))
+    await waitFor(() =>
+      expect(dismiss).toHaveBeenCalledWith(CLASS_ID, SESSION_ID, 'propose_changes'),
+    )
     expect(regenerate).not.toHaveBeenCalled()
     expect(api.attachAgentWorkspace).not.toHaveBeenCalled()
   })

@@ -116,11 +116,24 @@ def _privacy_safe_route(scope) -> str:
     `/api/sessions/{session_id}/messages`) identifies the endpoint without it.
     Unroutable requests are reported by method only.
     """
+
+    def candidates(route):
+        # FastAPI wraps included routers in a lazy `_IncludedRouter` container that matches
+        # its whole subtree but carries no path of its own: descend to the wrapped
+        # router's concrete routes so their templates stay visible instead of the
+        # container masking every endpoint behind it.
+        wrapped = getattr(route, "original_router", None)
+        if wrapped is not None:
+            return list(getattr(wrapped, "routes", ()))
+        return [route]
+
     try:
         for route in _production_app.routes:
-            match, _child = route.matches(scope)
-            if match is Match.FULL:
-                path = getattr(route, "path", None)
+            for candidate in candidates(route):
+                match, _child = candidate.matches(scope)
+                if match is not Match.FULL:
+                    continue
+                path = getattr(candidate, "path", None)
                 if isinstance(path, str):
                     return path
                 break

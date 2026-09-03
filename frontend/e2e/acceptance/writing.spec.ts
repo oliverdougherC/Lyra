@@ -93,7 +93,7 @@ test.describe('Writing', () => {
     expect(conflict.server_body).toBe('Version one content.')
   })
 
-  test('snapshot creates a recoverable revision', async () => {
+  test('snapshot creates a recoverable revision', async ({ page }) => {
     const draft = await createDraft(classId, 'Snapshot Test')
 
     await apiPatch(`/api/drafts/${draft.id}/body`, {
@@ -117,6 +117,21 @@ test.describe('Writing', () => {
     expect(revsRes.ok).toBe(true)
     const revisions = await revsRes.json()
     expect(revisions.length).toBeGreaterThanOrEqual(1)
+
+    // Rendered provenance (writer simplification pass): in the history sheet, versions are
+    // labelled by who wrote them - this student snapshot reads "Your edit", while model
+    // whole-document generations would read "Generated" in the same list (the label split
+    // is unit-pinned in tests/revision-history.test.tsx).
+    await page.goto(`/classes/${classId}/drafts/${draft.id}`)
+    await page.waitForLoadState('networkidle')
+    await page.locator('[aria-label="Draft tool"]').click()
+    await page.getByRole('option', { name: 'Details · plan, sources, history' }).click()
+    await page.locator('[aria-label="Draft details section"]').click()
+    await page.getByRole('option', { name: 'History' }).click()
+    await page.getByRole('button', { name: 'View history' }).click()
+    const historySheet = page.locator('[data-slot="sheet-content"]')
+    await expect(historySheet.getByText('Your edit')).toBeVisible()
+    await expect(historySheet.getByText('Generated')).toHaveCount(0)
   })
 
   test('PLA-308: writer-chat concurrent turns with deterministic barrier', async () => {

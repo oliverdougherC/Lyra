@@ -114,6 +114,80 @@ const MESSAGES = [
     created_at: '2026-08-20T10:01:20Z',
   },
 ]
+// The contextual agent work in the same conversation: an attached workspace (read not yet
+// granted, so one just-in-time request card is live), a pending edit, and a pending
+// verification command. This is the fullest live-work state the work surface takes, and
+// it is what the narrow window must hold without sideways scroll or a displaced composer.
+const WORKSPACE = {
+  id: 51,
+  class_id: CLASS_ID,
+  root_path: '/tmp/lyra-cs201',
+  display_name: 'cs201-homework-4',
+  read_enabled: false,
+  change_proposals_enabled: true,
+  commands_enabled: true,
+  created_at: '2026-08-20T09:00:00Z',
+  updated_at: '2026-08-20T09:00:00Z',
+}
+
+const AGENT_ACTIVITY = [
+  {
+    id: 'ev-agent-1',
+    tool: 'request_workspace_access',
+    capability: 'access_request',
+    effect: 'pure',
+    state: 'succeeded',
+    target_kind: 'capability_request',
+    target_id: 'read',
+    error_message: null,
+    started_at: '2026-08-20T09:50:00Z',
+    finished_at: '2026-08-20T09:50:01Z',
+    result_summary: {
+      scope: 'read',
+      reason: 'To inspect this homework, Lyra needs to read the files in cs201-homework-4.',
+    },
+  },
+]
+
+const AGENT_DISMISSALS = { dismissals: [] }
+
+const AGENT_CHANGE = {
+  id: 61,
+  workspace_id: 51,
+  session_id: SESSION_ID,
+  path: 'parser.py',
+  rationale: 'Add the parser skeleton.',
+  state: 'pending',
+  current_hash: 'a'.repeat(64),
+  current_content: 'def parse(text):\n    raise NotImplementedError\n',
+  proposed_content: 'def parse(text):\n    return text.split()\n',
+  hunks: [
+    {
+      index: 0,
+      hash: 'b'.repeat(64),
+      lines: ['-    raise NotImplementedError', '+    return text.split()'],
+    },
+  ],
+  created_at: '2026-08-20T09:55:00Z',
+  updated_at: '2026-08-20T09:55:00Z',
+}
+
+const AGENT_COMMAND = {
+  id: 71,
+  workspace_id: 51,
+  session_id: SESSION_ID,
+  argv: ['python3', 'test_parser.py'],
+  relative_cwd: '.',
+  reason: 'Verify the parser skeleton against its test.',
+  expected_signal: 'tests passed',
+  timeout_seconds: 60,
+  state: 'pending',
+  confirmed_at: null,
+  exit_code: null,
+  stdout_text: null,
+  stderr_text: null,
+  truncated: false,
+}
 
 const SETTINGS = {
   endpoint_url: 'http://127.0.0.1:8080/v1',
@@ -295,7 +369,7 @@ const PROFILE = {
  * back to an empty list rather than an error, so the shell stays calm instead of surfacing
  * a red state the matrix is not testing.
  */
-async function installClassMocks(page: Page) {
+export async function installClassMocks(page: Page) {
   const json = (body: unknown) => ({
     status: 200,
     contentType: 'application/json',
@@ -311,6 +385,11 @@ async function installClassMocks(page: Page) {
     [`/api/classes/${CLASS_ID}/drafts`]: DRAFTS,
     [`/api/classes/${CLASS_ID}/profile`]: PROFILE,
     [`/api/sessions/${SESSION_ID}/messages`]: MESSAGES,
+    [`/api/classes/${CLASS_ID}/workspace`]: WORKSPACE,
+    [`/api/classes/${CLASS_ID}/sessions/${SESSION_ID}/agent/activity`]: AGENT_ACTIVITY,
+    [`/api/classes/${CLASS_ID}/sessions/${SESSION_ID}/agent/access-dismissals`]: AGENT_DISMISSALS,
+    [`/api/classes/${CLASS_ID}/sessions/${SESSION_ID}/workspace/changes`]: [AGENT_CHANGE],
+    [`/api/classes/${CLASS_ID}/sessions/${SESSION_ID}/workspace/commands`]: [AGENT_COMMAND],
     '/api/settings': SETTINGS,
     '/api/desktop-import/status': IMPORT_IDLE,
   }
@@ -513,6 +592,10 @@ for (const { width, height } of INTERACTION_MATRIX) {
     ).toBeLessThanOrEqual(height + 1)
     await page.keyboard.press('Escape')
     await expect(sheet).toBeHidden()
+    // The sheet is temporary: closing it hands focus back to the control that opened it.
+    await expect(
+      page.getByRole('button', { name: '2 class facts need confirmation' }),
+    ).toBeFocused()
 
     // The chat: the source disclosure opens, is used, and closes with focus returning.
     await page.goto(`/#/classes/${CLASS_ID}/chat?session=${SESSION_ID}`)
@@ -538,6 +621,71 @@ for (const { width, height } of INTERACTION_MATRIX) {
     // Keyboard operation stays intact: Tab from the composer reaches the send control.
     await page.keyboard.press('Tab')
     await expect(page.getByRole('button', { name: 'Send message' })).toBeFocused()
+
+    // The contextual agent work lives in the same conversation: the workspace chip, the
+    // just-in-time access card, the pending edit, and the pending command all render in
+    // the transcript and composer row without a second composer or any Agent destination.
+    const workspaceChip = page.locator('[data-workspace-chip]')
+    await expect(workspaceChip).toHaveText(/cs201-homework-4/)
+    await expect(page.getByRole('button', { name: 'Attach a folder' })).toBeHidden()
+    await expect(page.getByRole('button', { name: /Not now/ })).toHaveCount(1)
+    const readRequest = page.locator('[data-access-request="read"]')
+    await expect(readRequest.getByRole('button', { name: 'Approve' })).toBeVisible()
+    await expect(
+      readRequest.getByText(
+        'To inspect this homework, Lyra needs to read the files in cs201-homework-4.',
+      ),
+    ).toBeVisible()
+    await expect(page.locator('[aria-label="Workspace change for parser.py"]')).toBeVisible()
+    await expect(page.locator('[aria-label="Command request 71"]')).toBeVisible()
+
+    // Nothing on the page - the live work surfaces included - scrolls sideways, and the
+    const surface = await measure(page)
+    expect(
+      surface.scrollWidth - surface.innerWidth,
+      `the chat scrolls sideways at ${width}px with live agent work`,
+    ).toBeLessThanOrEqual(0)
+    // The diff review is the same kind of in-conversation card: it stays inside the window.
+    const changeBox = await page
+      .locator('[aria-label="Workspace change for parser.py"]')
+      .boundingBox()
+    expect(changeBox, 'the diff card has no box').not.toBeNull()
+    expect(
+      changeBox!.x + changeBox!.width,
+      'the diff card is clipped on the right',
+    ).toBeLessThanOrEqual(width + 1)
+    const surfaceBox = await page.locator('[aria-label="Command request 71"]').boundingBox()
+    expect(surfaceBox, 'the command card has no box').not.toBeNull()
+    expect(
+      surfaceBox!.x + surfaceBox!.width,
+      'the command card is clipped on the right',
+    ).toBeLessThanOrEqual(width + 1)
+    const composerBox = await composer.boundingBox()
+    expect(composerBox, 'the composer has no box').not.toBeNull()
+    expect(
+      composerBox!.y + composerBox!.height,
+      'the live work pushed the composer out of the window',
+    ).toBeLessThanOrEqual(height + 1)
+    expect(
+      composerBox!.x + composerBox!.width,
+      'the composer is clipped on the right',
+    ).toBeLessThanOrEqual(width + 1)
+
+    // There is exactly one composer and no Agent destination: the bridge is gone, and the
+    // answer stays the dominant surface in the transcript.
+    expect(await page.locator('#message-composer').count()).toBe(1)
+    expect(await page.getByRole('button', { name: 'Agent' }).count()).toBe(0)
+    expect(await page.getByRole('tab', { name: 'Agent' }).count()).toBe(0)
+    await expect(
+      page.getByText(/A linear time-invariant system is BIBO stable/).first(),
+    ).toBeVisible()
+
+    // The workspace options menu is a temporary popover: it closes and restores focus.
+    await page.getByRole('button', { name: 'Workspace options' }).click()
+    await expect(page.getByRole('menuitem', { name: 'Detach workspace' })).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('menuitem', { name: 'Detach workspace' })).toBeHidden()
+    await expect(page.getByRole('button', { name: 'Workspace options' })).toBeFocused()
 
     expect(pageErrors, 'a runtime error fired while the window was operated').toEqual([])
   })

@@ -67,7 +67,9 @@ export function WorkspaceAttachProvider({
   const detach = useDetachAgentWorkspace(classId)
   const updateGrants = useUpdateAgentWorkspaceGrants(classId)
   const [cardPathEntryVisible, setCardPathEntryVisible] = useState(false)
-  const [lastResolution, setLastResolution] = useState<{ scopes: string[]; at: number } | null>(null)
+  const [lastResolution, setLastResolution] = useState<{ scopes: string[]; at: number } | null>(
+    null,
+  )
 
   const value = useMemo<WorkspaceAttachContextValue>(() => {
     const attachFolder = (rootPath: string) => {
@@ -115,24 +117,21 @@ export function WorkspaceAttachProvider({
       if (scope === 'run_commands') {
         body.commands_enabled = true
       }
-      updateGrants.mutate(
-        body,
-        {
-          onSuccess: () => {
-            // The scopes this approval satisfies: what was asked for, plus the read
-            // grant that editing presupposes when it was still off.
-            const scopes: string[] = []
-            if (scope === 'read') scopes.push('read')
-            if (scope === 'propose_changes') {
-              scopes.push('propose_changes')
-              if (body.read_enabled) scopes.push('read')
-            }
-            if (scope === 'run_commands') scopes.push('run_commands')
-            setLastResolution({ scopes, at: Date.now() })
-          },
-          onError: (error) => toast.error(error.message),
+      updateGrants.mutate(body, {
+        onSuccess: () => {
+          // The scopes this approval satisfies: what was asked for, plus the read
+          // grant that editing presupposes when it was still off.
+          const scopes: string[] = []
+          if (scope === 'read') scopes.push('read')
+          if (scope === 'propose_changes') {
+            scopes.push('propose_changes')
+            if (body.read_enabled) scopes.push('read')
+          }
+          if (scope === 'run_commands') scopes.push('run_commands')
+          setLastResolution({ scopes, at: Date.now() })
         },
-      )
+        onError: (error) => toast.error(error.message),
+      })
     }
     return {
       workspace: workspace.data ?? null,
@@ -150,9 +149,7 @@ export function WorkspaceAttachProvider({
     }
   }, [attach, detach, lastResolution, setLastResolution, updateGrants, workspace.data])
 
-  return (
-    <WorkspaceAttachContext.Provider value={value}>{children}</WorkspaceAttachContext.Provider>
-  )
+  return <WorkspaceAttachContext.Provider value={value}>{children}</WorkspaceAttachContext.Provider>
 }
 
 export function useWorkspaceAttach(): WorkspaceAttachContextValue {

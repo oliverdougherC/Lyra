@@ -27,6 +27,7 @@ import {
 } from '@/lib/api'
 import { formatCount, parseTimestamp } from '@/lib/format'
 import { chatKeys, useCreateSession, useMessages, useSessions } from '@/lib/hooks/use-chat'
+import { invalidateAgentTurnCaches } from '@/lib/hooks/use-agent'
 import { useDocuments } from '@/lib/hooks/use-documents'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { useClassProfile } from '@/lib/hooks/use-profile'
@@ -546,24 +547,38 @@ export function ChatPane({
           // The contextual agent answers in place: one non-streaming turn that plans the
           // work, runs its tools, and returns the full reply. Its durable artifacts (access
           // requests, proposed edits, commands, activity) are surfaced by the surrounding
-          // work surface, which re-fetches when this transcript grows. Retry and regenerate
-          // take the same shape: the server reuses the last user message (retry) or re-answers
-          // and supersedes the last reply (regenerate), and each returns the one reply.
+          // work surface. Retry and regenerate take the same shape: the server reuses the
+          // last user message (retry) or re-answers and supersedes the last reply
+          // (regenerate), and each returns the one reply.
           const agentDocumentId = scopedDocument?.id ?? null
-          const result =
-            kind === 'tutor-retry'
-              ? await api.retryAgentChat(classId, turnSessionId)
-              : kind === 'regenerate'
-                ? await api.regenerateAgentChat(classId, turnSessionId)
-                : await api.sendAgentChat(
-                    classId,
-                    turnSessionId,
-                    content,
-                    undefined,
-                    agentDocumentId,
-                    activeMode,
-                  )
-          onEvent({ type: 'done', message_id: result.message_id })
+          try {
+            const result =
+              kind === 'tutor-retry'
+                ? await api.retryAgentChat(classId, turnSessionId)
+                : kind === 'regenerate'
+                  ? await api.regenerateAgentChat(classId, turnSessionId)
+                  : await api.sendAgentChat(
+                      classId,
+                      turnSessionId,
+                      content,
+                      undefined,
+                      agentDocumentId,
+                      activeMode,
+                    )
+            onEvent({ type: 'done', message_id: result.message_id })
+          } catch (err) {
+            // The turn's truth is durable on the server either way: a failed attempt row, or
+            // a committed reply whose acceptance the transport lost. Refresh the transcript
+            // and the work surface before surfacing the error, so the conversation shows the
+            // failed turn or the recovered answer instead of a stale cache.
+            await invalidateAgentTurnCaches(queryClient, classId, turnSessionId).catch(
+              () => undefined,
+            )
+            throw err
+          }
+          await invalidateAgentTurnCaches(queryClient, classId, turnSessionId).catch(
+            () => undefined,
+          )
           return
         }
         const documentId = scopedDocument?.id ?? null
@@ -939,39 +954,39 @@ export function ChatPane({
   // them: the mode still governs how the work is presented, and the shared mode contract
   // inherits it (the agent plans tools, it does not own the pedagogy).
   const modeToggle = writer ? null : (
-      <div
-        className="border-border/70 bg-muted/70 flex items-center rounded-full border p-0.5"
-        role="group"
-        aria-label="Answer style"
-      >
-        {MODES.map((option) => (
-          <Tooltip key={option.value}>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-pressed={activeMode === option.value}
-                className={cn(
-                  'h-7 rounded-full px-3 text-xs transition-colors duration-150',
-                  activeMode === option.value
-                    ? 'bg-card text-foreground hover:bg-card shadow-sm'
-                    : 'text-text-secondary hover:bg-transparent hover:text-foreground',
-                )}
-                onClick={() => {
-                  if (!inline && sessionId === null && activeSessionId !== null) {
-                    onSessionIdChange?.(activeSessionId)
-                  }
-                  setMode(option.value)
-                }}
-              >
-                {option.label}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{option.hint}</TooltipContent>
-          </Tooltip>
-        ))}
-      </div>
-    )
+    <div
+      className="border-border/70 bg-muted/70 flex items-center rounded-full border p-0.5"
+      role="group"
+      aria-label="Answer style"
+    >
+      {MODES.map((option) => (
+        <Tooltip key={option.value}>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-pressed={activeMode === option.value}
+              className={cn(
+                'h-7 rounded-full px-3 text-xs transition-colors duration-150',
+                activeMode === option.value
+                  ? 'bg-card text-foreground hover:bg-card shadow-sm'
+                  : 'text-text-secondary hover:bg-transparent hover:text-foreground',
+              )}
+              onClick={() => {
+                if (!inline && sessionId === null && activeSessionId !== null) {
+                  onSessionIdChange?.(activeSessionId)
+                }
+                setMode(option.value)
+              }}
+            >
+              {option.label}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{option.hint}</TooltipContent>
+        </Tooltip>
+      ))}
+    </div>
+  )
 
   const paneControls = (
     <div className="flex items-center gap-1.5">

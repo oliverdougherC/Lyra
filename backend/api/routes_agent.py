@@ -40,6 +40,9 @@ Origin = Annotated[str | None, Header(alias="Origin")]
 class WorkspaceAttach(BaseModel):
     root_path: str = Field(min_length=1, max_length=4096)
     display_name: str | None = Field(default=None, max_length=200)
+    # The minimum for inspecting a folder the student just chose: reads only. Deeper
+    # grants (change proposals, commands) stay off and are requested separately.
+    read_enabled: bool = False
 
     @field_validator("root_path")
     @classmethod
@@ -427,13 +430,14 @@ def attach_workspace(class_id: int, payload: WorkspaceAttach, conn: DbConn) -> d
         tool="attach_workspace",
         capability="workspace_attachment",
         effect="database_write",
-        arguments={"display_name": payload.display_name},
+        arguments={"display_name": payload.display_name, "read_enabled": payload.read_enabled},
         class_id=class_id,
         operation=lambda: agent_store.attach_workspace(
             conn,
             class_id,
             root_path=payload.root_path,
             display_name=payload.display_name,
+            read_enabled=payload.read_enabled,
         ),
     )
 

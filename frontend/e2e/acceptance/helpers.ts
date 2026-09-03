@@ -41,11 +41,14 @@ export async function setTutorMode(mode: string) {
   if (!res.ok) throw new Error(`setTutorMode failed: ${res.status}`)
 }
 
-export async function enqueueTutorResponse(content: string) {
+export async function enqueueTutorResponse(
+  item: string | { content?: string; raw?: Record<string, unknown> },
+) {
+  const body = typeof item === 'string' ? { content: item } : item
   const res = await fetch(`${TUTOR_CONTROL}/enqueue`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(body),
   })
   if (!res.ok) throw new Error(`enqueueTutorResponse failed: ${res.status}`)
 }

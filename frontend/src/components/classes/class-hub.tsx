@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Archive, Info, MoreVertical, Pencil, RotateCcw, Trash2 } from 'lucide-react'
 import { useRouter } from '@/router/hooks'
 import { toast } from 'sonner'
@@ -121,6 +121,8 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
   const [editing, setEditing] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  // The control that opened the details sheet, so closing it hands focus back there.
+  const detailsTriggerRef = useRef<HTMLElement | null>(null)
 
   const klass = classQuery.data
   const studyCount = study ? study.decks.length + study.quizzes.length : null
@@ -211,7 +213,10 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
                 // nudge rides on the class itself and opens the sheet where they are resolved.
                 <button
                   type="button"
-                  onClick={() => setDetailsOpen(true)}
+                  onClick={() => {
+                    detailsTriggerRef.current = document.activeElement as HTMLElement | null
+                    setDetailsOpen(true)
+                  }}
                   title="Open the class details to confirm them"
                   className="text-info-text bg-info-fill hover:opacity-80 focus-visible:ring-ring/50 shrink-0 rounded-full px-2 py-0.5 text-xs focus-visible:ring-2 focus-visible:outline-none"
                 >
@@ -237,7 +242,12 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={() => setDetailsOpen(true)}>
+              <DropdownMenuItem
+                onSelect={() => {
+                  detailsTriggerRef.current = document.activeElement as HTMLElement | null
+                  setDetailsOpen(true)
+                }}
+              >
                 <Info />
                 Class details
               </DropdownMenuItem>
@@ -316,6 +326,13 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
             classId={classId}
             open={detailsOpen}
             onOpenChange={setDetailsOpen}
+            onCloseAutoFocus={(event) => {
+              // A temporary sheet hands focus back to the control that opened it.
+              // The default restore would land inside the sheet's own (dying) content.
+              event.preventDefault()
+              const trigger = detailsTriggerRef.current
+              if (trigger && trigger.isConnected) trigger.focus()
+            }}
             klass={klass}
           />
           <ClassFormDialog open={editing} onOpenChange={setEditing} klass={klass} />

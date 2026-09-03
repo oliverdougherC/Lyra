@@ -332,8 +332,13 @@ def attach_workspace(
     *,
     root_path: str,
     display_name: str | None = None,
+    read_enabled: bool = False,
 ) -> dict[str, object]:
-    """Attach or replace the one workspace root for a class."""
+    """Attach or replace the one workspace root for a class.
+
+    A just-in-time attach can carry the minimum grant for inspection (reads on the folder
+    the student chose); it never implies the deeper grants, which stay off until asked for
+    separately."""
     classes.get_class(conn, class_id)
     canonical_root, device, inode = _canonical_root(root_path)
     label = (display_name or Path(canonical_root).name or canonical_root).strip()
@@ -345,8 +350,8 @@ def attach_workspace(
         if existing is None:
             cursor = conn.execute(
                 "insert into class_workspaces (class_id, root_path, display_name, root_device, "
-                "root_inode) values (?, ?, ?, ?, ?)",
-                (class_id, canonical_root, label, device, inode),
+                "root_inode, read_enabled) values (?, ?, ?, ?, ?, ?)",
+                (class_id, canonical_root, label, device, inode, int(read_enabled)),
             )
             workspace_id = int(cursor.lastrowid or 0)
         else:
@@ -360,10 +365,10 @@ def attach_workspace(
                 _invalidate_pending_commands(conn, workspace_id, reason="workspace_replaced")
                 conn.execute(
                     "update class_workspaces set root_path = ?, display_name = ?, root_device = ?, "
-                    "root_inode = ?, read_enabled = 0, change_proposals_enabled = 0, "
+                    "root_inode = ?, read_enabled = ?, change_proposals_enabled = 0, "
                     "commands_enabled = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') "
                     "where id = ?",
-                    (canonical_root, label, device, inode, workspace_id),
+                    (canonical_root, label, device, inode, int(read_enabled), workspace_id),
                 )
             else:
                 conn.execute(

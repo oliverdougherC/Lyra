@@ -40,8 +40,8 @@ type AgentWorkSurfaceProps = {
 const ACCESS_SCOPE_LABELS: Record<string, { title: string; enables: string; review: string }> = {
   attach: {
     title: 'Attach a local folder',
-    enables: 'Lyra can look at the folder and ask for specific access when a task needs it.',
-    review: 'Reading, file edits, and command runs each still need their own approval.',
+    enables: 'Lyra can look at the folder and read its files to inspect the project.',
+    review: 'File edits and command runs each still need their own approval.',
   },
   read: {
     title: 'Read the attached folder',
@@ -186,7 +186,9 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
     const list = messages.data ?? []
     // The turn must be settled: its reply is the last thing in the transcript.
     if (list[list.length - 1]?.role !== 'assistant') return
-    const lastUser = [...list].reverse().find((message) => message.role === 'user' && message.agent_attempt)
+    const lastUser = [...list]
+      .reverse()
+      .find((message) => message.role === 'user' && message.agent_attempt)
     if (!lastUser) return
     const turnStart = parseTimestamp(lastUser.created_at).getTime()
     const askedInLastTurn = (activity.data ?? []).some(

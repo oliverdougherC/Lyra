@@ -141,6 +141,35 @@ def test_attachment_defaults_off_and_read_is_class_session_scoped(
     ]
 
 
+def test_attach_grants_only_the_read_minimum_when_asked_for(
+    client: TestClient,
+    class_id: int,
+    session_id: int,
+    tmp_path: Path,
+) -> None:
+    """A just-in-time attach is the student's explicit choice of a folder for inspection:
+    it may carry the read minimum, and nothing deeper. The deeper grants stay off."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "notes.txt").write_text("line one\n", encoding="utf-8")
+
+    attached = client.put(
+        f"/api/classes/{class_id}/workspace",
+        json={"root_path": str(root), "display_name": "Repository", "read_enabled": True},
+    )
+    assert attached.status_code == 201, attached.text
+    assert attached.json()["read_enabled"] is True
+    assert attached.json()["change_proposals_enabled"] is False
+    assert attached.json()["commands_enabled"] is False
+
+    read = client.get(
+        f"/api/classes/{class_id}/sessions/{session_id}/workspace/read",
+        params={"path": "notes.txt"},
+    )
+    assert read.status_code == 200
+    assert read.json()["content"] == "line one\n"
+
+
 def test_workspace_change_requires_exact_single_use_confirmation(
     client: TestClient,
     class_id: int,

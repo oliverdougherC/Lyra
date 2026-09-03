@@ -1,6 +1,7 @@
 'use client'
 
 import { ProfileFacts } from '@/components/profile/profile-facts'
+import * as React from 'react'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Sheet,
@@ -19,21 +20,29 @@ import type { ClassRead } from '@/types'
  * route. That moved here, into the hub's own menu, where the class - not a control - is
  * the subject. The sheet loads only while open, and it is where a fact the class holds
  * can be corrected in place.
+ *
+ * `onCloseAutoFocus` is the caller's chance to take over focus when the sheet closes -
+ * the default hands it to whatever Radix last captured inside the content.
  */
 export function ClassDetailsSheet({
   classId,
   open,
   onOpenChange,
+  onCloseAutoFocus,
   klass,
 }: {
   classId: number
   open: boolean
   onOpenChange: (open: boolean) => void
+  onCloseAutoFocus?: React.ComponentProps<typeof SheetContent>['onCloseAutoFocus']
   klass?: ClassRead | null
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="flex w-full flex-col sm:max-w-md">
+      <SheetContent
+        className="flex w-full flex-col sm:max-w-md"
+        onCloseAutoFocus={onCloseAutoFocus}
+      >
         <SheetHeader className="shrink-0 border-b px-5 py-4">
           <SheetTitle>Class details</SheetTitle>
           <SheetDescription>
