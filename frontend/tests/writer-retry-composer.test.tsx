@@ -64,7 +64,6 @@ function renderWriterPane() {
           classId={1}
           className="ENG 101"
           selectedDocumentId={null}
-          onClearSelectedDocument={() => {}}
           writer={{ artifactId: DRAFT_ID }}
           sessionId={SESSION_ID}
           draft={false}

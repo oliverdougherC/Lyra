@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { describe, expect, it } from 'vitest'
 
@@ -36,8 +37,14 @@ const TRAIL: WriterActivity[] = [
 ]
 
 describe('the activity trail on a message', () => {
-  it('renders a stored trail with its outcomes, failures included', () => {
+  it('keeps a settled trail collapsed by default, behind one Details disclosure', async () => {
     renderRow(<MessageRow message={message({ tool_activity: TRAIL })} />)
+
+    // The answer is what the reader came for: the trail does not sit above it expanded.
+    expect(screen.queryByLabelText('What Lyra did for this reply')).not.toBeInTheDocument()
+    const details = screen.getByRole('button', { name: 'Details' })
+
+    await userEvent.click(details)
 
     const trail = screen.getByLabelText('What Lyra did for this reply')
     expect(trail).toHaveTextContent('Reading section "Introduction"')

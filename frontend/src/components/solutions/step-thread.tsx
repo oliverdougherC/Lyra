@@ -93,7 +93,6 @@ export function StepThread({
         classId={classId}
         className={className}
         selectedDocumentId={null}
-        onClearSelectedDocument={() => undefined}
         sessionId={sessionId}
         draft={sessionId === null}
         anchorPartId={step.id}

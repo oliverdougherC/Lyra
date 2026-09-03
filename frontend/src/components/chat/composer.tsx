@@ -1,10 +1,9 @@
 'use client'
 
 import Link from '@/router/link'
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
-import { ArrowUp, Square, X } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react'
+import { ArrowUp, Square } from 'lucide-react'
 
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
 import { Textarea } from '@/components/ui/textarea'
@@ -26,8 +25,11 @@ type ComposerProps = {
   streaming: boolean
   /** Non-null disables the composer and explains why. */
   disabledReason: string | null
-  scopedDocumentName: string | null
-  onClearScope: () => void
+  /**
+   * The active source context, rendered in the composer's control row. Omitted for a
+   * composer that has no material to scope (the writer reads the class, not a pick).
+   */
+  sourceControl?: ReactNode
   /** Take focus on mount, for a composer the reader has just opened deliberately. */
   autoFocus?: boolean
 }
@@ -39,8 +41,7 @@ export function Composer({
   onStop,
   streaming,
   disabledReason,
-  scopedDocumentName,
-  onClearScope,
+  sourceControl,
   autoFocus = false,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -104,20 +105,6 @@ export function Composer({
 
   return (
     <div className="space-y-2">
-      {scopedDocumentName ? (
-        <Badge variant="secondary" className="max-w-full">
-          <span className="truncate">Only {scopedDocumentName}</span>
-          <button
-            type="button"
-            onClick={onClearScope}
-            aria-label="Clear document scope"
-            className="rounded-full focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-          >
-            <X aria-hidden className="size-3" />
-          </button>
-        </Badge>
-      ) : null}
-
       {/* A sheet of writing paper laid on the canvas: one row, the send control riding the
           last line of type. The lift comes from the surface being genuinely a different
           paper from the pane behind it, not from a heavier border. The shared control-row
@@ -129,6 +116,14 @@ export function Composer({
           'focus-within:border-accent-primary/60 focus-within:shadow-md',
         )}
       >
+        {sourceControl ? (
+          <div
+            data-source-control
+            className="mb-1.5 flex shrink-0 items-center gap-1 text-text-tertiary"
+          >
+            {sourceControl}
+          </div>
+        ) : null}
         <Textarea
           ref={textareaRef}
           rows={1}

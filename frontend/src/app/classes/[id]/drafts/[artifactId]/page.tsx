@@ -861,7 +861,6 @@ export default function DraftWorkspacePage() {
                   classId={classId}
                   className={className}
                   selectedDocumentId={null}
-                  onClearSelectedDocument={() => undefined}
                   writer={{
                     artifactId: loaded.id,
                     onProposed: () => {

@@ -59,7 +59,6 @@ function renderTutorPane() {
           classId={1}
           className="CS 101"
           selectedDocumentId={null}
-          onClearSelectedDocument={() => {}}
           sessionId={SESSION_ID}
           draft={false}
           onSessionIdChange={() => {}}

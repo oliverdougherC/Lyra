@@ -70,22 +70,22 @@ beforeEach(() => {
 })
 
 describe('readHubTab', () => {
-  it('falls back to the overview for anything it does not recognize', () => {
-    expect(readHubTab('documents')).toBe('documents')
-    expect(readHubTab(null)).toBe('overview')
+  it('falls back to the front door for anything it does not recognize', () => {
+    expect(readHubTab('files')).toBe('files')
+    expect(readHubTab(null)).toBe('ask')
     // A hand-edited or stale URL should land somewhere real rather than on a blank panel.
-    expect(readHubTab('nonsense')).toBe('overview')
+    expect(readHubTab('nonsense')).toBe('ask')
   })
 })
 
 describe('ClassHub', () => {
-  it('names the class and every section it holds', async () => {
+  it('names the class and every task it offers', async () => {
     const { wrapper } = createWrapper()
 
-    render(<ClassHub classId={1} tab="overview" />, { wrapper })
+    render(<ClassHub classId={1} tab="ask" />, { wrapper })
 
     expect(await screen.findByRole('heading', { name: 'Continuous-Time Signals' })).toBeVisible()
-    for (const name of ['Overview', 'Chats', 'Solutions', 'Study', 'Documents', 'Profile']) {
+    for (const name of ['Ask', 'Practice', 'Work', 'Files']) {
       expect(screen.getByRole('tab', { name: new RegExp(`^${name}`) })).toBeInTheDocument()
     }
   })
@@ -93,22 +93,22 @@ describe('ClassHub', () => {
   it('shows what is in the class on its tabs, so the counts are readable at a glance', async () => {
     const { wrapper } = createWrapper()
 
-    render(<ClassHub classId={1} tab="overview" />, { wrapper })
+    render(<ClassHub classId={1} tab="ask" />, { wrapper })
 
-    expect(await screen.findByRole('tab', { name: 'Documents 2' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Chats 1' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Solutions 1' })).toBeInTheDocument()
+    expect(await screen.findByRole('tab', { name: 'Files 2' })).toBeInTheDocument()
+    // Work counts the conversations, problem sets, and drafts together - one number for
+    // everything the student was doing, whatever the subsystem that owns each one is.
+    expect(screen.getByRole('tab', { name: 'Work 2' })).toBeInTheDocument()
     // Every collection tab counts once its data has loaded, zero included, so the strip is
     // consistent rather than counting only the tabs that happen to be non-empty (ui-overhaul
-    // 3.2). Overview is a synthesis, not a collection, so it carries no count.
-    expect(screen.getByRole('tab', { name: 'Profile 0' })).toBeInTheDocument()
-    expect(screen.getByRole('tab', { name: 'Overview' })).toBeInTheDocument()
+    // 3.2). Ask is the front door, not a collection, so it carries no count.
+    expect(screen.getByRole('tab', { name: 'Practice 0' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Ask' })).toBeInTheDocument()
   })
-
   it('opens on a continuation surface: ask, resume, and the ways to start', async () => {
     const { wrapper } = createWrapper()
 
-    render(<ClassHub classId={1} tab="overview" />, { wrapper })
+    render(<ClassHub classId={1} tab="ask" />, { wrapper })
 
     // The ask box is the front door: a question typed here lands in a conversation.
     expect(
@@ -129,12 +129,13 @@ describe('ClassHub', () => {
     // it is the thing most worth the student's next click.
     expect(screen.getByRole('link', { name: /One document could not be used/ })).toHaveAttribute(
       'href',
-      '/#/classes/1?tab=documents',
+      '/#/classes/1?tab=files',
     )
     expect(screen.getByText('Needs attention')).toBeInTheDocument()
 
-    // The common starts are verbs, not feature cards, and each goes somewhere real.
-    expect(screen.getByRole('button', { name: 'Practice this material' })).toBeInTheDocument()
+    // Practice is the dominant way in: one balanced session, no choosing first. The rest of
+    // the verbs stay one click away, and each goes somewhere real.
+    expect(screen.getByRole('button', { name: 'Practice now' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Solve a problem set' })).toHaveAttribute(
       'href',
       '/#/classes/1/solutions/new',
@@ -142,7 +143,7 @@ describe('ClassHub', () => {
     expect(screen.getByRole('button', { name: 'Start writing' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Add documents' })).toHaveAttribute(
       'href',
-      '/#/classes/1?tab=documents',
+      '/#/classes/1?tab=files',
     )
   })
 
@@ -154,7 +155,7 @@ describe('ClassHub', () => {
       { id: 5, class_id: 1, filename: 'syllabus.pdf', state: 'failed' },
       { id: 6, class_id: 1, filename: 'notes.pdf', state: 'failed' },
     ] as DocumentRead[])
-    const failedView = render(<ClassHub classId={1} tab="overview" />, { wrapper })
+    const failedView = render(<ClassHub classId={1} tab="ask" />, { wrapper })
     expect(
       await screen.findByRole('link', { name: /2 documents could not be used/ }),
     ).toBeInTheDocument()
@@ -166,12 +167,12 @@ describe('ClassHub', () => {
     vi.spyOn(api, 'listDocuments').mockResolvedValue([
       { id: 8, class_id: 1, filename: 'lecture.key', state: 'unsupported' },
     ] as DocumentRead[])
-    const unsupportedView = render(<ClassHub classId={1} tab="overview" />, {
+    const unsupportedView = render(<ClassHub classId={1} tab="ask" />, {
       wrapper: createWrapper().wrapper,
     })
     expect(
       await screen.findByRole('link', { name: /One document could not be used/ }),
-    ).toHaveAttribute('href', '/#/classes/1?tab=documents')
+    ).toHaveAttribute('href', '/#/classes/1?tab=files')
     expect(screen.getByText('Needs attention')).toBeInTheDocument()
     expect(screen.queryByText(/Nothing uploaded yet/)).not.toBeInTheDocument()
     unsupportedView.unmount()
@@ -182,7 +183,7 @@ describe('ClassHub', () => {
       { id: 5, class_id: 1, filename: 'syllabus.pdf', state: 'failed' },
       { id: 8, class_id: 1, filename: 'lecture.key', state: 'unsupported' },
     ] as DocumentRead[])
-    const mixedView = render(<ClassHub classId={1} tab="overview" />, {
+    const mixedView = render(<ClassHub classId={1} tab="ask" />, {
       wrapper: createWrapper().wrapper,
     })
     expect(
@@ -194,7 +195,7 @@ describe('ClassHub', () => {
     vi.spyOn(api, 'listDocuments').mockResolvedValue([
       { id: 7, class_id: 1, filename: 'slides.pdf', state: 'embedding' },
     ] as DocumentRead[])
-    const workingView = render(<ClassHub classId={1} tab="overview" />, {
+    const workingView = render(<ClassHub classId={1} tab="ask" />, {
       wrapper: createWrapper().wrapper,
     })
     expect(await screen.findByRole('link', { name: /One document being read/ })).toBeInTheDocument()
@@ -203,7 +204,7 @@ describe('ClassHub', () => {
 
     // Truly empty: only now does the empty copy appear.
     vi.spyOn(api, 'listDocuments').mockResolvedValue([])
-    render(<ClassHub classId={1} tab="overview" />, { wrapper: createWrapper().wrapper })
+    render(<ClassHub classId={1} tab="ask" />, { wrapper: createWrapper().wrapper })
     expect(await screen.findByText(/Nothing uploaded yet/)).toBeInTheDocument()
   })
 
@@ -213,9 +214,9 @@ describe('ClassHub', () => {
     vi.spyOn(api, 'listDocuments').mockReturnValue(new Promise(() => {}))
     const { wrapper } = createWrapper()
 
-    render(<ClassHub classId={1} tab="overview" />, { wrapper })
+    render(<ClassHub classId={1} tab="ask" />, { wrapper })
 
-    const practice = await screen.findByRole('button', { name: 'Practice this material' })
+    const practice = await screen.findByRole('button', { name: 'Practice now' })
     expect(practice).toBeDisabled()
   })
 
@@ -225,10 +226,10 @@ describe('ClassHub', () => {
     const listDocuments = vi.spyOn(api, 'listDocuments').mockRejectedValue(new Error('offline'))
     const { wrapper } = createWrapper()
 
-    render(<ClassHub classId={1} tab="overview" />, { wrapper })
+    render(<ClassHub classId={1} tab="ask" />, { wrapper })
 
     expect(await screen.findByText(/The document list did not load/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Practice this material' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Practice now' })).toBeDisabled()
     // Not knowing what is uploaded is not the same as knowing nothing is.
     expect(screen.queryByText(/Nothing uploaded yet/)).not.toBeInTheDocument()
 
@@ -239,7 +240,7 @@ describe('ClassHub', () => {
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: 'Retry' }))
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Practice this material' })).toBeEnabled(),
+      expect(screen.getByRole('button', { name: 'Practice now' })).toBeEnabled(),
     )
     expect(screen.queryByText(/The document list did not load/)).not.toBeInTheDocument()
   })
@@ -247,7 +248,7 @@ describe('ClassHub', () => {
   it('sends a typed question into a new conversation, words and all', async () => {
     const { wrapper } = createWrapper()
 
-    render(<ClassHub classId={1} tab="overview" />, { wrapper })
+    render(<ClassHub classId={1} tab="ask" />, { wrapper })
 
     const user = userEvent.setup()
     const box = await screen.findByRole('textbox', { name: 'Ask about Continuous-Time Signals' })
@@ -257,14 +258,5 @@ describe('ClassHub', () => {
     expect(push).toHaveBeenCalledWith(
       '/classes/1/chat?session=new&ask=Why+does+convolution+flip+the+signal%3F&send=1',
     )
-  })
-
-  it('opens a new conversation at the chat route rather than at the class itself', async () => {
-    const { wrapper } = createWrapper()
-
-    render(<ClassHub classId={1} tab="overview" />, { wrapper })
-
-    const links = await screen.findAllByRole('link', { name: /New chat/ })
-    for (const link of links) expect(link).toHaveAttribute('href', '/#/classes/1/chat?session=new')
   })
 })
