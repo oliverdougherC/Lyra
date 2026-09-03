@@ -42,6 +42,19 @@ def _request_db() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+@pytest.fixture(autouse=True)
+def empty_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Turns without a selected document now retrieve class-wide, like the tutor.
+    Tests that do not exercise retrieval get the same empty result the tutor tests
+    stub with: the hosted CI has no embedding model to embed against."""
+    nothing = RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "retrieve",
+        lambda conn, class_id, query, budget_tokens, document_id=None: nothing,
+    )
+
+
 @pytest.fixture
 def client(db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     db.execute(

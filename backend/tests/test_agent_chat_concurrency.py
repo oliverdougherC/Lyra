@@ -44,6 +44,7 @@ from backend.core import (
 )
 from backend.core.errors import ConflictError, LyraError
 from backend.llm import tools
+from backend.rag.retrieve import RetrievalResult
 from backend.storage.database import connect, get_db
 
 ENDPOINT = "http://127.0.0.1:8080/v1"
@@ -72,6 +73,25 @@ def released_claims() -> Iterator[None]:
     """No test may leak a turn claim into the next: the registry is process-global."""
     yield
     sessions._active_turns.clear()
+
+
+@pytest.fixture(autouse=True)
+def empty_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests exercise claims and attempt lifecycle, not retrieval. The hosted CI
+    has no embedding model downloaded, so serve the same empty retrieval the tutor tests
+    stub (`routes_chat.retrieve`), for both routes these turns can take."""
+
+    def nothing_retrieved(
+        conn: object,
+        class_id: object,
+        query: object,
+        budget_tokens: object,
+        document_id: object | None = None,
+    ) -> RetrievalResult:
+        return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", nothing_retrieved)
+    monkeypatch.setattr(routes_chat, "retrieve", nothing_retrieved)
 
 
 @pytest.fixture
