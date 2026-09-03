@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { EndpointLocalityBadge } from '@/components/layout/endpoint-locality-badge'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -202,6 +203,9 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               Lyra works best with a local model server. Remote endpoints send your documents over
               the network.
             </FieldDescription>
+            <div className="mt-2">
+              <EndpointLocalityBadge />
+            </div>
           </Field>
 
           <Field>

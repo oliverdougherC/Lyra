@@ -9,6 +9,11 @@ import { ReasoningTrace } from '@/components/chat/reasoning-trace'
  * live or settled, because it is the model's working rather than the reply. The header is a
  * trigger in both states, so a live thought is still reachable. A model that does not think
  * renders none of this.
+ *
+ * The settled row says "Thought" and nothing more: the "Thought for 6 seconds" readout was
+ * a system status, not information the reader came for, and the elapsed time of a finished
+ * turn does not travel with the stored message. Live, the same row is the Thinking
+ * indicator, which is the wait made visible.
  */
 describe('ReasoningTrace', () => {
   it('renders nothing for a model that does not think', () => {
@@ -22,7 +27,7 @@ describe('ReasoningTrace', () => {
   })
 
   it('starts closed when settled, so the answer is not pushed down the page', () => {
-    render(<ReasoningTrace text="working through it" durationMs={12000} />)
+    render(<ReasoningTrace text="working through it" />)
     expect(screen.queryByText('working through it')).not.toBeInTheDocument()
   })
 
@@ -31,14 +36,14 @@ describe('ReasoningTrace', () => {
     expect(screen.queryByText('half a thought')).not.toBeInTheDocument()
   })
 
-  it('reports the duration once thinking has stopped', () => {
-    render(<ReasoningTrace text="done" durationMs={12000} />)
-    expect(screen.getByRole('button')).toHaveTextContent('Thought for 12 seconds')
+  it('labels a settled thought a static word, not a nominal duration', () => {
+    render(<ReasoningTrace text="done" />)
+    expect(screen.getByRole('button')).toHaveTextContent('Thought')
+    expect(screen.getByRole('button')).not.toHaveTextContent('for')
   })
 
-  it('says Thinking when no duration was recorded', () => {
-    // A message loaded from history before durations were stored carries no elapsed time.
-    render(<ReasoningTrace text="done" />)
+  it('shows the live wait while streaming', () => {
+    render(<ReasoningTrace text="live thought" streaming startedAt={Date.now()} />)
     expect(screen.getByRole('button')).toHaveTextContent('Thinking')
   })
 
@@ -52,7 +57,7 @@ describe('ReasoningTrace', () => {
   })
 
   it('opens and closes a settled thought', async () => {
-    render(<ReasoningTrace text="settled thought" durationMs={3000} />)
+    render(<ReasoningTrace text="settled thought" />)
     const trigger = screen.getByRole('button')
 
     await userEvent.click(trigger)
@@ -63,27 +68,13 @@ describe('ReasoningTrace', () => {
   })
 
   it('is operable from the keyboard', async () => {
-    render(<ReasoningTrace text="keyboard thought" durationMs={1000} />)
+    render(<ReasoningTrace text="keyboard thought" />)
 
     await userEvent.tab()
     expect(screen.getByRole('button')).toHaveFocus()
 
     await userEvent.keyboard('{Enter}')
     expect(screen.getByText('keyboard thought')).toBeVisible()
-  })
-
-  describe('duration wording', () => {
-    it.each([
-      [1000, 'Thought for 1 second'],
-      [2000, 'Thought for 2 seconds'],
-      [59000, 'Thought for 59 seconds'],
-      [60000, 'Thought for 1 minute'],
-      [120000, 'Thought for 2 minutes'],
-      [90000, 'Thought for 1m 30s'],
-    ])('renders %ims as "%s"', (ms, expected) => {
-      render(<ReasoningTrace text="x" durationMs={ms} />)
-      expect(screen.getByRole('button')).toHaveTextContent(expected)
-    })
   })
 
   describe('markdown is deferred until the thought settles', () => {
@@ -100,7 +91,7 @@ describe('ReasoningTrace', () => {
     })
 
     it('renders a settled thought as markdown', async () => {
-      const { container } = render(<ReasoningTrace text="# a heading" durationMs={1000} />)
+      const { container } = render(<ReasoningTrace text="# a heading" />)
       await userEvent.click(screen.getByRole('button'))
 
       expect(container.querySelector('h1')).not.toBeNull()

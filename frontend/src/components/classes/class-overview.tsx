@@ -167,7 +167,7 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
     if (attentionCount > 0) {
       broken.push({
         key: 'documents-attention',
-        href: `/classes/${classId}?tab=documents`,
+        href: `/classes/${classId}?tab=files`,
         title:
           attentionCount === 1
             ? 'One document could not be used'
@@ -180,7 +180,7 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
     if (ingestingCount > 0) {
       working.push({
         key: 'documents-ingesting',
-        href: `/classes/${classId}?tab=documents`,
+        href: `/classes/${classId}?tab=files`,
         title:
           ingestingCount === 1
             ? 'One document being read'
@@ -205,29 +205,9 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
       const total = dueDecks.reduce((sum, deck) => sum + deck.due_count, 0)
       due.push({
         key: 'due-all',
-        href: `/classes/${classId}?tab=study`,
+        href: `/classes/${classId}?tab=practice`,
         title: 'Review what is due',
         word: { tone: 'info', text: `${total} cards across ${dueDecks.length} decks` },
-        time: null,
-      })
-    }
-
-    const unconfirmed =
-      profile?.facts.filter(
-        (fact) => fact.confidence === 'low' && !fact.confirmed && !fact.rejected,
-      ).length ?? 0
-    if (unconfirmed > 0) {
-      due.push({
-        key: 'profile-unconfirmed',
-        href: `/classes/${classId}?tab=profile`,
-        title: 'Class profile',
-        word: {
-          tone: 'info',
-          text:
-            unconfirmed === 1
-              ? 'One fact needs your confirmation'
-              : `${unconfirmed} facts need your confirmation`,
-        },
         time: null,
       })
     }
@@ -418,32 +398,37 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
         <div className="border-border/70 flex items-center gap-2 border-b pb-2">
           <h2 className="text-xs font-medium tracking-[0.14em] uppercase">Start something</h2>
         </div>
-        <div className="flex flex-wrap gap-x-1 gap-y-1">
+        {/* Practice is the default way in: one balanced session from whatever the class has
+            ready, no choosing of decks, quotas, or difficulty first. The rest of the verbs
+            stay one click away, one line below. */}
+        <div className="flex flex-col gap-3">
           <Button
-            variant="ghost"
-            size="sm"
+            size="lg"
+            className="h-11 self-start"
             onClick={startPractice}
             disabled={createQuiz.isPending || !documentsLoaded}
           >
             {createQuiz.isPending ? <Spinner /> : <Layers aria-hidden className="size-4" />}
-            Practice this material
+            Practice now
           </Button>
-          <Button variant="ghost" size="sm" asChild>
-            <Link href={`/classes/${classId}/solutions/new`}>
-              <SquareCheckBig aria-hidden className="size-4" />
-              Solve a problem set
-            </Link>
-          </Button>
-          <Button variant="ghost" size="sm" onClick={startDraft} disabled={createDraft.isPending}>
-            {createDraft.isPending ? <Spinner /> : <PenLine aria-hidden className="size-4" />}
-            Start writing
-          </Button>
-          <Button variant="ghost" size="sm" asChild>
-            <Link href={`/classes/${classId}?tab=documents`}>
-              <FileUp aria-hidden className="size-4" />
-              Add documents
-            </Link>
-          </Button>
+          <div className="flex flex-wrap gap-x-1 gap-y-1">
+            <Button variant="ghost" size="sm" asChild>
+              <Link href={`/classes/${classId}/solutions/new`}>
+                <SquareCheckBig aria-hidden className="size-4" />
+                Solve a problem set
+              </Link>
+            </Button>
+            <Button variant="ghost" size="sm" onClick={startDraft} disabled={createDraft.isPending}>
+              {createDraft.isPending ? <Spinner /> : <PenLine aria-hidden className="size-4" />}
+              Start writing
+            </Button>
+            <Button variant="ghost" size="sm" asChild>
+              <Link href={`/classes/${classId}?tab=files`}>
+                <FileUp aria-hidden className="size-4" />
+                Add documents
+              </Link>
+            </Button>
+          </div>
         </div>
         {/* A failed query is its own state, said out loud: Practice stays held because
             the ready count is unknown, and a held button with no reason on screen reads

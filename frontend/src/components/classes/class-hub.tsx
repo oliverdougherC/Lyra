@@ -1,22 +1,19 @@
 'use client'
 
 import { useState } from 'react'
-import { Archive, MoreVertical, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
-import Link from '@/router/link'
+import { Archive, Info, MoreVertical, Pencil, RotateCcw, Trash2 } from 'lucide-react'
 import { useRouter } from '@/router/hooks'
 import { toast } from 'sonner'
 
 import { HandUnderline } from '@/components/ex-libris'
-import { ClassChatsPanel } from '@/components/classes/class-chats-panel'
-import { ClassDraftsPanel } from '@/components/classes/class-drafts-panel'
+import { ClassDetailsSheet } from '@/components/profile/class-details-sheet'
 import { ClassFormDialog } from '@/components/classes/class-form-dialog'
 import { ClassOverview } from '@/components/classes/class-overview'
-import { ClassSolutionsPanel } from '@/components/classes/class-solutions-panel'
 import { ClassStudyPanel } from '@/components/classes/class-study-panel'
+import { ClassWorkPanel } from '@/components/classes/class-work-panel'
 import { CourseMark } from '@/components/classes/course-mark'
 import { DeleteClassDialog } from '@/components/classes/delete-class-dialog'
 import { DocumentsPane } from '@/components/documents/documents-pane'
-import { ProfileFacts } from '@/components/profile/profile-facts'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -31,26 +28,52 @@ import { formatRelativeTime } from '@/lib/format'
 import { useSessions } from '@/lib/hooks/use-chat'
 import { useClass, useUpdateClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
-import { useDrafts } from '@/lib/hooks/use-drafts'
 import { useClassProfile } from '@/lib/hooks/use-profile'
+import { useDrafts } from '@/lib/hooks/use-drafts'
 import { useSolutions } from '@/lib/hooks/use-solutions'
 import { useStudyList } from '@/lib/hooks/use-study'
 import { cn } from '@/lib/utils'
 
-export const HUB_TABS = [
-  'overview',
-  'chats',
-  'solutions',
-  'study',
-  'drafts',
-  'documents',
-  'profile',
-] as const
+/**
+ * The four ways into a class, named for the task rather than the subsystem that stores it.
+ *
+ * `ask` is the front door and the default: the class opens onto the question, not onto a
+ * rail of collections. `practice` is the study tools. `work` is everything the student was
+ * doing - the conversations, the problem sets, the half-written answers - in one list, so
+ * no one has to remember which tab a thing lived under. `files` is the document library.
+ * The class facts (the old Profile tab) live in the menu, where the class is the subject.
+ */
+export const HUB_TABS = ['ask', 'practice', 'work', 'files'] as const
 
 export type HubTab = (typeof HUB_TABS)[number]
 
+/**
+ * Old class pages had one tab per subsystem, and bookmarks, history entries, and links
+ * from those days still carry those values. Each lands where that collection lives now
+ * rather than on the default tab: overview was the front door, study became practice,
+ * documents became files, and the profile moved into the class itself.
+ */
+export const LEGACY_HUB_TABS: Record<string, HubTab> = {
+  overview: 'ask',
+  chats: 'work',
+  solutions: 'work',
+  study: 'practice',
+  drafts: 'work',
+  documents: 'files',
+  profile: 'ask',
+}
+
+/** The old tabs whose view is one filtered Work list rather than the whole of Work. */
+export const LEGACY_HUB_WORK_FILTERS: Record<string, 'chats' | 'solutions' | 'drafts'> = {
+  chats: 'chats',
+  solutions: 'solutions',
+  drafts: 'drafts',
+}
+
 export function readHubTab(value: string | null): HubTab {
-  return HUB_TABS.includes(value as HubTab) ? (value as HubTab) : 'overview'
+  if (value === null) return 'ask'
+  if (HUB_TABS.includes(value as HubTab)) return value as HubTab
+  return LEGACY_HUB_TABS[value] ?? 'ask'
 }
 
 /**
@@ -80,11 +103,9 @@ const MARK_SIZE = [
 /**
  * The class, as a place rather than as a shortcut into one conversation.
  *
- * Clicking a class used to open a chat, which made the class the chat and left everything
- * else - the history, the solution sets, the files, the profile - reachable only through
- * the sidebar, where they could be opened but not managed. This is the room those things
- * live in: one header, one tab bar, and every action that belongs to the class in the
- * place the class is.
+ * The hub is one header, four task tabs, and the actions that belong to the class. What
+ * used to be a seventh tab (Profile) and a persistent New chat button are gone: the facts
+ * are a menu item where the class is the subject, and the question has the front door.
  */
 export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
   const router = useRouter()
@@ -99,19 +120,32 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
 
   const [editing, setEditing] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [detailsOpen, setDetailsOpen] = useState(false)
 
   const klass = classQuery.data
-  const chatCount = sessions?.length ?? null
-  const solutionCount = solutions?.length ?? null
   const studyCount = study ? study.decks.length + study.quizzes.length : null
-  const draftCount = drafts?.length ?? null
+  // Work is the getting-back-to-it list: the conversations, the problem sets, the half-
+  // written answers, and the study artifacts, in one count.
+  const workCount =
+    sessions && solutions && drafts && study
+      ? sessions.length +
+        solutions.length +
+        drafts.length +
+        study.decks.length +
+        study.quizzes.length
+      : null
   const documentCount = documents?.length ?? klass?.document_count ?? null
-  const factCount = profile?.facts.length ?? null
+  // Low-confidence facts Lyra has not been confirmed on are the only class facts that
+  // still need the student: everything else is read-only. The count is the affordance,
+  // the sheet is where the confirming happens.
+  const unconfirmedFactCount =
+    profile?.facts.filter((fact) => fact.confidence === 'low' && !fact.confirmed && !fact.rejected)
+      .length ?? 0
 
   // The tab lives in the URL, so a class opened on its files is a link the student can
   // send themselves, and Back out of a tab goes where Back should.
   function selectTab(next: string) {
-    const target = next === 'overview' ? `/classes/${classId}` : `/classes/${classId}?tab=${next}`
+    const target = next === 'ask' ? `/classes/${classId}` : `/classes/${classId}?tab=${next}`
     router.replace(target, { scroll: false })
   }
 
@@ -130,8 +164,8 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
 
   return (
     // `min-h-0 flex-1` so the column can be measured against the window rather than against
-    // its own contents: the Documents tab hands the height it is given to the file list, and
-    // a column sized by its contents would have nothing to hand over.
+    // its own contents: the Files tab hands the height it is given to the file list, and a
+    // column sized by its contents would have nothing to hand over.
     <div className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col gap-6 pt-2 md:pt-6">
       <header className="flex flex-wrap items-start gap-4">
         {/* The mark and the words it names are one block, kept apart from the actions so
@@ -171,17 +205,26 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
                   Archived
                 </span>
               ) : null}
+              {unconfirmedFactCount > 0 ? (
+                // The one class-level uncertainty that still needs the student. A chip in the
+                // subtitle, not a tab: the facts are read silently by every answer, so the
+                // nudge rides on the class itself and opens the sheet where they are resolved.
+                <button
+                  type="button"
+                  onClick={() => setDetailsOpen(true)}
+                  title="Open the class details to confirm them"
+                  className="text-info-text bg-info-fill hover:opacity-80 focus-visible:ring-ring/50 shrink-0 rounded-full px-2 py-0.5 text-xs focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  {unconfirmedFactCount === 1
+                    ? '1 class fact needs confirmation'
+                    : `${unconfirmedFactCount} class facts need confirmation`}
+                </button>
+              ) : null}
             </p>
           </div>
         </div>
 
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          <Button asChild size="sm">
-            <Link href={`/classes/${classId}/chat?session=new`}>
-              <Plus className="size-4" />
-              New chat
-            </Link>
-          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -194,6 +237,10 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => setDetailsOpen(true)}>
+                <Info />
+                Class details
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setEditing(true)}>
                 <Pencil />
                 Rename or edit
@@ -213,65 +260,39 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
       </header>
 
       <Tabs value={tab} onValueChange={selectTab} className="min-h-0 flex-1 gap-6">
-        {/* Scrolls rather than wraps: seven tabs with counts do not fit 375px, and a tab bar
-            on two lines stops reading as one control. */}
+        {/* Scrolls rather than wraps: four task tabs with counts must fit 375px, and a tab
+            bar on two lines stops reading as one control. */}
         <TabsList
           variant="line"
           aria-label="Class sections"
           className="shrink-0 overflow-x-auto overflow-y-hidden"
         >
+          <HubTabButton value="ask" label="Ask" count={null} active={tab === 'ask'} />
           <HubTabButton
-            value="overview"
-            label="Overview"
-            count={null}
-            active={tab === 'overview'}
+            value="practice"
+            label="Practice"
+            count={studyCount}
+            active={tab === 'practice'}
           />
-          <HubTabButton value="chats" label="Chats" count={chatCount} active={tab === 'chats'} />
+          <HubTabButton value="work" label="Work" count={workCount} active={tab === 'work'} />
           <HubTabButton
-            value="solutions"
-            label="Solutions"
-            count={solutionCount}
-            active={tab === 'solutions'}
-          />
-          <HubTabButton value="study" label="Study" count={studyCount} active={tab === 'study'} />
-          <HubTabButton
-            value="drafts"
-            label="Drafts"
-            count={draftCount}
-            active={tab === 'drafts'}
-          />
-          <HubTabButton
-            value="documents"
-            label="Documents"
+            value="files"
+            label="Files"
             count={documentCount}
-            active={tab === 'documents'}
-          />
-          <HubTabButton
-            value="profile"
-            label="Profile"
-            count={factCount}
-            active={tab === 'profile'}
+            active={tab === 'files'}
           />
         </TabsList>
 
-        <TabsContent value="overview">
+        <TabsContent value="ask">
           <ClassOverview classId={classId} className={klass?.name} />
         </TabsContent>
 
-        <TabsContent value="chats">
-          <ClassChatsPanel classId={classId} />
-        </TabsContent>
-
-        <TabsContent value="solutions">
-          <ClassSolutionsPanel classId={classId} />
-        </TabsContent>
-
-        <TabsContent value="study">
+        <TabsContent value="practice">
           <ClassStudyPanel classId={classId} />
         </TabsContent>
 
-        <TabsContent value="drafts">
-          <ClassDraftsPanel classId={classId} />
+        <TabsContent value="work">
+          <ClassWorkPanel classId={classId} />
         </TabsContent>
 
         {/* The one tab that takes the height it is given rather than asking for a height of
@@ -279,7 +300,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
             floor, so the well is on screen at whatever size the window is - it was a fixed
             70svh before, which is a guess that is wrong on both sides: short windows had to
             be scrolled to reach the well, tall ones left a band of empty page beneath it. */}
-        <TabsContent value="documents" className="flex min-h-0 flex-1 flex-col gap-4">
+        <TabsContent value="files" className="flex min-h-0 flex-1 flex-col gap-4">
           <p className="text-text-secondary shrink-0 text-sm">
             Everything Lyra reads for this class. Select files to move or delete them.
           </p>
@@ -287,20 +308,16 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
             <DocumentsPane classId={classId} variant="manage" />
           </div>
         </TabsContent>
-
-        <TabsContent value="profile">
-          <div className="flex flex-col gap-4">
-            <p className="text-text-secondary text-sm">
-              What Lyra has worked out about this class from everything you uploaded. Click any
-              value to correct it.
-            </p>
-            <ProfileFacts classId={classId} />
-          </div>
-        </TabsContent>
       </Tabs>
 
       {klass ? (
         <>
+          <ClassDetailsSheet
+            classId={classId}
+            open={detailsOpen}
+            onOpenChange={setDetailsOpen}
+            klass={klass}
+          />
           <ClassFormDialog open={editing} onOpenChange={setEditing} klass={klass} />
           <DeleteClassDialog
             klass={deleting ? klass : null}
@@ -344,7 +361,7 @@ function HubTabButton({
         {active ? <HandUnderline /> : null}
       </span>
       {/* A real space before the count, not only the margin: without it the tab announces
-          as "Documents17", because JSX drops the newline between the label and this. */}
+          as "Files17", because JSX drops the newline between the label and this. */}
       {count !== null ? (
         <>
           {' '}

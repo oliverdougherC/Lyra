@@ -59,6 +59,8 @@ Thumbs.db
 # Local agent tooling state (machine-specific, not project config)
 .codex/
 .openclaude-profile.json
+.pla401-spec/
+.pla401-part*.md
 
 # Python security gate work dir (exported requirements + evidence; regenerated per run)
 .security-audit/

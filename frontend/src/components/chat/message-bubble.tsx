@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { AlertTriangle, Check, Copy, RefreshCw, X } from 'lucide-react'
+import { AlertTriangle, Check, ChevronRight, Copy, RefreshCw, X } from 'lucide-react'
 
 import { LyraAvatar } from '@/components/chat/lyra-mark'
 import { ReasoningTrace } from '@/components/chat/reasoning-trace'
@@ -12,6 +12,7 @@ import {
   type ProcessingStage,
 } from '@/components/chat/thinking-indicator'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatCount, formatRelativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -53,11 +54,6 @@ type MessageRowProps = {
   processingStage?: ProcessingStage | null
   /** When the turn started, so the wait can report how long it has run. */
   turnStartedAt?: number | null
-  /**
-   * How long the model spent thinking on the turn currently streaming. A message read back
-   * from the server carries its own `thinking_ms` instead, which is what this falls back to.
-   */
-  thinkingDurationMs?: number | null
   turnEnded?: boolean
   onRevealComplete?: () => void
   canRetry?: boolean
@@ -72,7 +68,6 @@ export function MessageRow({
   activity,
   processingStage,
   turnStartedAt,
-  thinkingDurationMs,
   turnEnded,
   onRevealComplete,
   canRetry,
@@ -119,16 +114,24 @@ export function MessageRow({
     <div className={cn('group flex w-full gap-3', className)}>
       <LyraAvatar thinking={Boolean(streaming) && !hasAnswer} />
       <div className="min-w-0 flex-1">
-        {message.thinking.trim() ? (
-          <ReasoningTrace
-            text={message.thinking}
-            streaming={thinkingNow}
-            startedAt={turnStartedAt}
-            durationMs={thinkingDurationMs ?? (message.thinking_ms || null)}
-          />
+        {/* Live, the thought and the tool trail are visible while they move. Settled, the
+            turn keeps one quiet record of how the answer was made - a single collapsed
+            `Details` disclosure, because a `Thought for 6 seconds` line that outlives the
+            turn is the machine narrating itself, not the student's task. */}
+        {streaming ? (
+          <>
+            {message.thinking.trim() ? (
+              <ReasoningTrace
+                text={message.thinking}
+                streaming={thinkingNow}
+                startedAt={turnStartedAt}
+              />
+            ) : null}
+            {trail.length > 0 ? <ActivityTrail entries={trail} working={working} /> : null}
+          </>
+        ) : message.thinking.trim() || trail.length > 0 ? (
+          <TurnDetails thinking={message.thinking} trail={trail} />
         ) : null}
-
-        {trail.length > 0 ? <ActivityTrail entries={trail} working={working} /> : null}
 
         {waiting ? (
           <ThinkingIndicator
@@ -198,6 +201,59 @@ function ActivityTrail({ entries, working }: { entries: WriterActivity[]; workin
         )
       })}
     </div>
+  )
+}
+
+/**
+ * The one collapsed record of how a settled answer was made: the reasoning model's thought
+ * and the writer's tool trail behind a single `Details` disclosure.
+ *
+ * While a turn is live, the moving parts are shown - a thought being written, a tool call
+ * in flight - because that is what the reader is waiting for. Once the answer has landed,
+ * none of it is the task any more. A permanent `Thought for 6 seconds` line is the machine
+ * narrating itself, and it sat above the answer in every settled message. The detail stays
+ * one click away for anyone who wants to see how it was reached, but the default is the
+ * answer, which is what the student came for.
+ *
+ * A model that neither thinks nor calls tools never renders this at all.
+ */
+function TurnDetails({ thinking, trail }: { thinking: string; trail: WriterActivity[] }) {
+  return (
+    <Collapsible className="mb-3">
+      <CollapsibleTrigger
+        className={cn(
+          'group/details -mx-1 flex h-7 items-center gap-1.5 rounded-md px-1 text-text-tertiary',
+          'transition-colors hover:text-text-secondary',
+          'focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
+        )}
+      >
+        <ChevronRight
+          aria-hidden
+          className="size-3 shrink-0 transition-transform duration-200 group-data-[state=open]/details:rotate-90"
+        />
+        <span className="text-xs">Details</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent
+        className={cn(
+          'overflow-hidden',
+          'data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down',
+        )}
+      >
+        <div className="mt-2 flex flex-col gap-3">
+          {thinking.trim() ? (
+            <div
+              className={cn(
+                'reasoning-body scrollbar-none max-h-[22rem] overflow-y-auto border-l border-border pl-3',
+                'font-ai-response text-text-secondary text-[0.9375rem] leading-6',
+              )}
+            >
+              <StreamingMarkdown content={thinking} />
+            </div>
+          ) : null}
+          {trail.length > 0 ? <ActivityTrail entries={trail} /> : null}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   )
 }
 

@@ -115,7 +115,7 @@ export default function StudySessionPage() {
         <AlertDescription>
           <p>It may have been deleted. Open another one from the workspace.</p>
           <Button asChild variant="outline" size="sm" className="mt-3">
-            <Link href={`/classes/${classId}?tab=study`}>Back to study tools</Link>
+            <Link href={`/classes/${classId}?tab=practice`}>Back to practice</Link>
           </Button>
         </AlertDescription>
       </Alert>
@@ -133,9 +133,9 @@ export default function StudySessionPage() {
     <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6">
       <header className="flex flex-wrap items-center gap-3 pt-2 md:pt-6">
         <Button asChild variant="ghost" size="sm" className="-ml-2">
-          <Link href={`/classes/${classId}?tab=study`}>
+          <Link href={`/classes/${classId}?tab=practice`}>
             <ArrowLeft className="size-4" />
-            Study tools
+            Practice
           </Link>
         </Button>
         <h1 className="font-heading text-text-primary min-w-0 truncate text-2xl tracking-tight">
@@ -176,7 +176,7 @@ export default function StudySessionPage() {
           <AlertDescription>
             <p>{errorMessage ?? 'Something went wrong while working on it.'}</p>
             <Button asChild variant="outline" size="sm" className="mt-3">
-              <Link href={`/classes/${classId}?tab=study`}>Back to study tools</Link>
+              <Link href={`/classes/${classId}?tab=practice`}>Back to practice</Link>
             </Button>
           </AlertDescription>
         </Alert>
@@ -188,7 +188,7 @@ export default function StudySessionPage() {
           <AlertDescription>
             <p>Generation was stopped before it finished.</p>
             <Button asChild variant="outline" size="sm" className="mt-3">
-              <Link href={`/classes/${classId}?tab=study`}>Back to study tools</Link>
+              <Link href={`/classes/${classId}?tab=practice`}>Back to practice</Link>
             </Button>
           </AlertDescription>
         </Alert>

@@ -9,19 +9,18 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { cn } from '@/lib/utils'
 
 /**
- * A reasoning model's thought, shown apart from the answer.
+ * A reasoning model's thought, shown live while the turn it belongs to is still moving.
  *
  * Always closed until the reader opens it. A thought is the model's working, not the reply:
  * unfolding it unasked pushes the answer down the page and makes the reader watch a draft
- * they did not ask to read. The header still reports that thinking is happening and how long
- * it has run, which is what the wait actually needs; the thought behind it is one click away
- * for anyone who wants it, live while the model is still writing it.
+ * they did not ask to read. The header still reports that thinking is happening, which is
+ * what the wait actually needs; the thought behind it is one click away, live while the
+ * model is still writing it.
  *
- * A trace opened mid-turn returns to closed when the turn lands, because the streaming row is
- * replaced by the stored message and this mounts fresh against it. That is the right end
- * state anyway: once the answer is there, the answer is what the reader came for. Opening a
- * settled trace keeps it open, since nothing replaces it. The thought is stored with the
- * message, so it survives a reload either way.
+ * A trace opened mid-turn returns to closed when the turn lands, because the streaming row
+ * is replaced by the stored message and this unmounts with it. The stored message keeps the
+ * thought under its own collapsed `Details` disclosure (see `TurnDetails`), which is the
+ * right end state: once the answer is there, the answer is what the reader came for.
  *
  * A model that does not think never renders this at all.
  */
@@ -33,31 +32,15 @@ import { cn } from '@/lib/utils'
  */
 const LIVE_WINDOW = 'max-h-[9.5rem] [mask-image:linear-gradient(to_bottom,transparent,black_2rem)]'
 
-function formatDuration(ms: number): string {
-  const seconds = Math.round(ms / 1000)
-  if (seconds < 60) return `${seconds} second${seconds === 1 ? '' : 's'}`
-  const minutes = Math.floor(seconds / 60)
-  const rest = seconds % 60
-  if (rest === 0) return `${minutes} minute${minutes === 1 ? '' : 's'}`
-  return `${minutes}m ${rest}s`
-}
-
 type ReasoningTraceProps = {
   text: string
   /** True while the thought itself is still arriving. */
   streaming?: boolean
-  /** When the turn started, used for the live counter and the settled duration. */
+  /** When the turn started, for the live counter. */
   startedAt?: number | null
-  /** How long thinking took, once known. Absent on a message loaded from history. */
-  durationMs?: number | null
 }
 
-export function ReasoningTrace({
-  text,
-  streaming = false,
-  startedAt = null,
-  durationMs = null,
-}: ReasoningTraceProps) {
+export function ReasoningTrace({ text, streaming = false, startedAt = null }: ReasoningTraceProps) {
   const [open, setOpen] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
   // The reader may scroll back through a long thought while it is still being written;
@@ -74,8 +57,9 @@ export function ReasoningTrace({
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="mb-3">
-      {/* One trigger for both states. A live thought has to be reachable too, or the reader
-          is told the model is thinking and given no way to look. */}
+      {/* One trigger for both live states. A live thought has to be reachable, or the
+          reader is told the model is thinking and given no way to look. The settled
+          record lives with the stored message, not here. */}
       {/* `h-7` matches the mark beside it and a line of the answer's prose, so the first row
           of a reply is one consistent height whether it leads with a thought, a wait, or the
           answer itself, and the mark never shifts as a turn moves between them. */}
@@ -90,12 +74,14 @@ export function ReasoningTrace({
           aria-hidden
           className="size-3 shrink-0 transition-transform duration-200 group-data-[state=open]/trace:rotate-90"
         />
+        {/* Live, the counter is the wait made visible. Settled-but-still-streaming, the
+            thought is done and the answer is moving, so a static word is the honest
+            label: the elapsed duration is nominal, and it no longer travels with the
+            stored message. */}
         {streaming ? (
           <ThinkingIndicator label="Thinking" startedAt={startedAt} />
         ) : (
-          <span className="text-xs">
-            {durationMs !== null ? `Thought for ${formatDuration(durationMs)}` : 'Thinking'}
-          </span>
+          <span className="text-xs">Thought</span>
         )}
       </CollapsibleTrigger>
 

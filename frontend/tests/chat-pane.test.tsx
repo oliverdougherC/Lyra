@@ -64,7 +64,6 @@ function Workspace() {
         classId={1}
         className="ECE 203"
         selectedDocumentId={null}
-        onClearSelectedDocument={() => {}}
         sessionId={sessionId}
         draft={sessionId === null}
         onSessionIdChange={setSessionId}
@@ -258,7 +257,6 @@ describe('ChatPane handoffs', () => {
             classId={1}
             className="ECE 203"
             selectedDocumentId={null}
-            onClearSelectedDocument={() => {}}
             sessionId={null}
             draft
             onSessionIdChange={() => {}}
@@ -331,7 +329,6 @@ describe('ChatPane handoffs', () => {
             classId={1}
             className="ECE 203"
             selectedDocumentId={null}
-            onClearSelectedDocument={() => {}}
             sessionId={7}
             draft={false}
             onSessionIdChange={() => {}}

@@ -156,8 +156,8 @@ describe('StudySessionPage', () => {
     render(<StudySessionPage />, { wrapper })
 
     expect(await screen.findByText('No topics found')).toBeInTheDocument()
-    const backLink = screen.getByRole('link', { name: /Back to study tools/ })
-    expect(backLink).toHaveAttribute('href', '/#/classes/1?tab=study')
+    const backLink = screen.getByRole('link', { name: /Back to practice/ })
+    expect(backLink).toHaveAttribute('href', '/#/classes/1?tab=practice')
     expect(screen.queryByTestId('deck-session')).not.toBeInTheDocument()
   })
 
@@ -172,8 +172,8 @@ describe('StudySessionPage', () => {
     render(<StudySessionPage />, { wrapper })
 
     expect(await screen.findByText('This was cancelled')).toBeInTheDocument()
-    const backLink = screen.getByRole('link', { name: /Back to study tools/ })
-    expect(backLink).toHaveAttribute('href', '/#/classes/1?tab=study')
+    const backLink = screen.getByRole('link', { name: /Back to practice/ })
+    expect(backLink).toHaveAttribute('href', '/#/classes/1?tab=practice')
     expect(screen.queryByTestId('deck-session')).not.toBeInTheDocument()
   })
 
@@ -275,7 +275,7 @@ describe('StudySessionPage', () => {
     render(<StudySessionPage />, { wrapper })
 
     expect(await screen.findByText('That study tool is not in this class')).toBeInTheDocument()
-    const backLink = screen.getByRole('link', { name: /Back to study tools/ })
-    expect(backLink).toHaveAttribute('href', '/#/classes/1?tab=study')
+    const backLink = screen.getByRole('link', { name: /Back to practice/ })
+    expect(backLink).toHaveAttribute('href', '/#/classes/1?tab=practice')
   })
 })

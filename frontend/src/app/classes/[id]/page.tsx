@@ -1,8 +1,15 @@
 'use client'
 
-import { useParams, useSearchParams } from '@/router/hooks'
+import { useEffect } from 'react'
+import { useParams, useRouter, useSearchParams } from '@/router/hooks'
 
-import { ClassHub, readHubTab } from '@/components/classes/class-hub'
+import {
+  ClassHub,
+  HUB_TABS,
+  LEGACY_HUB_TABS,
+  LEGACY_HUB_WORK_FILTERS,
+  readHubTab,
+} from '@/components/classes/class-hub'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { useClass } from '@/lib/hooks/use-classes'
@@ -28,8 +35,32 @@ export default function ClassHubPage() {
   // one does. A boundary here rendered the whole hub twice - once as the fallback, once
   // for real - and left both copies in the document, so the upload inputs and the pane's
   // scroll container each existed under two elements carrying the same id.
-  const tab = useSearchParams().get('tab')
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const tab = searchParams.get('tab')
   const classQuery = useClass(classId ?? Number.NaN)
+  // A bookmark or history entry from the seven-tab era names a subsystem, not a task.
+  // Read it as the task that owns the same view now (readHubTab), then rewrite it once to
+  // the canonical destination: ?tab=study becomes ?tab=practice, ?tab=documents becomes
+  // ?tab=files, and ?tab=chats becomes ?tab=work&work=chats, so a reload of the old link
+  // lands where the rewrite did and the URL stops carrying a dead tab name.
+  useEffect(() => {
+    if (classId === null || tab === null) return
+    if (HUB_TABS.includes(tab as (typeof HUB_TABS)[number])) return
+    const legacyTab = LEGACY_HUB_TABS[tab]
+    if (legacyTab === undefined) return
+    if (legacyTab === 'ask') {
+      // The front door has no param: ask is what a bare class link already means.
+      router.replace(`/classes/${classId}`, { scroll: false })
+      return
+    }
+    const workFilter = LEGACY_HUB_WORK_FILTERS[tab]
+    const search = new URLSearchParams()
+    search.set('tab', legacyTab)
+    if (workFilter) search.set('work', workFilter)
+    const query = search.toString()
+    router.replace(`/classes/${classId}${query ? `?${query}` : ''}`, { scroll: false })
+  }, [classId, tab, router])
 
   if (classId === null) {
     return (

@@ -26,8 +26,6 @@ function baseProps(overrides: Partial<Props> = {}): Props {
     onStop: noop,
     streaming: false,
     disabledReason: null,
-    scopedDocumentName: null,
-    onClearScope: noop,
     ...overrides,
   }
 }

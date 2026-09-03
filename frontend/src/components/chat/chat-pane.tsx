@@ -38,9 +38,9 @@ const MODES: { value: ChatMode; label: string; hint: string }[] = [
   {
     value: 'guide',
     label: 'Guide',
-    hint: 'Lyra asks leading questions and holds back the answer.',
+    hint: 'Lyra works toward your understanding - explaining, scaffolding, checking in - at a pace you can follow.',
   },
-  { value: 'show', label: 'Show', hint: 'Lyra explains the full solution directly.' },
+  { value: 'show', label: 'Show', hint: 'Lyra works through the full answer, start to finish.' },
 ]
 
 /**
@@ -66,7 +66,6 @@ type ChatPaneProps = {
   classId: number
   className?: string
   selectedDocumentId: number | null
-  onClearSelectedDocument: () => void
   /** Present in the draft workspace: this pane speaks to the writer, not the tutor. */
   writer?: WriterVariant
   /** The conversation to show; `null` falls back to the newest one. */
@@ -116,6 +115,11 @@ type ChatPaneProps = {
    * are the main topics in this class?" would be answering a question nobody asked.
    */
   emptyState?: React.ReactNode
+  /**
+   * The active source context, rendered in the composer's control row. A writer variant
+   * passes nothing - the writer reads the class, not a pick.
+   */
+  sourceControl?: React.ReactNode
 }
 
 /** How close to the bottom still counts as "following the conversation". */
@@ -147,7 +151,6 @@ export function ChatPane({
   classId,
   className = 'Class',
   selectedDocumentId,
-  onClearSelectedDocument,
   writer,
   sessionId: sessionIdProp = null,
   draft: isDraft = false,
@@ -159,6 +162,7 @@ export function ChatPane({
   onSessionIdChange,
   headerActions,
   emptyState,
+  sourceControl,
 }: ChatPaneProps) {
   const inline = layout === 'inline'
   // Matches the workspace's own desktop breakpoint, so the controls move into the header
@@ -184,7 +188,6 @@ export function ChatPane({
   const [streamThinking, setStreamThinking] = useState('')
   const [streamActivity, setStreamActivity] = useState<WriterActivity[]>([])
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
-  const [thinkingDurationMs, setThinkingDurationMs] = useState<number | null>(null)
   const [processingStage, setProcessingStage] = useState<ProcessingStage | null>(null)
   const [turnOutcome, setTurnOutcome] = useState<TurnOutcome | null>(null)
   const [turnKind, setTurnKind] = useState<TurnKind>('send')
@@ -324,7 +327,6 @@ export function ChatPane({
     setStreamThinking('')
     setStreamActivity([])
     setTurnStartedAt(null)
-    setThinkingDurationMs(null)
     streamTextRef.current = ''
     setProcessingStage(null)
     setTurnOutcome(null)
@@ -439,7 +441,6 @@ export function ChatPane({
       setProcessingStage('prompt_processing')
       turnOpenedAtRef.current = performance.now()
       setTurnStartedAt(turnOpenedAtRef.current)
-      setThinkingDurationMs(null)
 
       const now = new Date().toISOString()
       let assistantText = ''
@@ -476,13 +477,6 @@ export function ChatPane({
         // writes it down. It just has no rows of its own to put it in any more.
         if (!owns()) return
         if (event.type === 'token') {
-          // The first word of the answer is what ends thinking, so the elapsed time is
-          // fixed here rather than when the reasoning channel happens to fall quiet.
-          if (assistantText.length === 0 && reasoningText.length > 0) {
-            setThinkingDurationMs(
-              (current) => current ?? performance.now() - turnOpenedAtRef.current,
-            )
-          }
           assistantText += event.text
           streamTextRef.current = assistantText
           setStreamText(assistantText)
@@ -980,7 +974,6 @@ export function ChatPane({
               activity={isStreamingReply ? streamActivity : undefined}
               processingStage={isStreamingReply ? processingStage : null}
               turnStartedAt={isStreamingReply ? turnStartedAt : null}
-              thinkingDurationMs={isStreamingReply ? thinkingDurationMs : null}
               turnEnded={
                 isStreamingReply
                   ? turnOutcome === 'completed' || turnOutcome === 'stopped'
@@ -1020,8 +1013,7 @@ export function ChatPane({
       onStop={stop}
       streaming={turnActive}
       disabledReason={disabledReason}
-      scopedDocumentName={scopedDocument?.filename ?? null}
-      onClearScope={onClearSelectedDocument}
+      sourceControl={sourceControl}
       // Inline, the reader clicked to open this and the next thing they do is type.
       autoFocus={inline}
     />

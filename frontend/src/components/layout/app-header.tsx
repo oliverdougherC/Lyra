@@ -1,20 +1,21 @@
 'use client'
 
-import { useCallback, useRef, useState } from 'react'
-import { ChevronRight, UserRound } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import Link from '@/router/link'
 import { usePathname } from '@/router/hooks'
-
-import { Dentil } from '@/components/ex-libris'
-import { EndpointLocalityBadge } from '@/components/layout/endpoint-locality-badge'
-import { HEADER_ACTIONS_SLOT, HEADER_CRUMB_SLOT } from '@/components/layout/page-chrome'
-import { ClassProfileSheet } from '@/components/profile/class-profile-sheet'
-import { Button } from '@/components/ui/button'
 import { SidebarTrigger } from '@/components/ui/sidebar'
+
 import { cn } from '@/lib/utils'
 import { useClasses } from '@/lib/hooks/use-classes'
 
-type Crumb = { label: string; href?: string; detail?: string }
+const HEADER_CRUMB_SLOT = 'lyra-header-crumb'
+const HEADER_ACTIONS_SLOT = 'lyra-header-actions'
+
+type Crumb = {
+  label: string
+  href?: string
+  detail?: string
+}
 
 function readClassId(pathname: string): number | null {
   const match = /^\/classes\/(\d+)/.exec(pathname)
@@ -24,24 +25,18 @@ function readClassId(pathname: string): number | null {
 }
 
 /**
- * The header carries the breadcrumb, and on class pages the class code and its profile
- * button, so the workspace below starts right at the panes.
+ * The application's lintel: the one bar the shell never takes away, carrying the
+ * breadcrumb, the route's portaled title and actions.
  *
- * Args:
- *   collapsed: Slide out of the way and give the row back, for a route that has asked for
- *     the window. Rendered rather than unmounted, so the bar animates out and back and the
- *     breadcrumb portal below it keeps its target across the transition - unmounting the
- *     slot would leave a workspace's title with nowhere to go and nothing to return to.
+ * What it used to hold on a class route - the endpoint readout, the Profile button and its
+ * sheet - is gone. The endpoint readout moved to Settings, where the endpoint is actually
+ * changed; the profile moved into the class hub's own menu, where the class is the subject.
+ * The bar keeps the skip link, the crumb, and the route slots, and it is `inert` in
+ * immersive mode so a keyboard user is not tabbed into a control the screen does not show.
  */
 export function AppHeader({ collapsed = false }: { collapsed?: boolean }) {
   const pathname = usePathname()
   const { data: classes } = useClasses()
-  const [profileOpen, setProfileOpen] = useState(false)
-  const profileTriggerRef = useRef<HTMLButtonElement>(null)
-  const onProfileOpenChange = useCallback((open: boolean) => {
-    setProfileOpen(open)
-    if (!open) requestAnimationFrame(() => profileTriggerRef.current?.focus())
-  }, [])
 
   const classId = readClassId(pathname)
   const klass = classId !== null ? (classes?.find((item) => item.id === classId) ?? null) : null
@@ -78,9 +73,6 @@ export function AppHeader({ collapsed = false }: { collapsed?: boolean }) {
           : 'relative h-14 translate-y-0 border-b opacity-100',
       )}
     >
-      {/* The lintel's dentil course, cut into the stone beneath the crumb. Decorative, still,
-          and clipped away with the rest of the bar in immersive mode. */}
-      {collapsed ? null : <Dentil className="absolute inset-x-0 -bottom-1" />}
       <SidebarTrigger className="-ml-1" />
       <nav aria-label="Breadcrumb" className="min-w-0 flex-1">
         <ol className="flex items-center gap-1.5 text-[13px]">
@@ -136,29 +128,6 @@ export function AppHeader({ collapsed = false }: { collapsed?: boolean }) {
       {/* The route's own actions, ahead of the class-level ones: they belong to what is on
           screen, and a workspace that gives up its title row has nowhere else to put them. */}
       <div id={HEADER_ACTIONS_SLOT} className="flex shrink-0 items-center gap-1" />
-
-      {/* The privacy readout is always on the lintel, whatever route is open. */}
-      <EndpointLocalityBadge className="hidden shrink-0 sm:inline-flex" />
-
-      {klass ? (
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            ref={profileTriggerRef}
-            variant="ghost"
-            size="sm"
-            className="text-text-secondary hover:text-text-primary"
-            onClick={() => setProfileOpen(true)}
-          >
-            <UserRound aria-hidden className="size-3.5" />
-            Profile
-          </Button>
-          <ClassProfileSheet
-            classId={klass.id}
-            open={profileOpen}
-            onOpenChange={onProfileOpenChange}
-          />
-        </div>
-      ) : null}
     </header>
   )
 }

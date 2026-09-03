@@ -1,13 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Bot, FileText, SquareCheckBig } from 'lucide-react'
-import Link from '@/router/link'
+import { Bot } from 'lucide-react'
 import { useParams, useRouter, useSearchParams } from '@/router/hooks'
 
-import { ChatPane } from '@/components/chat/chat-pane'
 import { AgentPanel } from '@/components/agent/agent-panel'
-import { DocumentsPane } from '@/components/documents/documents-pane'
+import { ChatPane } from '@/components/chat/chat-pane'
+import { SourceContext } from '@/components/chat/source-context'
 import { useFullBleed } from '@/components/layout/page-chrome'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -36,10 +35,18 @@ function parseOpen(raw: string): boolean {
   return raw === 'true'
 }
 
+/**
+ * The class conversation, alone in the window.
+ *
+ * The workspace is the page here: the whole window is the workbench, and the only
+ * question it owns is which material the answer reads. The documents column moved out to
+ * the class Files tab. The agent column stays as a temporary compatibility bridge (see
+ * below): its replacement is the contextual agent in #65, and until that is merged the
+ * existing entry point must keep working.
+ */
 export default function ClassWorkspacePage() {
   const params = useParams<{ id: string }>()
   const classId = readClassId(params.id)
-  const compact = useMediaQuery('(max-width: 1023px)')
   const router = useRouter()
   const searchParams = useSearchParams()
 
@@ -60,6 +67,17 @@ export default function ClassWorkspacePage() {
     router.replace(`/classes/${classId}/chat${query ? `?${query}` : ''}`, { scroll: false })
   }, [classId, router, searchParams])
 
+  // ── Temporary Agent compatibility bridge (removed by #65) ─────────────────────────
+  // This page used to be the agent's only door: a header toggle opening the AgentPanel
+  // column, a workspace tab below 1024px. #64 removes the surrounding chrome (documents
+  // column, Solve button) but not this door, because #65's contextual agent does not exist
+  // yet and main must never lose a working capability. It is kept deliberately un-
+  // prominent - the same ghost button and column it was - and #65 deletes it when the
+  // replacement entry point lands.
+  const compact = useMediaQuery('(max-width: 1023px)')
+  const agentStorageKey = `lyra-workspace-agent-open-${classId ?? 'unknown'}`
+  const [agentOpen, setAgentOpen] = useLocalStorageState(agentStorageKey, false, parseOpen)
+
   // The conversation is part of the URL so sidebar chats are linkable and reloadable.
   // The URL is the only source of truth here: mirroring it into state meant every
   // navigation set state from an effect and re-rendered the workspace twice.
@@ -78,20 +96,8 @@ export default function ClassWorkspacePage() {
     [classId, router],
   )
 
-  // Documents open into the space the reading column was never going to use, so the
-  // conversation does not shrink when the list appears. Closed by default, per class.
-  const documentsStorageKey = `lyra-workspace-documents-open-${classId ?? 'unknown'}`
-  const [documentsOpen, setDocumentsOpen] = useLocalStorageState(
-    documentsStorageKey,
-    false,
-    parseOpen,
-  )
-  const agentStorageKey = `lyra-workspace-agent-open-${classId ?? 'unknown'}`
-  const [agentOpen, setAgentOpen] = useLocalStorageState(agentStorageKey, false, parseOpen)
-
   const classQuery = useClass(classId ?? Number.NaN)
-  const { data: documentList } = useDocuments(classId ?? Number.NaN)
-  const documentCount = documentList?.length ?? null
+  const documentsQuery = useDocuments(classId ?? Number.NaN)
 
   // The workspace is the page here, so it gets the window. Not while the class failed to
   // load: that is an alert in a column, which wants the ordinary frame.
@@ -128,93 +134,61 @@ export default function ClassWorkspacePage() {
   }
 
   const className = classQuery.data?.name ?? 'Class'
-  const documents = (
-    <DocumentsPane
-      classId={classId}
-      selectedDocumentId={selectedDocumentId}
-      onSelectDocument={setSelectedDocumentId}
-      onClose={compact ? undefined : () => setDocumentsOpen(false)}
+
+  // The composer's source context: one chip, one click into a popover, one answer to
+  // "what Lyra reads for this question". Everything ready is the default; a single file
+  // is a deliberate scope. Managing those files is not this page's job - the class Files
+  // tab owns that.
+  const sourceControl = (
+    <SourceContext
+      documents={documentsQuery.data}
+      documentsError={documentsQuery.error}
+      onRetryDocuments={() => void documentsQuery.refetch()}
+      selectedId={selectedDocumentId}
+      onSelect={setSelectedDocumentId}
     />
   )
+
+  // The conversation is part of the URL so sidebar chats are linkable and reloadable.
   const chat = (
     <ChatPane
       key={classId}
       classId={classId}
       className={className}
       selectedDocumentId={selectedDocumentId}
-      onClearSelectedDocument={() => setSelectedDocumentId(null)}
       sessionId={sessionId}
       draft={draftSession}
       initialAsk={handoff.ask}
       initialSend={handoff.send}
+      sourceControl={sourceControl}
       onSessionIdChange={handleSessionIdChange}
       headerActions={
-        <>
-          {/* Solve is the third rung of the Guide/Show/Solve ladder, and until this
-              existed it was the only rung with no way into it from the workspace: the
-              solver lived exclusively in a sidebar sub-item below the conversation list.
-              A peer of Documents rather than of Guide and Show, because those two change
-              how the current answer is written and this opens something else. */}
-          <Button variant="ghost" size="sm" className="h-8" asChild>
-            <Link href={`/classes/${classId}/solutions`}>
-              <SquareCheckBig aria-hidden className="size-3.5" />
-              Solve
-            </Link>
+        // The bridge's door on the desktop layout: the toggle the pre-#64 workspace had.
+        compact ? null : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8"
+            aria-expanded={agentOpen}
+            aria-controls="agent-pane-body"
+            onClick={() => setAgentOpen(!agentOpen)}
+          >
+            <Bot aria-hidden className="size-3.5" />
+            Agent
           </Button>
-          {compact ? null : (
-            <>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8"
-                aria-expanded={agentOpen}
-                aria-controls="agent-pane-body"
-                onClick={() => {
-                  setAgentOpen(!agentOpen)
-                  if (!agentOpen) setDocumentsOpen(false)
-                }}
-              >
-                <Bot aria-hidden className="size-3.5" />
-                Agent
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8"
-                aria-expanded={documentsOpen}
-                aria-controls="documents-pane-body"
-                onClick={() => {
-                  setDocumentsOpen(!documentsOpen)
-                  if (!documentsOpen) setAgentOpen(false)
-                }}
-              >
-                <FileText aria-hidden className="size-3.5" />
-                Documents
-                {documentCount === null ? null : (
-                  <span className="text-text-tertiary tabular-nums">{documentCount}</span>
-                )}
-              </Button>
-            </>
-          )}
-        </>
+        )
       }
     />
   )
 
-  // One workbench filling the window, not a card floating in the middle of it. The
-  // conversation and its documents are the page here, so they get the page.
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {compact ? (
+  if (compact) {
+    // Below the rail line the agent is a pane of the workspace, exactly as it was before
+    // this pass: Chat and Agent share the window, one at a time.
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
         <Tabs defaultValue="chat" className="min-h-0 flex-1 gap-0 overflow-hidden bg-background">
           <TabsList variant="line" aria-label="Workspace panes" className="px-4">
             <TabsTrigger value="chat">Chat</TabsTrigger>
-            <TabsTrigger value="documents">
-              Documents
-              {documentCount === null ? null : (
-                <span className="text-text-tertiary tabular-nums">{documentCount}</span>
-              )}
-            </TabsTrigger>
             <TabsTrigger value="agent">Agent</TabsTrigger>
           </TabsList>
           <TabsContent
@@ -224,35 +198,26 @@ export default function ClassWorkspacePage() {
             {chat}
           </TabsContent>
           <TabsContent
-            value="documents"
-            className="mt-0 min-h-0 flex-1 overflow-hidden rounded-none border-0"
-          >
-            {documents}
-          </TabsContent>
-          <TabsContent
             value="agent"
             className="mt-0 min-h-0 flex-1 overflow-hidden rounded-none border-0"
           >
             <AgentPanel classId={classId} sessionId={sessionId} />
           </TabsContent>
         </Tabs>
-      ) : (
-        <div className="flex min-h-0 flex-1 overflow-hidden bg-background">
-          <div className="min-w-0 flex-1">{chat}</div>
-          {documentsOpen ? (
-            <div className="w-[340px] shrink-0 border-l xl:w-[380px]">{documents}</div>
-          ) : null}
-          {agentOpen ? (
-            <div id="agent-pane-body" className="w-[420px] shrink-0 border-l">
-              <AgentPanel
-                classId={classId}
-                sessionId={sessionId}
-                onClose={() => setAgentOpen(false)}
-              />
-            </div>
-          ) : null}
+      </div>
+    )
+  }
+
+  // The conversation is the page; the agent column is the bridge's other half, docked to
+  // its right, as before this pass.
+  return (
+    <div className="flex min-h-0 flex-1 overflow-hidden bg-background">
+      <div className="min-w-0 flex-1">{chat}</div>
+      {agentOpen ? (
+        <div id="agent-pane-body" className="w-[420px] shrink-0 border-l">
+          <AgentPanel classId={classId} sessionId={sessionId} onClose={() => setAgentOpen(false)} />
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
