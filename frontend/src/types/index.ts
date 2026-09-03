@@ -350,6 +350,11 @@ export interface AgentAuditEventRead {
   result_summary: Record<string, unknown> | null
 }
 
+export interface AgentAccessDismissalRead {
+  scope: string
+  dismissed_at: string
+}
+
 export interface AgentWorkspaceHunkRead {
   index: number
   hash: string

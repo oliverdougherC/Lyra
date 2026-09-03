@@ -59,6 +59,7 @@ beforeEach(() => {
   vi.spyOn(runtime, 'pickDesktopWorkspaceDirectory').mockResolvedValue(null)
   vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(null)
   vi.spyOn(api, 'listAgentActivity').mockResolvedValue([])
+  vi.spyOn(api, 'listAgentAccessDismissals').mockResolvedValue({ dismissals: [] })
   vi.spyOn(api, 'listAgentWorkspaceChanges').mockResolvedValue([])
   vi.spyOn(api, 'listAgentCommands').mockResolvedValue([])
   vi.spyOn(api, 'listMessages').mockResolvedValue([])
@@ -111,8 +112,9 @@ describe('the contextual agent panel (PLA-401)', () => {
 
     render(<AgentPanel classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
 
-    // The workspace is absent, so the attach button is the entry point - not a grant card.
-    fireEvent.click(screen.getByRole('button', { name: /choose a folder to work in/i }))
+    // The workspace is absent, so the compact attach affordance is the entry point - not a
+    // grant card, and not a setup section.
+    fireEvent.click(screen.getByRole('button', { name: /attach a folder/i }))
     // No native picker in the test environment: the bounded path entry appears.
     const input = await screen.findByLabelText('Attach a local folder')
     fireEvent.change(input, { target: { value: '/tmp/starter' } })
@@ -178,13 +180,53 @@ describe('the contextual agent panel (PLA-401)', () => {
     vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace({ read_enabled: false }))
     vi.spyOn(api, 'listAgentActivity').mockResolvedValue([accessEvent({ target_id: 'read' })])
     vi.spyOn(api, 'updateAgentWorkspaceGrants').mockResolvedValue(workspace())
+    const dismiss = vi
+      .spyOn(api, 'dismissAgentAccess')
+      .mockResolvedValue({ scope: 'read', dismissed_at: '2026-09-02T00:00:00Z' })
+    const active: string[] = []
+    vi.spyOn(api, 'listAgentAccessDismissals').mockImplementation(async () => ({
+      dismissals: active.map((scope) => ({ scope, dismissed_at: '2026-09-02T00:00:00Z' })),
+    }))
     const { wrapper } = createWrapper()
 
     render(<AgentPanel classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
 
     await screen.findByText('Read the attached folder')
     fireEvent.click(screen.getByRole('button', { name: 'Not now' }))
+    // "Not now" is server state with a bounded lifetime, not component-local state: the
+    // dismissal is recorded against the conversation, so a reload or unmount cannot
+    // resurface the card while it is active.
+    active.push('read')
+    await waitFor(() => expect(dismiss).toHaveBeenCalledWith(CLASS_ID, SESSION_ID, 'read'))
     await waitFor(() => expect(screen.queryByText('Read the attached folder')).toBeNull())
     expect(api.updateAgentWorkspaceGrants).not.toHaveBeenCalled()
+  })
+
+  it('shows the task-specific reason and what still needs separate review', async () => {
+    vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace({ read_enabled: false }))
+    vi.spyOn(api, 'listAgentActivity').mockResolvedValue([
+      accessEvent({
+        target_id: 'read',
+        result_summary: {
+          scope: 'read',
+          reason: 'To understand this starter project, Lyra needs to read the files in proj.',
+        },
+      }),
+    ])
+    const { wrapper } = createWrapper()
+
+    render(<AgentPanel classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+
+    // The model's reason is the card's main line - not a generic status phrase.
+    expect(
+      await screen.findByText(
+        'To understand this starter project, Lyra needs to read the files in proj.',
+      ),
+    ).toBeInTheDocument()
+    // What granting enables, and what still needs its own review.
+    expect(
+      screen.getByText(/Lyra can list and read the text files in the folder\./),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/each still need their own approval/)).toBeInTheDocument()
   })
 })

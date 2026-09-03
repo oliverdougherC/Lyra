@@ -17,6 +17,8 @@ export const agentKeys = {
     ['agent', 'changes', classId, sessionId] as const,
   commands: (classId: number, sessionId: number) =>
     ['agent', 'commands', classId, sessionId] as const,
+  dismissals: (classId: number, sessionId: number) =>
+    ['agent', 'dismissals', classId, sessionId] as const,
 }
 
 async function invalidateAgentTurnCaches(
@@ -31,6 +33,7 @@ async function invalidateAgentTurnCaches(
     queryClient.invalidateQueries({ queryKey: agentKeys.activity(classId, sessionId) }),
     queryClient.invalidateQueries({ queryKey: agentKeys.changes(classId, sessionId) }),
     queryClient.invalidateQueries({ queryKey: agentKeys.commands(classId, sessionId) }),
+    queryClient.invalidateQueries({ queryKey: agentKeys.dismissals(classId, sessionId) }),
     queryClient.invalidateQueries({ queryKey: profileKeys.forClass(classId) }),
     queryClient.invalidateQueries({ queryKey: draftKeys.sources(classId) }),
   ])
@@ -84,6 +87,32 @@ export function useAgentActivity(classId: number, sessionId: number | null) {
   })
 }
 
+export function useAgentAccessDismissals(classId: number, sessionId: number | null) {
+  return useQuery({
+    queryKey: agentKeys.dismissals(classId, sessionId ?? -1),
+    queryFn: ({ signal }) => api.listAgentAccessDismissals(classId, sessionId as number, signal),
+    enabled: sessionId !== null,
+    refetchInterval: 5_000,
+    select: (data) => new Set(data.dismissals.map((d) => d.scope)),
+  })
+}
+
+export function useDismissAgentAccess(classId: number, sessionId: number | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (scope: string) => api.dismissAgentAccess(classId, sessionId as number, scope),
+    onSuccess: () => {
+      // The dismissal is server state with a bounded lifetime: refresh it so the card
+      // stays dismissed across reloads, and the model's next ask sees it too.
+      if (sessionId !== null) {
+        void queryClient.invalidateQueries({
+          queryKey: agentKeys.dismissals(classId, sessionId),
+        })
+      }
+    },
+  })
+}
+
 export function useAgentChanges(classId: number, sessionId: number | null, enabled: boolean) {
   return useQuery({
     queryKey: agentKeys.changes(classId, sessionId ?? -1),
@@ -109,6 +138,7 @@ export function useRefreshAgentSession(classId: number, sessionId: number | null
     void queryClient.invalidateQueries({ queryKey: agentKeys.activity(classId, sessionId) })
     void queryClient.invalidateQueries({ queryKey: agentKeys.changes(classId, sessionId) })
     void queryClient.invalidateQueries({ queryKey: agentKeys.commands(classId, sessionId) })
+    void queryClient.invalidateQueries({ queryKey: agentKeys.dismissals(classId, sessionId) })
   }
 }
 

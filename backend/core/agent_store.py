@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 from backend.core import agent_attempts, classes, commands, sessions, workspace_paths
@@ -57,6 +58,20 @@ MAX_TIMEOUT_SECONDS = 600
 MAX_OUTPUT_BYTES = commands.DEFAULT_MAX_OUTPUT_BYTES
 MAX_REASON_CHARS = 2_000
 MAX_EXPECTED_SIGNAL_CHARS = 1_000
+
+# Just-in-time access requests are deferred with a bounded "Not now": the dismissal
+# keeps the card from nagging again across reloads and unmounts, but it is neither
+# permanent nor a permission decision. It expires after this window and dies with the
+# conversation (migration 041).
+ACCESS_DISMISSAL_TTL_SECONDS = 30 * 60
+# The scopes a contextual agent can ask for through `request_workspace_access`. The
+# dismissal table (migration 041) checks against the same vocabulary.
+WORKSPACE_ACCESS_SCOPES: tuple[str, ...] = (
+    "attach",
+    "read",
+    "propose_changes",
+    "run_commands",
+)
 _UNSET = object()
 
 TABLE_SQL = """
@@ -410,6 +425,78 @@ def update_workspace_grants(
         conn.rollback()
         raise
     return get_workspace(conn, int(workspace["id"]), class_id=class_id)
+
+
+def _dismissal_within_ttl(dismissed_at: str, reference: datetime) -> bool:
+    stamp = datetime.strptime(dismissed_at, "%Y-%m-%dT%H:%M:%S.%fZ")
+    return (reference - stamp).total_seconds() <= ACCESS_DISMISSAL_TTL_SECONDS
+
+
+def get_active_dismissals(
+    conn: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    *,
+    now: datetime | None = None,
+) -> dict[str, str]:
+    """Active (unexpired) deferrals for one conversation.
+
+    Returns ``scope -> dismissed_at``. A deferral stays active until
+    ``ACCESS_DISMISSAL_TTL_SECONDS`` have passed since it was recorded; after that the
+    scope is askable again. Records die with the conversation (migration 041), so a
+    deferral can never outlive the conversation that created it. ``now`` must be naive
+    UTC; omit it for the real clock.
+    """
+    classes.get_class(conn, class_id)
+    _require_session_scope(conn, session_id, class_id)
+    reference = now if now is not None else datetime.now(UTC).replace(tzinfo=None)
+    rows = conn.execute(
+        "select scope, dismissed_at from agent_access_dismissals "
+        "where class_id = ? and session_id = ?",
+        (class_id, session_id),
+    ).fetchall()
+    active: dict[str, str] = {}
+    for row in rows:
+        if _dismissal_within_ttl(str(row["dismissed_at"]), reference):
+            active[str(row["scope"])] = str(row["dismissed_at"])
+    return active
+
+
+def dismiss_workspace_access(
+    conn: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    scope: str,
+) -> dict[str, object]:
+    """Record that the student deferred one just-in-time access request.
+
+    Bounded by design: the deferral lasts at most ``ACCESS_DISMISSAL_TTL_SECONDS`` and
+    only within this conversation. It is not a permission decision - nothing is granted
+    or revoked - it only stops the card from nagging again and tells the model the
+    student has already answered once.
+    """
+    if scope not in WORKSPACE_ACCESS_SCOPES:
+        raise ValueError(f"Unknown access scope: {scope}")
+    classes.get_class(conn, class_id)
+    _require_session_scope(conn, session_id, class_id)
+    conn.execute(
+        "insert into agent_access_dismissals (class_id, session_id, scope) "
+        "values (?, ?, ?) on conflict (class_id, session_id, scope) do update set "
+        "dismissed_at = excluded.dismissed_at",
+        (class_id, session_id, scope),
+    )
+    conn.commit()
+    row = conn.execute(
+        "select scope, dismissed_at from agent_access_dismissals "
+        "where class_id = ? and session_id = ? and scope = ?",
+        (class_id, session_id, scope),
+    ).fetchone()
+    return {
+        "class_id": class_id,
+        "session_id": session_id,
+        "scope": str(row["scope"]),
+        "dismissed_at": str(row["dismissed_at"]),
+    }
 
 
 def detach_workspace(conn: sqlite3.Connection, class_id: int) -> None:

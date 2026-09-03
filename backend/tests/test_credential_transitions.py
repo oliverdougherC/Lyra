@@ -205,6 +205,34 @@ def test_demotion_from_probe_failure(
     assert fallback.read_text().strip() == "sk-probe-fail"
 
 
+def test_blocking_probe_demotes_within_deadline(
+    isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A keyring backend that blocks instead of raising must not hold the caller:
+    the probe hits its deadline, storage demotes to file, and the call returns."""
+    import time
+
+    from backend.config import settings
+
+    def block_forever(service: str, username: str) -> str | None:
+        time.sleep(30)
+        return None
+
+    isolated_secrets.get_password = block_forever  # type: ignore[method-assign]
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+    monkeypatch.setattr(secrets, "_PROBE_TIMEOUT_SECONDS", 0.25)
+
+    started = time.monotonic()
+    assert secrets._keyring_usable() is False
+    # Returned at the deadline, not after the backend's own (nonexistent) answer.
+    assert time.monotonic() - started < 10
+
+    # And the demoted storage works: the value lands in the file fallback.
+    secrets.set_api_key("sk-after-block")
+    assert secrets.api_key_storage() == "file"
+    assert (settings.data_dir / ".api_key").read_text().strip() == "sk-after-block"
+
+
 # ---------------------------------------------------------------------------
 # Partial failure: keychain write succeeds but file removal fails
 # ---------------------------------------------------------------------------

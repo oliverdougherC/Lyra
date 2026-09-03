@@ -429,7 +429,10 @@ function CheckedDisclosure({
   grounded: number
 }) {
   const checks = problem.checks
-  const hasGrounding = steps.length > 0 && grounded > 0
+  // Zero grounded steps is itself trust-relevant: a whole working that no step could
+  // ground says more than a partial grounding, so the row renders whenever there are
+  // steps, even at 0 of N.
+  const hasGrounding = steps.length > 0
   if (checks.length === 0 && !hasGrounding) return null
 
   return (

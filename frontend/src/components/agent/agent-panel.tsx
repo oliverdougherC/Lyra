@@ -23,12 +23,14 @@ import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import {
+  useAgentAccessDismissals,
   useAgentActivity,
   useAgentChanges,
   useAgentCommands,
   useAgentWorkspace,
   useAttachAgentWorkspace,
   useDetachAgentWorkspace,
+  useDismissAgentAccess,
   useRefreshAgentSession,
   useRetryAgentChat,
   useSendAgentChat,
@@ -47,22 +49,30 @@ type AgentPanelProps = {
 }
 
 // The just-in-time access the contextual agent can ask for (backend `request_workspace_access`).
-const ACCESS_SCOPE_LABELS: Record<string, { title: string; detail: string }> = {
+// Each card carries three things: what the student is being asked (title), why *this*
+// task needs it now (the model's `reason`, rendered as the card's main line), and what
+// granting enables versus what still needs its own review.
+const ACCESS_SCOPE_LABELS: Record<string, { title: string; enables: string; review: string }> = {
   attach: {
     title: 'Attach a local folder',
-    detail: 'Choose a folder; Lyra can read the files in it.',
+    enables: 'Lyra can look at the folder and ask for specific access when a task needs it.',
+    review: 'Reading, file edits, and command runs each still need their own approval.',
   },
   read: {
     title: 'Read the attached folder',
-    detail: 'Lyra can list and read text files under it.',
+    enables: 'Lyra can list and read the text files in the folder.',
+    review: 'File edits and command runs each still need their own approval.',
   },
   propose_changes: {
     title: 'Prepare file edits',
-    detail: 'Lyra can draft changes you review hunk by hunk before anything is applied.',
+    enables:
+      'Lyra can draft changes for you to review hunk by hunk; nothing is applied until you accept it.',
+    review: 'Command runs each still need their own approval.',
   },
   run_commands: {
     title: 'Prepare verification commands',
-    detail: 'Lyra can propose exact commands; every run still needs your approval.',
+    enables: 'Lyra can propose the exact command, its working folder, and what it checks.',
+    review: 'Each run needs your explicit approval before it happens.',
   },
 }
 
@@ -89,7 +99,6 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
   const [prompt, setPrompt] = useState('')
   const [attachPath, setAttachPath] = useState('')
   const [attachPathVisible, setAttachPathVisible] = useState(false)
-  const [dismissedScopes, setDismissedScopes] = useState<ReadonlySet<string>>(new Set())
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [effectBusy, setEffectBusy] = useState(false)
   const workspace = useAgentWorkspace(classId)
@@ -99,6 +108,8 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
   const activity = useAgentActivity(classId, sessionId)
   const changes = useAgentChanges(classId, sessionId, Boolean(workspace.data))
   const commands = useAgentCommands(classId, sessionId, Boolean(workspace.data))
+  const dismissals = useAgentAccessDismissals(classId, sessionId)
+  const dismiss = useDismissAgentAccess(classId, sessionId)
   const refresh = useRefreshAgentSession(classId, sessionId)
   const sendAgentChat = useSendAgentChat(classId, sessionId)
   const retryAgentChat = useRetryAgentChat(classId, sessionId)
@@ -167,12 +178,20 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
   }
 
   const dismissAccess = (scope: string) => {
-    setDismissedScopes(new Set([...dismissedScopes, scope]))
+    // "Not now" is server state with a bounded lifetime: recorded against this
+    // conversation (agent_store.ACCESS_DISMISSAL_TTL_SECONDS), so it survives reloads
+    // and unmounts, keeps the model from asking again, and lapses instead of persisting.
+    dismiss.mutate(scope, {
+      onError: (error) =>
+        toast.error(error instanceof Error ? error.message : 'Could not save that.'),
+    })
   }
 
-  // One card per scope the last agent run asked for and that is still missing. Once the
-  // student approves (or detaches/re-attaches) the grant state moves and the card leaves -
-  // it is derived, so there is nothing to remember and no dashboard to manage.
+  // One card per scope the agent asked for that is still missing and not deferred. The
+  // card's main line is the model's task-specific reason (durably stored with the
+  // request), not a status phrase. Deferred scopes are suppressed by the server's
+  // bounded dismissal, not by local state, so unmounting or reloading does not resurface
+  // them.
   const pendingRequests = useMemo(() => {
     const latest = new Map<string, AgentAuditEventRead>()
     for (const event of activity.data ?? []) {
@@ -180,12 +199,17 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
       const scope = event.target_id
       if (scope && ACCESS_SCOPE_LABELS[scope]) latest.set(scope, event)
     }
+    const dismissed = dismissals.data ?? new Set<string>()
     return [...latest.entries()]
-      .map(([scope]) => scope)
       .filter(
-        (scope) => !dismissedScopes.has(scope) && !accessScopeSatisfied(workspace.data, scope),
+        ([scope, event]) => !dismissed.has(scope) && !accessScopeSatisfied(workspace.data, scope),
       )
-  }, [activity.data, dismissedScopes, workspace.data])
+      .map(([scope, event]) => {
+        const summary = event.result_summary
+        const reason = summary && typeof summary.reason === 'string' ? summary.reason : null
+        return { scope, reason }
+      })
+  }, [activity.data, dismissals.data, workspace.data])
 
   const acceptHunks = async (changeId: number, hunks: { index: number; hash: string }[]) => {
     if (sessionId === null) return
@@ -353,14 +377,18 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
               </div>
             </form>
           ) : (
+            // A small, optional context affordance - not a setup section. Folder selection
+            // happens contextually: the attach access card, when a task needs local files,
+            // carries the picker and the task-specific reason.
             <Button
-              variant="outline"
+              variant="ghost"
               size="sm"
+              className="text-text-tertiary -ml-2"
               disabled={attach.isPending}
               onClick={() => void openFolderPicker()}
             >
               <Folder aria-hidden />
-              {attach.isPending ? 'Attaching…' : 'Choose a folder to work in'}
+              {attach.isPending ? 'Attaching…' : 'Attach a folder'}
             </Button>
           )}
 
@@ -436,21 +464,33 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
             </Alert>
           ) : null}
 
-          {pendingRequests.map((scope) => (
+          {pendingRequests.map(({ scope, reason }) => (
             <div
               key={scope}
               data-access-request={scope}
               className="border-border flex flex-col gap-2 rounded-md border p-3"
             >
               <p className="text-sm font-medium">{ACCESS_SCOPE_LABELS[scope].title}</p>
-              <p className="text-text-secondary text-xs">{ACCESS_SCOPE_LABELS[scope].detail}</p>
+              {reason ? <p className="text-sm">{reason}</p> : null}
+              <p className="text-text-secondary text-xs">
+                {ACCESS_SCOPE_LABELS[scope].enables} {ACCESS_SCOPE_LABELS[scope].review}
+              </p>
               <div className="flex items-center gap-2">
-                <Button size="sm" disabled={busy} onClick={() => approveAccess(scope)}>
+                <Button
+                  size="sm"
+                  disabled={busy || dismiss.isPending}
+                  onClick={() => approveAccess(scope)}
+                >
                   {scope === 'attach' && !desktopFolderPickerAvailable()
                     ? 'Attach a folder'
                     : 'Approve'}
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => dismissAccess(scope)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={dismiss.isPending}
+                  onClick={() => dismissAccess(scope)}
+                >
                   Not now
                 </Button>
               </div>

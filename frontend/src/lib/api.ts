@@ -5,6 +5,7 @@
 
 import type {
   AcceptRejectResult,
+  AgentAccessDismissalRead,
   AgentAuditEventRead,
   AgentChatActivity,
   AgentChatFailure,
@@ -604,6 +605,21 @@ export const api = {
   listAgentActivity: (classId: number, sessionId: number, signal?: AbortSignal) =>
     requestJson<AgentAuditEventRead[]>(
       `/api/classes/${classId}/sessions/${sessionId}/agent/activity`,
+      { signal },
+    ),
+
+  // A bounded "Not now" for a just-in-time access request: recorded server-side against
+  // this conversation, so the card does not resurface on reload or in later turns until
+  // its window lapses. It grants nothing.
+  dismissAgentAccess: (classId: number, sessionId: number, scope: string) =>
+    requestJson<AgentAccessDismissalRead>(
+      `/api/classes/${classId}/sessions/${sessionId}/agent/access-dismiss`,
+      { method: 'POST', body: { scope } },
+    ),
+
+  listAgentAccessDismissals: (classId: number, sessionId: number, signal?: AbortSignal) =>
+    requestJson<{ dismissals: AgentAccessDismissalRead[] }>(
+      `/api/classes/${classId}/sessions/${sessionId}/agent/access-dismissals`,
       { signal },
     ),
 

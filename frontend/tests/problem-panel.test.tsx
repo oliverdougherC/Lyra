@@ -117,6 +117,27 @@ describe('ProblemPanel', () => {
     expect(screen.getByText('lecture3.pdf, page 12')).toBeInTheDocument()
   })
 
+  it('says 0 of N steps grounded when nothing could be grounded', async () => {
+    renderPanel(
+      node({
+        steps: [
+          part({
+            id: 2,
+            parent_part_id: 1,
+            label: 'Set up the integral',
+            content: 'Apply the definition.',
+          }),
+          part({ id: 3, parent_part_id: 1, ordinal: 1, label: 'Evaluate', content: 'Integrate.' }),
+        ],
+      }),
+    )
+
+    // Zero evidence is itself trust-relevant: the row is not hidden because nothing was
+    // grounded - it says 0.
+    await userEvent.click(screen.getByRole('button', { name: /how lyra checked this/i }))
+    expect(screen.getByText('0 of 2 steps grounded in your material')).toBeInTheDocument()
+  })
+
   it('shows a refuted solution in full and names what disagreed', () => {
     renderPanel(
       node({

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from dataclasses import replace
@@ -13,10 +14,11 @@ from fastapi.testclient import TestClient
 
 from backend.api import routes_agent_chat
 from backend.api.routes_agent_chat import AgentTurnCost
-from backend.core import app_settings, sessions
+from backend.core import agent_store, app_settings, sessions
 from backend.core.app_settings import TutorAccess, TutorConfig
 from backend.core.errors import LyraError
 from backend.core.writer_budgets import WriterCapabilities
+from backend.llm import prompts as llm_prompts
 from backend.llm import tools
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect, get_db
@@ -1210,6 +1212,83 @@ def test_an_access_request_is_asked_once_per_scope_per_turn(
     # One run-local activity event per scope, so the conversation shows one card.
     events = [e for e in response.json()["activity"] if e["target_kind"] == "capability_request"]
     assert len(events) == 1
+    # The task-specific reason survives into the durable audit summary: the card renders
+    # it verbatim, so the student sees why this task needs the access, not a status line.
+    row = db.execute(
+        "select result_summary_json from tool_audit_events where target_kind = ? "
+        "order by rowid desc limit 1",
+        ("capability_request",),
+    ).fetchone()
+    assert json.loads(row[0]) == {"scope": "read", "reason": "read the project files"}
+
+
+def test_a_deferred_scope_is_not_resent_while_the_dismissal_is_active(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: object,
+) -> None:
+    # "Not now" has a bounded, server-side lifetime. The model asks once and the student
+    # defers; the model's repeat ask in a later turn is reported as deferred (no new
+    # request event, no nag card) and told to proceed. Once the dismissal's window lapses,
+    # the same scope is askable again.
+    holder = {"ws": _fake_workspace(tmp_path, read=False)}
+    monkeypatch.setattr(
+        routes_agent_chat.agent_tools.agent_store,
+        "get_workspace_for_class",
+        lambda conn, cid: holder["ws"],
+    )
+    captured: dict[str, object] = {}
+
+    async def fake_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        registry = kwargs["registry"]
+        captured.setdefault("asks", []).append(
+            registry["request_workspace_access"].handler(
+                scope="read", reason="read the project files"
+            )
+        )
+        return tools.ToolLoopResult(content="done")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", fake_loop)
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    chat_url = f"/api/classes/{class_id}/sessions/{session_id}/agent-chat"
+
+    first = client.post(chat_url, json={"content": "Read the project"})
+    assert first.status_code == 200, first.text
+    assert captured["asks"][0].ok is True
+    assert captured["asks"][0].value["requested"] is True
+
+    # The student defers the request in the conversation. The endpoint's own contract
+    # lives in test_api_agent.py; here the deferral just needs to exist for the tool.
+    agent_store.dismiss_workspace_access(db, class_id, session_id, "read")
+
+    second = client.post(chat_url, json={"content": "Please read the project"})
+    assert second.status_code == 200, second.text
+    deferred = captured["asks"][1]
+    assert deferred.ok is True
+    assert deferred.value["requested"] is False
+    assert deferred.value["deferred"] is True
+    # The deferred ask creates no second request card while the deferral is active.
+    events = [e for e in second.json()["activity"] if e["target_kind"] == "capability_request"]
+    assert events == []
+    deferrals = [e for e in second.json()["activity"] if e["target_kind"] == "access_deferral"]
+    assert len(deferrals) == 1
+
+    # Once the bounded window lapses, the scope is askable again: a fresh request is
+    # recorded and the card may resurface.
+    db.execute(
+        "update agent_access_dismissals set dismissed_at = "
+        "strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 hour') "
+        "where class_id = ? and session_id = ?",
+        (class_id, session_id),
+    )
+    db.commit()
+    third = client.post(chat_url, json={"content": "Read the project now"})
+    assert third.status_code == 200, third.text
+    assert captured["asks"][2].value["requested"] is True
+    events = [e for e in third.json()["activity"] if e["target_kind"] == "capability_request"]
+    assert len(events) == 1
 
 
 def test_a_scope_granted_mid_turn_is_available_not_requested(
@@ -1273,8 +1352,10 @@ def test_legacy_profiles_do_not_gain_the_access_request_tool(
 def test_the_agent_prompt_keeps_the_conversations_guide_show_contract(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The agent turn rides the conversation's Guide/Show mode (Workstream A), so the mode
-    # toggle keeps its meaning in agent work too.
+    # The agent turn rides the conversation's Guide/Show contract inherited from the
+    # shared tutoring prompt (llm_prompts.mode_contract) - not a restatement of it - so
+    # the mode toggle keeps its meaning in agent work too and the two surfaces cannot
+    # drift: the agent prompt must contain the shared contract for the session's mode.
     session_id = int(sessions.create_session(db, class_id)["id"])  # guide by default
     captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
 
@@ -1285,7 +1366,7 @@ def test_the_agent_prompt_keeps_the_conversations_guide_show_contract(
 
     assert response.status_code == 200, response.text
     prompt = str(captured["messages"][0]["content"])
-    assert "guide mode" in prompt
+    assert llm_prompts.mode_contract("guide") in prompt
 
     sessions.set_session_mode(db, session_id, "show")
     captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="ok"))
@@ -1295,4 +1376,7 @@ def test_the_agent_prompt_keeps_the_conversations_guide_show_contract(
     )
 
     assert response.status_code == 200, response.text
-    assert "show mode" in str(captured["messages"][0]["content"])
+    prompt = str(captured["messages"][0]["content"])
+    assert llm_prompts.mode_contract("show") in prompt
+    # Only one contract rides the turn: the guide contract does not linger in show work.
+    assert llm_prompts.mode_contract("guide") not in prompt

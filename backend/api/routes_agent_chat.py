@@ -17,6 +17,7 @@ from backend.core import agent_attempts, agent_tools, sessions
 from backend.core.app_settings import TutorConfig, resolve_tutor_access
 from backend.core.classes import touch_class
 from backend.core.errors import LyraError, NotFoundError
+from backend.llm import prompts as llm_prompts
 from backend.llm import tools as llm_tools
 from backend.llm.tools import (
     ContextBudget,
@@ -255,20 +256,11 @@ def _availability_prompt(
                     f" {label} is not available in this conversation right now. Say that "
                     "plainly if the task needs it."
                 )
-        # The agent turn rides the conversation's Guide/Show contract (Workstream A),
-        # so the student's mode toggle keeps its meaning in agent work too.
-        if mode == "show":
-            prompt += (
-                " The conversation is in show mode: give the complete worked result, "
-                "concise enough to study from."
-            )
-        else:
-            prompt += (
-                " The conversation is in guide mode: optimize the student's understanding "
-                "and productive progress - explain, demonstrate, scaffold, or diagnose; a "
-                "question is a tool you use when it helps, not something owed on every "
-                "answer."
-            )
+        # The agent turn inherits the conversation's Guide/Show contract through the
+        # shared tutoring prompt (llm_prompts.mode_contract). The agent layer contributes
+        # only tool/capability instructions; the mode semantics live in one place, so
+        # the tutoring and agent surfaces cannot drift apart.
+        prompt += f" {llm_prompts.mode_contract('show' if mode == 'show' else 'guide')}"
         return prompt
     required_tool, capability = _PROFILE_REQUIREMENTS[profile]
     if required_tool not in registry:

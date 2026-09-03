@@ -1278,7 +1278,9 @@ def _add_command_tools(
     )
 
 
-ACCESS_SCOPES: tuple[str, ...] = ("attach", "read", "propose_changes", "run_commands")
+# One vocabulary, owned by the persistence layer (migration 041 checks the same set):
+# the tool below only offers the scopes the frozen snapshot shows as missing.
+ACCESS_SCOPES: tuple[str, ...] = agent_store.WORKSPACE_ACCESS_SCOPES
 
 ACCESS_SCOPE_DESCRIPTIONS: Mapping[str, str] = {
     "attach": "Attach a local folder Lyra can work with",
@@ -1317,9 +1319,11 @@ def _add_access_request_tools(
     only the scopes that are currently missing are offered, so the model is not even
     tempted to ask for what it already holds. Each dispatch re-reads the live state, so a
     scope granted mid-turn is reported as available instead of requested again, and the
-    one-request-per-scope-per-turn rule lives in the run-local collector. The tool has no
-    host effect: a grant only ever happens through the ordinary attach/grant endpoints,
-    and only when the student acts.
+    one-request-per-scope-per-turn rule lives in the run-local collector. A scope the
+    student deferred with "Not now" is reported as deferred for a bounded window
+    (agent_store.ACCESS_DISMISSAL_TTL_SECONDS), so the card does not nag and the model
+    learns to proceed without it. The tool has no host effect: a grant only ever happens
+    through the ordinary attach/grant endpoints, and only when the student acts.
     """
     scopes: list[str] = []
     if not snapshot.workspace_present:
@@ -1337,7 +1341,7 @@ def _add_access_request_tools(
         scope = _text(scope, "scope", maximum=32)
         if scope not in scopes:
             raise _RefusalError(f"Unknown access scope: {scope}")
-        _text(reason, "reason", maximum=400)
+        reason = _text(reason, "reason", maximum=400)
         workspace = agent_store.get_workspace_for_class(conn, class_id)
         if _access_scope_available(workspace, scope):
             raise _RefusalError(f"{ACCESS_SCOPE_DESCRIPTIONS[scope]} is already available; use it.")
@@ -1345,6 +1349,26 @@ def _add_access_request_tools(
             raise _RefusalError(
                 "You already requested this access this turn. The student has not answered "
                 "yet; do not ask again and say plainly what still needs approval."
+            )
+        # The student already answered this request with "Not now" earlier in the
+        # conversation. Keep the card from nagging again and tell the model plainly:
+        # proceed without the access; the scope becomes askable again once the
+        # dismissal's bounded window lapses (agent_store.ACCESS_DISMISSAL_TTL_SECONDS).
+        if agent_store.get_active_dismissals(conn, class_id, session_id).get(scope):
+            return _Outcome(
+                success(
+                    scope=scope,
+                    requested=False,
+                    deferred=True,
+                    note=(
+                        "The student already deferred this access earlier in the "
+                        "conversation; do not ask again. Proceed with what is available "
+                        "and say plainly what still needs approval."
+                    ),
+                ),
+                {"scope": scope, "deferred": True},
+                target_kind="access_deferral",
+                target_id=scope,
             )
         activity.requested_scopes.add(scope)
         return _Outcome(
@@ -1357,7 +1381,7 @@ def _add_access_request_tools(
                     "Continue with what you can and say plainly what still needs approval."
                 ),
             ),
-            {"scope": scope},
+            {"scope": scope, "reason": reason},
             target_kind="capability_request",
             target_id=scope,
         )
@@ -1392,7 +1416,9 @@ def _add_access_request_tools(
                 "minLength": 1,
                 "maxLength": 400,
                 "description": (
-                    "One or two sentences, in the student's words, of why this is needed now."
+                    "One or two sentences, in the student's own words, of why this task "
+                    "needs this access now. Shown verbatim on the request card, so make it "
+                    "specific to this task."
                 ),
             },
         },
