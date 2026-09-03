@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from backend.api import routes_agent_chat
 from backend.api.routes_agent_chat import AgentTurnCost
 from backend.core import (
+    agent_attempts,
     agent_store,
     agent_tools,
     app_settings,
@@ -773,19 +774,65 @@ def test_the_assembler_and_the_fit_gate_agree_on_the_canonical_accounting() -> N
     routes_agent_chat._require_request_fits(messages, tool_tokens, ceiling)  # must not raise
 
 
-def test_a_512_token_window_cannot_host_the_tool_definitions(
+def test_a_512_token_window_answers_tool_less_instead_of_refusing(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The smallest window Settings permits. The tool schema alone outweighs it, so no agent
-    # turn can fit: it is refused locally, with a bounded student-facing message, before any
-    # request and before anything is stored.
+    # The smallest window Settings permits. The tool schemas alone outweigh it, so the tool
+    # surface cannot fit - but the tool-less surface (no schemas charged) can, and the
+    # student's ordinary question is not refused over the cost of optional capability
+    # (PLA-401 final pass): it is answered as a plain completion, the full tutor contract,
+    # with the capability note that the agent work is unavailable. The loop never runs and
+    # no tool schemas are sent; the reply persists like any other.
     session_id = int(sessions.create_session(db, class_id)["id"])
     _set_window(db, 512)
     calls = _spy_loop(monkeypatch)
+    sent: dict[str, object] = {}
+
+    async def fake_complete(*args: object, **kwargs: object) -> str:
+        sent["messages"] = args[3]
+        return "Answered without tools."
+
+    monkeypatch.setattr(routes_agent_chat.llm_client, "complete", fake_complete)
 
     response = client.post(
         f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
         json={"content": "Anything at all", "profile": "code"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["content"] == "Answered without tools."
+    # No tool round trip happened: the loop never ran and no schema rode the request.
+    assert calls == []
+    system = str(sent["messages"][0]["content"])
+    assert "cas_evaluate" not in system
+    # The legacy profile's own note says its capability is unavailable, plainly.
+    assert "Workspace reading is currently disabled or unavailable" in system
+    # A normal turn: the question and the answer persist, and the title is claimed.
+    roles = [m["role"] for m in sessions.list_messages(db, session_id)]
+    assert roles == ["user", "assistant"]
+    assert sessions.get_session(db, session_id)["title"] is not None
+
+
+def test_a_window_that_cannot_host_even_the_toolless_turn_is_refused(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The same smallest window, with a question that even the tool-less surface cannot
+    # host: the turn is refused locally, with a bounded student-facing message, before any
+    # request, loop run, or persistence. This is the only remaining "too large" refusal.
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    _set_window(db, 512)
+    calls = _spy_loop(monkeypatch)
+    complete_calls: list[int] = []
+
+    async def refusing_complete(*args: object, **kwargs: object) -> str:
+        complete_calls.append(1)
+        return "unreachable"
+
+    monkeypatch.setattr(routes_agent_chat.llm_client, "complete", refusing_complete)
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "word " * 2000, "profile": "code"},
     )
 
     assert response.status_code == 400
@@ -794,6 +841,7 @@ def test_a_512_token_window_cannot_host_the_tool_definitions(
     # Bounded and privacy-safe: no endpoint, path, key, or transcript in the refusal.
     assert "127.0.0.1" not in detail and "http" not in detail
     assert calls == []
+    assert complete_calls == []
     assert sessions.list_messages(db, session_id) == []
     assert sessions.get_session(db, session_id)["title"] is None
 
@@ -840,64 +888,91 @@ def test_an_impossible_initial_turn_leaves_the_database_untouched(
     assert sessions.get_session(db, session_id)["title"] is None
 
 
-def test_a_20000_character_prompt_is_refused_at_the_default_window_but_fits_a_larger_one(
+def test_a_20000_character_prompt_falls_back_tool_less_at_the_default_window(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # `AgentChatRequest.content` permits 20,000 characters - about 5,000 tokens. Beside the
     # generation reserve and the tool schema, that does not fit the default 8,192 window, so
-    # it is refused; a 16,384 window has room, so the same message is answered. The refusal
-    # is the current message being charged: without it, the fixed material fits the small
-    # window with thousands of tokens to spare. Worded (not one unbroken run), because the
-    # question now also rides the retrieval query and an un-splittable run is an embedding
-    # failure, not a turn-shape problem.
+    # the tool surface cannot be sent - but the question itself (without the schemas) does
+    # fit, and the turn is not refused over the cost of optional capability (PLA-401 final
+    # pass): it is answered tool-less, the full tutor contract with no tool round trip. A
+    # 24,576 window has room for the whole agent surface, so the same message is answered
+    # with tools there. Worded (not one unbroken run), because the question now also rides
+    # the retrieval query and an un-splittable run is an embedding failure, not a
+    # turn-shape problem.
     prompt = "word " * 4_000
     fixed_without_question = (
         2048 + estimate_tokens(routes_agent_chat._SYSTEM_PROMPTS["code"]) + 1055
     )
-    assert fixed_without_question < 8192  # the turn is refused only because the message is charged
+    assert fixed_without_question < 8192  # only the charged question + schemas overfill
 
     session_id = int(sessions.create_session(db, class_id)["id"])
     _set_window(db, 8192)
-    refused_calls = _spy_loop(monkeypatch)
-    refused = client.post(
+    toolless_calls = _spy_loop(monkeypatch)
+    sent: dict[str, object] = {}
+
+    async def fake_complete(*args: object, **kwargs: object) -> str:
+        sent["messages"] = args[3]
+        return "Long but answerable, without tools."
+
+    monkeypatch.setattr(routes_agent_chat.llm_client, "complete", fake_complete)
+    first = client.post(
         f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
         json={"content": prompt, "profile": "code"},
     )
-    assert refused.status_code == 400
-    assert refused_calls == []
-    assert sessions.list_messages(db, session_id) == []
+    assert first.status_code == 200, first.text
+    assert first.json()["content"] == "Long but answerable, without tools."
+    # The tool surface was refused by the budget, not the endpoint: the loop never ran and
+    # the plain completion carried the turn, with the whole message in the prompt - never
+    # silently truncated.
+    assert toolless_calls == []
+    assert sent["messages"][-1] == {"role": "user", "content": prompt.strip()}
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user", "assistant"]
 
-    _set_window(db, 16_384)
+    _set_window(db, 24_576)
     captured = _stub_loop(monkeypatch, tools.ToolLoopResult(content="Long but answerable."))
     ok = client.post(
         f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
         json={"content": prompt, "profile": "code"},
     )
     assert ok.status_code == 200, ok.text
-    # The whole message survived into the prompt - it is never silently truncated
-    # (the request's documented strip is the only change, exactly as in the tutor route).
+    # The whole message survived into the tool-surface prompt too - it is never silently
+    # truncated (the request's documented strip is the only change, as in the tutor route).
     assert captured["messages"][-1] == {"role": "user", "content": prompt.strip()}
 
 
-def test_oversized_tool_overhead_refuses_the_turn_before_any_effect(
+def test_oversized_tool_overhead_falls_back_to_the_toolless_surface(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # The agent's mandatory non-trimmable context is its tool schema. When that overhead is
-    # large enough to fill the window on its own, the turn is refused before persistence or
-    # any request - the same fit check, driven by tool/workspace context rather than history.
+    # large enough to fill the window on its own, the turn is not refused - it is planned
+    # tool-less (no schemas charged) and answered as a plain completion, the loop never
+    # running. The refusal remains only for a window that even the tool-less surface cannot
+    # host (test_a_window_that_cannot_host_even_the_toolless_turn_is_refused).
     session_id = int(sessions.create_session(db, class_id)["id"])
     _set_window(db, 8192)
     monkeypatch.setattr(routes_agent_chat, "schema_tokens", lambda schemas: 10_000)
     calls = _spy_loop(monkeypatch)
+    sent: dict[str, object] = {}
+
+    async def fake_complete(*args: object, **kwargs: object) -> str:
+        sent["messages"] = args[3]
+        return "Answered without tools."
+
+    monkeypatch.setattr(routes_agent_chat.llm_client, "complete", fake_complete)
 
     response = client.post(
         f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
         json={"content": "A short question", "profile": "code"},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 200, response.text
+    assert response.json()["content"] == "Answered without tools."
+    # The tool surface was refused by the budget, not the endpoint: no loop, no schemas sent.
     assert calls == []
-    assert sessions.list_messages(db, session_id) == []
+    system = str(sent["messages"][0]["content"])
+    assert "Workspace reading is currently disabled or unavailable" in system
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user", "assistant"]
 
 
 def test_long_history_trims_older_turns_but_keeps_the_mandatory_recent_pair(
@@ -2076,3 +2151,571 @@ async def test_the_stop_endpoint_cancels_the_inflight_turn(
     finally:
         conn_c.close()
     assert again == {"stopped": False}
+
+
+# ---------------------------------------------------------------------------
+# PLA-401 final pass: the tool-less surface, the attempt lifecycle, and the
+# persisted-scope sentinel.
+# ---------------------------------------------------------------------------
+
+
+def _settings_verdict(db: sqlite3.Connection) -> tuple[int | None, str | None]:
+    row = db.execute("select tools_supported, tools_message from settings where id = 1").fetchone()
+    return row["tools_supported"], row["tools_message"]
+
+
+def test_a_known_tool_incompatible_endpoint_answers_basic_chat_tool_less(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 1, known-false: a settings row measured `tools_supported = 0` takes the
+    tool-less path at once - one plain completion carrying the full tutor contract, the
+    loop never running, no tool schemas charged or sent, and the measured verdict left
+    untouched by the turn."""
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    db.execute("update settings set tools_supported = 0 where id = 1")
+    db.commit()
+
+    loop_calls: list[int] = []
+
+    async def loop_never(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        loop_calls.append(1)
+        return tools.ToolLoopResult(content="unreachable")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", loop_never)
+    sent: dict[str, object] = {}
+
+    async def fake_complete(*args: object, **kwargs: object) -> str:
+        sent["messages"] = args[3]
+        return "Convolution combines each input with a kernel."
+
+    monkeypatch.setattr(routes_agent_chat.llm_client, "complete", fake_complete)
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Explain convolution", "profile": "agent"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["content"].startswith("Convolution")
+    # The tool-less surface: the loop never ran and no tool schema rode the request.
+    assert loop_calls == []
+    system = str(sent["messages"][0]["content"])
+    # The full tutor contract rides the plain completion: the mode contract is present,
+    # and the one sentence that says the agent work is unavailable replaces the agent
+    # capability layer (which describes tools this turn never sends).
+    assert "Mode: Guide." in system
+    assert routes_agent_chat._TOOLLESS_AGENT_NOTE in system
+    assert routes_agent_chat._SYSTEM_PROMPTS["agent"] not in system
+    # One durable attempt, completed with the reply; no tool activity of any kind.
+    rows = db.execute(
+        "select state, assistant_message_id, mode from agent_turn_attempts order by id"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["state"] == "completed"
+    assert rows[0]["assistant_message_id"] is not None
+    assert rows[0]["mode"] == "guide"
+    assert response.json()["activity"] == []
+    # The verdict is a measured fact: the turn neither clears nor changes it.
+    assert _settings_verdict(db) == (0, None)
+
+
+def test_an_unknown_endpoints_first_tools_refusal_falls_back_and_remembers_the_verdict(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 1, unknown: an unproven endpoint refuses the turn's first tools request. The
+    same logical turn continues tool-less - no duplicate user message, one reply - the
+    abandoned tool pass settles as a stopped attempt beside the completed one, and the
+    verdict is remembered on the settings row so the next turn never asks the question
+    again."""
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    db.execute("update settings set tools_supported = NULL, tools_message = NULL where id = 1")
+    db.commit()
+
+    completions: list[list[dict[str, object]]] = []
+
+    async def fake_complete(*args: object, **kwargs: object) -> str:
+        completions.append(args[3])
+        return "The answer, without tools."
+
+    monkeypatch.setattr(routes_agent_chat.llm_client, "complete", fake_complete)
+    loop_calls: list[dict[str, object]] = []
+
+    async def fake_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        loop_calls.append({"messages": args[3], "registry": kwargs["registry"]})
+        return tools.ToolLoopResult(
+            content="", calls=(), stopped=tools.NO_TOOL_SUPPORT, detail="tools refused"
+        )
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", fake_loop)
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Explain convolution", "profile": "agent", "operation_id": "op-1"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["content"] == "The answer, without tools."
+    # One question, one answer: the fallback continued the turn, it did not re-send it.
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user", "assistant"]
+    # The loop made exactly one tools request (the refused one); the continuation was a
+    # plain completion, not a second round.
+    assert len(loop_calls) == 1
+    assert len(completions) == 1
+    # The two attempts are one lineage: the abandoned tool pass stopped as no_tool_support
+    # (carrying the operation ID, no reply), the continuation completed with the reply.
+    attempts = db.execute(
+        "select state, stopped_reason, operation_id, assistant_message_id "
+        "from agent_turn_attempts order by id"
+    ).fetchall()
+    assert len(attempts) == 2
+    assert attempts[0]["state"] == "stopped"
+    assert attempts[0]["stopped_reason"] == tools.NO_TOOL_SUPPORT
+    assert attempts[0]["operation_id"] == "op-1"
+    assert attempts[0]["assistant_message_id"] is None
+    assert attempts[1]["state"] == "completed"
+    assert attempts[1]["operation_id"] is None
+    assert attempts[1]["assistant_message_id"] is not None
+    # The tool-less continuation carried the full tutor contract, not the agent layer.
+    system = str(completions[0][0]["content"])
+    assert "Mode: Guide." in system
+    assert routes_agent_chat._TOOLLESS_AGENT_NOTE in system
+    assert routes_agent_chat._SYSTEM_PROMPTS["agent"] not in system
+    # The verdict is remembered for the next turn and the settings screen.
+    assert _settings_verdict(db) == (0, routes_agent_chat._NO_TOOL_SUPPORT_VERDICT_MESSAGE)
+
+    # The next turn is known-tool-less: no second tools request is ever made.
+    again = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "And what about a conv layer?", "profile": "agent"},
+    )
+    assert again.status_code == 200, again.text
+    assert len(loop_calls) == 1
+    assert len(completions) == 2
+
+
+def test_a_toolless_turn_carries_retrieval_and_facts_like_the_tool_turn(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 1: the tool-less answer is the same tutoring surface, not a degraded one -
+    retrieved chunks and active facts ride its prompt exactly as they ride a tool turn,
+    so the endpoint that cannot run tools still answers grounded on the class material."""
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    _facts(db, class_id)
+    db.execute("update settings set tools_supported = 0 where id = 1")
+    db.commit()
+
+    chunk = RetrievedChunk(
+        chunk_id=1,
+        document_id=7,
+        content="Convolution combines two signals.",
+        token_count=6,
+        page_number=1,
+        section_title="Convolution",
+        section_path="ch2/convolution",
+        section_number="2.1",
+        problem_number=None,
+        part_index=None,
+        filename="signals.pdf",
+        similarity=0.9,
+        score=0.9,
+    )
+    retrieved: list[int | None] = []
+
+    def fake_retrieve(
+        conn: object,
+        class_id_: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        retrieved.append(document_id)
+        return RetrievalResult(chunks=[chunk], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", fake_retrieve)
+    loop_calls: list[int] = []
+
+    async def loop_never(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        loop_calls.append(1)
+        return tools.ToolLoopResult(content="unreachable")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", loop_never)
+    sent: dict[str, object] = {}
+
+    async def fake_complete(*args: object, **kwargs: object) -> str:
+        sent["messages"] = args[3]
+        return "Grounded answer."
+
+    monkeypatch.setattr(routes_agent_chat.llm_client, "complete", fake_complete)
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "Explain convolution", "profile": "agent"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert loop_calls == []
+    # The unscoped turn retrieves class-wide, and the retrieval and the facts are in the
+    # plain completion's prompt.
+    assert retrieved == [None]
+    system = str(sent["messages"][0]["content"])
+    assert "Convolution combines two signals." in system
+    assert "signals.pdf" in system
+    assert "prefers visual proofs" in system
+    assert "Mode: Guide." in system
+    assert routes_agent_chat._TOOLLESS_AGENT_NOTE in system
+
+
+def _client_without_server_exceptions(db: sqlite3.Connection) -> TestClient:
+    """A client that reports server-side exceptions as 500 bodies instead of raising,
+    so an injected preflight failure is asserted on its response and its aftermath.
+    Configures the endpoint the way the `client` fixture does, so a refused turn is
+    refused by the injected seam, not by a missing endpoint."""
+    db.execute("update settings set endpoint_url = 'http://127.0.0.1:8080/v1' where id = 1")
+    db.commit()
+    app = FastAPI()
+
+    @app.exception_handler(LyraError)
+    async def handle_lyra_error(request: Request, exc: LyraError) -> JSONResponse:
+        content: dict[str, object] = {"detail": exc.message}
+        if exc.extra:
+            content.update(exc.extra)
+        return JSONResponse(status_code=exc.status, content=content)
+
+    app.include_router(routes_agent_chat.router)
+    app.dependency_overrides[get_db] = _request_db
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_a_fresh_send_rejected_by_a_failed_preflight_persists_nothing_and_moves_no_mode(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 4: a fresh send whose preflight fails (injected retrieval failure) persists
+    nothing and changes nothing: no user message, no attempt to orphan as RUNNING, no
+    session-mode mutation, no title, no class touch. The plan runs before the first
+    durable write, so a refused turn cannot leave the conversation moved."""
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "retrieve",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("injected retrieval failure")),
+    )
+    touched: list[int] = []
+    monkeypatch.setattr(routes_agent_chat, "touch_class", lambda conn, cid: touched.append(cid))
+    client = _client_without_server_exceptions(db)
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "A question", "profile": "agent", "mode": "show"},
+    )
+
+    assert response.status_code == 500
+    # Nothing of the turn landed, and the mode toggle the body carried was never written.
+    assert sessions.list_messages(db, session_id) == []
+    assert db.execute("select count(*) from agent_turn_attempts").fetchone()[0] == 0
+    assert sessions.get_session(db, session_id)["mode"] == "guide"
+    assert sessions.get_session(db, session_id)["title"] is None
+    assert touched == []
+    assert sessions.active_turn(session_id) is None
+
+
+def test_a_fit_refused_fresh_send_moves_no_mode_and_persists_nothing(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 4, the fit gate: a window that cannot host even the tool-less surface refuses
+    with the bounded message, and - the regression this reorders - the session's mode is
+    still the one the turn started with: the mode is written only once the preflight
+    succeeded."""
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    db.execute("update settings set context_window = 512 where id = 1")
+    db.commit()
+    client = _client_without_server_exceptions(db)
+
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "word " * 2000, "profile": "agent", "mode": "show"},
+    )
+
+    assert response.status_code == 400
+    assert "context window" in str(response.json()["detail"])
+    assert sessions.list_messages(db, session_id) == []
+    assert db.execute("select count(*) from agent_turn_attempts").fetchone()[0] == 0
+    # The turn was refused, not started: the toggle stays where it was.
+    assert sessions.get_session(db, session_id)["mode"] == "guide"
+    assert sessions.active_turn(session_id) is None
+
+
+def test_a_retry_whose_preflight_fails_leaves_no_attempt_and_no_host_effect(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 4, retry: a retry plans before it persists anything. An injected registry
+    failure on the plan leaves the original failed attempt exactly as it was - no new
+    RUNNING attempt beside it, no reply, no mode change, the claim released."""
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    client = _client_without_server_exceptions(db)
+    # One failed attempt to retry.
+    stub = tools.ToolLoopResult(
+        content="",
+        calls=(),
+        stopped=tools.UPSTREAM_FAILED,
+        detail="The tutor endpoint could not be reached.",
+    )
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", lambda *a, **k: _stub_result(stub))
+    first = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "A question", "profile": "agent"},
+    )
+    assert first.status_code == 502
+    attempts_before = db.execute("select count(*) from agent_turn_attempts").fetchone()[0]
+    mode_before = sessions.get_session(db, session_id)["mode"]
+
+    def broken_registry(*args: object, **kwargs: object):
+        raise RuntimeError("injected registry failure")
+
+    monkeypatch.setattr(routes_agent_chat.agent_tools, "build_agent_registry", broken_registry)
+    retry = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat/retry",
+        json={"mode": "show"},
+    )
+
+    assert retry.status_code == 500
+    # No new attempt was created by the failed retry plan, and none is left reading
+    # RUNNING.
+    attempts_after = db.execute("select state from agent_turn_attempts order by id").fetchall()
+    assert len(attempts_after) == attempts_before
+    assert all(row["state"] != "running" for row in attempts_after)
+    # The conversation is untouched by the failed retry: no reply, mode where it was.
+    assert [m["role"] for m in sessions.list_messages(db, session_id)] == ["user"]
+    assert sessions.get_session(db, session_id)["mode"] == mode_before
+    assert sessions.active_turn(session_id) is None
+
+
+async def _stub_result(result: tools.ToolLoopResult) -> tools.ToolLoopResult:
+    return result
+
+
+def test_a_regenerate_whose_preflight_fails_preserves_the_existing_reply(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 4, regeneration: a regeneration that fails its preflight leaves the reply it
+    was about to replace exactly where it was - the supersede only happens when the new
+    reply commits - and does not create an attempt, move the mode, or hold the claim."""
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    client = _client_without_server_exceptions(db)
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "run_tool_loop",
+        lambda *a, **k: _stub_result(tools.ToolLoopResult(content="The original answer.")),
+    )
+    first = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "A question", "profile": "agent"},
+    )
+    assert first.status_code == 200
+    assert first.json()["content"] == "The original answer."
+    reply_id = first.json()["message_id"]
+    attempts_before = db.execute("select count(*) from agent_turn_attempts").fetchone()[0]
+    mode_before = sessions.get_session(db, session_id)["mode"]
+
+    def broken_registry(*args: object, **kwargs: object):
+        raise RuntimeError("injected registry failure")
+
+    monkeypatch.setattr(routes_agent_chat.agent_tools, "build_agent_registry", broken_registry)
+    regen = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat/regenerate",
+        json={"mode": "show"},
+    )
+
+    assert regen.status_code == 500
+    # The reply the regeneration was about to supersede is still there, undisturbed.
+    assert [m["id"] for m in sessions.list_messages(db, session_id)] == [
+        1,
+        reply_id,
+    ]
+    assert db.execute("select count(*) from agent_turn_attempts").fetchone()[0] == (attempts_before)
+    assert sessions.get_session(db, session_id)["mode"] == mode_before
+    assert sessions.active_turn(session_id) is None
+
+
+def test_a_retry_of_an_all_material_turn_stays_class_wide_even_when_a_document_is_named(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 5: a modern attempt persists its scope with the `scope_persisted` flag, and a
+    persisted `document_id` of NULL is the real value 'All material' - not an absence. A
+    retry of a class-wide turn must retrieve class-wide even when its body names a
+    document: the sentinel makes the stored NULL authoritative."""
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    retrieved: list[int | None] = []
+
+    def spy_retrieve(
+        conn: object,
+        class_id_: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        retrieved.append(document_id)
+        return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", spy_retrieve)
+    # Turn one: All material (no document_id in the body).
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "run_tool_loop",
+        lambda *a, **k: _stub_result(tools.ToolLoopResult(content="First answer.")),
+    )
+    assert (
+        client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+            json={"content": "First", "profile": "agent"},
+        ).status_code
+        == 200
+    )
+    # Turn two: a failed attempt to retry, also All material.
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "run_tool_loop",
+        lambda *a, **k: _stub_result(
+            tools.ToolLoopResult(
+                content="",
+                calls=(),
+                stopped=tools.UPSTREAM_FAILED,
+                detail="The tutor endpoint could not be reached.",
+            )
+        ),
+    )
+    assert (
+        client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+            json={"content": "Second", "profile": "agent"},
+        ).status_code
+        == 502
+    )
+    last_user_id = int(
+        db.execute(
+            "select max(id) from messages where session_id = ? and role = 'user'",
+            (session_id,),
+        ).fetchone()[0]
+    )
+    attempt = agent_attempts.latest_attempts_by_message(db, session_id)[last_user_id]
+    assert attempt["scope_persisted"] == 1
+    assert attempt["document_id"] is None
+
+    # The retry names a document in its body - the malicious case. The persisted NULL
+    # wins: retrieval runs class-wide.
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "run_tool_loop",
+        lambda *a, **k: _stub_result(tools.ToolLoopResult(content="Retried answer.")),
+    )
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat/retry",
+        json={"document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    assert retrieved[-1] is None
+
+
+def test_a_legacy_attempt_scope_backstops_from_the_request(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 5, legacy rows: an attempt created before the persisted-scope column (flag 0)
+    does not own its scope, so a retry backstops from the request-provided scope - the
+    pre-sentinel behavior - and a stored NULL there is an absence, not 'All material'."""
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    # Seed the user message and a legacy failed attempt directly, flag 0.
+    user_id = sessions.add_message(db, session_id, "user", "A legacy question")
+    db.execute(
+        "insert into agent_turn_attempts "
+        "(session_id, user_message_id, profile, state, mode, document_id, operation_id, "
+        "scope_persisted) values (?, ?, 'agent', 'failed', 'guide', NULL, NULL, 0)",
+        (session_id, user_id),
+    )
+    db.commit()
+
+    retrieved: list[int | None] = []
+
+    def spy_retrieve(
+        conn: object,
+        class_id_: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        retrieved.append(document_id)
+        return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", spy_retrieve)
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "run_tool_loop",
+        lambda *a, **k: _stub_result(tools.ToolLoopResult(content="Legacy retry.")),
+    )
+
+    # The request names a document: with no sentinel, that backstop is the scope.
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat/retry",
+        json={"document_id": 7},
+    )
+    assert response.status_code == 200, response.text
+    assert retrieved[-1] == 7
+
+    # A second legacy row, this one with a stored document: a body-less retry backstops to
+    # the stored value, the pre-sentinel behavior for rows that never carried the flag.
+    user_id_2 = sessions.add_message(db, session_id, "user", "Another legacy question")
+    db.execute(
+        "insert into agent_turn_attempts "
+        "(session_id, user_message_id, profile, state, mode, document_id, operation_id, "
+        "scope_persisted) values (?, ?, 'agent', 'failed', 'guide', 3, NULL, 0)",
+        (session_id, user_id_2),
+    )
+    db.commit()
+    client.post(f"/api/classes/{class_id}/sessions/{session_id}/agent-chat/retry")
+    assert retrieved[-1] == 3
+
+
+def test_a_regenerate_with_an_explicit_null_document_retrieves_class_wide(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Item 2, server side: a regeneration body that carries an explicit `document_id:
+    null` (the composer's 'All material') names the scope by property presence - the
+    stored scope is ignored and retrieval runs class-wide, even for a turn that was
+    asked under a document."""
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    retrieved: list[int | None] = []
+
+    def spy_retrieve(
+        conn: object,
+        class_id_: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        retrieved.append(document_id)
+        return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", spy_retrieve)
+    monkeypatch.setattr(
+        routes_agent_chat,
+        "run_tool_loop",
+        lambda *a, **k: _stub_result(tools.ToolLoopResult(content="Scoped answer.")),
+    )
+    # The original turn was asked under document 7.
+    assert (
+        client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+            json={"content": "Scoped question", "profile": "agent", "document_id": 7},
+        ).status_code
+        == 200
+    )
+    assert retrieved == [7]
+    (attempt,) = agent_attempts.latest_attempts_by_message(db, session_id).values()
+    assert attempt["document_id"] == 7
+
+    # Manual regeneration to All material: explicit null in the body wins over the
+    # stored 7.
+    response = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat/regenerate",
+        json={"document_id": None},
+    )
+    assert response.status_code == 200, response.text
+    assert retrieved[-1] is None

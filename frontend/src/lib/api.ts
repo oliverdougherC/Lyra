@@ -672,7 +672,11 @@ export const api = {
           ? undefined
           : {
               ...(scope.mode ? { mode: scope.mode } : null),
-              ...(scope.documentId != null ? { document_id: scope.documentId } : null),
+              // Property presence, not non-nullness (PLA-401 final pass): an explicit
+              // documentId of null is the real value "All material" and must ride the wire
+              // as an explicit null; only an ABSENT property means "the caller did not
+              // name a scope" (the server's persisted scope then owns the turn).
+              ...('documentId' in scope ? { document_id: scope.documentId } : null),
             },
       signal,
       errorFactory: agentChatErrorFactory,
@@ -699,7 +703,12 @@ export const api = {
             ? undefined
             : {
                 ...(scope.mode ? { mode: scope.mode } : null),
-                ...(scope.documentId != null ? { document_id: scope.documentId } : null),
+                // Property presence, not non-nullness (PLA-401 final pass): an explicit
+                // documentId of null is the real value "All material" and must ride the
+                // wire as an explicit null - a manual regeneration to All material must
+                // win over the stored document scope, and only an ABSENT property means
+                // "continue the persisted scope" (the body-less JIT continuation).
+                ...('documentId' in scope ? { document_id: scope.documentId } : null),
               },
         signal,
         errorFactory: agentChatErrorFactory,

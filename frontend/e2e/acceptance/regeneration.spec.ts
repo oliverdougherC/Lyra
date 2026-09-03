@@ -13,6 +13,7 @@
  * a deterministic reply. We do not replace any of the backend's persistence with test doubles.
  */
 
+import { resolve } from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 import {
   apiGet,
@@ -22,7 +23,11 @@ import {
   waitForChatResponse,
   enqueueTutorResponse,
   clearTutorState,
+  uploadDocument,
+  waitForDocumentReady,
 } from './helpers'
+
+const TEST_DATA = resolve(__dirname, 'test-data')
 
 const ANSWER_A = 'Deterministic original answer ALPHA for the regeneration test.'
 const ANSWER_B = 'Deterministic replacement answer BETA after a successful regeneration.'
@@ -113,5 +118,65 @@ test.describe('PLA-316 regeneration (class conversation)', () => {
     expect(await assistantCount(sessionId)).toBe(1)
     expect(await lastAssistantContent(sessionId)).toBe(ANSWER_B)
     await expect(page.getByText('BETA').first()).toBeVisible({ timeout: 10_000 })
+  })
+
+  test('a manual regeneration to All material carries an explicit null scope (PLA-401 final pass)', async ({
+    page,
+  }) => {
+    // The pin the review turns on: send under a selected document, switch the composer to
+    // "All material", and Regenerate. The wire body must name the scope by property
+    // presence - an EXPLICIT `document_id: null`, not an absent property - so the server
+    // answers class-wide even though the stored scope is the document.
+    const upload = await uploadDocument(
+      classId,
+      resolve(TEST_DATA, 'supplement.md'),
+      'supplement.md',
+    )
+    // Document upload is accepted then processed asynchronously.
+    expect(upload.status).toBe(202)
+    const doc = (await upload.json()) as { id: number }
+    await waitForDocumentReady(doc.id)
+
+    // A fresh conversation of this class: the earlier test already left one answered
+    // turn in the shared session, and this test counts replies in its own.
+    const ownSession = await createSession(classId)
+
+    await enqueueTutorResponse(ANSWER_A)
+    await openChatSession(page, classId, ownSession.id)
+
+    // Select the document in the source chip and send under it.
+    const chip = page.locator('button[aria-label$="Choose what Lyra reads for this answer."]')
+    await chip.click()
+    await page.getByRole('radio', { name: 'supplement.md' }).click()
+    await expect(chip).toContainText('supplement.md')
+    await sendChatMessage(page, 'Explain the key idea in the supplement.')
+    await waitForChatResponse(page)
+    await expect(page.getByText('ALPHA').first()).toBeVisible({ timeout: 30_000 })
+
+    // Capture the regenerate request and let it run against the real backend.
+    const regenerateBodies: Array<Record<string, unknown>> = []
+    await page.route('**/api/**/agent-chat/regenerate', async (route) => {
+      const data = route.request().postDataJSON()
+      regenerateBodies.push((data ?? {}) as Record<string, unknown>)
+      await route.continue()
+    })
+
+    // Switch the composer to All material, then regenerate the reply.
+    await chip.click()
+    await page.getByRole('radio', { name: 'All material' }).click()
+    await expect(chip).toContainText('All material')
+    await enqueueTutorResponse(ANSWER_B)
+    await clickRegenerateFor(page, 'ALPHA')
+
+    await waitForChatResponse(page)
+    await expect(regenerateBodies).toHaveLength(1)
+    // Property presence on the wire: the key is present with an explicit null - an ABSENT
+    // property (the pre-fix serialization) would have re-answered under the stored
+    // document instead of class-wide.
+    expect(regenerateBodies[0]).toHaveProperty('document_id', null)
+    expect(regenerateBodies[0].mode).toBe('guide')
+    // The regeneration still replaces exactly once, now class-wide.
+    expect(await assistantCount(ownSession.id)).toBe(1)
+    expect(await lastAssistantContent(ownSession.id)).toBe(ANSWER_B)
   })
 })

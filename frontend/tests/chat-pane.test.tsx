@@ -1179,4 +1179,101 @@ describe('ChatPane contextual agent (PLA-401)', () => {
     await waitFor(() => expect(vi.mocked(api.stopAgentChat)).toHaveBeenCalledWith(1, 7))
     releaseSend?.()
   })
+
+  /**
+   * PLA-401 final pass, item 3: the three-state lost-response reconciliation. A non-streaming
+   * agent turn can lose its acceptance in transport for ANY error - not just ApiErrors - so
+   * the composer's recovery is decided from the durable state, not from the error's type.
+   */
+  describe('lost-response reconciliation', () => {
+    it('case A: a durable reply retires both refs - empty composer, fresh operation id', async () => {
+      vi.mocked(api.sendAgentChat).mockClear()
+      const transcript: MessageRead[] = []
+      vi.mocked(api.listMessages).mockImplementation(async () => transcript)
+      vi.mocked(api.sendAgentChat).mockImplementation(async () => {
+        // The turn commits durably; the HTTP response is lost in transit.
+        transcript.push(
+          message({ id: 1, role: 'user', content: QUESTION }),
+          message({ id: 2, role: 'assistant', content: 'A durable answer.' }),
+        )
+        throw new Error('connection lost')
+      })
+
+      const user = userEvent.setup()
+      renderAgentPane()
+
+      const box = await screen.findByLabelText('Message Lyra')
+      await user.type(box, QUESTION)
+      await user.click(screen.getByLabelText('Send message'))
+
+      // The self-heal: the transcript shows the recovered question and reply, and the
+      // composer is left empty - the text is not offered back for re-sending.
+      await waitFor(() => expect(screen.getAllByText(QUESTION)).toHaveLength(1))
+      expect(await screen.findByText('A durable answer.')).toBeInTheDocument()
+      await waitFor(() => expect(box).toHaveValue(''))
+
+      // The next Send is a new question with a FRESH operation id, never the stale key.
+      await user.type(box, 'A different follow-up question')
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
+      const [first, second] = vi.mocked(api.sendAgentChat).mock.calls
+      expect(first[6]).toBeTypeOf('string')
+      expect(second[6]).toBeTypeOf('string')
+      expect(second[6]).not.toBe(first[6])
+    })
+
+    it('case B: a durable failed turn leaves the composer empty (no prefill) but keeps the operation id', async () => {
+      // The question landed; the attempt failed. The transcript shows the honest turn;
+      // the composer must not prefill the text (Retry is the causal path), yet an identical
+      // re-send must carry the SAME operation id so the server re-runs the stored turn.
+      vi.mocked(api.sendAgentChat).mockClear()
+      const transcript: MessageRead[] = [message({ id: 1, role: 'user', content: QUESTION })]
+      vi.mocked(api.listMessages).mockImplementation(async () => transcript)
+      vi.mocked(api.sendAgentChat).mockRejectedValue(new Error('upstream failed'))
+
+      const user = userEvent.setup()
+      renderAgentPane()
+
+      const box = await screen.findByLabelText('Message Lyra')
+      await user.type(box, QUESTION)
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+
+      // No prefill: the composer is empty, not offered the failed question again.
+      await waitFor(() => expect(box).toHaveValue(''))
+
+      // Re-sending the same words re-runs the same durable turn under the same operation id.
+      await user.type(box, QUESTION)
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
+      const [first, second] = vi.mocked(api.sendAgentChat).mock.calls
+      expect(second[6]).toBe(first[6])
+    })
+
+    it('case C: nothing durable restores the draft and keeps the operation id for an idempotent re-send', async () => {
+      // The request never landed (the transport died before the server saw it): the draft
+      // goes back in the box and the operation id stays minted, so a re-send either lands
+      // fresh or, if it actually did commit, the server reconciles by operation id.
+      vi.mocked(api.sendAgentChat).mockClear()
+      vi.mocked(api.listMessages).mockResolvedValue([])
+      vi.mocked(api.sendAgentChat).mockRejectedValue(new TypeError('failed to fetch'))
+
+      const user = userEvent.setup()
+      renderAgentPane()
+
+      const box = await screen.findByLabelText('Message Lyra')
+      await user.type(box, QUESTION)
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+
+      // The draft is back in the composer.
+      await waitFor(() => expect(box).toHaveValue(QUESTION))
+
+      // And the re-send carries the same operation id.
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
+      const [first, second] = vi.mocked(api.sendAgentChat).mock.calls
+      expect(second[6]).toBe(first[6])
+    })
+  })
 })

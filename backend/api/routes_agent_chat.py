@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Literal
 
@@ -13,16 +14,19 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
 from backend.api.routes_chat import fit_retrieval_to_budget, require_document_allowed
-from backend.core import agent_attempts, agent_tools, profiles, sessions
+from backend.core import agent_attempts, agent_tools, app_settings, profiles, sessions
 from backend.core.app_settings import TutorConfig, resolve_tutor_access
 from backend.core.classes import touch_class
-from backend.core.errors import ConflictError, LyraError, NotFoundError
+from backend.core.errors import ConflictError, LyraError, NotFoundError, UpstreamError
 from backend.core.query_guard import PrivateContextLedger
+from backend.llm import client as llm_client
 from backend.llm import prompts as llm_prompts
 from backend.llm import tools as llm_tools
 from backend.llm.tools import (
+    QUIESCENCE_SECONDS,
     ContextBudget,
     ToolLoopResult,
+    ToolStopGate,
     conversation_tokens,
     run_tool_loop,
     schema_tokens,
@@ -119,6 +123,26 @@ _PERSISTENCE_STOPPED_DETAIL = (
     "This turn was interrupted before its reply could be saved. Try it again."
 )
 _PERSISTENCE_FAILED_DETAIL = "The agent reply could not be saved. Try it again."
+# The tool-less turn's agent note: the same conversation, the same tutor contract, with
+# the one sentence that keeps the model honest about the work it cannot perform on a
+# tool-incompatible endpoint (the review's item: an agent-specific request on such an
+# endpoint is explained, not faked, and ordinary studying keeps working).
+_TOOLLESS_AGENT_NOTE = (
+    " The current endpoint cannot run tool calls, so Lyra's agent work - public-web "
+    "research, reading the attached workspace, preparing file changes, and proposing "
+    "verification commands - is not available in this conversation. If the task needs "
+    "any of it, say that plainly, and answer from the conversation and the course "
+    "material instead."
+)
+# Remembered on the settings row when an unknown endpoint refuses a turn's first tools
+# request (PLA-313 capability contract): the next turn takes the tool-less path at once.
+_NO_TOOL_SUPPORT_VERDICT_MESSAGE = (
+    "The tutor endpoint does not accept tool calls, so Lyra answers without them."
+)
+# Bounded how long /stop waits for the in-flight turn to settle after its cancel. The
+# turn only settles once its workers have quiesced (the loop's wait is bounded by
+# `QUIESCENCE_SECONDS`), so this is that bound plus room for the settlement write itself.
+_STOP_TASK_TIMEOUT = QUIESCENCE_SECONDS + 30.0
 
 
 class AgentChatRequest(BaseModel):
@@ -263,6 +287,12 @@ class AgentTurnPlan:
     response reads the events the handlers wrote. `context_budget` lets the tool loop
     re-check the growing transcript against the same window, reserve, and safety margin the
     preflight proved the first request against.
+
+    `toolless` marks the tool-less surface: a turn planned for an endpoint that is known
+    not to accept tool calls (or whose window cannot carry the tool schemas), which answers
+    with a plain completion - full tutor contract, Guide/Show, facts, and retrieval, no
+    tool schemas charged, no registry, no agent work possible. The route runs
+    `client.complete` for such a plan instead of `run_tool_loop`.
     """
 
     config: TutorConfig
@@ -275,6 +305,7 @@ class AgentTurnPlan:
     context_budget: ContextBudget
     registry: dict[str, llm_tools.ToolDefinition]
     activity: agent_tools.AgentRunActivity
+    toolless: bool = False
 
 
 def _scoped_session(conn: sqlite3.Connection, class_id: int, session_id: int) -> dict[str, object]:
@@ -315,6 +346,17 @@ def _availability_prompt(profile: agent_tools.AgentProfile, registry: dict[str, 
     return prompt
 
 
+class _TurnTooLargeError(LyraError):
+    """The turn cannot fit the configured context window.
+
+    A `LyraError` with the student-facing `_TOO_LARGE_MESSAGE`, raised by both fit gates.
+    It exists as its own type so the tool-surface preflight can distinguish "does not fit"
+    from every other planning failure and fall back to the cheaper tool-less surface (which
+    charges no tool schemas) instead of guessing: a registry build or a retrieval failure is
+    not a fit problem, and must not be read as one.
+    """
+
+
 def _require_agent_turn_fits(cost: AgentTurnCost) -> None:
     """Coarse reject when even the non-trimmable material cannot fit, ignoring framing.
 
@@ -333,10 +375,10 @@ def _require_agent_turn_fits(cost: AgentTurnCost) -> None:
     `TurnReserve` inequality wired into the route it guards.
 
     Raises:
-        LyraError: the turn cannot fit the window with the reserves intact.
+        _TurnTooLargeError: the turn cannot fit the window with the reserves intact.
     """
     if not cost.fits:
-        raise LyraError(_TOO_LARGE_MESSAGE)
+        raise _TurnTooLargeError(_TOO_LARGE_MESSAGE)
 
 
 def _assemble_within_ceiling(
@@ -394,11 +436,11 @@ def _require_request_fits(
     exactly as an oversized initial turn is.
 
     Raises:
-        LyraError: the assembled request plus the tool schema exceeds the margin-reduced
+        _TurnTooLargeError: the assembled request plus the tool schema exceeds the margin-reduced
             window.
     """
     if conversation_tokens(messages) + tool_tokens > ceiling:
-        raise LyraError(_TOO_LARGE_MESSAGE)
+        raise _TurnTooLargeError(_TOO_LARGE_MESSAGE)
 
 
 def _source_context_entry(chunk: RetrievedChunk) -> dict[str, object]:
@@ -454,6 +496,10 @@ def _plan_agent_turn(
     document_id: int | None,
     user_message_id: int | None = None,
     exclude_message_ids: frozenset[int] = frozenset(),
+    tools_supported: bool | None = None,
+    cached_retrieval: RetrievalResult | None = None,
+    stop_gate: ToolStopGate | None = None,
+    history: tuple[HistoryMessage, ...] | None = None,
 ) -> AgentTurnPlan:
     """Cost, fit-check, and assemble one agent turn without mutating anything.
 
@@ -473,6 +519,18 @@ def _plan_agent_turn(
     any mutation) or returns the assembled first request, the executable registry the loop
     will run, and the budget the loop guards with.
 
+    **The tool surface is decided before anything is sent.** `tools_supported` is the
+    endpoint's capability verdict: known `False` (measured by the capability probe, or
+    remembered from a first-request refusal) plans the tool-less surface at once - the
+    full tutor contract with no tool schemas charged, the path `llm/client.py` has always
+    promised an otherwise-compatible endpoint without tool calling; `True` plans the tool
+    surface; `None` (unknown) plans the tool surface, and when - and only when - that
+    surface does not fit the window while the tool-less one does (no tool-schema cost), the
+    turn falls back to answering tool-less, so a basic tutoring turn that fits is never
+    refused because optional tool schemas would push it over the window. The loop's own
+    first-request refusal (an unknown endpoint rejecting `tools`) takes the same fallback
+    at run time and never reaches a student-visible failure.
+
     The schema-gating capability state is read exactly once, into a frozen snapshot, and
     reused for both the token budget and the executable registry, so a settings or grant
     change landing mid-turn cannot make the registry the loop runs larger or different from
@@ -487,39 +545,157 @@ def _plan_agent_turn(
     Dispatch-time reauthorization still runs when each handler executes, so a grant revoked
     after this snapshot fails closed at the tool; a grant newly enabled after it waits for
     the next turn.
+
+    `cached_retrieval` reuses a prior plan's fitted retrieval for a re-plan of the same
+    turn (the run-time no-tool-support fallback), so the fallback recharges the same
+    chunks without re-embedding the question.
+
+    `history` overrides the conversation's persisted history with an in-memory one: the
+    product path always reads the session's own messages, while the eval harness's
+    `class_chat` surface plans a corpus case's case history through this very planner, so
+    the harness and the route trim, budget, and assemble the same way by construction.
+    """
+    # The verdict rides the turn's own settings snapshot - the same single read that
+    # produced `config.endpoint_url` - so the endpoint sent to and the endpoint the verdict
+    # was measured for cannot disagree between a settings change landing mid-turn.
+    support = tools_supported if tools_supported is not None else config.tools_supported
+
+    if support is False:
+        # Known tool-incompatible endpoint. Basic tutoring is exactly what this endpoint
+        # carries, so the turn is planned tool-less at once: no snapshot read, no registry
+        # build, no schema tokens charged.
+        return _plan_agent_turn_surface(
+            conn,
+            class_id,
+            session_id,
+            config,
+            profile=profile,
+            content=content,
+            mode=mode,
+            document_id=document_id,
+            user_message_id=user_message_id,
+            exclude_message_ids=exclude_message_ids,
+            toolless=True,
+            cached_retrieval=cached_retrieval,
+            history=history,
+        )
+
+    try:
+        return _plan_agent_turn_surface(
+            conn,
+            class_id,
+            session_id,
+            config,
+            profile=profile,
+            content=content,
+            mode=mode,
+            document_id=document_id,
+            user_message_id=user_message_id,
+            exclude_message_ids=exclude_message_ids,
+            toolless=False,
+            cached_retrieval=cached_retrieval,
+            stop_gate=stop_gate,
+            history=history,
+        )
+    except _TurnTooLargeError:
+        if cached_retrieval is not None:
+            # This plan is already a re-plan of a turn that planned once; it is the
+            # fallback itself, so a fit failure is final.
+            raise
+        # The tool surface - system prompt plus every tool schema the class grants - does
+        # not fit this window. A basic tutoring turn charges no schemas; if that fits, the
+        # student's question is answered tool-less rather than refused over the cost of
+        # optional capability. (The endpoint may well support tools: the window is too
+        # small for the agent surface, not the endpoint incapable of it, so no verdict is
+        # remembered.)
+        return _plan_agent_turn_surface(
+            conn,
+            class_id,
+            session_id,
+            config,
+            profile=profile,
+            content=content,
+            mode=mode,
+            document_id=document_id,
+            user_message_id=user_message_id,
+            exclude_message_ids=exclude_message_ids,
+            toolless=True,
+            cached_retrieval=cached_retrieval,
+            history=history,
+        )
+
+
+def _plan_agent_turn_surface(
+    conn: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    config: TutorConfig,
+    *,
+    profile: agent_tools.AgentProfile,
+    content: str,
+    mode: llm_prompts.ChatMode,
+    document_id: int | None,
+    user_message_id: int | None,
+    exclude_message_ids: frozenset[int],
+    toolless: bool,
+    cached_retrieval: RetrievalResult | None,
+    stop_gate: ToolStopGate | None = None,
+    history: tuple[HistoryMessage, ...] | None = None,
+) -> AgentTurnPlan:
+    """One tool surface of the plan: the shared body, with or without tools.
+
+    `toolless` plans a plain-completion turn (no registry, no schema tokens, the tool-less
+    note instead of the agent capability layer); otherwise the surface is the full agent
+    tool surface - snapshot, probe registry, schema budget, and the executable registry
+    around the run-local private-context ledger.
     """
     budget = plan_budget(config.context_window)
 
-    snapshot = agent_tools.snapshot_agent_capabilities(conn, class_id)
-    probe_registry, _probe_activity = agent_tools.build_agent_registry(
-        conn, class_id, session_id, profile, private_context=(), snapshot=snapshot
-    )
-    tool_tokens = schema_tokens(tool_schemas(probe_registry))
+    snapshot: agent_tools.AgentCapabilitySnapshot | None = None
+    if toolless:
+        probe_registry: dict[str, llm_tools.ToolDefinition] = {}
+        tool_tokens = 0
+    else:
+        snapshot = agent_tools.snapshot_agent_capabilities(conn, class_id)
+        probe_registry, _probe_activity = agent_tools.build_agent_registry(
+            conn, class_id, session_id, profile, private_context=(), snapshot=snapshot
+        )
+        tool_tokens = schema_tokens(tool_schemas(probe_registry))
 
     # The system prompt the turn answers under. The contextual turn - the ordinary class
     # conversation - builds on the FULL tutor system prompt: base rules, the mode contract
     # the turn runs under, active class facts, and user facts, all owned by
     # `build_system_prompt` (and by it alone). The agent layer adds only what the tools
     # change: capability availability, trust boundaries, JIT access, and proposal/command
-    # semantics. Legacy isolated profiles keep their own prompts.
+    # semantics. Tool-less, it is replaced by the one sentence that says the agent work
+    # is unavailable, so a task that needs it is explained rather than attempted. Legacy
+    # isolated profiles keep their own prompts (with their "disabled" note when tool-less).
     if profile == "agent":
         tutor_prompt = llm_prompts.build_system_prompt(
             mode,
             profiles.select_user_facts(conn),
             profiles.select_active_facts(conn, class_id),
         )
-        base_system = f"{tutor_prompt}\n\n{_agent_layer_prompt(probe_registry)}"
+        if toolless:
+            base_system = f"{tutor_prompt}\n\n{_TOOLLESS_AGENT_NOTE}"
+        else:
+            base_system = f"{tutor_prompt}\n\n{_agent_layer_prompt(probe_registry)}"
     else:
         tutor_prompt = ""
         base_system = _availability_prompt(profile, probe_registry)
 
-    messages = sessions.list_messages(conn, session_id)
-    earlier = tuple(
-        HistoryMessage(role=message["role"], content=str(message["content"]))
-        for message in messages
-        if int(message["id"]) not in exclude_message_ids
-        and (user_message_id is None or int(message["id"]) != user_message_id)
-    )
+    if history is not None:
+        # The eval harness's class_chat surface: the conversation arrives with the case,
+        # not from the session table.
+        earlier = history
+    else:
+        messages = sessions.list_messages(conn, session_id)
+        earlier = tuple(
+            HistoryMessage(role=message["role"], content=str(message["content"]))
+            for message in messages
+            if int(message["id"]) not in exclude_message_ids
+            and (user_message_id is None or int(message["id"]) != user_message_id)
+        )
     cost = AgentTurnCost(
         context_window=config.context_window,
         generation=budget.generation,
@@ -551,9 +727,16 @@ def _plan_agent_turn(
     # Class-wide retrieval by default: the composer's "All material" scope is
     # `document_id=None`, and like the tutor route that means retrieve across ALL ready
     # material for the class. A selected document filters retrieval to that document.
-    retrieval = _retrieve_turn_context(conn, class_id, content, retrieval_budget, document_id)
+    # A re-plan of the same turn (the run-time no-tool-support fallback) reuses the plan
+    # that just planned's fitted result instead of re-embedding the question.
+    if cached_retrieval is not None:
+        retrieval = cached_retrieval
+    else:
+        retrieval = _retrieve_turn_context(conn, class_id, content, retrieval_budget, document_id)
     # The shared final pass charges the block's source labels and heading against the same
-    # budget the chunks were drawn to, dropping lowest-ranked chunks from the end.
+    # budget the chunks were drawn to, dropping lowest-ranked chunks from the end. Re-fitting
+    # an already-fitted result is a no-op (the kept prefix still fits), which is what makes
+    # the reuse above safe under a surface with a slightly different base system.
     retrieval = fit_retrieval_to_budget(base_system, retrieval_budget, retrieval)
     context_block = llm_prompts.format_context_block(
         [_source_context_entry(chunk) for chunk in retrieval.chunks]
@@ -586,14 +769,22 @@ def _plan_agent_turn(
     for chunk in retrieval.chunks:
         private_context.add(chunk.content)
 
-    registry, activity = agent_tools.build_agent_registry(
-        conn,
-        class_id,
-        session_id,
-        profile,
-        private_context=private_context,
-        snapshot=snapshot,
-    )
+    if toolless:
+        # No tools are offered, so there is no registry to execute, nothing to audit, and
+        # nothing for the private-context ledger to guard: the guard exists to protect a
+        # web query this turn cannot make.
+        registry: dict[str, llm_tools.ToolDefinition] = {}
+        activity = agent_tools.AgentRunActivity()
+    else:
+        registry, activity = agent_tools.build_agent_registry(
+            conn,
+            class_id,
+            session_id,
+            profile,
+            private_context=private_context,
+            snapshot=snapshot,
+            stop=stop_gate,
+        )
     context_budget = ContextBudget(
         context_window=config.context_window,
         generation_reserve=budget.generation,
@@ -611,6 +802,65 @@ def _plan_agent_turn(
         context_budget=context_budget,
         registry=registry,
         activity=activity,
+        toolless=toolless,
+    )
+
+
+@dataclass(frozen=True)
+class ClassChatAssembly:
+    """The class chat's first model request, as the production turn sends it.
+
+    `messages` is the whole conversation - the system prompt with its retrieved context
+    block, the kept history, the question - and `tools` the schemas offered alongside,
+    exactly what `run_tool_loop`'s first `complete_with_tools` call sends. On the tool-less
+    surface (a window too small for the schemas, or a known tool-incompatible endpoint)
+    `tools` is empty and the system prompt carries the tool-less note instead.
+    """
+
+    messages: tuple[dict[str, object], ...]
+    tools: tuple[dict[str, object], ...]
+    toolless: bool
+
+
+def assemble_class_chat_turn(
+    conn: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    config: TutorConfig,
+    *,
+    content: str,
+    mode: llm_prompts.ChatMode = "guide",
+    document_id: int | None = None,
+    history: tuple[HistoryMessage, ...] | None = None,
+    cached_retrieval: RetrievalResult | None = None,
+) -> ClassChatAssembly:
+    """The exact first model request one class-chat turn sends, assembled by the
+    production planner itself.
+
+    This is the seam the eval harness's `class_chat` surface calls: the harness sends
+    what the product sends because both call this one function - and the deterministic
+    parity test pins that seam to the same planner the route uses, so a change to the
+    production assembly is visible to the eval. `session_id` is still the turn's
+    conversation (the executable registry is built around it); `history` lets a caller
+    plan against an in-memory conversation (the corpus case) instead of the session's
+    persisted messages. Read-only: it plans, embeds, and registers, and mutates nothing.
+    """
+    plan = _plan_agent_turn(
+        conn,
+        class_id,
+        session_id,
+        config,
+        profile="agent",
+        content=content,
+        mode=mode,
+        document_id=document_id,
+        cached_retrieval=cached_retrieval,
+        history=history,
+    )
+    return ClassChatAssembly(
+        messages=tuple(plan.messages),
+        tools=tuple(tool_schemas(plan.registry)),
+        toolless=plan.toolless,
     )
 
 
@@ -691,8 +941,10 @@ def _replay_completed_attempt(
 _inflight: dict[int, tuple[int, asyncio.Task]] = {}
 
 
-def _register_inflight(session_id: int, turn_token: int, task: asyncio.Task) -> None:
-    _inflight[session_id] = (turn_token, task)
+def _register_inflight(
+    session_id: int, turn_token: int, task: asyncio.Task, gate: ToolStopGate
+) -> None:
+    _inflight[session_id] = (turn_token, task, gate)
 
 
 def _unregister_inflight(session_id: int, turn_token: int) -> None:
@@ -701,9 +953,13 @@ def _unregister_inflight(session_id: int, turn_token: int) -> None:
         del _inflight[session_id]
 
 
+def _inflight_entry(session_id: int) -> tuple[int, asyncio.Task, ToolStopGate] | None:
+    return _inflight.get(session_id)
+
+
 def _inflight_task(session_id: int) -> asyncio.Task | None:
-    current = _inflight.get(session_id)
-    return current[1] if current is not None else None
+    entry = _inflight.get(session_id)
+    return entry[1] if entry is not None else None
 
 
 async def _await_turn_or_stopped(turn_task: asyncio.Task) -> AgentChatResult | JSONResponse:
@@ -743,6 +999,135 @@ async def _await_turn_or_stopped(turn_task: asyncio.Task) -> AgentChatResult | J
         )
 
 
+def _planning_worker(gate: ToolStopGate, plan: Callable[[], AgentTurnPlan]) -> AgentTurnPlan:
+    """The planning body, with the turn's gate accounting for the worker's lifetime.
+
+    Registration and clearing happen inside the worker thread, not around the `to_thread`
+    await: a cancellation of the turn lands at the await, but the planning thread keeps
+    running to the end of its read-only work, and the gate must learn "quiesced" only when
+    that thread has actually left - so the handler's bounded gate wait (and the Stop
+    endpoint's) can never report a settled turn while a planner still holds the request
+    connection.
+    """
+    done = gate.begin_work()
+    try:
+        return plan()
+    finally:
+        gate.finish_work(done)
+
+
+async def _plan_turn_offloop(
+    gate: ToolStopGate, plan: Callable[[], AgentTurnPlan]
+) -> AgentTurnPlan:
+    """Run one turn's synchronous planning off the event loop (PLA-401 final pass).
+
+    The planning boundary is blocking by nature: embedding the question, SQLite retrieval
+    (exact KNN and FTS), and optional cross-encoder reranking - roughly a second or more on
+    a reranked question. This is now the primary class-chat path, so it may not run on the
+    FastAPI event loop: one ordinary class question held there would freeze every unrelated
+    request (health, other classes' sessions, the Stop itself) for the whole retrieval. The
+    tutor route made the same call for its own blocking open (`asyncio.to_thread(_open_turn,
+    ...)`); the agent turn takes the same shape here, under the same per-session claim, so
+    serialization is unchanged - one turn per session still plans, persists, and runs in one
+    protected slot.
+
+    Cancellation stays truthful: a cancelled turn waits for its read-only planner to leave
+    before it can settle, through the gate, rather than racing the connection teardown.
+    """
+    return await asyncio.to_thread(_planning_worker, gate, plan)
+
+
+def _remember_no_tool_support(conn: sqlite3.Connection) -> None:
+    """Remember a first-request tool refusal as the endpoint's capability verdict (PLA-313).
+
+    The settings row is the shared memory for this three-state verdict (unknown / supported /
+    not supported): the solver's verification probe and the settings screen read the same
+    column. It is written only when nothing was stored (unknown) - a measured verdict is
+    never overridden by one turn, and a settings change that cleared it (endpoint or model
+    changed) simply asks again next time.
+    """
+    if app_settings.get_settings_row(conn)["tools_supported"] is not None:
+        return
+    app_settings.update_settings_row(
+        conn, {"tools_supported": 0, "tools_message": _NO_TOOL_SUPPORT_VERDICT_MESSAGE}
+    )
+
+
+def _resolve_retry_scope(
+    target: agent_attempts.RetryTarget,
+    regenerate: bool,
+    scope: AgentTurnScopeRequest | None,
+    session_mode: str,
+) -> tuple[str, int | None]:
+    """The scope a retry or regeneration re-answers under, by persisted-scope authority.
+
+    A row that carries `scope_persisted` (created by the modern path) owns its scope: a
+    persisted `document_id` of NULL is the real value "All material", so retrying a
+    class-wide turn retrieves class-wide even when the request happens to name a document.
+    Only a legacy row - created before the scope was persisted, the column's default -
+    falls back to request-provided scope, the pre-sentinel behavior.
+    """
+    latest = target.latest
+    persisted = bool(latest.get("scope_persisted"))
+    fields = scope.model_fields_set if scope is not None else ()
+    body_mode = scope.mode if scope is not None else None
+    body_doc = scope.document_id if "document_id" in fields else None
+
+    if regenerate:
+        # A manual regeneration carries the CURRENT selection when its body names one; a
+        # body-less one (the just-in-time continuation after an access approval) continues
+        # the persisted scope. An explicit body document_id of null is "All material" and
+        # wins like any other named value (property presence, not non-nullness).
+        mode = (
+            body_mode
+            if body_mode is not None
+            else (latest.get("mode") if persisted else (latest.get("mode") or body_mode))
+        )
+        if "document_id" in fields:
+            document_id = body_doc
+        elif persisted:
+            document_id = latest.get("document_id")
+        else:
+            document_id = latest.get("document_id") or body_doc
+    else:
+        # A retry re-answers the turn with the scope it was asked under. A flagged row owns
+        # its scope outright - a stored NULL document is authoritative "All material", so a
+        # retry of a class-wide turn retrieves class-wide even when the request happens to
+        # name a document. Only a legacy row (predating the persisted scope) falls back to
+        # the request-provided backstop, the pre-sentinel behavior.
+        if persisted:
+            mode = latest.get("mode")
+            document_id = latest.get("document_id")
+        else:
+            mode = latest.get("mode") or body_mode
+            stored_doc = latest.get("document_id")
+            document_id = stored_doc if stored_doc is not None else body_doc
+    mode = "show" if (mode or session_mode) == "show" else "guide"
+    return mode, document_id
+
+
+def _lineage_scope(
+    existing: dict[str, object], mode: str, document_id: int | None
+) -> tuple[str, int | None]:
+    """Re-run an all-failed operation under the scope it was originally asked with.
+
+    Sentinel-aware: a flagged lineage row owns its scope (a stored NULL document is the
+    authoritative "All material"), so the re-run uses the stored values; a legacy row
+    falls back to the resubmitted request's values, which the mismatch check just proved
+    equal to the stored ones.
+    """
+    if not bool(existing.get("scope_persisted")):
+        if existing.get("mode") is not None:
+            mode = "show" if str(existing["mode"]) == "show" else "guide"
+        if existing.get("document_id") is not None:
+            document_id = int(existing["document_id"])
+        return mode, document_id
+    return (
+        "show" if existing.get("mode") == "show" else "guide",
+        existing.get("document_id"),
+    )
+
+
 async def _run_agent_turn(
     conn: sqlite3.Connection,
     class_id: int,
@@ -752,6 +1137,7 @@ async def _run_agent_turn(
     payload: AgentChatRequest | None,
     regenerate: bool = False,
     scope: AgentTurnScopeRequest | None = None,
+    gate: ToolStopGate,
 ) -> AgentChatResult | JSONResponse:
     """Plan, persist, and run one agent turn (a fresh send, or a retry when payload is None).
 
@@ -795,34 +1181,32 @@ async def _run_agent_turn(
         content = target.content
         profile = target.profile or "agent"
         user_message_id = target.user_message_id
-        latest = target.latest
-        # The source scope the turn is asked under. Retry preserves the scope the turn was
-        # originally asked with - persisted on its attempt - and the request body only
-        # backstops attempts that predate the persisted scope. Regeneration uses the
-        # CURRENT Guide/Show selection and source scope when its body names them, exactly
-        # like the tutor's regeneration; a body-less regeneration (the just-in-time
-        # continuation after an access approval) continues the persisted scope.
-        if regenerate:
-            mode = (
-                scope.mode if scope is not None and scope.mode is not None else latest.get("mode")
-            )
-            document_id = (
-                scope.document_id
-                if scope is not None and "document_id" in scope.model_fields_set
-                else latest.get("document_id")
-            )
-        else:
-            mode = latest.get("mode") or (scope.mode if scope is not None else None)
-            stored_doc = latest.get("document_id")
-            document_id = (
-                stored_doc
-                if stored_doc is not None
-                else (scope.document_id if scope is not None else None)
-            )
-        # Last resort for both: the conversation's current toggle, so a turn with no
-        # recorded mode anywhere (an attempt predating the persisted scope) still gets a
-        # real Guide/Show contract rather than a guess.
-        mode = "show" if (mode or session_mode) == "show" else "guide"
+        # The source scope the turn is asked under: a flagged attempt owns its persisted
+        # scope (null document included); a manual regeneration's body names the current
+        # selection; a body-less continuation continues the persisted scope.
+        mode, document_id = _resolve_retry_scope(target, regenerate, scope, session_mode)
+        # All planning is read-only and happens FIRST (PLA-401 final pass): an embedding,
+        # retrieval, rerank, registry-build, or fit failure refuses the turn before it can
+        # move the conversation's mode, create an attempt, or touch anything else, so no
+        # attempt can be left RUNNING by a failed preflight and a rejected request never
+        # changes the conversation's durable state.
+        plan = await _plan_turn_offloop(
+            gate,
+            lambda: _plan_agent_turn(
+                conn,
+                class_id,
+                session_id,
+                config,
+                profile=profile,
+                content=content,
+                mode=mode,
+                document_id=document_id,
+                user_message_id=user_message_id,
+                exclude_message_ids=frozenset(superseded),
+                stop_gate=gate,
+            ),
+        )
+        # Planning succeeded: only now do the durable mutations for this run land.
         if regenerate and scope is not None and scope.mode is not None:
             # The student's manual regeneration toggles the conversation's mode, like the
             # tutor's: the turn and the session agree on the toggle. A body-less JIT
@@ -830,6 +1214,8 @@ async def _run_agent_turn(
             sessions.set_session_mode(conn, session_id, mode)
         # One durable attempt brackets this run of the model (PLA-295), persisting the turn
         # context it answers under so the next retry or continuation keeps the same scope.
+        # Created only after the plan succeeded, so it is never orphaned RUNNING by a
+        # planning failure.
         attempt_id = agent_attempts.create_attempt(
             conn,
             session_id=session_id,
@@ -841,18 +1227,6 @@ async def _run_agent_turn(
         # The current message is the reused user message; excluding it (and any superseded reply)
         # from history is what keeps the original prompt appearing exactly once in model context,
         # and keeps a discarded reply from being shown to the model as history.
-        plan = _plan_agent_turn(
-            conn,
-            class_id,
-            session_id,
-            config,
-            profile=profile,
-            content=content,
-            mode=mode,
-            document_id=document_id,
-            user_message_id=user_message_id,
-            exclude_message_ids=frozenset(superseded),
-        )
         sessions.bind_turn(session_id, turn_token, user_message_id)
         touch_class(conn, class_id)
     else:
@@ -863,11 +1237,9 @@ async def _run_agent_turn(
         # effect behind.
         content = payload.content
         profile = payload.resolved_profile
-        # The student's mode toggle rides the turn like the tutor's does: persist it before
-        # the preflight assembles the prompt, so the availability contract and the reply it
-        # shapes agree on which presentation the student asked for.
-        if payload.mode is not None:
-            sessions.set_session_mode(conn, session_id, payload.mode)
+        # The student's mode toggle rides the turn like the tutor's does: the PROMPT is
+        # assembled under it here, but the session's durable mode is written only once the
+        # preflight succeeds (below), so a refused turn cannot move the conversation's mode.
         mode = "show" if (payload.mode or session_mode) == "show" else "guide"
         document_id = payload.document_id
 
@@ -922,32 +1294,39 @@ async def _run_agent_turn(
                     # keeps the operation ID for the resubmit after settlement.
                     raise ConflictError("Another turn is still in progress on this conversation.")
                 # All attempts on this message failed or stopped: the logical send is the
-                # stored one, re-run now under the scope it was originally asked with.
+                # stored one, re-run now under the scope it was originally asked with
+                # (sentinel-aware: a flagged lineage owns its scope, null document included).
                 user_message_id = stored_message_id
-                stored_mode = existing.get("mode")
-                if stored_mode is not None:
-                    mode = "show" if stored_mode == "show" else "guide"
-                stored_document = existing.get("document_id")
-                if stored_document is not None:
-                    document_id = stored_document
-        plan = _plan_agent_turn(
-            conn,
-            class_id,
-            session_id,
-            config,
-            profile=profile,
-            content=content,
-            mode=mode,
-            document_id=document_id,
-            user_message_id=user_message_id,
+                mode, document_id = _lineage_scope(existing, mode, document_id)
+        # The plan is still read-only (embedding, retrieval, snapshot, registry, budget):
+        # an oversized or registry-failed turn leaves no persisted user message, attempt,
+        # or mode change behind. It runs off the event loop, so the blocking retrieval it
+        # performs cannot freeze unrelated API requests.
+        plan = await _plan_turn_offloop(
+            gate,
+            lambda: _plan_agent_turn(
+                conn,
+                class_id,
+                session_id,
+                config,
+                profile=profile,
+                content=content,
+                mode=mode,
+                document_id=document_id,
+                user_message_id=user_message_id,
+                stop_gate=gate,
+            ),
         )
-        sessions.set_session_title_if_unset(conn, session_id, content)
         if user_message_id is None:
-            # First arrival of this logical send: the user message and its attempt land in
-            # one transaction, so a crash can never leave a question without its attempt
-            # (or an attempt without its question).
+            # First arrival of this logical send: the mode it moves to, the user message,
+            # its attempt, and the conversation title land in ONE transaction, so a crash
+            # (or a rollback after a post-plan failure) can never leave a question without
+            # its attempt, an attempt without its question, or a mode change for a turn
+            # that did not happen.
             conn.execute("begin immediate")
             try:
+                if payload.mode is not None:
+                    sessions.update_session_mode(conn, session_id, mode)
                 user_message_id = sessions.insert_message(conn, session_id, "user", content)
                 attempt_id = agent_attempts.create_attempt(
                     conn,
@@ -959,6 +1338,7 @@ async def _run_agent_turn(
                     operation_id=payload.operation_id,
                     commit=False,
                 )
+                sessions.set_session_title_if_unset_uncommitted(conn, session_id, content)
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -984,6 +1364,13 @@ async def _run_agent_turn(
     # the preflight having to know the attempt id before any mutation.
     activity = plan.activity
     activity.attempt_id = attempt_id
+
+    if plan.toolless:
+        # The turn's surface has no tools (a known tool-incompatible endpoint, or a window
+        # that cannot carry the tool schemas): one plain completion, settled exactly like a
+        # tool run, with the same reply-commit and supersede semantics.
+        return await _run_toolless_turn(conn, session_id, plan, attempt_id, superseded)
+
     try:
         result: ToolLoopResult = await run_tool_loop(
             config.endpoint_url,
@@ -992,6 +1379,7 @@ async def _run_agent_turn(
             plan.messages,
             registry=plan.registry,
             context_budget=plan.context_budget,
+            stop_gate=gate,
         )
     except BaseException as exc:
         # `run_tool_loop` reports upstream/timeout/limit failures through its result, not by
@@ -1018,10 +1406,68 @@ async def _run_agent_turn(
         except Exception:
             logger.debug("Could not settle agent attempt %s after an interrupted run", attempt_id)
         raise
+    if result.stopped == llm_tools.NO_TOOL_SUPPORT and not result.calls:
+        # An UNKNOWN endpoint rejected the turn's FIRST tools request before any tool ran
+        # (PLA-401 final pass): the tool pass never happened, so it is settled truthfully as
+        # an abandoned stopped attempt, the verdict is remembered (the settings row the
+        # solver and the settings screen share), and the SAME logical turn - same user
+        # message, same operation lineage, no duplicate question - continues through the
+        # tool-less path. The student's ordinary question is answered, not failed, and the
+        # ledger keeps the abandoned tool pass beside the answer that landed.
+        _remember_no_tool_support(conn)
+        agent_attempts.stop_attempt(
+            conn,
+            attempt_id,
+            stopped_reason=llm_tools.NO_TOOL_SUPPORT,
+            detail="The endpoint does not accept tool calls; the turn continued without them.",
+        )
+        # Re-plan the same turn's material tool-less FIRST (reusing the fitted retrieval, so
+        # the fallback neither re-embeds the question nor re-sends tool schemas): a re-plan
+        # that fails (only possible in the pathological case where even the tool-less
+        # surface does not fit) leaves the already-settled stopped attempt and no attempt
+        # to orphan, while a cancellation mid-re-plan settles nothing, because the second
+        # attempt is still read-only - created only once the re-plan succeeded, so no
+        # attempt can read RUNNING after this turn leaves.
+        plan = await _plan_turn_offloop(
+            gate,
+            lambda: _plan_agent_turn(
+                conn,
+                class_id,
+                session_id,
+                config,
+                profile=plan.profile,
+                content=plan.content,
+                mode=mode,
+                document_id=document_id,
+                user_message_id=user_message_id,
+                tools_supported=False,
+                cached_retrieval=plan.retrieval,
+            ),
+        )
+        attempt_id = agent_attempts.create_attempt(
+            conn,
+            session_id=session_id,
+            user_message_id=user_message_id,
+            profile=plan.profile,
+            mode=mode,
+            document_id=document_id,
+        )
+        plan.activity.attempt_id = attempt_id
+        return await _run_toolless_turn(conn, session_id, plan, attempt_id, superseded)
     tool_activity = _activity_events_payload(activity)
     answer = result.content.strip()
     if not result.complete:
         detail = result.detail or "The agent turn did not complete."
+        if result.stopped == llm_tools.STOPPED:
+            # The turn's Stop settled the loop (the flag latched before its task was
+            # cancelled): the attempt stops with the loop's own words, the request
+            # completes with the same bounded body /stop produces, and nothing here reads
+            # the partial transcript as an answer.
+            agent_attempts.stop_attempt(conn, attempt_id, detail=detail)
+            return JSONResponse(
+                status_code=200,
+                content={"detail": detail or "This turn was stopped.", "stopped": "stopped"},
+            )
         agent_attempts.fail_attempt(conn, attempt_id, stopped_reason=result.stopped, detail=detail)
         return JSONResponse(
             status_code=_failure_status(result.stopped),
@@ -1043,10 +1489,45 @@ async def _run_agent_turn(
             conn, attempt_id, stopped_reason="empty", detail="The agent returned an empty response."
         )
         raise LyraError("The agent returned an empty response. Try again.")
-    # The assistant reply and the attempt's completion are committed together, in one
-    # transaction, so a crash between them cannot leave a stored reply beside an attempt
-    # still reading as running - which a later retry would re-run, producing a second answer
-    # (PLA-295's "replayed, not re-run" guarantee). Either both land or neither does.
+    return AgentChatResult(
+        message_id=_commit_reply(
+            conn, session_id, plan, attempt_id, superseded, answer, tool_activity
+        ),
+        content=answer,
+        stopped=result.stopped,
+        detail=result.detail,
+        activity=tool_activity,
+        source_ids=activity.source_ids,
+        workspace_change_ids=activity.workspace_change_ids,
+        command_request_ids=activity.command_request_ids,
+        profile_fact_ids=activity.profile_fact_ids,
+    )
+
+
+def _commit_reply(
+    conn: sqlite3.Connection,
+    session_id: int,
+    plan: AgentTurnPlan,
+    attempt_id: int,
+    superseded: tuple[int, ...],
+    answer: str,
+    tool_activity: list[dict[str, object]],
+) -> int:
+    """Commit the assistant reply and the attempt's completion in one transaction.
+
+    The reply and the `completed` state land together or not at all, so a crash between them
+    cannot leave a stored reply beside an attempt still reading as running - which a later
+    retry would re-run, producing a second answer (PLA-295's "replayed, not re-run"
+    guarantee). A regeneration supersedes its previous reply: the discarded rows are removed
+    in the same transaction as the new reply, so a crash between them leaves neither a stale
+    nor a doubled answer; an ordinary send or retry supersedes nothing, so this is a no-op.
+
+    If the atomic transaction fails, the attempt row (committed before the model ran) is
+    restored to `running` by the rollback and settled here in a fresh transaction, so a live
+    backend never presents a finished model run as indefinitely in flight. Conditional
+    terminal writes keep an ambiguous commit safe: if SQLite committed before surfacing an
+    error, the already-completed row is left alone and Retry replays its one stored reply.
+    """
     try:
         conn.execute("begin immediate")
         message_id = sessions.insert_message(
@@ -1059,21 +1540,12 @@ async def _run_agent_turn(
             tool_activity=tool_activity,
         )
         agent_attempts.mark_completed(conn, attempt_id, message_id)
-        # A regeneration supersedes its previous reply: the discarded rows are removed in the
-        # same transaction as the new reply, so a crash between them leaves neither a stale nor
-        # a doubled answer. An ordinary send or retry supersedes nothing, so this is a no-op.
         if superseded:
             sessions.remove_messages(conn, session_id, superseded)
         conn.commit()
     except BaseException as exc:
         if conn.in_transaction:
             conn.rollback()
-        # The attempt row was committed before the model ran. If the atomic reply/
-        # completion transaction fails, rolling it back restores that row to `running`.
-        # Settle it in a fresh transaction so a live backend never presents a finished
-        # model run as indefinitely in flight. Conditional terminal writes keep an
-        # ambiguous commit safe: if SQLite committed before surfacing an error, the
-        # already-completed row is left alone and Retry replays its one stored reply.
         try:
             if isinstance(exc, asyncio.CancelledError | GeneratorExit):
                 agent_attempts.stop_attempt(
@@ -1098,16 +1570,89 @@ async def _run_agent_turn(
                 attempt_id,
             )
         raise
+    return message_id
+
+
+async def _run_toolless_turn(
+    conn: sqlite3.Connection,
+    session_id: int,
+    plan: AgentTurnPlan,
+    attempt_id: int,
+    superseded: tuple[int, ...],
+) -> AgentChatResult | JSONResponse:
+    """Run a tool-less turn: one plain completion under the full tutor surface.
+
+    The same settlement contract as the tool path, for the endpoint that cannot run tools
+    (known tool-incompatible, or whose first tools request was refused): cancellation
+    stops, upstream failure fails the attempt with a retryable body, an empty completion
+    is a retryable failure, and success commits the reply with the same atomic reply/
+    completion transaction. No tool work happens here - there is no registry to run - so a
+    task that needs one is explained in the answer rather than attempted.
+    """
+    try:
+        answer = await llm_client.complete(
+            plan.config.endpoint_url,
+            plan.config.api_key,
+            plan.config.model,
+            plan.messages,
+        )
+    except UpstreamError as exc:
+        # The endpoint failed: settle the attempt and answer with the same retryable body
+        # the tool loop's UPSTREAM_FAILED result produces, so the UI and the retry affordance
+        # cannot tell the surfaces apart.
+        agent_attempts.fail_attempt(
+            conn, attempt_id, stopped_reason=llm_tools.UPSTREAM_FAILED, detail=exc.message
+        )
+        return JSONResponse(
+            status_code=_failure_status(llm_tools.UPSTREAM_FAILED),
+            content={
+                "detail": exc.message,
+                "retryable": True,
+                "stopped": llm_tools.UPSTREAM_FAILED,
+                "activity": [],
+                "source_ids": [],
+                "workspace_change_ids": [],
+                "command_request_ids": [],
+                "profile_fact_ids": [],
+            },
+        )
+    except BaseException as exc:
+        # Cancellation (a Stop or a disconnect) settles as stopped; a genuine bug as
+        # failed - either way the attempt does not read as forever in flight.
+        cancelled = isinstance(exc, asyncio.CancelledError | GeneratorExit)
+        try:
+            if cancelled:
+                agent_attempts.stop_attempt(
+                    conn,
+                    attempt_id,
+                    detail="This turn was interrupted before it finished. Try it again.",
+                )
+            else:
+                agent_attempts.fail_attempt(
+                    conn,
+                    attempt_id,
+                    stopped_reason="error",
+                    detail="The agent turn did not complete.",
+                )
+        except Exception:
+            logger.debug("Could not settle agent attempt %s after an interrupted run", attempt_id)
+        raise
+    answer = answer.strip()
+    if not answer:
+        agent_attempts.fail_attempt(
+            conn, attempt_id, stopped_reason="empty", detail="The agent returned an empty response."
+        )
+        raise LyraError("The agent returned an empty response. Try again.")
     return AgentChatResult(
-        message_id=message_id,
+        message_id=_commit_reply(conn, session_id, plan, attempt_id, superseded, answer, []),
         content=answer,
-        stopped=result.stopped,
-        detail=result.detail,
-        activity=tool_activity,
-        source_ids=activity.source_ids,
-        workspace_change_ids=activity.workspace_change_ids,
-        command_request_ids=activity.command_request_ids,
-        profile_fact_ids=activity.profile_fact_ids,
+        stopped=llm_tools.COMPLETED,
+        detail="",
+        activity=[],
+        source_ids=[],
+        workspace_change_ids=[],
+        command_request_ids=[],
+        profile_fact_ids=[],
     )
 
 
@@ -1129,23 +1674,32 @@ async def send_agent_chat(
     # agent or tutor turn on this session is refused here with a deterministic 409 before
     # this turn reads history, persists, or sends anything.
     turn_token = sessions.begin_turn(session_id)
+    # One stop gate per turn, shared by the planning worker, every tool dispatch, and the
+    # /stop endpoint that latches it: the state that makes "the turn is stopped" a truth
+    # about the workers, not just about the task.
+    gate = ToolStopGate()
     # The turn runs in its own task (registered under the turn token, not this request
     # task): /stop cancels that task, and this request still completes with a bounded body
     # rather than the middleware's "No response returned." 500.
     turn_task = asyncio.create_task(
-        _run_agent_turn(conn, class_id, session_id, turn_token, payload=payload)
+        _run_agent_turn(conn, class_id, session_id, turn_token, payload=payload, gate=gate)
     )
-    _register_inflight(session_id, turn_token, turn_task)
+    _register_inflight(session_id, turn_token, turn_task, gate)
     try:
         return await _await_turn_or_stopped(turn_task)
     finally:
         # Release on every ending: a consent or impossible-context refusal, a planning or
         # registry-build failure, a tool-loop/upstream/timeout failure, a context or output
-        # limit, a stopped turn, and any unexpected exception. `end_turn` is idempotent and
+        # limit, a stopped turn, and any unexpected exception. The bounded gate wait runs
+        # FIRST: a turn killed mid-planning or mid-dispatch may still have a worker thread
+        # inside a handler, and this request's connection must not close (and the claim
+        # must not free) while that worker is still reading or writing. A healthy turn has
+        # no in-flight worker, so the wait returns at once. `end_turn` is idempotent and
         # token-owned, so it can never free a claim a newer turn has since taken. The
         # in-flight entry goes with the token, so a Stop that races a finished turn cancels
         # nothing.
         _unregister_inflight(session_id, turn_token)
+        await asyncio.to_thread(gate.wait_quiesced, QUIESCENCE_SECONDS)
         sessions.end_turn(session_id, turn_token)
 
 
@@ -1171,16 +1725,22 @@ async def retry_agent_chat(
     """
     _scoped_session(conn, class_id, session_id)
     turn_token = sessions.begin_turn(session_id)
+    gate = ToolStopGate()
     # Same dedicated-task shape as a fresh send: Stop cancels the turn task, and the retry
     # request itself settles with a bounded body instead of a middleware 500.
     turn_task = asyncio.create_task(
-        _run_agent_turn(conn, class_id, session_id, turn_token, payload=None, scope=payload)
+        _run_agent_turn(
+            conn, class_id, session_id, turn_token, payload=None, scope=payload, gate=gate
+        )
     )
-    _register_inflight(session_id, turn_token, turn_task)
+    _register_inflight(session_id, turn_token, turn_task, gate)
     try:
         return await _await_turn_or_stopped(turn_task)
     finally:
+        # Release on every ending, after the bounded gate wait so no worker outlives the
+        # connection or the claim (a Stop that races a finished retry cancels nothing).
         _unregister_inflight(session_id, turn_token)
+        await asyncio.to_thread(gate.wait_quiesced, QUIESCENCE_SECONDS)
         sessions.end_turn(session_id, turn_token)
 
 
@@ -1208,18 +1768,30 @@ async def regenerate_agent_chat(
     """
     _scoped_session(conn, class_id, session_id)
     turn_token = sessions.begin_turn(session_id)
+    gate = ToolStopGate()
     # Same dedicated-task shape as a fresh send: Stop cancels the turn task, and the
     # regeneration request itself settles with a bounded body instead of a middleware 500.
     turn_task = asyncio.create_task(
         _run_agent_turn(
-            conn, class_id, session_id, turn_token, payload=None, regenerate=True, scope=payload
+            conn,
+            class_id,
+            session_id,
+            turn_token,
+            payload=None,
+            regenerate=True,
+            scope=payload,
+            gate=gate,
         )
     )
-    _register_inflight(session_id, turn_token, turn_task)
+    _register_inflight(session_id, turn_token, turn_task, gate)
     try:
         return await _await_turn_or_stopped(turn_task)
     finally:
+        # Release on every ending, after the bounded gate wait so no worker outlives the
+        # connection or the claim (a Stop that races a finished regeneration cancels
+        # nothing).
         _unregister_inflight(session_id, turn_token)
+        await asyncio.to_thread(gate.wait_quiesced, QUIESCENCE_SECONDS)
         sessions.end_turn(session_id, turn_token)
 
 
@@ -1232,15 +1804,31 @@ async def stop_agent_chat(
     """Cancel this conversation's in-flight agent turn, if there is one.
 
     The non-streaming handler cannot see its own client's disconnect, so the UI's Stop is
-    explicit: cancel the in-flight task, which lands in the tool loop's awaits, settles the
-    durable attempt as stopped, and releases the per-session claim - the model/tool work
-    actually stops. Stopping a session with no in-flight turn is not an error: there is
-    simply nothing to stop. The in-flight turn's own finally block releases the claim, so
-    this endpoint takes no claim itself.
+    explicit. Stop is a GATE, not just a cancel: it latches the turn's stop flag first - from
+    which instant no in-flight tool can create a new durable consequence, because every
+    durable tool re-checks the flag before its write - and only then cancels the turn task,
+    which lands in the loop's awaits, settles the durable attempt as stopped, and releases
+    the per-session claim. The model/tool work actually stops, and the guarantee it makes -
+    "no later network or database effect from this turn" - holds no matter how long an
+    already-running read-only tool takes to finish.
+
+    The Stop response waits (bounded) for the turn to settle and its workers to leave, so
+    the "stopped" the UI reads means the session is already free and the turn's work is done.
+    Stopping a session with no in-flight turn is not an error: there is simply nothing to
+    stop. The in-flight turn's own finally block releases the claim, so this endpoint takes
+    no claim itself.
     """
     _scoped_session(conn, class_id, session_id)
-    task = _inflight_task(session_id)
-    if task is not None and not task.done():
-        task.cancel()
-        return {"stopped": True}
+    entry = _inflight_entry(session_id)
+    if entry is not None:
+        _turn_token, task, gate = entry
+        if not task.done():
+            gate.request_stop()
+            task.cancel()
+            # Bounded, truthful: report the Stop once the turn task has settled (it
+            # settles after its own bounded gate wait) and no worker is still inside a
+            # handler - the backstop for a turn whose task was cancelled from elsewhere.
+            await asyncio.wait({task}, timeout=_STOP_TASK_TIMEOUT)
+            await asyncio.to_thread(gate.wait_quiesced, QUIESCENCE_SECONDS)
+            return {"stopped": True}
     return {"stopped": False}

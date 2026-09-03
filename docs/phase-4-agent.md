@@ -160,6 +160,50 @@ failure reason. Internal paths outside the attached root and secret values never
 
 Guide/Show/Solve remains a response-style choice, not a permission setting.
 
+### 4a. The class turn answers as one whole reply (non-streaming)
+
+The agent's turn is deliberately non-streaming: one request, one complete reply. The loop may
+plan, run tools, and re-ask the model across several internal rounds, but the surface sees a
+single `POST /agent-chat` that resolves with the whole answer (or the attempt's settled
+failure/stopped state). The legacy streaming tutor path (`/chat`) is unchanged for API clients.
+
+What the student sees while the turn runs is the local working indicator - "Reading your
+question" as the turn opens, "Thinking" until the reply lands - minted client-side at send
+time, so the conversation never looks dead even though nothing streams. Stop works through
+the explicit `/agent-chat/stop` endpoint, which settles the durable attempt as `stopped` and
+releases the session claim; the transport abort alone would leave the server-side turn
+running.
+
+The trade, recorded here so it is a decision and not an oversight:
+
+- **Given up: first-token latency.** On a slow or remote endpoint the first visible word waits
+  for the whole reply (planning plus every model round plus the full answer). A streaming
+  surface would show words earlier, at the cost of the invariants below.
+- **Bought: one durable reply per question.** The answer commits atomically with its tool
+  activity and attempt state - there is no half-streamed row to reconcile, no partial answer
+  a stopped turn would leave behind, and regeneration supersedes exactly one stored reply.
+  The three-state lost-response contract (recovered reply, truthful failed turn, or restored
+  draft) reads cleanly because the durable state is always one of: nothing, a failed
+  attempt, or a complete reply.
+- **Bought: tools before text.** The model's tool rounds happen before any text is
+  published, so the transcript never shows an answer written on top of work that did not
+  happen, and the activity trail and the reply arrive together - the reply's "How Lyra
+  checked this" is truthful at the moment it renders.
+- **Bought: one bounded request per round.** The loop's context ceiling, output reserve, and
+  stop gate are all per-request guarantees; a streaming turn would have to carry them across
+  an open socket for the life of the answer.
+
+Latency evidence (measured 2026-09-03 on the class's configured endpoint, `Qwen3.8-27B`,
+locality `remote`, class_chat surface through the production planner): a representative
+guide-mode turn with retrieval context took **24.95 s** wall clock from planning through the
+committed reply (1,939-char answer, 4,796-token system prompt); the 13-case corpus run
+completed end to end with every turn settling durably. The visible working state starts at
+send (client-side), so the student sees a running indicator for the whole interval and the
+reply with its activity trail in one commit. A Linear follow-up on streaming the agent turn
+is warranted only if real students report the whole reply waiting on slow endpoints; the
+working indicator plus the durable contract above are what make the wait tolerable, and they
+are the contract a streaming redesign would have to re-prove.
+
 ### 5. Attach one rooted workspace per class
 
 A class may attach one local directory by explicit path. The backend validates and stores its

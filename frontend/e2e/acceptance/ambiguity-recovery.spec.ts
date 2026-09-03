@@ -144,6 +144,81 @@ test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
     expect((await getTutorRequests()).length).toBe(1)
   })
 
+  test('a dropped acceptance self-heals the UI, and the next send mints a fresh operation ID (PLA-401 final pass)', async ({
+    page,
+  }) => {
+    // The review's browser pin for the three-state reconciliation: lose the first turn's
+    // acceptance in transit; the conversation must self-heal into ONE question and ONE
+    // reply with an EMPTY composer (case A retires both refs), and the NEXT - different -
+    // question goes out with a FRESH operation ID, leaving 2Q+2A durable and exactly two
+    // logical model calls.
+    const cls = await createClass('Self-heal Class')
+    const session = await createSession(cls.id)
+    await clearTutorState()
+    await setTutorMode('success')
+
+    const operationIds: Array<string | null> = []
+    let dropped = false
+    await page.route('**/api/classes/*/sessions/*/agent-chat', async (route) => {
+      if (route.request().method() === 'POST') {
+        const body = route.request().postDataJSON() as { operation_id?: string } | null
+        operationIds.push(body?.operation_id ?? null)
+        if (!dropped) {
+          dropped = true
+          await route.fetch() // let the backend commit; the response never reaches the page
+          return route.abort()
+        }
+      }
+      return route.continue()
+    })
+
+    await navigateToChat(page, cls.id)
+    await sendForced(page, 'Explain the convolution theorem.')
+
+    // The durable commit lands server-side: one question, one reply, one model call.
+    await expect
+      .poll(
+        async () => {
+          const { user, assistant } = await countMessages(session.id)
+          return user.length === 1 && assistant.length === 1
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(true)
+    expect((await getTutorRequests()).length).toBe(1)
+
+    // The UI self-heals: the ordinary transcript shows the recovered question and reply,
+    // and the composer is left EMPTY - the dropped acceptance is not offered back.
+    await expect(
+      page.getByText('Explain the convolution theorem.', { exact: true }).first(),
+    ).toBeVisible({
+      timeout: 15_000,
+    })
+    await expect(page.getByText(/deterministic response/i).first()).toBeVisible({ timeout: 15_000 })
+    await expect
+      .poll(async () => await page.locator('#message-composer').inputValue(), { timeout: 15_000 })
+      .toBe('')
+
+    // A different question goes out with a FRESH operation ID (the stale key is spent).
+    await sendForced(page, 'Now the second theorem.')
+    await expect.poll(async () => operationIds.length, { timeout: 15_000 }).toBe(2)
+    expect(operationIds[0]).toEqual(expect.any(String))
+    expect(operationIds[1]).toEqual(expect.any(String))
+    expect(operationIds[1]).not.toBe(operationIds[0])
+
+    // 2Q + 2A durable, exactly two logical model calls, no duplicate of the first question.
+    await expect
+      .poll(
+        async () => {
+          const { user, assistant } = await countMessages(session.id)
+          return user.length === 2 && assistant.length === 2
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(true)
+    expect((await getTutorRequests()).length).toBe(2)
+  })
+
   test('a completed turn is replayed by its operation ID without a second model call', async () => {
     const cls = await createClass('Replay Class')
     const session = await createSession(cls.id)

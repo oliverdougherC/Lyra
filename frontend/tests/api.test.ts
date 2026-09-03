@@ -197,6 +197,26 @@ describe('agent chat idempotency and stop (PLA-313)', () => {
     expect(continuationInit.body).toBeUndefined()
   })
 
+  it('carries an explicit null document (All material) into retry and regeneration', async () => {
+    // PLA-401 final pass: a null documentId is the real value "All material", so it must
+    // ride the wire as an EXPLICIT null (property presence, not non-nullness) - the server
+    // reads the persisted scope only when the caller did not name one. An absent property
+    // is the other message: continue the stored scope (the body-less JIT continuation).
+    const spy = mockFetch(async () => jsonResponse({ message_id: 3 }))
+
+    await api.retryAgentChat(9, 12, { documentId: null })
+    await api.regenerateAgentChat(9, 12, { mode: 'show', documentId: null })
+    await api.regenerateAgentChat(9, 12, { mode: 'show' })
+
+    const [, retryInit] = spy.mock.calls[0]
+    expect(JSON.parse(retryInit.body as string)).toEqual({ document_id: null })
+    const [, manualInit] = spy.mock.calls[1]
+    expect(JSON.parse(manualInit.body as string)).toEqual({ mode: 'show', document_id: null })
+    const [, absentInit] = spy.mock.calls[2]
+    expect(JSON.parse(absentInit.body as string)).toEqual({ mode: 'show' })
+    expect(JSON.parse(absentInit.body as string)).not.toHaveProperty('document_id')
+  })
+
   it('stops the in-flight agent turn through its explicit endpoint', async () => {
     const spy = mockFetch(async () => jsonResponse({ stopped: true }))
 

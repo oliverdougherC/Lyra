@@ -27,6 +27,7 @@ on a small local model, and a number from one model tells you nothing about that
 Usage:
 
     python scripts/eval_tutor.py run    [--corpus P] [--workspace W] [--source-db D] [--case ID]
+                                      [--surface class_chat|tutor] [--class-id N] [--session-id N]
     python scripts/eval_tutor.py grade  [--corpus P] [--workspace W] [--source-db D]
                                        [--judge-source-db D] [--judge-model M] [--case ID]
     python scripts/eval_tutor.py report [--corpus P] [--workspace W] [--fail-under 1.0]
@@ -38,6 +39,7 @@ import asyncio
 import json
 import sqlite3
 import sys
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,6 +48,10 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from backend.api.routes_agent_chat import (  # noqa: E402
+    ClassChatAssembly,
+    assemble_class_chat_turn,
+)
 from backend.core.app_settings import TutorConfig, resolve_tutor_config  # noqa: E402
 from backend.llm import client  # noqa: E402
 from backend.llm.client import JsonSchema  # noqa: E402
@@ -55,7 +61,10 @@ from backend.llm.prompts import (  # noqa: E402
     build_system_prompt,
     format_context_block,
 )
+from backend.llm.turn_budget import HistoryMessage  # noqa: E402
+from backend.rag.retrieve import RetrievalResult, RetrievedChunk  # noqa: E402
 from backend.rag.tokens import estimate_tokens  # noqa: E402
+from backend.storage import database  # noqa: E402
 
 DEFAULT_CORPUS = ROOT / "scripts" / "eval_corpora" / "tutor_semantic.json"
 DEFAULT_WORKSPACE = ROOT / "data" / "eval-tutor"
@@ -207,6 +216,98 @@ def case_messages(case: Case) -> list[dict[str, str]]:
     messages += [{"role": turn["role"], "content": turn["content"]} for turn in case.history]
     messages.append({"role": "user", "content": case.user})
     return messages
+
+
+def class_chat_assembly(
+    conn: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    config: TutorConfig,
+    case: Case,
+) -> ClassChatAssembly:
+    """One corpus case through the PRODUCTION class-chat planner (PLA-401 final pass).
+
+    The `class_chat` surface does not re-derive the prompt: it hands the case's history
+    and context to `assemble_class_chat_turn`, the same planner the agent route runs, so
+    the harness sends what the product sends - the full system prompt (tutor contract,
+    mode, class and user facts, agent capability layer), the class-wide or document-scoped
+    retrieval block, the trimmed history, the question, and the tool schemas the class's
+    registry offers (empty on the tool-less surface, which is exactly when the route would
+    answer tool-less). A case that carries its own `context` pins that material into the
+    plan; a case without one retrieves across the class's real material in the source
+    database, class-wide. The contract test in `backend/tests/test_eval_tutor.py` assembles
+    the same case through the route's planner and asserts the two agree.
+    """
+    history = tuple(
+        HistoryMessage(role=turn["role"], content=turn["content"]) for turn in case.history
+    )
+    if case.context:
+        retrieval = RetrievalResult(
+            chunks=tuple(
+                RetrievedChunk(
+                    chunk_id=index + 1,
+                    document_id=0,
+                    content=str(chunk.get("content") or ""),
+                    token_count=0,
+                    page_number=chunk.get("page_number"),
+                    section_title=chunk.get("section_title"),
+                    section_path=chunk.get("section_path"),
+                    section_number=chunk.get("section_number"),
+                    problem_number=chunk.get("problem_number"),
+                    part_index=None,
+                    filename=str(chunk.get("filename") or ""),
+                    similarity=1.0,
+                    score=1.0,
+                )
+                for index, chunk in enumerate(case.context)
+            ),
+            trimmed=False,
+            omitted_document_count=0,
+        )
+    else:
+        retrieval = None
+    return assemble_class_chat_turn(
+        conn,
+        class_id,
+        session_id,
+        config,
+        content=case.user,
+        mode=case.mode,
+        history=history,
+        cached_retrieval=retrieval,
+    )
+
+
+async def _run_one_class_chat(
+    endpoint: str,
+    api_key: str | None,
+    model: str | None,
+    assembly: ClassChatAssembly,
+) -> tuple[str, list[str], float]:
+    """One class-chat first request: exactly the round-zero call the product's loop sends.
+
+    Returns the reply content, the tool calls the model made instead (empty when it
+    answered), and the system-prompt token cost.
+    """
+    answer = await client.complete_with_tools(
+        endpoint,
+        api_key,
+        model,
+        [dict(message) for message in assembly.messages],
+        list(assembly.tools),
+        temperature=client.DETERMINISTIC_TEMPERATURE,
+    )
+    if answer.tool_calls:
+        return (
+            "",
+            [call.name for call in answer.tool_calls],
+            estimate_tokens(str(assembly.messages[0].get("content") or "")),
+        )
+    return (
+        answer.content,
+        [],
+        estimate_tokens(str(assembly.messages[0].get("content") or "")),
+    )
 
 
 def _transcript(case: Case) -> str:
@@ -457,6 +558,103 @@ def _selected(cases: list[Case], wanted: list[str] | None) -> list[Case]:
     return [case for case in cases if case.id in order]
 
 
+def _class_chat_target(
+    source_db: Path, class_id: int | None, session_id: int | None
+) -> tuple[int, int]:
+    """The class and session the class_chat surface plans against, in the source database.
+
+    Defaults to the database's first class and its first session: an evaluation of the
+    class conversation needs the class's real facts, capability grants, and material, and
+    the planner's registry scope check wants a real session of that class.
+    """
+    # The app's own opener, not a bare connect: the source database may carry virtual
+    # tables the planner touches, which need the same extension load.
+    conn = database.connect(source_db)
+    conn.row_factory = sqlite3.Row
+    try:
+        if class_id is None:
+            row = conn.execute("select id from classes order by id limit 1").fetchone()
+            if row is None:
+                raise SystemExit(
+                    "No class in the source database. Create one in Lyra, or pass --class-id."
+                )
+            class_id = int(row["id"])
+        session = None
+        if session_id is None:
+            session = conn.execute(
+                "select id from chat_sessions where class_id = ? order by id limit 1",
+                (class_id,),
+            ).fetchone()
+            if session is None:
+                raise SystemExit(
+                    f"No session in class {class_id}. Open the class's conversation once in "
+                    "Lyra, or pass --session-id."
+                )
+            session_id = int(session["id"])
+    finally:
+        conn.close()
+    return class_id, session_id
+
+
+def _run_class_chat_cases(
+    cases: list[Case],
+    conn: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    config: TutorConfig,
+    cases_run: dict[str, object],
+) -> None:
+    """The class_chat run stage: each case through the production planner, one first
+    request per case, replies and tool-call behaviors recorded."""
+    for case in cases:
+        started = time.monotonic()
+        try:
+            assembly = class_chat_assembly(conn, class_id, session_id, config, case)
+            reply, tool_calls, system_tokens = asyncio.run(
+                _run_one_class_chat(config.endpoint_url, config.api_key, config.model, assembly)
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed case is a datum, not a crash
+            print(f"{case.id}: run failed: {exc}")
+            cases_run[case.id] = {"status": "error", "error": str(exc)[:300]}
+            continue
+        # Wall-clock time from planning through the endpoint's reply - the latency the
+        # non-streaming surface makes the student wait for (docs/phase-4-agent.md, 4a).
+        duration_seconds = round(time.monotonic() - started, 2)
+        if tool_calls:
+            # The model spent the turn calling tools instead of answering: that is the
+            # behavior the eval exists to measure, and it is recorded as such rather than
+            # graded as an (empty) reply.
+            print(f"{case.id}: called tools {', '.join(tool_calls)}")
+            cases_run[case.id] = {
+                "status": "tool_call",
+                "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                "duration_seconds": duration_seconds,
+                "tools": tool_calls,
+                "toolless": assembly.toolless,
+                "user": case.user,
+                "mode": case.mode,
+            }
+            continue
+        if not reply.strip():
+            print(f"{case.id}: empty reply")
+            cases_run[case.id] = {"status": "error", "error": "empty reply"}
+            continue
+        cases_run[case.id] = {
+            "status": "ok",
+            "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "duration_seconds": duration_seconds,
+            "response": reply,
+            "system_prompt_tokens": system_tokens,
+            "toolless": assembly.toolless,
+            "user": case.user,
+            "mode": case.mode,
+        }
+        print(
+            f"{case.id}: {len(reply)} chars, {duration_seconds}s, system prompt "
+            f"{system_tokens} tokens" + (" (tool-less surface)" if assembly.toolless else "")
+        )
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Send every selected case to the configured endpoint and record the replies."""
     corpus_path = Path(args.corpus).resolve()
@@ -464,53 +662,74 @@ def cmd_run(args: argparse.Namespace) -> int:
     config = _endpoint_config(Path(args.source_db).resolve())
     selected = _selected(cases, args.case)
 
+    surface = args.surface
+    conn = None
+    class_id = session_id = None
+    if surface == "class_chat":
+        class_id, session_id = _class_chat_target(
+            Path(args.source_db).resolve(), args.class_id, args.session_id
+        )
+        # The production planner works on a connection with Row mapping, like the route's -
+        # and on the app's opener, so virtual tables resolve the same way in the eval as
+        # in the product.
+        conn = database.connect(Path(args.source_db).resolve())
+        conn.row_factory = sqlite3.Row
+
     workspace = Workspace(Path(args.workspace).resolve())
     runs = workspace.read("runs") if workspace.report("runs").exists() else {}
     cases_run = runs.get("cases")
     cases_run = cases_run if isinstance(cases_run, dict) else {}
 
     try:
-        for case in selected:
-            messages = case_messages(case)
-            try:
-                reply, system_tokens = asyncio.run(
-                    _run_one(config.endpoint_url, config.api_key, config.model, case, messages)
-                )
-            except Exception as exc:  # noqa: BLE001 - a failed case is a datum, not a crash
-                print(f"{case.id}: run failed: {exc}")
-                cases_run[case.id] = {"status": "error", "error": str(exc)[:300]}
-                continue
-            if not reply.strip():
-                print(f"{case.id}: empty reply")
-                cases_run[case.id] = {"status": "error", "error": "empty reply"}
-                continue
-            cases_run[case.id] = {
-                "status": "ok",
-                "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
-                "response": reply,
-                "system_prompt_tokens": system_tokens,
-                "user": case.user,
-                "mode": case.mode,
-            }
-            print(f"{case.id}: {len(reply)} chars, system prompt {system_tokens} tokens")
+        if surface == "class_chat":
+            if conn is not None and class_id is not None and session_id is not None:
+                _run_class_chat_cases(selected, conn, class_id, session_id, config, cases_run)
+        else:
+            for case in selected:
+                messages = case_messages(case)
+                try:
+                    reply, system_tokens = asyncio.run(
+                        _run_one(config.endpoint_url, config.api_key, config.model, case, messages)
+                    )
+                except Exception as exc:  # noqa: BLE001 - a failed case is a datum, not a crash
+                    print(f"{case.id}: run failed: {exc}")
+                    cases_run[case.id] = {"status": "error", "error": str(exc)[:300]}
+                    continue
+                if not reply.strip():
+                    print(f"{case.id}: empty reply")
+                    cases_run[case.id] = {"status": "error", "error": "empty reply"}
+                    continue
+                cases_run[case.id] = {
+                    "status": "ok",
+                    "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                    "response": reply,
+                    "system_prompt_tokens": system_tokens,
+                    "user": case.user,
+                    "mode": case.mode,
+                }
+                print(f"{case.id}: {len(reply)} chars, system prompt {system_tokens} tokens")
     finally:
         # One terminal write, guaranteed: ok, empty, and failed cases all land in
         # runs.json, so a run in which every case failed still leaves a record
         # `grade` can consume, and an interrupted run keeps the cases it finished.
         workspace.write("runs", {**runs, "cases": cases_run})
+        if conn is not None:
+            conn.close()
 
-    workspace.write(
-        "meta",
-        {
-            "corpus": str(corpus_path),
-            "corpus_version": header["corpus_version"],
-            "prompt_contract_version": header["prompt_contract_version"],
-            "expected_contract_version": TUTOR_PROMPT_CONTRACT_VERSION,
-            "model": config.model,
-            "context_window": config.context_window,
-            "endpoint_locality": _locality(config.endpoint_url),
-        },
-    )
+    meta: dict[str, object] = {
+        "surface": surface,
+        "corpus": str(corpus_path),
+        "corpus_version": header["corpus_version"],
+        "prompt_contract_version": header["prompt_contract_version"],
+        "expected_contract_version": TUTOR_PROMPT_CONTRACT_VERSION,
+        "model": config.model,
+        "context_window": config.context_window,
+        "endpoint_locality": _locality(config.endpoint_url),
+    }
+    if surface == "class_chat":
+        meta["class_id"] = class_id
+        meta["session_id"] = session_id
+    workspace.write("meta", meta)
     if header["prompt_contract_version"] != TUTOR_PROMPT_CONTRACT_VERSION:
         print(
             f"warning: corpus is written against contract "
@@ -577,6 +796,18 @@ def cmd_grade(args: argparse.Namespace) -> int:
                 continue
             case = by_id[case_id]
             if args.case and case_id not in args.case:
+                continue
+            if isinstance(record, dict) and record.get("status") == "tool_call":
+                # The model called tools instead of answering. There is no reply to grade;
+                # the verdict is a fail that says so, not a not-run the report would drop.
+                tools = record.get("tools")
+                tools = ", ".join(str(name) for name in tools) if isinstance(tools, list) else "?"
+                grades[case_id] = {
+                    "verdict": "fail",
+                    "grading": {"note": f"the model called tools instead of answering: {tools}"},
+                    "generated_at": record.get("generated_at"),
+                }
+                print(f"{case_id}: fail (tool call: {tools})")
                 continue
             if not isinstance(record, dict) or record.get("status") != "ok":
                 grades[case_id] = {"verdict": "not_run", "grading": record}
@@ -717,6 +948,29 @@ def main() -> int:
 
     run = sub.add_parser("run")
     _common(run)
+    run.add_argument(
+        "--surface",
+        choices=("class_chat", "tutor"),
+        default="class_chat",
+        help=(
+            "class_chat (default) sends each case the way the product's class conversation "
+            "sends it, through the production planner: full system prompt, class facts, "
+            "retrieved context, history, and the class's tool schemas. tutor sends the "
+            "anchored-tutor assembly (the historical surface)."
+        ),
+    )
+    run.add_argument(
+        "--class-id",
+        type=int,
+        default=None,
+        help="class_chat only: the class in the source database (default: its first).",
+    )
+    run.add_argument(
+        "--session-id",
+        type=int,
+        default=None,
+        help="class_chat only: a session of that class (default: the class's first).",
+    )
     run.set_defaults(func=cmd_run)
 
     grade = sub.add_parser("grade")

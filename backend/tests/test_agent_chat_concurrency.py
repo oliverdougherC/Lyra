@@ -23,6 +23,8 @@ import asyncio
 import hashlib
 import json
 import sqlite3
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -43,6 +45,7 @@ from backend.core import (
     web_research,
 )
 from backend.core.errors import ConflictError, LyraError
+from backend.llm import client as llm_client
 from backend.llm import tools
 from backend.rag.retrieve import RetrievalResult
 from backend.storage.database import connect, get_db
@@ -338,9 +341,13 @@ def test_a_consent_refusal_releases_the_session_and_persists_nothing(
 def test_an_impossible_context_refusal_releases_the_session(
     client: TestClient, db: sqlite3.Connection, class_id: int, session_id: int
 ) -> None:
+    # A turn the window cannot host on EITHER surface: the smallest window plus a question
+    # too large even for the tool-less fallback. The refusal is local and pre-flight, so it
+    # releases the session claim and persists nothing. (A window too small for the TOOL
+    # surface alone no longer refuses - the turn falls back to the tool-less answer.)
     db.execute("update settings set context_window = 512")
     db.commit()
-    assert _send(client, class_id, session_id).status_code == 400
+    assert _send(client, class_id, session_id, content="word " * 2000).status_code == 400
     assert sessions.active_turn(session_id) is None
     assert sessions.list_messages(db, session_id) == []
 
@@ -1530,4 +1537,197 @@ async def test_a_retry_racing_a_new_turn_obeys_the_shared_claim(
 
     _first, second = await _run_two_overlapping(class_id, session_id, monkeypatch, retry, new_turn)
     assert isinstance(second, ConflictError)
+    assert sessions.active_turn(session_id) is None
+
+
+# ---------------------------------------------------------------------------
+# PLA-401 final pass: planning off the event loop, and Stop during real dispatch.
+# ---------------------------------------------------------------------------
+
+
+def test_planning_off_the_event_loop_does_not_freeze_the_app(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Item 6: a turn's blocking planning (embedding, retrieval, rerank) runs in a worker
+    thread, not on the FastAPI event loop. While one turn sits inside its planning
+    barrier, unrelated API work on the same app still completes, a second turn on the
+    same session is still refused with the ordinary 409 (serialization by the claim is
+    unchanged), and the held turn completes normally once the barrier opens."""
+    entered = threading.Event()
+    release = threading.Event()
+
+    def barrier_retrieve(
+        conn: object,
+        class_id_: int,
+        query: str,
+        budget_tokens: int,
+        document_id: int | None = None,
+    ) -> RetrievalResult:
+        entered.set()
+        release.wait(timeout=10.0)  # bounded backstop: the suite can never hang forever
+        return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(routes_agent_chat, "retrieve", barrier_retrieve)
+
+    async def fast_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        return tools.ToolLoopResult(content="Unblocked.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", fast_loop)
+
+    results: dict[str, object] = {}
+
+    def run_turn() -> None:
+        results["turn"] = client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+            json={"content": "A question that plans", "profile": "agent"},
+        )
+
+    turn_thread = threading.Thread(target=run_turn)
+    turn_thread.start()
+    assert entered.wait(timeout=5.0), "the planning worker never reached the barrier"
+
+    # The planner is blocked off-loop right now. Unrelated work on the same app still
+    # completes: this Stop takes no claim and touches no turn of ours.
+    other_session = int(sessions.create_session(db, class_id)["id"])
+    unrelated = client.post(f"/api/classes/{class_id}/sessions/{other_session}/agent-chat/stop")
+    assert unrelated.status_code == 200
+    assert unrelated.json() == {"stopped": False}
+
+    # And serialization is preserved: a second turn on the held session is refused with
+    # the ordinary conversation-busy 409, without waiting on the planner.
+    busy = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "A second question", "profile": "agent"},
+    )
+    assert busy.status_code == 409
+
+    # Open the barrier: the turn's model work runs and it settles like any healthy turn.
+    release.set()
+    turn_thread.join(timeout=10.0)
+    assert not turn_thread.is_alive()
+    assert results["turn"].status_code == 200
+    assert results["turn"].json()["content"] == "Unblocked."
+    assert sessions.active_turn(session_id) is None
+
+
+def test_stop_during_real_tool_dispatch_leaves_no_later_effect(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Item 8: a turn stopped while a tool is in flight in its worker thread settles only
+    once the worker has left (the Stop waits for quiescence), and from the moment the Stop
+    latched, the in-flight tool could create no new durable consequence: every durable
+    tool re-checks the turn's stop flag before its write, the cancelled loop makes no
+    further model call, the attempt settles as stopped, and the session claim frees."""
+    app_settings.update_settings_row(db, {"allow_web_research": 1})
+
+    # Script the model: ask for one search, then answer. The second reply never happens -
+    # the turn is stopped in the first dispatch - so the iterator going dry would be a
+    # loud sign of exactly the bug this test forbids (a model call after the stop).
+    scripted = iter(
+        [
+            llm_client.AssistantMessage(
+                content="",
+                tool_calls=(
+                    llm_client.ToolCall(
+                        id="call-1",
+                        name="search_web",
+                        arguments='{"query": "definition of convolution"}',
+                    ),
+                ),
+                truncated=False,
+            ),
+            llm_client.AssistantMessage(content="The answer.", tool_calls=(), truncated=False),
+        ]
+    )
+
+    async def scripted_with_tools(
+        endpoint: str,
+        api_key: str | None,
+        model: str | None,
+        messages: list[dict[str, object]],
+        tool_definitions: list[dict[str, object]],
+        **kwargs: object,
+    ) -> llm_client.AssistantMessage:
+        return next(scripted)
+
+    monkeypatch.setattr(tools, "complete_with_tools", scripted_with_tools)
+
+    dispatched = threading.Event()
+    release = threading.Event()
+    network_calls: list[str] = []
+
+    def blocking_search(query: str, **kwargs: object) -> list[dict[str, str]]:
+        # The real dispatch seam, blocked mid-call: this worker cannot be cancelled, only
+        # watched. The stop flag it meets on the way out is what makes the guarantee hold.
+        network_calls.append(query)
+        dispatched.set()
+        release.wait(timeout=10.0)
+        return [{"title": "A result", "url": "https://example.com", "content": "Body text."}]
+
+    monkeypatch.setattr(web_research, "search_web", blocking_search)
+
+    results: dict[str, object] = {}
+
+    def run_turn() -> None:
+        results["turn"] = client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+            json={"content": "Research the definition of convolution", "profile": "agent"},
+        )
+
+    turn_thread = threading.Thread(target=run_turn)
+    turn_thread.start()
+    assert dispatched.wait(timeout=5.0), "the real dispatch never started"
+
+    # A real Stop on the running turn. It completes only once the in-flight worker has
+    # left, so it runs in its own thread; the release below follows the latched gate, so
+    # the stop flag is set before the in-flight read can finish and do anything.
+    stop_results: dict[str, object] = {}
+
+    def run_stop() -> None:
+        stop_results["stop"] = client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat/stop"
+        )
+
+    stop_thread = threading.Thread(target=run_stop)
+    stop_thread.start()
+    deadline = time.monotonic() + 5.0
+    entry = None
+    while time.monotonic() < deadline:
+        entry = routes_agent_chat._inflight.get(session_id)
+        if entry is not None and entry[2].stopped:
+            break
+        time.sleep(0.01)
+    assert entry is not None and entry[2].stopped, "the Stop never latched the turn's gate"
+    release.set()
+
+    stop_thread.join(timeout=10.0)
+    turn_thread.join(timeout=10.0)
+    assert not stop_thread.is_alive() and not turn_thread.is_alive()
+
+    # The Stop reported a real stop, and the turn settled with the same bounded body.
+    assert stop_results["stop"].status_code == 200
+    assert stop_results["stop"].json() == {"stopped": True}
+    turn = results["turn"]
+    assert turn.status_code == 200
+    assert json.loads(turn.content)["stopped"] == "stopped"
+
+    # Exactly one network search - the one that was in flight - and nothing after the
+    # Stop completed: the cancelled loop made no further model call.
+    assert len(network_calls) == 1
+    # No durable consequence from the turn: the search result was dropped at the stop
+    # boundary, so nothing was proposed, persisted, or requested.
+    for table in ("writer_sources", "workspace_changes", "command_requests"):
+        assert db.execute(f"select count(*) from {table}").fetchone()[0] == 0  # noqa: S608
+    # The attempt settled as stopped - not failed, not forever running.
+    row = db.execute("select state from agent_turn_attempts order by id desc limit 1").fetchone()
+    assert row["state"] == "stopped"
+    # And the session is free: the claim released only after the worker left.
     assert sessions.active_turn(session_id) is None

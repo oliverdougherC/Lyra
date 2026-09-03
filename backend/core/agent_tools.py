@@ -40,7 +40,7 @@ from backend.core.query_guard import PrivateContextLedger, QueryRefusal, guard_w
 from backend.core.writer_budgets import WriterCapabilities, get_writer_capabilities
 from backend.llm import tool_profiles
 from backend.llm.tools import REGISTRY as COMPUTE_REGISTRY
-from backend.llm.tools import ToolDefinition
+from backend.llm.tools import ToolDefinition, ToolStopGate
 from backend.tools.result import ToolResult, failure, success
 
 type AgentProfile = Literal["research", "code", "command", "agent"]
@@ -182,6 +182,25 @@ class _RefusalError(Exception):
     """A safe policy/input refusal that should be visible to the model."""
 
 
+# The one bounded refusal a tool returns once its turn's Stop has latched.
+_STOPPED_MESSAGE = "This turn was stopped."
+
+
+def _require_not_stopped(stop: ToolStopGate | None) -> None:
+    """A durable tool's pre-write check against the turn's stop gate.
+
+    Python cannot cancel a worker thread once it is running, so the Stop contract for an
+    in-flight tool is enforced here rather than in the loop: the gate's flag is latched
+    *before* the turn's task is cancelled, and every tool that can create a durable
+    consequence (a ledger source, an excerpt, a fact, a workspace change, a command, a
+    network fetch) re-checks the flag at its write boundary and refuses when it is set.
+    Read-only tools need no check: they create no consequence the Stop could be lying
+    about.
+    """
+    if stop is not None and stop.stopped:
+        raise _RefusalError(_STOPPED_MESSAGE)
+
+
 def _definition(
     name: str,
     description: str,
@@ -317,10 +336,20 @@ def _audited_handler(
     activity: AgentRunActivity,
     authorize: Callable[[], object],
     action: Callable[..., _Outcome],
+    stop: ToolStopGate | None = None,
 ) -> Callable[..., ToolResult]:
-    """Wrap authorization and work in one durable audit lifecycle."""
+    """Wrap authorization and work in one durable audit lifecycle.
+
+    `stop` is the turn's stop gate. When the turn's Stop has latched, a dispatch that has
+    not started does not start: no authorization read, no audit rows, no action - the
+    model gets a bounded refusal. A dispatch already in flight instead meets the gate at
+    its action's durable boundary (`_require_not_stopped`), where it is refused the same
+    way, so Stop never leaves a half-written durable effect behind.
+    """
 
     def call(**arguments: object) -> ToolResult:
+        if stop is not None and stop.stopped:
+            return failure(_STOPPED_MESSAGE)
         safe_arguments = _audit_arguments(name, arguments)
         try:
             authorization = authorize()
@@ -435,6 +464,7 @@ def build_agent_registry(
     *,
     private_context: PrivateContextLedger | Sequence[str] = (),
     snapshot: AgentCapabilitySnapshot | None = None,
+    stop: ToolStopGate | None = None,
 ) -> tuple[dict[str, ToolDefinition], AgentRunActivity]:
     """Build the smallest raw registry allowed for one class-agent turn.
 
@@ -452,6 +482,12 @@ def build_agent_registry(
     same turn. A plain sequence is frozen at build time, which is what the read-only
     preflight probe passes (it measures schemas with an empty context) and what legacy
     callers pass.
+
+    `stop` is the turn's stop gate. Every retained handler checks it before it can create
+    a durable consequence, so a Stop that lands while a tool dispatch is running in a
+    worker thread cannot leave a new source, change, command, or fetch committed after the
+    UI has already presented the turn as stopped. Omit for a registry built outside a
+    live turn (the preflight probe, tests), where there is no stop to honor.
     """
     if profile not in PROFILES:
         raise ValueError(f"Unknown agent profile: {profile}")
@@ -500,6 +536,7 @@ def build_agent_registry(
                 activity=activity,
                 authorize=session_authorization,
                 action=compute_action,
+                stop=stop,
             ),
         )
         definitions.append(
@@ -521,10 +558,11 @@ def build_agent_registry(
             activity,
             ledger,
             snapshot,
+            stop,
         )
-        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot, ledger)
-        _add_command_tools(conn, class_id, session_id, definitions, activity, snapshot)
-        _add_access_request_tools(conn, class_id, session_id, definitions, activity, snapshot)
+        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot, ledger, stop)
+        _add_command_tools(conn, class_id, session_id, definitions, activity, snapshot, stop)
+        _add_access_request_tools(conn, class_id, session_id, definitions, activity, snapshot, stop)
     elif profile == "research":
         _add_research_tools(
             conn,
@@ -534,11 +572,12 @@ def build_agent_registry(
             activity,
             ledger,
             snapshot,
+            stop,
         )
     elif profile == "code":
-        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot, ledger)
+        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot, ledger, stop)
     else:
-        _add_command_tools(conn, class_id, session_id, definitions, activity, snapshot)
+        _add_command_tools(conn, class_id, session_id, definitions, activity, snapshot, stop)
 
     selected = tool_profiles.build_tool_profile(profile, definitions)
     return {item.name: item.definition for item in selected.definitions}, activity
@@ -552,6 +591,7 @@ def _add_research_tools(
     activity: AgentRunActivity,
     private_context: PrivateContextLedger,
     snapshot: AgentCapabilitySnapshot,
+    stop: ToolStopGate | None = None,
 ) -> None:
     # Schema inclusion is decided by the frozen snapshot, not a fresh read, so the tools
     # offered match what the preflight budgeted. The handlers below still re-read the live
@@ -575,11 +615,18 @@ def _add_research_tools(
         guarded = guard_web_query(query, private_context=current_private_context)
         if isinstance(guarded, QueryRefusal):
             raise _RefusalError(guarded.message)
+        # A public read is not itself a durable consequence, but it is the worker a Stop
+        # most often catches mid-flight, and its result must not reach the ledger or the
+        # collector after the turn is over: refuse before the network call, and drop a
+        # result the call returns with the flag already latched.
+        _require_not_stopped(stop)
         results = web_research.search_web(
             guarded.query,
             allowed=True,
             private_context=current_private_context,
         )
+        if stop is not None and stop.stopped:
+            raise _RefusalError(_STOPPED_MESSAGE)
         return _Outcome(
             success(results=results, count=len(results)),
             {"result_count": len(results)},
@@ -599,6 +646,7 @@ def _add_research_tools(
             activity=activity,
             authorize=research_auth,
             action=search_action,
+            stop=stop,
         ),
         properties={"query": {"type": "string", "maxLength": 500}},
         required=("query",),
@@ -616,6 +664,7 @@ def _add_research_tools(
 
         def fetch_action(capabilities: WriterCapabilities, *, url: str) -> _Outcome:
             url = _text(url, "url", maximum=source_ledger.MAX_URL_CHARS)
+            _require_not_stopped(stop)
             fetched = web_research.fetch_source(
                 url,
                 allowed=True,
@@ -673,6 +722,7 @@ def _add_research_tools(
                 activity=activity,
                 authorize=scrape_auth,
                 action=fetch_action,
+                stop=stop,
             ),
             properties={"url": {"type": "string", "maxLength": 4096}},
             required=("url",),
@@ -691,6 +741,9 @@ def _add_research_tools(
         fetched = activity.fetched_sources.get(fetch_id)
         if fetched is None:
             raise _RefusalError("That fetched source is not available in this agent turn.")
+        # The ledger write is the durable consequence of the whole research thread: refuse
+        # it once the turn is stopped, so a proposal in flight cannot land after Stop.
+        _require_not_stopped(stop)
         stored = source_ledger.upsert_source(
             conn,
             class_id,
@@ -755,6 +808,7 @@ def _add_research_tools(
             activity=activity,
             authorize=research_auth,
             action=propose_snapshot_action,
+            stop=stop,
         ),
         properties={"fetch_id": {"type": "string", "minLength": 1, "maxLength": 64}},
         required=("fetch_id",),
@@ -784,6 +838,7 @@ def _add_research_tools(
             allow_blank=True,
         )
         source_ledger.get_source(conn, source_id, class_id=class_id)
+        _require_not_stopped(stop)
         stored = source_ledger.add_excerpt(
             conn,
             source_id,
@@ -817,6 +872,7 @@ def _add_research_tools(
             activity=activity,
             authorize=research_auth,
             action=propose_excerpt_action,
+            stop=stop,
         ),
         properties={
             "source_id": {"type": "integer", "minimum": 1},
@@ -852,6 +908,7 @@ def _add_research_tools(
         value = _text(value, "value", maximum=4_000)
         source_id = _integer(source_id, "source_id", minimum=1, maximum=2**63 - 1)
         excerpt_id = _integer(excerpt_id, "excerpt_id", minimum=1, maximum=2**63 - 1)
+        _require_not_stopped(stop)
         fact = profiles.propose_ledger_fact(
             conn,
             class_id,
@@ -905,6 +962,7 @@ def _add_research_tools(
             activity=activity,
             authorize=research_auth,
             action=propose_profile_fact_action,
+            stop=stop,
         ),
         properties={
             "kind": {
@@ -936,6 +994,7 @@ def _add_code_tools(
     activity: AgentRunActivity,
     snapshot: AgentCapabilitySnapshot,
     private_context: PrivateContextLedger | None = None,
+    stop: ToolStopGate | None = None,
 ) -> None:
     # The frozen snapshot decides which workspace schemas are exposed; each handler still
     # re-reads the live workspace row and its grants at dispatch via `_workspace_authorization`.
@@ -1073,6 +1132,7 @@ def _add_code_tools(
                 activity=activity,
                 authorize=read_auth,
                 action=read_action,
+                stop=stop,
             ),
             properties=properties,
             required=required,
@@ -1123,6 +1183,9 @@ def _add_code_tools(
             observed_base_hash,
             proposed_content,
         )
+        # The proposal row is the durable consequence: refuse it once the turn is stopped,
+        # so a change in flight cannot appear in the student's review queue after Stop.
+        _require_not_stopped(stop)
         stored = agent_store.create_workspace_change(
             conn,
             class_id,
@@ -1171,6 +1234,7 @@ def _add_code_tools(
             activity=activity,
             authorize=change_auth,
             action=change_action,
+            stop=stop,
         ),
         properties={
             "relative_path": {"type": "string", "minLength": 1, "maxLength": 1000},
@@ -1200,6 +1264,7 @@ def _add_command_tools(
     definitions: list[tool_profiles.AnnotatedToolDefinition],
     activity: AgentRunActivity,
     snapshot: AgentCapabilitySnapshot,
+    stop: ToolStopGate | None = None,
 ) -> None:
     # Exposure is decided by the frozen snapshot; the handler re-reads the live command
     # grant at dispatch via `_workspace_authorization`.
@@ -1233,6 +1298,9 @@ def _add_command_tools(
             minimum=1,
             maximum=agent_store.MAX_TIMEOUT_SECONDS,
         )
+        # The request row is the durable consequence: refuse it once the turn is stopped,
+        # so a command cannot reach the student's confirmation screen after Stop.
+        _require_not_stopped(stop)
         stored = agent_store.create_command_request(
             conn,
             class_id,
@@ -1281,6 +1349,7 @@ def _add_command_tools(
             activity=activity,
             authorize=command_auth,
             action=command_action,
+            stop=stop,
         ),
         properties={
             "argv": {
@@ -1343,6 +1412,7 @@ def _add_access_request_tools(
     definitions: list[tool_profiles.AnnotatedToolDefinition],
     activity: AgentRunActivity,
     snapshot: AgentCapabilitySnapshot,
+    stop: ToolStopGate | None = None,
 ) -> None:
     """Just-in-time access requests for the capabilities the snapshot shows as missing.
 
@@ -1433,6 +1503,7 @@ def _add_access_request_tools(
             activity=activity,
             authorize=lambda: _session_scope(conn, class_id, session_id),
             action=request_action,
+            stop=stop,
         ),
         properties={
             "scope": {

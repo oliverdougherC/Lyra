@@ -338,6 +338,9 @@ def test_a_run_of_only_failed_cases_still_leaves_a_gradeable_record(
         workspace=str(tmp_path),
         source_db="/ignored",
         case=["what-is-a-derivative"],
+        surface="tutor",
+        class_id=None,
+        session_id=None,
     )
     assert eval_tutor.cmd_run(args) == 0
 
@@ -424,3 +427,186 @@ def test_grade_records_the_judge_it_uses(tmp_path: Path, monkeypatch: pytest.Mon
     assert seen_models[-1] == "judge-model"
     grades = json.loads((tmp_path / "grades.json").read_text(encoding="utf-8"))
     assert grades["what-is-a-derivative"]["verdict"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# PLA-401 final pass, item 7: the class_chat surface assembles what the class
+# chat ACTUALLY sends - through the production planner - and the tool-less
+# fallback is part of the surface, not a divergence from it.
+# ---------------------------------------------------------------------------
+
+
+def _class_chat_case() -> Case:
+    """One corpus-shaped case: history, retrieved context, and the question."""
+    return Case(
+        id="explain-convolution",
+        mode="guide",
+        user="Explain convolution",
+        history=(
+            {"role": "user", "content": "What is a transfer function?"},
+            {"role": "assistant", "content": "It maps an input to an output."},
+        ),
+        context=(
+            {
+                "content": "The convolution integral sums the overlap of f and a flipped g.",
+                "filename": "Lecture 4.pdf",
+                "page_number": 12,
+                "section_title": "Convolution",
+            },
+        ),
+        must=("gives the overlap integral",),
+        must_not=("withholds the requested explanation",),
+        may=(),
+        notes="The course defines convolution via the overlap integral.",
+    )
+
+
+def test_the_class_chat_surface_matches_the_production_assembly(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """The harness must send the product what the product sends.
+
+    `class_chat_assembly` is the harness's surface; `routes_agent_chat._plan_agent_turn`
+    is the route's planner. This assembles the same case through both and asserts they
+    agree message for message and tool for tool, so a change to the production assembly
+    (the prompt, the retrieval block, the registry) is visible to the eval here.
+    """
+    from backend.api import routes_agent_chat
+    from backend.core import sessions as sessions_core
+    from backend.core.app_settings import TutorConfig
+    from backend.llm import tools as llm_tools
+    from backend.llm.turn_budget import HistoryMessage
+    from scripts import eval_tutor
+
+    session_id = int(sessions_core.create_session(db, class_id)["id"])
+    config = TutorConfig(
+        endpoint_url="http://127.0.0.1:8000/v1",
+        api_key=None,
+        model="local-model",
+        context_window=8192,
+    )
+    case = _class_chat_case()
+
+    # The harness surface.
+    harness = eval_tutor.class_chat_assembly(db, class_id, session_id, config, case)
+
+    # The route's planner, with the case's history and context handed to it the same way.
+    history = tuple(
+        HistoryMessage(role=turn["role"], content=turn["content"]) for turn in case.history
+    )
+    retrieval = RetrievalResult(
+        chunks=tuple(
+            RetrievedChunk(
+                chunk_id=index + 1,
+                document_id=0,
+                content=str(chunk.get("content") or ""),
+                token_count=0,
+                page_number=chunk.get("page_number"),
+                section_title=chunk.get("section_title"),
+                section_path=chunk.get("section_path"),
+                section_number=chunk.get("section_number"),
+                problem_number=chunk.get("problem_number"),
+                part_index=None,
+                filename=str(chunk.get("filename") or ""),
+                similarity=1.0,
+                score=1.0,
+            )
+            for index, chunk in enumerate(case.context)
+        ),
+        trimmed=False,
+        omitted_document_count=0,
+    )
+    plan = routes_agent_chat._plan_agent_turn(
+        db,
+        class_id,
+        session_id,
+        config,
+        profile="agent",
+        content=case.user,
+        mode=case.mode,
+        document_id=None,
+        cached_retrieval=retrieval,
+        history=history,
+    )
+
+    # The two agree, message for message and tool for tool.
+    assert [dict(message) for message in harness.messages] == [
+        dict(message) for message in plan.messages
+    ]
+    assert harness.tools == tuple(llm_tools.tool_schemas(plan.registry))
+    assert harness.toolless is plan.toolless
+
+
+def test_the_class_chat_surface_carries_the_contract_the_class_chat_sends(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """The surface is not just a mirror: it carries the pieces that make it the class
+    chat - the mode contract, the agent capability layer, the retrieved context block,
+    the history, the question, and the class's real tool schemas."""
+    from backend.core import sessions as sessions_core
+    from backend.core.app_settings import TutorConfig
+    from scripts import eval_tutor
+
+    session_id = int(sessions_core.create_session(db, class_id)["id"])
+    config = TutorConfig(
+        endpoint_url="http://127.0.0.1:8000/v1",
+        api_key=None,
+        model="local-model",
+        context_window=8192,
+    )
+    case = _class_chat_case()
+    assembly = eval_tutor.class_chat_assembly(db, class_id, session_id, config, case)
+
+    system = str(assembly.messages[0]["content"])
+    # The mode contract the turn runs under (the full tutor prompt, not a stub).
+    assert "Mode: Guide." in system
+    # The agent capability layer, appended on top of it.
+    assert "You are Lyra's class agent" in system
+    # The case's retrieved context, rendered as the route renders it.
+    assert "Retrieved context from the student's uploaded material:" in system
+    assert "Lecture 4.pdf" in system
+    assert "page 12" in system
+    # The conversation: history in order, then the question.
+    contents = [str(message["content"]) for message in assembly.messages]
+    assert "What is a transfer function?" in contents
+    assert contents.index("It maps an input to an output.") < contents.index("Explain convolution")
+    assert assembly.messages[-1] == {"role": "user", "content": case.user}
+    # The class's real tool surface: a fresh class offers the case-evaluation tool...
+    tool_names = {str(schema.get("function", {}).get("name")) for schema in assembly.tools}
+    assert "cas_evaluate" in tool_names
+    # ...and nothing the class has not granted: no web research on an ungranted class.
+    assert "search_web" not in tool_names
+    assert assembly.toolless is False
+
+
+def test_the_class_chat_surface_is_tool_less_on_a_known_incompatible_endpoint(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """The fallback is part of the surface: a known tool-incompatible endpoint plans the
+    tool-less surface at once - no tools on the wire, the tool-less note in the system
+    prompt, the basic tutoring turn still answered - exactly as the route plans it."""
+    from backend.core import sessions as sessions_core
+    from backend.core.app_settings import TutorConfig
+    from scripts import eval_tutor
+
+    session_id = int(sessions_core.create_session(db, class_id)["id"])
+    config = TutorConfig(
+        endpoint_url="http://127.0.0.1:8000/v1",
+        api_key=None,
+        model="local-model",
+        context_window=16384,
+        tools_supported=False,
+    )
+    case = _class_chat_case()
+    assembly = eval_tutor.class_chat_assembly(db, class_id, session_id, config, case)
+
+    assert assembly.toolless is True
+    assert assembly.tools == ()
+    system = str(assembly.messages[0]["content"])
+    assert "is not available in this conversation" in system
+    # The full tutor contract is still there: tool-less is a smaller surface, not a
+    # different conversation.
+    assert "Mode: Guide." in system
+    # The question still went out, tool-less: the basic tutoring turn is never refused
+    # over the cost of optional capability.
+    assert assembly.messages[-1] == {"role": "user", "content": case.user}

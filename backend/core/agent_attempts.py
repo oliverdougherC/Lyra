@@ -71,7 +71,12 @@ def create_attempt(
 
     `mode` and `document_id` persist the turn context the attempt was asked under (the
     Guide/Show choice and the selected source scope), so a retry or a just-in-time
-    continuation can re-run the turn with the scope it was originally asked with.
+    continuation can re-run the turn with the scope it was originally asked with. Since
+    migration 042 a stored `document_id` of None is a real value ("All material"), not an
+    absence, so `scope_persisted` records that this row's mode/document_id were written by
+    the modern path: retry and regenerate read the persisted scope - null included - only
+    from a row that carries the flag, and fall back to request-provided scope for the
+    pre-flag legacy rows instead.
     `operation_id` is the client-generated idempotency key (PLA-313), bound to this session
     by a unique index: a fresh send stores it, and a retry attempt on an existing message
     stores None, exactly like the tutor's attempt lifecycle.
@@ -80,10 +85,15 @@ def create_attempt(
     transaction as the user message insert (the fresh-send path); retry and legacy callers
     keep the default, which commits the attempt row on its own.
     """
+    # `scope_persisted=1` is always written by the modern path: this row's mode and
+    # document_id are authoritative, a stored null document included ("All material").
+    # Pre-flag rows (the column's default) are the legacy scope that retry backstops from
+    # the request instead of from the row.
     cursor = conn.execute(
         "insert into agent_turn_attempts "
-        "(session_id, user_message_id, profile, state, mode, document_id, operation_id) "
-        "values (?, ?, ?, ?, ?, ?, ?)",
+        "(session_id, user_message_id, profile, state, mode, document_id, operation_id, "
+        "scope_persisted) "
+        "values (?, ?, ?, ?, ?, ?, ?, 1)",
         (session_id, user_message_id, profile, RUNNING, mode, document_id, operation_id),
     )
     if commit:
@@ -97,13 +107,13 @@ def find_by_operation_id(
     """Find an existing attempt by its client-generated operation_id (PLA-313).
 
     Returns a dict with `user_message_id`, `attempt_id`, `state`,
-    `assistant_message_id`, `mode`, and `document_id` when a prior attempt committed
-    with the same operation_id in this session; None otherwise. Mirrors the tutor's
-    `tutor_attempts.find_by_operation_id`.
+    `assistant_message_id`, `mode`, `document_id`, and `scope_persisted` when a prior
+    attempt committed with the same operation_id in this session; None otherwise. Mirrors
+    the tutor's `tutor_attempts.find_by_operation_id`.
     """
     row = conn.execute(
         "select user_message_id, id as attempt_id, state, "
-        "assistant_message_id, mode, document_id "
+        "assistant_message_id, mode, document_id, scope_persisted "
         "from agent_turn_attempts "
         "where session_id = ? and operation_id = ? "
         "order by id desc limit 1",
@@ -171,18 +181,29 @@ def fail_attempt(
     conn.commit()
 
 
-def stop_attempt(conn: sqlite3.Connection, attempt_id: int, *, detail: str) -> None:
+def stop_attempt(
+    conn: sqlite3.Connection,
+    attempt_id: int,
+    *,
+    detail: str,
+    stopped_reason: str = "cancelled",
+) -> None:
     """Settle a still-running attempt as stopped (abandoned).
 
     Used when a turn is cancelled or the client disconnects mid-run: the claim is released,
     but the attempt must not read as forever in flight. Stopped is a truthful, retryable
     terminal state, the same one a restart reconciles an interrupted attempt to. Only a
     still-running row is settled, so a settle racing an ordinary completion is a no-op.
+
+    `stopped_reason` names what stopped it: "cancelled" for a Stop or disconnect,
+    "abandoned" for a restart's reconciliation, and the loop's own stop reasons (for
+    example "no_tool_support", when the turn's tool pass was abandoned in favor of the
+    tool-less answer of the same logical turn) so the attempt ledger stays truthful.
     """
     conn.execute(
         "update agent_turn_attempts set state = ?, stopped_reason = ?, detail = ?, "
         "finished_at = ? where id = ? and state = ?",
-        (STOPPED, "cancelled", detail[:_MAX_DETAIL_CHARS], _timestamp(), attempt_id, RUNNING),
+        (STOPPED, stopped_reason, detail[:_MAX_DETAIL_CHARS], _timestamp(), attempt_id, RUNNING),
     )
     conn.commit()
 

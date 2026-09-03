@@ -599,29 +599,6 @@ export function ChatPane({
             await invalidateAgentTurnCaches(queryClient, classId, turnSessionId).catch(
               () => undefined,
             )
-            // PLA-313 reconciliation after an ambiguous transport failure: decide from the
-            // durable state what actually landed. A committed user message with a reply
-            // means the turn is durable - the transcript already shows both, so the
-            // composer must not offer to send the question again. A landed question with a
-            // failed or stopped attempt leaves the text restorable: re-sending the same
-            // words carries the same operation ID, so the server re-runs the turn under the
-            // stored message instead of appending a duplicate.
-            if (kind === 'send' && err instanceof ApiError && err.status !== 409) {
-              const durable = await api.listMessages(turnSessionId).catch(() => null)
-              if (durable !== null) {
-                const lastUser = [...durable]
-                  .reverse()
-                  .find((item) => item.role === 'user' && item.content === content)
-                if (
-                  lastUser &&
-                  durable.some((item) => item.role === 'assistant' && item.id > lastUser.id)
-                ) {
-                  // Durable question + stored reply: show it, do not re-send it. The
-                  // operation ID stays minted so an identical later Send replays it.
-                  submittedTextRef.current = null
-                }
-              }
-            }
             throw err
           }
           await invalidateAgentTurnCaches(queryClient, classId, turnSessionId).catch(
@@ -713,11 +690,61 @@ export function ChatPane({
           // not clear one either: an earlier ambiguous send's X stays intact.
           setOutcome('failed')
         } else {
-          toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
-          if (submittedTextRef.current !== null) {
-            setDraft(submittedTextRef.current)
-          }
           setOutcome('failed')
+          if (agent && kind === 'send') {
+            // PLA-401 final pass: the three-state lost-response reconciliation, for ANY
+            // non-409 error - including transport failures that never became an ApiError
+            // (a dropped connection is the most common one). The durable state decides
+            // what the composer does; the transcript above already fell back to it, so the
+            // screen shows the truth in every branch.
+            const durable = await api.listMessages(turnSessionId).catch(() => null)
+            const lastUser =
+              durable === null
+                ? undefined
+                : [...durable]
+                    .reverse()
+                    .find((item) => item.role === 'user' && item.content === content)
+            const hasReply =
+              lastUser !== undefined &&
+              durable !== null &&
+              durable.some((item) => item.role === 'assistant' && item.id > lastUser.id)
+            if (hasReply) {
+              // CASE A - durable question with a stored reply: the turn succeeded and only
+              // its acceptance was lost. Retire BOTH refs: the composer goes empty and the
+              // next Send mints a fresh operation ID (re-sending this question would be a
+              // new question, not a duplicate).
+              submittedTextRef.current = null
+              operationIdRef.current = null
+              responseAcceptedRef.current = true
+              setDraft('')
+              toast.success('Your answer was already saved.')
+            } else if (lastUser !== undefined) {
+              // CASE B - durable question, failed or stopped attempt, no reply: the
+              // transcript shows the honest turn with its causal Retry. The composer goes
+              // empty - no prefill - but the operation ID is KEPT: re-sending the same
+              // words carries it, so the server re-runs the stored turn instead of
+              // appending a duplicate question.
+              submittedTextRef.current = null
+              setDraft('')
+              toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
+            } else {
+              // CASE C - nothing durable landed. The draft goes back in the box and the
+              // operation ID is kept: a re-send either lands fresh, or - if the turn did
+              // commit and only the readback failed - the server reconciles by operation
+              // ID instead of duplicating.
+              if (submittedTextRef.current !== null) {
+                setDraft(submittedTextRef.current)
+              }
+              toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
+            }
+          } else {
+            // Non-agent turns keep their longstanding behavior: the question goes back in
+            // the box.
+            toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
+            if (submittedTextRef.current !== null) {
+              setDraft(submittedTextRef.current)
+            }
+          }
         }
       } finally {
         if (owns()) {

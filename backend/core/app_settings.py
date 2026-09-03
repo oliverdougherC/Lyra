@@ -52,12 +52,19 @@ class TutorConfig:
         api_key: The stored key, or None when the endpoint needs no authentication.
         model: The model identifier the user picked, or None to let the server choose.
         context_window: Token budget the endpoint is assumed to accept.
+        tools_supported: The endpoint's measured tool-calling verdict from the SAME settings
+            read that produced the endpoint: True when probing measured it, False when the
+            measurement (or a remembered first-request refusal) proved it away, None when
+            unknown. Carried on the snapshot so a turn plans and sends from one read - an
+            endpoint that changes between reads changes the verdict with it, and a caller
+            must never pair one read's endpoint with a second read's verdict.
     """
 
     endpoint_url: str
     api_key: str | None
     model: str | None
     context_window: int
+    tools_supported: bool | None = None
 
 
 def get_settings_row(conn: sqlite3.Connection) -> sqlite3.Row:
@@ -143,7 +150,21 @@ def _tutor_config_from_row(row: sqlite3.Row) -> TutorConfig | None:
         api_key=get_api_key(),
         model=row["model"],
         context_window=int(row["context_window"]),
+        tools_supported=_tool_support_from_row(row),
     )
+
+
+def _tool_support_from_row(row: sqlite3.Row) -> bool | None:
+    """The row's tool-support verdict: None (unknown), False, or True.
+
+    The column is absent from pre-migration-rows and from test rows shaped like this one
+    but cut before it; both read as "unknown", which is the value that asks the next turn
+    to decide rather than assume.
+    """
+    if "tools_supported" not in row.keys():  # noqa: SIM118
+        return None
+    stored = row["tools_supported"]
+    return None if stored is None else bool(stored)
 
 
 def _document_block_from_row(row: sqlite3.Row) -> str | None:
