@@ -4,6 +4,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from '@/router/hooks'
 
 import { AgentWorkSurface } from '@/components/agent/work-surface'
+import {
+  WorkspaceAttachProvider,
+  WorkspaceContextChip,
+} from '@/components/agent/workspace-attach'
 import { ChatPane } from '@/components/chat/chat-pane'
 import { SourceContext } from '@/components/chat/source-context'
 import { useFullBleed } from '@/components/layout/page-chrome'
@@ -146,18 +150,22 @@ export default function ClassWorkspacePage() {
       initialAsk={handoff.ask}
       initialSend={handoff.send}
       sourceControl={sourceControl}
+      workspaceControl={<WorkspaceContextChip />}
       onSessionIdChange={handleSessionIdChange}
     />
   )
 
-  // One column: the agent's contextual work surface - thin when idle, expanding for live
-  // work - sits above the transcript it belongs to. No tabs, no docked column, no toggle:
-  // the conversation is the surface, and the agent's access requests, edits, commands, and
-  // activity are part of it.
+  // One conversation owns everything: the composer's context row carries what Lyra has
+  // on hand (the material it reads, the attached workspace), and the work surface above
+  // the transcript shows only what is live - access requests, edits, commands, activity.
+  // Nothing here is a separate agent destination: no tabs, no docked column, no second
+  // composer, no setup dashboard.
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
-      <AgentWorkSurface classId={classId} sessionId={sessionId} />
-      <div className="min-h-0 flex-1">{chat}</div>
-    </div>
+    <WorkspaceAttachProvider classId={classId}>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
+        <AgentWorkSurface classId={classId} sessionId={sessionId} />
+        <div className="min-h-0 flex-1">{chat}</div>
+      </div>
+    </WorkspaceAttachProvider>
   )
 }

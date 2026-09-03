@@ -128,6 +128,12 @@ type ChatPaneProps = {
    * passes nothing - the writer reads the class, not a pick.
    */
   sourceControl?: React.ReactNode
+  /**
+   * The attached local workspace for this class conversation, rendered beside the source
+   * context in the composer's control row - the same compact chip, so the two answers to
+   * "what does Lyra have on hand" sit together.
+   */
+  workspaceControl?: React.ReactNode
 }
 
 /** How close to the bottom still counts as "following the conversation". */
@@ -172,6 +178,7 @@ export function ChatPane({
   headerActions,
   emptyState,
   sourceControl,
+  workspaceControl,
 }: ChatPaneProps) {
   const inline = layout === 'inline'
   // Matches the workspace's own desktop breakpoint, so the controls move into the header
@@ -554,6 +561,7 @@ export function ChatPane({
                     content,
                     undefined,
                     agentDocumentId,
+                    activeMode,
                   )
           onEvent({ type: 'done', message_id: result.message_id })
           return
@@ -924,13 +932,13 @@ export function ChatPane({
     return () => observer.disconnect()
   }, [scrollToBottom])
 
-  // A segmented control rather than underlined tabs. These do not navigate anywhere — they
-  // change how the next answer is written — and in the header bar there is no pane rule for
-  // an underline to sit on, so the honest idiom is a switch with a travelling thumb.
-  // The writer and the contextual agent have no pedagogy modes: the agent plans its own
-  // work, so there is nothing to toggle.
-  const modeToggle =
-    writer || agent ? null : (
+  // A segmented control rather than underlined tabs. These do not navigate anywhere - they
+  // change how the next answer is written. In the header bar there is no pane rule for an
+  // underline to sit on, so the honest idiom is a switch with a travelling thumb.
+  // The writer has no pedagogy modes - there is one writer. The contextual agent keeps
+  // them: the mode still governs how the work is presented, and the shared mode contract
+  // inherits it (the agent plans tools, it does not own the pedagogy).
+  const modeToggle = writer ? null : (
       <div
         className="border-border/70 bg-muted/70 flex items-center rounded-full border p-0.5"
         role="group"
@@ -1052,6 +1060,7 @@ export function ChatPane({
       streaming={turnActive}
       disabledReason={disabledReason}
       sourceControl={sourceControl}
+      workspaceControl={workspaceControl}
       // Inline, the reader clicked to open this and the next thing they do is type.
       autoFocus={inline}
     />

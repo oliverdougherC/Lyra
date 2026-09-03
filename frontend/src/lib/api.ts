@@ -25,6 +25,7 @@ import type {
   CardUpdate,
   CardUpdateRead,
   ChatEvent,
+  ChatMode,
   ChatRequest,
   ClassCreate,
   ClassProfile,
@@ -629,6 +630,7 @@ export const api = {
     content: string,
     profile?: AgentProfile,
     documentId?: number | null,
+    mode?: ChatMode,
   ) =>
     requestJson<AgentChatResult>(`/api/classes/${classId}/sessions/${sessionId}/agent-chat`, {
       method: 'POST',
@@ -638,6 +640,9 @@ export const api = {
         content,
         ...(profile ? { profile } : null),
         ...(documentId != null ? { document_id: documentId } : null),
+        // The student's Guide/Show choice rides the turn and is persisted on the session,
+        // so the agent's shared mode contract follows the same toggle as the tutor.
+        ...(mode ? { mode } : null),
       },
       errorFactory: agentChatErrorFactory,
     }),

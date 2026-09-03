@@ -30,6 +30,11 @@ type ComposerProps = {
    * composer that has no material to scope (the writer reads the class, not a pick).
    */
   sourceControl?: ReactNode
+  /**
+   * The attached local workspace, rendered beside the source context: the same compact
+   * chip, one glance answers "what does Lyra have on hand for this task".
+   */
+  workspaceControl?: ReactNode
   /** Take focus on mount, for a composer the reader has just opened deliberately. */
   autoFocus?: boolean
 }
@@ -42,6 +47,7 @@ export function Composer({
   streaming,
   disabledReason,
   sourceControl,
+  workspaceControl,
   autoFocus = false,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -116,12 +122,13 @@ export function Composer({
           'focus-within:border-accent-primary/60 focus-within:shadow-md',
         )}
       >
-        {sourceControl ? (
+        {sourceControl || workspaceControl ? (
           <div
             data-source-control
-            className="mb-1.5 flex shrink-0 items-center gap-1 text-text-tertiary"
+            className="mb-1.5 flex shrink-0 items-center gap-1.5 text-text-tertiary"
           >
             {sourceControl}
+            {workspaceControl}
           </div>
         ) : null}
         <Textarea

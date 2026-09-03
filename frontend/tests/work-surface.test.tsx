@@ -1,12 +1,17 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AgentWorkSurface } from '@/components/agent/work-surface'
+import {
+  WorkspaceAttachProvider,
+  WorkspaceContextChip,
+} from '@/components/agent/workspace-attach'
 import { api } from '@/lib/api'
 import * as runtime from '@/lib/runtime'
-import type { AgentAuditEventRead } from '@/types'
+import type { AgentAuditEventRead, MessageRead } from '@/types'
 
 const CLASS_ID = 9
 const SESSION_ID = 11
@@ -16,7 +21,9 @@ function createWrapper() {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
   const wrapper = ({ children }: { children: ReactNode }) => (
-    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    <QueryClientProvider client={queryClient}>
+      <WorkspaceAttachProvider classId={CLASS_ID}>{children}</WorkspaceAttachProvider>
+    </QueryClientProvider>
   )
   return { queryClient, wrapper }
 }
@@ -105,18 +112,23 @@ describe('the contextual agent work surface (PLA-401)', () => {
     )
   })
 
-  it('offers attach through the folder picker, with a bounded path entry when no picker exists', async () => {
-    // No workspace attached: the only actionable request is attach.
+  it('offers attach from the composer chip, with a bounded path entry in the surface when no picker exists', async () => {
+    // No workspace attached: the chip beside the composer is the attach affordance, and
+    // the bounded path entry appears in the conversation surface - not as setup chrome.
     const attach = vi.spyOn(api, 'attachAgentWorkspace').mockResolvedValue(workspace())
     const { wrapper } = createWrapper()
 
-    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    render(
+      <>
+        <AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />
+        <WorkspaceContextChip />
+      </>,
+      { wrapper },
+    )
 
-    // The workspace is absent, so the compact attach affordance is the entry point - not a
-    // grant card, and not a setup section.
-    fireEvent.click(screen.getByRole('button', { name: /attach a folder/i }))
-    // No native picker in the test environment: the bounded path entry appears.
-    const input = await screen.findByLabelText('Attach a local folder')
+    fireEvent.click(await screen.findByRole('button', { name: 'Attach folder' }))
+    // No native picker in the test environment: the bounded path entry stands in.
+    const input = await screen.findByLabelText('Path to the folder')
     fireEvent.change(input, { target: { value: '/tmp/starter' } })
     fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
     await waitFor(() =>
@@ -125,6 +137,33 @@ describe('the contextual agent work surface (PLA-401)', () => {
         readEnabled: true,
       }),
     )
+    // The chip becomes the attached-workspace chip in the same place it started.
+    await screen.findByText('Workspace: proj')
+  })
+
+  it('shows the attached workspace as a compact chip beside the composer, and detaches from it', async () => {
+    vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace())
+    const detach = vi.spyOn(api, 'detachAgentWorkspace').mockResolvedValue(null)
+    const { wrapper } = createWrapper()
+
+    render(
+      <>
+        <AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />
+        <WorkspaceContextChip />
+      </>,
+      { wrapper },
+    )
+
+    // Same weight as the source-context chip beside it: a compact context affordance,
+    // with no dashboard or setup section anywhere in the surface.
+    const chip = await screen.findByText('Workspace: proj')
+    expect(chip.closest('[data-workspace-chip]')).not.toBeNull()
+    expect(screen.queryByRole('button', { name: /attach a folder/i })).toBeNull()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Workspace options' }))
+    await userEvent.click(await screen.findByText('Detach workspace'))
+    await waitFor(() => expect(detach).toHaveBeenCalledWith(CLASS_ID))
+    await screen.findByRole('button', { name: 'Attach folder' })
   })
 
   it('shows no access cards once every requested scope is granted', async () => {
@@ -153,6 +192,7 @@ describe('the contextual agent work surface (PLA-401)', () => {
     const dismiss = vi
       .spyOn(api, 'dismissAgentAccess')
       .mockResolvedValue({ scope: 'read', dismissed_at: '2026-09-02T00:00:00Z' })
+    const regenerate = vi.spyOn(api, 'regenerateAgentChat')
     const active: string[] = []
     vi.spyOn(api, 'listAgentAccessDismissals').mockImplementation(async () => ({
       dismissals: active.map((scope) => ({ scope, dismissed_at: '2026-09-02T00:00:00Z' })),
@@ -169,7 +209,101 @@ describe('the contextual agent work surface (PLA-401)', () => {
     active.push('read')
     await waitFor(() => expect(dismiss).toHaveBeenCalledWith(CLASS_ID, SESSION_ID, 'read'))
     await waitFor(() => expect(screen.queryByText('Read the attached folder')).toBeNull())
+    // Dismissing is not a resolution: nothing is granted and nothing is re-run.
     expect(api.updateAgentWorkspaceGrants).not.toHaveBeenCalled()
+    expect(regenerate).not.toHaveBeenCalled()
+  })
+
+  it('re-answers the interrupted turn once the access its request asked for is resolved', async () => {
+    vi.spyOn(api, 'listAgentActivity').mockResolvedValue([
+      accessEvent({
+        target_id: 'attach',
+        result_summary: {
+          scope: 'attach',
+          reason: 'To inspect this starter project, Lyra needs to open the folder.',
+        },
+      }),
+    ])
+    vi.spyOn(api, 'listMessages').mockResolvedValue([
+      message({
+        agent_attempt: { state: 'stopped', stopped_reason: null, detail: 'Waiting for folder access' },
+      }),
+      message({
+        id: 2,
+        role: 'assistant',
+        content: 'I need access to the folder first.',
+        created_at: '2026-09-02T00:00:02Z',
+      }),
+    ])
+    vi.spyOn(api, 'attachAgentWorkspace').mockResolvedValue(workspace())
+    const regenerate = vi.spyOn(api, 'regenerateAgentChat').mockResolvedValue({
+      message_id: 2,
+      content: 'It is a two-file project: main.py drives parser.py.',
+      stopped: '',
+      detail: '',
+      activity: [],
+      source_ids: [],
+      workspace_change_ids: [],
+      command_request_ids: [],
+    })
+    const { wrapper } = createWrapper()
+
+    render(
+      <>
+        <AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />
+        <WorkspaceContextChip />
+      </>,
+      { wrapper },
+    )
+
+    await screen.findByText('To inspect this starter project, Lyra needs to open the folder.')
+    fireEvent.click(screen.getByRole('button', { name: 'Attach a folder' }))
+    const input = await screen.findByLabelText('Path to the folder')
+    fireEvent.change(input, { target: { value: '/tmp/starter' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    await waitFor(() => expect(api.attachAgentWorkspace).toHaveBeenCalled())
+    // The student's turn is continued for them: the same question is re-answered with the
+    // access now in hand, instead of asking for it again.
+    await waitFor(() => expect(regenerate).toHaveBeenCalledWith(CLASS_ID, SESSION_ID))
+  })
+
+  it('does not re-run the turn while another scope still needs its own review', async () => {
+    vi.spyOn(api, 'listAgentActivity').mockResolvedValue([
+      accessEvent({
+        target_id: 'attach',
+        result_summary: { scope: 'attach', reason: 'To inspect this starter project, Lyra needs to open the folder.' },
+      }),
+      accessEvent({
+        id: 'ev-2',
+        target_id: 'propose_changes',
+        result_summary: { scope: 'propose_changes', reason: 'To add the parser skeleton, Lyra needs to edit files.' },
+      }),
+    ])
+    vi.spyOn(api, 'listMessages').mockResolvedValue([
+      message({
+        agent_attempt: { state: 'stopped', stopped_reason: null, detail: 'Waiting for access' },
+      }),
+      message({
+        id: 2,
+        role: 'assistant',
+        content: 'I need access first.',
+        created_at: '2026-09-02T00:00:02Z',
+      }),
+    ])
+    vi.spyOn(api, 'attachAgentWorkspace').mockResolvedValue(workspace())
+    const regenerate = vi.spyOn(api, 'regenerateAgentChat')
+    const { wrapper } = createWrapper()
+
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+
+    const reason = await screen.findByText('To add the parser skeleton, Lyra needs to edit files.')
+    const scope = reason.closest('[data-access-request]')
+    if (!scope) throw new Error('expected the edit-scope access card')
+    fireEvent.click(within(scope).getByRole('button', { name: /not now/i }))
+    const dismiss = vi.spyOn(api, 'dismissAgentAccess')
+    await waitFor(() => expect(dismiss).toHaveBeenCalledWith(CLASS_ID, SESSION_ID, 'propose_changes'))
+    expect(regenerate).not.toHaveBeenCalled()
+    expect(api.attachAgentWorkspace).not.toHaveBeenCalled()
   })
 
   it('shows the task-specific reason and what still needs separate review', async () => {
@@ -200,3 +334,20 @@ describe('the contextual agent work surface (PLA-401)', () => {
     expect(screen.getByText(/each still need their own approval/)).toBeInTheDocument()
   })
 })
+
+function message(overrides: Partial<MessageRead>): MessageRead {
+  return {
+    id: 1,
+    session_id: SESSION_ID,
+    role: 'user',
+    content: 'Read this starter project and explain how it is structured.',
+    thinking: '',
+    thinking_ms: 0,
+    retrieval_trimmed: false,
+    omitted_document_count: 0,
+    tool_activity: [],
+    created_at: '2026-09-02T00:00:00Z',
+    agent_attempt: null,
+    ...overrides,
+  }
+}

@@ -127,6 +127,10 @@ class AgentChatRequest(BaseModel):
     # When set, retrieved chunks from that document ground the turn as fixed system
     # material; when absent the agent works from its tools and prior history.
     document_id: int | None = None
+    # The presentation mode the student is asking under (Guide/Show), like the tutor's.
+    # Persisted on the session when present, so the conversation - tutor turns and agent
+    # turns alike - keeps one mode, and the agent's shared mode contract follows it.
+    mode: llm_prompts.ChatMode | None = None
 
     @property
     def resolved_profile(self) -> Literal["research", "code", "command", "agent"]:
@@ -635,6 +639,11 @@ async def _run_agent_turn(
         # no persisted title, message, attempt, or tool effect behind.
         content = payload.content
         profile = payload.resolved_profile
+        # The student's mode toggle rides the turn like the tutor's does: persist it before
+        # the preflight assembles the prompt, so the availability contract and the reply it
+        # shapes agree on which presentation the student asked for.
+        if payload.mode is not None:
+            sessions.set_session_mode(conn, session_id, payload.mode)
         plan = _plan_agent_turn(conn, class_id, session_id, payload, config)
         sessions.set_session_title_if_unset(conn, session_id, content)
         user_message_id = sessions.add_message(conn, session_id, "user", content)

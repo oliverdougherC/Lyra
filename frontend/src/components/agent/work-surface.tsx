@@ -1,40 +1,30 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Folder, MoreHorizontal } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { AgentActivityFeed } from '@/components/agent/activity-cards'
 import { CommandConfirmationCard } from '@/components/agent/command-confirmation'
+import { AttachPathEntry, useWorkspaceAttach } from '@/components/agent/workspace-attach'
 import { WorkspaceChangeReviewRail } from '@/components/agent/workspace-change-review'
 import { SourceLedger } from '@/components/drafts/source-ledger'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
-import {
   useAgentAccessDismissals,
   useAgentActivity,
   useAgentChanges,
   useAgentCommands,
-  useAgentWorkspace,
-  useAttachAgentWorkspace,
-  useDetachAgentWorkspace,
   useDismissAgentAccess,
   useRefreshAgentSession,
+  useRegenerateAgentChat,
   useRetryAgentChat,
-  useUpdateAgentWorkspaceGrants,
 } from '@/lib/hooks/use-agent'
 import { useMessages } from '@/lib/hooks/use-chat'
-import { api } from '@/lib/api'
-import { desktopFolderPickerAvailable, pickDesktopWorkspaceDirectory } from '@/lib/runtime'
-import type { AgentAuditEventRead, AgentWorkspaceGrantsUpdate } from '@/types'
+import { ApiError, api } from '@/lib/api'
+import { parseTimestamp } from '@/lib/format'
+import type { AgentAuditEventRead } from '@/types'
 import { hunksAreStale } from './types'
 import type { AgentToolActivity } from './types'
 
@@ -93,28 +83,38 @@ function accessScopeSatisfied(
 /**
  * The contextual agent's work surface, rendered as part of the ordinary class
  * conversation rather than a separate cockpit. It owns no composer - the conversation's
- * own composer sends the turn - and it shows only what is live: the attached workspace,
- * a just-in-time access request (with the model's task-specific reason), pending edits to
- * review, pending commands to approve, the failed-turn retry, and the durable activity
- * trail. With nothing to show it collapses to a small, optional "attach a folder"
- * affordance - context, not setup chrome.
+ * own composer sends the turn - and it shows only what is live: a just-in-time access
+ * request (with the model's task-specific reason), pending edits to review, pending
+ * commands to approve, the failed-turn retry, and the durable activity trail. The
+ * attached workspace is the composer's context chip (`WorkspaceContextChip`), so with
+ * no live work this surface renders nothing at all.
+ *
+ * When a turn asks for access and ends on the request, and the student then resolves
+ * that request (attaching the folder, approving a scope), the work the turn was for has
+ * not happened yet. The surface continues the turn for them: it regenerates the last
+ * question, so the re-answered reply inspects the newly granted access in the same
+ * transcript - one conversation, no re-asking, no second composer.
  */
 export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) {
-  const [attachPath, setAttachPath] = useState('')
-  const [attachPathVisible, setAttachPathVisible] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [effectBusy, setEffectBusy] = useState(false)
-  const workspace = useAgentWorkspace(classId)
-  const attach = useAttachAgentWorkspace(classId)
-  const detach = useDetachAgentWorkspace(classId)
-  const updateGrants = useUpdateAgentWorkspaceGrants(classId)
+  const {
+    workspace: workspaceData,
+    attachPending,
+    attachFolder,
+    approveAccess,
+    lastResolution,
+    cardPathEntryVisible,
+    setCardPathEntryVisible,
+  } = useWorkspaceAttach()
   const activity = useAgentActivity(classId, sessionId)
-  const changes = useAgentChanges(classId, sessionId, Boolean(workspace.data))
-  const commands = useAgentCommands(classId, sessionId, Boolean(workspace.data))
+  const changes = useAgentChanges(classId, sessionId, Boolean(workspaceData))
+  const commands = useAgentCommands(classId, sessionId, Boolean(workspaceData))
   const dismissals = useAgentAccessDismissals(classId, sessionId)
   const dismiss = useDismissAgentAccess(classId, sessionId)
   const refresh = useRefreshAgentSession(classId, sessionId)
   const retryAgentChat = useRetryAgentChat(classId, sessionId)
+  const regenerateAgentChat = useRegenerateAgentChat(classId, sessionId)
   const messages = useMessages(sessionId)
 
   // The conversation's own composer drives the turn, so this surface learns that a turn
@@ -138,57 +138,6 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
       lastMessage.agent_attempt?.state === 'stopped')
       ? lastMessage
       : null
-
-  const busy = attach.isPending || detach.isPending || updateGrants.isPending
-
-  const attachFolder = (rootPath: string) => {
-    attach.mutate(
-      // A just-in-time attach starts with reading - the minimum for inspecting a project.
-      // Deeper grants (edits, commands) are requested separately when a task needs them.
-      { rootPath, readEnabled: true },
-      {
-        onSuccess: () => {
-          setAttachPath('')
-          setAttachPathVisible(false)
-          refresh()
-        },
-        onError: (error) => toast.error(error.message),
-      },
-    )
-  }
-
-  const openFolderPicker = async () => {
-    const path = await pickDesktopWorkspaceDirectory()
-    if (path) {
-      attachFolder(path)
-    } else if (!desktopFolderPickerAvailable()) {
-      setAttachPathVisible(true)
-    }
-    // A cancelled native picker leaves the affordance as-is: choosing is still possible.
-  }
-
-  const approveAccess = (scope: string) => {
-    if (scope === 'attach') {
-      void openFolderPicker()
-      return
-    }
-    const body: AgentWorkspaceGrantsUpdate = {}
-    if (scope === 'read') {
-      body.read_enabled = true
-    }
-    if (scope === 'propose_changes') {
-      // Editing presupposes reading: when the read grant is still off, approve the pair.
-      body.change_proposals_enabled = true
-      if (workspace.data && !workspace.data.read_enabled) body.read_enabled = true
-    }
-    if (scope === 'run_commands') {
-      body.commands_enabled = true
-    }
-    updateGrants.mutate(body, {
-      onSuccess: () => refresh(),
-      onError: (error) => toast.error(error.message),
-    })
-  }
 
   const dismissAccess = (scope: string) => {
     // "Not now" is server state with a bounded lifetime: recorded against this
@@ -214,13 +163,55 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
     }
     const dismissed = dismissals.data ?? new Set<string>()
     return [...latest.entries()]
-      .filter(([scope]) => !dismissed.has(scope) && !accessScopeSatisfied(workspace.data, scope))
+      .filter(([scope]) => !dismissed.has(scope) && !accessScopeSatisfied(workspaceData, scope))
       .map(([scope, event]) => {
         const summary = event.result_summary
         const reason = summary && typeof summary.reason === 'string' ? summary.reason : null
         return { scope, reason }
       })
-  }, [activity.data, dismissals.data, workspace.data])
+  }, [activity.data, dismissals.data, workspaceData])
+
+  // ── Just-in-time access continuation ──────────────────────────────────────────────
+  // The turn a student asked for asked for access and ended on the request. When the
+  // student then resolves it (attaching the folder, approving a scope), the surface
+  // continues that turn: the last question is regenerated and re-answered with the new
+  // access, in the same transcript. Firing is bounded - the resolved scope must have
+  // been asked by the conversation's LAST turn (approving a stale card after the student
+  // moved on must not re-answer a newer question), every open request must be satisfied,
+  // and each resolution fires at most once.
+  const continuedKeyRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!lastResolution) return
+    if (Date.now() - lastResolution.at > 60_000) return
+    const list = messages.data ?? []
+    // The turn must be settled: its reply is the last thing in the transcript.
+    if (list[list.length - 1]?.role !== 'assistant') return
+    const lastUser = [...list].reverse().find((message) => message.role === 'user' && message.agent_attempt)
+    if (!lastUser) return
+    const turnStart = parseTimestamp(lastUser.created_at).getTime()
+    const askedInLastTurn = (activity.data ?? []).some(
+      (event) =>
+        event.target_kind === 'capability_request' &&
+        event.state === 'succeeded' &&
+        event.target_id !== null &&
+        lastResolution.scopes.includes(event.target_id) &&
+        Date.parse(event.started_at) >= turnStart - 5_000,
+    )
+    if (!askedInLastTurn) return
+    if (pendingRequests.length > 0) return
+    const key = `${lastUser.id}:${lastResolution.at}`
+    if (continuedKeyRef.current === key) return
+    continuedKeyRef.current = key
+    regenerateAgentChat.mutate(undefined, {
+      onError: (error) => {
+        // A 409 means another turn took the session claim first - the student is driving
+        // (they sent their own message), so this continuation yields without a toast.
+        if (!(error instanceof ApiError) || error.status !== 409) {
+          toast.error(error instanceof Error ? error.message : 'Could not continue that turn.')
+        }
+      },
+    })
+  }, [activity.data, lastResolution, messages.data, pendingRequests, regenerateAgentChat])
 
   const acceptHunks = async (changeId: number, hunks: { index: number; hash: string }[]) => {
     if (sessionId === null) return
@@ -313,94 +304,35 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
   const pendingCommands = commands.data ?? []
   const hasActivity = (activity.data ?? []).length > 0
   const hasWork =
-    Boolean(workspace.data) ||
     pendingRequests.length > 0 ||
     pendingChanges.length > 0 ||
     pendingCommands.length > 0 ||
     failedTurn !== null ||
-    hasActivity
+    hasActivity ||
+    // The bounded path entry is live state the student is in the middle of: the surface
+    // exists exactly as long as the form is on screen.
+    cardPathEntryVisible
+
+  // The surface is purely contextual: nothing live, nothing rendered. The attached
+  // workspace lives in the composer's context chip, so an idle state has no surface of
+  // its own - no docked strip, no setup block, no second composer.
+  if (!hasWork) return null
 
   return (
     <section
-      className={
-        hasWork
-          ? 'border-border bg-background flex min-h-0 flex-col gap-3 border-b px-4 py-3'
-          : 'flex min-h-0 flex-col gap-3 px-4 py-2'
-      }
+      className="border-border bg-background flex min-h-0 flex-col gap-3 border-b px-4 py-3"
       aria-label="Agent work"
     >
-      {workspace.data ? (
-        <div className="flex items-center gap-1.5">
-          <span className="text-text-secondary inline-flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium">
-            <Folder className="size-3" aria-hidden />
-            Workspace: {workspace.data.display_name}
-          </span>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon-sm" aria-label="Workspace options">
-                <MoreHorizontal className="size-3.5" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem
-                onSelect={() =>
-                  detach.mutate(undefined, {
-                    onError: (error) => toast.error(error.message),
-                  })
-                }
-              >
-                Detach workspace
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      ) : attachPathVisible ? (
-        <form
-          className="flex flex-col gap-2"
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (!attachPath.trim()) return
-            attachFolder(attachPath.trim())
-          }}
-        >
-          <label htmlFor="agent-attach-path" className="text-sm font-medium">
-            Attach a local folder
-          </label>
-          <Input
-            id="agent-attach-path"
-            value={attachPath}
-            placeholder="/absolute/path/to/repository"
-            onChange={(event) => setAttachPath(event.target.value)}
-          />
-          <div className="flex items-center gap-2">
-            <Button type="submit" size="sm" disabled={!attachPath.trim() || attach.isPending}>
-              Attach
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={() => setAttachPathVisible(false)}
-            >
-              Cancel
-            </Button>
-          </div>
-        </form>
-      ) : (
-        // A small, optional context affordance - not a setup section. Folder selection
-        // happens contextually: the attach access card, when a task needs local files,
-        // carries the picker and the task-specific reason.
-        <Button
-          variant="ghost"
-          size="sm"
-          className="text-text-tertiary -ml-2"
-          disabled={attach.isPending}
-          onClick={() => void openFolderPicker()}
-        >
-          <Folder aria-hidden />
-          {attach.isPending ? 'Attaching…' : 'Attach a folder'}
-        </Button>
-      )}
+      {cardPathEntryVisible && !workspaceData ? (
+        // No native picker on this build (the browser): the bounded path entry stands in
+        // for it, shown in the conversation surface next to the card that asked for the
+        // folder, not as permanent setup chrome.
+        <AttachPathEntry
+          busy={attachPending}
+          onSubmit={(rootPath) => attachFolder(rootPath)}
+          onCancel={() => setCardPathEntryVisible(false)}
+        />
+      ) : null}
 
       {failedTurn ? (
         <Alert data-agent-retry variant="destructive">
@@ -440,12 +372,10 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
           <div className="flex items-center gap-2">
             <Button
               size="sm"
-              disabled={busy || dismiss.isPending}
+              disabled={attachPending || dismiss.isPending}
               onClick={() => approveAccess(scope)}
             >
-              {scope === 'attach' && !desktopFolderPickerAvailable()
-                ? 'Attach a folder'
-                : 'Approve'}
+              {scope === 'attach' ? 'Attach a folder' : 'Approve'}
             </Button>
             <Button
               size="sm"
