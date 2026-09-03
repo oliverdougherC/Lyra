@@ -71,10 +71,7 @@ describe('the contextual agent panel (PLA-401)', () => {
     const update = vi.spyOn(api, 'updateAgentWorkspaceGrants').mockResolvedValue(workspace())
     const { wrapper } = createWrapper()
     const attachSpy = vi.spyOn(api, 'attachAgentWorkspace')
-    render(
-      <AgentPanel classId={CLASS_ID} sessionId={SESSION_ID} />,
-      { wrapper },
-    )
+    render(<AgentPanel classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
 
     const card = await screen.findByText('Read the attached folder')
     expect(card).toBeInTheDocument()
@@ -89,9 +86,9 @@ describe('the contextual agent panel (PLA-401)', () => {
     vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(
       workspace({ read_enabled: false, change_proposals_enabled: false }),
     )
-    vi.spyOn(api, 'listAgentActivity').mockResolvedValue(
-      [accessEvent({ target_id: 'propose_changes', id: 'ev-2' })],
-    )
+    vi.spyOn(api, 'listAgentActivity').mockResolvedValue([
+      accessEvent({ target_id: 'propose_changes', id: 'ev-2' }),
+    ])
     const update = vi.spyOn(api, 'updateAgentWorkspaceGrants').mockResolvedValue(workspace())
     const { wrapper } = createWrapper()
 
@@ -169,7 +166,11 @@ describe('the contextual agent panel (PLA-401)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     await waitFor(() => expect(send).toHaveBeenCalled())
     const [classId, sessionId, content, profile] = vi.mocked(send).mock.calls[0]
-    expect([classId, sessionId, content]).toEqual([CLASS_ID, SESSION_ID, 'Read the starter project'])
+    expect([classId, sessionId, content]).toEqual([
+      CLASS_ID,
+      SESSION_ID,
+      'Read the starter project',
+    ])
     expect(profile).toBeUndefined()
   })
 

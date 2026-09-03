@@ -46,9 +46,15 @@ export function useAgentWorkspace(classId: number) {
 export function useAttachAgentWorkspace(classId: number) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ rootPath, displayName, readEnabled }:
-      { rootPath: string; displayName?: string; readEnabled?: boolean }) =>
-      api.attachAgentWorkspace(classId, rootPath, { displayName, readEnabled }),
+    mutationFn: ({
+      rootPath,
+      displayName,
+      readEnabled,
+    }: {
+      rootPath: string
+      displayName?: string
+      readEnabled?: boolean
+    }) => api.attachAgentWorkspace(classId, rootPath, { displayName, readEnabled }),
     onSuccess: (workspace) => queryClient.setQueryData(agentKeys.workspace(classId), workspace),
   })
 }

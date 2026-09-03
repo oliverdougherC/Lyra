@@ -1340,9 +1340,7 @@ def _add_access_request_tools(
         _text(reason, "reason", maximum=400)
         workspace = agent_store.get_workspace_for_class(conn, class_id)
         if _access_scope_available(workspace, scope):
-            raise _RefusalError(
-                f"{ACCESS_SCOPE_DESCRIPTIONS[scope]} is already available; use it."
-            )
+            raise _RefusalError(f"{ACCESS_SCOPE_DESCRIPTIONS[scope]} is already available; use it.")
         if scope in activity.requested_scopes:
             raise _RefusalError(
                 "You already requested this access this turn. The student has not answered "

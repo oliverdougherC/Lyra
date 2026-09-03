@@ -1,14 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import {
-  AlertTriangle,
-  Check,
-  ChevronRight,
-  Info,
-  RefreshCw,
-  TriangleAlert,
-} from 'lucide-react'
+import { AlertTriangle, Check, ChevronRight, Info, RefreshCw, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -29,11 +22,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { DesktopImportSection } from '@/components/settings/desktop-import-section'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { api, ApiError } from '@/lib/api'
 import { useClasses } from '@/lib/hooks/use-classes'
 import {
@@ -272,7 +261,6 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
             </div>
           </Field>
 
-
           <Field>
             <FieldLabel htmlFor="model">Model</FieldLabel>
             <div className="flex gap-2">
@@ -313,7 +301,6 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               really offers.
             </FieldDescription>
           </Field>
-
         </FieldGroup>
       </SettingsSection>
 
@@ -397,7 +384,6 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               onCheckedChange={(checked) => void save({ allow_web_research: checked })}
             />
           </Field>
-
 
           <Alert>
             <Info />
@@ -593,9 +579,7 @@ function AdvancedSection({ children }: { children: React.ReactNode }) {
   return (
     <section className="border-border/70 border-t pt-6">
       <Collapsible open={open} onOpenChange={setOpen}>
-        <CollapsibleTrigger
-          className="focus-visible:ring-ring [&[data-state=open]>svg]:rotate-90 flex w-full items-center justify-between gap-3 rounded-md text-left focus-visible:ring-2 focus-visible:outline-none"
-        >
+        <CollapsibleTrigger className="focus-visible:ring-ring [&[data-state=open]>svg]:rotate-90 flex w-full items-center justify-between gap-3 rounded-md text-left focus-visible:ring-2 focus-visible:outline-none">
           <div className="min-w-0">
             <h2 className="font-heading text-xl leading-tight font-medium tracking-tight">
               Advanced

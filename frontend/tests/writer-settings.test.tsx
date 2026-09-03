@@ -105,9 +105,7 @@ it('surfaces an inheritance-aware web-research override for each class', async (
   render(<SettingsForm />, { wrapper: createWrapper() })
 
   await userEvent.click(await screen.findByRole('button', { name: /Advanced/ }))
-  await userEvent.click(
-    await screen.findByRole('combobox', { name: 'History 201 web research' }),
-  )
+  await userEvent.click(await screen.findByRole('combobox', { name: 'History 201 web research' }))
   await userEvent.click(screen.getByRole('option', { name: 'Allow' }))
 
   expect(update).toHaveBeenCalledWith(7, { allow_web_research: true })

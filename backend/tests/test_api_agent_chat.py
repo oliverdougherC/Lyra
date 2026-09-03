@@ -1130,7 +1130,11 @@ def test_the_contextual_turn_defaults_to_the_agent_profile(
 
 
 def test_the_agent_registry_unions_the_families_the_snapshot_admits(
-    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: object,
 ) -> None:
     # Web on, workspace attached with every grant: the contextual registry is the union of
     # the admitted families, and no access request is offered - everything the snapshot
@@ -1162,7 +1166,11 @@ def test_the_agent_registry_unions_the_families_the_snapshot_admits(
 
 
 def test_an_access_request_is_asked_once_per_scope_per_turn(
-    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: object,
 ) -> None:
     # Attached workspace with no grants: read is missing, so the request card exists. The
     # model asks once and is told the student decides; a second ask in the same turn is
@@ -1205,7 +1213,11 @@ def test_an_access_request_is_asked_once_per_scope_per_turn(
 
 
 def test_a_scope_granted_mid_turn_is_available_not_requested(
-    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: object,
 ) -> None:
     # The request was frozen into this turn's registry by the snapshot (no read grant). If
     # the student grants read before the model asks, the live re-read reports the scope as

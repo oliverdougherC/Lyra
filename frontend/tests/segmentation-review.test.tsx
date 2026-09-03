@@ -89,9 +89,7 @@ describe('SegmentationReview', () => {
     expect(screen.getByText('Lyra found 2 problems')).toBeInTheDocument()
     // The screen's job is to confirm the judgment calls (boundaries, part independence),
     // not to make the student audit every normally detected problem.
-    expect(
-      screen.getByText(/Lyra is least sure about the boundaries/),
-    ).toBeInTheDocument()
+    expect(screen.getByText(/Lyra is least sure about the boundaries/)).toBeInTheDocument()
   })
 
   it('keeps Save disabled until something actually changes', async () => {

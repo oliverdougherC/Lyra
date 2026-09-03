@@ -904,7 +904,6 @@ export default function DraftWorkspacePage() {
           />
         </TabsContent>
 
-
         {/* forceMount: a conversation survives a look at the history tab. */}
         <TabsContent
           value="chat"
@@ -1033,10 +1032,7 @@ export default function DraftWorkspacePage() {
                 Draft a passage
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onSelect={() => void onSnapshot()}
-                disabled={updateBody.isPending}
-              >
+              <DropdownMenuItem onSelect={() => void onSnapshot()} disabled={updateBody.isPending}>
                 <Camera />
                 Snapshot
               </DropdownMenuItem>

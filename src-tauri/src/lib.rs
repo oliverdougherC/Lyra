@@ -369,9 +369,7 @@ async fn pick_import_directory(
 }
 
 #[tauri::command]
-async fn pick_workspace_directory(
-    app: AppHandle,
-) -> Result<Option<String>, CommandError> {
+async fn pick_workspace_directory(app: AppHandle) -> Result<Option<String>, CommandError> {
     // The contextual agent's just-in-time attach: a normal native folder selection, no
     // path pasting. The path only ever reaches the backend's bounded-attach endpoint,
     // which re-validates the root (device/inode) server-side before anything is read.

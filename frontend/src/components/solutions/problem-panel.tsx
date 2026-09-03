@@ -1,6 +1,13 @@
 'use client'
 
-import { AlertCircle, ChevronRight, History, MoreHorizontal, RefreshCw, XCircle } from 'lucide-react'
+import {
+  AlertCircle,
+  ChevronRight,
+  History,
+  MoreHorizontal,
+  RefreshCw,
+  XCircle,
+} from 'lucide-react'
 import { Fragment } from 'react'
 
 import { MathText } from '@/components/solutions/math-text'

@@ -10,11 +10,7 @@ import { WorkspaceChangeReviewRail } from '@/components/agent/workspace-change-r
 import { SourceLedger } from '@/components/drafts/source-ledger'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -70,11 +66,17 @@ const ACCESS_SCOPE_LABELS: Record<string, { title: string; detail: string }> = {
   },
 }
 
-function accessScopeSatisfied(workspace: {
-  read_enabled: boolean
-  change_proposals_enabled: boolean
-  commands_enabled: boolean
-} | null | undefined, scope: string): boolean {
+function accessScopeSatisfied(
+  workspace:
+    | {
+        read_enabled: boolean
+        change_proposals_enabled: boolean
+        commands_enabled: boolean
+      }
+    | null
+    | undefined,
+  scope: string,
+): boolean {
   if (scope === 'attach') return workspace !== null
   if (!workspace) return false
   if (scope === 'read') return workspace.read_enabled
@@ -180,7 +182,9 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
     }
     return [...latest.entries()]
       .map(([scope]) => scope)
-      .filter((scope) => !dismissedScopes.has(scope) && !accessScopeSatisfied(workspace.data, scope))
+      .filter(
+        (scope) => !dismissedScopes.has(scope) && !accessScopeSatisfied(workspace.data, scope),
+      )
   }, [activity.data, dismissedScopes, workspace.data])
 
   const acceptHunks = async (changeId: number, hunks: { index: number; hash: string }[]) => {
@@ -284,12 +288,7 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
           <RefreshCw className="size-3.5" />
         </Button>
         {onClose ? (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Close agent panel"
-            onClick={onClose}
-          >
+          <Button variant="ghost" size="icon-sm" aria-label="Close agent panel" onClick={onClose}>
             <X className="size-3.5" />
           </Button>
         ) : null}
@@ -304,11 +303,7 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
               </span>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Workspace options"
-                  >
+                  <Button variant="ghost" size="icon-sm" aria-label="Workspace options">
                     <MoreHorizontal className="size-3.5" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -344,11 +339,7 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
                 onChange={(event) => setAttachPath(event.target.value)}
               />
               <div className="flex items-center gap-2">
-                <Button
-                  type="submit"
-                  size="sm"
-                  disabled={!attachPath.trim() || attach.isPending}
-                >
+                <Button type="submit" size="sm" disabled={!attachPath.trim() || attach.isPending}>
                   Attach
                 </Button>
                 <Button
@@ -454,11 +445,7 @@ export function AgentPanel({ classId, sessionId, onClose }: AgentPanelProps) {
               <p className="text-sm font-medium">{ACCESS_SCOPE_LABELS[scope].title}</p>
               <p className="text-text-secondary text-xs">{ACCESS_SCOPE_LABELS[scope].detail}</p>
               <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => approveAccess(scope)}
-                >
+                <Button size="sm" disabled={busy} onClick={() => approveAccess(scope)}>
                   {scope === 'attach' && !desktopFolderPickerAvailable()
                     ? 'Attach a folder'
                     : 'Approve'}
