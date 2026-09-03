@@ -522,7 +522,6 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
           </CollapsibleContent>
         </Collapsible>
       ) : null}
-
     </section>
   )
 }

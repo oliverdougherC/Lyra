@@ -194,7 +194,9 @@ describe('the contextual agent work surface (PLA-401)', () => {
       ),
     ).toBeInTheDocument()
     // What granting enables, and what still needs its own review.
-    expect(screen.getByText(/Lyra can list and read the text files in the folder\./)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Lyra can list and read the text files in the folder\./),
+    ).toBeInTheDocument()
     expect(screen.getByText(/each still need their own approval/)).toBeInTheDocument()
   })
 })

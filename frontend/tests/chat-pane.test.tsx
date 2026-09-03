@@ -930,7 +930,6 @@ describe('ChatPane idempotency (PLA-313)', () => {
   })
 })
 
-
 describe('ChatPane contextual agent (PLA-401)', () => {
   function renderAgentPane() {
     const queryClient = new QueryClient({
@@ -1041,8 +1040,8 @@ describe('ChatPane contextual agent (PLA-401)', () => {
 
     // One ordinary conversation surface: the turn goes to the agent endpoint, carries the
     // scoped source, and names no profile (the agent plans its own work).
-    const [classId, sessionId, content, profile, documentId] =
-      vi.mocked(api.sendAgentChat).mock.calls[0]
+    const [classId, sessionId, content, profile, documentId] = vi.mocked(api.sendAgentChat).mock
+      .calls[0]
     expect(classId).toBe(1)
     expect(sessionId).toBe(7)
     expect(content).toBe('Read my starter code and explain how it works')

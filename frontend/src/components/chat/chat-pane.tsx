@@ -922,40 +922,41 @@ export function ChatPane({
   // an underline to sit on, so the honest idiom is a switch with a travelling thumb.
   // The writer and the contextual agent have no pedagogy modes: the agent plans its own
   // work, so there is nothing to toggle.
-  const modeToggle = writer || agent ? null : (
-    <div
-      className="border-border/70 bg-muted/70 flex items-center rounded-full border p-0.5"
-      role="group"
-      aria-label="Answer style"
-    >
-      {MODES.map((option) => (
-        <Tooltip key={option.value}>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              aria-pressed={activeMode === option.value}
-              className={cn(
-                'h-7 rounded-full px-3 text-xs transition-colors duration-150',
-                activeMode === option.value
-                  ? 'bg-card text-foreground hover:bg-card shadow-sm'
-                  : 'text-text-secondary hover:bg-transparent hover:text-foreground',
-              )}
-              onClick={() => {
-                if (!inline && sessionId === null && activeSessionId !== null) {
-                  onSessionIdChange?.(activeSessionId)
-                }
-                setMode(option.value)
-              }}
-            >
-              {option.label}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>{option.hint}</TooltipContent>
-        </Tooltip>
-      ))}
-    </div>
-  )
+  const modeToggle =
+    writer || agent ? null : (
+      <div
+        className="border-border/70 bg-muted/70 flex items-center rounded-full border p-0.5"
+        role="group"
+        aria-label="Answer style"
+      >
+        {MODES.map((option) => (
+          <Tooltip key={option.value}>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-pressed={activeMode === option.value}
+                className={cn(
+                  'h-7 rounded-full px-3 text-xs transition-colors duration-150',
+                  activeMode === option.value
+                    ? 'bg-card text-foreground hover:bg-card shadow-sm'
+                    : 'text-text-secondary hover:bg-transparent hover:text-foreground',
+                )}
+                onClick={() => {
+                  if (!inline && sessionId === null && activeSessionId !== null) {
+                    onSessionIdChange?.(activeSessionId)
+                  }
+                  setMode(option.value)
+                }}
+              >
+                {option.label}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{option.hint}</TooltipContent>
+          </Tooltip>
+        ))}
+      </div>
+    )
 
   const paneControls = (
     <div className="flex items-center gap-1.5">
