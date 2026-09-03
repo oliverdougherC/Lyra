@@ -114,9 +114,7 @@ export function SourceContext({
       </div>
 
       <PopoverContent align="start" sideOffset={8} className="w-72 max-w-[calc(100vw-1.5rem)] p-0">
-        <p className="text-foreground border-b px-3 py-2 text-sm font-medium">
-          What Lyra reads
-        </p>
+        <p className="text-foreground border-b px-3 py-2 text-sm font-medium">What Lyra reads</p>
 
         {documentsError ? (
           <div className="flex flex-col gap-2 px-3 py-3 text-sm">
@@ -195,8 +193,7 @@ export function SourceContext({
             </ScrollArea>
             {readyCount === 0 && documents.length > 0 && !documentsError ? (
               <p className="text-text-tertiary border-t px-3 py-2 text-xs">
-                Nothing is ready to read yet. Files Lyra has finished reading can be chosen
-                here.
+                Nothing is ready to read yet. Files Lyra has finished reading can be chosen here.
               </p>
             ) : null}
           </>

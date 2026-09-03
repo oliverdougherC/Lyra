@@ -157,9 +157,9 @@ test.describe('Launch and documents', () => {
     expect(newBody.id).not.toBe(sample.id) // new row
   })
 
-  test('documents tab in class hub shows documents', async ({ page }) => {
+  test('files tab in class hub shows documents', async ({ page }) => {
     await page.goto(`/classes/${classId}`)
-    await page.getByRole('tab', { name: /documents/i }).click()
+    await page.getByRole('tab', { name: /^Files/ }).click()
     await expect(page.getByText('sample.txt')).toBeVisible()
   })
 })

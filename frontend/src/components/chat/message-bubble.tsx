@@ -12,11 +12,7 @@ import {
   type ProcessingStage,
 } from '@/components/chat/thinking-indicator'
 import { Button } from '@/components/ui/button'
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from '@/components/ui/collapsible'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatCount, formatRelativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -125,7 +121,11 @@ export function MessageRow({
         {streaming ? (
           <>
             {message.thinking.trim() ? (
-              <ReasoningTrace text={message.thinking} streaming={thinkingNow} startedAt={turnStartedAt} />
+              <ReasoningTrace
+                text={message.thinking}
+                streaming={thinkingNow}
+                startedAt={turnStartedAt}
+              />
             ) : null}
             {trail.length > 0 ? <ActivityTrail entries={trail} working={working} /> : null}
           </>

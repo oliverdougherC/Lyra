@@ -155,6 +155,140 @@ const IMPORT_IDLE = {
   preview: null,
 }
 
+// One of every kind the Work tab aggregates, so the filter rows have something real to
+// swap in and the all-list is a genuine getting-back-to-it list.
+const SOLUTIONS = [
+  {
+    id: 21,
+    class_id: CLASS_ID,
+    title: 'Homework 2',
+    state: 'ready',
+    stage_detail: null,
+    problems_total: 4,
+    problems_done: 4,
+    error_message: null,
+    created_at: '2026-08-05 08:00:00',
+    updated_at: '2026-08-05 09:30:00',
+    sources: [{ document_id: 101, filename: 'Syllabus.pdf', role: 'problem_set' }],
+  },
+]
+
+const DRAFTS = [
+  {
+    id: 31,
+    class_id: CLASS_ID,
+    title: 'First draft of the essay',
+    state: 'ready',
+    stage_detail: null,
+    problems_total: null,
+    problems_done: 0,
+    error_message: null,
+    created_at: '2026-08-06 09:00:00',
+    updated_at: '2026-08-06 09:30:00',
+  },
+]
+
+const STUDY = {
+  decks: [
+    {
+      id: 41,
+      class_id: CLASS_ID,
+      kind: 'flashcard_deck',
+      title: 'Laplace transforms deck',
+      state: 'ready',
+      stage_detail: null,
+      problems_total: null,
+      problems_done: 0,
+      error_message: null,
+      created_at: '2026-08-02 10:00:00',
+      updated_at: '2026-08-07 10:00:00',
+      cards_total: 24,
+      due_count: 5,
+      buckets: { new: 19, learning: 3, mastered: 2 },
+    },
+  ],
+  quizzes: [
+    {
+      id: 42,
+      class_id: CLASS_ID,
+      kind: 'quiz',
+      title: 'Week 5 quiz',
+      state: 'ready',
+      stage_detail: null,
+      problems_total: 6,
+      problems_done: 2,
+      error_message: null,
+      created_at: '2026-08-03 10:00:00',
+      updated_at: '2026-08-04 10:00:00',
+    },
+  ],
+}
+
+// Two facts Lyra is not sure about, one it is sure of: only the first two still need
+// the student, and that is exactly what the hub's chip counts.
+const PROFILE = {
+  facts: [
+    {
+      id: 51,
+      class_id: CLASS_ID,
+      kind: 'deadline',
+      label: 'Quiz 5 due',
+      value: 'Aug 12',
+      confidence: 'low',
+      confirmed: false,
+      rejected: false,
+      edited: false,
+      source_document_id: 101,
+      source_filename: 'Syllabus.pdf',
+      sources: ['Syllabus.pdf'],
+      source_writer_id: null,
+      source_excerpt_id: null,
+      source_title: null,
+      source_url: null,
+      created_at: '2026-08-01 09:10:00',
+    },
+    {
+      id: 52,
+      class_id: CLASS_ID,
+      kind: 'professor',
+      label: 'Professor',
+      value: 'Prof. Alvarez',
+      confidence: 'low',
+      confirmed: false,
+      rejected: false,
+      edited: false,
+      source_document_id: 101,
+      source_filename: 'Syllabus.pdf',
+      sources: ['Syllabus.pdf'],
+      source_writer_id: null,
+      source_excerpt_id: null,
+      source_title: null,
+      source_url: null,
+      created_at: '2026-08-01 09:10:00',
+    },
+    {
+      id: 53,
+      class_id: CLASS_ID,
+      kind: 'topic',
+      label: 'Signal stability',
+      value: 'BIBO stability',
+      confidence: 'high',
+      confirmed: false,
+      rejected: false,
+      edited: false,
+      source_document_id: 102,
+      source_filename: 'Lecture 5 - Laplace Transforms.pdf',
+      sources: ['Lecture 5 - Laplace Transforms.pdf'],
+      source_writer_id: null,
+      source_excerpt_id: null,
+      source_title: null,
+      source_url: null,
+      created_at: '2026-08-12 14:25:00',
+    },
+  ],
+  extraction_skipped_reason: null,
+}
+
 /**
  * A class populated enough that the hub and the chat render with real content: two ready
  * documents, one conversation, one answer pair. Unknown reads under the class tree fall
@@ -172,10 +306,10 @@ async function installClassMocks(page: Page) {
     [`/api/classes/${CLASS_ID}`]: CLASS_12,
     [`/api/classes/${CLASS_ID}/documents`]: DOCUMENTS,
     [`/api/classes/${CLASS_ID}/sessions`]: SESSIONS,
-    [`/api/classes/${CLASS_ID}/solutions`]: [],
-    [`/api/classes/${CLASS_ID}/study`]: { decks: [], quizzes: [] },
-    [`/api/classes/${CLASS_ID}/drafts`]: [],
-    [`/api/classes/${CLASS_ID}/profile`]: { facts: [], extraction_skipped_reason: null },
+    [`/api/classes/${CLASS_ID}/solutions`]: SOLUTIONS,
+    [`/api/classes/${CLASS_ID}/study`]: STUDY,
+    [`/api/classes/${CLASS_ID}/drafts`]: DRAFTS,
+    [`/api/classes/${CLASS_ID}/profile`]: PROFILE,
     [`/api/sessions/${SESSION_ID}/messages`]: MESSAGES,
     '/api/settings': SETTINGS,
     '/api/desktop-import/status': IMPORT_IDLE,
@@ -249,9 +383,7 @@ const MATRIX = [
 ]
 
 for (const { width, height } of MATRIX) {
-  test(`${width}x${height}: the hub and the chat keep the task in the window`, async ({
-    page,
-  }) => {
+  test(`${width}x${height}: the hub and the chat keep the task in the window`, async ({ page }) => {
     const pageErrors: string[] = []
     page.on('pageerror', (error) => pageErrors.push(error.message))
     await installClassMocks(page)
@@ -294,5 +426,119 @@ for (const { width, height } of MATRIX) {
     expectNavigationFits(chat, width)
 
     expect(pageErrors, 'a runtime error fired while the page held its layout').toEqual([])
+  })
+}
+
+/**
+ * Not every size in the matrix gets operated - 540x720, 768x700, and 1024x768 cover the
+ * three ways a narrow window actually behaves: a temporary navigation sheet below the
+ * rail line, a typical tablet slice, and the tightest docked-rail size. At each, the page
+ * must be usable when operated, not merely unclipped when measured.
+ */
+const INTERACTION_MATRIX = [
+  { width: 540, height: 720 },
+  { width: 768, height: 700 },
+  { width: 1024, height: 768 },
+]
+
+for (const { width, height } of INTERACTION_MATRIX) {
+  test(`${width}x${height}: the narrow window stays usable when operated`, async ({ page }) => {
+    const pageErrors: string[] = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
+    await installClassMocks(page)
+    await page.setViewportSize({ width, height })
+
+    const main = page.locator('#main-content')
+
+    // The class hub: the Work filters drive the real route, and the class's unresolved
+    // uncertainty keeps a compact home on the class itself. Everything here is scoped to
+    // the page's main content: the docked rail carries its own links, and the sheet and
+    // popover layers portal out of it.
+    await page.goto(`/#/classes/${CLASS_ID}`)
+    await page.waitForLoadState('networkidle')
+    await expect(
+      main.getByRole('button', { name: '2 class facts need confirmation' }),
+    ).toBeVisible()
+
+    const hash = () => page.evaluate(() => window.location.hash)
+    await main.getByRole('tab', { name: /^Work/ }).click()
+    await expect.poll(hash).toBe(`#/classes/${CLASS_ID}?tab=work`)
+
+    // The all-list is the getting-back-to-it view: every kind the class holds.
+    await expect(main.getByRole('link', { name: /Laplace transforms deck/ })).toBeVisible()
+    await expect(main.getByRole('link', { name: /Week 5 quiz/ })).toBeVisible()
+    await expect(main.getByRole('link', { name: /Convolution and LTI systems/ })).toBeVisible()
+
+    // Each filter updates the actual hash route and swaps in its own list.
+    await main.getByRole('tab', { name: 'Solutions', exact: true }).click()
+    await expect.poll(hash).toBe(`#/classes/${CLASS_ID}?tab=work&work=solutions`)
+    await expect(main.getByRole('link', { name: /Homework 2/ })).toBeVisible()
+    await expect(main.getByRole('link', { name: /Convolution and LTI systems/ })).toBeHidden()
+
+    await main.getByRole('tab', { name: 'Drafts', exact: true }).click()
+    await expect.poll(hash).toBe(`#/classes/${CLASS_ID}?tab=work&work=drafts`)
+    await expect(main.getByRole('link', { name: /First draft of the essay/ })).toBeVisible()
+    await expect(main.getByRole('link', { name: /Homework 2/ })).toBeHidden()
+
+    // A filtered URL is a real location: reloading it lands on the filtered view.
+    await main.getByRole('tab', { name: 'Chats', exact: true }).click()
+    await expect.poll(hash).toBe(`#/classes/${CLASS_ID}?tab=work&work=chats`)
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    await expect(main.getByRole('tab', { name: 'Chats', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    await expect(main.getByRole('link', { name: /Convolution and LTI systems/ })).toBeVisible()
+
+    // "All" drops the param from the route and restores the combined list.
+    await main.getByRole('tab', { name: 'All', exact: true }).click()
+    await expect.poll(hash).toBe(`#/classes/${CLASS_ID}?tab=work`)
+    await expect(main.getByRole('link', { name: /Laplace transforms deck/ })).toBeVisible()
+
+    // The confirmation nudge opens the class details: it fits the window and closes.
+    await page.getByRole('button', { name: '2 class facts need confirmation' }).click()
+    const sheet = page.locator('[data-slot="sheet-content"]')
+    await expect(sheet.getByRole('heading', { name: 'Class details' })).toBeVisible()
+    await expect(sheet.getByText('Needs confirmation').first()).toBeVisible()
+    const sheetBox = await sheet.boundingBox()
+    expect(sheetBox, 'the sheet has no box').not.toBeNull()
+    expect(sheetBox!.x, 'the sheet is clipped on the left').toBeGreaterThanOrEqual(0)
+    expect(sheetBox!.x + sheetBox!.width, 'the sheet is clipped on the right').toBeLessThanOrEqual(
+      width + 1,
+    )
+    expect(
+      sheetBox!.y + sheetBox!.height,
+      'the sheet is clipped at the bottom',
+    ).toBeLessThanOrEqual(height + 1)
+    await page.keyboard.press('Escape')
+    await expect(sheet).toBeHidden()
+
+    // The chat: the source disclosure opens, is used, and closes with focus returning.
+    await page.goto(`/#/classes/${CLASS_ID}/chat?session=${SESSION_ID}`)
+    await page.waitForLoadState('networkidle')
+    const chip = page.getByRole('button', { name: /Choose what Lyra reads/ })
+    await expect(chip).toBeVisible()
+    await chip.click()
+    const disclosure = page.locator('[data-slot="popover-content"]')
+    await expect(disclosure.getByText('What Lyra reads')).toBeVisible()
+    await disclosure.getByRole('radio', { name: 'Lecture 5 - Laplace Transforms.pdf' }).click()
+    // Choosing a document closes the disclosure, and the composer chip carries the choice.
+    await expect(disclosure).toBeHidden()
+    await expect(page.getByRole('button', { name: /Lyra reads only/ })).toBeVisible()
+    await expect(chip).toBeFocused()
+
+    // The composer keeps working: a typed question arms the send control.
+    const composer = page.locator('#message-composer')
+    await composer.click()
+    await composer.pressSequentially('Is convolution commutative?')
+    await expect(composer).toHaveValue('Is convolution commutative?')
+    await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled()
+
+    // Keyboard operation stays intact: Tab from the composer reaches the send control.
+    await page.keyboard.press('Tab')
+    await expect(page.getByRole('button', { name: 'Send message' })).toBeFocused()
+
+    expect(pageErrors, 'a runtime error fired while the window was operated').toEqual([])
   })
 }

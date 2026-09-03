@@ -39,8 +39,7 @@ export function AppHeader({ collapsed = false }: { collapsed?: boolean }) {
   const { data: classes } = useClasses()
 
   const classId = readClassId(pathname)
-  const klass =
-    classId !== null ? (classes?.find((item) => item.id === classId) ?? null) : null
+  const klass = classId !== null ? (classes?.find((item) => item.id === classId) ?? null) : null
   // The class now has a page of its own, so on any route inside it the class crumb is the
   // way back up to that page rather than a label naming where you already are.
   const insideClass = classId !== null && pathname !== `/classes/${classId}`

@@ -28,6 +28,7 @@ import { formatRelativeTime } from '@/lib/format'
 import { useSessions } from '@/lib/hooks/use-chat'
 import { useClass, useUpdateClass } from '@/lib/hooks/use-classes'
 import { useDocuments } from '@/lib/hooks/use-documents'
+import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useDrafts } from '@/lib/hooks/use-drafts'
 import { useSolutions } from '@/lib/hooks/use-solutions'
 import { useStudyList } from '@/lib/hooks/use-study'
@@ -46,8 +47,33 @@ export const HUB_TABS = ['ask', 'practice', 'work', 'files'] as const
 
 export type HubTab = (typeof HUB_TABS)[number]
 
+/**
+ * Old class pages had one tab per subsystem, and bookmarks, history entries, and links
+ * from those days still carry those values. Each lands where that collection lives now
+ * rather than on the default tab: overview was the front door, study became practice,
+ * documents became files, and the profile moved into the class itself.
+ */
+export const LEGACY_HUB_TABS: Record<string, HubTab> = {
+  overview: 'ask',
+  chats: 'work',
+  solutions: 'work',
+  study: 'practice',
+  drafts: 'work',
+  documents: 'files',
+  profile: 'ask',
+}
+
+/** The old tabs whose view is one filtered Work list rather than the whole of Work. */
+export const LEGACY_HUB_WORK_FILTERS: Record<string, 'chats' | 'solutions' | 'drafts'> = {
+  chats: 'chats',
+  solutions: 'solutions',
+  drafts: 'drafts',
+}
+
 export function readHubTab(value: string | null): HubTab {
-  return HUB_TABS.includes(value as HubTab) ? (value as HubTab) : 'ask'
+  if (value === null) return 'ask'
+  if (HUB_TABS.includes(value as HubTab)) return value as HubTab
+  return LEGACY_HUB_TABS[value] ?? 'ask'
 }
 
 /**
@@ -89,6 +115,7 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
   const { data: study } = useStudyList(classId)
   const { data: drafts } = useDrafts(classId)
   const { data: documents } = useDocuments(classId)
+  const { data: profile } = useClassProfile(classId)
   const updateClass = useUpdateClass()
 
   const [editing, setEditing] = useState(false)
@@ -97,9 +124,23 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
 
   const klass = classQuery.data
   const studyCount = study ? study.decks.length + study.quizzes.length : null
+  // Work is the getting-back-to-it list: the conversations, the problem sets, the half-
+  // written answers, and the study artifacts, in one count.
   const workCount =
-    sessions && solutions && drafts ? sessions.length + solutions.length + drafts.length : null
+    sessions && solutions && drafts && study
+      ? sessions.length +
+        solutions.length +
+        drafts.length +
+        study.decks.length +
+        study.quizzes.length
+      : null
   const documentCount = documents?.length ?? klass?.document_count ?? null
+  // Low-confidence facts Lyra has not been confirmed on are the only class facts that
+  // still need the student: everything else is read-only. The count is the affordance,
+  // the sheet is where the confirming happens.
+  const unconfirmedFactCount =
+    profile?.facts.filter((fact) => fact.confidence === 'low' && !fact.confirmed && !fact.rejected)
+      .length ?? 0
 
   // The tab lives in the URL, so a class opened on its files is a link the student can
   // send themselves, and Back out of a tab goes where Back should.
@@ -163,6 +204,21 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
                 <span className="text-text-tertiary border-border rounded-full border px-2 py-0.5 text-xs">
                   Archived
                 </span>
+              ) : null}
+              {unconfirmedFactCount > 0 ? (
+                // The one class-level uncertainty that still needs the student. A chip in the
+                // subtitle, not a tab: the facts are read silently by every answer, so the
+                // nudge rides on the class itself and opens the sheet where they are resolved.
+                <button
+                  type="button"
+                  onClick={() => setDetailsOpen(true)}
+                  title="Open the class details to confirm them"
+                  className="text-info-text bg-info-fill hover:opacity-80 focus-visible:ring-ring/50 shrink-0 rounded-full px-2 py-0.5 text-xs focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  {unconfirmedFactCount === 1
+                    ? '1 class fact needs confirmation'
+                    : `${unconfirmedFactCount} class facts need confirmation`}
+                </button>
               ) : null}
             </p>
           </div>

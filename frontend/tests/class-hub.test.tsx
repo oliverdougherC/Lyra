@@ -6,7 +6,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ClassHub, readHubTab } from '@/components/classes/class-hub'
 import { api } from '@/lib/api'
-import type { ClassProfile, ClassRead, DocumentRead, SessionRead, SolutionRead } from '@/types'
+import type {
+  ClassProfile,
+  ClassRead,
+  DocumentRead,
+  FactRead,
+  SessionRead,
+  SolutionRead,
+} from '@/types'
 
 const replace = vi.fn()
 const push = vi.fn()
@@ -38,6 +45,34 @@ const KLASS = {
   created_at: '2026-01-05 09:00:00',
   last_active_at: '2026-08-05 09:00:00',
 } as ClassRead
+
+/** A fact with only the fields the hub's count and the sheet care about. */
+function fact(
+  id: number,
+  confidence: 'high' | 'low',
+  confirmed: boolean,
+  rejected = false,
+): FactRead {
+  return {
+    id,
+    class_id: 1,
+    kind: 'topic',
+    label: `Fact ${id}`,
+    value: `Value ${id}`,
+    confidence,
+    confirmed,
+    rejected,
+    edited: false,
+    source_document_id: null,
+    source_filename: null,
+    sources: [],
+    source_writer_id: null,
+    source_excerpt_id: null,
+    source_title: null,
+    source_url: null,
+    created_at: '2026-01-05 09:00:00',
+  } as FactRead
+}
 
 beforeEach(() => {
   vi.restoreAllMocks()
@@ -76,6 +111,16 @@ describe('readHubTab', () => {
     // A hand-edited or stale URL should land somewhere real rather than on a blank panel.
     expect(readHubTab('nonsense')).toBe('ask')
   })
+
+  it('lands a seven-tab-era bookmark on the task that owns the same view now', () => {
+    expect(readHubTab('overview')).toBe('ask')
+    expect(readHubTab('chats')).toBe('work')
+    expect(readHubTab('solutions')).toBe('work')
+    expect(readHubTab('study')).toBe('practice')
+    expect(readHubTab('drafts')).toBe('work')
+    expect(readHubTab('documents')).toBe('files')
+    expect(readHubTab('profile')).toBe('ask')
+  })
 })
 
 describe('ClassHub', () => {
@@ -90,14 +135,66 @@ describe('ClassHub', () => {
     }
   })
 
+  it('keeps the front door free of the confirmation nudge while nothing needs confirming', async () => {
+    const { wrapper } = createWrapper()
+
+    render(<ClassHub classId={1} tab="ask" />, { wrapper })
+
+    await screen.findByRole('heading', { name: 'Continuous-Time Signals' })
+    expect(
+      screen.queryByRole('button', { name: /class facts? need(s)? confirmation/ }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('nudges for unconfirmed low-confidence facts from the class itself, into the details sheet', async () => {
+    vi.spyOn(api, 'getClassProfile').mockResolvedValue({
+      facts: [
+        // Low and unchecked: the two that need the student.
+        fact(1, 'low', false),
+        fact(2, 'low', false),
+        // High and unchecked: Lyra is sure, nobody has to act.
+        fact(3, 'high', false),
+        // Checked or rejected: decided, out of the loop.
+        fact(4, 'low', true),
+        fact(5, 'low', false, true),
+      ],
+      extraction_skipped_reason: null,
+    } as ClassProfile)
+    const { wrapper } = createWrapper()
+    const user = userEvent.setup()
+
+    render(<ClassHub classId={1} tab="ask" />, { wrapper })
+
+    const chip = await screen.findByRole('button', {
+      name: '2 class facts need confirmation',
+    })
+    await user.click(chip)
+    expect(await screen.findByRole('heading', { name: 'Class details' })).toBeVisible()
+  })
+
+  it('says the singular form when one fact needs confirming', async () => {
+    vi.spyOn(api, 'getClassProfile').mockResolvedValue({
+      facts: [fact(1, 'low', false), fact(2, 'high', false)],
+      extraction_skipped_reason: null,
+    } as ClassProfile)
+    const { wrapper } = createWrapper()
+
+    render(<ClassHub classId={1} tab="ask" />, { wrapper })
+
+    expect(
+      await screen.findByRole('button', { name: '1 class fact needs confirmation' }),
+    ).toBeInTheDocument()
+  })
+
   it('shows what is in the class on its tabs, so the counts are readable at a glance', async () => {
     const { wrapper } = createWrapper()
 
     render(<ClassHub classId={1} tab="ask" />, { wrapper })
 
     expect(await screen.findByRole('tab', { name: 'Files 2' })).toBeInTheDocument()
-    // Work counts the conversations, problem sets, and drafts together - one number for
-    // everything the student was doing, whatever the subsystem that owns each one is.
+    // Work counts the conversations, problem sets, drafts, and study artifacts together -
+    // one number for everything the student was doing, whatever the subsystem that owns
+    // each one is.
     expect(screen.getByRole('tab', { name: 'Work 2' })).toBeInTheDocument()
     // Every collection tab counts once its data has loaded, zero included, so the strip is
     // consistent rather than counting only the tabs that happen to be non-empty (ui-overhaul
@@ -239,9 +336,7 @@ describe('ClassHub', () => {
     ] as DocumentRead[])
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: 'Retry' }))
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Practice now' })).toBeEnabled(),
-    )
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Practice now' })).toBeEnabled())
     expect(screen.queryByText(/The document list did not load/)).not.toBeInTheDocument()
   })
 
