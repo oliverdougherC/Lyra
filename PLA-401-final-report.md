@@ -265,7 +265,12 @@ advisories affect the locked production graph).
   `50961c9`.
 - This report is committed on top of the code head; the pushed branch head is that
   report commit.
-- main: `b6c75027966de2d20137ac3c4ebc3a84c0ae1cac` — 0 behind at push.
-- CI: see the push run for this head (reported on push).
+- main: `b6c75027966de2d20137ac3c4ebc3a84c0ae1cac` — 0 behind at push (14 ahead).
+- CI: run 33817336796 on head `f35b3d9` — **completed / success**, all 11 jobs green
+  (backend, frontend, full-stack acceptance, Rust desktop checks, Desktop macOS
+  artifact, Python production dependency audit, Frozen Python build and smoke,
+  Backend targeted regressions, Active reference absence scan, Component resource
+  report, CI Gate).
+  https://github.com/oliverdougherC/Lyra/actions/runs/33817336796
 
 The previous pass's report (review 5105553464 parity pass) is superseded by this one.
