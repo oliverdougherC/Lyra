@@ -539,15 +539,22 @@ export function ChatPane({
           // The contextual agent answers in place: one non-streaming turn that plans the
           // work, runs its tools, and returns the full reply. Its durable artifacts (access
           // requests, proposed edits, commands, activity) are surfaced by the surrounding
-          // work surface, which re-fetches when this transcript grows.
+          // work surface, which re-fetches when this transcript grows. Retry and regenerate
+          // take the same shape: the server reuses the last user message (retry) or re-answers
+          // and supersedes the last reply (regenerate), and each returns the one reply.
           const agentDocumentId = scopedDocument?.id ?? null
-          const result = await api.sendAgentChat(
-            classId,
-            turnSessionId,
-            content,
-            undefined,
-            agentDocumentId,
-          )
+          const result =
+            kind === 'tutor-retry'
+              ? await api.retryAgentChat(classId, turnSessionId)
+              : kind === 'regenerate'
+                ? await api.regenerateAgentChat(classId, turnSessionId)
+                : await api.sendAgentChat(
+                    classId,
+                    turnSessionId,
+                    content,
+                    undefined,
+                    agentDocumentId,
+                  )
           onEvent({ type: 'done', message_id: result.message_id })
           return
         }
@@ -1020,7 +1027,9 @@ export function ChatPane({
                     : undefined
                   : !optimisticTurn &&
                       index === lastUserIndex &&
-                      (message.tutor_attempt?.state === 'failed' ||
+                      (message.agent_attempt?.state === 'failed' ||
+                        message.agent_attempt?.state === 'stopped' ||
+                        message.tutor_attempt?.state === 'failed' ||
                         message.tutor_attempt?.state === 'stopped')
                     ? retryTutorTurn
                     : message.role === 'assistant'

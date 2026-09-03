@@ -651,6 +651,18 @@ export const api = {
       errorFactory: agentChatErrorFactory,
     }),
 
+  // Answer the conversation's last agent question again, replacing the reply it has (PLA-316
+  // class affordance). Unlike retry, this re-runs even a completed turn and supersedes the old
+  // reply on the server, so the transcript carries exactly one answer.
+  regenerateAgentChat: (classId: number, sessionId: number) =>
+    requestJson<AgentChatResult>(
+      `/api/classes/${classId}/sessions/${sessionId}/agent-chat/regenerate`,
+      {
+        method: 'POST',
+        errorFactory: agentChatErrorFactory,
+      },
+    ),
+
   listAgentWorkspaceChanges: (classId: number, sessionId: number, signal?: AbortSignal) =>
     requestJson<AgentWorkspaceChangeRead[]>(
       `/api/classes/${classId}/sessions/${sessionId}/workspace/changes`,

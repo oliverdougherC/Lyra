@@ -187,3 +187,25 @@ export function useRetryAgentChat(classId: number, sessionId: number | null) {
     },
   })
 }
+
+/**
+ * Regenerate the conversation's last agent answer, superseding the reply it already has.
+ * Re-runs the turn even when it completed, so a completed answer can be re-answered.
+ */
+export function useRegenerateAgentChat(classId: number, sessionId: number | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => {
+      if (sessionId === null) throw new Error('Start a conversation before using agent tools.')
+      return api.regenerateAgentChat(classId, sessionId)
+    },
+    onSuccess: async () => {
+      if (sessionId === null) return
+      await invalidateAgentTurnCaches(queryClient, classId, sessionId)
+    },
+    onError: async (error) => {
+      if (sessionId === null || !(error instanceof AgentChatError)) return
+      await invalidateAgentTurnCaches(queryClient, classId, sessionId)
+    },
+  })
+}

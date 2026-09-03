@@ -574,6 +574,7 @@ async def _run_agent_turn(
     turn_token: int,
     *,
     payload: AgentChatRequest | None,
+    regenerate: bool = False,
 ) -> AgentChatResult | JSONResponse:
     """Plan, persist, and run one agent turn (a fresh send, or a retry when payload is None).
 
@@ -595,25 +596,37 @@ async def _run_agent_turn(
     require_document_allowed(access)
     config = access.config
 
+    superseded: tuple[int, ...] = ()
     if payload is None:
-        # A retry reuses the original user message rather than appending a duplicate. The
-        # target is resolved under the claim, so no concurrent turn can move the
-        # conversation between the read and the run.
+        # A retry or regeneration reuses the original user message rather than appending a
+        # duplicate. The target is resolved under the claim, so no concurrent turn can move the
+        # conversation between the read and the run that acts on it.
         target = agent_attempts.resolve_retry_target(conn, session_id)
-        if target.latest["state"] == agent_attempts.COMPLETED:
+        if not regenerate and target.latest["state"] == agent_attempts.COMPLETED:
             return _replay_completed_attempt(conn, session_id, target)
+        if regenerate:
+            # Regeneration re-answers the last question and replaces the reply it already has:
+            # the old reply is superseded (deleted when the new reply commits), never joined by
+            # a second one. Unlike a plain retry it re-runs rather than replays, so a completed
+            # answer is re-answered instead of returned verbatim.
+            superseded_rows = conn.execute(
+                "select id from messages where session_id = ? and id > ? order by id",
+                (session_id, target.user_message_id),
+            ).fetchall()
+            superseded = tuple(int(r["id"]) for r in superseded_rows)
         content = target.content
         profile = target.profile or "agent"
         user_message_id = target.user_message_id
-        # The current message is the reused user message; excluding it from history is what
-        # keeps the original prompt appearing exactly once in model context.
+        # The current message is the reused user message; excluding it (and any superseded reply)
+        # from history is what keeps the original prompt appearing exactly once in model context,
+        # and keeps a discarded reply from being shown to the model as history.
         plan = _plan_agent_turn(
             conn,
             class_id,
             session_id,
             AgentChatRequest(content=content, profile=profile),  # type: ignore[arg-type]
             config,
-            exclude_message_ids=frozenset({user_message_id}),
+            exclude_message_ids=frozenset({user_message_id, *superseded}),
         )
     else:
         # The privacy gate proved the endpoint may receive this turn's private material; the
@@ -714,6 +727,11 @@ async def _run_agent_turn(
             tool_activity=tool_activity,
         )
         agent_attempts.mark_completed(conn, attempt_id, message_id)
+        # A regeneration supersedes its previous reply: the discarded rows are removed in the
+        # same transaction as the new reply, so a crash between them leaves neither a stale nor
+        # a doubled answer. An ordinary send or retry supersedes nothing, so this is a no-op.
+        if superseded:
+            sessions.remove_messages(conn, session_id, superseded)
         conn.commit()
     except BaseException as exc:
         if conn.in_transaction:
@@ -810,5 +828,32 @@ async def retry_agent_chat(
     turn_token = sessions.begin_turn(session_id)
     try:
         return await _run_agent_turn(conn, class_id, session_id, turn_token, payload=None)
+    finally:
+        sessions.end_turn(session_id, turn_token)
+
+
+@router.post(
+    "/classes/{class_id}/sessions/{session_id}/agent-chat/regenerate",
+    response_model=AgentChatResult,
+)
+async def regenerate_agent_chat(
+    class_id: int,
+    session_id: int,
+    conn: DbConn,
+) -> AgentChatResult | JSONResponse:
+    """Answer the conversation's last agent question again, replacing the reply it has.
+
+    Unlike Retry, this re-runs the turn even when the last attempt completed, and supersedes
+    the existing reply: the discarded rows are removed the moment the new reply commits, so a
+    regeneration that fails or is stopped leaves the student with the answer they already had
+    rather than nothing, and a successful one leaves exactly one reply. Serialized by the same
+    per-session claim as send and retry: a second in-flight turn is refused with a 409.
+    """
+    _scoped_session(conn, class_id, session_id)
+    turn_token = sessions.begin_turn(session_id)
+    try:
+        return await _run_agent_turn(
+            conn, class_id, session_id, turn_token, payload=None, regenerate=True
+        )
     finally:
         sessions.end_turn(session_id, turn_token)

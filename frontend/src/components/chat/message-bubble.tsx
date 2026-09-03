@@ -85,7 +85,9 @@ export function MessageRow({
         <div className="bg-accent-secondary/45 border-accent-secondary/60 max-w-[80%] rounded-2xl rounded-br-md border px-4 py-2.5 text-[0.9375rem] leading-6 whitespace-pre-wrap">
           {message.content}
         </div>
-        {agentFailed ? <AgentTurnFailure detail={agentAttempt?.detail ?? null} /> : null}
+        {agentFailed ? (
+          <AgentTurnFailure detail={agentAttempt?.detail ?? null} onRetry={onRetry} />
+        ) : null}
         {writerFailed ? (
           <WriterTurnFailure detail={writerAttempt?.detail ?? null} onRetry={onRetry} />
         ) : null}
@@ -351,7 +353,7 @@ function CopyButton({ content }: { content: string }) {
  * transcript) and points at the agent controls, where the turn was sent from and where
  * Retry lives. `data-agent-turn-failure` marks it for the tests that assert the state.
  */
-function AgentTurnFailure({ detail }: { detail: string | null }) {
+function AgentTurnFailure({ detail, onRetry }: { detail: string | null; onRetry?: () => void }) {
   return (
     <div
       data-agent-turn-failure
@@ -359,7 +361,18 @@ function AgentTurnFailure({ detail }: { detail: string | null }) {
       role="status"
     >
       <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-      <span>{detail?.trim() || 'This turn did not finish. Retry it from the agent controls.'}</span>
+      <span>{detail?.trim() || 'This turn did not finish.'}</span>
+      {onRetry ? (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="text-destructive hover:text-foreground -mt-0.5 ml-0.5 shrink-0"
+          onClick={onRetry}
+          aria-label="Try again"
+        >
+          <RefreshCw className="size-3" />
+        </Button>
+      ) : null}
     </div>
   )
 }
