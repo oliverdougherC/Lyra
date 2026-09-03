@@ -194,15 +194,75 @@ def test_claims_review_requires_ledger_verification_for_web_and_course_sources()
     assert "cited ledger entry" in rendered
 
 
-def test_guide_withholds_the_answer_and_show_does_not() -> None:
-    guide = build_system_prompt("guide", [], [])
-    show = build_system_prompt("show", [], [])
+def test_guide_teaches_directly_and_withholds_nothing_by_default() -> None:
+    """PLA-401: Guide is a teaching contract, not Socratic mode.
+
+    The prompt that preceded this one opened every Guide turn with a leading question and
+    withheld the answer until the student earned it, which is exactly why "Explain
+    convolution" came back as a Socratic setup about which values of a variable make two
+    functions nonzero. This test pins the replacement: a direct explanation request gets
+    a direct explanation, and nothing the student asks for outright is held back.
+    """
+    guide = _normalized(build_system_prompt("guide", [], []))
+    show = _normalized(build_system_prompt("show", [], []))
 
     assert guide != show
-    assert "do not give the final answer immediately" in _normalized(guide)
-    assert "do not withhold the answer" in _normalized(show)
-    assert "$$...$$ on its own line for a displayed equation" in _normalized(guide)
-    assert "$...$ for a quantity inside a line of text" in _normalized(guide)
+    # Guide names what it optimizes for and how to answer a direct request.
+    assert "mental model" in guide
+    assert "the student understands more after this reply than before it" in guide
+    # The old mandatory-Socratic machinery is gone from the mode prompt.
+    for phrase in (
+        "socratic",
+        "leading question",
+        "do not give the final answer immediately",
+        "offer the next hint first",
+    ):
+        assert phrase not in guide
+    # Nothing the student asks for outright is withheld, in either mode.
+    assert "never withhold an explanation or answer the student asked for outright" in guide
+    assert "do not withhold the answer" in show
+    # The shared LaTeX contract still rides into both.
+    for prompt in (guide, show):
+        assert "$$...$$ on its own line for a displayed equation" in prompt
+        assert "$...$ for a quantity inside a line of text" in prompt
+
+
+def test_explain_convolution_is_explained_not_interrogated() -> None:
+    """The PLA-401 motivating failure, protected at the prompt level.
+
+    A student who asks "Explain convolution" used to be met with an indirect Socratic
+    setup (which values of a variable make two functions nonzero) instead of the
+    explanation they asked for. The prompt must route a direct "Explain X" request to a
+    direct explanation that leads with the mental model, and must not route it to a
+    question-first setup.
+    """
+    guide = _normalized(build_system_prompt("guide", [], []))
+
+    # The direct-explanation request is named and answered with the mental model first.
+    assert '"explain x" or "what is x?"' in guide
+    assert "mental model first" in guide
+    # A question is a tool the model may reach for, never the opening move.
+    assert "a question is a tool, not a format" in guide
+    # And the old interrogation framing is absent.
+    for phrase in ("socratic", "leading question", "wait for the student's attempt"):
+        assert phrase not in guide
+
+
+def test_the_anchored_scope_still_limits_the_turn_without_a_question_budget() -> None:
+    """The step-anchored override keeps the turn to the step, minus the question budget.
+
+    The earlier wording handed Guide an explicit "at most one leading question" budget
+    inside an anchored session. The scope rule that matters - answer the step, stop, do
+    not walk the rest of the problem - survives; the question budget goes with the
+    Socratic mode it was sized for.
+    """
+    block = prompts._ANCHORED_SCOPE
+
+    assert "this conversation is about that step and nothing else" in _normalized(block)
+    assert "do not move on to the next step" in _normalized(block)
+    assert "never offer to work through the rest of the problem" in _normalized(block)
+    # No residual question budget from the old mode.
+    assert "leading question" not in _normalized(block)
 
 
 def test_the_prompt_forbids_opening_every_reply_by_citing_the_material() -> None:

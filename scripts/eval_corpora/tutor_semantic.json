@@ -1,0 +1,345 @@
+{
+  "about": [
+    "Versioned semantic corpus for tutor-reply quality, graded by scripts/eval_tutor.py.",
+    "",
+    "What this measures and what it does not. The backend test suite proves the *contract*",
+    "the prompt asks for: the mode says explain directly, it says do not withhold, it says a",
+    "question is a tool. Only a run against a real model can tell you whether the model that",
+    "answers with that prompt actually behaves that way - whether 'Explain convolution' gets",
+    "the mental model or an interrogation, whether a directly requested answer is delivered",
+    "or deferred behind a hint. That gap is the whole reason this exists, so the grading is",
+    "semantic, not textual: no case asserts a substring of the reply.",
+    "",
+    "Each case is one student request (plus the turns that got there) with:",
+    "",
+    "- `must`: behaviors the reply must show. Graded by the model grader, per item.",
+    "- `must_not`: behaviors the reply must not show. Graded the same way.",
+    "- `may`: behaviors the reply is allowed but not required to show.",
+    "- `notes`: ground truth the grader is given, so it can judge correctness without",
+    "  solving the problem itself.",
+    "- `dimensions`: every case is also scored on the fixed seven semantic qualities",
+    "  listed at the top of this file, on the 0-2 scale defined in the grader prompt.",
+    "",
+    "A case passes when every `must` item is met, no `must_not` item is violated, and",
+    "`correctness` is not a hard failure (score >= 1). The harness computes that",
+    "deterministically from the grader's per-item judgments; it does not trust a",
+    "model-produced verdict.",
+    "",
+    "The corpus is written rather than scraped, deliberately. A transcript of a real",
+    "student's session cannot be committed, and tuning the prompts to one course's",
+    "formatting would be the same failure the extraction corpus documents. The course",
+    "facts here (ECE 301-style signals and systems, a PHYS 201-style ODE problem) are",
+    "fictional and self-authored; the mathematics is standard and checked by hand.",
+    "",
+    "`prompt_contract_version` pins the version of the model-facing contract these cases",
+    "were written against (backend.llm.prompts.TUTOR_PROMPT_CONTRACT_VERSION). When the",
+    "contract version moves, the corpus needs a re-read: a case written against the",
+    "Socratic contract grades the teaching contract with the wrong ruler."
+  ],
+  "corpus_version": "1.1.0",
+  "prompt_contract_version": "2",
+  "dimensions": [
+    "directness",
+    "proportionality",
+    "prerequisite_setup",
+    "questioning",
+    "withholding",
+    "correctness",
+    "pedagogical_usefulness"
+  ],
+  "cases": [
+    {
+      "id": "explain-convolution",
+      "mode": "guide",
+      "user": "Explain convolution",
+      "history": [],
+      "context": [],
+      "must": [
+        "Begins with the mental model - the core idea of convolution stated in the first one or two sentences - before any formality, example, or question to the student",
+        "States what convolution computes: for each output time, a weighted overlap of one signal with a flipped and shifted copy of the other",
+        "Gives the integral (or summation) form of convolution once the intuition is established"
+      ],
+      "must_not": [
+        "Asks the student a question in place of the explanation they asked for, such as which values of a variable make two functions nonzero",
+        "Withholds the meaning of convolution so that the student has to derive it first",
+        "Opens with a prerequisite review the request did not ask for"
+      ],
+      "may": [
+        "Closes with one short, focused question that checks understanding",
+        "Includes a small worked example, such as a pulse through a system"
+      ],
+      "notes": "Standard answer: the convolution of two continuous signals is (f*g)(t) = integral of f(tau) g(t-tau) d(tau), read as a flip-and-slide overlap. No course context is supplied, so general knowledge is the expected source."
+    },
+    {
+      "id": "what-is-a-derivative",
+      "mode": "guide",
+      "user": "What is a derivative?",
+      "history": [],
+      "context": [],
+      "must": [
+        "Explains the derivative directly in the first one or two sentences",
+        "Gives the intuitive picture - instantaneous rate of change, or the slope of the tangent line - before or alongside the formal definition",
+        "States the limit definition, or an equivalent statement of the difference quotient"
+      ],
+      "must_not": [
+        "Opens with a question to the student instead of the explanation",
+        "Withholds the definition or asks the student to guess it"
+      ],
+      "may": [
+        "Gives a short example, such as the derivative of a position being a velocity"
+      ],
+      "notes": "Standard answer: f'(x) is the instantaneous rate of change of f at x, defined as the limit of (f(x+h) - f(x)) / h as h approaches 0. No course context is supplied."
+    },
+    {
+      "id": "why-can-they-cancel-these-terms",
+      "mode": "guide",
+      "user": "Why can they cancel these terms? The 2x dx seems to just disappear.",
+      "history": [
+        {
+          "role": "user",
+          "content": "I'm working through the integral of 2x cos(x^2) dx. My notes set u = x^2, so du = 2x dx, and then the integral just becomes the integral of cos(u) du. I don't see how that works."
+        }
+      ],
+      "context": [],
+      "must": [
+        "Answers the specific step: nothing is cancelled - because du is 2x dx, the substitution replaces the factor 2x dx with du, a change of variable, and the step is valid because u = x^2 is differentiable",
+        "Stays on that step rather than re-teaching substitution or starting a new problem"
+      ],
+      "must_not": [
+        "Delivers a full lecture on integration by substitution instead of answering the step asked about",
+        "Asks a leading question in place of the answer"
+      ],
+      "may": [
+        "Notes that the variable name is a dummy: the integral of cos(u) du is the same as the integral of cos(v) dv"
+      ],
+      "notes": "The student's 'cancel' framing is the misconception to correct: with u = x^2, du = 2x dx, so the factor 2x dx is replaced by du, not cancelled against anything. The integral of 2x cos(x^2) dx is sin(x^2) + C."
+    },
+    {
+      "id": "no-idea-how-to-start",
+      "mode": "guide",
+      "user": "I have no idea how to start.",
+      "history": [
+        {
+          "role": "user",
+          "content": "A tank holds 100 L of brine with 20 kg of salt in it. Brine containing 0.1 kg/L of salt flows in at 3 L/min and the well-stirred mixture flows out at 3 L/min. Find the amount of salt in the tank after t minutes."
+        },
+        {
+          "role": "assistant",
+          "content": "That is a mixing problem. The amount of salt S(t) changes at the rate salt comes in minus the rate it leaves: dS/dt = (rate in) - (rate out). What are those two rates, in kg per minute?"
+        }
+      ],
+      "context": [],
+      "must": [
+        "Identifies the blockage: writing the two rates, and specifically that the outflow rate depends on S(t) because the outflow concentration is S(t)/100 kg/L",
+        "Gives the smallest useful next move: rate in is 3 L/min times 0.1 kg/L = 0.3 kg/min, and the outflow rate is 3 L/min times S(t)/100 kg/L = 0.03 S(t) kg/min"
+      ],
+      "must_not": [
+        "Hands over the full solved answer, S(t) = 10 + 10 e^{-0.03t}, unprompted",
+        "Lectures about what differential equations are instead of unblocking this problem",
+        "Makes the student re-explain the problem before doing anything"
+      ],
+      "may": [
+        "Names the resulting equation dS/dt = 0.3 - 0.03 S as the thing to solve next"
+      ],
+      "notes": "Model: dS/dt = 0.3 - 0.03 S, S(0) = 20. The productive next move is writing the two rates; solving the ODE is the step after that, and the student has not asked for it yet."
+    },
+    {
+      "id": "attempt-where-did-i-go-wrong",
+      "mode": "guide",
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "history": [
+        {
+          "role": "user",
+          "content": "Compute y(t) = x(t) * h(t) where x(t) = u(t) - u(t-1) and h(t) = e^{-t} u(t)."
+        },
+        {
+          "role": "assistant",
+          "content": "Write it as the convolution integral: (f*g)(t) = integral of f(tau) g(t-tau) d(tau). With x the pulse on [0,1] and h causal, the limits depend on where t falls relative to that interval."
+        }
+      ],
+      "context": [],
+      "must": [
+        "Reads the attempt and names the actual error: h(t-tau) = e^{-(t-tau)} u(t-tau) depends on tau, so e^{-t} cannot be treated as a constant and pulled out of the integral; the integrand is e^{-(t-tau)}",
+        "Acknowledges what the attempt gets right - setting up the integral and the limits for 0 <= t <= 1 - before or alongside the correction"
+      ],
+      "must_not": [
+        "Starts a fresh method from the top without addressing the attempt",
+        "Praises the attempt with no diagnosis of the error"
+      ],
+      "may": [
+        "Gives the corrected value for 0 <= t <= 1, y(t) = 1 - e^{-t}, and notes that for t >= 1 the upper limit becomes 1"
+      ],
+      "notes": "The attempt treats e^{-(t-tau)} as e^{-t}. Correctly: for 0 <= t <= 1, y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = 1 - e^{-t}; for t >= 1 the integral runs 0 to 1, giving e^{-t}(e - 1)."
+    },
+    {
+      "id": "is-my-answer-correct",
+      "mode": "guide",
+      "user": "I got (1/3) sin(3t). Is my answer correct?",
+      "history": [
+        {
+          "role": "user",
+          "content": "Find the inverse Laplace transform of 1 / (s^2 + 9)."
+        }
+      ],
+      "context": [],
+      "must": [
+        "Gives the verdict in the first sentence: the answer is correct",
+        "Then gives the first meaningful reason: L{sin(at)} = a / (s^2 + a^2), so 1 / (s^2 + 9) = (1/3) * 3 / (s^2 + 9), which inverts to (1/3) sin(3t)"
+      ],
+      "must_not": [
+        "Lectures about the Laplace transform before saying whether the answer is right",
+        "Withholds the verdict or asks the student to justify the answer first"
+      ],
+      "notes": "The student's answer is correct: L{sin(3t)} = 3 / (s^2 + 9), so 1 / (s^2 + 9) = (1/3) L{sin(3t)}."
+    },
+    {
+      "id": "just-tell-me-the-answer",
+      "mode": "guide",
+      "user": "Just tell me the answer.",
+      "history": [
+        {
+          "role": "user",
+          "content": "A tank holds 100 L of brine with 20 kg of salt in it. Brine containing 0.1 kg/L of salt flows in at 3 L/min and the well-stirred mixture flows out at 3 L/min. Find the amount of salt in the tank after t minutes. I've been staring at this for an hour."
+        },
+        {
+          "role": "assistant",
+          "content": "The amount of salt S(t) changes at the rate salt enters minus the rate it leaves: dS/dt = (rate in) - (rate out). What are those two rates, in kg per minute?"
+        }
+      ],
+      "context": [],
+      "must": [
+        "Gives the answer directly: S(t) = 10 + 10 e^{-0.03t} kg",
+        "Includes a compact justification - the equation dS/dt = 0.3 - 0.03 S and how it is solved - short enough to read in a minute"
+      ],
+      "must_not": [
+        "Offers another hint first, or asks the student to try the rates again, instead of giving the answer",
+        "Withholds the final formula"
+      ],
+      "notes": "ODE: dS/dt = 0.3 - 0.03 S, S(0) = 20. Solution: S(t) = 10 + (20 - 10) e^{-0.03t} = 10 + 10 e^{-0.03t}. The contract says a directly requested answer is given, preferably with a concise justification - not deferred behind another hint."
+    },
+    {
+      "id": "explain-that-more-simply",
+      "mode": "guide",
+      "user": "Explain that more simply.",
+      "history": [
+        {
+          "role": "user",
+          "content": "Explain the convolution integral."
+        },
+        {
+          "role": "assistant",
+          "content": "For a continuous-time system, the output at time t is y(t) = integral from -infinity to infinity of x(tau) h(t-tau) d(tau): the input x, decomposed into weighted impulses, each convolved with the system's response h, so the output sums the contribution of every past input value, weighted by how the system responds to it."
+        }
+      ],
+      "context": [],
+      "must": [
+        "Simplifies the same material - the overlap / sliding-window picture in plainer words, ideally with one concrete small example",
+        "Stays on the same topic at a lower level of abstraction rather than a different topic"
+      ],
+      "must_not": [
+        "Restates the formal definition at the same or a higher level of abstraction",
+        "Introduces new formalism (such as the frequency domain) to make the explanation 'simpler'",
+        "Turns the reply into a quiz"
+      ],
+      "may": [
+        "Uses a picture like sliding one shape along the other and measuring the overlap at each position"
+      ],
+      "notes": "A good simpler version: convolution measures, at each output moment, how much of the input overlaps a flipped copy of the system's response - like sliding one shape along the other and measuring the overlap at each position."
+    },
+    {
+      "id": "dont-ask-me-questions-teach-it",
+      "mode": "guide",
+      "user": "Don't ask me questions; teach it.",
+      "history": [
+        {
+          "role": "user",
+          "content": "Explain what an eigenvalue is."
+        },
+        {
+          "role": "assistant",
+          "content": "An eigenvalue lambda of a matrix A is a number for which A x = lambda x for some nonzero vector x. Which part of that is unclear to you so far?"
+        }
+      ],
+      "context": [],
+      "must": [
+        "Teaches it directly: an eigenvector is a direction the matrix only stretches, and lambda is the stretch factor, with a concrete small example or a geometric picture",
+        "Contains no question to the student and no offer to practice"
+      ],
+      "must_not": [
+        "Ends with a question such as 'does that make sense?' or 'would you like to try one?'",
+        "Asks the student what they find confusing before teaching"
+      ],
+      "may": [
+        "Works through a 2 by 2 example"
+      ],
+      "notes": "The student has explicitly declined questions; the reply must be pure teaching. Intuition: A x = lambda x means the matrix sends x to a multiple of itself - the direction is preserved and only the length scales by lambda."
+    },
+    {
+      "id": "intuition-not-the-derivation",
+      "mode": "guide",
+      "user": "Give me the intuition, not the derivation. Why does convolution flip one of the signals?",
+      "history": [],
+      "context": [],
+      "must": [
+        "Gives the intuition directly: at output time t, the input applied at time tau arrives at the system's output at t only after the system's response has played out, so the input must be read backwards from t - the flip is a bookkeeping of 'how long ago'",
+        "Keeps the reply at intuition level: a picture or one concrete example, not a formal derivation"
+      ],
+      "must_not": [
+        "Delivers the full formal derivation despite the explicit request for intuition",
+        "Withholds the intuition and asks the student to guess it"
+      ],
+      "notes": "Intuition: h is the system's echo of a single input applied at time zero. Input applied at tau' echoes out at tau' + s, so to know what lands at t you read the input backwards from t: tau' = t - s. That is the flip."
+    },
+    {
+      "id": "five-minutes-before-exam",
+      "mode": "guide",
+      "user": "I'm studying five minutes before the exam. What are the essentials I should remember about the Fourier transform?",
+      "history": [],
+      "context": [],
+      "must": [
+        "Compresses the essentials: the forward definition, and the two or three highest-yield properties (for example linearity, the time-shift property, differentiation in time, and convolution becoming multiplication), in a form the student can use immediately",
+        "Is study-ready: short, scannable, and free of digressions"
+      ],
+      "must_not": [
+        "Delivers a full lecture - history, motivation, complete derivations - that the five-minute window cannot hold",
+        "Introduces new material the request did not ask for"
+      ],
+      "may": [
+        "Pairs the properties that go together, such as a time shift producing a frequency modulation factor"
+      ],
+      "notes": "High-yield Fourier transform essentials: F{f(t)} = integral of f(t) e^{-j w t} dt; linearity; a time shift by t0 multiplies by e^{-j w t0}; differentiation in time multiplies by j w; convolution in time is multiplication in frequency; Parseval's relation. The reply should read like a compact review sheet, not a lesson."
+    },
+    {
+      "id": "show-convolution-worked",
+      "mode": "show",
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "history": [],
+      "context": [],
+      "must": [
+        "Delivers the complete worked result: y(t) is 0 for t < 0, 1 - e^{-t} for 0 <= t <= 1, and e^{-t}(e - 1) for t >= 1, with every step shown in order",
+        "Names the rule or definition each step relies on: the integral form, where the integrand is nonzero, and the evaluation of the integral"
+      ],
+      "must_not": [
+        "Withholds the final result or leaves it as an exercise",
+        "Turns the reply into a quiz for the student"
+      ],
+      "notes": "x(t) = u(t) - u(t-1) is 1 on [0,1]. For 0 <= t <= 1: y(t) = integral from 0 to t of e^{-(t-tau)} d(tau) = 1 - e^{-t}. For t >= 1: the integral runs 0 to 1, giving e^{-t}(e - 1). For t < 0 the integrand is zero by causality."
+    },
+    {
+      "id": "show-what-is-a-derivative",
+      "mode": "show",
+      "user": "What is a derivative?",
+      "history": [],
+      "context": [],
+      "must": [
+        "Gives a direct, complete explanation: the intuitive meaning (instantaneous rate of change, slope of the tangent line) and the limit definition, with enough structure to be useful",
+        "Closes with the short summary of the idea worth carrying forward"
+      ],
+      "must_not": [
+        "Turns the reply into a quiz",
+        "Withholds the definition"
+      ],
+      "notes": "Same request as the guide case what-is-a-derivative, for contrast: show optimizes for a complete worked result. Both modes must answer the question; the difference is that show's reply is the complete explanation, not a conversational slice of it."
+    }
+  ]
+}

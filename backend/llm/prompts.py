@@ -51,6 +51,16 @@ from backend.rag.chunk import (
 
 ChatMode = Literal["guide", "show"]
 
+# The version of the tutor's model-facing contract: the base rules, the Guide and Show
+# semantics, and the anchored-scope rule, together. The semantic eval corpus
+# (`scripts/eval_corpora/tutor_semantic.json`) pins the version it was written against,
+# so a prompt change that moves the behavior a case grades shows up as a mismatch the
+# harness reports rather than as a silent drift. Version 1 encoded Guide as mandatory
+# Socratic questioning with the answer withheld until the student earned it; version 2
+# (PLA-401) encodes Guide as a teaching contract - see docs/tutor-prompt-contract.md.
+# Bump it when a mode's semantics change, not when wording is polished.
+TUTOR_PROMPT_CONTRACT_VERSION = "2"
+
 # Said once, in one wording, in every prompt that parses its reply. It used to be written
 # out four times in four places, so a fix to one was a fix to one.
 _JSON_ONLY = "Reply with JSON only. No prose, no explanation, and no code fence."
@@ -101,14 +111,37 @@ about.
 4. """
     + _LATEX_RULES
 )
+# Guide is a teaching contract, not a response format. Version 1 of this prompt made
+# questioning mandatory and the answer a reward: the reply that followed "Explain
+# convolution" was a Socratic setup about which values of a variable make two functions
+# nonzero, and a student who asked for the answer was told to take a hint first. That is
+# the failure PLA-401 exists to remove.
+#
+# So this block states the contract - what the mode optimizes for, and the handful of
+# request shapes a small model will not infer on its own - and stops there. It does not
+# enumerate every possible request into a rulebook: a small model given the principle and
+# a few patterns generalizes to the rest, and a longer list would recreate the same
+# failure as a different one (a tutor that follows the letter of a rule it was handed).
 _GUIDE_PROMPT = """\
 Mode: Guide.
 
-Teach by Socratic questioning. Open with one leading question aimed at the very next step,
-then give one step at a time and wait for the student's attempt before moving on. Do not give
-the final answer immediately: withhold it until the student has worked toward it, and only
-then confirm their result and fill in what they missed. If they ask outright for the answer,
-offer the next hint first."""
+Guide means the student understands more after this reply than before it. Answer the
+student's actual question with the move that gets there: explain it directly, work one
+example, scaffold the next step, diagnose an attempt they sent, or ask a question that
+tells you what to teach next.
+
+- "Explain X" or "What is X?": explain it. Mental model first - the idea in a sentence or
+  two - then the formalism or an example that makes it concrete. Do not make the student
+  derive framing you can simply explain.
+- The student sends an attempt: read and diagnose it first - what is right, what is wrong,
+  and why - before teaching anything new.
+- "Just give me the answer": give it, with the briefest justification that makes it
+  trustworthy.
+
+A question is a tool, not a format: never ask one merely because this is Guide, and never
+withhold an explanation or answer the student asked for outright. Keep the reply
+proportional to the request and to the time the student has: a quick question gets a quick,
+complete answer, and a short window before an exam gets the essentials."""
 
 _SHOW_PROMPT = """\
 Mode: Show.
@@ -747,19 +780,17 @@ _STEP_CONTEXT_HEADING = "The student is asking about one step of a solution Lyra
 
 # The scope of an anchored conversation, which is narrower than the mode it runs in.
 #
-# Guide is written to teach a problem end to end, and turned loose on a step it does what
-# it was built to do: the student asks why one line follows from the one above it, answers
-# the leading question correctly, and is told "perfect, now how do we do the next step?"
-# They did not ask to be walked through the problem. They asked about a step, and the
-# conversation is over when that step makes sense. Offering the walkthrough unprompted
-# takes a thirty-second question and turns it into an assignment.
+# The mode prompts are written to teach, and a conversation anchored to one step of a
+# solution keeps teaching past the step: the student asks why one line follows from the
+# one above it, gets the answer, and the reply drifts into the next step or offers to
+# walk through the rest. They did not ask to be walked through the problem. They asked
+# about a step, and the conversation is over when that step makes sense. Offering the
+# walkthrough unprompted takes a thirty-second question and turns it into an assignment.
 _ANCHORED_SCOPE = """\
 Scope. This overrides the mode instructions above wherever the two disagree.
 
 This conversation is about that step and nothing else. Answer what the student actually
-asked, then stop. In Guide, that means at most one leading question rather than one per
-step: once they have it, confirm it, answer what they asked, and end the turn.
-Do not move on to the next step, do not recap the steps before it, and
+asked, then stop. Do not move on to the next step, do not recap the steps before it, and
 never offer to work through the rest of the problem. If the student wants that, they will
 ask, and then it is theirs to ask for rather than yours to start."""
 
@@ -992,8 +1023,15 @@ def build_system_prompt(
 ) -> str:
     """Build the chat system prompt for one turn.
 
+    The system message carries the whole model-facing contract for the turn: the base
+    rules, the mode's semantics (contract `TUTOR_PROMPT_CONTRACT_VERSION`, documented in
+    `docs/tutor-prompt-contract.md`), and the class profile facts. The pinned step and
+    the retrieved context are joined on by the caller.
+
     Args:
-        mode: `guide` for Socratic tutoring, `show` for a direct worked explanation.
+        mode: `guide` for teaching toward understanding - direct explanation, worked
+            examples, scaffolding, and questions only when they help - or `show` for a
+            direct worked result.
         user_facts: Active facts about the student, already filtered by the caller.
         class_facts: Active facts about this class, already filtered by the caller.
 
