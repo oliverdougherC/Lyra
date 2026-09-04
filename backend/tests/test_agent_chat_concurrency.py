@@ -25,6 +25,7 @@ import json
 import sqlite3
 import threading
 import time
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -1822,6 +1823,163 @@ def test_a_non_quiesced_ending_holds_the_connection_and_claim_until_the_worker_l
         assert sessions.active_turn(session_id) is None
 
     asyncio.run(quiet_ending())
+    assert sessions.active_turn(session_id) is None
+
+
+async def test_a_torn_down_request_holds_the_connection_and_claim_to_the_worker_exit(
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The request-teardown branch of `_release_turn`, deterministically.
+
+    A real turn's tool worker is held inside its dispatch while the request is torn down:
+    a Stop settles the turn (the worker is still in flight, so the request must stay open
+    for it), and then a client disconnect cancels the REQUEST task itself while the
+    release is still waiting for that worker. That is the exact branch this regression
+    exists for: it must not raise AttributeError or leak an un-awaited coroutine, must
+    not free the session claim, and must not let the request-scoped connection close
+    under the worker. The invariant proven: a worker that can still touch the turn's
+    SQLite connection never outlives ownership of that connection, and the claim never
+    frees while the worker exists - so the torn-down request stays open (connection open,
+    claim held) until the worker has provably left, and only then are the claim released
+    and the cancellation propagated.
+    """
+    monkeypatch.setattr(routes_agent_chat, "QUIESCENCE_SECONDS", 0.1)
+    monkeypatch.setattr(tools, "QUIESCENCE_SECONDS", 0.1)
+    app_settings.update_settings_row(db, {"allow_web_research": 1})
+
+    barrier = threading.Event()
+    worker_started = threading.Event()
+    worker_used_conn = threading.Event()
+    conn = connect()
+    conn_b = connect()
+
+    async def late_worker_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        raw_gate = kwargs["stop_gate"]
+        assert isinstance(raw_gate, tools.ToolStopGate)
+        gate = raw_gate
+
+        def dispatch() -> None:
+            # The turn's tool worker: registered in flight exactly like a real dispatch,
+            # held in its work by the barrier, and reading the turn's own request-scoped
+            # connection once it is let go - exactly the access the invariant protects.
+            done = gate.begin_work()
+            try:
+                worker_started.set()
+                barrier.wait(timeout=15.0)
+                assert conn.execute("select 1 as alive").fetchone()["alive"] == 1
+                worker_used_conn.set()
+            finally:
+                gate.finish_work(done)
+
+        await asyncio.to_thread(dispatch)
+        return tools.ToolLoopResult(content="Never sent.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", late_worker_loop)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            payload = routes_agent_chat.AgentChatRequest(
+                content="Hold the connection", profile="agent"
+            )
+            task = asyncio.create_task(
+                routes_agent_chat.send_agent_chat(class_id, session_id, payload, conn)
+            )
+            # Poll while yielding: the worker starts only once the loop task is scheduled.
+            # The signal is a threading.Event set by the worker thread, so asyncio.Event
+            # is not available here and the polling yield is the right shape.
+            deadline = time.monotonic() + 5.0
+            while not worker_started.is_set() and time.monotonic() < deadline:  # noqa: ASYNC110
+                await asyncio.sleep(0.01)
+            assert worker_started.is_set(), "the tool worker never entered its dispatch"
+            turn_task = routes_agent_chat._inflight[session_id][1]
+
+            # A real Stop on the in-flight turn: it latches the gate, cancels the TURN task,
+            # and settles - but the worker is still inside its dispatch, so the request (and
+            # its connection) must stay open for it.
+            stopped = await routes_agent_chat.stop_agent_chat(class_id, session_id, conn_b)
+            assert stopped == {"stopped": False, "settling": True}
+
+            # The request is now inside its release wait: the turn task has settled, the
+            # in-flight entry is gone, and the release is the only thing still holding the
+            # connection for the worker.
+            deadline = time.monotonic() + 5.0
+            while not turn_task.done() or routes_agent_chat._inflight.get(session_id) is not None:
+                if time.monotonic() > deadline:
+                    break
+                await asyncio.sleep(0.01)
+            assert turn_task.done()
+            assert routes_agent_chat._inflight.get(session_id) is None
+
+            # Tear down the REQUEST itself (the client gave up mid-settling): the
+            # cancellation lands in the release's own wait - the branch under test.
+            task.cancel()
+            # One bounded release wait elapses against the still-blocked worker.
+            await asyncio.sleep(0.25)
+
+            # The request must not complete while the worker exists: its connection (and
+            # the claim) are still owned by that worker. The old code raised AttributeError
+            # here and completed the task in error, closing the connection under the worker.
+            assert not task.done(), (
+                "the route may not return (and close its connection) under a live worker"
+            )
+            # The session stays held: no new same-session turn may start while the worker
+            # exists.
+            assert sessions.active_turn(session_id) is not None
+            with pytest.raises(ConflictError):
+                await routes_agent_chat.send_agent_chat(
+                    class_id,
+                    session_id,
+                    routes_agent_chat.AgentChatRequest(
+                        content="Overlap while held", profile="agent"
+                    ),
+                    conn_b,
+                )
+
+            # Let the worker go: it can still use the turn's connection - it is not closed
+            # out from under it - and only then does the release complete.
+            barrier.set()
+            deadline = time.monotonic() + 5.0
+            while not worker_used_conn.is_set() and time.monotonic() < deadline:  # noqa: ASYNC110
+                await asyncio.sleep(0.01)
+            assert worker_used_conn.is_set(), (
+                "the worker's own connection access failed while the route was still open"
+            )
+            # The claim releases only now, and the held cancellation propagates truthfully:
+            # the request task completes as cancelled - not normally, not with AttributeError.
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=5.0)
+        finally:
+            barrier.set()
+            conn_b.close()
+
+    assert sessions.active_turn(session_id) is None
+    # No AttributeError from the teardown branch, and no un-awaited coroutine leaked.
+    assert "AttributeError" not in caplog.text
+    assert not any("never awaited" in str(w.message) for w in caught)
+
+    # And the session is not wedged: the next same-session turn succeeds.
+    async def fast_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        return tools.ToolLoopResult(content="The next answer.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", fast_loop)
+    try:
+        result = await routes_agent_chat.send_agent_chat(
+            class_id,
+            session_id,
+            routes_agent_chat.AgentChatRequest(
+                content="A question after the teardown", profile="agent"
+            ),
+            conn,
+        )
+    finally:
+        conn.close()
+    assert isinstance(result, routes_agent_chat.AgentChatResult)
+    assert result.content == "The next answer."
     assert sessions.active_turn(session_id) is None
 
 

@@ -994,10 +994,16 @@ async def _release_turn(session_id: int, turn_token: int, gate: ToolStopGate) ->
     impossible, and a permanently wedged session is the failure this design refuses to
     trade for a live worker.
 
-    If this request is torn down while the release is still waiting (a client disconnect
-    landing mid-release), the wait detaches: its thread keeps running, and the claim is
-    released from its completion - the one point at which the worker has provably stopped -
-    so the session never frees while a worker exists, request or no request.
+    If the request is torn down while the release is still waiting - a client disconnect
+    landing mid-release, on any quiescence period, bounded or unbounded - the pending
+    cancellation is held here, not detached from the request: a detached wait would let the
+    route return, and the request's connection finalizer would close the SQLite connection
+    the worker is still reading or writing through, while a callback releasing the claim
+    could not know the worker had left. Instead the wait follows the worker to its exit
+    without a deadline, the claim is released exactly there, and only afterward is the held
+    exception re-raised, so the request still tears down truthfully rather than completing
+    normally. A second cancellation landing mid-wait is held the same way: the worker's
+    exit, not the request's, is what frees the connection and the claim.
     """
     _unregister_inflight(session_id, turn_token)
     try:
@@ -1009,14 +1015,28 @@ async def _release_turn(session_id: int, turn_token: int, gate: ToolStopGate) ->
                 session_id,
                 turn_token,
             )
-    except BaseException:
-        # The request is being torn down with a worker still in flight: its connection is
-        # going with it, so the release detaches from the request. The detached wait has no
-        # deadline - it follows the worker to its exit, and the claim is released exactly
-        # there, idempotently and token-owned.
-        wait = asyncio.to_thread(gate.wait_quiesced, None)
-        wait.add_done_callback(lambda _wait: sessions.end_turn(session_id, turn_token))
-        raise
+    except BaseException as exc:
+        # The request is being torn down with a worker still in flight. The held exception
+        # is re-raised only AFTER the worker has provably left (below): until then this
+        # await keeps the route - and therefore its request-scoped connection - open, and
+        # the claim stays held, so nothing closes or frees out from under the worker.
+        while True:
+            try:
+                if await asyncio.to_thread(gate.wait_quiesced, None):
+                    break
+            except BaseException:
+                # A second cancellation (or shutdown wave) landing again mid-wait must not
+                # free the claim or let the connection close either: hold, log, and keep
+                # following the worker to its exit.
+                logger.error(
+                    "The request on session %s (turn token %d) was torn down again while "
+                    "the release was still waiting for a tool worker; the claim stays "
+                    "held, with the connection open, until the worker leaves",
+                    session_id,
+                    turn_token,
+                )
+        sessions.end_turn(session_id, turn_token)
+        raise exc
     sessions.end_turn(session_id, turn_token)
 
 
