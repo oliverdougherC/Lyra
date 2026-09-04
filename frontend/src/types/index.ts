@@ -119,8 +119,12 @@ export interface AgentAttempt {
   /**
    * The logical-send identity the client minted for this send (PLA-313): the key the
    * lost-response reconciliation matches against, never the message text - an identical
-   * earlier question in this conversation must not satisfy a newer send. Null for attempts
-   * that carry no operation id (retries, regenerations, legacy rows).
+   * earlier question in this conversation must not satisfy a newer send. This is the
+   * lineage's ROOT operation id, not the latest attempt's own: an internal fallback
+   * attempt (the tool-less continuation of an endpoint that refused the first tools
+   * request) completes with no id of its own, but the readback still names the send it
+   * belongs to. Null only for lineages that never carried one (retries, regenerations,
+   * legacy rows).
    */
   operation_id?: string | null
 }

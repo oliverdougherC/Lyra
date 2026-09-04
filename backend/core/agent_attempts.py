@@ -267,13 +267,31 @@ def latest_attempts_by_message(
 
     One query for the whole conversation, so the message-list endpoint can annotate each
     user turn with its attempt state without a lookup per message.
+
+    Each row also carries `lineage_operation_id`: the operation ID the logical send that
+    created this message's attempt lineage minted - the id on the lineage's ROOT attempt,
+    not the latest one. Internal attempts carry no id of their own (a retry, a
+    regeneration, and the tool-less continuation of an endpoint that refused the first
+    tools request all create attempts with `operation_id = NULL`), so the latest attempt's
+    own id can be NULL even though the send itself has a durable identity. The readback
+    exposes the root's non-null id, which is the identity a lost-response reconciliation
+    must match: the unique index keeps at most one non-null operation id per session, so
+    the lineage's first id-carrying attempt is the root by construction, and the id is
+    surfaced in readback rather than duplicated onto the later attempts.
     """
     rows = conn.execute(
-        "select a.* from agent_turn_attempts a "
+        "select a.*, root.operation_id as lineage_operation_id "
+        "from agent_turn_attempts a "
         "join (select user_message_id, max(id) as latest_id from agent_turn_attempts "
         "      where session_id = ? group by user_message_id) newest "
-        "  on a.id = newest.latest_id",
-        (session_id,),
+        "  on a.id = newest.latest_id "
+        "left join (select user_message_id, min(id) as root_id "
+        "      from agent_turn_attempts "
+        "      where session_id = ? and operation_id is not null "
+        "      group by user_message_id) rooted "
+        "  on rooted.user_message_id = a.user_message_id "
+        "left join agent_turn_attempts root on root.id = rooted.root_id",
+        (session_id, session_id),
     ).fetchall()
     return {int(row["user_message_id"]): dict(row) for row in rows}
 

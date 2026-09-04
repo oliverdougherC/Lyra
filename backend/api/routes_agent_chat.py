@@ -977,71 +977,47 @@ def _inflight_task(session_id: int) -> asyncio.Task | None:
     return entry[1] if entry is not None else None
 
 
-# How many extra bounded quiescence periods the background release waits, on the
-# exceptional path where a worker outlived the route's own wait. Handlers bound their own
-# work (network calls carry timeouts, proposals are single writes), so this is the depth of
-# the backstop, not a working number: it must outlive the slowest real handler, and the
-# release at its end is the last resort that keeps the session from wedging forever.
-_STOP_RELEASE_PERIODS = 3
-
-
-async def _release_claim_when_quiesced(
-    session_id: int, turn_token: int, gate: ToolStopGate
-) -> None:
-    """The bounded background release for the exceptional, non-quiesced turn ending.
-
-    The route's own finally has already waited one full quiescence bound and found a worker
-    still inside a dispatch: the session claim (and the connection that worker reads and
-    writes through) must not be released while it runs, and no new turn may start under it.
-    This watcher keeps the claim held and releases it the moment the worker leaves. If the
-    worker outlives the entire outer bound - a handler past its own bound, i.e. a bug - the
-    claim is released anyway, with a loud error: the stop flag has already made any further
-    durable effect from that turn impossible, and a permanently wedged session is the worse
-    failure.
-    """
-    quiesced = False
-    for _ in range(_STOP_RELEASE_PERIODS):
-        quiesced = await asyncio.to_thread(gate.wait_quiesced, QUIESCENCE_SECONDS)
-        if quiesced:
-            break
-    sessions.end_turn(session_id, turn_token)
-    if quiesced:
-        logger.info(
-            "Session %s released after its late worker left (turn token %d)",
-            session_id,
-            turn_token,
-        )
-    else:
-        logger.error(
-            "A tool worker on session %s (turn token %d) outlived every quiescence bound; "
-            "the claim is released as the last resort - the stop flag already forbids any "
-            "further durable effect from that turn",
-            session_id,
-            turn_token,
-        )
-
-
 async def _release_turn(session_id: int, turn_token: int, gate: ToolStopGate) -> None:
     """Settle a turn's claim only when its workers have actually left.
 
     Runs in the route's finally, on every ending. A healthy turn has no in-flight worker -
     the loop awaits each dispatch before it settles - so the wait returns at once and the
     claim frees in place. The exceptional path (a worker still inside a handler when the
-    route ends) does NOT claim the turn is settled and does NOT free the session while that
-    worker holds its resources: the claim is handed to `_release_claim_when_quiesced`,
-    which keeps it held until the worker leaves.
+    turn ends) does not claim the turn is settled and does not let the route return: the
+    request-scoped connection the worker reads and writes through must not close out from
+    under it, and the session claim must not free while it exists, so the release stays
+    inside this await and the route - and therefore its connection - stays open until the
+    worker has provably left. The wait re-checks one quiescence period at a time, so the
+    release lands the moment the worker exits rather than on a schedule; a handler that
+    outlives its own bound (a bug) logs loudly on every period and holds the session until
+    it leaves - the stop flag has already made any further durable effect from that turn
+    impossible, and a permanently wedged session is the failure this design refuses to
+    trade for a live worker.
+
+    If this request is torn down while the release is still waiting (a client disconnect
+    landing mid-release), the wait detaches: its thread keeps running, and the claim is
+    released from its completion - the one point at which the worker has provably stopped -
+    so the session never frees while a worker exists, request or no request.
     """
     _unregister_inflight(session_id, turn_token)
-    if await asyncio.to_thread(gate.wait_quiesced, QUIESCENCE_SECONDS):
-        sessions.end_turn(session_id, turn_token)
-        return
-    logger.error(
-        "A tool worker on session %s (turn token %d) is still inside a dispatch after the "
-        "turn's bounded quiescence wait; the claim stays held until the worker leaves",
-        session_id,
-        turn_token,
-    )
-    asyncio.create_task(_release_claim_when_quiesced(session_id, turn_token, gate))
+    try:
+        while not await asyncio.to_thread(gate.wait_quiesced, QUIESCENCE_SECONDS):
+            logger.error(
+                "A tool worker on session %s (turn token %d) is still inside a dispatch "
+                "after a quiescence period; the request (and its connection) stays open, "
+                "and the claim held, until the worker leaves",
+                session_id,
+                turn_token,
+            )
+    except BaseException:
+        # The request is being torn down with a worker still in flight: its connection is
+        # going with it, so the release detaches from the request. The detached wait has no
+        # deadline - it follows the worker to its exit, and the claim is released exactly
+        # there, idempotently and token-owned.
+        wait = asyncio.to_thread(gate.wait_quiesced, None)
+        wait.add_done_callback(lambda _wait: sessions.end_turn(session_id, turn_token))
+        raise
+    sessions.end_turn(session_id, turn_token)
 
 
 async def _await_turn_or_stopped(turn_task: asyncio.Task) -> AgentChatResult | JSONResponse:
@@ -1792,15 +1768,15 @@ async def send_agent_chat(
     finally:
         # Release on every ending: a consent or impossible-context refusal, a planning or
         # registry-build failure, a tool-loop/upstream/timeout failure, a context or output
-        # limit, a stopped turn, and any unexpected exception. The bounded gate wait runs
-        # FIRST: a turn killed mid-planning or mid-dispatch may still have a worker thread
-        # inside a handler, and this request's connection must not close (and the claim
-        # must not free) while that worker is still reading or writing - so a non-quiesced
-        # ending keeps the claim held by a bounded watcher instead of freeing it. A healthy
-        # turn has no in-flight worker, so the wait returns at once. `end_turn` is
-        # idempotent and token-owned, so it can never free a claim a newer turn has since
-        # taken. The in-flight entry goes with the token, so a Stop that races a finished
-        # turn cancels nothing.
+        # limit, a stopped turn, and any unexpected exception. The gate wait runs FIRST:
+        # a turn killed mid-planning or mid-dispatch may still have a worker thread inside
+        # a handler, and this request's connection must not close (and the claim must not
+        # free) while that worker is still reading or writing - so a non-quiesced ending
+        # keeps the request, and its connection, open until the worker has provably left,
+        # and frees the claim exactly then. A healthy turn has no in-flight worker, so the
+        # wait returns at once. `end_turn` is idempotent and token-owned, so it can never
+        # free a claim a newer turn has since taken. The in-flight entry goes with the
+        # token, so a Stop that races a finished turn cancels nothing.
         await _release_turn(session_id, turn_token, gate)
 
 
@@ -1838,10 +1814,10 @@ async def retry_agent_chat(
     try:
         return await _await_turn_or_stopped(turn_task)
     finally:
-        # Release on every ending, after the bounded gate wait so no worker outlives the
-        # connection or the claim; a non-quiesced ending keeps the claim held by a bounded
-        # watcher until the worker leaves (a Stop that races a finished retry cancels
-        # nothing).
+        # Release on every ending, after the gate wait so no worker outlives the connection
+        # or the claim; a non-quiesced ending keeps the request (and its connection) open
+        # and the claim held until the worker leaves (a Stop that races a finished retry
+        # cancels nothing).
         await _release_turn(session_id, turn_token, gate)
 
 
@@ -1888,10 +1864,10 @@ async def regenerate_agent_chat(
     try:
         return await _await_turn_or_stopped(turn_task)
     finally:
-        # Release on every ending, after the bounded gate wait so no worker outlives the
-        # connection or the claim; a non-quiesced ending keeps the claim held by a bounded
-        # watcher until the worker leaves (a Stop that races a finished regeneration
-        # cancels nothing).
+        # Release on every ending, after the gate wait so no worker outlives the connection
+        # or the claim; a non-quiesced ending keeps the request (and its connection) open
+        # and the claim held until the worker leaves (a Stop that races a finished
+        # regeneration cancels nothing).
         await _release_turn(session_id, turn_token, gate)
 
 
@@ -1916,12 +1892,13 @@ async def stop_agent_chat(
       * `{"stopped": true, "settling": false}` - the turn task has settled AND no worker is
         still inside a handler: the session is free and the turn's work is done.
       * `{"stopped": false, "settling": true}` - the stop was latched and the cancellation
-        delivered, but the turn has not provably finished: a worker outlived its bound and
-        the turn's own finally (or its bounded release watcher) will finish the settlement
-        and free the session when the worker leaves. The turn is stopped in every way that
-        matters to the student (no reply will arrive, no further durable effect can land),
-        so the UI may present the stopped state - but nothing here claims quiescence it
-        does not hold.
+        delivered, but the turn has not provably finished: a worker is still inside a
+        dispatch, and the turn's own finally keeps the request (and its connection) open
+        until that worker leaves, freeing the session exactly then. The turn is stopped in
+        every way that matters to the student (no reply will arrive, no further durable
+        effect can land), so the UI may present the stopped state - but the conversation
+        must stay closed until the session is proven free, which the /stop/status endpoint
+        reports. Nothing here claims quiescence it does not hold.
       * `{"stopped": false, "settling": false}` - nothing was in flight; stopping a session
         with no turn is a no-op, not an error.
     Stopping a session with no in-flight turn is not an error: there is simply nothing to
@@ -1947,6 +1924,28 @@ async def stop_agent_chat(
         if task.done() and quiesced:
             return {"stopped": True, "settling": False}
         # The stop was delivered but the turn's work has not provably left: report exactly
-        # that. The turn's own settlement (or its bounded release watcher) finishes it.
+        # that. The turn's own release keeps the request (and its connection) open until
+        # the late worker leaves, and frees the session exactly then.
         return {"stopped": False, "settling": True}
     return {"stopped": False, "settling": False}
+
+
+@router.get("/classes/{class_id}/sessions/{session_id}/agent-chat/stop/status")
+async def agent_chat_stop_status(
+    class_id: int,
+    session_id: int,
+    conn: DbConn,
+) -> dict[str, bool]:
+    """The bounded status read a settling Stop polls.
+
+    A Stop that answers `settling: true` proves the cancellation was delivered, not that
+    the session is free: a worker is still inside a dispatch, and the turn's release keeps
+    the request open until it leaves. This endpoint is the proof the UI waits for:
+    `settling: false` means the session's turn claim has been released, which happens only
+    after every worker of the stopped turn has provably left (and its attempt durably
+    settled), so the conversation may re-enable exactly then. Reading the claim - not
+    re-issuing /stop - is what keeps the status truthful: the claim is the one object the
+    release touches last, and a new turn cannot start while it is held.
+    """
+    _scoped_session(conn, class_id, session_id)
+    return {"settling": sessions.active_turn(session_id) is not None}

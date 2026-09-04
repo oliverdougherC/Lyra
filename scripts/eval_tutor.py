@@ -760,10 +760,12 @@ def _run_class_chat_cases(
                     replan_toolless=(
                         None
                         if config.tools_supported is not None
-                        # Bound as a default argument: the loop variable is the case this
-                        # iteration runs.
+                        # The NO_TOOL_SUPPORT fallback as a zero-argument callable: the loop
+                        # invokes it (not its result) when an unknown endpoint refuses the
+                        # first tools request. Bound as a default argument: the loop
+                        # variable is the case this iteration runs.
                         else (
-                            lambda case: class_chat_assembly(
+                            lambda case=case: class_chat_assembly(
                                 conn,
                                 class_id,
                                 session_id,
@@ -771,7 +773,7 @@ def _run_class_chat_cases(
                                 case,
                                 no_context=no_context,
                             )
-                        )(case)
+                        )
                     ),
                 )
             )

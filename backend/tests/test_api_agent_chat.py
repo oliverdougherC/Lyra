@@ -2294,6 +2294,109 @@ def test_an_unknown_endpoints_first_tools_refusal_falls_back_and_remembers_the_v
     assert len(completions) == 2
 
 
+def test_a_lost_response_after_the_tool_fallback_readback_finds_the_send(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lost-acceptance regression behind the operation-lineage readback.
+
+    An unknown endpoint refuses the first tools request, the automatic tool-less fallback
+    completes, and the HTTP acceptance is then lost in transport - the client holds only
+    its minted operation id. The durable readback must still let it recognize its own
+    send: the user message is annotated with the SEND's operation id - the id on the
+    abandoned tool pass, whose completed successor attempt carries none of its own - and
+    with the completed state. The client reconciles to the stored answer instead of
+    re-sending, a re-send of the same operation replays instead of duplicating, and the
+    next different question is a new send with a fresh id.
+    """
+    from backend.api import routes_chat
+
+    session_id = int(sessions.create_session(db, class_id)["id"])
+    # Unknown tool support: the first request carries the tool schemas.
+    db.execute(
+        "update settings set endpoint_url = 'http://127.0.0.1:8080/v1', model = 'qwen', "
+        "tools_supported = NULL, tools_message = NULL where id = 1"
+    )
+    db.commit()
+
+    completions: list[int] = []
+
+    async def fake_complete(*args: object, **kwargs: object) -> str:
+        completions.append(1)
+        return "The answer, without tools."
+
+    monkeypatch.setattr(routes_agent_chat.llm_client, "complete", fake_complete)
+    loop_calls: list[int] = []
+
+    async def fake_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        loop_calls.append(1)
+        return tools.ToolLoopResult(
+            content="", calls=(), stopped=tools.NO_TOOL_SUPPORT, detail="tools refused"
+        )
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", fake_loop)
+
+    app = FastAPI()
+    app.include_router(routes_agent_chat.router)
+    app.include_router(routes_chat.router)
+    app.dependency_overrides[get_db] = _request_db
+    with TestClient(app) as client:
+        # The send: first tools request refused, fallback completes - and the acceptance
+        # is lost in transport. Exactly one user question and one answer are what remain.
+        first = client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+            json={"content": "Explain convolution", "profile": "agent", "operation_id": "op-x"},
+        )
+        assert first.status_code == 200, first.text
+        assert len(loop_calls) == 1
+        assert len(completions) == 1
+        assert [m["role"] for m in sessions.list_messages(db, session_id)] == [
+            "user",
+            "assistant",
+        ]
+
+        # The readback the client runs after the lost acceptance: the user message carries
+        # the send's operation id - though the attempt that completed is the tool-less one,
+        # which stores no id of its own - and its completed state.
+        readback = client.get(f"/api/sessions/{session_id}/messages").json()
+        assert [m["role"] for m in readback] == ["user", "assistant"]
+        user_readback = next(m for m in readback if m["role"] == "user")
+        assert user_readback["agent_attempt"]["operation_id"] == "op-x"
+        assert user_readback["agent_attempt"]["state"] == "completed"
+
+        # A re-send of the same operation replays the stored reply instead of running the
+        # model again: the server recognizes the lineage through the root id.
+        replay = client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+            json={"content": "Explain convolution", "profile": "agent", "operation_id": "op-x"},
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json()["content"] == "The answer, without tools."
+        assert len(loop_calls) == 1
+        assert len(completions) == 1
+        assert [m["role"] for m in sessions.list_messages(db, session_id)] == [
+            "user",
+            "assistant",
+        ]
+
+        # The next different question is a NEW send with its own operation id, and the
+        # readback distinguishes the two lineages by id.
+        second = client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+            json={
+                "content": "What about a conv layer?",
+                "profile": "agent",
+                "operation_id": "op-y",
+            },
+        )
+        assert second.status_code == 200, second.text
+        readback_final = client.get(f"/api/sessions/{session_id}/messages").json()
+        by_content = {str(m["content"]): m for m in readback_final}
+        assert by_content["Explain convolution"]["agent_attempt"]["operation_id"] == "op-x"
+        assert by_content["Explain convolution"]["agent_attempt"]["state"] == "completed"
+        assert by_content["What about a conv layer?"]["agent_attempt"]["operation_id"] == "op-y"
+        assert by_content["What about a conv layer?"]["agent_attempt"]["state"] == "completed"
+
+
 def test_a_toolless_turn_carries_retrieval_and_facts_like_the_tool_turn(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:

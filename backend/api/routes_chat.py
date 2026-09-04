@@ -564,7 +564,13 @@ def read_messages(session_id: int, conn: DbConn) -> list[dict[str, object]]:
                 "detail": aa["detail"],
                 # The logical-send identity for lost-response reconciliation (PLA-313):
                 # the client keys its in-flight send to this, never to message text.
-                "operation_id": aa["operation_id"],
+                # This is the lineage's ROOT operation id, not the latest attempt's own:
+                # an internal fallback attempt (the tool-less continuation of an endpoint
+                # that refused the first tools request) completes with `operation_id =
+                # NULL`, but the send it belongs to is still the one the root attempt
+                # carried - so the readback identifies the send even after an internal
+                # fallback, and a lost response reconciles instead of re-sending.
+                "operation_id": aa["lineage_operation_id"],
             }
         wa = writer_att.get(mid)
         if wa is not None:

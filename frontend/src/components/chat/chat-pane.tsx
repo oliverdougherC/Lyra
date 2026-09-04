@@ -146,6 +146,15 @@ const USER_SCROLL_WINDOW_MS = 700
 /** A pause long enough that the reader will want to know when the thread resumed. */
 const TIME_GAP_MS = 60 * 60 * 1000
 
+// A settling Stop's status poll: a calm interval, a generous bound. The server keeps the
+// stopped turn's request (and its connection) open only as long as its late workers
+// remain, and those workers bound their own work (network timeouts, the command
+// ceiling) - so the proof of a free session always arrives well inside this bound. The
+// bound itself is a safety net that exceeds even the slowest of them; past it the pane
+// stops claiming anything and hands the Stop affordance back to the student.
+const _STOP_SETTLE_POLL_MS = 750
+const _STOP_SETTLE_LIMIT_MS = 12 * 60 * 1000
+
 function startsTimeGap(messages: ChatMessage[], index: number): boolean {
   if (index === 0) return true
   const previous = messages[index - 1]
@@ -885,6 +894,39 @@ export function ChatPane({
     void runTurn('writer-retry', '', activeSessionId)
   }, [activeSessionId, runTurn, writer])
 
+  /**
+   * A settling Stop's wait for the backend's proof that the session is free: a calm,
+   * bounded poll of the status endpoint. "Stopping…" and the closed conversation last
+   * for the whole stretch - the turn is stopped in every way that matters (no reply will
+   * arrive, no further durable effect can land), but the conversation must not re-enable
+   * until the backend proves the stopped turn's release has finished: every worker has
+   * provably left, the attempt is durably settled, and the session's claim is free.
+   * Returns true when that proof arrives; false when the bound elapses first or the pane
+   * is no longer owned by this turn (the caller then leaves Stop available to try again).
+   */
+  const pollStopStatus = useCallback(
+    async (classId: number, session: number, owner: number): Promise<boolean> => {
+      const deadline = performance.now() + _STOP_SETTLE_LIMIT_MS
+      while (turnIdRef.current === owner) {
+        let settling = true
+        try {
+          settling = (await api.stopAgentChatStatus(classId, session)).settling
+        } catch {
+          // A dropped status read is not proof of anything: the session is merely still
+          // settling. Wait a beat and ask again.
+        }
+        if (turnIdRef.current !== owner) return false
+        if (!settling) return true
+        if (performance.now() >= deadline) return false
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, _STOP_SETTLE_POLL_MS)
+        })
+      }
+      return false
+    },
+    [],
+  )
+
   const stop = useCallback(() => {
     const pending = abortRef.current
     if (pending === null) return
@@ -905,9 +947,9 @@ export function ChatPane({
     }
     // The agent's turn is non-streaming: its server handler cannot see this fetch being
     // aborted, so the explicit /stop is what actually stops the work. The UI enters a
-    // bounded "Stopping…" state and AWAITs the server's confirmation: the student must
-    // not be told "stopped" before the server has proved the turn is stopped, and the
-    // conversation stays closed to another turn meanwhile.
+    // bounded "Stopping…" state and AWAITs the server's verdict: the student must not be
+    // told "stopped" before the server has proved it, and the conversation stays closed
+    // to another turn meanwhile.
     if (stopInFlightRef.current) return
     stopInFlightRef.current = true
     setStopping(true)
@@ -915,26 +957,47 @@ export function ChatPane({
     // new turn starts, so a stop callback arriving after a newer turn owns the pane
     // must not touch the newer turn's state.
     const owner = turnIdRef.current
+    // The terminal action, applied exactly once the server has proved the stop: mark the
+    // turn stopped (if still active), spend the send key, drain the reveal queue, and
+    // stand down the local request. Idempotent - the turn's own settled response may
+    // land in the same instant with exactly these effects.
+    const confirmStopped = () => {
+      if (turnIdRef.current !== owner) return
+      if (outcomeRef.current === 'active') setOutcome('stopped')
+      responseAcceptedRef.current = true
+      submittedTextRef.current = null
+      operationIdRef.current = null
+      if (streamTextRef.current.trim().length === 0) {
+        revealDrainedRef.current = true
+        setRevealDrained(true)
+      }
+      pending.abort()
+    }
     void (async () => {
       try {
-        await api.stopAgentChat(classId, session)
+        const verdict = await api.stopAgentChat(classId, session)
         if (turnIdRef.current !== owner) return
-        // A successful response is the server's confirmation that the stop was latched
-        // and the cancellation delivered: the turn will settle as stopped, no reply will
-        // arrive, and no further durable effect from it can land. `stopped: true`
-        // adds the proof that every worker has left (the session is free); `settling`
-        // means one late worker is still leaving and the session frees a moment later.
-        // Either way the student's turn is stopped, so present it as such: spend the
-        // send key, settle the local request, and re-enable the conversation.
-        if (outcomeRef.current === 'active') setOutcome('stopped')
-        responseAcceptedRef.current = true
-        submittedTextRef.current = null
-        operationIdRef.current = null
-        if (streamTextRef.current.trim().length === 0) {
-          revealDrainedRef.current = true
-          setRevealDrained(true)
+        if (verdict.stopped) {
+          // Settled and quiescent: the session is free and the turn's work is done.
+          confirmStopped()
+        } else if (verdict.settling) {
+          // The stop was latched but a worker is still inside a dispatch: the turn is
+          // stopped in every way that matters, but the conversation stays closed -
+          // "Stopping…", not sendable - until the backend proves the session free.
+          const provenFree = await pollStopStatus(classId, session, owner)
+          if (provenFree) {
+            confirmStopped()
+          } else if (turnIdRef.current === owner && outcomeRef.current === 'active') {
+            // The bound elapsed without the proof: the stop was latched, but this pane
+            // will not claim a stop that was not proven. The Stop affordance comes back
+            // (the finally) so the student can try again.
+            toast.error('Stop could not be confirmed. The turn may still be running.')
+          }
         }
-        pending.abort()
+        // Else: nothing was in flight when /stop inspected it - the turn settled in the
+        // race just before the Stop (completed, or failed). This Stop changed nothing
+        // durable: the turn's own request (or its lost-response reconciliation) settles
+        // the outcome, and nothing here may label it stopped or spend the send key.
       } catch {
         // The stop did not reach the server (or the server could not handle it): the turn
         // may still be running. Stay active - do NOT present a stop that was never
@@ -949,7 +1012,7 @@ export function ChatPane({
         }
       }
     })()
-  }, [classId])
+  }, [classId, pollStopStatus])
 
   /**
    * Called by the streaming renderer whenever its reveal queue drains. Mid-stream

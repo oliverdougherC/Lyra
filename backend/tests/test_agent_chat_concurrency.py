@@ -1733,38 +1733,87 @@ def test_stop_during_real_tool_dispatch_leaves_no_later_effect(
     assert sessions.active_turn(session_id) is None
 
 
-def test_a_non_quiesced_ending_holds_the_claim_until_the_worker_leaves(
+def test_a_non_quiesced_ending_holds_the_connection_and_claim_until_the_worker_leaves(
     session_id: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A turn's ending where `wait_quiesced` reports false does not claim the turn is
-    settled: the session stays held (nothing may start under an in-flight worker, and the
-    connection it reads through must not close out from under it) until the worker has
-    actually left - while a quiesced ending releases in place. The bounded watcher's
-    last-resort release is the only other exit, and it is a loud one."""
+    """The exceptional path: a worker outlives the route's bounded quiescence wait.
+
+    The ownership contract, deterministically: a worker that can still access the turn's
+    SQLite connection must never outlive ownership of that connection, and no new turn may
+    take the session claim while the worker still exists. So the route's ending does not
+    return - and therefore does not let the connection close - while the worker is inside
+    a dispatch: it waits, one quiescence period at a time, until the worker has provably
+    left, and only then frees the claim. Proven here by holding the worker in its dispatch
+    from the main thread and observing, from the outside, exactly that order.
+    """
     monkeypatch.setattr(routes_agent_chat, "QUIESCENCE_SECONDS", 0.1)
     token = sessions.begin_turn(session_id)
     gate = tools.ToolStopGate()
-    worker_left = gate.begin_work()
 
-    def wait_for_release() -> None:
-        deadline = time.monotonic() + 5.0
-        while sessions.active_turn(session_id) is not None and time.monotonic() < deadline:
-            time.sleep(0.01)
+    # The request-scoped connection the route would hand the worker, with the route's own
+    # ownership: it closes only after the ending returns, exactly as `get_db`'s finalizer
+    # closes after the route returns.
+    conn = connect()
+    in_flight = threading.Event()
+    release_worker = threading.Event()
+    worker_conn_usable = threading.Event()
+
+    def late_worker() -> None:
+        # A dispatch that outlives the ending's first bounded wait: registered in flight
+        # when the ending starts, held in the dispatch until the main thread lets it leave.
+        done = gate.begin_work()
+        try:
+            in_flight.set()
+            release_worker.wait(timeout=10.0)
+            # The worker touches the request connection AFTER the ending has begun and
+            # already found a non-quiesced gate: a release that returned early (and closed
+            # the connection with it) would make this read hit a closed database.
+            conn.execute("select 1 as alive").fetchone()
+            worker_conn_usable.set()
+        finally:
+            gate.finish_work(done)
+
+    worker_thread = threading.Thread(target=late_worker)
+    worker_thread.start()
+    assert in_flight.wait(timeout=5.0)
+
+    # The ending (the route's finally) on its own loop: it must not return while the
+    # worker is inside its dispatch.
+    ending_returned = threading.Event()
 
     async def ending() -> None:
         await routes_agent_chat._release_turn(session_id, token, gate)
-        # The non-quiesced ending kept the claim held.
-        assert sessions.active_turn(session_id) is not None
-        # The worker leaves: the bounded watcher releases the moment it sees quiescence.
-        gate.finish_work(worker_left)
-        await asyncio.wait_for(asyncio.to_thread(wait_for_release), timeout=6.0)
+        ending_returned.set()
 
-    asyncio.run(ending())
-    # ...released, and only once the worker left.
+    ending_thread = threading.Thread(target=lambda: asyncio.run(ending()))
+    ending_thread.start()
+    # Let the ending's first 0.1s wait expire against the still-in-flight worker.
+    time.sleep(0.2)
+    assert not ending_returned.is_set(), (
+        "the route may not return (and close its connection) under a live worker"
+    )
+    # The session stays held: no new same-session turn may start while the worker exists.
+    assert sessions.active_turn(session_id) is not None
+    with pytest.raises(ConflictError):
+        sessions.begin_turn(session_id)
+
+    # The worker leaves: the release lands the moment it does - the ending returns only
+    # once the worker has left, and the connection closes only after the worker has left.
+    release_worker.set()
+    assert worker_conn_usable.wait(timeout=5.0), (
+        "the worker's own connection access failed while the route was still open"
+    )
+    worker_thread.join(timeout=5.0)
+    ending_thread.join(timeout=5.0)
+    assert ending_returned.is_set(), "the ending must return once the worker has left"
+    # The connection is still open here: the ending returned, and the route (this test)
+    # owns the close - which happens now, after the worker left.
+    assert conn.execute("select 1 as alive").fetchone()["alive"] == 1
+    conn.close()
     assert sessions.active_turn(session_id) is None
 
-    # The quiesced ending (no in-flight worker) releases in place.
+    # The quiesced ending (no in-flight worker) still releases in place, at once.
     token2 = sessions.begin_turn(session_id)
     quiet_gate = tools.ToolStopGate()
 

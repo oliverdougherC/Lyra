@@ -869,6 +869,87 @@ def test_a_loop_that_never_reaches_a_terminal_answer_is_incomplete(
         conn.close()
 
 
+def test_an_unknown_endpoint_refusal_replans_toolless_and_reaches_the_terminal_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The NO_TOOL_SUPPORT fallback through the case runner, deterministically.
+
+    An endpoint whose tool support is UNKNOWN (`tools_supported=None`) refuses the turn's
+    FIRST tools request. The product settles that pass as abandoned and re-plans the same
+    turn tool-less; the case runner must mirror that - its `replan_toolless` is an actual
+    zero-argument callable the loop invokes, not an already-evaluated assembly - so the
+    case reaches the same tool-less terminal answer it does in production, recorded
+    exactly as production settles it.
+    """
+    from backend.core import errors
+    from backend.llm import client as llm_client
+    from backend.llm import tools as llm_tools
+
+    db_path, conn, class_id, session_id = eval_tutor.open_eval_environment(None)
+    try:
+        # Unknown tool support: the first request carries the tool schemas.
+        config = TutorConfig(
+            endpoint_url="http://127.0.0.1:1234/v1",
+            api_key=None,
+            model="local-model",
+            context_window=16384,
+            tools_supported=None,
+        )
+        case = Case(
+            id="explain-convolution",
+            mode="guide",
+            user="Explain convolution",
+            history=(),
+            context=(),
+            must=("gives the overlap integral",),
+            must_not=("withholds the requested explanation",),
+            may=(),
+            notes="The course defines convolution via the overlap integral.",
+        )
+
+        tool_rounds: list[int] = []
+        plain_calls: list[int] = []
+
+        async def refusing_tools(
+            endpoint: str,
+            api_key: str | None,
+            model: str | None,
+            messages: list[dict[str, object]],
+            tools: list[dict[str, object]],
+            **kwargs: object,
+        ):
+            tool_rounds.append(len(tools))
+            raise errors.ToolsUnsupportedError("the endpoint does not accept tool calls")
+
+        async def plain_complete(*args: object, **kwargs: object) -> str:
+            plain_calls.append(1)
+            return "Convolution slides one signal past the other and sums the overlap."
+
+        monkeypatch.setattr(llm_tools, "complete_with_tools", refusing_tools)
+        monkeypatch.setattr(llm_client, "complete", plain_complete)
+
+        cases_run: dict[str, object] = {}
+        eval_tutor._run_class_chat_cases(
+            [case], conn, class_id, session_id, config, cases_run, no_context=True
+        )
+
+        record = cases_run[case.id]
+        # The run fell back tool-less and reached the terminal answer - it is recorded
+        # as an ok tool-less turn, not as a failed or incomplete one.
+        assert record["status"] == "ok"
+        assert record["toolless"] is True
+        assert "slides one signal past the other" in str(record["response"])
+        # One tools round (the refused one) plus the one plain completion.
+        assert record["rounds"] == 2
+        assert len(tool_rounds) == 1
+        assert len(plain_calls) == 1
+        # The refusal carried the case's tool surface, and the fallback re-planned the
+        # same turn through the runner's own callback.
+        assert tool_rounds[0] > 0
+    finally:
+        conn.close()
+
+
 def test_grade_fails_an_incomplete_turn_truthfully(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -720,16 +720,35 @@ export const api = {
   // attempt as stopped and releasing the session claim - and the work actually stops.
   // Stopping a session with no turn in flight is a no-op, not an error.
   //
-  // The response is a quiescence claim, made truthfully: `stopped: true` means the turn
-  // task has settled AND no worker is still inside a tool dispatch (the session is free).
-  // `settling: true` means the stop was latched and the cancellation delivered, but a
-  // late worker is still leaving - the turn is stopped in every way that matters to the
-  // student (no reply will arrive, no further durable effect can land), and the session
-  // frees the moment the worker leaves.
+  // The response is a quiescence claim, made truthfully - it is the verdict, not a
+  // confirmation that the HTTP call succeeded:
+  //   * `{ stopped: true, settling: false }` - the stop fully settled AND no worker is
+  //     still inside a tool dispatch: the session is free. The UI may mark the turn
+  //     stopped, clear the send key, and re-enable the conversation.
+  //   * `{ stopped: false, settling: true }` - the stop was latched and the cancellation
+  //     delivered, but a late worker is still inside a dispatch: the turn is stopped in
+  //     every way that matters (no reply will arrive, no further durable effect can
+  //     land), but the session is NOT free yet. The UI must stay in "Stopping…" and
+  //     keep the conversation closed, and poll `stopAgentChatStatus` until the backend
+  //     proves the session free.
+  //   * `{ stopped: false, settling: false }` - nothing was in flight when /stop
+  //     inspected it: the turn settled (completed or failed) in the race just before the
+  //     Stop. It is NOT a stop. The turn's own request settles (or reconciles) the
+  //     outcome; the durable state wins.
   stopAgentChat: (classId: number, sessionId: number, signal?: AbortSignal) =>
     requestJson<{ stopped: boolean; settling: boolean }>(
       `/api/classes/${classId}/sessions/${sessionId}/agent-chat/stop`,
       { method: 'POST', signal },
+    ),
+
+  // The bounded status read a settling Stop polls: `settling: false` is the backend's
+  // proof that the stopped turn's release has finished - every worker has provably left,
+  // the attempt is durably settled, and the session's turn claim is free - so this is
+  // the moment the conversation re-enables.
+  stopAgentChatStatus: (classId: number, sessionId: number, signal?: AbortSignal) =>
+    requestJson<{ settling: boolean }>(
+      `/api/classes/${classId}/sessions/${sessionId}/agent-chat/stop/status`,
+      { signal },
     ),
 
   listAgentWorkspaceChanges: (classId: number, sessionId: number, signal?: AbortSignal) =>

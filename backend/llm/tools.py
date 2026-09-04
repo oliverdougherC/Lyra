@@ -186,17 +186,25 @@ class ToolStopGate:
         with self._lock:
             return bool(self._in_flight)
 
-    def wait_quiesced(self, timeout: float) -> bool:
-        """Block until no worker is inside a dispatch. True when quiesced before `timeout`."""
-        deadline = time.monotonic() + timeout
+    def wait_quiesced(self, timeout: float | None) -> bool:
+        """Block until no worker is inside a dispatch.
+
+        True when quiesced before `timeout` expires; with `timeout=None` there is no
+        deadline and the call returns only once every registered worker has left - the
+        form the turn's release wait detaches to when its request is torn down first.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             with self._lock:
                 pending = [event for event in self._in_flight if not event.is_set()]
             if not pending:
                 return True
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return False
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+            else:
+                remaining = None
             # Wait on one; a second worker may have started in the meantime, so re-check.
             if pending[0].wait(remaining):
                 continue
