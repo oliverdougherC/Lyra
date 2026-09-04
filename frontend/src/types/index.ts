@@ -116,6 +116,13 @@ export interface AgentAttempt {
   state: 'running' | 'completed' | 'failed' | 'stopped'
   stopped_reason: string | null
   detail: string | null
+  /**
+   * The logical-send identity the client minted for this send (PLA-313): the key the
+   * lost-response reconciliation matches against, never the message text - an identical
+   * earlier question in this conversation must not satisfy a newer send. Null for attempts
+   * that carry no operation id (retries, regenerations, legacy rows).
+   */
+  operation_id?: string | null
 }
 
 export interface WriterAttempt {

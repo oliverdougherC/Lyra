@@ -166,11 +166,19 @@ class AgentAttemptRead(BaseModel):
     failed/stopped; `stopped_reason` and `detail` are the bounded, privacy-safe stop
     reason for a failed or stopped attempt. The interface shows a truthful failed/stopped
     state and offers Retry from it; a completed attempt carries the reply's id.
+
+    `operation_id` is the logical-send identity the client minted for this send (PLA-313):
+    the reconciliation contract for a lost response. A client that lost its send's response
+    finds the EXACT user message its operation committed to - by this key, never by
+    matching message text, which an identical earlier question in the same conversation
+    would otherwise satisfy with its own old turn. None for attempts that carry no
+    operation id (retries, regenerations, legacy rows).
     """
 
     state: str
     stopped_reason: str | None = None
     detail: str | None = None
+    operation_id: str | None = None
 
 
 class MessageRead(BaseModel):
@@ -554,6 +562,9 @@ def read_messages(session_id: int, conn: DbConn) -> list[dict[str, object]]:
                 "state": aa["state"],
                 "stopped_reason": aa["stopped_reason"],
                 "detail": aa["detail"],
+                # The logical-send identity for lost-response reconciliation (PLA-313):
+                # the client keys its in-flight send to this, never to message text.
+                "operation_id": aa["operation_id"],
             }
         wa = writer_att.get(mid)
         if wa is not None:

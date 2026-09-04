@@ -136,6 +136,33 @@ export async function releaseSourceBarrier(): Promise<void> {
   if (!res.ok) throw new Error(`releaseSourceBarrier failed: ${res.status}`)
 }
 
+export async function enableToolBarrier(): Promise<void> {
+  const res = await fetch(`${BACKEND}/_acceptance/tool-barrier/enable`, {
+    method: 'POST',
+    headers: LYRA_HEADERS,
+  })
+  if (!res.ok) throw new Error(`enableToolBarrier failed: ${res.status}`)
+}
+
+export async function waitForToolBarrier(timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const res = await fetch(`${BACKEND}/_acceptance/tool-barrier/arrived`)
+    const { arrived } = await res.json()
+    if (arrived) return
+    await sleep(50)
+  }
+  throw new Error('No dispatch worker arrived at the tool barrier within timeout')
+}
+
+export async function releaseToolBarrier(): Promise<void> {
+  const res = await fetch(`${BACKEND}/_acceptance/tool-barrier/release`, {
+    method: 'POST',
+    headers: LYRA_HEADERS,
+  })
+  if (!res.ok) throw new Error(`releaseToolBarrier failed: ${res.status}`)
+}
+
 /* ------------------------------------------------------------------ */
 /*  Backend API helpers                                                */
 /* ------------------------------------------------------------------ */

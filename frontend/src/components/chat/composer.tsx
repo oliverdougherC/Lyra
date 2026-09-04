@@ -23,6 +23,13 @@ type ComposerProps = {
   onSend: () => void
   onStop: () => void
   streaming: boolean
+  /**
+   * The agent's Stop is a round trip to the server's /stop: while it is in flight the
+   * turn is being stopped but the server has not yet confirmed it, so the affordance
+   * says "Stopping…" instead of claiming the turn is stopped. Clicking again is a no-op
+   * (the pane guards the in-flight stop), so the button stays enabled and honest.
+   */
+  stopping?: boolean
   /** Non-null disables the composer and explains why. */
   disabledReason: string | null
   /**
@@ -45,6 +52,7 @@ export function Composer({
   onSend,
   onStop,
   streaming,
+  stopping = false,
   disabledReason,
   sourceControl,
   workspaceControl,
@@ -158,9 +166,9 @@ export function Composer({
             type="button"
             size="icon-sm"
             variant="outline"
-            className="size-9 shrink-0 rounded-full"
+            className={cn('size-9 shrink-0 rounded-full', stopping && 'animate-pulse')}
             onClick={onStop}
-            aria-label="Stop generating"
+            aria-label={stopping ? 'Stopping…' : 'Stop generating'}
           >
             <Square className="size-3" />
           </Button>

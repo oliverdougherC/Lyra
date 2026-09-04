@@ -458,7 +458,7 @@ async def test_cancellation_mid_loop_releases_the_session(
         # Stop the in-flight turn through the real endpoint (it cancels the turn task, not
         # the request task, so the request itself can still settle with a response).
         stopped = await routes_agent_chat.stop_agent_chat(class_id, session_id, conn)
-        assert stopped == {"stopped": True}
+        assert stopped == {"stopped": True, "settling": False}
         # The request completes with a bounded "stopped" body, not a bare cancellation.
         result = await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
     finally:
@@ -1595,7 +1595,7 @@ def test_planning_off_the_event_loop_does_not_freeze_the_app(
     other_session = int(sessions.create_session(db, class_id)["id"])
     unrelated = client.post(f"/api/classes/{class_id}/sessions/{other_session}/agent-chat/stop")
     assert unrelated.status_code == 200
-    assert unrelated.json() == {"stopped": False}
+    assert unrelated.json() == {"stopped": False, "settling": False}
 
     # And serialization is preserved: a second turn on the held session is refused with
     # the ordinary conversation-busy 409, without waiting on the planner.
@@ -1714,7 +1714,7 @@ def test_stop_during_real_tool_dispatch_leaves_no_later_effect(
 
     # The Stop reported a real stop, and the turn settled with the same bounded body.
     assert stop_results["stop"].status_code == 200
-    assert stop_results["stop"].json() == {"stopped": True}
+    assert stop_results["stop"].json() == {"stopped": True, "settling": False}
     turn = results["turn"]
     assert turn.status_code == 200
     assert json.loads(turn.content)["stopped"] == "stopped"
@@ -1731,3 +1731,173 @@ def test_stop_during_real_tool_dispatch_leaves_no_later_effect(
     assert row["state"] == "stopped"
     # And the session is free: the claim released only after the worker left.
     assert sessions.active_turn(session_id) is None
+
+
+def test_a_non_quiesced_ending_holds_the_claim_until_the_worker_leaves(
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A turn's ending where `wait_quiesced` reports false does not claim the turn is
+    settled: the session stays held (nothing may start under an in-flight worker, and the
+    connection it reads through must not close out from under it) until the worker has
+    actually left - while a quiesced ending releases in place. The bounded watcher's
+    last-resort release is the only other exit, and it is a loud one."""
+    monkeypatch.setattr(routes_agent_chat, "QUIESCENCE_SECONDS", 0.1)
+    token = sessions.begin_turn(session_id)
+    gate = tools.ToolStopGate()
+    worker_left = gate.begin_work()
+
+    def wait_for_release() -> None:
+        deadline = time.monotonic() + 5.0
+        while sessions.active_turn(session_id) is not None and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+    async def ending() -> None:
+        await routes_agent_chat._release_turn(session_id, token, gate)
+        # The non-quiesced ending kept the claim held.
+        assert sessions.active_turn(session_id) is not None
+        # The worker leaves: the bounded watcher releases the moment it sees quiescence.
+        gate.finish_work(worker_left)
+        await asyncio.wait_for(asyncio.to_thread(wait_for_release), timeout=6.0)
+
+    asyncio.run(ending())
+    # ...released, and only once the worker left.
+    assert sessions.active_turn(session_id) is None
+
+    # The quiesced ending (no in-flight worker) releases in place.
+    token2 = sessions.begin_turn(session_id)
+    quiet_gate = tools.ToolStopGate()
+
+    async def quiet_ending() -> None:
+        await routes_agent_chat._release_turn(session_id, token2, quiet_gate)
+        assert sessions.active_turn(session_id) is None
+
+    asyncio.run(quiet_ending())
+    assert sessions.active_turn(session_id) is None
+
+
+def test_stop_reports_settling_when_a_worker_outlives_the_quiescence_bound(
+    client: TestClient,
+    db: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The quiescence-timeout branch, end to end: a worker still inside its dispatch when
+    the Stop's bounded wait expires makes /stop report the truth - the stop was latched
+    and the cancellation delivered, but quiescence is NOT claimed. The attempt still
+    settles as stopped, the session frees as soon as the worker actually leaves, and the
+    conversation is not wedged afterwards.
+
+    Both quiescence bounds shrink to keep the branch inside the test's clock: the route's
+    own waits AND the loop's shielded wait read their module's constant at call time, so
+    the turn's bounded settlement stays bounded while the barrier holds the worker."""
+    monkeypatch.setattr(routes_agent_chat, "QUIESCENCE_SECONDS", 0.1)
+    monkeypatch.setattr(tools, "QUIESCENCE_SECONDS", 0.1)
+    app_settings.update_settings_row(db, {"allow_web_research": 1})
+
+    scripted = iter(
+        [
+            llm_client.AssistantMessage(
+                content="",
+                tool_calls=(
+                    llm_client.ToolCall(
+                        id="call-1",
+                        name="search_web",
+                        arguments='{"query": "definition of convolution"}',
+                    ),
+                ),
+                truncated=False,
+            ),
+            llm_client.AssistantMessage(content="The answer.", tool_calls=(), truncated=False),
+        ]
+    )
+
+    async def scripted_with_tools(
+        endpoint: str,
+        api_key: str | None,
+        model: str | None,
+        messages: list[dict[str, object]],
+        tool_definitions: list[dict[str, object]],
+        **kwargs: object,
+    ) -> llm_client.AssistantMessage:
+        return next(scripted)
+
+    monkeypatch.setattr(tools, "complete_with_tools", scripted_with_tools)
+
+    dispatched = threading.Event()
+    release = threading.Event()
+    network_calls: list[str] = []
+
+    def blocking_search(query: str, **kwargs: object) -> list[dict[str, str]]:
+        network_calls.append(query)
+        dispatched.set()
+        release.wait(timeout=10.0)
+        return [{"title": "A result", "url": "https://example.com", "content": "Body text."}]
+
+    monkeypatch.setattr(web_research, "search_web", blocking_search)
+
+    results: dict[str, object] = {}
+
+    def run_turn() -> None:
+        results["turn"] = client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+            json={"content": "Research the definition of convolution", "profile": "agent"},
+        )
+
+    turn_thread = threading.Thread(target=run_turn)
+    turn_thread.start()
+    assert dispatched.wait(timeout=5.0), "the real dispatch never started"
+
+    stop_results: dict[str, object] = {}
+
+    def run_stop() -> None:
+        stop_results["stop"] = client.post(
+            f"/api/classes/{class_id}/sessions/{session_id}/agent-chat/stop"
+        )
+
+    stop_thread = threading.Thread(target=run_stop)
+    stop_thread.start()
+    deadline = time.monotonic() + 5.0
+    entry = None
+    while time.monotonic() < deadline:
+        entry = routes_agent_chat._inflight.get(session_id)
+        if entry is not None and entry[2].stopped:
+            break
+        time.sleep(0.01)
+    assert entry is not None and entry[2].stopped, "the Stop never latched the turn's gate"
+
+    # The worker is STILL inside its dispatch when the Stop's bounded wait expires:
+    # the response must not claim a stop that has not provably happened.
+    stop_thread.join(timeout=10.0)
+    assert not stop_thread.is_alive()
+    assert stop_results["stop"].status_code == 200
+    assert stop_results["stop"].json() == {"stopped": False, "settling": True}
+
+    # The attempt settled as stopped either way - the turn is over for the student.
+    row = db.execute("select state from agent_turn_attempts order by id desc limit 1").fetchone()
+    assert row["state"] == "stopped"
+
+    # The worker leaves: the session frees as soon as the worker actually left.
+    release.set()
+    turn_thread.join(timeout=10.0)
+    assert not turn_thread.is_alive()
+    assert json.loads(results["turn"].content)["stopped"] == "stopped"
+    deadline = time.monotonic() + 5.0
+    while sessions.active_turn(session_id) is not None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert sessions.active_turn(session_id) is None
+    # Exactly one network search - the one that was in flight - and nothing after.
+    assert len(network_calls) == 1
+
+    # And the session is not wedged: the next turn runs and settles.
+    async def fast_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        return tools.ToolLoopResult(content="The next answer.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", fast_loop)
+    next_turn = client.post(
+        f"/api/classes/{class_id}/sessions/{session_id}/agent-chat",
+        json={"content": "A question after the stop", "profile": "agent"},
+    )
+    assert next_turn.status_code == 200
+    assert next_turn.json()["content"] == "The next answer."

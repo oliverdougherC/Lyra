@@ -1122,10 +1122,25 @@ describe('ChatPane contextual agent (PLA-401)', () => {
     // The transport failed, but the server did commit the question and its reply: the
     // reconciliation must leave the composer empty rather than invite a duplicate send.
     vi.mocked(api.sendAgentChat).mockClear()
-    vi.mocked(api.listMessages).mockImplementation(async () => [
-      message({ id: 1, role: 'user', content: 'Durable question' }),
-      message({ id: 2, role: 'assistant', content: 'Durable reply' }),
-    ])
+    vi.mocked(api.listMessages).mockImplementation(async () => {
+      // The reconciliation is matched on the operation id the send minted, not on the
+      // question's text.
+      const operationId = vi.mocked(api.sendAgentChat).mock.calls[0]?.[6]
+      return [
+        message({
+          id: 1,
+          role: 'user',
+          content: 'Durable question',
+          agent_attempt: {
+            state: 'completed',
+            stopped_reason: null,
+            detail: null,
+            operation_id: operationId,
+          },
+        }),
+        message({ id: 2, role: 'assistant', content: 'Durable reply' }),
+      ]
+    })
     vi.mocked(api.sendAgentChat).mockRejectedValue(
       new ApiError(0, 'Could not reach the Lyra service.'),
     )
@@ -1142,17 +1157,20 @@ describe('ChatPane contextual agent (PLA-401)', () => {
     await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe(''))
   })
 
-  it('stops the in-flight agent turn through the explicit stop endpoint', async () => {
-    vi.mocked(api.sendAgentChat).mockClear()
-    vi.mocked(api.stopAgentChat).mockClear()
-    let releaseSend: (() => void) | undefined
-    vi.mocked(api.listMessages).mockResolvedValue([])
-    vi.mocked(api.sendAgentChat).mockImplementation(
-      () =>
-        new Promise((resolve) => {
+  describe('agent stop lifecycle', () => {
+    function pendingTurnHarness() {
+      const transcript: MessageRead[] = []
+      let releaseSend: (() => void) | undefined
+      vi.mocked(api.listMessages).mockImplementation(async () => transcript)
+      let nextId = 1
+      vi.mocked(api.sendAgentChat).mockImplementation((_c, _s, content) => {
+        // The server stores the question the moment the turn opens, even though the
+        // answer is still in flight.
+        transcript.push(message({ id: nextId++, role: 'user', content }))
+        return new Promise((resolve) => {
           releaseSend = () =>
             resolve({
-              message_id: 9,
+              message_id: 2,
               content: 'Too late',
               stopped: 'complete',
               detail: 'Complete.',
@@ -1162,42 +1180,166 @@ describe('ChatPane contextual agent (PLA-401)', () => {
               command_request_ids: [],
               profile_fact_ids: [],
             })
-        }),
-    )
-    vi.mocked(api.stopAgentChat).mockResolvedValue({ stopped: true })
-    const user = userEvent.setup()
-    renderAgentPane()
+        })
+      })
+      return { transcript, releaseSend }
+    }
 
-    const box = await screen.findByLabelText('Message Lyra')
-    await user.type(box, 'Take a while')
-    await user.click(screen.getByLabelText('Send message'))
-    await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+    it('waits for the server stop confirmation before presenting the turn as stopped', async () => {
+      vi.mocked(api.sendAgentChat).mockClear()
+      vi.mocked(api.stopAgentChat).mockClear()
+      const { releaseSend } = pendingTurnHarness()
+      let releaseStop: (() => void) | undefined
+      vi.mocked(api.stopAgentChat).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            releaseStop = () => resolve({ stopped: true, settling: false })
+          }),
+      )
+      const user = userEvent.setup()
+      renderAgentPane()
 
-    // The turn is in flight: Stop hits the explicit endpoint (the handler cannot see a
-    // fetch abort) and the turn settles as stopped rather than running on unseen.
-    await user.click(await screen.findByLabelText('Stop generating'))
-    await waitFor(() => expect(vi.mocked(api.stopAgentChat)).toHaveBeenCalledWith(1, 7))
-    releaseSend?.()
+      const box = await screen.findByLabelText('Message Lyra')
+      await user.type(box, 'Take a while')
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+
+      // The turn is in flight: Stop hits the explicit endpoint (the handler cannot see a
+      // fetch abort) and the UI enters the bounded "Stopping…" state.
+      await user.click(await screen.findByLabelText('Stop generating'))
+      await waitFor(() => expect(api.stopAgentChat).toHaveBeenCalledTimes(1))
+      // The "Stopping…" affordance is the visible contract: the turn has NOT been
+      // declared stopped locally yet - that belongs to the server's confirmation.
+      expect(screen.getByLabelText('Stopping…')).toBeInTheDocument()
+      // And the conversation is still closed to a new turn while it settles.
+      expect(screen.queryByLabelText('Send message')).not.toBeInTheDocument()
+
+      // The server confirms: only now does the turn settle as stopped, the local request
+      // stand down, and the conversation re-enable.
+      act(() => releaseStop?.())
+      await waitFor(() => expect(screen.getByLabelText('Send message')).toBeInTheDocument())
+      expect(screen.queryByLabelText('Stopping…')).not.toBeInTheDocument()
+      expect(screen.queryByLabelText('Stop generating')).not.toBeInTheDocument()
+      await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe(''))
+      releaseSend?.()
+    })
+
+    it('treats a settling confirmation as a stop: the turn is stopped, the session frees a moment later', async () => {
+      vi.mocked(api.sendAgentChat).mockClear()
+      vi.mocked(api.stopAgentChat).mockClear()
+      const { releaseSend } = pendingTurnHarness()
+      // The stop was latched and the cancellation delivered, but a late worker is still
+      // leaving: the response reports exactly that, and the UI still presents the stopped
+      // state - no reply will arrive and no further durable effect can land.
+      vi.mocked(api.stopAgentChat).mockResolvedValue({ stopped: false, settling: true })
+      const user = userEvent.setup()
+      renderAgentPane()
+
+      const box = await screen.findByLabelText('Message Lyra')
+      await user.type(box, 'Take a while')
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+
+      await user.click(await screen.findByLabelText('Stop generating'))
+      await waitFor(() => expect(api.stopAgentChat).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(screen.getByLabelText('Send message')).toBeInTheDocument())
+      expect((box as HTMLTextAreaElement).value).toBe('')
+      releaseSend?.()
+    })
+
+    it('keeps the turn active and retries Stop when the stop request fails', async () => {
+      vi.mocked(api.sendAgentChat).mockClear()
+      vi.mocked(api.stopAgentChat).mockClear()
+      const { releaseSend } = pendingTurnHarness()
+      vi.mocked(api.stopAgentChat).mockRejectedValue(new TypeError('failed to fetch'))
+      const user = userEvent.setup()
+      renderAgentPane()
+
+      const box = await screen.findByLabelText('Message Lyra')
+      await user.type(box, 'Take a while')
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+
+      // The stop cannot reach the server: the UI must not claim the turn is stopped.
+      await user.click(await screen.findByLabelText('Stop generating'))
+      await waitFor(() => expect(api.stopAgentChat).toHaveBeenCalledTimes(1))
+      // The turn is still running: the Stop affordance is back (not "Stopping…"), a
+      // second attempt is allowed, and nothing settled locally in the meantime.
+      await waitFor(() => expect(screen.getByLabelText('Stop generating')).toBeInTheDocument())
+      expect(screen.queryByLabelText('Stopping…')).not.toBeInTheDocument()
+      expect(screen.queryByLabelText('Send message')).not.toBeInTheDocument()
+      vi.mocked(api.stopAgentChat).mockResolvedValue({ stopped: true, settling: false })
+      await user.click(screen.getByLabelText('Stop generating'))
+      await waitFor(() => expect(api.stopAgentChat).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(screen.getByLabelText('Send message')).toBeInTheDocument())
+      releaseSend?.()
+    })
+
+    it('retires the send key once the stop is confirmed, so the next send mints fresh', async () => {
+      vi.mocked(api.sendAgentChat).mockClear()
+      vi.mocked(api.stopAgentChat).mockClear()
+      const { transcript, releaseSend } = pendingTurnHarness()
+      vi.mocked(api.stopAgentChat).mockResolvedValue({ stopped: true, settling: false })
+      const user = userEvent.setup()
+      renderAgentPane()
+
+      const box = await screen.findByLabelText('Message Lyra')
+      await user.type(box, 'Take a while')
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+      const firstOp = vi.mocked(api.sendAgentChat).mock.calls[0][6]
+      expect(firstOp).toEqual(expect.any(String))
+
+      await user.click(await screen.findByLabelText('Stop generating'))
+      await waitFor(() => expect(api.stopAgentChat).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(screen.getByLabelText('Send message')).toBeInTheDocument())
+      releaseSend?.()
+
+      // A stop-confirmed turn is durably stopped: the browser's send key is spent, and a
+      // subsequent message - identical or different - is a NEW send with a fresh
+      // operation ID. The stopped turn's question stays in the transcript exactly once.
+      await user.type(box, 'What about Fourier transforms?')
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
+      const secondOp = vi.mocked(api.sendAgentChat).mock.calls[1][6]
+      expect(secondOp).toEqual(expect.any(String))
+      expect(secondOp).not.toBe(firstOp)
+      expect(transcript.filter((item) => item.content === 'Take a while')).toHaveLength(1)
+    })
   })
 
   /**
-   * PLA-401 final pass, item 3: the three-state lost-response reconciliation. A non-streaming
-   * agent turn can lose its acceptance in transport for ANY error - not just ApiErrors - so
-   * the composer's recovery is decided from the durable state, not from the error's type.
+   * Lost-response reconciliation keyed on the send's OPERATION ID (PLA-313), never on
+   * message text: a non-streaming agent turn can lose its acceptance in transport for
+   * ANY error, and the conversation may already contain an identical earlier question
+   * with its own turn, so the durable readback is matched on the operation id the send
+   * minted. The durable state decides what the composer does.
    */
   describe('lost-response reconciliation', () => {
-    it('case A: a durable reply retires both refs - empty composer, fresh operation id', async () => {
+    it('case A: a durable completed turn retires both refs - empty composer, fresh operation id', async () => {
       vi.mocked(api.sendAgentChat).mockClear()
       const transcript: MessageRead[] = []
       vi.mocked(api.listMessages).mockImplementation(async () => transcript)
-      vi.mocked(api.sendAgentChat).mockImplementation(async () => {
-        // The turn commits durably; the HTTP response is lost in transit.
-        transcript.push(
-          message({ id: 1, role: 'user', content: QUESTION }),
-          message({ id: 2, role: 'assistant', content: 'A durable answer.' }),
-        )
-        throw new Error('connection lost')
-      })
+      vi.mocked(api.sendAgentChat).mockImplementation(
+        async (_c, _s, _content, _r, _d, _m, operationId) => {
+          // The turn commits durably and completes; the HTTP response is lost in transit.
+          transcript.push(
+            message({
+              id: 1,
+              role: 'user',
+              content: QUESTION,
+              agent_attempt: {
+                state: 'completed',
+                stopped_reason: null,
+                detail: null,
+                operation_id: operationId,
+              },
+            }),
+            message({ id: 2, role: 'assistant', content: 'A durable answer.' }),
+          )
+          throw new Error('connection lost')
+        },
+      )
 
       const user = userEvent.setup()
       renderAgentPane()
@@ -1222,14 +1364,32 @@ describe('ChatPane contextual agent (PLA-401)', () => {
       expect(second[6]).not.toBe(first[6])
     })
 
-    it('case B: a durable failed turn leaves the composer empty (no prefill) but keeps the operation id', async () => {
-      // The question landed; the attempt failed. The transcript shows the honest turn;
-      // the composer must not prefill the text (Retry is the causal path), yet an identical
-      // re-send must carry the SAME operation id so the server re-runs the stored turn.
+    it('case B: a durable failed turn retires the send key entirely - no prefill, next send is a new send', async () => {
+      // The question landed; the attempt failed durably. The transcript shows the honest
+      // turn with its Retry. The composer must not prefill the text (Retry is the causal
+      // path) AND the send key is spent: a follow-up message - identical or different -
+      // is a NEW send that mints a fresh operation id, never a re-run of the spent one.
       vi.mocked(api.sendAgentChat).mockClear()
-      const transcript: MessageRead[] = [message({ id: 1, role: 'user', content: QUESTION })]
+      const transcript: MessageRead[] = []
       vi.mocked(api.listMessages).mockImplementation(async () => transcript)
-      vi.mocked(api.sendAgentChat).mockRejectedValue(new Error('upstream failed'))
+      vi.mocked(api.sendAgentChat).mockImplementation(
+        async (_c, _s, _content, _r, _d, _m, operationId) => {
+          transcript.push(
+            message({
+              id: 1,
+              role: 'user',
+              content: QUESTION,
+              agent_attempt: {
+                state: 'failed',
+                stopped_reason: 'upstream_failed',
+                detail: 'The model endpoint could not be reached.',
+                operation_id: operationId,
+              },
+            }),
+          )
+          throw new Error('upstream failed')
+        },
+      )
 
       const user = userEvent.setup()
       renderAgentPane()
@@ -1238,16 +1398,82 @@ describe('ChatPane contextual agent (PLA-401)', () => {
       await user.type(box, QUESTION)
       await user.click(screen.getByLabelText('Send message'))
       await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+      const firstOp = vi.mocked(api.sendAgentChat).mock.calls[0][6]
 
       // No prefill: the composer is empty, not offered the failed question again.
       await waitFor(() => expect(box).toHaveValue(''))
 
-      // Re-sending the same words re-runs the same durable turn under the same operation id.
+      // A typed message after the failed turn - identical or different - is a NEW send.
+      await user.type(box, 'What about Fourier transforms?')
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
+      const secondOp = vi.mocked(api.sendAgentChat).mock.calls[1][6]
+      expect(secondOp).not.toBe(firstOp)
+    })
+
+    it('reconciles an identical re-send against its own operation id, not an earlier identical question', async () => {
+      // The conversation already holds a COMPLETED turn for this exact question (with its
+      // own operation id). A NEW send of the same text carries a fresh operation id; when
+      // its acceptance is lost, the reconciliation must match the new operation's own
+      // durable turn - not the older identical-text turn - or it would silently lose the
+      // new question.
+      vi.mocked(api.sendAgentChat).mockClear()
+      const transcript: MessageRead[] = [
+        message({
+          id: 1,
+          role: 'user',
+          content: QUESTION,
+          agent_attempt: {
+            state: 'completed',
+            stopped_reason: null,
+            detail: null,
+            operation_id: 'earlier-operation',
+          },
+        }),
+        message({ id: 2, role: 'assistant', content: 'The earlier answer.' }),
+      ]
+      vi.mocked(api.listMessages).mockImplementation(async () => transcript)
+      vi.mocked(api.sendAgentChat).mockImplementation(
+        async (_c, _s, _content, _r, _d, _m, operationId) => {
+          // The new turn commits as its own durable turn under the NEW operation id; the
+          // reply is lost in transit.
+          transcript.push(
+            message({
+              id: 3,
+              role: 'user',
+              content: QUESTION,
+              agent_attempt: {
+                state: 'completed',
+                stopped_reason: null,
+                detail: null,
+                operation_id: operationId,
+              },
+            }),
+            message({ id: 4, role: 'assistant', content: 'The newer answer.' }),
+          )
+          throw new Error('connection lost')
+        },
+      )
+
+      const user = userEvent.setup()
+      renderAgentPane()
+
+      const box = await screen.findByLabelText('Message Lyra')
       await user.type(box, QUESTION)
+      await user.click(screen.getByLabelText('Send message'))
+
+      // Both turns are visible: the older identical-text turn and the newer one.
+      await waitFor(() => expect(screen.getAllByText(QUESTION)).toHaveLength(2))
+      expect(screen.getByText('The newer answer.')).toBeInTheDocument()
+      // The newer turn's acceptance was lost, but its key is spent: empty composer, and
+      // the NEXT send mints fresh.
+      await waitFor(() => expect(box).toHaveValue(''))
+      await user.type(box, 'And one more question')
       await user.click(screen.getByLabelText('Send message'))
       await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
       const [first, second] = vi.mocked(api.sendAgentChat).mock.calls
-      expect(second[6]).toBe(first[6])
+      expect(first[6]).not.toBe('earlier-operation')
+      expect(second[6]).not.toBe(first[6])
     })
 
     it('case C: nothing durable restores the draft and keeps the operation id for an idempotent re-send', async () => {

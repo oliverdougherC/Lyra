@@ -719,8 +719,15 @@ export const api = {
   // disconnect, so the server cancels the in-flight task itself - settling the durable
   // attempt as stopped and releasing the session claim - and the work actually stops.
   // Stopping a session with no turn in flight is a no-op, not an error.
+  //
+  // The response is a quiescence claim, made truthfully: `stopped: true` means the turn
+  // task has settled AND no worker is still inside a tool dispatch (the session is free).
+  // `settling: true` means the stop was latched and the cancellation delivered, but a
+  // late worker is still leaving - the turn is stopped in every way that matters to the
+  // student (no reply will arrive, no further durable effect can land), and the session
+  // frees the moment the worker leaves.
   stopAgentChat: (classId: number, sessionId: number, signal?: AbortSignal) =>
-    requestJson<{ stopped: boolean }>(
+    requestJson<{ stopped: boolean; settling: boolean }>(
       `/api/classes/${classId}/sessions/${sessionId}/agent-chat/stop`,
       { method: 'POST', signal },
     ),

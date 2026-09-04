@@ -248,6 +248,11 @@ export function ChatPane({
   // local fetch for these: the non-streaming handler cannot see its client's disconnect,
   // so the server-side cancellation (attempt settled, claim released) is explicit.
   const agentTurnRef = useRef(false)
+  // The agent's Stop is a round trip: the composer shows "Stopping…" while /agent-chat/stop
+  // is in flight, and the terminal stopped state is presented only once the server has
+  // confirmed it - never faked locally.
+  const [stopping, setStopping] = useState(false)
+  const stopInFlightRef = useRef(false)
 
   const newestSession = useMemo(
     () => (sessions && sessions.length > 0 ? [...sessions].sort((a, b) => b.id - a.id)[0] : null),
@@ -354,6 +359,8 @@ export function ChatPane({
     outcomeRef.current = null
     setRevealDrained(false)
     revealDrainedRef.current = false
+    stopInFlightRef.current = false
+    setStopping(false)
   }, [])
 
   /**
@@ -582,14 +589,32 @@ export function ChatPane({
                       operationIdRef.current ?? undefined,
                       controller.signal,
                     )
-            onEvent({ type: 'done', message_id: result.message_id })
-            if (kind === 'send') {
-              // The operation is durably settled: the reply committed (or the failure is
-              // durable), so the key is spent. A retry or regeneration must never clear a
-              // key an earlier ambiguous send still owns.
-              responseAcceptedRef.current = true
-              submittedTextRef.current = null
-              operationIdRef.current = null
+            if (result.stopped === 'stopped') {
+              // The server settled this turn as STOPPED - our Stop, or the server's own
+              // backstop - and completed the request with its bounded stopped body.
+              // There is no reply to show: present the terminal stopped state (not a
+              // completion of an empty answer) and spend the send key, exactly as a
+              // confirmed Stop would.
+              if (outcomeRef.current === 'active') setOutcome('stopped')
+              if (kind === 'send') {
+                responseAcceptedRef.current = true
+                submittedTextRef.current = null
+                operationIdRef.current = null
+                if (streamTextRef.current.trim().length === 0) {
+                  revealDrainedRef.current = true
+                  setRevealDrained(true)
+                }
+              }
+            } else {
+              onEvent({ type: 'done', message_id: result.message_id })
+              if (kind === 'send') {
+                // The operation is durably settled: the reply committed (or the failure is
+                // durable), so the key is spent. A retry or regeneration must never clear a
+                // key an earlier ambiguous send still owns.
+                responseAcceptedRef.current = true
+                submittedTextRef.current = null
+                operationIdRef.current = null
+              }
             }
           } catch (err) {
             // The turn's truth is durable on the server either way: a failed attempt row, or
@@ -692,46 +717,57 @@ export function ChatPane({
         } else {
           setOutcome('failed')
           if (agent && kind === 'send') {
-            // PLA-401 final pass: the three-state lost-response reconciliation, for ANY
-            // non-409 error - including transport failures that never became an ApiError
-            // (a dropped connection is the most common one). The durable state decides
-            // what the composer does; the transcript above already fell back to it, so the
-            // screen shows the truth in every branch.
+            // Lost-response reconciliation keyed on the logical send's OPERATION ID
+            // (PLA-313), never on message text: this conversation may already contain an
+            // identical earlier question with its own completed turn, and text equality
+            // would let that old turn satisfy the new operation - clearing the composer
+            // and silently losing the new question. The durable readback carries the
+            // operation id on the attempt of the user message the send committed to; a
+            // message that carries THIS id is the send's own turn, in whatever state it
+            // settled in. The screen above already fell back to the durable state, so
+            // every branch shows the truth.
             const durable = await api.listMessages(turnSessionId).catch(() => null)
-            const lastUser =
-              durable === null
+            const operationId = operationIdRef.current
+            const ownTurn =
+              durable === null || operationId === null
                 ? undefined
-                : [...durable]
-                    .reverse()
-                    .find((item) => item.role === 'user' && item.content === content)
-            const hasReply =
-              lastUser !== undefined &&
-              durable !== null &&
-              durable.some((item) => item.role === 'assistant' && item.id > lastUser.id)
-            if (hasReply) {
-              // CASE A - durable question with a stored reply: the turn succeeded and only
-              // its acceptance was lost. Retire BOTH refs: the composer goes empty and the
-              // next Send mints a fresh operation ID (re-sending this question would be a
-              // new question, not a duplicate).
-              submittedTextRef.current = null
-              operationIdRef.current = null
-              responseAcceptedRef.current = true
-              setDraft('')
-              toast.success('Your answer was already saved.')
-            } else if (lastUser !== undefined) {
-              // CASE B - durable question, failed or stopped attempt, no reply: the
-              // transcript shows the honest turn with its causal Retry. The composer goes
-              // empty - no prefill - but the operation ID is KEPT: re-sending the same
-              // words carries it, so the server re-runs the stored turn instead of
-              // appending a duplicate question.
-              submittedTextRef.current = null
-              setDraft('')
-              toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
+                : durable.find(
+                    (item) =>
+                      item.role === 'user' && item.agent_attempt?.operation_id === operationId,
+                  )
+            if (ownTurn !== undefined) {
+              // The send committed durably - completed, failed, stopped, or still
+              // settling. It now has a durable identity of its own, so the browser's
+              // send key is spent: retire BOTH refs, whatever the attempt's state.
+              // (A failed or stopped turn keeps its causal Retry; a subsequent Send -
+              // identical or different - is a NEW send with a fresh operation ID, never
+              // a re-run of the spent key.)
+              if (ownTurn.agent_attempt?.state === 'completed') {
+                // The turn succeeded and only its acceptance was lost: the reply is in
+                // the transcript, the composer goes empty, and the next Send mints a
+                // fresh operation ID.
+                submittedTextRef.current = null
+                operationIdRef.current = null
+                responseAcceptedRef.current = true
+                setDraft('')
+                toast.success('Your answer was already saved.')
+              } else {
+                // Durable failed/stopped (or still settling) turn, no usable reply: the
+                // transcript shows the honest turn with its Retry. The composer goes
+                // empty - no prefill - and the spent key is retired as well.
+                submittedTextRef.current = null
+                operationIdRef.current = null
+                setDraft('')
+                toast.error(
+                  caught instanceof ApiError ? caught.message : 'The answer stopped early.',
+                )
+              }
             } else {
-              // CASE C - nothing durable landed. The draft goes back in the box and the
-              // operation ID is kept: a re-send either lands fresh, or - if the turn did
-              // commit and only the readback failed - the server reconciles by operation
-              // ID instead of duplicating.
+              // Nothing durable carries this operation: the request never reached the
+              // server (or the readback failed). The draft goes back in the box and the
+              // minted key is kept, so a re-send either lands fresh or - if the turn did
+              // commit and only the readback missed it - the server reconciles by that
+              // same id instead of duplicating.
               if (submittedTextRef.current !== null) {
                 setDraft(submittedTextRef.current)
               }
@@ -749,6 +785,10 @@ export function ChatPane({
       } finally {
         if (owns()) {
           abortRef.current = null
+          // The turn is gone: any in-flight Stop belongs to it, so its "Stopping…"
+          // state ends with the turn no matter how the turn settled.
+          stopInFlightRef.current = false
+          setStopping(false)
           if (outcomeRef.current === 'active') {
             toast.error('The answer stopped early.')
             setOutcome('failed')
@@ -846,24 +886,70 @@ export function ChatPane({
   }, [activeSessionId, runTurn, writer])
 
   const stop = useCallback(() => {
-    if (!abortRef.current) return
-    setOutcome('stopped')
-    if (responseAcceptedRef.current) {
-      operationIdRef.current = null
+    const pending = abortRef.current
+    if (pending === null) return
+    const session = turnSessionRef.current
+    if (agentTurnRef.current === false || session === null) {
+      // Non-agent turns keep their longstanding behavior: the stream belongs to this
+      // connection, so the local abort IS the whole stop.
+      if (outcomeRef.current === 'active') setOutcome('stopped')
+      if (responseAcceptedRef.current) {
+        operationIdRef.current = null
+      }
+      if (streamTextRef.current.trim().length === 0) {
+        revealDrainedRef.current = true
+        setRevealDrained(true)
+      }
+      pending.abort()
+      return
     }
-    if (streamTextRef.current.trim().length === 0) {
-      revealDrainedRef.current = true
-      setRevealDrained(true)
-    }
-    // The contextual agent's turn is non-streaming: its server handler cannot see this
-    // fetch being aborted, so the explicit /stop is what actually cancels the work -
-    // settling the durable attempt as stopped and releasing the session claim, with the
-    // turn left retryable. The local abort still stands down the UI either way.
-    if (agentTurnRef.current && turnSessionRef.current !== null) {
-      void api.stopAgentChat(classId, turnSessionRef.current).catch(() => undefined)
-    }
-    abortRef.current.abort()
-  }, [classId, setOutcome])
+    // The agent's turn is non-streaming: its server handler cannot see this fetch being
+    // aborted, so the explicit /stop is what actually stops the work. The UI enters a
+    // bounded "Stopping…" state and AWAITs the server's confirmation: the student must
+    // not be told "stopped" before the server has proved the turn is stopped, and the
+    // conversation stays closed to another turn meanwhile.
+    if (stopInFlightRef.current) return
+    stopInFlightRef.current = true
+    setStopping(true)
+    // Identity of the turn this stop belongs to: the turn counter only moves when a
+    // new turn starts, so a stop callback arriving after a newer turn owns the pane
+    // must not touch the newer turn's state.
+    const owner = turnIdRef.current
+    void (async () => {
+      try {
+        await api.stopAgentChat(classId, session)
+        if (turnIdRef.current !== owner) return
+        // A successful response is the server's confirmation that the stop was latched
+        // and the cancellation delivered: the turn will settle as stopped, no reply will
+        // arrive, and no further durable effect from it can land. `stopped: true`
+        // adds the proof that every worker has left (the session is free); `settling`
+        // means one late worker is still leaving and the session frees a moment later.
+        // Either way the student's turn is stopped, so present it as such: spend the
+        // send key, settle the local request, and re-enable the conversation.
+        if (outcomeRef.current === 'active') setOutcome('stopped')
+        responseAcceptedRef.current = true
+        submittedTextRef.current = null
+        operationIdRef.current = null
+        if (streamTextRef.current.trim().length === 0) {
+          revealDrainedRef.current = true
+          setRevealDrained(true)
+        }
+        pending.abort()
+      } catch {
+        // The stop did not reach the server (or the server could not handle it): the turn
+        // may still be running. Stay active - do NOT present a stop that was never
+        // confirmed - and let the student try Stop again.
+        if (turnIdRef.current === owner && outcomeRef.current === 'active') {
+          toast.error('Stop could not be confirmed. The turn may still be running.')
+        }
+      } finally {
+        if (turnIdRef.current === owner) {
+          stopInFlightRef.current = false
+          setStopping(false)
+        }
+      }
+    })()
+  }, [classId])
 
   /**
    * Called by the streaming renderer whenever its reveal queue drains. Mid-stream
@@ -1155,6 +1241,7 @@ export function ChatPane({
       onSend={() => send(draft)}
       onStop={stop}
       streaming={turnActive}
+      stopping={stopping}
       disabledReason={disabledReason}
       sourceControl={sourceControl}
       workspaceControl={workspaceControl}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import threading
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -2127,7 +2128,7 @@ async def test_the_stop_endpoint_cancels_the_inflight_turn(
 
         # Explicit stop on the in-flight turn.
         stopped = await routes_agent_chat.stop_agent_chat(class_id, session_id, conn_b)
-        assert stopped == {"stopped": True}
+        assert stopped == {"stopped": True, "settling": False}
 
         # The stopped turn settles: attempt stopped, claim released, no hidden work left.
         # The request itself completes normally with a bounded "stopped" body - it never
@@ -2150,7 +2151,7 @@ async def test_the_stop_endpoint_cancels_the_inflight_turn(
         again = await routes_agent_chat.stop_agent_chat(class_id, session_id, conn_c)
     finally:
         conn_c.close()
-    assert again == {"stopped": False}
+    assert again == {"stopped": False, "settling": False}
 
 
 # ---------------------------------------------------------------------------
@@ -2719,3 +2720,280 @@ def test_a_regenerate_with_an_explicit_null_document_retrieves_class_wide(
     )
     assert response.status_code == 200, response.text
     assert retrieved[-1] is None
+
+
+# ---------------------------------------------------------------------------
+# PLA-401 final pass, item 3: the lost-response reconciliation is keyed on the
+# send's operation ID, never on message text - and the readback the client
+# reconciles against is the message list's own attempt annotation.
+# ---------------------------------------------------------------------------
+
+
+def _readback_app(monkeypatch: pytest.MonkeyPatch, db: sqlite3.Connection) -> FastAPI:
+    """An app carrying both the agent turn and the message-list readback."""
+    from backend.api import routes_chat
+
+    db.execute(
+        "update settings set endpoint_url = 'http://127.0.0.1:8080/v1', model = 'qwen', "
+        "tools_supported = 1 where id = 1"
+    )
+    db.commit()
+
+    async def ok_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        return tools.ToolLoopResult(content="An answer.")
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", ok_loop)
+    app = FastAPI()
+    app.include_router(routes_agent_chat.router)
+    app.include_router(routes_chat.router)
+    app.dependency_overrides[get_db] = _request_db
+    return app
+
+
+def test_the_message_list_carries_the_send_operation_id(
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The readback contract: the message list exposes the logical send's operation ID on
+    the attempt of the user message the send committed to - the only thing the client's
+    lost-response reconciliation may match, never the message text.
+
+    An identical question re-sent under a fresh operation ID is a new turn: it must neither
+    replay the earlier completed turn nor be satisfied by it, on either side of the wire.
+    """
+    app = _readback_app(monkeypatch, db)
+    with TestClient(app) as client:
+        session_id = int(sessions.create_session(db, class_id)["id"])
+        url = f"/api/classes/{class_id}/sessions/{session_id}/agent-chat"
+
+        first = client.post(url, json={"content": "Explain convolution", "operation_id": "op-one"})
+        assert first.status_code == 200
+        # The same question, a fresh key: a new logical send, not the first one.
+        second = client.post(url, json={"content": "Explain convolution", "operation_id": "op-two"})
+        assert second.status_code == 200
+
+        messages = client.get(f"/api/sessions/{session_id}/messages").json()
+        users = [m for m in messages if m["role"] == "user"]
+        assert [m["content"] for m in users] == ["Explain convolution"] * 2
+        assert users[0]["agent_attempt"]["operation_id"] == "op-one"
+        assert users[1]["agent_attempt"]["operation_id"] == "op-two"
+        assert users[0]["agent_attempt"]["state"] == "completed"
+        assert users[1]["agent_attempt"]["state"] == "completed"
+        # Replies carry no attempt of their own.
+        for message in messages:
+            if message["role"] == "assistant":
+                assert message.get("agent_attempt") is None
+
+
+def test_a_failed_turn_does_not_satisfy_a_new_send_of_the_same_text(
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A durably FAILED turn (identical text) must not answer the client's reconciliation
+    for a newer send: the new operation is its own turn, the old one stays failed beside
+    it, and both attempts stay legible in the readback."""
+    from backend.api import routes_chat
+
+    db.execute(
+        "update settings set endpoint_url = 'http://127.0.0.1:8080/v1', model = 'qwen', "
+        "tools_supported = 1 where id = 1"
+    )
+    db.commit()
+    results = iter(
+        [
+            tools.ToolLoopResult(
+                content="",
+                stopped=tools.UPSTREAM_FAILED,
+                detail="The tutor endpoint could not be reached.",
+            ),
+            tools.ToolLoopResult(content="The second answer."),
+        ]
+    )
+
+    async def loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        return next(results)
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", loop)
+    app = FastAPI()
+    app.include_router(routes_agent_chat.router)
+    app.include_router(routes_chat.router)
+    app.dependency_overrides[get_db] = _request_db
+
+    with TestClient(app) as client:
+        session_id = int(sessions.create_session(db, class_id)["id"])
+        url = f"/api/classes/{class_id}/sessions/{session_id}/agent-chat"
+
+        first = client.post(
+            url, json={"content": "Explain convolution", "operation_id": "op-failed"}
+        )
+        assert first.status_code == 502
+        # The same question, a fresh key: the server runs a NEW turn - it neither replays
+        # the failed one nor refuses it.
+        second = client.post(
+            url, json={"content": "Explain convolution", "operation_id": "op-fresh"}
+        )
+        assert second.status_code == 200
+        assert second.json()["content"] == "The second answer."
+
+        messages = client.get(f"/api/sessions/{session_id}/messages").json()
+        users = [m for m in messages if m["role"] == "user"]
+        assert len(users) == 2
+        assert users[0]["agent_attempt"]["operation_id"] == "op-failed"
+        assert users[0]["agent_attempt"]["state"] == "failed"
+        assert users[1]["agent_attempt"]["operation_id"] == "op-fresh"
+        assert users[1]["agent_attempt"]["state"] == "completed"
+        # The failed turn left no reply; the new one did.
+        assert [m["role"] for m in messages] == ["user", "user", "assistant"]
+
+
+# ---------------------------------------------------------------------------
+# PLA-401 final pass, item 4: the no-tool-support verdict is compare-and-set
+# against the turn's own TutorConfig identity - a refusal about endpoint A can
+# never stamp the settings row that now points at endpoint B.
+# ---------------------------------------------------------------------------
+
+
+def test_a_tool_refusal_lands_only_on_the_endpoint_it_was_measured_against(
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Endpoint A refused tools, then Settings flipped to endpoint B while the slow turn
+    was still in flight. The verdict is a fact about A's pair: it must be discarded when
+    the row moves, and B's pair must keep its unknown state, so B's first turn gets a fair
+    tool attempt instead of inheriting a refusal that is not its own."""
+    endpoint_a = "http://127.0.0.1:18901/v1"
+    endpoint_b = "http://127.0.0.1:18902/v1"
+    db.execute(
+        "update settings set endpoint_url = ?, model = 'model-a', tools_supported = NULL, "
+        "tools_message = NULL where id = 1",
+        (endpoint_a,),
+    )
+    db.commit()
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    async def refused_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        # The first tools request to endpoint A was refused; the turn sits in its
+        # settlement while Settings flips underneath it.
+        entered.set()
+        release.wait(timeout=10.0)
+        return tools.ToolLoopResult(
+            content="",
+            stopped=tools.NO_TOOL_SUPPORT,
+            detail="The endpoint refused the tool definitions.",
+        )
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", refused_loop)
+
+    async def toolless_complete(endpoint, api_key, model, messages):
+        return "The tool-less answer."
+
+    monkeypatch.setattr(routes_agent_chat.llm_client, "complete", toolless_complete)
+
+    app = FastAPI()
+
+    async def _no_error(request: Request, exc: LyraError) -> JSONResponse:
+        return JSONResponse(status_code=exc.status, content={"detail": exc.message})
+
+    app.exception_handler(LyraError)(_no_error)
+    app.include_router(routes_agent_chat.router)
+    app.dependency_overrides[get_db] = _request_db
+
+    with TestClient(app) as client:
+        session_id = int(sessions.create_session(db, class_id)["id"])
+        url = f"/api/classes/{class_id}/sessions/{session_id}/agent-chat"
+
+        results: dict[str, object] = {}
+
+        def run_turn() -> None:
+            results["turn"] = client.post(url, json={"content": "Explain convolution"})
+
+        turn = threading.Thread(target=run_turn)
+        turn.start()
+        assert entered.wait(timeout=5.0), "the turn never reached its tool refusal"
+
+        # The student switches endpoints while the turn is still in flight.
+        app_settings.update_settings_row(db, {"endpoint_url": endpoint_b, "model": "model-b"})
+        release.set()
+        turn.join(timeout=10.0)
+        assert not turn.is_alive()
+        # The same logical turn continued tool-less and was answered.
+        assert results["turn"].status_code == 200
+
+    # The verdict about A never landed on B's row: the flip kept B unknown.
+    row = db.execute(
+        "select endpoint_url, model, tools_supported, tools_message from settings where id = 1"
+    ).fetchone()
+    assert row["endpoint_url"] == endpoint_b
+    assert row["model"] == "model-b"
+    assert row["tools_supported"] is None
+    assert row["tools_message"] is None
+
+
+def test_a_stale_tool_refusal_cannot_pre_block_the_new_endpoint(
+    db: sqlite3.Connection,
+    class_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the race: the next turn, aimed at the NEW endpoint with an
+    unknown verdict, gets a fair attempt at tools (the registry is offered to the loop) -
+    not a pre-blocked tool-less pass inherited from a refusal that is not its own."""
+    endpoint_a = "http://127.0.0.1:18911/v1"
+    endpoint_b = "http://127.0.0.1:18912/v1"
+    db.execute(
+        "update settings set endpoint_url = ?, model = 'model-a', tools_supported = NULL, "
+        "tools_message = NULL where id = 1",
+        (endpoint_a,),
+    )
+    db.commit()
+
+    registries: list[object] = []
+
+    async def no_tools_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+        registries.append(kwargs.get("registry"))
+        return tools.ToolLoopResult(
+            content="",
+            stopped=tools.NO_TOOL_SUPPORT,
+            detail="The endpoint refused the tool definitions.",
+        )
+
+    monkeypatch.setattr(routes_agent_chat, "run_tool_loop", no_tools_loop)
+
+    async def toolless_complete(endpoint, api_key, model, messages):
+        return "The tool-less answer."
+
+    monkeypatch.setattr(routes_agent_chat.llm_client, "complete", toolless_complete)
+
+    app = FastAPI()
+    app.include_router(routes_agent_chat.router)
+    app.dependency_overrides[get_db] = _request_db
+
+    with TestClient(app) as client:
+        session_id = int(sessions.create_session(db, class_id)["id"])
+        url = f"/api/classes/{class_id}/sessions/{session_id}/agent-chat"
+        # Turn one: endpoint A refuses; the verdict lands on A's pair (the row still names
+        # A, so the compare-and-set matches).
+        assert client.post(url, json={"content": "First question"}).status_code == 200
+        row = db.execute("select tools_supported from settings where id = 1").fetchone()
+        assert row["tools_supported"] == 0
+
+        # The flip, this time AFTER the verdict: the row names B with the verdict cleared.
+        app_settings.update_settings_row(db, {"endpoint_url": endpoint_b, "model": "model-b"})
+
+        # Turn two: endpoint B, unknown verdict - the loop runs with its registry.
+        async def tool_loop(*args: object, **kwargs: object) -> tools.ToolLoopResult:
+            registries.append(kwargs.get("registry"))
+            return tools.ToolLoopResult(content="A tool answer from B.")
+
+        monkeypatch.setattr(routes_agent_chat, "run_tool_loop", tool_loop)
+        second = client.post(url, json={"content": "Second question"})
+        assert second.status_code == 200
+
+    # B's first turn got a fair attempt: the registry was offered, not pre-blocked.
+    assert len(registries) == 2
+    assert isinstance(registries[-1], dict)
+    assert "cas_evaluate" in registries[-1]

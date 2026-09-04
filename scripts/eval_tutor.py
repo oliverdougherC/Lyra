@@ -24,10 +24,26 @@ with the wrong ruler.
 **Run it against more than one model.** The point of the prompt work is that it holds up
 on a small local model, and a number from one model tells you nothing about that.
 
+**Two surfaces, one ruler.** `--surface class_chat` (the default) sends each case the way
+the product's class conversation sends it: the production planner, and then the production
+TOOL LOOP, run to the terminal assistant answer - a model that checks its work with
+`cas_evaluate` before explaining convolution is mid-conversation, not a failure, and the
+case is graded on the answer the loop ends with. Only a loop that never reaches a usable
+terminal answer fails, named by the loop's own stop reason. `--surface tutor` keeps the
+historical anchored-tutor assembly.
+
+**The default run is deterministic.** `class_chat` plans against a disposable, eval-only
+database by default: one fixed class and session, no user data, no workspace, no
+public-web grant - the corpus grades the product under identical class state on every
+run. The source database is read only for the endpoint configuration; it is never planned
+against and never modified in the default run. `--class-id`/`--session-id` opt into an
+environment-specific smoke run against the real class instead.
+
 Usage:
 
     python scripts/eval_tutor.py run    [--corpus P] [--workspace W] [--source-db D] [--case ID]
-                                      [--surface class_chat|tutor] [--class-id N] [--session-id N]
+                                      [--surface class_chat|tutor] [--eval-db P]
+                                      [--class-id N --session-id N]   # real-class smoke mode
     python scripts/eval_tutor.py grade  [--corpus P] [--workspace W] [--source-db D]
                                        [--judge-source-db D] [--judge-model M] [--case ID]
     python scripts/eval_tutor.py report [--corpus P] [--workspace W] [--fail-under 1.0]
@@ -37,10 +53,13 @@ Usage:
 import argparse
 import asyncio
 import json
+import shutil
 import sqlite3
 import sys
+import tempfile
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -52,8 +71,10 @@ from backend.api.routes_agent_chat import (  # noqa: E402
     ClassChatAssembly,
     assemble_class_chat_turn,
 )
+from backend.core import sessions  # noqa: E402
 from backend.core.app_settings import TutorConfig, resolve_tutor_config  # noqa: E402
 from backend.llm import client  # noqa: E402
+from backend.llm import tools as llm_tools  # noqa: E402
 from backend.llm.client import JsonSchema  # noqa: E402
 from backend.llm.locality import is_local_endpoint  # noqa: E402
 from backend.llm.prompts import (  # noqa: E402
@@ -61,6 +82,7 @@ from backend.llm.prompts import (  # noqa: E402
     build_system_prompt,
     format_context_block,
 )
+from backend.llm.tools import run_tool_loop  # noqa: E402
 from backend.llm.turn_budget import HistoryMessage  # noqa: E402
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk  # noqa: E402
 from backend.rag.tokens import estimate_tokens  # noqa: E402
@@ -224,6 +246,8 @@ def class_chat_assembly(
     session_id: int,
     config: TutorConfig,
     case: Case,
+    *,
+    no_context: bool = False,
 ) -> ClassChatAssembly:
     """One corpus case through the PRODUCTION class-chat planner (PLA-401 final pass).
 
@@ -234,9 +258,13 @@ def class_chat_assembly(
     retrieval block, the trimmed history, the question, and the tool schemas the class's
     registry offers (empty on the tool-less surface, which is exactly when the route would
     answer tool-less). A case that carries its own `context` pins that material into the
-    plan; a case without one retrieves across the class's real material in the source
-    database, class-wide. The contract test in `backend/tests/test_eval_tutor.py` assembles
-    the same case through the route's planner and asserts the two agree.
+    plan. A case without one retrieves across the class's real material class-wide - or,
+    with `no_context`, pins the deliberately empty retrieval of the deterministic eval
+    environment, whose class carries no material: an empty retrieval is exactly what
+    production retrieval returns there, and pinning it keeps the benchmark hermetic (no
+    dependency on the local embedding server) without changing what the model sees. The
+    contract test in `backend/tests/test_eval_tutor.py` assembles the same case through the
+    route's planner and asserts the two agree.
     """
     history = tuple(
         HistoryMessage(role=turn["role"], content=turn["content"]) for turn in case.history
@@ -264,6 +292,11 @@ def class_chat_assembly(
             trimmed=False,
             omitted_document_count=0,
         )
+    elif no_context:
+        # The deterministic eval environment's intentional clean state: the class carries
+        # no material, so the turn plans with no context block, exactly as production
+        # retrieval over that class would return.
+        retrieval = RetrievalResult(chunks=(), trimmed=False, omitted_document_count=0)
     else:
         retrieval = None
     return assemble_class_chat_turn(
@@ -283,31 +316,94 @@ async def _run_one_class_chat(
     api_key: str | None,
     model: str | None,
     assembly: ClassChatAssembly,
-) -> tuple[str, list[str], float]:
-    """One class-chat first request: exactly the round-zero call the product's loop sends.
+    replan_toolless: Callable[[], ClassChatAssembly] | None = None,
+) -> dict[str, object]:
+    """One class-chat turn, executed the way the PRODUCT runs it: the production tool
+    loop, to the terminal assistant answer.
 
-    Returns the reply content, the tool calls the model made instead (empty when it
-    answered), and the system-prompt token cost.
+    The assembly is the planner's own output - its messages, its executable registry, its
+    context budget - so `run_tool_loop` here is the route's loop: the same handlers, the
+    same audit, the same depth/wall-clock/context/output bounds, and the same semantics in
+    which a tool error is a result the model can act on, not a failure of the turn. A model
+    that calls `cas_evaluate` while answering "Explain convolution" is mid-conversation,
+    not failed: the loop feeds the result back and keeps going, and the case is graded on
+    the answer the loop ends with. The calls it made ride along as metadata (`tool_calls`,
+    `rounds`), and the loop's own stop reason is recorded on every non-terminal ending.
+
+    Only a loop that never reaches a usable terminal answer fails truthfully - as
+    `incomplete`, with the stop reason (depth, timeout, context overflow, output limit,
+    upstream failure, stop) and the partial trace, exactly as the route would settle it.
     """
-    answer = await client.complete_with_tools(
-        endpoint,
-        api_key,
-        model,
-        [dict(message) for message in assembly.messages],
-        list(assembly.tools),
-        temperature=client.DETERMINISTIC_TEMPERATURE,
-    )
-    if answer.tool_calls:
-        return (
-            "",
-            [call.name for call in answer.tool_calls],
-            estimate_tokens(str(assembly.messages[0].get("content") or "")),
+    tool_calls: list[dict[str, object]] = []
+    if assembly.toolless:
+        # The tool-less surface (a known tool-incompatible endpoint, or a window that
+        # cannot carry the tool schemas): one plain completion, as the route's tool-less
+        # path sends it - the full tutor contract, no schemas, no loop.
+        answer = await client.complete(
+            endpoint, api_key, model, [dict(message) for message in assembly.messages]
         )
-    return (
-        answer.content,
-        [],
-        estimate_tokens(str(assembly.messages[0].get("content") or "")),
+        return {
+            "status": "ok" if answer.strip() else "error",
+            "response": answer,
+            "tool_calls": [],
+            "rounds": 1,
+            "toolless": True,
+        }
+    # Count model calls (rounds) through the loop's own request seam: the loop reports its
+    # tool calls via `on_call`, but rounds are model turns, so the counter wraps exactly
+    # the call the loop makes - restored before any return path leaves.
+    original_with_tools = llm_tools.complete_with_tools
+    rounds = {"model_calls": 0}
+
+    async def _counting_with_tools(*args: object, **kwargs: object):
+        rounds["model_calls"] += 1
+        return await original_with_tools(*args, **kwargs)
+
+    llm_tools.complete_with_tools = _counting_with_tools
+    try:
+        result = await run_tool_loop(
+            endpoint,
+            api_key,
+            model,
+            [dict(message) for message in assembly.messages],
+            registry=dict(assembly.registry),
+            context_budget=assembly.context_budget,
+            # The loop reports each executed call (name, ok, bounded result) as evidence.
+            on_call=lambda call: tool_calls.append({"name": call.name, "ok": call.ok}),
+        )
+    finally:
+        llm_tools.complete_with_tools = original_with_tools
+    record: dict[str, object] = {
+        "tool_calls": tool_calls,
+        "rounds": rounds["model_calls"],
+        "toolless": False,
+    }
+    if result.complete:
+        answer = result.content.strip()
+        record.update(
+            status="ok" if answer else "error",
+            response=result.content,
+        )
+        return record
+    if result.stopped == llm_tools.NO_TOOL_SUPPORT and not tool_calls and replan_toolless:
+        # An UNKNOWN endpoint rejected the FIRST tools request before any tool ran: the
+        # route settles that pass as abandoned and re-plans the same turn tool-less - the
+        # eval mirrors the product's fallback rather than scoring it a failure.
+        toolless = replan_toolless()
+        answer = await client.complete(
+            endpoint, api_key, model, [dict(message) for message in toolless.messages]
+        )
+        record.update(toolless=True, rounds=rounds["model_calls"] + 1)
+        record.update(status="ok" if answer.strip() else "error", response=answer)
+        return record
+    # The loop never reached a usable terminal answer: record exactly why, truthfully.
+    record.update(
+        status="incomplete",
+        stopped=result.stopped,
+        detail=result.detail,
+        response="",
     )
+    return record
 
 
 def _transcript(case: Case) -> str:
@@ -543,7 +639,7 @@ async def _run_one(
     chunks: list[str] = []
     async for delta in client.stream_chat(endpoint, api_key, model, messages):
         if delta.channel == "answer":
-            chunks.append(delta.content)
+            chunks.append(delta.text)
     return "".join(chunks), estimate_tokens(messages[0]["content"])
 
 
@@ -558,39 +654,74 @@ def _selected(cases: list[Case], wanted: list[str] | None) -> list[Case]:
     return [case for case in cases if case.id in order]
 
 
-def _class_chat_target(
-    source_db: Path, class_id: int | None, session_id: int | None
-) -> tuple[int, int]:
-    """The class and session the class_chat surface plans against, in the source database.
+EVAL_CLASS_NAME = "Semantic Eval Class"
+EVAL_CLASS_CODE = "EVAL 101"
 
-    Defaults to the database's first class and its first session: an evaluation of the
-    class conversation needs the class's real facts, capability grants, and material, and
-    the planner's registry scope check wants a real session of that class.
+
+def open_eval_environment(
+    eval_db_path: Path | None = None,
+) -> tuple[Path, sqlite3.Connection, int, int]:
+    """A disposable, eval-only database: the deterministic home of the default run.
+
+    A fresh migrated database with exactly one class and one session - and nothing else:
+    no user facts, no class facts, no documents, no workspace, no public-web grant, no
+    real workspaces. The class_chat surface plans against it by default, so two runs of
+    the corpus inherit the SAME (empty) class state instead of whatever facts, material,
+    and capability grants happened to sit in the first real class of the source database.
+    The normal compute/CAS surface is exactly what production would grant a fresh class
+    (the CAS tools ride the agent profile unconditionally), and every audit/proposal row
+    the loop writes during a run stays in this throwaway database. The user's real Lyra
+    database is never opened for planning - only for the endpoint configuration.
+
+    Returns the database path, a Row-mapped connection, and the deterministic class and
+    session ids. Pass a path to keep the database inspectable between runs; without one
+    it lives in a temporary directory that dies with the process.
+    """
+    if eval_db_path is not None:
+        eval_db_path = eval_db_path.resolve()
+        workdir = eval_db_path.parent
+        if not workdir.exists():
+            workdir.mkdir(parents=True)
+        db_path = eval_db_path
+    else:
+        workdir = Path(tempfile.mkdtemp(prefix="lyra-eval-"))
+        db_path = workdir / "eval.db"
+    # The app's own opener (extension load, private file handling), pointed at the
+    # throwaway path - never the configured data directory.
+    conn = database.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    database.migrate(conn)
+    cursor = conn.execute(
+        "insert into classes (name, code) values (?, ?)", (EVAL_CLASS_NAME, EVAL_CLASS_CODE)
+    )
+    class_id = int(cursor.lastrowid or 0)
+    session = sessions.create_session(conn, class_id)
+    session_id = int(session["id"])
+    conn.commit()
+    return db_path, conn, class_id, session_id
+
+
+def _real_class_chat_target(source_db: Path, class_id: int, session_id: int) -> tuple[int, int]:
+    """The optional real-class smoke mode: the named class and session in the source DB.
+
+    An environment-specific check against the student's actual material, facts, and
+    grants - explicitly opted into, never the default. The planner's registry scope check
+    wants a real session of that class.
     """
     # The app's own opener, not a bare connect: the source database may carry virtual
     # tables the planner touches, which need the same extension load.
     conn = database.connect(source_db)
     conn.row_factory = sqlite3.Row
     try:
-        if class_id is None:
-            row = conn.execute("select id from classes order by id limit 1").fetchone()
-            if row is None:
-                raise SystemExit(
-                    "No class in the source database. Create one in Lyra, or pass --class-id."
-                )
-            class_id = int(row["id"])
-        session = None
-        if session_id is None:
-            session = conn.execute(
-                "select id from chat_sessions where class_id = ? order by id limit 1",
-                (class_id,),
-            ).fetchone()
-            if session is None:
-                raise SystemExit(
-                    f"No session in class {class_id}. Open the class's conversation once in "
-                    "Lyra, or pass --session-id."
-                )
-            session_id = int(session["id"])
+        row = conn.execute("select id from classes where id = ?", (class_id,)).fetchone()
+        if row is None:
+            raise SystemExit(f"No class {class_id} in the source database.")
+        session = conn.execute(
+            "select id from chat_sessions where class_id = ? and id = ?",
+            (class_id, session_id),
+        ).fetchone()
+        if session is None:
+            raise SystemExit(f"No session {session_id} in class {class_id}.")
     finally:
         conn.close()
     return class_id, session_id
@@ -603,56 +734,80 @@ def _run_class_chat_cases(
     session_id: int,
     config: TutorConfig,
     cases_run: dict[str, object],
+    *,
+    no_context: bool = False,
 ) -> None:
-    """The class_chat run stage: each case through the production planner, one first
-    request per case, replies and tool-call behaviors recorded."""
+    """The class_chat run stage: each case through the production planner and the
+    production tool loop, to the terminal assistant answer.
+
+    Every record keeps the evaluation metadata the terminal comparison reports on: the
+    final answer, the tool calls the loop made (behavior, not automatic failure), the
+    number of model rounds, the wall clock, and the prompt sizes - and, on a loop that
+    never reached a usable answer, the loop's own stop reason instead of a made-up grade.
+    """
     for case in cases:
         started = time.monotonic()
         try:
-            assembly = class_chat_assembly(conn, class_id, session_id, config, case)
-            reply, tool_calls, system_tokens = asyncio.run(
-                _run_one_class_chat(config.endpoint_url, config.api_key, config.model, assembly)
+            assembly = class_chat_assembly(
+                conn, class_id, session_id, config, case, no_context=no_context
+            )
+            record = asyncio.run(
+                _run_one_class_chat(
+                    config.endpoint_url,
+                    config.api_key,
+                    config.model,
+                    assembly,
+                    replan_toolless=(
+                        None
+                        if config.tools_supported is not None
+                        # Bound as a default argument: the loop variable is the case this
+                        # iteration runs.
+                        else (
+                            lambda case: class_chat_assembly(
+                                conn,
+                                class_id,
+                                session_id,
+                                replace(config, tools_supported=False),
+                                case,
+                                no_context=no_context,
+                            )
+                        )(case)
+                    ),
+                )
             )
         except Exception as exc:  # noqa: BLE001 - a failed case is a datum, not a crash
             print(f"{case.id}: run failed: {exc}")
             cases_run[case.id] = {"status": "error", "error": str(exc)[:300]}
             continue
-        # Wall-clock time from planning through the endpoint's reply - the latency the
-        # non-streaming surface makes the student wait for (docs/phase-4-agent.md, 4a).
+        # Wall-clock time from planning through the endpoint's terminal answer - the
+        # latency the non-streaming surface makes the student wait for (docs/phase-4-agent.md,
+        # 4a).
         duration_seconds = round(time.monotonic() - started, 2)
-        if tool_calls:
-            # The model spent the turn calling tools instead of answering: that is the
-            # behavior the eval exists to measure, and it is recorded as such rather than
-            # graded as an (empty) reply.
-            print(f"{case.id}: called tools {', '.join(tool_calls)}")
-            cases_run[case.id] = {
-                "status": "tool_call",
-                "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
-                "duration_seconds": duration_seconds,
-                "tools": tool_calls,
-                "toolless": assembly.toolless,
-                "user": case.user,
-                "mode": case.mode,
-            }
-            continue
-        if not reply.strip():
-            print(f"{case.id}: empty reply")
-            cases_run[case.id] = {"status": "error", "error": "empty reply"}
-            continue
-        cases_run[case.id] = {
-            "status": "ok",
-            "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "duration_seconds": duration_seconds,
-            "response": reply,
-            "system_prompt_tokens": system_tokens,
-            "toolless": assembly.toolless,
-            "user": case.user,
-            "mode": case.mode,
-        }
-        print(
-            f"{case.id}: {len(reply)} chars, {duration_seconds}s, system prompt "
-            f"{system_tokens} tokens" + (" (tool-less surface)" if assembly.toolless else "")
+        record.update(
+            generated_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            duration_seconds=duration_seconds,
+            system_prompt_tokens=estimate_tokens(str(assembly.messages[0].get("content") or "")),
+            tool_schema_tokens=llm_tools.schema_tokens(list(assembly.tools)),
+            user=case.user,
+            mode=case.mode,
         )
+        cases_run[case.id] = record
+        tool_names = [str(call["name"]) for call in record["tool_calls"]]
+        if record["status"] == "incomplete":
+            print(
+                f"{case.id}: NO terminal answer - loop stopped "
+                f"({record['stopped']}) after {record['rounds']} rounds, "
+                f"{duration_seconds}s"
+            )
+        elif record["status"] != "ok":
+            print(f"{case.id}: {record['status']} - {record.get('error', '')}")
+        else:
+            tail = f", tools: {', '.join(tool_names)}" if tool_names else ""
+            surface = " (tool-less surface)" if record["toolless"] else ""
+            print(
+                f"{case.id}: {len(record['response'])} chars, {record['rounds']} rounds, "
+                f"{duration_seconds}s{tail}{surface}"
+            )
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -665,15 +820,41 @@ def cmd_run(args: argparse.Namespace) -> int:
     surface = args.surface
     conn = None
     class_id = session_id = None
+    no_context = False
+    eval_env: dict[str, object] = {}
     if surface == "class_chat":
-        class_id, session_id = _class_chat_target(
-            Path(args.source_db).resolve(), args.class_id, args.session_id
-        )
-        # The production planner works on a connection with Row mapping, like the route's -
-        # and on the app's opener, so virtual tables resolve the same way in the eval as
-        # in the product.
-        conn = database.connect(Path(args.source_db).resolve())
-        conn.row_factory = sqlite3.Row
+        # Two environments, one contract: the production planner either way.
+        #
+        # DEFAULT - the deterministic eval environment: a disposable eval-only database
+        # with one fixed class and session, no user data, no workspace, no public-web
+        # grant. The corpus grades the product's behavior under identical class state
+        # every run; the user's real database is read only for the endpoint
+        # configuration, never planned against and never modified.
+        #
+        # OPTIONAL SMOKE MODE - --class-id/--session-id: the named real class and session
+        # in the source database, for an environment-specific check against the
+        # student's actual facts, material, and grants.
+        if args.class_id is not None or args.session_id is not None:
+            if args.class_id is None or args.session_id is None:
+                raise SystemExit("--class-id and --session-id are a pair (real-class mode).")
+            class_id, session_id = _real_class_chat_target(
+                Path(args.source_db).resolve(), args.class_id, args.session_id
+            )
+            # The production planner works on a connection with Row mapping, like the
+            # route's - and on the app's opener, so virtual tables resolve the same way
+            # in the eval as in the product.
+            conn = database.connect(Path(args.source_db).resolve())
+            conn.row_factory = sqlite3.Row
+        else:
+            eval_db_path, conn, class_id, session_id = open_eval_environment(
+                Path(args.eval_db).resolve() if args.eval_db else None
+            )
+            no_context = True
+            eval_env = {
+                "eval_db": str(eval_db_path),
+                "deterministic": True,
+                "temp": args.eval_db is None,
+            }
 
     workspace = Workspace(Path(args.workspace).resolve())
     runs = workspace.read("runs") if workspace.report("runs").exists() else {}
@@ -683,7 +864,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     try:
         if surface == "class_chat":
             if conn is not None and class_id is not None and session_id is not None:
-                _run_class_chat_cases(selected, conn, class_id, session_id, config, cases_run)
+                _run_class_chat_cases(
+                    selected,
+                    conn,
+                    class_id,
+                    session_id,
+                    config,
+                    cases_run,
+                    no_context=no_context,
+                )
         else:
             for case in selected:
                 messages = case_messages(case)
@@ -715,6 +904,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         workspace.write("runs", {**runs, "cases": cases_run})
         if conn is not None:
             conn.close()
+        # The default eval database is disposable: it held only audit/proposal rows from
+        # this run, so a temporary one dies with the process.
+        if eval_env.get("temp"):
+            shutil.rmtree(Path(str(eval_env["eval_db"])).parent, ignore_errors=True)
 
     meta: dict[str, object] = {
         "surface": surface,
@@ -729,6 +922,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     if surface == "class_chat":
         meta["class_id"] = class_id
         meta["session_id"] = session_id
+        if eval_env:
+            meta["environment"] = eval_env
     workspace.write("meta", meta)
     if header["prompt_contract_version"] != TUTOR_PROMPT_CONTRACT_VERSION:
         print(
@@ -797,17 +992,42 @@ def cmd_grade(args: argparse.Namespace) -> int:
             case = by_id[case_id]
             if args.case and case_id not in args.case:
                 continue
+            if isinstance(record, dict) and record.get("status") == "incomplete":
+                # The production tool loop never reached a usable terminal answer: the
+                # turn fails truthfully, named by the loop's own stop reason - a fail that
+                # says the product did not answer, not a grade of an answer that was not
+                # produced.
+                stopped = str(record.get("stopped") or "?")
+                detail = str(record.get("detail") or "")
+                tool_trace = ", ".join(str(call["name"]) for call in record.get("tool_calls", []))
+                note = f"no terminal answer - the tool loop stopped ({stopped})"
+                if detail:
+                    note += f": {detail}"
+                if tool_trace:
+                    note += f" after tool calls: {tool_trace}"
+                grades[case_id] = {
+                    "verdict": "fail",
+                    "grading": {"note": note, "rounds": record.get("rounds")},
+                    "generated_at": record.get("generated_at"),
+                }
+                print(f"{case_id}: fail ({note})")
+                continue
             if isinstance(record, dict) and record.get("status") == "tool_call":
-                # The model called tools instead of answering. There is no reply to grade;
-                # the verdict is a fail that says so, not a not-run the report would drop.
+                # Legacy records from the round-zero harness, which graded a first-round
+                # tool call as an automatic failure. Kept so old workspaces still grade;
+                # current runs never produce this status (a tool call is intermediate
+                # behavior, and the loop runs to the terminal answer).
                 tools = record.get("tools")
                 tools = ", ".join(str(name) for name in tools) if isinstance(tools, list) else "?"
                 grades[case_id] = {
                     "verdict": "fail",
-                    "grading": {"note": f"the model called tools instead of answering: {tools}"},
+                    "grading": {
+                        "note": f"legacy round-zero record: the model called tools ({tools}) "
+                        "before the harness could grade a terminal answer"
+                    },
                     "generated_at": record.get("generated_at"),
                 }
-                print(f"{case_id}: fail (tool call: {tools})")
+                print(f"{case_id}: fail (legacy tool-call record: {tools})")
                 continue
             if not isinstance(record, dict) or record.get("status") != "ok":
                 grades[case_id] = {"verdict": "not_run", "grading": record}
@@ -963,13 +1183,25 @@ def main() -> int:
         "--class-id",
         type=int,
         default=None,
-        help="class_chat only: the class in the source database (default: its first).",
+        help=(
+            "class_chat only, real-class smoke mode (with --session-id): plan against this "
+            "named class in the source database, inheriting its real facts, material, and "
+            "grants. Omit both for the default deterministic eval environment."
+        ),
     )
     run.add_argument(
         "--session-id",
         type=int,
         default=None,
-        help="class_chat only: a session of that class (default: the class's first).",
+        help="class_chat only, real-class smoke mode: a session of --class-id (a pair).",
+    )
+    run.add_argument(
+        "--eval-db",
+        default=None,
+        help=(
+            "class_chat only: keep the disposable eval database at this path instead of a "
+            "temporary one (it is rebuilt from scratch on every run)."
+        ),
     )
     run.set_defaults(func=cmd_run)
 
