@@ -38,8 +38,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="the Tauri resource directory the runtime is staged into",
     )
     args = parser.parse_args(argv)
+    # `fetch_llama_server` has already refused the build unless the extracted binary
+    # identifies as the pin; printing the verified identity here is the receipt, not
+    # the check - a mismatch has already raised and failed the build.
     binary = fetch_models.fetch_llama_server(target_dir=args.destination)
-    print(f"llama-server: {binary}  ({fetch_models.installed_build(binary)})")
+    verified = fetch_models.verify_llama_build(binary)
+    print(f"llama-server: {binary}  (verified {verified})")
     return 0
 
 

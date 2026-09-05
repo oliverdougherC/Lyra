@@ -19,6 +19,7 @@ from backend.config import settings
 from backend.core.errors import ConfigurationError
 from backend.llm import model_provisioning
 from backend.llm.model_provisioning import (
+    EMBEDDING_REVISION,
     EMBEDDING_WEIGHTS,
     RERANK_WEIGHTS,
     ensure_weight,
@@ -26,7 +27,7 @@ from backend.llm.model_provisioning import (
 )
 
 
-def _land_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+def _land_download(*, repo_id: str, filename: str, local_dir: object, revision: str | None) -> str:
     """A successful `hf_hub_download`: the file is moved to its final name."""
     path = local_dir / filename  # type: ignore[operator]
     path.write_bytes(b"GGUF fake")
@@ -37,6 +38,20 @@ def test_metadata_names_the_paths_the_settings_already_use() -> None:
     """The two must stay one fact: a drift here means a download to a path Lyra never reads."""
     assert EMBEDDING_WEIGHTS.path == settings.embedding_model_path
     assert RERANK_WEIGHTS.path == settings.rerank_model_path
+
+
+def test_the_embedding_model_is_pinned_to_an_immutable_commit() -> None:
+    """A fresh install downloads from a content address, not from whatever the repository's
+    default branch holds today: the revision is a full 40-character SHA, and it is the same
+    fact in the constant and in the spec the download consumes."""
+    revision = EMBEDDING_WEIGHTS.revision
+    assert revision is not None
+    assert len(revision) == 40
+    assert all(c in "0123456789abcdef" for c in revision)
+    assert revision == EMBEDDING_REVISION
+    # The optional reranker is deliberately not pinned (it is not load-bearing for first
+    # use); the field says so rather than leaving it implicit.
+    assert RERANK_WEIGHTS.revision is None
 
 
 def test_an_existing_file_is_never_downloaded(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,11 +67,15 @@ def test_an_existing_file_is_never_downloaded(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_a_missing_file_is_downloaded_to_the_models_dir(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, str, object]] = []
+    calls: list[tuple[str, str, object, str | None]] = []
 
-    def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
-        calls.append((repo_id, filename, local_dir))
-        return _land_download(repo_id=repo_id, filename=filename, local_dir=local_dir)
+    def fake_download(
+        *, repo_id: str, filename: str, local_dir: object, revision: str | None
+    ) -> str:
+        calls.append((repo_id, filename, local_dir, revision))
+        return _land_download(
+            repo_id=repo_id, filename=filename, local_dir=local_dir, revision=revision
+        )
 
     monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
 
@@ -68,6 +87,9 @@ def test_a_missing_file_is_downloaded_to_the_models_dir(monkeypatch: pytest.Monk
             "nomic-ai/nomic-embed-text-v1.5-GGUF",
             "nomic-embed-text-v1.5.Q8_0.gguf",
             settings.models_dir,
+            # The exact commit the weights were downloaded and tested on - the full SHA,
+            # never a branch or a tag.
+            "0188c9bf409793f810680a5a431e7b899c46104c",
         )
     ]
     assert EMBEDDING_WEIGHTS.path.exists()
@@ -77,10 +99,14 @@ def test_concurrent_first_uses_share_one_download(monkeypatch: pytest.MonkeyPatc
     """A burst of first-use requests must start one download, not one per thread."""
     calls: list[str] = []
 
-    def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+    def fake_download(
+        *, repo_id: str, filename: str, local_dir: object, revision: str | None
+    ) -> str:
         calls.append(filename)
         time.sleep(0.1)  # long enough that every other thread is waiting on it
-        return _land_download(repo_id=repo_id, filename=filename, local_dir=local_dir)
+        return _land_download(
+            repo_id=repo_id, filename=filename, local_dir=local_dir, revision=revision
+        )
 
     monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
 
@@ -112,7 +138,9 @@ def test_a_failed_download_leaves_no_file_and_a_retryable_error(
 ) -> None:
     """The user gets a retryable sentence: no command, no path, no stack trace."""
 
-    def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+    def fake_download(
+        *, repo_id: str, filename: str, local_dir: object, revision: str | None
+    ) -> str:
         raise httpx.ConnectError("network unreachable")
 
     monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
@@ -136,14 +164,18 @@ def test_a_waiter_retries_after_a_failed_leader(monkeypatch: pytest.MonkeyPatch)
     first_attempt_started = threading.Event()
     attempts = 0
 
-    def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+    def fake_download(
+        *, repo_id: str, filename: str, local_dir: object, revision: str | None
+    ) -> str:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             first_attempt_started.set()
             hold_first_attempt.wait()
             raise httpx.ConnectError("network unreachable")
-        return _land_download(repo_id=repo_id, filename=filename, local_dir=local_dir)
+        return _land_download(
+            repo_id=repo_id, filename=filename, local_dir=local_dir, revision=revision
+        )
 
     monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
 
@@ -183,7 +215,9 @@ def test_a_waiter_retries_after_a_failed_leader(monkeypatch: pytest.MonkeyPatch)
 def test_after_a_failure_the_next_caller_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     attempts: list[str] = []
 
-    def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+    def fake_download(
+        *, repo_id: str, filename: str, local_dir: object, revision: str | None
+    ) -> str:
         attempts.append(filename)
         raise httpx.ConnectError("network unreachable")
 
@@ -203,10 +237,14 @@ def test_download_in_progress_is_true_only_while_downloading(
     release = threading.Event()
     download_started = threading.Event()
 
-    def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+    def fake_download(
+        *, repo_id: str, filename: str, local_dir: object, revision: str | None
+    ) -> str:
         download_started.set()
         release.wait()
-        return _land_download(repo_id=repo_id, filename=filename, local_dir=local_dir)
+        return _land_download(
+            repo_id=repo_id, filename=filename, local_dir=local_dir, revision=revision
+        )
 
     monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
 
@@ -230,8 +268,12 @@ def test_a_leftover_temporary_file_is_not_treated_as_installed(
     leftover = settings.models_dir / (EMBEDDING_WEIGHTS.filename + ".deadbeef.incomplete")
     leftover.write_bytes(b"partial")
 
-    def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
-        return _land_download(repo_id=repo_id, filename=filename, local_dir=local_dir)
+    def fake_download(
+        *, repo_id: str, filename: str, local_dir: object, revision: str | None
+    ) -> str:
+        return _land_download(
+            repo_id=repo_id, filename=filename, local_dir=local_dir, revision=revision
+        )
 
     monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
 
@@ -242,8 +284,12 @@ def test_a_leftover_temporary_file_is_not_treated_as_installed(
 def test_progress_reports_the_download_line(monkeypatch: pytest.MonkeyPatch) -> None:
     lines: list[str] = []
 
-    def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
-        return _land_download(repo_id=repo_id, filename=filename, local_dir=local_dir)
+    def fake_download(
+        *, repo_id: str, filename: str, local_dir: object, revision: str | None
+    ) -> str:
+        return _land_download(
+            repo_id=repo_id, filename=filename, local_dir=local_dir, revision=revision
+        )
 
     monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
 

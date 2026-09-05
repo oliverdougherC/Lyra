@@ -4,7 +4,9 @@ Run once after installing the backend:
 
     python scripts/fetch_models.py
 
-Every download is skipped when its target already exists, so re-running is cheap.
+Every download is skipped when its target already exists and identifies as the pin, so
+re-running is cheap - and a target that does not identify as the pin is replaced, because
+a directory name is a label, not a guarantee of what the bytes inside are.
 
 The specialist OCR weights are **not** included in that. They are 2.8 GB, they are only
 worth having for bulk transcription of long scanned documents, and text recognition works
@@ -14,6 +16,7 @@ without them through the configured vision model. Ask for them explicitly:
 """
 
 import argparse
+import hashlib
 import platform
 import re
 import shutil
@@ -65,6 +68,22 @@ ASSET_SUFFIXES: dict[tuple[str, str], str] = {
     ("win32", "ARM64"): "win-cpu-arm64.zip",
 }
 
+# SHA-256 digest of every release asset Lyra supports, published by GitHub for the
+# pinned release (https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/b10287,
+# which records one `digest` per uploaded asset). A download is verified against these
+# while it streams, before anything is extracted: a tampered or republished archive is
+# refused at the bytes level, and the binary's own `--version` check stays as a second,
+# independent layer. Keyed by the same suffix as `ASSET_SUFFIXES`, so an asset without a
+# pinned digest is an error, never a guess.
+ASSET_SHA256: dict[str, str] = {
+    "macos-arm64.tar.gz": "32b99f35f7cf9f9bdb59ad5a5ae692015b92da5ceae64d39e35fd52a53bdbac6",
+    "macos-x64.tar.gz": "c0d354be02ab7eedb7a88fc06f09b375218344f96d0e2f15f7d08270dabf5bc8",
+    "ubuntu-arm64.tar.gz": "f0fa1f3f228b89c2692b90ac4691b7cd08948274b15dfb2c9b1f3825d4b04960",
+    "ubuntu-x64.tar.gz": "901998eed6165efcc4d584e3e8da4366a18860869ef91d376a6783730504e4c8",
+    "win-cpu-arm64.zip": "b35783d9052efc272c336117ffb131a1ea7697b1c0e4f7ad587a1c1bf0b7d449",
+    "win-cpu-x64.zip": "6ae960c04bcc3b9f2083f21cbeb3543ee0dd2e1ce7e110e4146bab9b9283fb36",
+}
+
 # The weights metadata - repositories, file names, weights, and the download itself -
 # lives in `backend/llm/model_provisioning.py`, shared with the embedding server's
 # first-use download, so the manual path and the automatic path can never name a
@@ -103,13 +122,13 @@ def find_llama_server(root: Path) -> Path | None:
     return None
 
 
-def installed_build(binary: Path) -> str | None:
-    """The build number a llama.cpp binary reports, or None if it will not say.
+def reported_build(binary: Path) -> tuple[str, str] | None:
+    """The build a llama.cpp binary reports for itself as `(tag, short commit)`, or None.
 
     `llama-server --version` prints `version: 10287 (b06aa774c)` to stderr. Asking the
     binary is the only way to know what is installed: the directory it was extracted into
     is named after whatever tag was pinned when it was downloaded, and that name does not
-    change when this file's pin moves.
+    change when this file's pin moves - the name of the file is a label, not its contents.
     """
     try:
         # S603: `binary` was located under the models directory by this script.
@@ -119,8 +138,74 @@ def installed_build(binary: Path) -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     output = (result.stderr + result.stdout).decode("utf-8", "replace")
-    match = re.search(r"version:\s*(\d+)", output)
-    return f"b{match.group(1)}" if match else None
+    match = re.search(r"version:\s*(\d+)\s*\(([0-9a-fA-F]+)\)", output)
+    return (f"b{match.group(1)}", match.group(2)) if match else None
+
+
+def installed_build(binary: Path) -> str | None:
+    """The build tag a llama.cpp binary reports, or None if it will not say."""
+    reported = reported_build(binary)
+    return reported[0] if reported is not None else None
+
+
+class LlamaBuildMismatchError(RuntimeError):
+    """An extracted or installed llama-server does not identify as the pinned build.
+
+    Raised only, and always, from `verify_llama_build`. A fetch or staging run that hits
+    this has installed nothing usable: the binary must not be run, and the bundle must
+    not be shipped.
+    """
+
+
+class LlamaChecksumMismatchError(RuntimeError):
+    """A downloaded release archive does not hash to its pinned SHA-256 digest.
+
+    Raised only, and always, from `_download`, before the archive is extracted. The
+    partial file has been deleted: there is no completed archive for a later run to
+    trust, and the runtime layer of verification never runs on bytes that were never
+    the pin.
+    """
+
+
+def verify_llama_build(binary: Path) -> str:
+    """Require the binary to identify as the configured pin - tag and commit - or fail.
+
+    This is the second, independent layer of pin enforcement (the first is the
+    SHA-256 pin on the archive itself): the archive's name is what the release URL
+    said, not what the bytes inside are, and a wrong or republished asset must not
+    reach a checkout or a bundle. It fails closed: a binary that will not answer is a
+    mismatch, never a warning.
+
+    The binary reports a short commit; the pin records the full one. The comparison is
+    case-normalized equality against the pin's first nine commit characters: a prefix
+    test is not a check, so a reported commit that is shorter, longer, or different is
+    a mismatch, as is any other tag.
+
+    Args:
+        binary: The extracted (or installed) llama-server.
+
+    Returns:
+        The reported build, e.g. `b10287 (b06aa774c)`.
+
+    Raises:
+        LlamaBuildMismatchError: The binary is not the pin.
+    """
+    reported = reported_build(binary)
+    if reported is None:
+        raise LlamaBuildMismatchError(
+            f"llama-server at {binary} did not report a version, and cannot be treated as "
+            f"{LLAMA_RELEASE_TAG}."
+        )
+    tag, commit = reported
+    # Both constants are lowercase, so comparing the normalized halves against them is
+    # a case-normalized equality check.
+    if tag.lower() != LLAMA_RELEASE_TAG or commit.lower() != LLAMA_COMMIT[:9]:
+        raise LlamaBuildMismatchError(
+            f"llama-server at {binary} reports {tag} ({commit}); the pin is "
+            f"{LLAMA_RELEASE_TAG} ({LLAMA_COMMIT[:9]}). The asset does not match the "
+            "configured build and was refused."
+        )
+    return f"{tag} ({commit})"
 
 
 def fetch_llama_server(target_dir: Path | None = None) -> Path:
@@ -134,26 +219,45 @@ def fetch_llama_server(target_dir: Path | None = None) -> Path:
     `target_dir` is where the build lands: the models directory for the checkout, or the
     Tauri resource tree when the same pin is being staged into the application bundle -
     one download, one extraction, and one build verification for both.
+
+    A fresh download must pass two independent checks before it is trusted: its
+    SHA-256 must match the pinned digest for the asset (checked while it streams,
+    before anything is extracted), and the extracted binary must identify itself as
+    the pin (tag and commit, via `verify_llama_build`). A wrong or republished release
+    asset fails the
+    fetch rather than getting installed and run, and the same identity gate decides
+    whether an already-present build is skipped or replaced, so a corrupted or swapped
+    artifact can neither be staged into the app nor run from a checkout.
     """
     root = settings.llama_dir if target_dir is None else target_dir
     existing = find_llama_server(root)
     if existing is not None:
-        found = installed_build(existing)
-        if found == LLAMA_RELEASE_TAG:
-            print(f"llama-server {found} already present, skipping download.")
+        try:
+            verified = verify_llama_build(existing)
+        except LlamaBuildMismatchError:
+            print(
+                f"llama-server reports {installed_build(existing) or 'an unknown build'}, "
+                f"and the pin is {LLAMA_RELEASE_TAG} ({LLAMA_COMMIT[:9]}). "
+                "Downloading the pinned build."
+            )
+        else:
+            print(f"llama-server {verified} already present, skipping download.")
             return existing
-        print(
-            f"llama-server reports {found or 'an unknown build'}, and the pin is "
-            f"{LLAMA_RELEASE_TAG}. Downloading the pinned build."
-        )
 
-    asset = f"llama-{LLAMA_RELEASE_TAG}-bin-{resolve_asset_suffix()}"
+    suffix = resolve_asset_suffix()
+    expected_sha256 = ASSET_SHA256.get(suffix)
+    if expected_sha256 is None:
+        raise ConfigurationError(
+            f"No pinned SHA-256 digest is recorded for the release asset {suffix}; "
+            "refusing to download an unpinned archive."
+        )
+    asset = f"llama-{LLAMA_RELEASE_TAG}-bin-{suffix}"
     root.mkdir(parents=True, exist_ok=True)
     _remove_stale_builds(root)
     archive = root / asset
 
     print(f"Downloading {asset} ...")
-    _download(f"{RELEASE_BASE_URL}/{LLAMA_RELEASE_TAG}/{asset}", archive)
+    _download(f"{RELEASE_BASE_URL}/{LLAMA_RELEASE_TAG}/{asset}", archive, expected_sha256)
     print(f"Extracting {asset} ...")
     _extract(archive, root)
     archive.unlink()
@@ -163,6 +267,9 @@ def fetch_llama_server(target_dir: Path | None = None) -> Path:
     if binary is None:
         raise ConfigurationError(f"The archive {asset} did not contain a llama-server binary.")
     binary.chmod(binary.stat().st_mode | 0o111)
+    # The download is only trusted once the extracted binary identifies as the pin:
+    # a wrong or republished asset fails the fetch, never the first spawn.
+    verify_llama_build(binary)
     return binary
 
 
@@ -245,16 +352,41 @@ def _remove_stale_builds(root: Path | None = None) -> None:
         shutil.rmtree(existing)
 
 
-def _download(url: str, destination: Path) -> None:
-    """Stream a URL to disk, moving into place only once it is complete."""
+def _download(url: str, destination: Path, expected_sha256: str) -> None:
+    """Stream a URL to disk, promoting it only once its SHA-256 matches the pin.
+
+    The digest is computed incrementally while the bytes stream into the temporary
+    `.part` file, so a tampered or corrupted archive is detected without a second pass
+    over the data, and an unverified archive is never written under its final name:
+    neither extracted nor trusted by a later run.
+
+    Raises:
+        LlamaChecksumMismatchError: The downloaded bytes do not hash to
+            `expected_sha256`. The partial file is deleted first.
+    """
     partial = destination.with_name(destination.name + ".part")
-    with httpx.stream(
-        "GET", url, follow_redirects=True, timeout=DOWNLOAD_TIMEOUT_SECONDS
-    ) as response:
-        response.raise_for_status()
-        with partial.open("wb") as handle:
-            for block in response.iter_bytes(_CHUNK_BYTES):
-                handle.write(block)
+    digest = hashlib.sha256()
+    try:
+        with httpx.stream(
+            "GET", url, follow_redirects=True, timeout=DOWNLOAD_TIMEOUT_SECONDS
+        ) as response:
+            response.raise_for_status()
+            with partial.open("wb") as handle:
+                for block in response.iter_bytes(_CHUNK_BYTES):
+                    digest.update(block)
+                    handle.write(block)
+    except BaseException:
+        # An interrupted transfer is not a completed download: nothing may survive.
+        partial.unlink(missing_ok=True)
+        raise
+    actual = digest.hexdigest()
+    if actual != expected_sha256.lower():
+        partial.unlink(missing_ok=True)
+        raise LlamaChecksumMismatchError(
+            f"SHA-256 of the downloaded {destination.name} is {actual}, but the pinned "
+            f"digest is {expected_sha256.lower()}. The partial file was deleted and the "
+            "archive was refused before extraction."
+        )
     partial.replace(destination)
 
 

@@ -380,7 +380,9 @@ class TestFirstUseProvisioning:
 
         downloads: list[tuple[str, str]] = []
 
-        def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+        def fake_download(
+            *, repo_id: str, filename: str, local_dir: object, revision: str | None
+        ) -> str:
             downloads.append((repo_id, filename))
             return _land_embedding_weights(repo_id=repo_id, filename=filename, local_dir=local_dir)
 
@@ -410,7 +412,9 @@ class TestFirstUseProvisioning:
 
         downloads: list[str] = []
 
-        def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+        def fake_download(
+            *, repo_id: str, filename: str, local_dir: object, revision: str | None
+        ) -> str:
             downloads.append(filename)
             return _land_embedding_weights(repo_id=repo_id, filename=filename, local_dir=local_dir)
 
@@ -451,7 +455,9 @@ class TestFirstUseProvisioning:
 
         downloads: list[str] = []
 
-        def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+        def fake_download(
+            *, repo_id: str, filename: str, local_dir: object, revision: str | None
+        ) -> str:
             downloads.append(filename)
             time.sleep(0.05)
             return _land_embedding_weights(repo_id=repo_id, filename=filename, local_dir=local_dir)
@@ -481,7 +487,9 @@ class TestFirstUseProvisioning:
         server = EmbeddingServer()
         _wire_a_fake_spawn(server, monkeypatch)
 
-        def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+        def fake_download(
+            *, repo_id: str, filename: str, local_dir: object, revision: str | None
+        ) -> str:
             raise httpx.ConnectError("network unreachable")
 
         monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
@@ -522,7 +530,9 @@ class TestFirstUseProvisioning:
         release = threading.Event()
         download_started = threading.Event()
 
-        def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+        def fake_download(
+            *, repo_id: str, filename: str, local_dir: object, revision: str | None
+        ) -> str:
             download_started.set()
             release.wait()
             return _land_embedding_weights(repo_id=repo_id, filename=filename, local_dir=local_dir)
