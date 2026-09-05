@@ -554,6 +554,13 @@ function PageImage({
   )
 }
 
+// Only these path-free native outcomes may replace the generic save error.
+// Keep in sync with OriginalCopyError::user_message in the desktop command.
+const originalSaveOutcomes = new Set([
+  'That destination already exists. Choose another filename to save the original document.',
+  'The original document was saved, but final cleanup or durability could not be confirmed. Check the saved file before retrying.',
+])
+
 function OriginalRecovery({ documentId, filename }: { documentId: number; filename: string }) {
   const controllerRef = useRef<AbortController | null>(null)
   useEffect(() => () => controllerRef.current?.abort(), [])
@@ -583,10 +590,14 @@ function OriginalRecovery({ documentId, filename }: { documentId: number; filena
     } catch (error) {
       if (controller.signal.aborted) return
       setFailed(true)
+      const nativeMessage =
+        typeof error === 'string' ? error : error instanceof Error ? error.message : ''
       setMessage(
         error instanceof ApiError && error.status === 404
           ? 'The original document is missing or inaccessible.'
-          : 'The original document could not be saved. Try again or choose another destination.',
+          : originalSaveOutcomes.has(nativeMessage)
+            ? nativeMessage
+            : 'The original document could not be saved. Try again or choose another destination.',
       )
     } finally {
       setSaving(false)

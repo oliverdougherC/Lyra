@@ -163,7 +163,7 @@ read-only study returning to the preserved operation, and per-deck recovery cont
 
 ## Exact integration base and acceptance limits
 
-This follow-up integrates PR #70 at `be6aed74d7573ac3bba59239e08174bee9cf1813`
+This follow-up integrates PR #70 at `8e462cbd098a7baa91cf56eaf61759425de0aba0`
 (`codex/pla-404-recovered`). PR #70 remains unmerged; PR #71 is stacked on that exact base.
 The initially overlapping card and harness changes were resolved semantically before the
 new targeted #70 follow-up was merged. The resulting tree retains both sets of study tests,
@@ -177,3 +177,19 @@ technology, physical CJK/native zoom, notarization, and the clean 8 GB sustained
 remain release acceptance work. Retained deleted outcomes cannot be reconstructed from a
 cascaded review log, and malformed storage supports unrecorded study until repaired. These
 limitations are explicit rather than fabricated acknowledgements or claims of release readiness.
+
+## Accepted recovery review and native-save base refresh
+
+[Review comment 5554631516](https://github.com/oliverdougherC/Lyra/pull/71#issuecomment-5554631516)
+accepted the recovery follow-up at `8a0d6c5867b84f8da09fc3e1c034dc89e3335762`.
+The next integration incorporates PR #70's exact native failed-save correction at
+`8e462cbd098a7baa91cf56eaf61759425de0aba0`. Study implementation, immutable operations,
+recovery ownership, authoritative reconciliation, accessible controls and the isolated
+acceptance harness are unchanged from the accepted review.
+
+The incoming native helper writes and syncs a private sibling, then publishes atomically only
+to an absent destination. Existing and racing entries are never overwritten; post-publication
+cleanup/durability failures report that bytes were saved. Combined verification must include
+its production-helper fault-point tests, source-pane outcome tests and the real-stack
+original-document/study-recovery regressions. Current exact-head results are recorded in
+PR #71 and PLA-477. This refresh does not claim a new interactive native Save-dialog run.

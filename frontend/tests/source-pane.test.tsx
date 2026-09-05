@@ -380,6 +380,33 @@ describe('original document recovery', () => {
     expect(screen.getByText('page 2 of 3')).toBeVisible()
   })
 
+  it.each([
+    'That destination already exists. Choose another filename to save the original document.',
+    'The original document was saved, but final cleanup or durability could not be confirmed. Check the saved file before retrying.',
+  ])('preserves the native publication outcome: %s', async (message) => {
+    fetchProtectedAsset.mockResolvedValue(new Blob(['original']))
+    // Tauri rejects Result::Err(String) with a string, not an Error object.
+    saveOriginalDocument.mockRejectedValue(message)
+    await doubleFailure()
+    await userEvent.click(await screen.findByRole('button', { name: 'Save original document' }))
+    expect(await screen.findByText(message, { exact: true })).toHaveAttribute('role', 'alert')
+    expect(screen.getByRole('button', { name: 'Save original document' })).toBeEnabled()
+  })
+
+  it('does not expose arbitrary native error details', async () => {
+    fetchProtectedAsset.mockResolvedValue(new Blob(['original']))
+    saveOriginalDocument.mockRejectedValue('cannot open /private/user/destination.pdf')
+    await doubleFailure()
+    await userEvent.click(await screen.findByRole('button', { name: 'Save original document' }))
+    expect(
+      await screen.findByText(
+        'The original document could not be saved. Try again or choose another destination.',
+        { exact: true },
+      ),
+    ).toHaveAttribute('role', 'alert')
+    expect(screen.queryByText(/private\/user/)).not.toBeInTheDocument()
+  })
+
   it('does not claim success when the native save is cancelled', async () => {
     fetchProtectedAsset.mockResolvedValue(new Blob(['original']))
     saveOriginalDocument.mockResolvedValue('cancelled')
