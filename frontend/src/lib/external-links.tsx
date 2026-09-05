@@ -8,6 +8,7 @@ const BLOCKED_LINK_MESSAGE = 'Lyra can only open public http or https links.'
 const OPEN_FAILED_MESSAGE = 'That link could not be opened.'
 const ABSOLUTE_SCHEME = /^[a-zA-Z][a-zA-Z\d+.-]*:/
 let pendingExternalLinkFocus: Element | null = null
+const trustedDownloads = new WeakMap<HTMLAnchorElement, string>()
 
 type ExternalHrefDecision =
   { kind: 'internal' } | { kind: 'blocked' } | { kind: 'external'; url: string }
@@ -285,11 +286,29 @@ function rememberExternalLinkFocus(event: MouseEvent | PointerEvent) {
   }
 }
 
+/** Only app-created byte downloads may pass the navigation guard's blob restriction. */
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  trustedDownloads.set(link, url)
+  document.body.appendChild(link)
+  try {
+    link.click()
+  } finally {
+    trustedDownloads.delete(link)
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  }
+}
+
 function handleLinkActivation(event: MouseEvent) {
   if (event.defaultPrevented || event.button === 2) return
 
   const anchor = findAnchor(event.target)
   if (!anchor) return
+  if (anchor.hasAttribute('download') && trustedDownloads.get(anchor) === anchor.href) return
 
   const decision = classifyExternalHref(anchor.getAttribute('href'))
   if (decision.kind === 'internal') return

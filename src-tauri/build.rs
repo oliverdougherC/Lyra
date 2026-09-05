@@ -3,6 +3,7 @@ const COMMANDS: &[&str] = &[
     "retry_backend",
     "open_external_url",
     "pick_import_directory",
+    "save_original_document",
     "pick_workspace_directory",
     "publish_desktop_import",
 ];

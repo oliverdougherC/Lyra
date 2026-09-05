@@ -6,7 +6,15 @@ import { useQuery } from '@tanstack/react-query'
 
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, documentPagePath, immediateAssetUrl, loadProtectedAssetSource } from '@/lib/api'
+import {
+  api,
+  documentPagePath,
+  immediateAssetUrl,
+  loadProtectedAssetSource,
+  fetchProtectedAsset,
+  ApiError,
+} from '@/lib/api'
+import { saveOriginalDocument } from '@/lib/runtime'
 import { truncateMiddle } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { DocumentRead, SolutionSource } from '@/types'
@@ -305,7 +313,12 @@ export function SourcePane({
               onReadText={() => setTextView(true)}
             />
           ) : (
-            <SourceText documentId={documentId} isPdf={isPdf} />
+            <SourceText
+              key={documentId}
+              documentId={documentId}
+              isPdf={isPdf}
+              filename={filename ?? 'document'}
+            />
           )}
         </div>
       </div>
@@ -541,7 +554,63 @@ function PageImage({
   )
 }
 
-function SourceText({ documentId, isPdf }: { documentId: number; isPdf: boolean }) {
+function OriginalRecovery({ documentId, filename }: { documentId: number; filename: string }) {
+  const controllerRef = useRef<AbortController | null>(null)
+  useEffect(() => () => controllerRef.current?.abort(), [])
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const [failed, setFailed] = useState(false)
+  async function save() {
+    const controller = new AbortController()
+    controllerRef.current = controller
+    setSaving(true)
+    setMessage('')
+    setFailed(false)
+    try {
+      const blob = await fetchProtectedAsset(
+        `/api/documents/${documentId}/original`,
+        controller.signal,
+      )
+      if (controller.signal.aborted) return
+      const result = await saveOriginalDocument(blob, filename)
+      setMessage(
+        result === 'saved'
+          ? 'Original document saved.'
+          : result === 'downloaded'
+            ? 'Original document download started.'
+            : 'Save cancelled.',
+      )
+    } catch (error) {
+      if (controller.signal.aborted) return
+      setFailed(true)
+      setMessage(
+        error instanceof ApiError && error.status === 404
+          ? 'The original document is missing or inaccessible.'
+          : 'The original document could not be saved. Try again or choose another destination.',
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div className="mt-3 space-y-2">
+      <Button variant="outline" size="sm" disabled={saving} onClick={() => void save()}>
+        {saving ? 'Saving original…' : 'Save original document'}
+      </Button>
+      {message ? <p role={failed ? 'alert' : 'status'}>{message}</p> : null}
+    </div>
+  )
+}
+
+function SourceText({
+  documentId,
+  isPdf,
+  filename,
+}: {
+  documentId: number
+  isPdf: boolean
+  filename: string
+}) {
   const text = useQuery({
     queryKey: ['document-text', documentId],
     queryFn: ({ signal }) => api.getDocumentText(documentId, signal),
@@ -560,6 +629,7 @@ function SourceText({ documentId, isPdf }: { documentId: number; isPdf: boolean 
         >
           {text.isFetching ? 'Retrying…' : 'Retry text'}
         </Button>
+        <OriginalRecovery documentId={documentId} filename={filename} />
       </div>
     )
   }
@@ -574,7 +644,10 @@ function SourceText({ documentId, isPdf }: { documentId: number; isPdf: boolean 
       {text.data.text.trim() ? (
         <pre className="font-sans break-words whitespace-pre-wrap">{text.data.text}</pre>
       ) : (
-        <p>No extracted text is available. Use the page view or open your original file.</p>
+        <div>
+          <p>No extracted text is available.</p>
+          <OriginalRecovery documentId={documentId} filename={filename} />
+        </div>
       )}
       {text.data.truncated ? (
         <p className="text-text-tertiary mt-4 text-xs">

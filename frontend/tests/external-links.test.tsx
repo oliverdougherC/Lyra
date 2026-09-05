@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { StreamingMarkdown } from '@/components/chat/streaming-markdown'
 import {
   classifyExternalHref,
+  downloadBlob,
   ExternalLinkInterceptor,
   openExternalUrl,
 } from '@/lib/external-links'
@@ -191,5 +192,65 @@ describe('external links', () => {
 
     await expect(openExternalUrl('https://example.com')).resolves.toBeUndefined()
     expect(open).toHaveBeenCalledWith('https://example.com/', '_blank', 'noopener,noreferrer')
+  })
+})
+
+describe('authenticated application downloads', () => {
+  it('allows the helper-created original download through the interceptor', () => {
+    render(<ExternalLinkInterceptor />)
+    const blob = new Blob(['original document bytes'])
+    const create = vi.fn().mockReturnValue('blob:trusted-original')
+    vi.stubGlobal(
+      'URL',
+      class extends URL {
+        static createObjectURL = create
+        static revokeObjectURL = vi.fn()
+      },
+    )
+    const allowed: boolean[] = []
+    const observe = (event: MouseEvent) => {
+      allowed.push(!event.defaultPrevented)
+      // jsdom has no downloads: observe browser default permission, then suppress navigation.
+      event.preventDefault()
+    }
+    document.addEventListener('click', observe, true)
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      expect(this.isConnected).toBe(true)
+      expect(this.href).toBe('blob:trusted-original')
+      expect(this.download).toBe('original.pdf')
+      this.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    try {
+      downloadBlob(blob, 'original.pdf')
+      expect(create).toHaveBeenCalledWith(blob)
+      expect(click).toHaveBeenCalledOnce()
+      expect(allowed).toEqual([true])
+      expect(toast.error).not.toHaveBeenCalled()
+      expect(document.querySelector('a[href="blob:trusted-original"]')).toBeNull()
+    } finally {
+      document.removeEventListener('click', observe, true)
+      click.mockRestore()
+    }
+  })
+
+  it('blocks arbitrary blob markup even when it declares a download filename', () => {
+    const invoke = vi.fn()
+    window.__TAURI_INTERNALS__ = { invoke }
+    render(
+      <>
+        <ExternalLinkInterceptor />
+        <a href="blob:untrusted" download="original.pdf">
+          Untrusted download
+        </a>
+      </>,
+    )
+    const anchor = screen.getByRole('link', { name: 'Untrusted download' })
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true })
+    anchor.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(invoke).not.toHaveBeenCalled()
+    expect(toast.error).toHaveBeenCalledWith('Lyra can only open public http or https links.')
   })
 })
