@@ -14,6 +14,7 @@ import { ApiError } from '@/lib/api'
 import { buildSuggestedPrompts } from '@/components/chat/suggested-prompts'
 import { formatRelativeTime, formatSessionFallbackTitle } from '@/lib/format'
 import { chatHandoffUrl, quickStudyTitle, untitledDraftTitle } from '@/lib/handoff'
+import { useSettings } from '@/lib/hooks/use-settings'
 import { useSessions } from '@/lib/hooks/use-chat'
 import { isTerminal, needsAttention, useDocuments } from '@/lib/hooks/use-documents'
 import { useCreateDraft, useDrafts } from '@/lib/hooks/use-drafts'
@@ -63,6 +64,9 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
   const { data: solutions } = useSolutions(classId)
   const { data: study } = useStudyList(classId)
   const { data: drafts } = useDrafts(classId)
+  const settingsQuery = useSettings()
+  const tutorReady = Boolean(settingsQuery.data?.endpoint_url)
+  const needsTutorSetup = settingsQuery.isSuccess && !tutorReady
   const documentsQuery = useDocuments(classId)
   const documents = documentsQuery.data
   const { data: profile } = useClassProfile(classId)
@@ -94,7 +98,7 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
           key: `solution-${solution.id}`,
           href,
           title: solution.title,
-          word: { tone: 'info', text: 'Waiting for your check' },
+          word: { tone: 'info', text: 'Review problems' },
           time: null,
         })
       } else if (solution.state === 'failed') {
@@ -319,49 +323,86 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
       {/* The front door: the question goes from here straight into a conversation. The
           class landing asking "what do you want to work on?" and then making the student
           find the composer themselves would be a question it did not mean. */}
-      <section aria-label="Ask Lyra" className="flex flex-col gap-1">
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            ask(question, true)
-          }}
-          className="flex items-center gap-2"
-        >
-          <Input
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            placeholder={
-              readyCount > 0 ? `Ask about ${className ?? 'this class'}` : 'Ask Lyra anything'
-            }
-            aria-label={`Ask about ${className ?? 'this class'}`}
-            autoComplete="off"
-            className="h-11 flex-1 text-[15px]"
-          />
-          <Button type="submit" size="lg" className="h-11 shrink-0">
-            Ask
-          </Button>
-        </form>
-        {suggestions.length > 0 ? (
-          <div className="flex flex-col">
-            {suggestions.map((prompt) => (
-              <button
-                key={prompt}
-                type="button"
-                onClick={() => ask(prompt, false)}
-                className="group/prompt border-border/70 text-text-secondary hover:text-text-primary focus-visible:ring-ring flex items-baseline justify-between gap-3 border-b py-2.5 text-left text-sm transition-colors duration-150 last:border-b-0 focus-visible:ring-2 focus-visible:outline-none"
-              >
-                <span className="min-w-0">{prompt}</span>
-                <span
-                  aria-hidden
-                  className="text-accent-primary shrink-0 opacity-0 transition-[opacity,transform] duration-150 group-hover/prompt:translate-x-0.5 group-hover/prompt:opacity-100 group-focus-visible/prompt:opacity-100"
-                >
-                  →
-                </span>
-              </button>
-            ))}
+      {needsTutorSetup || (documentsLoaded && readyCount === 0) ? (
+        <section aria-label="Get started" className="space-y-3">
+          <h2 className="font-heading text-xl font-medium">Get your class ready</h2>
+          <p className="text-text-secondary text-sm">
+            {needsTutorSetup
+              ? 'Connect a tutor to ask questions and generate practice. Add course materials for help grounded in your class.'
+              : 'Add a syllabus, lecture notes, or a problem set to summarize and practice from.'}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {needsTutorSetup ? (
+              <Button asChild>
+                <Link href="/settings">Set up your tutor</Link>
+              </Button>
+            ) : null}
+            <Button variant={needsTutorSetup ? 'outline' : 'default'} asChild>
+              <Link href={`/classes/${classId}?tab=files`}>
+                <FileUp />
+                Add course materials
+              </Link>
+            </Button>
           </div>
-        ) : null}
-      </section>
+          <p className="text-text-tertiary text-sm">
+            You can start writing without files.
+            {tutorReady ? ' You can also ask general questions below.' : ''}
+          </p>
+        </section>
+      ) : null}
+      {settingsQuery.isError ? (
+        <p role="alert" className="text-sm">
+          Could not check tutor setup.{' '}
+          <Button variant="outline" size="sm" onClick={() => void settingsQuery.refetch()}>
+            Retry tutor setup
+          </Button>
+        </p>
+      ) : null}
+      {tutorReady ? (
+        <section aria-label="Ask Lyra" className="flex flex-col gap-1">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              ask(question, true)
+            }}
+            className="flex items-center gap-2"
+          >
+            <Input
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              placeholder={
+                readyCount > 0 ? `Ask about ${className ?? 'this class'}` : 'Ask Lyra anything'
+              }
+              aria-label={`Ask about ${className ?? 'this class'}`}
+              autoComplete="off"
+              className="h-11 flex-1 text-[15px]"
+            />
+            <Button type="submit" size="lg" className="h-11 shrink-0">
+              Ask
+            </Button>
+          </form>
+          {readyCount > 0 && suggestions.length > 0 ? (
+            <div className="flex flex-col">
+              {suggestions.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => ask(prompt, false)}
+                  className="group/prompt border-border/70 text-text-secondary hover:text-text-primary focus-visible:ring-ring flex items-baseline justify-between gap-3 border-b py-2.5 text-left text-sm transition-colors duration-150 last:border-b-0 focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  <span className="min-w-0">{prompt}</span>
+                  <span
+                    aria-hidden
+                    className="text-accent-primary shrink-0 opacity-0 transition-[opacity,transform] duration-150 group-hover/prompt:translate-x-0.5 group-hover/prompt:opacity-100 group-focus-visible/prompt:opacity-100"
+                  >
+                    →
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       {items.length > 0 ? (
         <section aria-label="Pick up where you left off" className="flex flex-col gap-3">
@@ -402,22 +443,26 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
             ready, no choosing of decks, quotas, or difficulty first. The rest of the verbs
             stay one click away, one line below. */}
         <div className="flex flex-col gap-3">
-          <Button
-            size="lg"
-            className="h-11 self-start"
-            onClick={startPractice}
-            disabled={createQuiz.isPending || !documentsLoaded}
-          >
-            {createQuiz.isPending ? <Spinner /> : <Layers aria-hidden className="size-4" />}
-            Practice now
-          </Button>
-          <div className="flex flex-wrap gap-x-1 gap-y-1">
-            <Button variant="ghost" size="sm" asChild>
-              <Link href={`/classes/${classId}/solutions/new`}>
-                <SquareCheckBig aria-hidden className="size-4" />
-                Solve a problem set
-              </Link>
+          {tutorReady && readyCount > 0 ? (
+            <Button
+              size="lg"
+              className="h-11 self-start"
+              onClick={startPractice}
+              disabled={createQuiz.isPending || !documentsLoaded}
+            >
+              {createQuiz.isPending ? <Spinner /> : <Layers aria-hidden className="size-4" />}
+              Practice now
             </Button>
+          ) : null}
+          <div className="flex flex-wrap gap-x-1 gap-y-1">
+            {tutorReady && readyCount > 0 ? (
+              <Button variant="ghost" size="sm" asChild>
+                <Link href={`/classes/${classId}/solutions/new`}>
+                  <SquareCheckBig aria-hidden className="size-4" />
+                  Solve a problem set
+                </Link>
+              </Button>
+            ) : null}
             <Button variant="ghost" size="sm" onClick={startDraft} disabled={createDraft.isPending}>
               {createDraft.isPending ? <Spinner /> : <PenLine aria-hidden className="size-4" />}
               Start writing
@@ -444,12 +489,6 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
         {/* Only a truly empty class is called empty. A class whose uploads all failed or
             are still being read is a different situation, and the continue list above
             already says which. */}
-        {documentsLoaded && documents.length === 0 ? (
-          <p className="text-text-tertiary text-sm">
-            Nothing uploaded yet. Add a syllabus, lecture notes, or a problem set and every verb
-            above has something to work from.
-          </p>
-        ) : null}
       </section>
     </div>
   )

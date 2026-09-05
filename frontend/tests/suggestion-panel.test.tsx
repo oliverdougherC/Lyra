@@ -72,8 +72,10 @@ describe('SuggestionPanel', () => {
 
     const removed = screen.getByText('A longwinded sentence.')
     expect(removed.closest('div')).toHaveClass('bg-danger-fill', 'text-danger-text')
+    expect(removed.closest('div')).toHaveTextContent('Removed: A longwinded sentence.')
     const added = screen.getByText('A shorter one.')
     expect(added.closest('div')).toHaveClass('bg-success-fill', 'text-success-text')
+    expect(added.closest('div')).toHaveTextContent('Added: A shorter one.')
     // Context lines stay quiet: they are there to anchor the eye, not to be acted on.
     expect(screen.getByText('The opening line.').closest('div')).not.toHaveClass('bg-danger-fill')
   })

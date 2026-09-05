@@ -267,3 +267,46 @@ describe('ClassStudyPanel', () => {
     expect(screen.queryByText(/due/)).not.toBeInTheDocument()
   })
 })
+
+it('retains raw quiz counts and rejects invalid whole-number counts', async () => {
+  vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
+  vi.spyOn(api, 'listDocuments').mockResolvedValue([
+    { id: 3, class_id: 1, filename: 'notes.pdf', state: 'ready' },
+  ] as never)
+  const create = vi.spyOn(api, 'createQuiz').mockResolvedValue(quiz({}))
+  render(<ClassStudyPanel classId={1} />, { wrapper: createWrapper().wrapper })
+  await userEvent.click(await screen.findByRole('button', { name: 'New quiz' }))
+  await userEvent.click(screen.getByRole('button', { name: /Options/ }))
+  const count = screen.getByLabelText('Questions')
+  for (const value of ['', '0', '31', '3.5']) {
+    await userEvent.clear(count)
+    if (value) await userEvent.type(count, value)
+    expect(screen.getByText('Enter a whole number from 3 to 30.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create quiz' })).toBeDisabled()
+  }
+  await userEvent.clear(count)
+  await userEvent.type(count, '12')
+  await userEvent.click(screen.getByRole('button', { name: 'Create quiz' }))
+  await waitFor(() =>
+    expect(create).toHaveBeenCalledWith(1, expect.objectContaining({ count: 12 })),
+  )
+})
+
+it('retries source loading in the open creation dialog without losing options', async () => {
+  vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
+  const documents = vi.spyOn(api, 'listDocuments').mockRejectedValue(new Error('offline'))
+  render(<ClassStudyPanel classId={1} />, { wrapper: createWrapper().wrapper })
+  await userEvent.click(await screen.findByRole('button', { name: 'New quiz' }))
+  await userEvent.click(screen.getByRole('button', { name: /Options/ }))
+  await userEvent.clear(screen.getByLabelText('Questions'))
+  await userEvent.type(screen.getByLabelText('Questions'), '14')
+  await userEvent.clear(screen.getByLabelText('Name'))
+  await userEvent.type(screen.getByLabelText('Name'), 'Retained quiz')
+  documents.mockResolvedValue([
+    { id: 3, class_id: 1, filename: 'notes.pdf', state: 'ready' },
+  ] as never)
+  await userEvent.click(screen.getByRole('button', { name: 'Retry documents' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Create quiz' })).toBeEnabled())
+  expect(screen.getByLabelText('Questions')).toHaveValue(14)
+  expect(screen.getByLabelText('Name')).toHaveValue('Retained quiz')
+})

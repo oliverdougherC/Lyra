@@ -136,32 +136,32 @@ export function ProblemPanel({
               {chipLabel(problem.label, index)}
             </span>
             <span className="font-heading text-text-primary text-base tracking-tight">{label}</span>
-            {separate ? (
-              // Read off the parts, because the section itself is never solved and its
-              // own row would say `pending` under five finished answers.
-              section.solving ? (
-                <span className="text-text-tertiary inline-flex items-center gap-1.5 text-xs">
-                  <Spinner className="size-3" />
-                  {formatCount(subParts.length, 'part')}
-                </span>
-              ) : (
-                <VerdictBadge verdict={section.verdict} detail={section.detail} />
-              )
-            ) : solving ? (
-              <span className="text-text-tertiary inline-flex items-center gap-1.5 text-xs">
-                <Spinner className="size-3" />
-                {problem.status === 'verifying' ? 'Checking' : 'Solving'}
-              </span>
-            ) : problem.status === 'failed' ? (
-              <span className="text-danger-text inline-flex items-center gap-1.5 text-xs">
-                <AlertCircle className="size-3.5" aria-hidden />
-                Could not be solved
-              </span>
-            ) : (
-              <VerdictBadge verdict={problem.verdict} detail={problem.verdict_detail} />
-            )}
           </span>
         </AccordionTrigger>
+        <div className="flex shrink-0 items-center py-3">
+          {separate ? (
+            section.solving ? (
+              <span className="text-text-tertiary inline-flex items-center gap-1.5 text-xs">
+                <Spinner className="size-3" />
+                {formatCount(subParts.length, 'part')}
+              </span>
+            ) : (
+              <VerdictBadge verdict={section.verdict} detail={section.detail} />
+            )
+          ) : solving ? (
+            <span className="text-text-tertiary inline-flex items-center gap-1.5 text-xs">
+              <Spinner className="size-3" />
+              {problem.status === 'verifying' ? 'Checking' : 'Solving'}
+            </span>
+          ) : problem.status === 'failed' ? (
+            <span className="text-danger-text inline-flex items-center gap-1.5 text-xs">
+              <AlertCircle className="size-3.5" aria-hidden />
+              Could not be solved
+            </span>
+          ) : (
+            <VerdictBadge verdict={problem.verdict} detail={problem.verdict_detail} />
+          )}
+        </div>
         {/* A section holds no solution of its own, so there is nothing here to re-solve,
             mark wrong, or show a history of. Each part carries its own menu instead. */}
         {separate ? null : (

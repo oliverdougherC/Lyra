@@ -8,6 +8,8 @@ import { ClassChatsPanel } from '@/components/classes/class-chats-panel'
 import { ClassDraftsPanel } from '@/components/classes/class-drafts-panel'
 import { ClassSolutionsPanel } from '@/components/classes/class-solutions-panel'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatRelativeTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -43,10 +45,21 @@ export function ClassWorkPanel({ classId }: { classId: number }) {
   const router = useRouter()
   const searchParams = useSearchParams()
   const filter = readFilter(searchParams)
-  const { data: sessions, isPending: sessionsPending } = useSessions(classId)
-  const { data: solutions, isPending: solutionsPending } = useSolutions(classId)
-  const { data: drafts, isPending: draftsPending } = useDrafts(classId)
-  const { data: study, isPending: studyPending } = useStudyList(classId)
+  const sessionsQuery = useSessions(classId)
+  const { data: sessions, isPending: sessionsPending } = sessionsQuery
+  const solutionsQuery = useSolutions(classId)
+  const { data: solutions, isPending: solutionsPending } = solutionsQuery
+  const draftsQuery = useDrafts(classId)
+  const { data: drafts, isPending: draftsPending } = draftsQuery
+  const studyQuery = useStudyList(classId)
+  const { data: study, isPending: studyPending } = studyQuery
+
+  const unavailable = [
+    { name: 'chats', query: sessionsQuery },
+    { name: 'solutions', query: solutionsQuery },
+    { name: 'drafts', query: draftsQuery },
+    { name: 'practice', query: studyQuery },
+  ].filter(({ query }) => query.isError)
 
   // The filter is part of the route, so it lives in the hash like the tab does: a link to
   // the class's work with a filter applied is a link that reloads and backs forward as
@@ -134,15 +147,14 @@ export function ClassWorkPanel({ classId }: { classId: number }) {
   return (
     <div className="flex flex-col gap-4">
       <div
-        role="tablist"
+        role="group"
         aria-label="Work"
         className="text-text-tertiary inline-flex w-fit items-center gap-1 rounded-md border border-border/70 bg-muted/40 p-1 text-sm"
       >
         {FILTERS.map((item) => (
           <button
             key={item.value}
-            role="tab"
-            aria-selected={filter === item.value}
+            aria-pressed={filter === item.value}
             type="button"
             onClick={() => setFilter(item.value)}
             className={cn(
@@ -158,6 +170,26 @@ export function ClassWorkPanel({ classId }: { classId: number }) {
         ))}
       </div>
 
+      {filter === 'all'
+        ? unavailable.map(({ name, query }) => (
+            <Alert key={name} variant="destructive">
+              <AlertTitle>Could not load {name}</AlertTitle>
+              <AlertDescription>
+                <p>The work list may be incomplete. Previously loaded items remain available.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={query.isFetching}
+                  aria-label={`Retry ${name}`}
+                  onClick={() => void query.refetch()}
+                >
+                  Retry
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ))
+        : null}
+
       {filter === 'all' ? (
         all === null ? (
           <div className="flex flex-col gap-2">
@@ -165,7 +197,7 @@ export function ClassWorkPanel({ classId }: { classId: number }) {
               <Skeleton key={index} className="h-11 w-full rounded-md" />
             ))}
           </div>
-        ) : all.length === 0 ? (
+        ) : all.length === 0 && unavailable.length > 0 ? null : all.length === 0 ? (
           <Empty className="max-w-xl">
             <EmptyHeader>
               <EmptyTitle>Nothing here yet</EmptyTitle>
@@ -215,7 +247,12 @@ const FILTERS: { value: WorkFilter; label: string }[] = [
 
 /** A non-ready run, in words: the stage line if there is one, else the state. */
 function stateWord(state: string, stageDetail: string | null): string {
-  if (state === 'solving' || state === 'generating') return stageDetail ?? state
+  if (state === 'awaiting_review') return 'Review problems'
   if (state === 'failed') return 'Could not finish'
-  return stageDetail ?? state
+  if (state === 'pending') return 'Queued'
+  if (state === 'segmenting') return 'Reading problems'
+  if (state === 'solving') return stageDetail ?? 'Solving problems'
+  if (state === 'generating') return stageDetail ?? 'Creating'
+  if (state === 'cancelled') return 'Stopped'
+  return stageDetail ?? 'In progress'
 }

@@ -386,3 +386,28 @@ describe('DocumentRow, text recognition', () => {
     expect(outline).not.toHaveBeenCalled()
   })
 })
+
+it('shows an outline failure with retry instead of invented empty structure', async () => {
+  const outline = vi
+    .spyOn(api, 'getDocumentOutline')
+    .mockRejectedValueOnce(new Error('offline'))
+    .mockResolvedValue({ sections: [], chunk_count: 12, sectioned_count: 0 })
+  render(
+    <DocumentRow
+      document={documentAt('ready')}
+      selected={false}
+      onSelect={noop}
+      onRetry={noop}
+      onRecognize={noop}
+      onDelete={noop}
+      onStatus={noop}
+    />,
+    { wrapper: createWrapper().wrapper },
+  )
+  await userEvent.click(screen.getByText('Outline'))
+  expect(await screen.findByText('Could not load outline.')).toBeInTheDocument()
+  expect(screen.queryByText(/No sections found/)).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Retry outline' }))
+  expect(await screen.findByText(/12 passages/)).toBeInTheDocument()
+  expect(outline).toHaveBeenCalledTimes(2)
+})

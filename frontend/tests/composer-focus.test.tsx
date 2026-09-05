@@ -144,3 +144,17 @@ describe('Composer focus across a streaming turn (PLA-318)', () => {
     expect(onSend).not.toHaveBeenCalled()
   })
 })
+
+describe('Composer IME input (PLA-407)', () => {
+  it.each([{ isComposing: true }, { keyCode: 229 }])(
+    'does not send candidate confirmation %o',
+    (ime) => {
+      const onSend = vi.fn()
+      render(<Composer {...baseProps({ onSend })} />)
+      fireEvent.keyDown(textarea(), { key: 'Enter', ...ime })
+      expect(onSend).not.toHaveBeenCalled()
+      fireEvent.keyDown(textarea(), { key: 'Enter' })
+      expect(onSend).toHaveBeenCalledTimes(1)
+    },
+  )
+})

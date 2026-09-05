@@ -6,7 +6,6 @@ import { FileSearch, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import type { DocumentRead, DocumentState } from '@/types'
@@ -159,7 +158,12 @@ export function SourceContext({
                 autoFocus
               />
             </div>
-            <ScrollArea className="max-h-72">
+            <div
+              className="max-h-[min(18rem,45dvh)] overflow-y-auto overscroll-contain"
+              role="region"
+              aria-label="Available material"
+              tabIndex={0}
+            >
               {visible.length === 0 ? (
                 <p className="text-text-tertiary px-3 py-3 text-sm">
                   {documents.length === 0
@@ -196,7 +200,7 @@ export function SourceContext({
                   ))}
                 </RadioGroup>
               )}
-            </ScrollArea>
+            </div>
             {readyCount === 0 && documents.length > 0 && !documentsError ? (
               <p className="text-text-tertiary border-t px-3 py-2 text-xs">
                 Nothing is ready to read yet. Files Lyra has finished reading can be chosen here.

@@ -27,7 +27,7 @@ import {
 import { useMessages } from '@/lib/hooks/use-chat'
 import { ApiError, api } from '@/lib/api'
 import { parseTimestamp } from '@/lib/format'
-import type { AgentAuditEventRead } from '@/types'
+import type { AgentAuditEventRead, AgentWorkspaceChangeRead } from '@/types'
 import { hunksAreStale } from './types'
 import type { AgentToolActivity } from './types'
 
@@ -54,7 +54,7 @@ const ACCESS_SCOPE_LABELS: Record<string, { title: string; enables: string; revi
   propose_changes: {
     title: 'Prepare file edits',
     enables:
-      'Lyra can draft changes for you to review hunk by hunk; nothing is applied until you accept it.',
+      'Lyra can draft changes for you to review one by one; nothing is applied until you accept it.',
     review: 'Command runs each still need their own approval.',
   },
   run_commands: {
@@ -104,6 +104,10 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
   const {
     workspace: workspaceData,
     attachPending,
+    attachError,
+    workspaceError,
+    workspaceReady,
+    retryWorkspace,
     attachFolder,
     approveAccess,
     lastResolution,
@@ -119,6 +123,34 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
   const retryAgentChat = useRetryAgentChat(classId, sessionId)
   const regenerateAgentChat = useRegenerateAgentChat(classId, sessionId)
   const messages = useMessages(sessionId)
+
+  const readsReady =
+    messages.isSuccess && activity.isSuccess && dismissals.isSuccess && workspaceReady
+  // The list endpoint returns stored proposal metadata. Only /review reads today's file.
+  // Keep that live comparison across list polling, until the stored proposal changes.
+  const [reviews, setReviews] = useState<
+    Record<number, { updatedAt: string; change: AgentWorkspaceChangeRead }>
+  >({})
+  const visibleChanges = (changes.data ?? []).map((stored) => {
+    const review = reviews[stored.id]
+    const reviewable =
+      stored.state === 'pending' || stored.state === 'partially_applied' || stored.state === 'stale'
+    return reviewable && review?.updatedAt === stored.updated_at ? review.change : stored
+  })
+  const adoptReview = (changeId: number, reviewed: AgentWorkspaceChangeRead) => {
+    const stored = changes.data?.find((change) => change.id === changeId)
+    if (!stored) return
+    setReviews((current) => ({
+      ...current,
+      [changeId]: { updatedAt: stored.updated_at, change: reviewed },
+    }))
+  }
+  const clearReview = (changeId: number) =>
+    setReviews((current) => {
+      const next = { ...current }
+      delete next[changeId]
+      return next
+    })
 
   // The conversation's own composer drives the turn, so this surface learns that a turn
   // committed by watching the transcript grow: a new assistant reply is what triggers a
@@ -184,7 +216,7 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
   // and each resolution fires at most once.
   const continuedKeyRef = useRef<string | null>(null)
   useEffect(() => {
-    if (!lastResolution) return
+    if (!lastResolution || !readsReady) return
     if (Date.now() - lastResolution.at > 60_000) return
     const list = messages.data ?? []
     // The turn must be settled: its reply is the last thing in the transcript.
@@ -216,17 +248,25 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
         }
       },
     })
-  }, [activity.data, lastResolution, messages.data, pendingRequests, regenerateAgentChat])
+  }, [
+    activity.data,
+    lastResolution,
+    messages.data,
+    pendingRequests,
+    regenerateAgentChat,
+    readsReady,
+  ])
 
   const acceptHunks = async (changeId: number, hunks: { index: number; hash: string }[]) => {
     if (sessionId === null) return
     setEffectBusy(true)
     try {
       const reviewed = await api.reviewAgentWorkspaceChange(classId, sessionId, changeId)
+      adoptReview(changeId, reviewed)
       const displayedCount =
-        changes.data?.find((c) => c.id === changeId)?.hunks.length ?? hunks.length
+        visibleChanges.find((c) => c.id === changeId)?.hunks.length ?? hunks.length
 
-      if (hunksAreStale(hunks, reviewed.hunks, displayedCount)) {
+      if (reviewed.state === 'stale' || hunksAreStale(hunks, reviewed.hunks, displayedCount)) {
         refresh()
         toast.error('The proposal changed since you reviewed it. Please review the updated diff.')
         return
@@ -239,9 +279,22 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
         hunks,
       )
       await api.applyAgentWorkspaceChange(classId, sessionId, changeId, hunks, confirmation.token)
+      clearReview(changeId)
       refresh()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not apply that change.')
+    } finally {
+      setEffectBusy(false)
+    }
+  }
+
+  const recheckChange = async (changeId: number) => {
+    if (sessionId === null || effectBusy) return
+    setEffectBusy(true)
+    try {
+      adoptReview(changeId, await api.reviewAgentWorkspaceChange(classId, sessionId, changeId))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Could not recheck that file.')
     } finally {
       setEffectBusy(false)
     }
@@ -252,6 +305,7 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
     setEffectBusy(true)
     try {
       await api.rejectAgentWorkspaceChange(classId, sessionId, changeId)
+      clearReview(changeId)
       refresh()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not reject that change.')
@@ -312,21 +366,36 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
   // forever. The terminal rows are not lost: they settle into the collapsed Details/audit
   // trail as read-only results (with the command's output), so a just-completed result is
   // still findable without re-asserting itself in the top band.
-  const pendingChanges = (changes.data ?? []).filter(
-    (change) => change.state === 'pending' || change.state === 'partially_applied',
+  const pendingChanges = visibleChanges.filter(
+    (change) =>
+      change.state === 'pending' ||
+      change.state === 'partially_applied' ||
+      change.state === 'stale',
   )
   const pendingCommands = (commands.data ?? []).filter(
     (command) => command.state === 'pending' || command.state === 'running',
   )
-  const settledChanges = (changes.data ?? []).filter(
-    (change) => change.state !== 'pending' && change.state !== 'partially_applied',
+  const settledChanges = visibleChanges.filter(
+    (change) =>
+      change.state !== 'pending' &&
+      change.state !== 'partially_applied' &&
+      change.state !== 'stale',
   )
   const settledCommands = (commands.data ?? []).filter(
     (command) => command.state !== 'pending' && command.state !== 'running',
   )
   const hasActivity = (activity.data ?? []).length > 0
   const settledCount = settledChanges.length + settledCommands.length
+  const failedQueries = [
+    { label: 'Conversation', query: messages },
+    { label: 'Activity', query: activity },
+    { label: 'File proposals', query: changes },
+    { label: 'Commands', query: commands },
+    { label: 'Access requests', query: dismissals },
+  ].filter(({ query }) => query.isError)
   const hasWork =
+    workspaceError ||
+    failedQueries.length > 0 ||
     pendingRequests.length > 0 ||
     pendingChanges.length > 0 ||
     pendingCommands.length > 0 ||
@@ -347,12 +416,39 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
       className="border-border bg-background flex min-h-0 flex-col gap-3 border-b px-4 py-3"
       aria-label="Agent work"
     >
+      {workspaceError ? (
+        <Alert variant="destructive">
+          <AlertTitle>Attached folder could not be loaded</AlertTitle>
+          <AlertDescription>
+            <Button size="sm" variant="outline" onClick={retryWorkspace}>
+              Retry attached folder
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      {failedQueries.map(({ label, query }) => (
+        <Alert key={label} variant="destructive">
+          <AlertTitle>{label} could not be loaded</AlertTitle>
+          <AlertDescription>
+            <p>Some work may be missing from this view.</p>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={query.isFetching}
+              onClick={() => void query.refetch()}
+            >
+              Retry {label.toLowerCase()}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ))}
       {cardPathEntryVisible && !workspaceData ? (
         // No native picker on this build (the browser): the bounded path entry stands in
         // for it, shown in the conversation surface next to the card that asked for the
         // folder, not as permanent setup chrome.
         <AttachPathEntry
           busy={attachPending}
+          error={attachError}
           onSubmit={(rootPath) => attachFolder(rootPath)}
           onCancel={() => setCardPathEntryVisible(false)}
         />
@@ -369,8 +465,9 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
             <Button
               size="sm"
               variant="outline"
-              disabled={retryAgentChat.isPending}
+              disabled={retryAgentChat.isPending || !readsReady}
               onClick={() =>
+                readsReady &&
                 retryAgentChat.mutate(undefined, {
                   onError: (error) => toast.error(error.message),
                 })
@@ -426,6 +523,7 @@ export function AgentWorkSurface({ classId, sessionId }: AgentWorkSurfaceProps) 
             proposedContent: change.proposed_content ?? undefined,
             hunks: change.hunks,
           }}
+          onRefresh={() => void recheckChange(change.id)}
           onAcceptHunk={(hunk) => void acceptHunks(change.id, [hunk])}
           onAcceptAll={() => void acceptHunks(change.id, change.hunks)}
           onRejectAll={() => void rejectChange(change.id)}

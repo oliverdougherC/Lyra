@@ -8,12 +8,7 @@ import { MathText } from '@/components/solutions/math-text'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  useComments,
-  useReplyToComment,
-  useResolveComment,
-  useStartPass,
-} from '@/lib/hooks/use-drafts'
+import { useComments, useReplyToComment, useResolveComment } from '@/lib/hooks/use-drafts'
 import { cn } from '@/lib/utils'
 import type { CommentSeverity, DraftComment } from '@/types'
 
@@ -30,12 +25,42 @@ import type { CommentSeverity, DraftComment } from '@/types'
 export function CommentList({
   draftId,
   onJump,
+  onAddressComment,
+  addressingDisabled = false,
 }: {
   draftId: number
+  onAddressComment: (comment: DraftComment) => Promise<void>
+  addressingDisabled?: boolean
   /** Scroll the editor to this thread's anchor. False when it has none to jump to. */
   onJump?: (comment: DraftComment) => boolean
 }) {
-  const { data: threads, isPending } = useComments(draftId)
+  const { data: threads, isPending, isError, refetch } = useComments(draftId)
+  const [addressing, setAddressing] = useState(false)
+  const [addressError, setAddressError] = useState<string | null>(null)
+  const errorNotice = isError ? (
+    <div className="space-y-2" role="alert">
+      <p className="text-danger-text text-sm">
+        Comments could not be refreshed.{' '}
+        {threads?.length ? 'Showing saved comments.' : 'Try again to load them.'}
+      </p>
+      <Button variant="outline" size="sm" onClick={() => void refetch()}>
+        Retry comments
+      </Button>
+    </div>
+  ) : null
+
+  async function addressComment(comment: DraftComment) {
+    if (addressing || addressingDisabled) return
+    setAddressing(true)
+    setAddressError(null)
+    try {
+      await onAddressComment(comment)
+    } catch {
+      setAddressError('Could not address this comment. Your draft has been kept; try again.')
+    } finally {
+      setAddressing(false)
+    }
+  }
 
   if (isPending) {
     return (
@@ -46,6 +71,7 @@ export function CommentList({
     )
   }
   if (!threads || threads.length === 0) {
+    if (isError) return errorNotice
     return (
       <p className="text-text-tertiary text-sm">
         No comments yet. Ask Lyra to review the draft, and its findings land here, anchored to the
@@ -60,10 +86,28 @@ export function CommentList({
 
   return (
     <div className="flex flex-col gap-4">
+      {errorNotice}
+      {addressError ? (
+        <p role="alert" className="text-danger-text text-sm">
+          {addressError}
+        </p>
+      ) : null}
+      {addressingDisabled ? (
+        <p className="text-text-tertiary text-xs">
+          Address is available when the current draft work finishes.
+        </p>
+      ) : null}
       {open.length > 0 ? (
         <ul className="flex flex-col gap-2" aria-label="Open comments">
           {sortBySeverity(open).map((thread) => (
-            <CommentThread key={thread.id} draftId={draftId} thread={thread} onJump={onJump} />
+            <CommentThread
+              key={thread.id}
+              draftId={draftId}
+              thread={thread}
+              onJump={onJump}
+              onAddress={addressComment}
+              addressingDisabled={addressing || addressingDisabled}
+            />
           ))}
         </ul>
       ) : (
@@ -75,7 +119,13 @@ export function CommentList({
           <p className="eyebrow text-text-tertiary mb-2">No longer anchored</p>
           <ul className="flex flex-col gap-2">
             {sortBySeverity(orphaned).map((thread) => (
-              <CommentThread key={thread.id} draftId={draftId} thread={thread} />
+              <CommentThread
+                key={thread.id}
+                draftId={draftId}
+                thread={thread}
+                onAddress={addressComment}
+                addressingDisabled={addressing || addressingDisabled}
+              />
             ))}
           </ul>
         </section>
@@ -86,7 +136,13 @@ export function CommentList({
           <p className="eyebrow text-text-tertiary mb-2">Resolved</p>
           <ul className="flex flex-col gap-2 opacity-60">
             {resolved.map((thread) => (
-              <CommentThread key={thread.id} draftId={draftId} thread={thread} />
+              <CommentThread
+                key={thread.id}
+                draftId={draftId}
+                thread={thread}
+                onAddress={addressComment}
+                addressingDisabled={addressing || addressingDisabled}
+              />
             ))}
           </ul>
         </section>
@@ -119,14 +175,17 @@ function CommentThread({
   draftId,
   thread,
   onJump,
+  onAddress,
+  addressingDisabled,
 }: {
   draftId: number
   thread: DraftComment
   onJump?: (comment: DraftComment) => boolean
+  onAddress: (comment: DraftComment) => Promise<void>
+  addressingDisabled: boolean
 }) {
   const reply = useReplyToComment(draftId)
   const resolve = useResolveComment(draftId)
-  const address = useStartPass(draftId)
   const [replying, setReplying] = useState(false)
   const [replyText, setReplyText] = useState('')
   const severity = thread.severity ?? 'note'
@@ -275,20 +334,8 @@ function CommentThread({
             variant="ghost"
             size="sm"
             className="text-text-tertiary hover:text-text-primary h-6 px-1.5 text-xs"
-            disabled={address.isPending}
-            onClick={async () => {
-              try {
-                await address.mutateAsync({
-                  instruction: `Address this review finding: ${thread.body}`,
-                  sections: thread.section_ref ? [thread.section_ref] : undefined,
-                  address_comment_id: thread.id,
-                  depth: 'standard',
-                })
-                toast.success('Lyra is addressing this comment.')
-              } catch {
-                toast.error('Could not start the targeted pass.')
-              }
-            }}
+            disabled={addressingDisabled}
+            onClick={() => void onAddress(thread)}
           >
             <Sparkles className="size-3" />
             Address

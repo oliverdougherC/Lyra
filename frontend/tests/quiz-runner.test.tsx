@@ -285,3 +285,35 @@ describe('QuizRunner', () => {
     await waitFor(() => expect(api.startAttempt).toHaveBeenCalledWith(9, true))
   })
 })
+
+describe('QuizRunner remediation', () => {
+  it('prevents restarting while grading or finishing and focuses feedback and results', async () => {
+    mockAttemptLifecycle(quizWith([MCQ]))
+    const grading = Promise.withResolvers<Awaited<ReturnType<typeof api.submitAnswer>>>()
+    const scoring = Promise.withResolvers<Awaited<ReturnType<typeof api.finishAttempt>>>()
+    vi.mocked(api.submitAnswer).mockReturnValue(grading.promise)
+    vi.spyOn(api, 'finishAttempt').mockReturnValue(scoring.promise)
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper: createWrapper().wrapper })
+    await userEvent.click(await screen.findByRole('button', { name: 'One' }))
+    expect(screen.getByRole('button', { name: 'Start over' })).toBeDisabled()
+    expect(screen.getByRole('status')).toHaveTextContent('Checking your answer')
+    grading.resolve({ correct: true, correct_index: 1, explanation: 'Correct by definition.' })
+    await waitFor(() =>
+      expect(screen.getByRole('region', { name: 'Answer feedback' })).toHaveFocus(),
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'See results' }))
+    expect(screen.getByRole('button', { name: 'Start over' })).toBeDisabled()
+    scoring.resolve({ score: 1, total: 1, answered: 1, by_topic: [] })
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'You scored 1 out of 1' })).toHaveFocus(),
+    )
+  })
+
+  it('focuses the next question after advancing', async () => {
+    mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]))
+    render(<QuizRunner classId={1} quizId={9} />, { wrapper: createWrapper().wrapper })
+    await userEvent.click(await screen.findByRole('button', { name: 'One' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Next' }))
+    expect(screen.getByRole('heading', { name: 'The capital of France is ...' })).toHaveFocus()
+  })
+})

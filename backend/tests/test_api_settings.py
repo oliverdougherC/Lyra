@@ -435,3 +435,52 @@ def test_repointing_the_endpoint_forgets_what_was_measured_about_vision(
 
     assert body["vision_supported"] is None
     assert body["vision_message"] is None
+
+
+@pytest.mark.parametrize("key", ["replacement-key", ""])
+def test_key_change_forgets_endpoint_capabilities(
+    client: TestClient, db: sqlite3.Connection, key: str
+) -> None:
+    client.put("/api/settings", json={"api_key": "original-key"})
+    update_settings_row(
+        db,
+        {
+            "tools_supported": 1,
+            "tools_message": "Works",
+            "vision_supported": 1,
+            "vision_message": "Works",
+        },
+    )
+    body = client.put("/api/settings", json={"api_key": key}).json()
+    assert body["tools_supported"] is None
+    assert body["vision_supported"] is None
+
+
+@pytest.mark.parametrize("kind", ["tools", "vision"])
+@pytest.mark.parametrize(
+    "change", [{"endpoint_url": None}, {"model": "new-model"}, {"api_key": "new-key"}]
+)
+def test_delayed_capability_probe_cannot_stamp_a_changed_configuration(
+    client: TestClient,
+    db: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    change: dict[str, object],
+) -> None:
+    client.put(
+        "/api/settings", json={"endpoint_url": "http://127.0.0.1:8080/v1", "api_key": "old-key"}
+    )
+
+    async def probe(endpoint: str, api_key: str | None, model: str | None):
+        routes_settings.write_settings(routes_settings.SettingsUpdate(**change), db)
+        support = client_module.ToolSupport if kind == "tools" else client_module.VisionSupport
+        return support(ok=True, message="Previous setup works")
+
+    monkeypatch.setattr(
+        client_module, "probe_tool_support" if kind == "tools" else "probe_vision_support", probe
+    )
+    response = client.post(f"/api/settings/test-{kind}")
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert "changed" in response.json()["message"]
+    assert get_settings_row(db)[f"{kind}_supported"] is None

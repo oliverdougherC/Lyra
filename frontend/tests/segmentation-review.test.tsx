@@ -3,6 +3,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
+import { api } from '@/lib/api'
 import { SegmentationReview } from '@/components/solutions/segmentation-review'
 import type { SolutionDetail, SolutionPart } from '@/types'
 
@@ -348,5 +349,109 @@ describe("how a problem's parts are solved", () => {
 
     // One part is not a set of questions; it is a problem whose statement runs on.
     expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+  })
+})
+
+describe('review corrections', () => {
+  it('saves edited child labels and statements without changing siblings', async () => {
+    const parts = [
+      { ...TWO_PROBLEMS[0], content: 'Shared context\n(a) Wrong equation\n(b) Keep sibling' },
+      part({ id: 12, parent_part_id: 10, label: '(a)', content: 'Wrong equation' }),
+      part({ id: 13, parent_part_id: 10, label: '(b)', content: 'Keep sibling' }),
+    ]
+    const update = vi.spyOn(api, 'updateSegmentation').mockResolvedValue(solution(parts))
+    renderReview(parts)
+    await userEvent.click(screen.getByRole('button', { name: 'Edit the statement' }))
+    const label = screen.getByRole('textbox', { name: 'Part 1 label of Problem 1' })
+    await userEvent.clear(label)
+    await userEvent.type(label, '(i)')
+    const statement = screen.getByRole('textbox', { name: 'Part 1 statement of Problem 1' })
+    await userEvent.clear(statement)
+    await userEvent.type(statement, 'Correct equation')
+    await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    expect(update).toHaveBeenCalledWith(1, {
+      problems: [
+        expect.objectContaining({
+          statement: 'Shared context',
+          parts: [
+            { label: '(i)', statement: 'Correct equation' },
+            { label: '(b)', statement: 'Keep sibling' },
+          ],
+        }),
+      ],
+    })
+    update.mockRestore()
+  })
+
+  it('offers visible Undo after removing the final problem, restoring children and settings', async () => {
+    renderReview([
+      { ...TWO_PROBLEMS[0], solve_parts: 'separately' },
+      part({ id: 12, parent_part_id: 10, label: '(a)', content: 'First child' }),
+      part({ id: 13, parent_part_id: 10, label: '(b)', content: 'Second child' }),
+    ])
+    await userEvent.click(screen.getByRole('button', { name: 'Actions for Problem 1' }))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
+    expect(screen.getByText('All problems removed')).toBeInTheDocument()
+    expect(screen.queryByText('Lyra could not find separate problems')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /Undo/ }))
+    expect(screen.getByText('First child')).toBeInTheDocument()
+    expect(screen.getByText('Second child')).toBeInTheDocument()
+    expect(screen.getByRole('switch')).toBeChecked()
+  })
+})
+
+it('adds editable parts and refuses to save a blank child', async () => {
+  const update = vi.spyOn(api, 'updateSegmentation').mockResolvedValue(solution([TWO_PROBLEMS[0]]))
+  renderReview([TWO_PROBLEMS[0]])
+  await userEvent.click(screen.getByRole('button', { name: 'Edit the statement' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Add a part' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  expect(update).not.toHaveBeenCalled()
+  await userEvent.type(
+    screen.getByRole('textbox', { name: 'Part 1 statement of Problem 1' }),
+    'Added child',
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  expect(update).toHaveBeenCalledWith(1, {
+    problems: [expect.objectContaining({ parts: [{ label: null, statement: 'Added child' }] })],
+  })
+})
+
+it('preserves parent context when a child label is a prefix of an ordinary word', async () => {
+  const parent = { ...TWO_PROBLEMS[0], content: 'Given f(x)\nand g(x) = 2\nFind both.' }
+  const parts = [parent, part({ id: 12, parent_part_id: 10, label: 'a', content: 'First child' })]
+  const update = vi.spyOn(api, 'updateSegmentation').mockResolvedValue(solution(parts))
+  renderReview(parts)
+  await userEvent.click(screen.getByRole('button', { name: 'Edit the statement' }))
+  expect(screen.getByRole('textbox', { name: 'Problem 1 statement' })).toHaveValue(parent.content)
+  await userEvent.type(
+    screen.getByRole('textbox', { name: 'Part 1 statement of Problem 1' }),
+    ' corrected',
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  expect(update).toHaveBeenCalledWith(1, {
+    problems: [expect.objectContaining({ statement: parent.content })],
+  })
+})
+
+it('preserves additional parent instructions after child-like lines', async () => {
+  const parent = {
+    ...TWO_PROBLEMS[0],
+    content: 'Given f(x)\n(a) First child\nExplain your answer.',
+  }
+  const parts = [parent, part({ id: 12, parent_part_id: 10, label: '(a)', content: 'First child' })]
+  const update = vi.spyOn(api, 'updateSegmentation').mockResolvedValue(solution(parts))
+  renderReview(parts)
+  await userEvent.click(screen.getByRole('button', { name: 'Edit the statement' }))
+  expect(screen.getByRole('textbox', { name: 'Problem 1 statement' })).toHaveValue(
+    'Given f(x)\nExplain your answer.',
+  )
+  await userEvent.type(
+    screen.getByRole('textbox', { name: 'Part 1 statement of Problem 1' }),
+    ' corrected',
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+  expect(update).toHaveBeenCalledWith(1, {
+    problems: [expect.objectContaining({ statement: 'Given f(x)\nExplain your answer.' })],
   })
 })

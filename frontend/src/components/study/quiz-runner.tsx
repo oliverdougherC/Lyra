@@ -46,6 +46,10 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
   const [attempt, setAttempt] = useState<AttemptRead | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
   const startedRef = useRef(false)
+  const generation = useRef(0)
+  const busy = useRef(false)
+  const questionHeading = useRef<HTMLHeadingElement>(null)
+  const feedback = useRef<HTMLDivElement>(null)
 
   const { mutateAsync: submitAnswer, isPending: submitting } = useSubmitAnswer(
     attempt?.attempt_id ?? Number.NaN,
@@ -73,6 +77,8 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
 
   const begin = useCallback(
     (restart = false) => {
+      const run = ++generation.current
+      busy.current = true
       startedRef.current = true
       setAttempt(null)
       setStartError(null)
@@ -83,6 +89,8 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
       setResult(null)
       start(restart, {
         onSuccess: (started) => {
+          if (run !== generation.current) return
+          busy.current = false
           setAttempt(started)
           // Resume where the student left off: the first question with no recorded answer,
           // or the last question when every one has already been answered (PLA-277).
@@ -111,8 +119,11 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
             }
           }
         },
-        onError: (error) =>
-          setStartError(error instanceof ApiError ? error.message : 'Could not start this quiz.'),
+        onError: (error) => {
+          if (run !== generation.current) return
+          busy.current = false
+          setStartError(error instanceof ApiError ? error.message : 'Could not start this quiz.')
+        },
       })
     },
     [quiz.data, start],
@@ -123,6 +134,19 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
   useEffect(() => {
     if (quiz.data && !startedRef.current) begin()
   }, [quiz.data, begin])
+
+  useEffect(() => {
+    if (answer) feedback.current?.focus()
+    else if (attempt) questionHeading.current?.focus()
+  }, [answer, index, attempt])
+
+  useEffect(
+    () => () => {
+      generation.current += 1
+      startedRef.current = false
+    },
+    [],
+  )
 
   if (quiz.isPending) {
     return (
@@ -199,18 +223,24 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
   const isLast = index === questions.length - 1
 
   async function choose(selectedIndex: number) {
-    if (revealed || submitting) return
+    if (revealed || busy.current || !attempt) return
+    const run = generation.current
+    busy.current = true
     setSelected(selectedIndex)
     try {
-      setAnswer(await submitAnswer({ part_id: current.part_id, selected_index: selectedIndex }))
+      const graded = await submitAnswer({ part_id: current.part_id, selected_index: selectedIndex })
+      if (run === generation.current) setAnswer(graded)
     } catch (caught) {
+      if (run !== generation.current) return
       setSelected(null)
       toast.error(caught instanceof ApiError ? caught.message : 'Could not record that answer.')
+    } finally {
+      if (run === generation.current) busy.current = false
     }
   }
 
   async function checkFillBlank() {
-    if (revealed || submitting) return
+    if (revealed || submitting || !fillText.trim()) return
     // The runner grades the text itself: case-insensitive and whitespace-trimmed against
     // the one stored option, then reported as 0 on a match and -1 on a miss, which is
     // the contract the answers endpoint documents.
@@ -227,16 +257,23 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
   }
 
   async function finish() {
+    if (busy.current || !attempt) return
+    const run = generation.current
+    busy.current = true
     try {
-      setResult(await finishAttempt())
+      const scored = await finishAttempt()
+      if (run === generation.current) setResult(scored)
     } catch (caught) {
+      if (run !== generation.current) return
       toast.error(caught instanceof ApiError ? caught.message : 'Could not score this quiz.')
+    } finally {
+      if (run === generation.current) busy.current = false
     }
   }
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-text-tertiary text-sm tabular-nums" aria-live="polite">
           Question {index + 1} of {questions.length}
         </p>
@@ -250,15 +287,22 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
             variant="ghost"
             size="sm"
             className="text-text-tertiary"
-            onClick={() => begin(true)}
-            disabled={starting}
+            onClick={() => {
+              if (!busy.current) begin(true)
+            }}
+            disabled={starting || submitting || finishing}
           >
             Start over
           </Button>
         </div>
       </div>
 
-      <MathText className="text-text-primary text-lg">{payload.question}</MathText>
+      <h2 ref={questionHeading} tabIndex={-1} className="focus:outline-none">
+        <MathText className="text-text-primary text-lg">{payload.question}</MathText>
+      </h2>
+      <p role="status" className="sr-only">
+        {submitting ? 'Checking your answer.' : finishing ? 'Scoring your quiz.' : ''}
+      </p>
 
       {payload.type === 'fill_blank' ? (
         <form
@@ -311,8 +355,12 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
 
       {answer ? (
         <div
+          ref={feedback}
+          tabIndex={-1}
+          role="region"
+          aria-label="Answer feedback"
           className={cn(
-            'flex flex-col gap-2 rounded-md border p-4',
+            'flex flex-col gap-2 rounded-md border p-4 focus:outline-none',
             answer.correct
               ? 'border-success-text/50 bg-success-fill/40'
               : 'border-danger-text/50 bg-danger-fill/40',
@@ -393,13 +441,21 @@ function QuizResult({
   result: AttemptResult
   onTryAgain: () => void
 }) {
+  const heading = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    heading.current?.focus()
+  }, [])
   return (
     <section aria-label="Quiz results" className="flex flex-col gap-6 py-4">
       <div className="flex flex-col items-center gap-1 text-center">
-        <h2 className="font-heading text-text-primary text-2xl tracking-tight">
+        <h2
+          ref={heading}
+          tabIndex={-1}
+          className="font-heading text-text-primary text-2xl tracking-tight focus:outline-none"
+        >
           You scored {result.score} out of {result.total}
         </h2>
-        <p className="text-text-secondary text-sm">Anything under 60% wants another look.</p>
+        <p className="text-text-secondary text-sm">Review topics where you scored below 60%.</p>
       </div>
 
       <ul className="flex flex-col gap-3">

@@ -13,6 +13,7 @@ import type {
   FactRead,
   SessionRead,
   SolutionRead,
+  SettingsRead,
 } from '@/types'
 
 const replace = vi.fn()
@@ -76,6 +77,10 @@ function fact(
 
 beforeEach(() => {
   vi.restoreAllMocks()
+  vi.spyOn(api, 'getSettings').mockResolvedValue({
+    endpoint_url: 'http://localhost:8080/v1',
+    model: 'tutor',
+  } as SettingsRead)
   vi.spyOn(api, 'getClass').mockResolvedValue(KLASS)
   vi.spyOn(api, 'listSessions').mockResolvedValue([
     { id: 4, class_id: 1, title: 'Fourier week', created_at: '2026-08-04 09:00:00' },
@@ -302,7 +307,9 @@ describe('ClassHub', () => {
     // Truly empty: only now does the empty copy appear.
     vi.spyOn(api, 'listDocuments').mockResolvedValue([])
     render(<ClassHub classId={1} tab="ask" />, { wrapper: createWrapper().wrapper })
-    expect(await screen.findByText(/Nothing uploaded yet/)).toBeInTheDocument()
+    expect(await screen.findByRole('link', { name: 'Add course materials' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Practice now' })).not.toBeInTheDocument()
+    expect(screen.queryByText('Summarize the material I uploaded')).not.toBeInTheDocument()
   })
 
   it('holds Practice until the document list has loaded', async () => {
@@ -313,8 +320,8 @@ describe('ClassHub', () => {
 
     render(<ClassHub classId={1} tab="ask" />, { wrapper })
 
-    const practice = await screen.findByRole('button', { name: 'Practice now' })
-    expect(practice).toBeDisabled()
+    await screen.findByRole('textbox', { name: 'Ask about Continuous-Time Signals' })
+    expect(screen.queryByRole('button', { name: 'Practice now' })).not.toBeInTheDocument()
   })
 
   it('says when the document list itself failed, and retries it on request', async () => {
@@ -326,7 +333,7 @@ describe('ClassHub', () => {
     render(<ClassHub classId={1} tab="ask" />, { wrapper })
 
     expect(await screen.findByText(/The document list did not load/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Practice now' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Practice now' })).not.toBeInTheDocument()
     // Not knowing what is uploaded is not the same as knowing nothing is.
     expect(screen.queryByText(/Nothing uploaded yet/)).not.toBeInTheDocument()
 
@@ -354,4 +361,21 @@ describe('ClassHub', () => {
       '/classes/1/chat?session=new&ask=Why+does+convolution+flip+the+signal%3F&send=1',
     )
   })
+})
+
+it('leads an unconfigured empty class to tutor setup and upload, while retaining manual writing', async () => {
+  vi.mocked(api.getSettings).mockResolvedValue({ endpoint_url: null, model: null } as SettingsRead)
+  vi.mocked(api.listDocuments).mockResolvedValue([])
+  render(<ClassHub classId={1} tab="ask" />, { wrapper: createWrapper().wrapper })
+  expect(await screen.findByRole('link', { name: 'Set up your tutor' })).toHaveAttribute(
+    'href',
+    '/#/settings',
+  )
+  expect(screen.getByRole('link', { name: 'Add course materials' })).toHaveAttribute(
+    'href',
+    '/#/classes/1?tab=files',
+  )
+  expect(screen.getByRole('button', { name: 'Start writing' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Practice now' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'Ask' })).not.toBeInTheDocument()
 })

@@ -94,30 +94,25 @@ export function ClassDraftsPanel({ classId }: { classId: number }) {
     )
   }
 
-  if (drafts.isError) {
-    return (
-      <Alert variant="destructive">
-        <AlertTitle>Could not load your drafts</AlertTitle>
-        <AlertDescription>
-          <p>{drafts.error instanceof ApiError ? drafts.error.message : 'Something went wrong.'}</p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-3"
-            onClick={() => void drafts.refetch()}
-          >
-            Retry
-          </Button>
-        </AlertDescription>
-      </Alert>
-    )
-  }
+  const errorNotice = (
+    <Alert variant="destructive">
+      <AlertTitle>Could not load your drafts</AlertTitle>
+      <AlertDescription>
+        <p>{drafts.error instanceof ApiError ? drafts.error.message : 'Something went wrong.'}</p>
+        <Button variant="outline" size="sm" className="mt-3" onClick={() => void drafts.refetch()}>
+          Retry
+        </Button>
+      </AlertDescription>
+    </Alert>
+  )
+  if (drafts.isError && !drafts.data) return errorNotice
 
-  const list = drafts.data
+  const list = drafts.data ?? []
   const empty = list.length === 0
 
   return (
     <div className="flex flex-col gap-6">
+      {drafts.isError ? errorNotice : null}
       <div className="flex items-center justify-between gap-3">
         <p className="text-text-secondary text-sm">
           Documents you write, with Lyra drafting passages and suggesting revisions.
@@ -171,7 +166,7 @@ export function ClassDraftsPanel({ classId }: { classId: number }) {
       <RenameDialog
         target={renaming ? { id: renaming.id, name: renaming.title } : null}
         title="Rename draft"
-        description="It was named in a hurry, which is rarely what the work is."
+        description="Choose a name for this draft."
         label="Name"
         pending={renameDraft.isPending}
         onOpenChange={(open) => {
@@ -261,7 +256,7 @@ function DraftRow({
               variant="ghost"
               size="icon"
               aria-label={`Actions for ${draft.title}`}
-              className="size-8 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+              className="size-8"
             >
               <MoreVertical />
             </Button>

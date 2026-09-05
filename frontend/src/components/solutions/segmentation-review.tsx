@@ -1,7 +1,7 @@
 'use client'
 
 import { FileQuestion, Plus, Undo2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import { DraftProblem, ProblemCard } from '@/components/solutions/problem-card'
@@ -43,7 +43,7 @@ export function SegmentationReview({
   solving = false,
 }: SegmentationReviewProps) {
   const [problems, setProblems] = useState<DraftProblem[]>(() => toDrafts(solution.parts))
-  const [nextKey, setNextKey] = useState(0)
+  const nextKey = useRef(0)
   const save = useUpdateSegmentation(solution.id)
 
   /**
@@ -62,6 +62,7 @@ export function SegmentationReview({
     setHistory((current) => [...current.slice(1 - HISTORY_LIMIT), { problems, label }])
 
   const undo = useCallback(() => {
+    if (save.isPending || solving || resegmenting) return
     const previous = history[history.length - 1]
     if (!previous) {
       toast('Nothing to undo.')
@@ -70,7 +71,7 @@ export function SegmentationReview({
     setProblems(previous.problems)
     setHistory((current) => current.slice(0, -1))
     toast(`Undid ${previous.label}.`)
-  }, [history])
+  }, [history, save.isPending, solving, resegmenting])
 
   // Cmd/Ctrl+Z, except while typing: a textarea has its own undo stack and taking that
   // key away from it would make editing a statement worse than the delete this fixes.
@@ -110,9 +111,7 @@ export function SegmentationReview({
   const dirty = useMemo(() => !sameAs(problems, solution.parts), [problems, solution.parts])
 
   const makeKey = () => {
-    const key = `new-${nextKey}`
-    setNextKey((current) => current + 1)
-    return key
+    return `new-${nextKey.current++}`
   }
 
   const replace = (index: number, next: DraftProblem[]) =>
@@ -197,6 +196,15 @@ export function SegmentationReview({
       toast.error(`${problems[blank].label || `Problem ${blank + 1}`} has no statement yet.`)
       return
     }
+    const blankPart = problems.find((problem) =>
+      problem.parts.some((part) => !part.statement.trim()),
+    )
+    if (blankPart) {
+      toast.error(
+        `Complete or remove the blank part in ${blankPart.label || 'this problem'} before saving.`,
+      )
+      return
+    }
     save.mutate(
       {
         problems: problems.map((problem) => ({
@@ -243,14 +251,25 @@ export function SegmentationReview({
             <EmptyMedia variant="icon">
               <FileQuestion className="text-text-tertiary size-8" />
             </EmptyMedia>
-            <EmptyTitle>Lyra could not find separate problems</EmptyTitle>
+            <EmptyTitle>
+              {history.length > 0
+                ? 'All problems removed'
+                : 'Lyra could not find separate problems'}
+            </EmptyTitle>
             <EmptyDescription>
-              This document does not look like a numbered problem set. You can add problems
-              yourself, or have Lyra read it again.
+              {history.length > 0
+                ? 'Undo to restore your problems, or add a new problem.'
+                : 'You can add problems yourself, or have Lyra read the document again.'}
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
-        <div className="flex justify-center gap-2">
+        <div className="flex flex-wrap justify-center gap-2">
+          {history.length > 0 ? (
+            <Button variant="outline" onClick={undo}>
+              <Undo2 className="size-4" />
+              Undo
+            </Button>
+          ) : null}
           <Button onClick={handleAdd}>Add a problem</Button>
           <Button variant="outline" onClick={onResegment} disabled={resegmenting}>
             {resegmenting ? 'Reading again' : 'Read it again'}
@@ -261,7 +280,10 @@ export function SegmentationReview({
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <fieldset
+      disabled={save.isPending || solving || resegmenting}
+      className="m-0 flex min-w-0 flex-col gap-6 border-0 p-0"
+    >
       <header className="flex flex-col gap-1">
         <h2 className="font-heading text-text-primary text-xl tracking-tight">
           Lyra found {formatCount(problems.length, 'problem')}
@@ -293,6 +315,16 @@ export function SegmentationReview({
                 onRemove={() => {
                   remember(`removing ${problem.label || `problem ${index + 1}`}`)
                   setProblems((current) => current.filter((_, i) => i !== index))
+                }}
+                onAddPart={() => {
+                  remember('adding a part')
+                  replace(index, [
+                    {
+                      ...problem,
+                      edited: true,
+                      parts: [...problem.parts, { key: makeKey(), label: '', statement: '' }],
+                    },
+                  ])
                 }}
                 onRemovePart={(position) => {
                   const part = problem.parts[position]
@@ -342,7 +374,7 @@ export function SegmentationReview({
           </Button>
         ) : null}
       </div>
-    </div>
+    </fieldset>
   )
 }
 
@@ -353,7 +385,9 @@ export function SegmentationReview({
  * with different text, and a count alone would not notice.
  */
 function partSignature(parts: SolutionPart[]): string {
-  return parts.map((part) => `${part.id}:${part.content.length}:${part.label ?? ''}`).join('|')
+  return JSON.stringify(
+    parts.map((part) => [part.id, part.parent_part_id, part.content, part.label, part.solve_parts]),
+  )
 }
 
 function toDrafts(parts: SolutionPart[]): DraftProblem[] {
@@ -362,7 +396,10 @@ function toDrafts(parts: SolutionPart[]): DraftProblem[] {
     key: `part-${root.id}`,
     id: root.id,
     label: root.label ?? '',
-    statement: root.content,
+    statement: reviewStatement(
+      root.content,
+      parts.filter((part) => part.parent_part_id === root.id),
+    ),
     parts: parts
       .filter((part) => part.parent_part_id === root.id)
       .map((part) => ({
@@ -375,6 +412,31 @@ function toDrafts(parts: SolutionPart[]): DraftProblem[] {
     page: root.provenance[0]?.page_number ?? null,
     edited: root.origin === 'user_corrected',
   }))
+}
+
+/** Remove only a complete, exact duplicate of the structured children, preserving all
+ * other parent instructions. Label-prefix heuristics are unsafe for persisted text. */
+function reviewStatement(statement: string, children: SolutionPart[]): string {
+  if (
+    children.length === 0 ||
+    children.some((child) => !child.label?.trim() || !child.content.trim())
+  )
+    return statement
+  const normalize = (value: string) => value.replace(/\s+/g, ' ').trim()
+  const repeated = normalize(children.map((child) => `${child.label} ${child.content}`).join(' '))
+  const lines = statement.split('\n')
+  for (let start = 0; start < lines.length; start++) {
+    let block = ''
+    for (let end = start; end < lines.length; end++) {
+      block = normalize(`${block} ${lines[end]}`)
+      if (!repeated.startsWith(block)) break
+      if (block === repeated) {
+        const result = [...lines.slice(0, start), ...lines.slice(end + 1)].join('\n').trim()
+        return result || statement
+      }
+    }
+  }
+  return statement
 }
 
 /** Whether the draft still matches what the backend holds, so Save can stay disabled. */

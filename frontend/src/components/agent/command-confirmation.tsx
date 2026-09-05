@@ -53,8 +53,8 @@ export function CommandConfirmationCard({
           <AlertTriangle className="size-4" />
           <AlertTitle>Runs exactly as shown</AlertTitle>
           <AlertDescription>
-            Lyra confirms an argv array with no shell expansion. Test commands can still run
-            arbitrary code inside the attached workspace.
+            This runs code from your attached folder and may change files. Review the command and
+            working folder before running it.
           </AlertDescription>
         </Alert>
 
@@ -76,21 +76,35 @@ export function CommandConfirmationCard({
         ) : null}
 
         <div className="grid gap-3 md:grid-cols-[minmax(0,2fr)_minmax(14rem,1fr)]">
-          <section aria-label="Exact argv" className="border-border bg-card rounded-md border p-3">
+          <section
+            aria-label="Command to run"
+            className="border-border bg-card rounded-md border p-3"
+          >
             <h3 className="text-text-tertiary mb-2 text-xs font-medium tracking-[0.14em] uppercase">
-              Exact argv
+              Command to run
             </h3>
-            <ol className="flex flex-wrap gap-2" role="list" aria-label="Command arguments">
-              {command.argv.map((arg, index) => (
-                <li
-                  key={`${index}-${arg}`}
-                  className="bg-muted rounded-md px-2 py-1 font-mono text-xs"
-                >
-                  <span className="text-text-tertiary mr-1">{index}:</span>
-                  <span>{arg}</span>
-                </li>
-              ))}
-            </ol>
+            <pre className="overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs">
+              {command.argv
+                .map((arg) => (/^[a-zA-Z0-9_./:=+-]+$/.test(arg) ? arg : JSON.stringify(arg)))
+                .join(' ')}
+            </pre>
+            <details className="mt-3 text-xs">
+              <summary className="cursor-pointer text-text-secondary">Argument details</summary>
+              <p className="my-2 text-text-secondary">
+                Each argument is passed separately, without shell expansion.
+              </p>
+              <ol className="flex flex-wrap gap-2" role="list" aria-label="Command arguments">
+                {command.argv.map((arg, index) => (
+                  <li
+                    key={`${index}-${arg}`}
+                    className="bg-muted rounded-md px-2 py-1 font-mono text-xs"
+                  >
+                    <span className="text-text-tertiary mr-1">{index}:</span>
+                    <span>{arg}</span>
+                  </li>
+                ))}
+              </ol>
+            </details>
           </section>
 
           <section className="border-border bg-card rounded-md border p-3">
@@ -108,7 +122,7 @@ export function CommandConfirmationCard({
               </div>
               {command.expectedSignal ? (
                 <div>
-                  <dt className="text-text-tertiary text-xs">Expected signal</dt>
+                  <dt className="text-text-tertiary text-xs">Expected result</dt>
                   <dd>{command.expectedSignal}</dd>
                 </div>
               ) : null}
@@ -161,13 +175,13 @@ function CommandOutput({ command }: { command: AgentCommandRequest }) {
         <p className="text-text-tertiary text-sm">Nothing has run yet.</p>
       ) : null}
       {command.state === 'running' && !hasOutput ? (
-        <p className="text-text-tertiary text-sm">Waiting for stdout or stderr.</p>
+        <p className="text-text-tertiary text-sm">Waiting for output.</p>
       ) : null}
 
       {hasOutput ? (
         <div className="grid gap-3 md:grid-cols-2">
-          <OutputPane label="Stdout" content={command.stdout} />
-          <OutputPane label="Stderr" content={command.stderr} />
+          <OutputPane label="Output" content={command.stdout} />
+          <OutputPane label="Errors" content={command.stderr} />
         </div>
       ) : null}
     </section>

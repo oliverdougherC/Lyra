@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { BriefCard } from '@/components/drafts/brief-card'
 import { api } from '@/lib/api'
+import { draftKeys } from '@/lib/hooks/use-drafts'
 import type { DraftBrief } from '@/types'
 
 function createWrapper() {
@@ -15,7 +16,7 @@ function createWrapper() {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   )
-  return { wrapper }
+  return { wrapper, queryClient }
 }
 
 function brief(overrides: Partial<DraftBrief>): DraftBrief {
@@ -108,5 +109,27 @@ describe('BriefCard', () => {
     // The form closes on the settled card, which now shows the saved summary.
     expect(await screen.findByText('My essay on entropy.')).toBeInTheDocument()
     expect(screen.queryByLabelText('Edit the brief', { selector: 'form' })).toBeNull()
+  })
+  it('shows a retryable load failure instead of claiming a brief is absent', async () => {
+    vi.spyOn(api, 'getBrief')
+      .mockRejectedValueOnce(new Error('Offline'))
+      .mockResolvedValue(brief({}))
+    const { wrapper } = createWrapper()
+    render(<BriefCard draftId={8} />, { wrapper })
+    expect(await screen.findByRole('alert')).toHaveTextContent('The brief could not be refreshed')
+    expect(screen.queryByText(/No brief yet/)).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Retry brief' }))
+    expect(await screen.findByText('Pendulum period vs. length.')).toBeInTheDocument()
+  })
+  it('retains the saved brief when a background refresh fails', async () => {
+    vi.spyOn(api, 'getBrief').mockRejectedValue(new Error('Offline'))
+    const { wrapper, queryClient } = createWrapper()
+    queryClient.setQueryData(draftKeys.brief(8), brief({}))
+    render(<BriefCard draftId={8} />, { wrapper })
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: draftKeys.brief(8) })
+    })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Showing the saved brief')
+    expect(screen.getByText('Pendulum period vs. length.')).toBeInTheDocument()
   })
 })

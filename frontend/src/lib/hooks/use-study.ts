@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { classKeys } from '@/lib/hooks/use-classes'
 import type {
   AnswerCreate,
@@ -143,6 +143,9 @@ export function useReviewCard(deckId: number) {
     }) => api.reviewCard(partId, rating, operationId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: studyKeys.deck(deckId) })
+      queryClient.invalidateQueries({ queryKey: ['study'] })
+      // Keep this run's queue stable; the next session must read the updated cards.
+      queryClient.invalidateQueries({ queryKey: ['deck-session', deckId], refetchType: 'none' })
     },
   })
 }
@@ -154,6 +157,9 @@ export function useUpdateCard(deckId: number) {
       api.updateCard(partId, body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: studyKeys.deck(deckId) })
+      queryClient.invalidateQueries({ queryKey: ['study'] })
+      // Keep this run's queue stable; the next session must read the updated cards.
+      queryClient.invalidateQueries({ queryKey: ['deck-session', deckId], refetchType: 'none' })
     },
   })
 }
@@ -161,9 +167,20 @@ export function useUpdateCard(deckId: number) {
 export function useDeleteCard(deckId: number) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (partId: number) => api.deleteCard(partId),
+    mutationFn: async (partId: number) => {
+      try {
+        await api.deleteCard(partId)
+      } catch (error) {
+        // The first delete may have committed before its response was lost.
+        // An already absent card satisfies this explicit removal request.
+        if (!(error instanceof ApiError && error.status === 404)) throw error
+      }
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: studyKeys.deck(deckId) })
+      queryClient.invalidateQueries({ queryKey: ['study'] })
+      // Keep this run's queue stable; the next session must read the updated cards.
+      queryClient.invalidateQueries({ queryKey: ['deck-session', deckId], refetchType: 'none' })
     },
   })
 }

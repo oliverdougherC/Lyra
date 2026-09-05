@@ -1,6 +1,10 @@
 'use client'
 
 import { Check, FileText, FileWarning } from 'lucide-react'
+import { useState } from 'react'
+
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatFileSize, truncateMiddle } from '@/lib/format'
@@ -42,6 +46,10 @@ export function SourcePicker({
   emptyLabel,
   name,
 }: SourcePickerProps) {
+  const [search, setSearch] = useState('')
+  const visible = documents.filter((document) =>
+    document.filename.toLowerCase().includes(search.trim().toLowerCase()),
+  )
   if (loading) {
     return (
       <div className="flex flex-col gap-2" aria-busy="true">
@@ -57,74 +65,100 @@ export function SourcePicker({
   }
 
   return (
-    <ul className="flex flex-col gap-2">
-      {documents.map((document) => {
-        const isSelected = selected.includes(document.id)
-        const isClaimed = claimed.includes(document.id)
-        const ready = document.state === 'ready'
-        const disabled = !ready || isClaimed
-        return (
-          <li key={document.id}>
-            <label
-              className={cn(
-                // `relative` is load-bearing. The checkbox below is `sr-only`, which is
-                // `position: absolute`, and an absolutely positioned box is only clipped
-                // by ancestors that lie between it and its containing block. Without a
-                // positioned parent here its containing block was the app shell's inset,
-                // several layers above the scroll container, so clicking a row focused a
-                // checkbox the browser believed to be off-screen and it scrolled the
-                // inset to reveal it. The inset is `overflow: hidden`: no scrollbar, no
-                // wheel, no way back. The page simply vanished.
-                'border-border bg-card relative flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2.5 transition-colors',
-                'has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2',
-                isSelected && 'border-accent-primary bg-accent-surface/40',
-                disabled && 'cursor-not-allowed opacity-60',
-              )}
-            >
-              <input
-                type="checkbox"
-                name={name}
-                className="sr-only"
-                checked={isSelected}
-                disabled={disabled}
-                onChange={() => onToggle(document.id)}
-              />
-              <span
-                aria-hidden
+    <div className="space-y-3">
+      {documents.length > 8 ? (
+        <Input
+          aria-label={`Search ${name} documents`}
+          placeholder="Search files…"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
+      ) : null}
+      {selected.length > 0 ? (
+        <p className="text-text-secondary text-xs">
+          {selected.length} selected
+          {search.trim()
+            ? ` (${selected.filter((id) => !visible.some((document) => document.id === id)).length} outside this search)`
+            : ''}
+        </p>
+      ) : null}
+      {visible.length === 0 ? (
+        <div className="text-text-secondary text-sm">
+          No matching files.{' '}
+          <Button variant="link" size="sm" onClick={() => setSearch('')}>
+            Clear search
+          </Button>
+        </div>
+      ) : null}
+      <ul className="flex max-h-72 flex-col gap-2 overflow-y-auto p-1">
+        {visible.map((document) => {
+          const isSelected = selected.includes(document.id)
+          const isClaimed = claimed.includes(document.id)
+          const ready = document.state === 'ready'
+          const disabled = !ready || isClaimed
+          return (
+            <li key={document.id}>
+              <label
                 className={cn(
-                  'border-border-strong flex size-5 shrink-0 items-center justify-center rounded-sm border',
-                  isSelected && 'border-accent-primary bg-accent-primary',
+                  // `relative` is load-bearing. The checkbox below is `sr-only`, which is
+                  // `position: absolute`, and an absolutely positioned box is only clipped
+                  // by ancestors that lie between it and its containing block. Without a
+                  // positioned parent here its containing block was the app shell's inset,
+                  // several layers above the scroll container, so clicking a row focused a
+                  // checkbox the browser believed to be off-screen and it scrolled the
+                  // inset to reveal it. The inset is `overflow: hidden`: no scrollbar, no
+                  // wheel, no way back. The page simply vanished.
+                  'border-border bg-card relative flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2.5 transition-colors',
+                  'has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2',
+                  isSelected && 'border-accent-primary bg-accent-surface/40',
+                  disabled && 'cursor-not-allowed opacity-60',
                 )}
               >
-                {isSelected ? <Check className="text-accent-foreground size-3.5" /> : null}
-              </span>
-              {document.state === 'unsupported' ? (
-                <FileWarning className="text-info-text size-4 shrink-0" aria-hidden />
-              ) : (
-                <FileText className="text-text-tertiary size-4 shrink-0" aria-hidden />
-              )}
-              <span className="min-w-0 flex-1">
-                {/* Truncated from the middle so the extension survives, which is what
+                <input
+                  type="checkbox"
+                  name={name}
+                  className="sr-only"
+                  checked={isSelected}
+                  disabled={disabled}
+                  onChange={() => onToggle(document.id)}
+                />
+                <span
+                  aria-hidden
+                  className={cn(
+                    'border-border-strong flex size-5 shrink-0 items-center justify-center rounded-sm border',
+                    isSelected && 'border-accent-primary bg-accent-primary',
+                  )}
+                >
+                  {isSelected ? <Check className="text-accent-foreground size-3.5" /> : null}
+                </span>
+                {document.state === 'unsupported' ? (
+                  <FileWarning className="text-info-text size-4 shrink-0" aria-hidden />
+                ) : (
+                  <FileText className="text-text-tertiary size-4 shrink-0" aria-hidden />
+                )}
+                <span className="min-w-0 flex-1">
+                  {/* Truncated from the middle so the extension survives, which is what
                     tells the student what kind of file a row is. The default budget is
                     what the document list already uses, and it fits the narrowest
                     breakpoint; a CSS clip on top of it would cut the extension back off. */}
-                <span className="text-text-primary block text-sm" title={document.filename}>
-                  {truncateMiddle(document.filename)}
+                  <span className="text-text-primary block text-sm" title={document.filename}>
+                    {truncateMiddle(document.filename)}
+                  </span>
+                  <span className="text-text-tertiary block text-xs">
+                    {describe(document, isClaimed)}
+                  </span>
                 </span>
-                <span className="text-text-tertiary block text-xs">
-                  {describe(document, isClaimed)}
-                </span>
-              </span>
-            </label>
-          </li>
-        )
-      })}
-    </ul>
+              </label>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
   )
 }
 
 function describe(document: DocumentRead, claimed: boolean): string {
-  if (claimed) return 'Already used above'
+  if (claimed) return 'Selected in the other source list'
   if (document.state === 'ready') return formatFileSize(document.byte_size)
   if (document.state === 'unsupported') return 'Needs text recognition, so Lyra cannot read it yet'
   if (document.state === 'failed') return document.error_message ?? 'Could not be processed'

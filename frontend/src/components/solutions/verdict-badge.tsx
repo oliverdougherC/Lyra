@@ -3,7 +3,7 @@
 import Link from '@/router/link'
 
 import { StatusWord, TheMark } from '@/components/ex-libris'
-import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import type { Verdict } from '@/types'
 
@@ -66,9 +66,16 @@ export function VerdictBadge({ verdict, detail, className }: VerdictBadgeProps) 
   const explanation = detail?.trim() || presentation.explanation
 
   return (
-    <HoverCard openDelay={150}>
-      <HoverCardTrigger asChild>
-        <span className={cn('inline-flex shrink-0 cursor-default items-center', className)}>
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`${presentation.label}: explanation`}
+          className={cn(
+            'inline-flex shrink-0 cursor-pointer items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            className,
+          )}
+        >
           {presentation.tone === 'mark' ? (
             // The one verdict that passed: the Mark, and only here.
             <TheMark />
@@ -77,9 +84,9 @@ export function VerdictBadge({ verdict, detail, className }: VerdictBadgeProps) 
               {presentation.label}
             </StatusWord>
           )}
-        </span>
-      </HoverCardTrigger>
-      <HoverCardContent align="end" className="text-text-secondary">
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="text-text-secondary">
         <p>{explanation}</p>
         {verdict === 'unchecked' ? (
           <p className="mt-2">
@@ -88,7 +95,7 @@ export function VerdictBadge({ verdict, detail, className }: VerdictBadgeProps) 
             </Link>
           </p>
         ) : null}
-      </HoverCardContent>
-    </HoverCard>
+      </PopoverContent>
+    </Popover>
   )
 }

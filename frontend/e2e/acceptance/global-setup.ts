@@ -49,6 +49,8 @@ export default async function globalSetup() {
   const FRONTEND_PORT = resolvePort('ACCEPTANCE_FRONTEND_PORT', 3000)
   const TUTOR_PORT = resolvePort('ACCEPTANCE_TUTOR_PORT', 18_900)
 
+  process.env.ACCEPTANCE_STATE_FILE = STATE_FILE
+
   // Publish resolved ports so workers and the config can read them.
   process.env.ACCEPTANCE_BACKEND_PORT = String(BACKEND_PORT)
   process.env.ACCEPTANCE_FRONTEND_PORT = String(FRONTEND_PORT)

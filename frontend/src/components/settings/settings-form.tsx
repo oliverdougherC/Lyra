@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronRight, Info, RefreshCw, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -26,6 +27,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { api, ApiError } from '@/lib/api'
 import { useClasses } from '@/lib/hooks/use-classes'
 import {
+  settingsKeys,
   useClassWriterSettings,
   useSettings,
   useTestConnection,
@@ -38,6 +40,20 @@ import {
 import { useTheme, type Theme } from '@/lib/theme'
 import type { ConnectionTestResult, SettingsRead, SettingsUpdate } from '@/types'
 import type { ClassRead } from '@/types'
+
+const SAVE_LABELS: Record<string, string> = {
+  endpoint_url: 'Endpoint URL',
+  api_key: 'API key',
+  exa_api_key: 'Exa key',
+  model: 'Model',
+  context_window: 'Context window',
+  parallel_concurrency: 'Maximum concurrent requests',
+  allow_web_research: 'Web research',
+  parallel_requests: 'Parallel requests',
+  remote_ack: 'Remote endpoint permission',
+  extraction_enabled: 'Course details',
+}
+type SaveState = { status: 'saving' | 'saved' | 'error'; patch: SettingsUpdate; message?: string }
 
 const MIN_RECOMMENDED_CONTEXT = 8192
 
@@ -105,6 +121,7 @@ function SettingsSection({
 }
 
 function SettingsSections({ settings }: { settings: SettingsRead }) {
+  const queryClient = useQueryClient()
   const updateSettings = useUpdateSettings()
   const testConnection = useTestConnection()
   const testExa = useTestExa()
@@ -121,51 +138,148 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
   )
   const [models, setModels] = useState<string[]>([])
   const [test, setTest] = useState<TestState>({ status: 'idle' })
+  const diagnosticVersion = useRef(0)
+  const saveVersions = useRef<Record<string, number>>({})
+  const [saves, setSaves] = useState<Record<string, SaveState>>({})
+  function invalidateDiagnostics() {
+    diagnosticVersion.current += 1
+    setTest({ status: 'idle' })
+    setModels([])
+  }
 
   // A save writes the canonical values back into the cache, and the inputs have to follow.
   // Adjusting during render rather than in an effect avoids a frame showing the stale text.
-  const serverEcho = `${settings.endpoint_url ?? ''}|${settings.context_window}|${settings.parallel_concurrency}`
-  const [lastEcho, setLastEcho] = useState(serverEcho)
-  if (serverEcho !== lastEcho) {
-    setLastEcho(serverEcho)
-    setEndpoint(settings.endpoint_url ?? '')
-    setContextWindow(String(settings.context_window))
-    setParallelConcurrency(String(settings.parallel_concurrency))
+  const [lastSettings, setLastSettings] = useState(settings)
+  if (settings !== lastSettings) {
+    setLastSettings(settings)
+    if (endpoint === (lastSettings.endpoint_url ?? '')) setEndpoint(settings.endpoint_url ?? '')
+    if (contextWindow === String(lastSettings.context_window))
+      setContextWindow(String(settings.context_window))
+    if (parallelConcurrency === String(lastSettings.parallel_concurrency))
+      setParallelConcurrency(String(settings.parallel_concurrency))
+    if (
+      settings.endpoint_url !== lastSettings.endpoint_url ||
+      settings.api_key_set !== lastSettings.api_key_set
+    ) {
+      setModels([])
+      setTest({ status: 'idle' })
+    }
   }
 
   // A successful test is what proves the endpoint answers, so the model select stays locked
   // until one lands rather than offering a list that cannot be populated.
   const modelsUnlocked = models.length > 0
   const hasEndpoint = endpoint.trim().length > 0
+  const hasUnsavedConnection =
+    (endpoint.trim() || null) !== settings.endpoint_url || apiKey.length > 0
 
   async function save(patch: SettingsUpdate, success?: string): Promise<boolean> {
+    const field = Object.keys(patch)[0]
+    const version = (saveVersions.current[field] ?? 0) + 1
+    saveVersions.current[field] = version
+    setSaves((current) => ({ ...current, [field]: { status: 'saving', patch } }))
+    if ('api_key' in patch) invalidateDiagnostics()
+    if ('exa_api_key' in patch) testExa.reset()
     try {
       await updateSettings.mutateAsync(patch)
+      if (saveVersions.current[field] === version)
+        setSaves((current) => ({ ...current, [field]: { status: 'saved', patch: {} } }))
       if (success) toast.success(success)
       return true
     } catch (caught) {
-      toast.error(caught instanceof ApiError ? caught.message : 'Could not save that change.')
+      const message = caught instanceof ApiError ? caught.message : 'Could not save that change.'
+      if (saveVersions.current[field] === version)
+        setSaves((current) => ({ ...current, [field]: { status: 'error', patch, message } }))
       return false
     }
   }
 
+  async function saveKey(field: 'api_key' | 'exa_api_key') {
+    const submitted = field === 'api_key' ? apiKey : exaApiKey
+    if (await save({ [field]: submitted })) {
+      const setKey = field === 'api_key' ? setApiKey : setExaApiKey
+      setKey((current) => (current === submitted ? '' : current))
+    }
+  }
+
   async function runTest() {
+    const version = ++diagnosticVersion.current
+    const testedEndpoint = endpoint.trim() || null
+    const isCurrent = () =>
+      version === diagnosticVersion.current &&
+      queryClient.getQueryData<SettingsRead>(settingsKeys.all)?.endpoint_url === testedEndpoint
     setTest({ status: 'testing' })
+    setModels([])
     if (!(await save({ endpoint_url: endpoint.trim() || null }))) {
-      setTest({ status: 'idle' })
+      if (version === diagnosticVersion.current) setTest({ status: 'idle' })
       return
     }
+    if (!isCurrent()) return
     try {
       const result = await testConnection.mutateAsync()
+      const choices = result.ok && result.model_count > 0 ? (await api.listModels()).models : []
+      if (!isCurrent()) return
       setTest({ status: 'done', result })
-      setModels(result.ok && result.model_count > 0 ? (await api.listModels()).models : [])
+      setModels(choices)
     } catch (caught) {
-      setModels([])
+      if (!isCurrent()) return
       setTest({
         status: 'error',
         message: caught instanceof ApiError ? caught.message : 'The connection test failed.',
       })
     }
+  }
+
+  function saveStatus(field: string) {
+    const state = saves[field]
+    if (!state) return null
+    return (
+      <div
+        aria-live="polite"
+        className={state.status === 'error' ? 'text-danger-text' : 'text-text-secondary'}
+      >
+        <span>
+          {SAVE_LABELS[field] ?? field}:{' '}
+          {state.status === 'saving'
+            ? 'Saving…'
+            : state.status === 'saved'
+              ? (field === 'api_key' && apiKey.length > 0) ||
+                (field === 'exa_api_key' && exaApiKey.length > 0) ||
+                (field === 'endpoint_url' && (endpoint.trim() || null) !== settings.endpoint_url) ||
+                (field === 'context_window' && Number(contextWindow) !== settings.context_window) ||
+                (field === 'parallel_concurrency' &&
+                  Number(parallelConcurrency) !== settings.parallel_concurrency)
+                ? 'Unsaved changes'
+                : 'Saved'
+              : `Not saved. ${state.message}`}
+        </span>
+        {state.status === 'error' ? (
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-2"
+            aria-label={`Retry ${SAVE_LABELS[field] ?? field} save`}
+            onClick={() => {
+              if (field === 'api_key' || field === 'exa_api_key') {
+                void saveKey(field)
+                return
+              }
+              void save(
+                field === 'endpoint_url'
+                  ? { endpoint_url: endpoint.trim() || null }
+                  : field === 'context_window'
+                    ? { context_window: Number(contextWindow) }
+                    : field === 'parallel_concurrency'
+                      ? { parallel_concurrency: Number(parallelConcurrency) }
+                      : state.patch,
+              )
+            }}
+          >
+            Retry
+          </Button>
+        ) : null}
+      </div>
+    )
   }
 
   const contextValue = Number(contextWindow)
@@ -176,8 +290,8 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
       <header className="pt-2 md:pt-6">
         <h1 className="font-display text-3xl leading-tight md:text-4xl">Settings</h1>
         <p className="text-text-secondary mt-1.5 text-sm">
-          Lyra stores everything on this machine. These settings control the one part that can leave
-          it.
+          Configure your tutor, privacy, and appearance. Changes save automatically when you leave a
+          field; API keys use Save key.
         </p>
       </header>
 
@@ -194,7 +308,10 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               autoComplete="off"
               placeholder="http://127.0.0.1:8080/v1"
               value={endpoint}
-              onChange={(event) => setEndpoint(event.target.value)}
+              onChange={(event) => {
+                setEndpoint(event.target.value)
+                invalidateDiagnostics()
+              }}
               onBlur={() => {
                 const next = endpoint.trim() || null
                 if (next !== settings.endpoint_url) void save({ endpoint_url: next })
@@ -207,6 +324,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
             <div className="mt-2">
               <EndpointLocalityBadge />
             </div>
+            {saveStatus('endpoint_url')}
           </Field>
 
           <Field>
@@ -218,14 +336,15 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
                 autoComplete="off"
                 placeholder={settings.api_key_set ? 'Set. Type to replace.' : 'Not set'}
                 value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
+                onChange={(event) => {
+                  setApiKey(event.target.value)
+                  invalidateDiagnostics()
+                }}
               />
               <Button
                 variant="outline"
                 disabled={apiKey.length === 0 || updateSettings.isPending}
-                onClick={async () => {
-                  if (await save({ api_key: apiKey }, 'API key saved.')) setApiKey('')
-                }}
+                onClick={() => void saveKey('api_key')}
               >
                 Save key
               </Button>
@@ -244,6 +363,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
                 ? 'Stored in your operating system keychain and never sent back to this screen.'
                 : 'No keychain was available, so it is kept in a file inside your data directory with owner-only permissions.'}
             </FieldDescription>
+            {saveStatus('api_key')}
           </Field>
 
           <Field>
@@ -252,7 +372,12 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               <Button
                 variant="outline"
                 onClick={runTest}
-                disabled={test.status === 'testing' || !hasEndpoint}
+                disabled={
+                  test.status === 'testing' ||
+                  testConnection.isPending ||
+                  !hasEndpoint ||
+                  apiKey.length > 0
+                }
               >
                 {test.status === 'testing' ? <Spinner /> : null}
                 Test connection
@@ -290,23 +415,28 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
                 variant="outline"
                 size="icon"
                 aria-label="Refresh model list"
-                disabled={test.status === 'testing' || !hasEndpoint}
+                disabled={
+                  test.status === 'testing' ||
+                  testConnection.isPending ||
+                  !hasEndpoint ||
+                  apiKey.length > 0
+                }
                 onClick={runTest}
               >
                 <RefreshCw />
               </Button>
             </div>
             <FieldDescription>
-              Populated by a successful connection test, so the list is always what the endpoint
-              really offers.
+              Save any new API key, then test the connection to choose a model.
             </FieldDescription>
+            {saveStatus('model')}
           </Field>
         </FieldGroup>
       </SettingsSection>
 
       <SettingsSection
         title="Research"
-        description="Optional web research for the writer: what it may search, and how its key is stored."
+        description="Let the writer find public sources on the web."
       >
         <FieldGroup>
           <Field>
@@ -324,9 +454,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               <Button
                 variant="outline"
                 disabled={exaApiKey.length === 0 || updateSettings.isPending}
-                onClick={async () => {
-                  if (await save({ exa_api_key: exaApiKey }, 'Exa key saved.')) setExaApiKey('')
-                }}
+                onClick={() => void saveKey('exa_api_key')}
               >
                 Save key
               </Button>
@@ -345,6 +473,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
                 ? 'Stored in your operating system keychain and never sent back to this screen.'
                 : 'No keychain was available, so it is kept in a file inside your data directory with owner-only permissions.'}
             </FieldDescription>
+            {saveStatus('exa_api_key')}
           </Field>
 
           <Field>
@@ -364,10 +493,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
                 result={testExa.data}
               />
             </div>
-            <FieldDescription>
-              Web research is optional and never probed on launch. When you test or use it, Exa
-              receives only the public search query and any public URLs Lyra is asked to retrieve.
-            </FieldDescription>
+            <FieldDescription>Tests your saved Exa key. Web research is optional.</FieldDescription>
           </Field>
 
           <Field orientation="horizontal">
@@ -383,17 +509,8 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               checked={settings.allow_web_research}
               onCheckedChange={(checked) => void save({ allow_web_research: checked })}
             />
+            {saveStatus('allow_web_research')}
           </Field>
-
-          <Alert>
-            <Info />
-            <AlertTitle>Exa receives public web requests only</AlertTitle>
-            <AlertDescription>
-              Lyra does not send your uploaded document text, private class facts, filesystem paths,
-              credentials, or prior private conversation content to Exa. Missing or failed Exa
-              configuration disables web research without making the rest of Lyra unhealthy.
-            </AlertDescription>
-          </Alert>
         </FieldGroup>
       </SettingsSection>
 
@@ -401,7 +518,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
         title="Privacy"
         description="See what stays on this machine and control what may leave it."
       >
-        <PrivacySection settings={settings} onSave={save} />
+        <PrivacySection settings={settings} onSave={save} saveStatus={saveStatus} />
       </SettingsSection>
 
       <SettingsSection
@@ -439,7 +556,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
 
       <SettingsSection
         title="Import existing Lyra data"
-        description="Bring in a previous checkout through a staged, verified desktop import. The source stays untouched."
+        description="Bring classes and documents from an older Lyra installation. The original folder stays untouched."
       >
         <DesktopImportSection />
       </SettingsSection>
@@ -476,6 +593,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
                 history, retrieved material, and the answer.
               </FieldDescription>
             )}
+            {saveStatus('context_window')}
           </Field>
 
           <Field>
@@ -484,12 +602,18 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               <Button
                 variant="outline"
                 onClick={() => testTools.mutate()}
-                disabled={testTools.isPending || !hasEndpoint}
+                disabled={testTools.isPending || !hasEndpoint || hasUnsavedConnection}
               >
                 {testTools.isPending ? <Spinner /> : null}
                 Test tool support
               </Button>
-              <ToolSupportOutcome settings={settings} pending={testTools.isPending} />
+              {hasUnsavedConnection ? (
+                <span className="text-text-secondary text-sm">
+                  Save connection changes before testing.
+                </span>
+              ) : (
+                <ToolSupportOutcome settings={settings} pending={testTools.isPending} />
+              )}
             </div>
             <FieldDescription>
               Lyra checks each solution against a computer algebra system, which needs an endpoint
@@ -504,12 +628,18 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               <Button
                 variant="outline"
                 onClick={() => testVision.mutate()}
-                disabled={testVision.isPending || !hasEndpoint}
+                disabled={testVision.isPending || !hasEndpoint || hasUnsavedConnection}
               >
                 {testVision.isPending ? <Spinner /> : null}
                 Test image support
               </Button>
-              <VisionSupportOutcome settings={settings} pending={testVision.isPending} />
+              {hasUnsavedConnection ? (
+                <span className="text-text-secondary text-sm">
+                  Save connection changes before testing.
+                </span>
+              ) : (
+                <VisionSupportOutcome settings={settings} pending={testVision.isPending} />
+              )}
             </div>
             <FieldDescription>
               A scanned page has no text to extract, so Lyra reads it by sending a picture of the
@@ -531,6 +661,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               checked={settings.parallel_requests}
               onCheckedChange={(checked) => void save({ parallel_requests: checked })}
             />
+            {saveStatus('parallel_requests')}
           </Field>
 
           <Field>
@@ -559,6 +690,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
             <FieldDescription>
               A bound, not a target. Lyra only fans out stages that do not depend on one another.
             </FieldDescription>
+            {saveStatus('parallel_concurrency')}
           </Field>
 
           <ClassResearchOverrides />
@@ -674,9 +806,10 @@ function ClassResearchOverride({ course }: { course: ClassRead }) {
 type PrivacySectionProps = {
   settings: SettingsRead
   onSave: (patch: SettingsUpdate, success?: string) => Promise<boolean>
+  saveStatus: (field: string) => React.ReactNode
 }
 
-function PrivacySection({ settings, onSave }: PrivacySectionProps) {
+function PrivacySection({ settings, onSave, saveStatus }: PrivacySectionProps) {
   const isRemote = settings.endpoint_is_local === false
   const locality =
     settings.endpoint_is_local === null
@@ -694,9 +827,7 @@ function PrivacySection({ settings, onSave }: PrivacySectionProps) {
         <div>
           <p className="font-medium">Stays on this machine</p>
           <p className="text-muted-foreground">
-            Reading your files, splitting them, computing embeddings, and all storage. The embedding
-            model runs locally
-            {settings.embedding_model ? ` as ${settings.embedding_model}` : ''}.
+            Your saved classes, documents, conversations, and search index stay on this device.
           </p>
         </div>
         <div>
@@ -728,6 +859,7 @@ function PrivacySection({ settings, onSave }: PrivacySectionProps) {
                 I understand my document text will be sent to this endpoint.
               </Label>
             </div>
+            {saveStatus('remote_ack')}
             {settings.remote_ack ? null : (
               <p className="mt-2">
                 Until this is on, Lyra will not send whole documents out for profile extraction.
@@ -737,12 +869,13 @@ function PrivacySection({ settings, onSave }: PrivacySectionProps) {
         </Alert>
       ) : null}
 
+      {saveStatus('extraction_enabled')}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <Label htmlFor="extraction-enabled">Automatic profile extraction</Label>
+          <Label htmlFor="extraction-enabled">Read course details after upload</Label>
           <p className="text-muted-foreground text-sm">
             After each upload, Lyra reads the whole document once to pull out dates, topics, and
-            grading. It costs one full-document pass per upload.
+            grading. The whole document is sent to your configured tutor endpoint.
           </p>
         </div>
         <Switch

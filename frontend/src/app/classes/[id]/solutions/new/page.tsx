@@ -119,7 +119,7 @@ export default function NewSolutionPage() {
     )
   }
 
-  const nothingToSolve = !documentsQuery.isPending && documents.length === 0
+  const nothingToSolve = documentsQuery.isSuccess && documents.length === 0
 
   return (
     <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6">
@@ -140,6 +140,14 @@ export default function NewSolutionPage() {
               ? documentsQuery.error.message
               : 'Something went wrong.'}
           </AlertDescription>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={documentsQuery.isFetching}
+            onClick={() => void documentsQuery.refetch()}
+          >
+            {documentsQuery.isFetching ? 'Retrying…' : 'Retry'}
+          </Button>
         </Alert>
       ) : null}
 
@@ -159,7 +167,7 @@ export default function NewSolutionPage() {
             <a href={`/classes/${classId}`}>Go to the workspace</a>
           </Button>
         </Empty>
-      ) : (
+      ) : documentsQuery.isError && documents.length === 0 ? null : (
         <>
           <SetupSection
             title="Problem set"
@@ -176,10 +184,14 @@ export default function NewSolutionPage() {
             />
           </SetupSection>
 
-          <SetupSection
-            title="Reference solutions"
-            description="Optional. Worked solutions Lyra should follow for notation and method."
-          >
+          <details className="border-border/70 border-t pt-4">
+            <summary className="text-text-primary cursor-pointer rounded-sm text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              Reference solutions (optional)
+              {reference.length > 0 ? ` · ${reference.length} selected` : ''}
+            </summary>
+            <p className="text-text-secondary my-3 text-sm">
+              Worked solutions Lyra should follow for notation and method.
+            </p>
             {suggestions.length > 0 ? (
               <div className="border-accent-primary/50 bg-accent-surface/40 mb-4 rounded-md border border-dashed p-3">
                 <p className="text-text-secondary flex items-start gap-2 text-sm">
@@ -246,7 +258,7 @@ export default function NewSolutionPage() {
               onToggle={toggle(reference, setReference)}
               emptyLabel="No documents in this class yet."
             />
-          </SetupSection>
+          </details>
 
           <SetupSection title="Name" description="What this set is called in your sidebar.">
             <Label htmlFor="solution-title" className="sr-only">
