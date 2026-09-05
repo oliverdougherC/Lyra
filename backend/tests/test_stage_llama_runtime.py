@@ -209,9 +209,7 @@ def test_an_existing_build_that_is_not_the_pin_is_replaced_not_reused(
     impostor = ("b90000", fetch_models.LLAMA_COMMIT[:9])
     pin = (fetch_models.LLAMA_RELEASE_TAG, fetch_models.LLAMA_COMMIT[:9])
     answers = [impostor, impostor, pin]
-    monkeypatch.setattr(
-        fetch_models, "reported_build", lambda binary: answers.pop(0)
-    )
+    monkeypatch.setattr(fetch_models, "reported_build", lambda binary: answers.pop(0))
 
     def fake_extract(archive: Path, destination: Path) -> None:
         build = destination / f"llama-{fetch_models.LLAMA_RELEASE_TAG}"
