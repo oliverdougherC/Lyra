@@ -151,6 +151,19 @@ leads to it in order, naming the rule or definition each step relies on. Close w
 summary of the idea worth carrying forward. Do not withhold the answer and do not turn the
 reply into a quiz."""
 
+
+def mode_contract(mode: ChatMode) -> str:
+    """The shared Guide/Show teaching contract for every surface that rides the
+    conversation's mode.
+
+    The tutoring prompt owns this text (Workstream A, PLA-401). Surfaces such as the
+    contextual agent's system prompt call this instead of restating the mode semantics,
+    so the contract cannot drift between surfaces: when the contract changes here, every
+    surface that inherits the mode changes with it.
+    """
+    return _GUIDE_PROMPT if mode == "guide" else _SHOW_PROMPT
+
+
 # --------------------------------------------------------------------------------------
 # Profile extraction.
 #

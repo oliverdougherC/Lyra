@@ -10,6 +10,7 @@ Nothing here reaches an endpoint or the student's own database.
 """
 
 import argparse
+import asyncio
 import json
 import sqlite3
 import sys
@@ -338,6 +339,9 @@ def test_a_run_of_only_failed_cases_still_leaves_a_gradeable_record(
         workspace=str(tmp_path),
         source_db="/ignored",
         case=["what-is-a-derivative"],
+        surface="tutor",
+        class_id=None,
+        session_id=None,
     )
     assert eval_tutor.cmd_run(args) == 0
 
@@ -424,3 +428,571 @@ def test_grade_records_the_judge_it_uses(tmp_path: Path, monkeypatch: pytest.Mon
     assert seen_models[-1] == "judge-model"
     grades = json.loads((tmp_path / "grades.json").read_text(encoding="utf-8"))
     assert grades["what-is-a-derivative"]["verdict"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# PLA-401 final pass, item 7: the class_chat surface assembles what the class
+# chat ACTUALLY sends - through the production planner - and the tool-less
+# fallback is part of the surface, not a divergence from it.
+# ---------------------------------------------------------------------------
+
+
+def _class_chat_case() -> Case:
+    """One corpus-shaped case: history, retrieved context, and the question."""
+    return Case(
+        id="explain-convolution",
+        mode="guide",
+        user="Explain convolution",
+        history=(
+            {"role": "user", "content": "What is a transfer function?"},
+            {"role": "assistant", "content": "It maps an input to an output."},
+        ),
+        context=(
+            {
+                "content": "The convolution integral sums the overlap of f and a flipped g.",
+                "filename": "Lecture 4.pdf",
+                "page_number": 12,
+                "section_title": "Convolution",
+            },
+        ),
+        must=("gives the overlap integral",),
+        must_not=("withholds the requested explanation",),
+        may=(),
+        notes="The course defines convolution via the overlap integral.",
+    )
+
+
+def test_the_class_chat_surface_matches_the_production_assembly(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """The harness must send the product what the product sends.
+
+    `class_chat_assembly` is the harness's surface; `routes_agent_chat._plan_agent_turn`
+    is the route's planner. This assembles the same case through both and asserts they
+    agree message for message and tool for tool, so a change to the production assembly
+    (the prompt, the retrieval block, the registry) is visible to the eval here.
+    """
+    from backend.api import routes_agent_chat
+    from backend.core import sessions as sessions_core
+    from backend.core.app_settings import TutorConfig
+    from backend.llm import tools as llm_tools
+    from backend.llm.turn_budget import HistoryMessage
+    from scripts import eval_tutor
+
+    session_id = int(sessions_core.create_session(db, class_id)["id"])
+    config = TutorConfig(
+        endpoint_url="http://127.0.0.1:8000/v1",
+        api_key=None,
+        model="local-model",
+        context_window=8192,
+    )
+    case = _class_chat_case()
+
+    # The harness surface.
+    harness = eval_tutor.class_chat_assembly(db, class_id, session_id, config, case)
+
+    # The route's planner, with the case's history and context handed to it the same way.
+    history = tuple(
+        HistoryMessage(role=turn["role"], content=turn["content"]) for turn in case.history
+    )
+    retrieval = RetrievalResult(
+        chunks=tuple(
+            RetrievedChunk(
+                chunk_id=index + 1,
+                document_id=0,
+                content=str(chunk.get("content") or ""),
+                token_count=0,
+                page_number=chunk.get("page_number"),
+                section_title=chunk.get("section_title"),
+                section_path=chunk.get("section_path"),
+                section_number=chunk.get("section_number"),
+                problem_number=chunk.get("problem_number"),
+                part_index=None,
+                filename=str(chunk.get("filename") or ""),
+                similarity=1.0,
+                score=1.0,
+            )
+            for index, chunk in enumerate(case.context)
+        ),
+        trimmed=False,
+        omitted_document_count=0,
+    )
+    plan = routes_agent_chat._plan_agent_turn(
+        db,
+        class_id,
+        session_id,
+        config,
+        profile="agent",
+        content=case.user,
+        mode=case.mode,
+        document_id=None,
+        cached_retrieval=retrieval,
+        history=history,
+    )
+
+    # The two agree, message for message and tool for tool.
+    assert [dict(message) for message in harness.messages] == [
+        dict(message) for message in plan.messages
+    ]
+    assert harness.tools == tuple(llm_tools.tool_schemas(plan.registry))
+    assert harness.toolless is plan.toolless
+
+
+def test_the_class_chat_surface_carries_the_contract_the_class_chat_sends(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """The surface is not just a mirror: it carries the pieces that make it the class
+    chat - the mode contract, the agent capability layer, the retrieved context block,
+    the history, the question, and the class's real tool schemas."""
+    from backend.core import sessions as sessions_core
+    from backend.core.app_settings import TutorConfig
+    from scripts import eval_tutor
+
+    session_id = int(sessions_core.create_session(db, class_id)["id"])
+    config = TutorConfig(
+        endpoint_url="http://127.0.0.1:8000/v1",
+        api_key=None,
+        model="local-model",
+        context_window=8192,
+    )
+    case = _class_chat_case()
+    assembly = eval_tutor.class_chat_assembly(db, class_id, session_id, config, case)
+
+    system = str(assembly.messages[0]["content"])
+    # The mode contract the turn runs under (the full tutor prompt, not a stub).
+    assert "Mode: Guide." in system
+    # The agent capability layer, appended on top of it.
+    assert "You are Lyra's class agent" in system
+    # The case's retrieved context, rendered as the route renders it.
+    assert "Retrieved context from the student's uploaded material:" in system
+    assert "Lecture 4.pdf" in system
+    assert "page 12" in system
+    # The conversation: history in order, then the question.
+    contents = [str(message["content"]) for message in assembly.messages]
+    assert "What is a transfer function?" in contents
+    assert contents.index("It maps an input to an output.") < contents.index("Explain convolution")
+    assert assembly.messages[-1] == {"role": "user", "content": case.user}
+    # The class's real tool surface: a fresh class offers the case-evaluation tool...
+    tool_names = {str(schema.get("function", {}).get("name")) for schema in assembly.tools}
+    assert "cas_evaluate" in tool_names
+    # ...and nothing the class has not granted: no web research on an ungranted class.
+    assert "search_web" not in tool_names
+    assert assembly.toolless is False
+
+
+def test_the_class_chat_surface_is_tool_less_on_a_known_incompatible_endpoint(
+    db: sqlite3.Connection, class_id: int
+) -> None:
+    """The fallback is part of the surface: a known tool-incompatible endpoint plans the
+    tool-less surface at once - no tools on the wire, the tool-less note in the system
+    prompt, the basic tutoring turn still answered - exactly as the route plans it."""
+    from backend.core import sessions as sessions_core
+    from backend.core.app_settings import TutorConfig
+    from scripts import eval_tutor
+
+    session_id = int(sessions_core.create_session(db, class_id)["id"])
+    config = TutorConfig(
+        endpoint_url="http://127.0.0.1:8000/v1",
+        api_key=None,
+        model="local-model",
+        context_window=16384,
+        tools_supported=False,
+    )
+    case = _class_chat_case()
+    assembly = eval_tutor.class_chat_assembly(db, class_id, session_id, config, case)
+
+    assert assembly.toolless is True
+    assert assembly.tools == ()
+    system = str(assembly.messages[0]["content"])
+    assert "is not available in this conversation" in system
+    # The full tutor contract is still there: tool-less is a smaller surface, not a
+    # different conversation.
+    assert "Mode: Guide." in system
+    # The question still went out, tool-less: the basic tutoring turn is never refused
+    # over the cost of optional capability.
+    assert assembly.messages[-1] == {"role": "user", "content": case.user}
+
+
+# ---------------------------------------------------------------------------
+# PLA-401 final pass, items 1-2: the class_chat surface runs the PRODUCTION
+# tool loop to its terminal answer, and the default run is deterministic -
+# a disposable eval-only environment, never the student's database.
+# ---------------------------------------------------------------------------
+
+
+def test_the_eval_environment_is_deterministic_and_user_data_free() -> None:
+    """The default run plans against a disposable database: one class, one session,
+    nothing the student owns.
+
+    No user data (no documents, no facts, no workspace, no audit history), no public-web
+    grant (a fresh database's default), and the same identifiers on every run, so the
+    corpus grades the product under identical class state and the run's artifacts never
+    touch `data/lyra.db`.
+    """
+    first = eval_tutor.open_eval_environment(None)
+    try:
+        db_path, conn, class_id, session_id = first
+        assert class_id == 1 and session_id == 1
+        assert db_path.name == "eval.db"
+        assert db_path.parent.name.startswith("lyra-eval-")
+        # Fresh-database defaults: no web grant, no parallelism, no source content.
+        settings = conn.execute(
+            "select allow_web_research, parallel_requests, source_content_enabled"
+            " from settings where id = 1"
+        ).fetchone()
+        assert tuple(settings) == (0, 0, 0)
+        # Nothing of the student's: no material, no workspace, no prior history.
+        assert conn.execute("select count(*) from documents").fetchone()[0] == 0
+        assert conn.execute("select count(*) from profile_facts").fetchone()[0] == 0
+        assert conn.execute("select count(*) from class_workspaces").fetchone()[0] == 0
+        assert conn.execute("select count(*) from tool_audit_events").fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "select count(*) from messages where session_id = ?", (session_id,)
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        first[1].close()
+
+    second = eval_tutor.open_eval_environment(None)
+    try:
+        # Deterministic: the same class and session every time ...
+        assert second[2] == 1 and second[3] == 1
+        # ... each run in its own disposable database, so runs never share state.
+        assert second[0] != first[0]
+    finally:
+        second[1].close()
+
+
+def test_the_eval_environment_accepts_an_explicit_path(tmp_path: Path) -> None:
+    """`--eval-db` points the disposable environment at a caller-chosen database."""
+    target = tmp_path / "target-eval.db"
+    db_path, conn, class_id, session_id = eval_tutor.open_eval_environment(target)
+    try:
+        assert db_path == target
+        assert class_id == 1 and session_id == 1
+    finally:
+        conn.close()
+
+
+def test_the_eval_class_chat_surface_offers_only_what_a_fresh_class_grants() -> None:
+    """The eval class offers what a fresh class offers: the case-evaluation compute
+    surface and the workspace-access request, and nothing the class has not granted -
+    no public web (the grant is off in the fresh database), no workspace tools (there is
+    no workspace), and the executable registry is exactly the schemas on the wire.
+    """
+    from backend.core.app_settings import TutorConfig
+
+    # A context-free case, as every shipped corpus case is: with `no_context`, the
+    # assembly pins the eval class's empty retrieval - the product's no-context state.
+    case = Case(
+        id="explain-convolution",
+        mode="guide",
+        user="Explain convolution",
+        history=(),
+        context=(),
+        must=("gives the overlap integral",),
+        must_not=("withholds the requested explanation",),
+        may=(),
+        notes="The course defines convolution via the overlap integral.",
+    )
+    db_path, conn, class_id, session_id = eval_tutor.open_eval_environment(None)
+    try:
+        config = TutorConfig(
+            endpoint_url="http://127.0.0.1:1234/v1",
+            api_key=None,
+            model="local-model",
+            context_window=8192,
+        )
+        # The default run plans with no corpus context (every shipped case is
+        # context-free), and the surface carries the production tool loop's inputs.
+        assembly = eval_tutor.class_chat_assembly(
+            conn, class_id, session_id, config, case, no_context=True
+        )
+        tool_names = {str(schema.get("function", {}).get("name")) for schema in assembly.tools}
+        assert "cas_evaluate" in tool_names
+        assert "request_workspace_access" in tool_names
+        # Nothing the class has not granted.
+        assert "search_web" not in tool_names
+        assert "fetch_source" not in tool_names
+        assert not any(
+            name.startswith(("read_", "list_", "write_", "run_", "apply_")) for name in tool_names
+        )
+        # The registry is the executable face of the schemas the loop will send.
+        assert set(assembly.registry) == tool_names
+        # The default run carries no retrieved material, even for a case written with
+        # some: the eval grades the product's no-context state truthfully.
+        system = str(assembly.messages[0]["content"])
+        assert "Retrieved context from the student's uploaded material:" not in system
+        assert assembly.toolless is False
+    finally:
+        conn.close()
+
+
+def test_the_eval_class_chat_surface_still_carries_corpus_context_when_asked() -> None:
+    """Opting back into the case's context renders the block the route renders - the
+    eval surface is the product surface with the environment pinned, not a different
+    prompt.
+    """
+    from backend.core.app_settings import TutorConfig
+
+    case = _class_chat_case()
+    db_path, conn, class_id, session_id = eval_tutor.open_eval_environment(None)
+    try:
+        config = TutorConfig(
+            endpoint_url="http://127.0.0.1:1234/v1",
+            api_key=None,
+            model="local-model",
+            context_window=8192,
+        )
+        assembly = eval_tutor.class_chat_assembly(
+            conn, class_id, session_id, config, case, no_context=False
+        )
+        system = str(assembly.messages[0]["content"])
+        assert "Retrieved context from the student's uploaded material:" in system
+        assert "Lecture 4.pdf" in system
+        assert "page 12" in system
+    finally:
+        conn.close()
+
+
+def test_a_case_that_calls_a_tool_grades_the_terminal_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The surface runs the PRODUCTION tool loop to its terminal answer.
+
+    A model that checks its work with `cas_evaluate` before explaining is mid-
+    conversation, not a failure: the loop feeds the result back and keeps going, and the
+    case is graded on the answer the loop ends with. The calls ride along as metadata
+    (`tool_calls`, `rounds`), and the production audit lands in the eval database.
+    """
+    from backend.core.app_settings import TutorConfig
+    from backend.llm import client as llm_client
+    from backend.llm import tools as llm_tools
+
+    db_path, conn, class_id, session_id = eval_tutor.open_eval_environment(None)
+    try:
+        config = TutorConfig(
+            endpoint_url="http://127.0.0.1:1234/v1",
+            api_key=None,
+            model="local-model",
+            context_window=16384,
+        )
+        case = _class_chat_case()
+        assembly = eval_tutor.class_chat_assembly(
+            conn, class_id, session_id, config, case, no_context=True
+        )
+
+        async def scripted_model(endpoint, api_key, model, messages, tools, **kwargs):
+            # Round one: the model verifies its work. Round two: the terminal answer.
+            saw_tool_result = any(message.get("role") == "tool" for message in messages)
+            if saw_tool_result:
+                return llm_client.AssistantMessage(
+                    content=(
+                        "Convolution slides one signal past the other "
+                        "and sums the overlap at each step."
+                    )
+                )
+            return llm_client.AssistantMessage(
+                content="",
+                tool_calls=(
+                    llm_client.ToolCall(
+                        id="c1",
+                        name="cas_evaluate",
+                        arguments=json.dumps({"expression": "sin(x) + cos(x)"}),
+                    ),
+                ),
+            )
+
+        monkeypatch.setattr(llm_tools, "complete_with_tools", scripted_model)
+        record = asyncio.run(
+            eval_tutor._run_one_class_chat(
+                config.endpoint_url, config.api_key, config.model, assembly
+            )
+        )
+
+        # Graded on the terminal answer, with the verification as metadata.
+        assert record["status"] == "ok"
+        assert "slides one signal past the other" in str(record["response"])
+        assert record["tool_calls"] == [{"name": "cas_evaluate", "ok": True}]
+        assert record["rounds"] == 2
+        assert record["toolless"] is False
+        # The production loop's audit row landed in the disposable environment.
+        assert [row[0] for row in conn.execute("select state from tool_audit_events")] == [
+            "succeeded"
+        ]
+    finally:
+        conn.close()
+
+
+def test_a_loop_that_never_reaches_a_terminal_answer_is_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a loop that never reaches a usable terminal answer fails, and it is named
+    by the loop's own stop reason - an `incomplete` record, not a grade of a reply that
+    was not produced.
+    """
+    from backend.core import errors
+    from backend.core.app_settings import TutorConfig
+    from backend.llm import tools as llm_tools
+
+    db_path, conn, class_id, session_id = eval_tutor.open_eval_environment(None)
+    try:
+        config = TutorConfig(
+            endpoint_url="http://127.0.0.1:1234/v1",
+            api_key=None,
+            model="local-model",
+            context_window=16384,
+        )
+        case = _class_chat_case()
+        assembly = eval_tutor.class_chat_assembly(
+            conn, class_id, session_id, config, case, no_context=True
+        )
+
+        async def broken_model(endpoint, api_key, model, messages, tools, **kwargs):
+            raise errors.UpstreamError("the model endpoint could not be reached")
+
+        monkeypatch.setattr(llm_tools, "complete_with_tools", broken_model)
+        record = asyncio.run(
+            eval_tutor._run_one_class_chat(
+                config.endpoint_url, config.api_key, config.model, assembly
+            )
+        )
+
+        assert record["status"] == "incomplete"
+        assert record["stopped"] == llm_tools.UPSTREAM_FAILED
+        assert "could not be reached" in str(record["detail"])
+        assert record["response"] == ""
+        assert record["tool_calls"] == []
+    finally:
+        conn.close()
+
+
+def test_an_unknown_endpoint_refusal_replans_toolless_and_reaches_the_terminal_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The NO_TOOL_SUPPORT fallback through the case runner, deterministically.
+
+    An endpoint whose tool support is UNKNOWN (`tools_supported=None`) refuses the turn's
+    FIRST tools request. The product settles that pass as abandoned and re-plans the same
+    turn tool-less; the case runner must mirror that - its `replan_toolless` is an actual
+    zero-argument callable the loop invokes, not an already-evaluated assembly - so the
+    case reaches the same tool-less terminal answer it does in production, recorded
+    exactly as production settles it.
+    """
+    from backend.core import errors
+    from backend.llm import client as llm_client
+    from backend.llm import tools as llm_tools
+
+    db_path, conn, class_id, session_id = eval_tutor.open_eval_environment(None)
+    try:
+        # Unknown tool support: the first request carries the tool schemas.
+        config = TutorConfig(
+            endpoint_url="http://127.0.0.1:1234/v1",
+            api_key=None,
+            model="local-model",
+            context_window=16384,
+            tools_supported=None,
+        )
+        case = Case(
+            id="explain-convolution",
+            mode="guide",
+            user="Explain convolution",
+            history=(),
+            context=(),
+            must=("gives the overlap integral",),
+            must_not=("withholds the requested explanation",),
+            may=(),
+            notes="The course defines convolution via the overlap integral.",
+        )
+
+        tool_rounds: list[int] = []
+        plain_calls: list[int] = []
+
+        async def refusing_tools(
+            endpoint: str,
+            api_key: str | None,
+            model: str | None,
+            messages: list[dict[str, object]],
+            tools: list[dict[str, object]],
+            **kwargs: object,
+        ):
+            tool_rounds.append(len(tools))
+            raise errors.ToolsUnsupportedError("the endpoint does not accept tool calls")
+
+        async def plain_complete(*args: object, **kwargs: object) -> str:
+            plain_calls.append(1)
+            return "Convolution slides one signal past the other and sums the overlap."
+
+        monkeypatch.setattr(llm_tools, "complete_with_tools", refusing_tools)
+        monkeypatch.setattr(llm_client, "complete", plain_complete)
+
+        cases_run: dict[str, object] = {}
+        eval_tutor._run_class_chat_cases(
+            [case], conn, class_id, session_id, config, cases_run, no_context=True
+        )
+
+        record = cases_run[case.id]
+        # The run fell back tool-less and reached the terminal answer - it is recorded
+        # as an ok tool-less turn, not as a failed or incomplete one.
+        assert record["status"] == "ok"
+        assert record["toolless"] is True
+        assert "slides one signal past the other" in str(record["response"])
+        # One tools round (the refused one) plus the one plain completion.
+        assert record["rounds"] == 2
+        assert len(tool_rounds) == 1
+        assert len(plain_calls) == 1
+        # The refusal carried the case's tool surface, and the fallback re-planned the
+        # same turn through the runner's own callback.
+        assert tool_rounds[0] > 0
+    finally:
+        conn.close()
+
+
+def test_grade_fails_an_incomplete_turn_truthfully(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn whose loop never reached a terminal answer is a fail that says the
+    product did not answer: named by the loop's stop reason and the calls it made, not
+    waved away as a finding.
+    """
+    from backend.llm import tools as llm_tools
+
+    config = TutorConfig("http://127.0.0.1:1234/v1", None, "tutor-model", 16384)
+    monkeypatch.setattr(eval_tutor, "_endpoint_config", lambda path: config)
+    (tmp_path / "runs.json").write_text(
+        json.dumps(
+            {
+                "cases": {
+                    "explain-convolution": {
+                        "status": "incomplete",
+                        "stopped": llm_tools.UPSTREAM_FAILED,
+                        "detail": "the model endpoint could not be reached",
+                        "tool_calls": [{"name": "cas_evaluate", "ok": True}],
+                        "rounds": 2,
+                        "response": "",
+                        "user": "Explain convolution",
+                        "mode": "guide",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    args = argparse.Namespace(
+        corpus=str(CORPUS),
+        workspace=str(tmp_path),
+        source_db="/ignored",
+        case=None,
+        judge_source_db=None,
+        judge_model=None,
+    )
+    assert eval_tutor.cmd_grade(args) == 0
+    grades = json.loads((tmp_path / "grades.json").read_text(encoding="utf-8"))
+    entry = grades["explain-convolution"]
+    assert entry["verdict"] == "fail"
+    note = str(entry["grading"]["note"])
+    assert "no terminal answer" in note
+    assert str(llm_tools.UPSTREAM_FAILED) in note
+    assert "cas_evaluate" in note

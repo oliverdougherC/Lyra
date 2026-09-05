@@ -34,16 +34,6 @@ const INITIAL = 'line one\n'
 const STATE_B = 'externally modified current state B\n'
 const FINAL_C = 'reviewed and accepted final state C\n'
 
-async function openAgentPanel(page: import('@playwright/test').Page): Promise<void> {
-  const agentBtn = page.getByRole('button', { name: 'Agent' })
-  if (await agentBtn.isVisible({ timeout: 3_000 }).catch(() => false)) {
-    const expanded = await agentBtn.getAttribute('aria-expanded')
-    if (expanded !== 'true') {
-      await agentBtn.click()
-    }
-  }
-}
-
 /** Read the current on-disk content of the lifecycle file. */
 function disk(ws: string): Promise<string> {
   return readFile(join(ws, 'lifecycle.py'), 'utf-8')
@@ -95,10 +85,10 @@ test.describe('PLA-303 full human-review lifecycle', () => {
     })
     expect(changeA.status).toBe(201)
 
-    // 2. Display proposal A in the review UI (pending, hunks visible).
+    // 2. Display proposal A in the review UI (pending, hunks visible). The work surface
+    // renders the card directly - there is no panel to open.
     await page.goto(`/classes/${classId}/chat?session=${session.id}`)
     await page.waitForLoadState('networkidle')
-    await openAgentPanel(page)
 
     const card = page.locator('[aria-label="Workspace change for lifecycle.py"]')
     await expect(card).toBeVisible({ timeout: 15_000 })
@@ -132,7 +122,14 @@ test.describe('PLA-303 full human-review lifecycle', () => {
     const rejectA = card.getByRole('button', { name: /Reject proposal/i })
     await expect(rejectA).toBeVisible()
     await rejectA.click()
-    await expect(card.locator('[data-slot="badge"]', { hasText: 'Rejected' })).toBeVisible({
+    // A's rejection settles out of the live band: the card leaves the top work band, and
+    // its terminal state stays findable in the collapsed Details audit.
+    await expect(card).toBeHidden({ timeout: 10_000 })
+    await page
+      .locator('[aria-label="Agent work"]')
+      .getByRole('button', { name: /Details/i })
+      .click()
+    await expect(page.locator('[data-slot="badge"]', { hasText: 'Rejected' })).toBeVisible({
       timeout: 10_000,
     })
 
@@ -154,8 +151,10 @@ test.describe('PLA-303 full human-review lifecycle', () => {
     })
     expect(changeC.status).toBe(201)
 
-    // Refresh the agent panel so the freshly created proposal is fetched and displayed.
-    await page.getByRole('button', { name: 'Refresh agent activity' }).click()
+    // Reload the conversation so the freshly created proposal is re-fetched and displayed:
+    // the work surface re-mounts and re-fetches its durable artifacts.
+    await page.reload()
+    await page.waitForLoadState('networkidle')
 
     // The newly reviewed proposal (derived from B) is displayed as pending with hunks.
     // Both cards share the same aria-label (and both render the action buttons), so scope
@@ -171,7 +170,14 @@ test.describe('PLA-303 full human-review lifecycle', () => {
     // 7. Student explicitly reviews B and accepts it through the browser UI. C's base is
     //    the current file state (B), so the re-fetched review matches and the apply lands.
     await cardC.getByRole('button', { name: /Accept remaining/i }).click()
-    await expect(cardC.getByText('Applied')).toBeVisible({ timeout: 15_000 })
+    // C applied: its result settles out of the live band into the collapsed audit
+    // (the reload above re-collapsed it).
+    await expect(cardC).toBeHidden({ timeout: 15_000 })
+    await page
+      .locator('[aria-label="Agent work"]')
+      .getByRole('button', { name: /Details/i })
+      .click()
+    await expect(page.getByText('Applied', { exact: true })).toBeVisible()
 
     // 8. Only the reviewed proposal derived from B applied. Stale A never did; B was the
     //    base, and C's content is now on disk (the sole subsequent change).

@@ -15,6 +15,7 @@ returns a stale value the caller thought was replaced.
 The key is never returned by any endpoint and never written to a log line.
 """
 
+import threading
 from contextlib import suppress
 from pathlib import Path
 from types import ModuleType
@@ -50,16 +51,37 @@ def _exa_key_file() -> Path:
     return settings.data_dir / EXA_KEY_FILENAME
 
 
+# A probe must never hold its caller: settings reads are on a hot path, and some
+# keyring backends block instead of raising (a keychain entry whose access control
+# the current process cannot satisfy). The probe therefore runs with a deadline; a
+# hang demotes to file storage the same way a KeyringError does.
+_PROBE_TIMEOUT_SECONDS = 5.0
+
+
 def _keyring_usable() -> bool:
-    """Probe the keyring once and cache whether this machine has a working backend."""
+    """Probe the keyring once, with a deadline, and cache whether this machine has a
+    working backend."""
     global _keyring_ok
     if _keyring_ok is None:
-        try:
-            _keyring().get_password(SERVICE, USERNAME)
-        except keyring.errors.KeyringError:
-            _keyring_ok = False
-        else:
-            _keyring_ok = True
+        outcome: dict[str, bool] = {}
+
+        def probe() -> None:
+            try:
+                _keyring().get_password(SERVICE, USERNAME)
+            except keyring.errors.KeyringError:
+                outcome["usable"] = False
+            else:
+                outcome["usable"] = True
+
+        # Daemon, so an abandoned probe (a backend that blocked past the deadline)
+        # cannot join at process exit. It dies with the process, like the
+        # `security` child it is waiting on.
+        thread = threading.Thread(target=probe, name="lyra-keyring-probe", daemon=True)
+        thread.start()
+        thread.join(timeout=_PROBE_TIMEOUT_SECONDS)
+        # A backend still alive past the deadline blocked instead of failing: it is
+        # unusable and we stop waiting; the daemon probe dies with the process.
+        _keyring_ok = not thread.is_alive() and outcome.get("usable", False)
     return _keyring_ok
 
 

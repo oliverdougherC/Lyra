@@ -1,6 +1,5 @@
 export * from './types'
-export * from './capability-summary'
 export * from './activity-cards'
-export * from './agent-panel'
+export * from './work-surface'
 export * from './workspace-change-review'
 export * from './command-confirmation'

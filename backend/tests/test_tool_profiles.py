@@ -99,6 +99,9 @@ def test_declared_profiles_are_explicit_and_complete() -> None:
         "research",
         "code",
         "command",
+        # The contextual agent (PLA-401): one declared profile that plans across the
+        # research, workspace, and command families instead of a surface-level picker.
+        "agent",
         "writer",
     )
 

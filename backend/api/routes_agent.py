@@ -40,6 +40,9 @@ Origin = Annotated[str | None, Header(alias="Origin")]
 class WorkspaceAttach(BaseModel):
     root_path: str = Field(min_length=1, max_length=4096)
     display_name: str | None = Field(default=None, max_length=200)
+    # The minimum for inspecting a folder the student just chose: reads only. Deeper
+    # grants (change proposals, commands) stay off and are requested separately.
+    read_enabled: bool = False
 
     @field_validator("root_path")
     @classmethod
@@ -93,6 +96,10 @@ class CommandCreate(BaseModel):
 
 class CommandExecuteRequest(BaseModel):
     confirmation_token: str = Field(min_length=64, max_length=64)
+
+
+class AccessDismissRequest(BaseModel):
+    scope: str = Field(min_length=1, max_length=32)
 
 
 def _as_domain_error(exc: ValueError) -> LyraError:
@@ -369,6 +376,52 @@ def list_agent_activity(
     )
 
 
+@router.post("/classes/{class_id}/sessions/{session_id}/agent/access-dismiss")
+def dismiss_access_request(
+    class_id: int,
+    session_id: int,
+    payload: AccessDismissRequest,
+    conn: DbConn,
+) -> dict[str, object]:
+    """Record a bounded "Not now" for one just-in-time access request.
+
+    The dismissal is scoped to this conversation and expires after a bounded window
+    (agent_store.ACCESS_DISMISSAL_TTL_SECONDS): it stops the card from nagging again and
+    tells the model the student already answered once, but it grants nothing and dies
+    with the conversation.
+    """
+    _require_session(conn, class_id, session_id)
+    if payload.scope not in agent_store.WORKSPACE_ACCESS_SCOPES:
+        raise LyraError("Unknown access scope.")
+    return _audit_call(
+        conn,
+        tool="dismiss_access_request",
+        capability="access_request",
+        effect="database_write",
+        arguments={"scope": payload.scope},
+        class_id=class_id,
+        session_id=session_id,
+        target_kind="access_deferral",
+        target_id=payload.scope,
+        operation=lambda: agent_store.dismiss_workspace_access(
+            conn, class_id, session_id, payload.scope
+        ),
+    )
+
+
+@router.get("/classes/{class_id}/sessions/{session_id}/agent/access-dismissals")
+def list_access_dismissals(class_id: int, session_id: int, conn: DbConn) -> dict[str, object]:
+    """Active (unexpired) deferrals for this conversation, so a reloaded client does
+    not resurface a card the student already declined."""
+    _require_session(conn, class_id, session_id)
+    active = agent_store.get_active_dismissals(conn, class_id, session_id)
+    return {
+        "dismissals": [
+            {"scope": scope, "dismissed_at": dismissed_at} for scope, dismissed_at in active.items()
+        ]
+    }
+
+
 @router.put("/classes/{class_id}/workspace", status_code=status.HTTP_201_CREATED)
 def attach_workspace(class_id: int, payload: WorkspaceAttach, conn: DbConn) -> dict[str, object]:
     get_class(conn, class_id)
@@ -377,13 +430,14 @@ def attach_workspace(class_id: int, payload: WorkspaceAttach, conn: DbConn) -> d
         tool="attach_workspace",
         capability="workspace_attachment",
         effect="database_write",
-        arguments={"display_name": payload.display_name},
+        arguments={"display_name": payload.display_name, "read_enabled": payload.read_enabled},
         class_id=class_id,
         operation=lambda: agent_store.attach_workspace(
             conn,
             class_id,
             root_path=payload.root_path,
             display_name=payload.display_name,
+            read_enabled=payload.read_enabled,
         ),
     )
 

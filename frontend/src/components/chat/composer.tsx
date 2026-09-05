@@ -23,6 +23,13 @@ type ComposerProps = {
   onSend: () => void
   onStop: () => void
   streaming: boolean
+  /**
+   * The agent's Stop is a round trip to the server's /stop: while it is in flight the
+   * turn is being stopped but the server has not yet confirmed it, so the affordance
+   * says "Stopping…" instead of claiming the turn is stopped. Clicking again is a no-op
+   * (the pane guards the in-flight stop), so the button stays enabled and honest.
+   */
+  stopping?: boolean
   /** Non-null disables the composer and explains why. */
   disabledReason: string | null
   /**
@@ -30,6 +37,11 @@ type ComposerProps = {
    * composer that has no material to scope (the writer reads the class, not a pick).
    */
   sourceControl?: ReactNode
+  /**
+   * The attached local workspace, rendered beside the source context: the same compact
+   * chip, one glance answers "what does Lyra have on hand for this task".
+   */
+  workspaceControl?: ReactNode
   /** Take focus on mount, for a composer the reader has just opened deliberately. */
   autoFocus?: boolean
 }
@@ -40,8 +52,10 @@ export function Composer({
   onSend,
   onStop,
   streaming,
+  stopping = false,
   disabledReason,
   sourceControl,
+  workspaceControl,
   autoFocus = false,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -116,12 +130,13 @@ export function Composer({
           'focus-within:border-accent-primary/60 focus-within:shadow-md',
         )}
       >
-        {sourceControl ? (
+        {sourceControl || workspaceControl ? (
           <div
             data-source-control
-            className="mb-1.5 flex shrink-0 items-center gap-1 text-text-tertiary"
+            className="mb-1.5 flex shrink-0 items-center gap-1.5 text-text-tertiary"
           >
             {sourceControl}
+            {workspaceControl}
           </div>
         ) : null}
         <Textarea
@@ -151,9 +166,9 @@ export function Composer({
             type="button"
             size="icon-sm"
             variant="outline"
-            className="size-9 shrink-0 rounded-full"
+            className={cn('size-9 shrink-0 rounded-full', stopping && 'animate-pulse')}
             onClick={onStop}
-            aria-label="Stop generating"
+            aria-label={stopping ? 'Stopping…' : 'Stop generating'}
           >
             <Square className="size-3" />
           </Button>

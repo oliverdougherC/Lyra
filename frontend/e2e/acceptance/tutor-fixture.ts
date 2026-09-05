@@ -34,8 +34,15 @@ type Mode =
   | 'writer-effect-then-fail'
 
 interface QueuedResponse {
-  content: string
+  /** Plain text content, streamed or completed as usual. */
+  content?: string
   stream?: boolean
+  /**
+   * A complete chat.completion body, returned verbatim (non-streaming). Scripted model
+   * tool calls land here: the caller owns the exact shape, including tool_calls and
+   * finish_reason, so an acceptance journey can drive a multi-round agent turn.
+   */
+  raw?: Record<string, unknown>
 }
 
 interface RecordedRequest {
@@ -274,14 +281,18 @@ export class TutorFixture {
 
   private async handleChatCompletion(body: Record<string, unknown>, res: ServerResponse) {
     const wantStream = body.stream === true
-
     // Check for enqueued responses first
     if (this.queue.length > 0) {
       const queued = this.queue.shift()!
+      if (queued.raw) {
+        // A scripted completion (e.g. a model tool call): returned verbatim.
+        json(res, 200, queued.raw)
+        return
+      }
       if (wantStream) {
-        this.streamResponse(res, queued.content)
+        this.streamResponse(res, queued.content ?? '')
       } else {
-        this.jsonCompletion(res, queued.content)
+        this.jsonCompletion(res, queued.content ?? '')
       }
       return
     }

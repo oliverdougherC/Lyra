@@ -59,19 +59,86 @@ def create_attempt(
     session_id: int,
     user_message_id: int,
     profile: str,
+    mode: str | None = None,
+    document_id: int | None = None,
+    operation_id: str | None = None,
+    commit: bool = True,
 ) -> int:
     """Record a running attempt on one user message and return its id.
 
     Called after the user message is persisted (or, on a retry, resolved) and before the
     tool loop runs, so every run of the model is bracketed by a durable row.
+
+    `mode` and `document_id` persist the turn context the attempt was asked under (the
+    Guide/Show choice and the selected source scope), so a retry or a just-in-time
+    continuation can re-run the turn with the scope it was originally asked with. Since
+    migration 042 a stored `document_id` of None is a real value ("All material"), not an
+    absence, so `scope_persisted` records that this row's mode/document_id were written by
+    the modern path: retry and regenerate read the persisted scope - null included - only
+    from a row that carries the flag, and fall back to request-provided scope for the
+    pre-flag legacy rows instead.
+    `operation_id` is the client-generated idempotency key (PLA-313), bound to this session
+    by a unique index: a fresh send stores it, and a retry attempt on an existing message
+    stores None, exactly like the tutor's attempt lifecycle.
+
+    `commit=False` leaves the insert uncommitted so the caller can land it in the same
+    transaction as the user message insert (the fresh-send path); retry and legacy callers
+    keep the default, which commits the attempt row on its own.
     """
+    # `scope_persisted=1` is always written by the modern path: this row's mode and
+    # document_id are authoritative, a stored null document included ("All material").
+    # Pre-flag rows (the column's default) are the legacy scope that retry backstops from
+    # the request instead of from the row.
     cursor = conn.execute(
-        "insert into agent_turn_attempts (session_id, user_message_id, profile, state) "
-        "values (?, ?, ?, ?)",
-        (session_id, user_message_id, profile, RUNNING),
+        "insert into agent_turn_attempts "
+        "(session_id, user_message_id, profile, state, mode, document_id, operation_id, "
+        "scope_persisted) "
+        "values (?, ?, ?, ?, ?, ?, ?, 1)",
+        (session_id, user_message_id, profile, RUNNING, mode, document_id, operation_id),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
     return int(cursor.lastrowid or 0)
+
+
+def find_by_operation_id(
+    conn: sqlite3.Connection, session_id: int, operation_id: str
+) -> dict[str, object] | None:
+    """Find an existing attempt by its client-generated operation_id (PLA-313).
+
+    Returns a dict with `user_message_id`, `attempt_id`, `state`,
+    `assistant_message_id`, `mode`, `document_id`, and `scope_persisted` when a prior
+    attempt committed with the same operation_id in this session; None otherwise. Mirrors
+    the tutor's `tutor_attempts.find_by_operation_id`.
+    """
+    row = conn.execute(
+        "select user_message_id, id as attempt_id, state, "
+        "assistant_message_id, mode, document_id, scope_persisted "
+        "from agent_turn_attempts "
+        "where session_id = ? and operation_id = ? "
+        "order by id desc limit 1",
+        (session_id, operation_id),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def find_completed_attempt(
+    conn: sqlite3.Connection, user_message_id: int
+) -> dict[str, object] | None:
+    """The most recent completed attempt on a user message, or None.
+
+    Scans the whole lineage, not just the attempt that carries the operation_id: a retry
+    attempt (`operation_id=None`) may have completed after the original failed, and the
+    replay must hand back that completed reply. Mirrors the tutor's
+    `tutor_attempts.find_completed_attempt`.
+    """
+    row = conn.execute(
+        "select * from agent_turn_attempts "
+        "where user_message_id = ? and state = ? "
+        "order by id desc limit 1",
+        (user_message_id, COMPLETED),
+    ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def mark_completed(conn: sqlite3.Connection, attempt_id: int, assistant_message_id: int) -> None:
@@ -114,18 +181,29 @@ def fail_attempt(
     conn.commit()
 
 
-def stop_attempt(conn: sqlite3.Connection, attempt_id: int, *, detail: str) -> None:
+def stop_attempt(
+    conn: sqlite3.Connection,
+    attempt_id: int,
+    *,
+    detail: str,
+    stopped_reason: str = "cancelled",
+) -> None:
     """Settle a still-running attempt as stopped (abandoned).
 
     Used when a turn is cancelled or the client disconnects mid-run: the claim is released,
     but the attempt must not read as forever in flight. Stopped is a truthful, retryable
     terminal state, the same one a restart reconciles an interrupted attempt to. Only a
     still-running row is settled, so a settle racing an ordinary completion is a no-op.
+
+    `stopped_reason` names what stopped it: "cancelled" for a Stop or disconnect,
+    "abandoned" for a restart's reconciliation, and the loop's own stop reasons (for
+    example "no_tool_support", when the turn's tool pass was abandoned in favor of the
+    tool-less answer of the same logical turn) so the attempt ledger stays truthful.
     """
     conn.execute(
         "update agent_turn_attempts set state = ?, stopped_reason = ?, detail = ?, "
         "finished_at = ? where id = ? and state = ?",
-        (STOPPED, "cancelled", detail[:_MAX_DETAIL_CHARS], _timestamp(), attempt_id, RUNNING),
+        (STOPPED, stopped_reason, detail[:_MAX_DETAIL_CHARS], _timestamp(), attempt_id, RUNNING),
     )
     conn.commit()
 
@@ -189,13 +267,31 @@ def latest_attempts_by_message(
 
     One query for the whole conversation, so the message-list endpoint can annotate each
     user turn with its attempt state without a lookup per message.
+
+    Each row also carries `lineage_operation_id`: the operation ID the logical send that
+    created this message's attempt lineage minted - the id on the lineage's ROOT attempt,
+    not the latest one. Internal attempts carry no id of their own (a retry, a
+    regeneration, and the tool-less continuation of an endpoint that refused the first
+    tools request all create attempts with `operation_id = NULL`), so the latest attempt's
+    own id can be NULL even though the send itself has a durable identity. The readback
+    exposes the root's non-null id, which is the identity a lost-response reconciliation
+    must match: the unique index keeps at most one non-null operation id per session, so
+    the lineage's first id-carrying attempt is the root by construction, and the id is
+    surfaced in readback rather than duplicated onto the later attempts.
     """
     rows = conn.execute(
-        "select a.* from agent_turn_attempts a "
+        "select a.*, root.operation_id as lineage_operation_id "
+        "from agent_turn_attempts a "
         "join (select user_message_id, max(id) as latest_id from agent_turn_attempts "
         "      where session_id = ? group by user_message_id) newest "
-        "  on a.id = newest.latest_id",
-        (session_id,),
+        "  on a.id = newest.latest_id "
+        "left join (select user_message_id, min(id) as root_id "
+        "      from agent_turn_attempts "
+        "      where session_id = ? and operation_id is not null "
+        "      group by user_message_id) rooted "
+        "  on rooted.user_message_id = a.user_message_id "
+        "left join agent_turn_attempts root on root.id = rooted.root_id",
+        (session_id, session_id),
     ).fetchall()
     return {int(row["user_message_id"]): dict(row) for row in rows}
 

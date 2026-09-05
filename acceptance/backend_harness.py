@@ -116,11 +116,24 @@ def _privacy_safe_route(scope) -> str:
     `/api/sessions/{session_id}/messages`) identifies the endpoint without it.
     Unroutable requests are reported by method only.
     """
+
+    def candidates(route):
+        # FastAPI wraps included routers in a lazy `_IncludedRouter` container that matches
+        # its whole subtree but carries no path of its own: descend to the wrapped
+        # router's concrete routes so their templates stay visible instead of the
+        # container masking every endpoint behind it.
+        wrapped = getattr(route, "original_router", None)
+        if wrapped is not None:
+            return list(getattr(wrapped, "routes", ()))
+        return [route]
+
     try:
         for route in _production_app.routes:
-            match, _child = route.matches(scope)
-            if match is Match.FULL:
-                path = getattr(route, "path", None)
+            for candidate in candidates(route):
+                match, _child = candidate.matches(scope)
+                if match is not Match.FULL:
+                    continue
+                path = getattr(candidate, "path", None)
                 if isinstance(path, str):
                     return path
                 break
@@ -561,6 +574,63 @@ async def _release_source_barrier() -> JSONResponse:
         ev.set()
     _source_barrier_event = None
     _source_barrier_arrived.clear()
+    return JSONResponse({"ok": True})
+
+
+# --------------------------------------------------------------------------
+# Tool-dispatch barrier (PLA-401 final pass, item 7 acceptance).
+#
+# When enabled, the agent's real `search_web` dispatch pauses at a threading
+# barrier BEFORE the network call. That is the exact state the UI's Stop and
+# the server's stop contract must handle: a turn whose worker is still inside
+# its actual tool dispatch. The barrier wraps the module attribute the
+# handler resolves at dispatch time, so everything else (registry, audit,
+# stop-flag checks, the loop itself) is production code.
+# --------------------------------------------------------------------------
+
+import backend.core.web_research as _web_research_mod  # noqa: E402
+
+_tool_barrier_event: threading.Event | None = None
+_tool_barrier_arrived = threading.Event()
+_real_search_web = _web_research_mod.search_web
+
+
+def _barrier_search_web(*args: object, **kwargs: object):
+    global _tool_barrier_event
+    ev = _tool_barrier_event
+    if ev is not None:
+        _tool_barrier_arrived.set()
+        ev.wait(timeout=30)
+    return _real_search_web(*args, **kwargs)
+
+
+_web_research_mod.search_web = _barrier_search_web
+
+
+@_production_app.post("/_acceptance/tool-barrier/enable")
+async def _enable_tool_barrier() -> JSONResponse:
+    """Enable the tool-dispatch barrier: the next real search_web call will pause."""
+    global _tool_barrier_event
+    _tool_barrier_arrived.clear()
+    _tool_barrier_event = threading.Event()
+    return JSONResponse({"ok": True})
+
+
+@_production_app.get("/_acceptance/tool-barrier/arrived")
+async def _tool_barrier_arrived_check() -> JSONResponse:
+    """Check whether a dispatch worker has arrived inside its tool call."""
+    return JSONResponse({"arrived": _tool_barrier_arrived.is_set()})
+
+
+@_production_app.post("/_acceptance/tool-barrier/release")
+async def _release_tool_barrier() -> JSONResponse:
+    """Release the dispatch worker held at the tool barrier."""
+    global _tool_barrier_event
+    ev = _tool_barrier_event
+    if ev is not None:
+        ev.set()
+    _tool_barrier_event = None
+    _tool_barrier_arrived.clear()
     return JSONResponse({"ok": True})
 
 

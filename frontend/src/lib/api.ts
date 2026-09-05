@@ -5,6 +5,7 @@
 
 import type {
   AcceptRejectResult,
+  AgentAccessDismissalRead,
   AgentAuditEventRead,
   AgentChatActivity,
   AgentChatFailure,
@@ -24,6 +25,7 @@ import type {
   CardUpdate,
   CardUpdateRead,
   ChatEvent,
+  ChatMode,
   ChatRequest,
   ClassCreate,
   ClassProfile,
@@ -575,10 +577,20 @@ export const api = {
   getAgentWorkspace: (classId: number, signal?: AbortSignal) =>
     requestJson<AgentWorkspaceRead | null>(`/api/classes/${classId}/workspace`, { signal }),
 
-  attachAgentWorkspace: (classId: number, rootPath: string, displayName?: string) =>
+  attachAgentWorkspace: (
+    classId: number,
+    rootPath: string,
+    options?: { displayName?: string; readEnabled?: boolean },
+  ) =>
     requestJson<AgentWorkspaceRead>(`/api/classes/${classId}/workspace`, {
       method: 'PUT',
-      body: { root_path: rootPath, display_name: displayName },
+      body: {
+        root_path: rootPath,
+        display_name: options?.displayName,
+        // A just-in-time attach reads the minimum it was asked for: the folder is
+        // inspectable. Deeper grants (change proposals, commands) are requested separately.
+        read_enabled: options?.readEnabled ?? false,
+      },
     }),
 
   detachAgentWorkspace: async (classId: number) => {
@@ -597,21 +609,147 @@ export const api = {
       { signal },
     ),
 
-  sendAgentChat: (classId: number, sessionId: number, content: string, profile: AgentProfile) =>
+  // A bounded "Not now" for a just-in-time access request: recorded server-side against
+  // this conversation, so the card does not resurface on reload or in later turns until
+  // its window lapses. It grants nothing.
+  dismissAgentAccess: (classId: number, sessionId: number, scope: string) =>
+    requestJson<AgentAccessDismissalRead>(
+      `/api/classes/${classId}/sessions/${sessionId}/agent/access-dismiss`,
+      { method: 'POST', body: { scope } },
+    ),
+
+  listAgentAccessDismissals: (classId: number, sessionId: number, signal?: AbortSignal) =>
+    requestJson<{ dismissals: AgentAccessDismissalRead[] }>(
+      `/api/classes/${classId}/sessions/${sessionId}/agent/access-dismissals`,
+      { signal },
+    ),
+
+  // `operationId` is the browser's PLA-313 idempotency key for this logical Send: minted
+  // once, carried on every ambiguous resubmit, discarded only for a genuinely new message
+  // (or a structured `operation_id_mismatch`). A completed operation replays its stored
+  // reply; a failed one re-runs the same durable question.
+  sendAgentChat: (
+    classId: number,
+    sessionId: number,
+    content: string,
+    profile?: AgentProfile,
+    documentId?: number | null,
+    mode?: ChatMode,
+    operationId?: string,
+    signal?: AbortSignal,
+  ) =>
     requestJson<AgentChatResult>(`/api/classes/${classId}/sessions/${sessionId}/agent-chat`, {
       method: 'POST',
-      body: { content, profile },
+      // The contextual turn omits the profile: the backend plans it (Workstream C). A scoped
+      // source, when the student selects one, grounds the turn like the tutor's context.
+      body: {
+        content,
+        ...(profile ? { profile } : null),
+        ...(documentId != null ? { document_id: documentId } : null),
+        // The student's Guide/Show choice rides the turn and is persisted on the session,
+        // so the agent's shared mode contract follows the same toggle as the tutor.
+        ...(mode ? { mode } : null),
+        ...(operationId ? { operation_id: operationId } : null),
+      },
+      signal,
       errorFactory: agentChatErrorFactory,
     }),
 
   // Retry the conversation's last failed agent turn, reusing its user message (PLA-295).
   // The server reuses the original message rather than appending a duplicate, and replays a
-  // reply that already committed instead of running the model again.
-  retryAgentChat: (classId: number, sessionId: number) =>
+  // reply that already committed instead of running the model again. The scope body is a
+  // backstop only: the attempt's persisted scope (source and mode) wins.
+  retryAgentChat: (
+    classId: number,
+    sessionId: number,
+    scope?: { mode?: ChatMode; documentId?: number | null },
+    signal?: AbortSignal,
+  ) =>
     requestJson<AgentChatResult>(`/api/classes/${classId}/sessions/${sessionId}/agent-chat/retry`, {
       method: 'POST',
+      body:
+        scope == null
+          ? undefined
+          : {
+              ...(scope.mode ? { mode: scope.mode } : null),
+              // Property presence, not non-nullness (PLA-401 final pass): an explicit
+              // documentId of null is the real value "All material" and must ride the wire
+              // as an explicit null; only an ABSENT property means "the caller did not
+              // name a scope" (the server's persisted scope then owns the turn).
+              ...('documentId' in scope ? { document_id: scope.documentId } : null),
+            },
+      signal,
       errorFactory: agentChatErrorFactory,
     }),
+
+  // Answer the conversation's last agent question again, replacing the reply it has (PLA-316
+  // class affordance). Unlike retry, this re-runs even a completed turn and supersedes the old
+  // reply on the server, so the transcript carries exactly one answer. A manual regeneration
+  // carries the CURRENT Guide/Show selection and source scope (like the tutor's); a body-less
+  // regeneration - the just-in-time continuation after an access approval - continues the
+  // turn's persisted scope.
+  regenerateAgentChat: (
+    classId: number,
+    sessionId: number,
+    scope?: { mode?: ChatMode; documentId?: number | null },
+    signal?: AbortSignal,
+  ) =>
+    requestJson<AgentChatResult>(
+      `/api/classes/${classId}/sessions/${sessionId}/agent-chat/regenerate`,
+      {
+        method: 'POST',
+        body:
+          scope == null
+            ? undefined
+            : {
+                ...(scope.mode ? { mode: scope.mode } : null),
+                // Property presence, not non-nullness (PLA-401 final pass): an explicit
+                // documentId of null is the real value "All material" and must ride the
+                // wire as an explicit null - a manual regeneration to All material must
+                // win over the stored document scope, and only an ABSENT property means
+                // "continue the persisted scope" (the body-less JIT continuation).
+                ...('documentId' in scope ? { document_id: scope.documentId } : null),
+              },
+        signal,
+        errorFactory: agentChatErrorFactory,
+      },
+    ),
+
+  // Explicit stop for the non-streaming agent turn: the handler cannot see its client's
+  // disconnect, so the server cancels the in-flight task itself - settling the durable
+  // attempt as stopped and releasing the session claim - and the work actually stops.
+  // Stopping a session with no turn in flight is a no-op, not an error.
+  //
+  // The response is a quiescence claim, made truthfully - it is the verdict, not a
+  // confirmation that the HTTP call succeeded:
+  //   * `{ stopped: true, settling: false }` - the stop fully settled AND no worker is
+  //     still inside a tool dispatch: the session is free. The UI may mark the turn
+  //     stopped, clear the send key, and re-enable the conversation.
+  //   * `{ stopped: false, settling: true }` - the stop was latched and the cancellation
+  //     delivered, but a late worker is still inside a dispatch: the turn is stopped in
+  //     every way that matters (no reply will arrive, no further durable effect can
+  //     land), but the session is NOT free yet. The UI must stay in "Stopping…" and
+  //     keep the conversation closed, and poll `stopAgentChatStatus` until the backend
+  //     proves the session free.
+  //   * `{ stopped: false, settling: false }` - nothing was in flight when /stop
+  //     inspected it: the turn settled (completed or failed) in the race just before the
+  //     Stop. It is NOT a stop. The turn's own request settles (or reconciles) the
+  //     outcome; the durable state wins.
+  stopAgentChat: (classId: number, sessionId: number, signal?: AbortSignal) =>
+    requestJson<{ stopped: boolean; settling: boolean }>(
+      `/api/classes/${classId}/sessions/${sessionId}/agent-chat/stop`,
+      { method: 'POST', signal },
+    ),
+
+  // The bounded status read a settling Stop polls: `settling: false` is the backend's
+  // proof that the stopped turn's release has finished - every worker has provably left,
+  // the attempt is durably settled, and the session's turn claim is free - so this is
+  // the moment the conversation re-enables.
+  stopAgentChatStatus: (classId: number, sessionId: number, signal?: AbortSignal) =>
+    requestJson<{ settling: boolean }>(
+      `/api/classes/${classId}/sessions/${sessionId}/agent-chat/stop/status`,
+      { signal },
+    ),
 
   listAgentWorkspaceChanges: (classId: number, sessionId: number, signal?: AbortSignal) =>
     requestJson<AgentWorkspaceChangeRead[]>(

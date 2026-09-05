@@ -17,6 +17,7 @@ import {
   waitForDocumentReady,
   setTutorMode,
   clearTutorState,
+  apiPost,
   waitForTutorRequest,
   readSSEFrames,
   sendChatMessage,
@@ -294,18 +295,34 @@ test.describe('Tutor chat', () => {
       timeout: 15_000,
     })
 
-    // Now trigger a failure and verify the "Try again" button appears
+    // Now trigger a failure and verify the agent failure surface appears. The ordinary
+    // class conversation speaks to the contextual agent: a failed agent turn persists
+    // agent_attempt.state='failed' and the failed user row renders the agent turn failure
+    // with a Retry button.
     await setTutorMode('error-before-stream')
     await sendChatMessage(page, 'This should fail')
 
-    // The failed turn persists a user message with tutor_attempt.state='failed'.
-    // After the SSE error frame, the frontend refetches messages and renders
-    // the TutorTurnFailure component with a Retry button on the user row.
-    const failureIndicator = page.locator('[data-tutor-turn-failure]')
+    const failureIndicator = page.locator('[data-agent-turn-failure]')
     await expect(failureIndicator).toBeVisible({ timeout: 15_000 })
 
     const retryButton = failureIndicator.locator('[aria-label="Try again"]')
     await expect(retryButton).toBeVisible({ timeout: 5_000 })
+
+    // The injected upstream failure made the agent endpoint answer 502: consume the expected
+    // failure from the backend failure ledger so the run's gate only sees unexpected ones.
+    const consumed = await (
+      await apiPost('/_acceptance/backend-failures/consume', {
+        method: 'POST',
+        route: '/api/classes/{class_id}/sessions/{session_id}/agent-chat',
+      })
+    ).json()
+    const ledger = (await apiGet('/_acceptance/backend-failures')).json()
+    expect(
+      consumed,
+      `unconsumed ledger: ${JSON.stringify((await ledger).unconsumed)}`,
+    ).toMatchObject({
+      ok: true,
+    })
 
     // Restore success mode and retry
     await setTutorMode('success')

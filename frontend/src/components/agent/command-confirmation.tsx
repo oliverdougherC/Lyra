@@ -187,7 +187,7 @@ function OutputPane({ label, content }: { label: string; content?: string }) {
   )
 }
 
-function CommandStateBadge({ state }: { state: AgentCommandRequest['state'] }) {
+export function CommandStateBadge({ state }: { state: AgentCommandRequest['state'] }) {
   return (
     <Badge
       variant={

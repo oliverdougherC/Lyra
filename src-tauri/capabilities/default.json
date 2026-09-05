@@ -11,6 +11,7 @@
     "allow-retry-backend",
     "allow-open-external-url",
     "allow-pick-import-directory",
+    "allow-pick-workspace-directory",
     "allow-publish-desktop-import"
   ]
 }

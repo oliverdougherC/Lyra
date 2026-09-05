@@ -83,13 +83,13 @@ function renderReview(parts: SolutionPart[] = TWO_PROBLEMS) {
 }
 
 describe('SegmentationReview', () => {
-  it('states the count and why checking it now is worth the interruption', () => {
+  it('states the count and directs the student to the boundaries Lyra is least sure about', () => {
     renderReview()
 
     expect(screen.getByText('Lyra found 2 problems')).toBeInTheDocument()
-    expect(
-      screen.getByText(/Fixing a problem now is much faster than re-solving one later/),
-    ).toBeInTheDocument()
+    // The screen's job is to confirm the judgment calls (boundaries, part independence),
+    // not to make the student audit every normally detected problem.
+    expect(screen.getByText(/Lyra is least sure about the boundaries/)).toBeInTheDocument()
   })
 
   it('keeps Save disabled until something actually changes', async () => {

@@ -36,16 +36,16 @@ from backend.core import (
     workspace_paths,
 )
 from backend.core.errors import LyraError
-from backend.core.query_guard import QueryRefusal, guard_web_query
+from backend.core.query_guard import PrivateContextLedger, QueryRefusal, guard_web_query
 from backend.core.writer_budgets import WriterCapabilities, get_writer_capabilities
 from backend.llm import tool_profiles
 from backend.llm.tools import REGISTRY as COMPUTE_REGISTRY
-from backend.llm.tools import ToolDefinition
+from backend.llm.tools import ToolDefinition, ToolStopGate
 from backend.tools.result import ToolResult, failure, success
 
-type AgentProfile = Literal["research", "code", "command"]
+type AgentProfile = Literal["research", "code", "command", "agent"]
 
-PROFILES: tuple[AgentProfile, ...] = ("research", "code", "command")
+PROFILES: tuple[AgentProfile, ...] = ("research", "code", "command", "agent")
 FETCH_PREVIEW_CHARS = source_ledger.MAX_RELIED_EXCERPT_CHARS
 
 
@@ -141,6 +141,10 @@ class AgentRunActivity:
     workspace_change_ids: list[int] = field(default_factory=list)
     command_request_ids: list[int] = field(default_factory=list)
     profile_fact_ids: list[int] = field(default_factory=list)
+    # Scopes requested through `request_workspace_access` during this run. A scope is
+    # asked at most once per turn: the student sees one card per missing capability,
+    # and a repeat call in the same turn is told so instead of producing another card.
+    requested_scopes: set[str] = field(default_factory=set)
 
     def note(
         self,
@@ -176,6 +180,25 @@ class _Outcome:
 
 class _RefusalError(Exception):
     """A safe policy/input refusal that should be visible to the model."""
+
+
+# The one bounded refusal a tool returns once its turn's Stop has latched.
+_STOPPED_MESSAGE = "This turn was stopped."
+
+
+def _require_not_stopped(stop: ToolStopGate | None) -> None:
+    """A durable tool's pre-write check against the turn's stop gate.
+
+    Python cannot cancel a worker thread once it is running, so the Stop contract for an
+    in-flight tool is enforced here rather than in the loop: the gate's flag is latched
+    *before* the turn's task is cancelled, and every tool that can create a durable
+    consequence (a ledger source, an excerpt, a fact, a workspace change, a command, a
+    network fetch) re-checks the flag at its write boundary and refuses when it is set.
+    Read-only tools need no check: they create no consequence the Stop could be lying
+    about.
+    """
+    if stop is not None and stop.stopped:
+        raise _RefusalError(_STOPPED_MESSAGE)
 
 
 def _definition(
@@ -313,10 +336,20 @@ def _audited_handler(
     activity: AgentRunActivity,
     authorize: Callable[[], object],
     action: Callable[..., _Outcome],
+    stop: ToolStopGate | None = None,
 ) -> Callable[..., ToolResult]:
-    """Wrap authorization and work in one durable audit lifecycle."""
+    """Wrap authorization and work in one durable audit lifecycle.
+
+    `stop` is the turn's stop gate. When the turn's Stop has latched, a dispatch that has
+    not started does not start: no authorization read, no audit rows, no action - the
+    model gets a bounded refusal. A dispatch already in flight instead meets the gate at
+    its action's durable boundary (`_require_not_stopped`), where it is refused the same
+    way, so Stop never leaves a half-written durable effect behind.
+    """
 
     def call(**arguments: object) -> ToolResult:
+        if stop is not None and stop.stopped:
+            return failure(_STOPPED_MESSAGE)
         safe_arguments = _audit_arguments(name, arguments)
         try:
             authorization = authorize()
@@ -429,8 +462,9 @@ def build_agent_registry(
     session_id: int,
     profile: AgentProfile,
     *,
-    private_context: Sequence[str] = (),
+    private_context: PrivateContextLedger | Sequence[str] = (),
     snapshot: AgentCapabilitySnapshot | None = None,
+    stop: ToolStopGate | None = None,
 ) -> tuple[dict[str, ToolDefinition], AgentRunActivity]:
     """Build the smallest raw registry allowed for one class-agent turn.
 
@@ -441,12 +475,30 @@ def build_agent_registry(
     route does this so the registry the loop runs is provably the one its preflight
     budgeted. Omitting `snapshot` reads the state live here, which is the behaviour every
     caller outside the fit-checked agent route relies on.
+
+    `private_context` is the run-local material the web-query guard must recognize. A
+    `PrivateContextLedger` is used live: `search_web` snapshots it at dispatch time, so
+    workspace contents a read tool returns mid-turn are visible to later searches in the
+    same turn. A plain sequence is frozen at build time, which is what the read-only
+    preflight probe passes (it measures schemas with an empty context) and what legacy
+    callers pass.
+
+    `stop` is the turn's stop gate. Every retained handler checks it before it can create
+    a durable consequence, so a Stop that lands while a tool dispatch is running in a
+    worker thread cannot leave a new source, change, command, or fetch committed after the
+    UI has already presented the turn as stopped. Omit for a registry built outside a
+    live turn (the preflight probe, tests), where there is no stop to honor.
     """
     if profile not in PROFILES:
         raise ValueError(f"Unknown agent profile: {profile}")
     _session_scope(conn, class_id, session_id)
     if snapshot is None:
         snapshot = snapshot_agent_capabilities(conn, class_id)
+    ledger = (
+        private_context
+        if isinstance(private_context, PrivateContextLedger)
+        else PrivateContextLedger(*private_context)
+    )
     activity = AgentRunActivity()
     definitions: list[tool_profiles.AnnotatedToolDefinition] = []
 
@@ -484,26 +536,48 @@ def build_agent_registry(
                 activity=activity,
                 authorize=session_authorization,
                 action=compute_action,
+                stop=stop,
             ),
         )
         definitions.append(
             _annotated(wrapped, capability="compute", effect="pure", trust="computed")
         )
 
-    if profile == "research":
+    if profile == "agent":
+        # The contextual turn plans across research, workspace, and command work on its
+        # own: every group is added and self-gates on the same frozen snapshot, so the
+        # exposed registry is the union of what the snapshot admits - no more, no less. The
+        # same run-local ledger is shared by every group, so private material one tool
+        # returns (a workspace read) is visible to the guard a later tool (a web search)
+        # consults in the same turn.
         _add_research_tools(
             conn,
             class_id,
             session_id,
             definitions,
             activity,
-            tuple(private_context),
+            ledger,
             snapshot,
+            stop,
+        )
+        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot, ledger, stop)
+        _add_command_tools(conn, class_id, session_id, definitions, activity, snapshot, stop)
+        _add_access_request_tools(conn, class_id, session_id, definitions, activity, snapshot, stop)
+    elif profile == "research":
+        _add_research_tools(
+            conn,
+            class_id,
+            session_id,
+            definitions,
+            activity,
+            ledger,
+            snapshot,
+            stop,
         )
     elif profile == "code":
-        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot)
+        _add_code_tools(conn, class_id, session_id, definitions, activity, snapshot, ledger, stop)
     else:
-        _add_command_tools(conn, class_id, session_id, definitions, activity, snapshot)
+        _add_command_tools(conn, class_id, session_id, definitions, activity, snapshot, stop)
 
     selected = tool_profiles.build_tool_profile(profile, definitions)
     return {item.name: item.definition for item in selected.definitions}, activity
@@ -515,8 +589,9 @@ def _add_research_tools(
     session_id: int,
     definitions: list[tool_profiles.AnnotatedToolDefinition],
     activity: AgentRunActivity,
-    private_context: tuple[str, ...],
+    private_context: PrivateContextLedger,
     snapshot: AgentCapabilitySnapshot,
+    stop: ToolStopGate | None = None,
 ) -> None:
     # Schema inclusion is decided by the frozen snapshot, not a fresh read, so the tools
     # offered match what the preflight budgeted. The handlers below still re-read the live
@@ -532,14 +607,26 @@ def _add_research_tools(
 
     def search_action(capabilities: WriterCapabilities, *, query: str) -> _Outcome:
         query = _text(query, "query", maximum=500)
-        guarded = guard_web_query(query, private_context=private_context)
+        # Snapshot the run-local ledger at dispatch time, not at registry build: a
+        # workspace read or search that ran earlier in this same turn has already added
+        # its contents to the ledger, and the guard must recognize them before this public
+        # query reaches the network.
+        current_private_context = private_context.snapshot()
+        guarded = guard_web_query(query, private_context=current_private_context)
         if isinstance(guarded, QueryRefusal):
             raise _RefusalError(guarded.message)
+        # A public read is not itself a durable consequence, but it is the worker a Stop
+        # most often catches mid-flight, and its result must not reach the ledger or the
+        # collector after the turn is over: refuse before the network call, and drop a
+        # result the call returns with the flag already latched.
+        _require_not_stopped(stop)
         results = web_research.search_web(
             guarded.query,
             allowed=True,
-            private_context=private_context,
+            private_context=current_private_context,
         )
+        if stop is not None and stop.stopped:
+            raise _RefusalError(_STOPPED_MESSAGE)
         return _Outcome(
             success(results=results, count=len(results)),
             {"result_count": len(results)},
@@ -559,6 +646,7 @@ def _add_research_tools(
             activity=activity,
             authorize=research_auth,
             action=search_action,
+            stop=stop,
         ),
         properties={"query": {"type": "string", "maxLength": 500}},
         required=("query",),
@@ -576,6 +664,7 @@ def _add_research_tools(
 
         def fetch_action(capabilities: WriterCapabilities, *, url: str) -> _Outcome:
             url = _text(url, "url", maximum=source_ledger.MAX_URL_CHARS)
+            _require_not_stopped(stop)
             fetched = web_research.fetch_source(
                 url,
                 allowed=True,
@@ -633,6 +722,7 @@ def _add_research_tools(
                 activity=activity,
                 authorize=scrape_auth,
                 action=fetch_action,
+                stop=stop,
             ),
             properties={"url": {"type": "string", "maxLength": 4096}},
             required=("url",),
@@ -651,6 +741,9 @@ def _add_research_tools(
         fetched = activity.fetched_sources.get(fetch_id)
         if fetched is None:
             raise _RefusalError("That fetched source is not available in this agent turn.")
+        # The ledger write is the durable consequence of the whole research thread: refuse
+        # it once the turn is stopped, so a proposal in flight cannot land after Stop.
+        _require_not_stopped(stop)
         stored = source_ledger.upsert_source(
             conn,
             class_id,
@@ -715,6 +808,7 @@ def _add_research_tools(
             activity=activity,
             authorize=research_auth,
             action=propose_snapshot_action,
+            stop=stop,
         ),
         properties={"fetch_id": {"type": "string", "minLength": 1, "maxLength": 64}},
         required=("fetch_id",),
@@ -744,6 +838,7 @@ def _add_research_tools(
             allow_blank=True,
         )
         source_ledger.get_source(conn, source_id, class_id=class_id)
+        _require_not_stopped(stop)
         stored = source_ledger.add_excerpt(
             conn,
             source_id,
@@ -777,6 +872,7 @@ def _add_research_tools(
             activity=activity,
             authorize=research_auth,
             action=propose_excerpt_action,
+            stop=stop,
         ),
         properties={
             "source_id": {"type": "integer", "minimum": 1},
@@ -812,6 +908,7 @@ def _add_research_tools(
         value = _text(value, "value", maximum=4_000)
         source_id = _integer(source_id, "source_id", minimum=1, maximum=2**63 - 1)
         excerpt_id = _integer(excerpt_id, "excerpt_id", minimum=1, maximum=2**63 - 1)
+        _require_not_stopped(stop)
         fact = profiles.propose_ledger_fact(
             conn,
             class_id,
@@ -865,6 +962,7 @@ def _add_research_tools(
             activity=activity,
             authorize=research_auth,
             action=propose_profile_fact_action,
+            stop=stop,
         ),
         properties={
             "kind": {
@@ -895,6 +993,8 @@ def _add_code_tools(
     definitions: list[tool_profiles.AnnotatedToolDefinition],
     activity: AgentRunActivity,
     snapshot: AgentCapabilitySnapshot,
+    private_context: PrivateContextLedger | None = None,
+    stop: ToolStopGate | None = None,
 ) -> None:
     # The frozen snapshot decides which workspace schemas are exposed; each handler still
     # re-reads the live workspace row and its grants at dispatch via `_workspace_authorization`.
@@ -994,6 +1094,18 @@ def _add_code_tools(
                         maximum=2**31 - 1,
                     )
             result = _primitive(Path(str(workspace_row["root_path"])), **arguments)
+            # This text is now visible to the model, so feed the bounded returned content
+            # into the run-local private ledger: a web query later in the same turn must be
+            # guarded against what a read or search in this turn just surfaced. File names
+            # from a plain listing are deliberately not added - they carry no private prose
+            # and the guard already refuses path-shaped queries outright.
+            if private_context is not None:
+                if _name == "read_workspace_file":
+                    private_context.add(result.get("content"))
+                elif _name == "search_workspace":
+                    for match in result.get("matches", []):
+                        if isinstance(match, Mapping):
+                            private_context.add(match.get("text"), match.get("path"))
             return _Outcome(
                 success(**result),
                 {
@@ -1020,6 +1132,7 @@ def _add_code_tools(
                 activity=activity,
                 authorize=read_auth,
                 action=read_action,
+                stop=stop,
             ),
             properties=properties,
             required=required,
@@ -1070,6 +1183,9 @@ def _add_code_tools(
             observed_base_hash,
             proposed_content,
         )
+        # The proposal row is the durable consequence: refuse it once the turn is stopped,
+        # so a change in flight cannot appear in the student's review queue after Stop.
+        _require_not_stopped(stop)
         stored = agent_store.create_workspace_change(
             conn,
             class_id,
@@ -1118,6 +1234,7 @@ def _add_code_tools(
             activity=activity,
             authorize=change_auth,
             action=change_action,
+            stop=stop,
         ),
         properties={
             "relative_path": {"type": "string", "minLength": 1, "maxLength": 1000},
@@ -1147,6 +1264,7 @@ def _add_command_tools(
     definitions: list[tool_profiles.AnnotatedToolDefinition],
     activity: AgentRunActivity,
     snapshot: AgentCapabilitySnapshot,
+    stop: ToolStopGate | None = None,
 ) -> None:
     # Exposure is decided by the frozen snapshot; the handler re-reads the live command
     # grant at dispatch via `_workspace_authorization`.
@@ -1180,6 +1298,9 @@ def _add_command_tools(
             minimum=1,
             maximum=agent_store.MAX_TIMEOUT_SECONDS,
         )
+        # The request row is the durable consequence: refuse it once the turn is stopped,
+        # so a command cannot reach the student's confirmation screen after Stop.
+        _require_not_stopped(stop)
         stored = agent_store.create_command_request(
             conn,
             class_id,
@@ -1228,6 +1349,7 @@ def _add_command_tools(
             activity=activity,
             authorize=command_auth,
             action=command_action,
+            stop=stop,
         ),
         properties={
             "argv": {
@@ -1255,6 +1377,159 @@ def _add_command_tools(
             effect="database_proposal",
             trust="database",
         )
+    )
+
+
+# One vocabulary, owned by the persistence layer (migration 041 checks the same set):
+# the tool below only offers the scopes the frozen snapshot shows as missing.
+ACCESS_SCOPES: tuple[str, ...] = agent_store.WORKSPACE_ACCESS_SCOPES
+
+ACCESS_SCOPE_DESCRIPTIONS: Mapping[str, str] = {
+    "attach": "Attach a local folder Lyra can work with",
+    "read": "Read files in the attached folder",
+    "propose_changes": "Prepare file edits for the student's hunk-by-hunk review",
+    "run_commands": "Prepare exact verification commands for the student's approval",
+}
+
+
+def _access_scope_available(workspace: dict[str, object] | None, scope: str) -> bool:
+    """Whether a scope is already granted, read from the live workspace row."""
+    if scope == "attach":
+        return workspace is not None
+    if workspace is None:
+        return False
+    return {
+        "read": bool(workspace["read_enabled"]),
+        "propose_changes": bool(workspace["change_proposals_enabled"]),
+        "run_commands": bool(workspace["commands_enabled"]),
+    }[scope]
+
+
+def _add_access_request_tools(
+    conn: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    definitions: list[tool_profiles.AnnotatedToolDefinition],
+    activity: AgentRunActivity,
+    snapshot: AgentCapabilitySnapshot,
+    stop: ToolStopGate | None = None,
+) -> None:
+    """Just-in-time access requests for the capabilities the snapshot shows as missing.
+
+    The student never manages grant state as a dashboard: when a task needs a capability
+    Lyra does not yet hold, the model asks once through this tool and the student sees a
+    single request card in the conversation. Exposure is decided by the frozen snapshot -
+    only the scopes that are currently missing are offered, so the model is not even
+    tempted to ask for what it already holds. Each dispatch re-reads the live state, so a
+    scope granted mid-turn is reported as available instead of requested again, and the
+    one-request-per-scope-per-turn rule lives in the run-local collector. A scope the
+    student deferred with "Not now" is reported as deferred for a bounded window
+    (agent_store.ACCESS_DISMISSAL_TTL_SECONDS), so the card does not nag and the model
+    learns to proceed without it. The tool has no host effect: a grant only ever happens
+    through the ordinary attach/grant endpoints, and only when the student acts.
+    """
+    scopes: list[str] = []
+    if not snapshot.workspace_present:
+        scopes.append("attach")
+    elif not snapshot.workspace_read_enabled:
+        scopes.append("read")
+    if snapshot.workspace_present and not snapshot.workspace_change_proposals_enabled:
+        scopes.append("propose_changes")
+    if snapshot.workspace_present and not snapshot.workspace_commands_enabled:
+        scopes.append("run_commands")
+    if not scopes:
+        return
+
+    def request_action(_authorization: object, *, scope: str, reason: str) -> _Outcome:
+        scope = _text(scope, "scope", maximum=32)
+        if scope not in scopes:
+            raise _RefusalError(f"Unknown access scope: {scope}")
+        reason = _text(reason, "reason", maximum=400)
+        workspace = agent_store.get_workspace_for_class(conn, class_id)
+        if _access_scope_available(workspace, scope):
+            raise _RefusalError(f"{ACCESS_SCOPE_DESCRIPTIONS[scope]} is already available; use it.")
+        if scope in activity.requested_scopes:
+            raise _RefusalError(
+                "You already requested this access this turn. The student has not answered "
+                "yet; do not ask again and say plainly what still needs approval."
+            )
+        # The student already answered this request with "Not now" earlier in the
+        # conversation. Keep the card from nagging again and tell the model plainly:
+        # proceed without the access; the scope becomes askable again once the
+        # dismissal's bounded window lapses (agent_store.ACCESS_DISMISSAL_TTL_SECONDS).
+        if agent_store.get_active_dismissals(conn, class_id, session_id).get(scope):
+            return _Outcome(
+                success(
+                    scope=scope,
+                    requested=False,
+                    deferred=True,
+                    note=(
+                        "The student already deferred this access earlier in the "
+                        "conversation; do not ask again. Proceed with what is available "
+                        "and say plainly what still needs approval."
+                    ),
+                ),
+                {"scope": scope, "deferred": True},
+                target_kind="access_deferral",
+                target_id=scope,
+            )
+        activity.requested_scopes.add(scope)
+        return _Outcome(
+            success(
+                scope=scope,
+                requested=True,
+                note=(
+                    "The student has been asked to approve this access. It is not available "
+                    "this turn; if it is approved it is available from the next turn. "
+                    "Continue with what you can and say plainly what still needs approval."
+                ),
+            ),
+            {"scope": scope, "reason": reason},
+            target_kind="capability_request",
+            target_id=scope,
+        )
+
+    definition = _definition(
+        "request_workspace_access",
+        "Request a workspace access the task needs but is not currently granted. The "
+        "student sees the request and decides; nothing is granted without their action.",
+        _audited_handler(
+            conn,
+            class_id=class_id,
+            session_id=session_id,
+            name="request_workspace_access",
+            capability="access_request",
+            effect="pure",
+            activity=activity,
+            authorize=lambda: _session_scope(conn, class_id, session_id),
+            action=request_action,
+            stop=stop,
+        ),
+        properties={
+            "scope": {
+                "type": "string",
+                "enum": scopes,
+                "description": (
+                    "attach: connect a local folder. read: read files in the attached "
+                    "folder. propose_changes: prepare file edits for the student's review. "
+                    "run_commands: prepare verification commands for the student's approval."
+                ),
+            },
+            "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 400,
+                "description": (
+                    "One or two sentences, in the student's own words, of why this task "
+                    "needs this access now. Shown verbatim on the request card, so make it "
+                    "specific to this task."
+                ),
+            },
+        },
+        required=("scope", "reason"),
+    )
+    definitions.append(
+        _annotated(definition, capability="access_request", effect="pure", trust="computed")
     )
 
 

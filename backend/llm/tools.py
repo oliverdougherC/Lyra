@@ -27,8 +27,11 @@ lives. Four requirements, in the order they matter:
 """
 
 import asyncio
+import contextlib
 import json
 import logging
+import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
@@ -74,6 +77,16 @@ NO_TOOL_SUPPORT = "no_tool_support"
 UPSTREAM_FAILED = "upstream_failed"
 CONTEXT_OVERFLOW = "context_overflow"
 OUTPUT_LIMIT = "output_limit"
+# The loop was stopped on purpose (the UI's Stop) rather than by a ceiling: the caller
+# settles the turn as stopped, never as a failure the student should retry on their own.
+STOPPED = "stopped"
+
+# Bounded how long a cancelled loop waits for an in-flight tool worker to leave before it
+# reports settlement. Every agent handler bounds its own work (network calls carry their
+# own timeouts, proposals are single writes), so this is a backstop, not a working number:
+# if it expires, the turn settles anyway and the stop flag has already made any durable
+# effect the worker might land impossible.
+QUIESCENCE_SECONDS = 90.0
 
 # Every reason a loop can end other than the model deciding it is finished. A caller must
 # treat all of these as "the check did not run", never as agreement.
@@ -84,6 +97,7 @@ INCOMPLETE_REASONS: tuple[str, ...] = (
     UPSTREAM_FAILED,
     CONTEXT_OVERFLOW,
     OUTPUT_LIMIT,
+    STOPPED,
 )
 
 _UNKNOWN_TOOL = "There is no tool called {name}."
@@ -112,6 +126,89 @@ _OUTPUT_LIMIT_DETAIL = (
     "The reply reached the space reserved for it before the turn could finish. Try a "
     "shorter request or a narrower scope."
 )
+_STOPPED_DETAIL = "This turn was stopped."
+
+
+class ToolStopGate:
+    """One turn's stop/quiescence state, shared between the event loop and its workers.
+
+    A tool handler runs in a worker thread (`asyncio.to_thread`), and Python cannot cancel
+    a thread that is already executing - so "the task was cancelled" is not, by itself,
+    the truth that "the tool work has stopped". This gate is the shared half of the Stop
+    contract, and it makes that truth hold for a turn's in-flight workers:
+
+    * `request_stop` latches a flag the handlers read at their durable boundaries. Once it
+      is set, no already-running tool can *create* a new durable consequence (a source, a
+      change proposal, a command, an access request): each such tool re-checks the flag
+      before its write and refuses when it is set. The flag is the guarantee; the waiting
+      below is only about knowing when the worker has actually left.
+    * Workers register their lifetime with `begin_work`/`finish_work` (the loop's planning
+      pass and every tool dispatch), and `wait_quiesced` blocks until none are inside a
+      dispatch. Stop therefore reports completion only once every worker has left, and a
+      request that is being torn down cannot close its database connection out from under
+      a worker that is still reading or writing.
+
+    The gate is plain threading state because it is crossed between the event-loop thread
+    and worker threads; it is per-turn and dies with the turn's in-flight entry.
+    """
+
+    def __init__(self) -> None:
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._in_flight: list[threading.Event] = []
+
+    def request_stop(self) -> None:
+        """Latch the stop flag. Durable-effect checks in every handler read it from here."""
+        self._stop.set()
+
+    @property
+    def stopped(self) -> bool:
+        return self._stop.is_set()
+
+    def begin_work(self) -> threading.Event:
+        """Register one worker as in flight; return its completion event.
+
+        Called by the worker (or the loop before `to_thread`), on any thread.
+        """
+        done = threading.Event()
+        with self._lock:
+            self._in_flight.append(done)
+        return done
+
+    def finish_work(self, done: threading.Event) -> None:
+        """Clear the registration and signal the worker has left, on any thread."""
+        with contextlib.suppress(ValueError), self._lock:
+            self._in_flight.remove(done)
+        done.set()
+
+    @property
+    def in_flight(self) -> bool:
+        with self._lock:
+            return bool(self._in_flight)
+
+    def wait_quiesced(self, timeout: float | None) -> bool:
+        """Block until no worker is inside a dispatch.
+
+        True when quiesced before `timeout` expires; with `timeout=None` there is no
+        deadline and the call returns only once every registered worker has left - the
+        form the turn's release wait detaches to when its request is torn down first.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            with self._lock:
+                pending = [event for event in self._in_flight if not event.is_set()]
+            if not pending:
+                return True
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+            else:
+                remaining = None
+            # Wait on one; a second worker may have started in the meantime, so re-check.
+            if pending[0].wait(remaining):
+                continue
+            return False
 
 
 @dataclass(frozen=True)
@@ -533,6 +630,7 @@ async def run_tool_loop(
     registry: dict[str, ToolDefinition] | None = None,
     on_call: Callable[[RecordedCall], None] | None = None,
     context_budget: ContextBudget | None = None,
+    stop_gate: ToolStopGate | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> ToolLoopResult:
     """Run the model with tools until it stops asking for them, or until a ceiling.
@@ -564,6 +662,12 @@ async def run_tool_loop(
             itself is not re-checked for fit: that is the caller's preflight to prove. Omit
             the budget to leave depth and wall clock as the only bounds, and to send no output
             ceiling, as the writer and solver do.
+        stop_gate: One turn's stop/quiescence state. When given, the loop settles with
+            `stopped` the moment the turn's Stop latches, waits for an in-flight tool
+            dispatch to quiesce before a cancellation propagates, and runs every dispatch
+            under the gate's in-flight accounting so the caller can wait for quiescence
+            before reporting the turn settled. Omit to leave the loop exactly as it ran
+            before the gate existed, as the writer and solver do.
         transport: Test seam. Leave unset in production code.
 
     Returns:
@@ -594,6 +698,7 @@ async def run_tool_loop(
                 REGISTRY if registry is None else registry,
                 on_call,
                 context_budget,
+                stop_gate,
                 transport,
             )
     except TimeoutError:
@@ -614,6 +719,7 @@ async def _drive(
     registry: dict[str, ToolDefinition],
     on_call: Callable[[RecordedCall], None] | None,
     context_budget: ContextBudget | None,
+    stop_gate: ToolStopGate | None,
     transport: httpx.AsyncBaseTransport | None,
 ) -> ToolLoopResult:
     """The loop itself. Appends to `calls` as it goes, so a caller can read them on a cut."""
@@ -639,6 +745,17 @@ async def _drive(
         )
 
     for round_index in range(max_depth):
+        # The turn's Stop may have latched since the last check (the stop endpoint sets the
+        # flag before it cancels the task). When it has, no further model call or dispatch
+        # belongs to this turn: settle as stopped, with the partial transcript kept for the
+        # same reason a cut loop keeps its partial calls.
+        if stop_gate is not None and stop_gate.stopped:
+            return ToolLoopResult(
+                content="",
+                calls=tuple(calls),
+                stopped=STOPPED,
+                detail=_STOPPED_DETAIL,
+            )
         # Before every request after the first, the appended assistant turns and tool
         # results can have grown the conversation past the window even though round zero
         # fit. Stop before sending one that cannot fit, rather than letting the endpoint
@@ -736,17 +853,53 @@ async def _drive(
                 detail=_OVERFLOW_DETAIL,
             )
         for call in answer.tool_calls:
-            # Handlers block on a subprocess, so they run off the event loop. Known cost:
-            # `to_thread` cannot be cancelled once the handler is running, so when the
-            # wall clock above cuts the loop mid-dispatch, a hung sympy call keeps its
-            # worker thread until it finishes on its own. Tolerated because the handlers
-            # bound themselves (cas runs under its own subprocess timeout), verification
-            # is rare enough that a leak per timeout does not accumulate, and the
-            # alternative - a kill-able subprocess per call - buys a daemon thread's
-            # worth of safety at a process-management price this loop does not yet earn.
-            recorded = await asyncio.to_thread(_dispatch, call, registry)
+            # Handlers block on a subprocess or the network, so they run off the event
+            # loop. Known cost: `to_thread` cannot be cancelled once the handler is
+            # running. For the loop's wall-clock cut that stays tolerated as before (the
+            # handlers bound themselves). For a *Stop* it is not tolerated in that form:
+            # the turn's stop flag is latched before the task is cancelled, and every
+            # durable-effect tool re-checks it before its write, so a worker that
+            # outlives the Stop can at most finish in-memory work - it cannot land a new
+            # source, proposal, command, or access request. The in-flight registration
+            # below is what lets the caller tell "the Stop is over" from "the worker has
+            # actually left".
+            # `call` is bound as a default argument so the worker's closure cannot observe
+            # the loop variable the next iteration rebinds (the worker may still be inside
+            # `_dispatch` when the loop advances past this iteration's await).
+            def run_dispatch(call=call) -> RecordedCall:
+                done = stop_gate.begin_work() if stop_gate is not None else None
+                try:
+                    return _dispatch(call, registry)
+                finally:
+                    if done is not None:
+                        stop_gate.finish_work(done)
+
+            try:
+                recorded = await asyncio.to_thread(run_dispatch)
+            except asyncio.CancelledError:
+                # A cancellation landing mid-dispatch cannot stop the worker (threads are
+                # not cancellable); it can only learn when the worker has left. The stop
+                # flag is already latched, so the durable-effect contract holds either way
+                # - this wait is what makes the turn's settlement truthful. Shielded: a
+                # second cancellation (the request tearing down) may interrupt it, and
+                # then the route's own gate wait is the bounded backstop.
+                if stop_gate is not None:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await asyncio.shield(
+                            asyncio.to_thread(stop_gate.wait_quiesced, QUIESCENCE_SECONDS)
+                        )
+                raise
             calls.append(recorded)
             conversation.append(_tool_turn(call, recorded))
+            # The flag may have latched while this worker ran: the calls still queued in
+            # this same assistant reply belong to a turn that no longer has one.
+            if stop_gate is not None and stop_gate.stopped:
+                return ToolLoopResult(
+                    content="",
+                    calls=tuple(calls),
+                    stopped=STOPPED,
+                    detail=_STOPPED_DETAIL,
+                )
             if on_call is not None:
                 try:
                     on_call(recorded)

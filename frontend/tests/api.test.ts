@@ -155,6 +155,79 @@ describe('request construction', () => {
   })
 })
 
+describe('agent chat idempotency and stop (PLA-313)', () => {
+  it('carries the browser operation ID into the agent turn', async () => {
+    const spy = mockFetch(async () => jsonResponse({ message_id: 3 }))
+    const signal = new AbortController().signal
+
+    await api.sendAgentChat(9, 12, 'Inspect the parser', undefined, 5, 'show', 'op-abc', signal)
+
+    const [url, init] = spy.mock.calls[0]
+    expect(url).toContain('/api/classes/9/sessions/12/agent-chat')
+    expect(init.signal).toBe(signal)
+    expect(JSON.parse(init.body as string)).toEqual({
+      content: 'Inspect the parser',
+      document_id: 5,
+      mode: 'show',
+      operation_id: 'op-abc',
+    })
+  })
+
+  it('omits the operation ID from the body when the browser minted none', async () => {
+    const spy = mockFetch(async () => jsonResponse({ message_id: 3 }))
+
+    await api.sendAgentChat(9, 12, 'Inspect the parser')
+
+    expect(JSON.parse(spy.mock.calls[0][1].body as string)).toEqual({
+      content: 'Inspect the parser',
+    })
+  })
+
+  it('sends the current selection into a manual regeneration and nothing into a body-less one', async () => {
+    const spy = mockFetch(async () => jsonResponse({ message_id: 3 }))
+
+    await api.regenerateAgentChat(9, 12, { mode: 'show', documentId: 5 })
+    await api.regenerateAgentChat(9, 12)
+
+    const [manualUrl, manualInit] = spy.mock.calls[0]
+    expect(manualUrl).toContain('/agent-chat/regenerate')
+    expect(JSON.parse(manualInit.body as string)).toEqual({ mode: 'show', document_id: 5 })
+
+    const [, continuationInit] = spy.mock.calls[1]
+    expect(continuationInit.body).toBeUndefined()
+  })
+
+  it('carries an explicit null document (All material) into retry and regeneration', async () => {
+    // PLA-401 final pass: a null documentId is the real value "All material", so it must
+    // ride the wire as an EXPLICIT null (property presence, not non-nullness) - the server
+    // reads the persisted scope only when the caller did not name one. An absent property
+    // is the other message: continue the stored scope (the body-less JIT continuation).
+    const spy = mockFetch(async () => jsonResponse({ message_id: 3 }))
+
+    await api.retryAgentChat(9, 12, { documentId: null })
+    await api.regenerateAgentChat(9, 12, { mode: 'show', documentId: null })
+    await api.regenerateAgentChat(9, 12, { mode: 'show' })
+
+    const [, retryInit] = spy.mock.calls[0]
+    expect(JSON.parse(retryInit.body as string)).toEqual({ document_id: null })
+    const [, manualInit] = spy.mock.calls[1]
+    expect(JSON.parse(manualInit.body as string)).toEqual({ mode: 'show', document_id: null })
+    const [, absentInit] = spy.mock.calls[2]
+    expect(JSON.parse(absentInit.body as string)).toEqual({ mode: 'show' })
+    expect(JSON.parse(absentInit.body as string)).not.toHaveProperty('document_id')
+  })
+
+  it('stops the in-flight agent turn through its explicit endpoint', async () => {
+    const spy = mockFetch(async () => jsonResponse({ stopped: true }))
+
+    const result = await api.stopAgentChat(9, 12)
+
+    expect(spy.mock.calls[0][0]).toContain('/api/classes/9/sessions/12/agent-chat/stop')
+    expect(spy.mock.calls[0][1].method).toBe('POST')
+    expect(result).toEqual({ stopped: true })
+  })
+})
+
 describe('error shape', () => {
   it('surfaces a FastAPI string detail', async () => {
     mockFetch(jsonResponse({ detail: 'Class not found.' }, 404))

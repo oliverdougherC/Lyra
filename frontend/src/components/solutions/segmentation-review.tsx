@@ -267,7 +267,9 @@ export function SegmentationReview({
           Lyra found {formatCount(problems.length, 'problem')}
         </h2>
         <p className="text-text-secondary text-sm">
-          Check these before solving. Fixing a problem now is much faster than re-solving one later.
+          Lyra is least sure about the boundaries: where one problem ends and another begins, and
+          whether a part is a question of its own. That is what you are confirming here - fix a
+          boundary now and it is cheaper than re-solving later.
         </p>
       </header>
 

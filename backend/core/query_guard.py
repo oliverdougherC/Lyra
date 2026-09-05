@@ -9,6 +9,7 @@ detected reliably, so this module only blocks verbatim and pattern-shaped leaks.
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from collections.abc import Sequence
@@ -21,6 +22,14 @@ MIN_OVERLAP_WORDS = 6
 MIN_OVERLAP_CHARS = 24
 MIN_QUOTED_WORDS = 5
 MIN_QUOTED_CHARS = 32
+
+# Bounds for the run-local private-context ledger: each piece of private material a run
+# exposes is chunked for overlap checks rather than kept whole, and the ledger stops
+# growing once the caps are hit. The caps keep the per-query comparison work bounded
+# (each guard call normalizes every stored chunk) without so few characters that an
+# overlap check cannot see across a chunk boundary of an ordinary file or document.
+PRIVATE_CONTEXT_CHUNK_CHARS = 8_000
+PRIVATE_CONTEXT_MAX_ITEMS = 128
 SEMANTIC_LIMITATION = (
     "This guard blocks verbatim and obviously secret material, but it cannot detect "
     "semantic paraphrase or inferred disclosures."
@@ -65,6 +74,61 @@ class QueryRefusal:
 
 
 QueryGuardResult = SafeQuery | QueryRefusal
+
+
+class PrivateContextLedger:
+    """Private text already exposed to one run, chunked for the guard's overlap checks.
+
+    A run-local accumulator for the material the guard must recognize: everything private
+    that a turn has shown the model *up to this point*. A turn that combines private
+    conversation, retrieved document chunks, active profile facts, and workspace file
+    contents read mid-turn with a public web search must guard the search against the
+    union of all of it - not only the tuple frozen before the tools ran. Callers seed the
+    ledger with the private material present before tool execution, and the tools that
+    return private text add their bounded results as they return them; `snapshot` is read
+    at each `search_web` dispatch, so later reads are visible to later searches in the same
+    turn.
+
+    The ledger is process-local and run-scoped: raw private text is never persisted here or
+    through the guard - the guard only ever compares it in memory, and the audit records
+    hashed projections of tool arguments, never the context itself.
+
+    Additions are chunked (``PRIVATE_CONTEXT_CHUNK_CHARS``) and deduplicated, so a large
+    file costs a bounded, fixed number of entries no matter how many times it is read, and
+    growth stops at ``PRIVATE_CONTEXT_MAX_ITEMS``.
+    """
+
+    def __init__(self, *values: object) -> None:
+        self._items: list[str] = []
+        self._seen: set[str] = set()
+        self.add(*values)
+
+    def add(self, *values: object) -> None:
+        """Fold one or more values (str, dict, list, or None) into the ledger."""
+        for value in values:
+            self._add_one(value)
+
+    def snapshot(self) -> tuple[str, ...]:
+        """The ledger as the guard's `private_context`, current at the moment of the read."""
+        return tuple(self._items)
+
+    def _add_one(self, value: object) -> None:
+        if value is None:
+            return
+        if isinstance(value, (dict, list)):
+            text = json.dumps(value, ensure_ascii=False)
+        else:
+            text = str(value).strip()
+        if not text:
+            return
+        for start in range(0, len(text), PRIVATE_CONTEXT_CHUNK_CHARS):
+            if len(self._items) >= PRIVATE_CONTEXT_MAX_ITEMS:
+                return
+            chunk = text[start : start + PRIVATE_CONTEXT_CHUNK_CHARS].strip()
+            if not chunk or chunk in self._seen:
+                continue
+            self._seen.add(chunk)
+            self._items.append(chunk)
 
 
 def guard_web_query(

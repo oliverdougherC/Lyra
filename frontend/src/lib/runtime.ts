@@ -174,6 +174,24 @@ export async function pickDesktopImportDirectory(): Promise<DesktopImportSelecti
   }
 }
 
+/**
+ * Open the native folder picker for the contextual agent's workspace attach. Returns the
+ * chosen path, or null when the picker is unavailable (browser build) or the student
+ * cancelled. Desktop-only by design: the picker is the normal way a student names a
+ * folder; a raw path entry remains as a fallback for non-desktop environments.
+ */
+export async function pickDesktopWorkspaceDirectory(): Promise<string | null> {
+  const invoke = tauriInvoke()
+  if (!invoke) return null
+  const raw = await invoke('pick_workspace_directory')
+  return typeof raw === 'string' && raw.trim() ? raw : null
+}
+
+/** True when the desktop shell is present and can open a native folder picker. */
+export function desktopFolderPickerAvailable(): boolean {
+  return tauriInvoke() !== undefined
+}
+
 export async function publishDesktopImport(): Promise<boolean> {
   if (!tauriInvoke()) return false
   try {

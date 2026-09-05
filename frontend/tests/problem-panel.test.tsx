@@ -19,7 +19,7 @@ import type { SolutionPart } from '@/types'
  * - A refuted solution is shown in full, with the refutation named. Hiding it would leave
  *   the student with nothing, and they may well spot the error themselves.
  * - Grounding is a count of steps carrying provenance, never a score.
- * - The audit trail travels with the badge, because it is the reason to believe it.
+ * - The audit trail is one disclosure deep from the answer, under "How Lyra checked this".
  */
 
 function part(overrides: Partial<SolutionPart> & { id: number }): SolutionPart {
@@ -107,12 +107,35 @@ function renderPanel(tree: ProblemTree = node()) {
 }
 
 describe('ProblemPanel', () => {
-  it('counts grounded steps rather than scoring them', () => {
+  it('counts grounded steps rather than scoring them', async () => {
     renderPanel()
 
+    // The grounding count is part of the checking surface, not the reading flow.
+    await userEvent.click(screen.getByRole('button', { name: /how lyra checked this/i }))
     expect(screen.getByText('1 of 2 steps grounded in your material')).toBeInTheDocument()
     // Provenance is on the step's own row, and only on the step that has it.
     expect(screen.getByText('lecture3.pdf, page 12')).toBeInTheDocument()
+  })
+
+  it('says 0 of N steps grounded when nothing could be grounded', async () => {
+    renderPanel(
+      node({
+        steps: [
+          part({
+            id: 2,
+            parent_part_id: 1,
+            label: 'Set up the integral',
+            content: 'Apply the definition.',
+          }),
+          part({ id: 3, parent_part_id: 1, ordinal: 1, label: 'Evaluate', content: 'Integrate.' }),
+        ],
+      }),
+    )
+
+    // Zero evidence is itself trust-relevant: the row is not hidden because nothing was
+    // grounded - it says 0.
+    await userEvent.click(screen.getByRole('button', { name: /how lyra checked this/i }))
+    expect(screen.getByText('0 of 2 steps grounded in your material')).toBeInTheDocument()
   })
 
   it('shows a refuted solution in full and names what disagreed', () => {
@@ -135,7 +158,7 @@ describe('ProblemPanel', () => {
     expect(screen.getByText('1/s^2')).toBeInTheDocument()
   })
 
-  it('states how many checks ran and lists them on request', async () => {
+  it('lists the checks that ran under "How Lyra checked this"', async () => {
     renderPanel(
       node({
         problem: {
@@ -153,7 +176,8 @@ describe('ProblemPanel', () => {
       }),
     )
 
-    await userEvent.click(screen.getByRole('button', { name: '1 check run' }))
+    // The count rides the disclosure trigger; the raw calls list on request.
+    await userEvent.click(screen.getByRole('button', { name: /how lyra checked this/i }))
 
     expect(screen.getByText('cas_integrate')).toBeInTheDocument()
     expect(screen.getByText('{"expression":"t"}')).toBeInTheDocument()

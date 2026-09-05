@@ -27,6 +27,7 @@ import {
 } from '@/lib/api'
 import { formatCount, parseTimestamp } from '@/lib/format'
 import { chatKeys, useCreateSession, useMessages, useSessions } from '@/lib/hooks/use-chat'
+import { invalidateAgentTurnCaches } from '@/lib/hooks/use-agent'
 import { useDocuments } from '@/lib/hooks/use-documents'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { useClassProfile } from '@/lib/hooks/use-profile'
@@ -68,6 +69,14 @@ type ChatPaneProps = {
   selectedDocumentId: number | null
   /** Present in the draft workspace: this pane speaks to the writer, not the tutor. */
   writer?: WriterVariant
+  /**
+   * The ordinary class conversation speaks to the contextual agent, not the tutor:
+   * turns go to the non-streaming agent endpoint, which plans the work itself and
+   * answers in place. The agent's just-in-time work (access requests, edits to review,
+   * commands to approve, the activity trail) is surfaced by the surrounding
+   * `AgentWorkSurface`, which re-fetches when the transcript grows.
+   */
+  agent?: boolean
   /** The conversation to show; `null` falls back to the newest one. */
   sessionId?: number | null
   /**
@@ -120,6 +129,12 @@ type ChatPaneProps = {
    * passes nothing - the writer reads the class, not a pick.
    */
   sourceControl?: React.ReactNode
+  /**
+   * The attached local workspace for this class conversation, rendered beside the source
+   * context in the composer's control row - the same compact chip, so the two answers to
+   * "what does Lyra have on hand" sit together.
+   */
+  workspaceControl?: React.ReactNode
 }
 
 /** How close to the bottom still counts as "following the conversation". */
@@ -130,6 +145,15 @@ const USER_SCROLL_WINDOW_MS = 700
 
 /** A pause long enough that the reader will want to know when the thread resumed. */
 const TIME_GAP_MS = 60 * 60 * 1000
+
+// A settling Stop's status poll: a calm interval, a generous bound. The server keeps the
+// stopped turn's request (and its connection) open only as long as its late workers
+// remain, and those workers bound their own work (network timeouts, the command
+// ceiling) - so the proof of a free session always arrives well inside this bound. The
+// bound itself is a safety net that exceeds even the slowest of them; past it the pane
+// stops claiming anything and hands the Stop affordance back to the student.
+const _STOP_SETTLE_POLL_MS = 750
+const _STOP_SETTLE_LIMIT_MS = 12 * 60 * 1000
 
 function startsTimeGap(messages: ChatMessage[], index: number): boolean {
   if (index === 0) return true
@@ -152,6 +176,7 @@ export function ChatPane({
   className = 'Class',
   selectedDocumentId,
   writer,
+  agent = false,
   sessionId: sessionIdProp = null,
   draft: isDraft = false,
   initialAsk = null,
@@ -163,6 +188,7 @@ export function ChatPane({
   headerActions,
   emptyState,
   sourceControl,
+  workspaceControl,
 }: ChatPaneProps) {
   const inline = layout === 'inline'
   // Matches the workspace's own desktop breakpoint, so the controls move into the header
@@ -227,6 +253,15 @@ export function ChatPane({
   const submittedTextRef = useRef<string | null>(null)
   const operationIdRef = useRef<string | null>(null)
   const responseAcceptedRef = useRef(false)
+  // Whether the turn in flight is a contextual agent turn. Stop must do more than abort a
+  // local fetch for these: the non-streaming handler cannot see its client's disconnect,
+  // so the server-side cancellation (attempt settled, claim released) is explicit.
+  const agentTurnRef = useRef(false)
+  // The agent's Stop is a round trip: the composer shows "Stopping…" while /agent-chat/stop
+  // is in flight, and the terminal stopped state is presented only once the server has
+  // confirmed it - never faked locally.
+  const [stopping, setStopping] = useState(false)
+  const stopInFlightRef = useRef(false)
 
   const newestSession = useMemo(
     () => (sessions && sessions.length > 0 ? [...sessions].sort((a, b) => b.id - a.id)[0] : null),
@@ -333,6 +368,8 @@ export function ChatPane({
     outcomeRef.current = null
     setRevealDrained(false)
     revealDrainedRef.current = false
+    stopInFlightRef.current = false
+    setStopping(false)
   }, [])
 
   /**
@@ -432,6 +469,7 @@ export function ChatPane({
       turnSessionRef.current = turnSessionId
       setDetached(false)
       settledRef.current = false
+      agentTurnRef.current = Boolean(agent)
       outcomeRef.current = 'active'
       revealDrainedRef.current = false
       streamTextRef.current = ''
@@ -526,6 +564,82 @@ export function ChatPane({
       }
 
       try {
+        if (agent) {
+          // The contextual agent answers in place: one non-streaming turn that plans the
+          // work, runs its tools, and returns the full reply. Its durable artifacts (access
+          // requests, proposed edits, commands, activity) are surfaced by the surrounding
+          // work surface. Retry and regenerate take the same shape: the server reuses the
+          // last user message (retry) or re-answers and supersedes the last reply
+          // (regenerate), and each returns the one reply.
+          const agentDocumentId = scopedDocument?.id ?? null
+          try {
+            const result =
+              kind === 'tutor-retry'
+                ? await api.retryAgentChat(classId, turnSessionId, undefined, controller.signal)
+                : kind === 'regenerate'
+                  ? await api.regenerateAgentChat(
+                      classId,
+                      turnSessionId,
+                      // A manual regeneration uses the CURRENT selection, like the tutor's;
+                      // a body-less one (the just-in-time continuation) keeps the stored scope.
+                      { mode: activeMode, documentId: agentDocumentId },
+                      controller.signal,
+                    )
+                  : await api.sendAgentChat(
+                      classId,
+                      turnSessionId,
+                      content,
+                      undefined,
+                      agentDocumentId,
+                      activeMode,
+                      // PLA-313: one operation ID per logical Send. It is minted by `send`
+                      // and retained across ambiguous failures so a resubmit reconciles
+                      // instead of duplicating.
+                      operationIdRef.current ?? undefined,
+                      controller.signal,
+                    )
+            if (result.stopped === 'stopped') {
+              // The server settled this turn as STOPPED - our Stop, or the server's own
+              // backstop - and completed the request with its bounded stopped body.
+              // There is no reply to show: present the terminal stopped state (not a
+              // completion of an empty answer) and spend the send key, exactly as a
+              // confirmed Stop would.
+              if (outcomeRef.current === 'active') setOutcome('stopped')
+              if (kind === 'send') {
+                responseAcceptedRef.current = true
+                submittedTextRef.current = null
+                operationIdRef.current = null
+                if (streamTextRef.current.trim().length === 0) {
+                  revealDrainedRef.current = true
+                  setRevealDrained(true)
+                }
+              }
+            } else {
+              onEvent({ type: 'done', message_id: result.message_id })
+              if (kind === 'send') {
+                // The operation is durably settled: the reply committed (or the failure is
+                // durable), so the key is spent. A retry or regeneration must never clear a
+                // key an earlier ambiguous send still owns.
+                responseAcceptedRef.current = true
+                submittedTextRef.current = null
+                operationIdRef.current = null
+              }
+            }
+          } catch (err) {
+            // The turn's truth is durable on the server either way: a failed attempt row, or
+            // a committed reply whose acceptance the transport lost. Refresh the transcript
+            // and the work surface before surfacing the error, so the conversation shows the
+            // failed turn or the recovered answer instead of a stale cache.
+            await invalidateAgentTurnCaches(queryClient, classId, turnSessionId).catch(
+              () => undefined,
+            )
+            throw err
+          }
+          await invalidateAgentTurnCaches(queryClient, classId, turnSessionId).catch(
+            () => undefined,
+          )
+          return
+        }
         const documentId = scopedDocument?.id ?? null
         await (kind === 'writer-retry' && writer
           ? streamWriterChatRetry(writer.artifactId, turnSessionId, onEvent, controller.signal)
@@ -610,15 +724,80 @@ export function ChatPane({
           // not clear one either: an earlier ambiguous send's X stays intact.
           setOutcome('failed')
         } else {
-          toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
-          if (submittedTextRef.current !== null) {
-            setDraft(submittedTextRef.current)
-          }
           setOutcome('failed')
+          if (agent && kind === 'send') {
+            // Lost-response reconciliation keyed on the logical send's OPERATION ID
+            // (PLA-313), never on message text: this conversation may already contain an
+            // identical earlier question with its own completed turn, and text equality
+            // would let that old turn satisfy the new operation - clearing the composer
+            // and silently losing the new question. The durable readback carries the
+            // operation id on the attempt of the user message the send committed to; a
+            // message that carries THIS id is the send's own turn, in whatever state it
+            // settled in. The screen above already fell back to the durable state, so
+            // every branch shows the truth.
+            const durable = await api.listMessages(turnSessionId).catch(() => null)
+            const operationId = operationIdRef.current
+            const ownTurn =
+              durable === null || operationId === null
+                ? undefined
+                : durable.find(
+                    (item) =>
+                      item.role === 'user' && item.agent_attempt?.operation_id === operationId,
+                  )
+            if (ownTurn !== undefined) {
+              // The send committed durably - completed, failed, stopped, or still
+              // settling. It now has a durable identity of its own, so the browser's
+              // send key is spent: retire BOTH refs, whatever the attempt's state.
+              // (A failed or stopped turn keeps its causal Retry; a subsequent Send -
+              // identical or different - is a NEW send with a fresh operation ID, never
+              // a re-run of the spent key.)
+              if (ownTurn.agent_attempt?.state === 'completed') {
+                // The turn succeeded and only its acceptance was lost: the reply is in
+                // the transcript, the composer goes empty, and the next Send mints a
+                // fresh operation ID.
+                submittedTextRef.current = null
+                operationIdRef.current = null
+                responseAcceptedRef.current = true
+                setDraft('')
+                toast.success('Your answer was already saved.')
+              } else {
+                // Durable failed/stopped (or still settling) turn, no usable reply: the
+                // transcript shows the honest turn with its Retry. The composer goes
+                // empty - no prefill - and the spent key is retired as well.
+                submittedTextRef.current = null
+                operationIdRef.current = null
+                setDraft('')
+                toast.error(
+                  caught instanceof ApiError ? caught.message : 'The answer stopped early.',
+                )
+              }
+            } else {
+              // Nothing durable carries this operation: the request never reached the
+              // server (or the readback failed). The draft goes back in the box and the
+              // minted key is kept, so a re-send either lands fresh or - if the turn did
+              // commit and only the readback missed it - the server reconciles by that
+              // same id instead of duplicating.
+              if (submittedTextRef.current !== null) {
+                setDraft(submittedTextRef.current)
+              }
+              toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
+            }
+          } else {
+            // Non-agent turns keep their longstanding behavior: the question goes back in
+            // the box.
+            toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
+            if (submittedTextRef.current !== null) {
+              setDraft(submittedTextRef.current)
+            }
+          }
         }
       } finally {
         if (owns()) {
           abortRef.current = null
+          // The turn is gone: any in-flight Stop belongs to it, so its "Stopping…"
+          // state ends with the turn no matter how the turn settled.
+          stopInFlightRef.current = false
+          setStopping(false)
           if (outcomeRef.current === 'active') {
             toast.error('The answer stopped early.')
             setOutcome('failed')
@@ -632,7 +811,9 @@ export function ChatPane({
       }
     },
     [
+      agent,
       activeMode,
+      classId,
       detached,
       pendingTurn,
       persisted,
@@ -713,18 +894,125 @@ export function ChatPane({
     void runTurn('writer-retry', '', activeSessionId)
   }, [activeSessionId, runTurn, writer])
 
+  /**
+   * A settling Stop's wait for the backend's proof that the session is free: a calm,
+   * bounded poll of the status endpoint. "Stopping…" and the closed conversation last
+   * for the whole stretch - the turn is stopped in every way that matters (no reply will
+   * arrive, no further durable effect can land), but the conversation must not re-enable
+   * until the backend proves the stopped turn's release has finished: every worker has
+   * provably left, the attempt is durably settled, and the session's claim is free.
+   * Returns true when that proof arrives; false when the bound elapses first or the pane
+   * is no longer owned by this turn (the caller then leaves Stop available to try again).
+   */
+  const pollStopStatus = useCallback(
+    async (classId: number, session: number, owner: number): Promise<boolean> => {
+      const deadline = performance.now() + _STOP_SETTLE_LIMIT_MS
+      while (turnIdRef.current === owner) {
+        let settling = true
+        try {
+          settling = (await api.stopAgentChatStatus(classId, session)).settling
+        } catch {
+          // A dropped status read is not proof of anything: the session is merely still
+          // settling. Wait a beat and ask again.
+        }
+        if (turnIdRef.current !== owner) return false
+        if (!settling) return true
+        if (performance.now() >= deadline) return false
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, _STOP_SETTLE_POLL_MS)
+        })
+      }
+      return false
+    },
+    [],
+  )
+
   const stop = useCallback(() => {
-    if (!abortRef.current) return
-    setOutcome('stopped')
-    if (responseAcceptedRef.current) {
+    const pending = abortRef.current
+    if (pending === null) return
+    const session = turnSessionRef.current
+    if (agentTurnRef.current === false || session === null) {
+      // Non-agent turns keep their longstanding behavior: the stream belongs to this
+      // connection, so the local abort IS the whole stop.
+      if (outcomeRef.current === 'active') setOutcome('stopped')
+      if (responseAcceptedRef.current) {
+        operationIdRef.current = null
+      }
+      if (streamTextRef.current.trim().length === 0) {
+        revealDrainedRef.current = true
+        setRevealDrained(true)
+      }
+      pending.abort()
+      return
+    }
+    // The agent's turn is non-streaming: its server handler cannot see this fetch being
+    // aborted, so the explicit /stop is what actually stops the work. The UI enters a
+    // bounded "Stopping…" state and AWAITs the server's verdict: the student must not be
+    // told "stopped" before the server has proved it, and the conversation stays closed
+    // to another turn meanwhile.
+    if (stopInFlightRef.current) return
+    stopInFlightRef.current = true
+    setStopping(true)
+    // Identity of the turn this stop belongs to: the turn counter only moves when a
+    // new turn starts, so a stop callback arriving after a newer turn owns the pane
+    // must not touch the newer turn's state.
+    const owner = turnIdRef.current
+    // The terminal action, applied exactly once the server has proved the stop: mark the
+    // turn stopped (if still active), spend the send key, drain the reveal queue, and
+    // stand down the local request. Idempotent - the turn's own settled response may
+    // land in the same instant with exactly these effects.
+    const confirmStopped = () => {
+      if (turnIdRef.current !== owner) return
+      if (outcomeRef.current === 'active') setOutcome('stopped')
+      responseAcceptedRef.current = true
+      submittedTextRef.current = null
       operationIdRef.current = null
+      if (streamTextRef.current.trim().length === 0) {
+        revealDrainedRef.current = true
+        setRevealDrained(true)
+      }
+      pending.abort()
     }
-    if (streamTextRef.current.trim().length === 0) {
-      revealDrainedRef.current = true
-      setRevealDrained(true)
-    }
-    abortRef.current.abort()
-  }, [setOutcome])
+    void (async () => {
+      try {
+        const verdict = await api.stopAgentChat(classId, session)
+        if (turnIdRef.current !== owner) return
+        if (verdict.stopped) {
+          // Settled and quiescent: the session is free and the turn's work is done.
+          confirmStopped()
+        } else if (verdict.settling) {
+          // The stop was latched but a worker is still inside a dispatch: the turn is
+          // stopped in every way that matters, but the conversation stays closed -
+          // "Stopping…", not sendable - until the backend proves the session free.
+          const provenFree = await pollStopStatus(classId, session, owner)
+          if (provenFree) {
+            confirmStopped()
+          } else if (turnIdRef.current === owner && outcomeRef.current === 'active') {
+            // The bound elapsed without the proof: the stop was latched, but this pane
+            // will not claim a stop that was not proven. The Stop affordance comes back
+            // (the finally) so the student can try again.
+            toast.error('Stop could not be confirmed. The turn may still be running.')
+          }
+        }
+        // Else: nothing was in flight when /stop inspected it - the turn settled in the
+        // race just before the Stop (completed, or failed). This Stop changed nothing
+        // durable: the turn's own request (or its lost-response reconciliation) settles
+        // the outcome, and nothing here may label it stopped or spend the send key.
+      } catch {
+        // The stop did not reach the server (or the server could not handle it): the turn
+        // may still be running. Stay active - do NOT present a stop that was never
+        // confirmed - and let the student try Stop again.
+        if (turnIdRef.current === owner && outcomeRef.current === 'active') {
+          toast.error('Stop could not be confirmed. The turn may still be running.')
+        }
+      } finally {
+        if (turnIdRef.current === owner) {
+          stopInFlightRef.current = false
+          setStopping(false)
+        }
+      }
+    })()
+  }, [classId, pollStopStatus])
 
   /**
    * Called by the streaming renderer whenever its reveal queue drains. Mid-stream
@@ -890,10 +1178,12 @@ export function ChatPane({
     return () => observer.disconnect()
   }, [scrollToBottom])
 
-  // A segmented control rather than underlined tabs. These do not navigate anywhere — they
-  // change how the next answer is written — and in the header bar there is no pane rule for
-  // an underline to sit on, so the honest idiom is a switch with a travelling thumb.
-  // The writer has no modes: there is one assistant, so there is nothing to toggle.
+  // A segmented control rather than underlined tabs. These do not navigate anywhere - they
+  // change how the next answer is written. In the header bar there is no pane rule for an
+  // underline to sit on, so the honest idiom is a switch with a travelling thumb.
+  // The writer has no pedagogy modes - there is one writer. The contextual agent keeps
+  // them: the mode still governs how the work is presented, and the shared mode contract
+  // inherits it (the agent plans tools, it does not own the pedagogy).
   const modeToggle = writer ? null : (
     <div
       className="border-border/70 bg-muted/70 flex items-center rounded-full border p-0.5"
@@ -991,7 +1281,9 @@ export function ChatPane({
                     : undefined
                   : !optimisticTurn &&
                       index === lastUserIndex &&
-                      (message.tutor_attempt?.state === 'failed' ||
+                      (message.agent_attempt?.state === 'failed' ||
+                        message.agent_attempt?.state === 'stopped' ||
+                        message.tutor_attempt?.state === 'failed' ||
                         message.tutor_attempt?.state === 'stopped')
                     ? retryTutorTurn
                     : message.role === 'assistant'
@@ -1012,8 +1304,10 @@ export function ChatPane({
       onSend={() => send(draft)}
       onStop={stop}
       streaming={turnActive}
+      stopping={stopping}
       disabledReason={disabledReason}
       sourceControl={sourceControl}
+      workspaceControl={workspaceControl}
       // Inline, the reader clicked to open this and the next thing they do is type.
       autoFocus={inline}
     />

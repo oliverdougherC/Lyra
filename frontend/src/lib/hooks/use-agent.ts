@@ -17,9 +17,19 @@ export const agentKeys = {
     ['agent', 'changes', classId, sessionId] as const,
   commands: (classId: number, sessionId: number) =>
     ['agent', 'commands', classId, sessionId] as const,
+  dismissals: (classId: number, sessionId: number) =>
+    ['agent', 'dismissals', classId, sessionId] as const,
 }
 
-async function invalidateAgentTurnCaches(
+/**
+ * Refresh everything one agent turn can have touched: the transcript, the class session list,
+ * and the work-surface queries (workspace, activity, changes, commands, dismissals), plus the
+ * cached surfaces that read from the same rows (profile, draft sources). Call it when an
+ * agent turn settles outside the mutation hooks - the chat pane's inline agent turns settle
+ * by hand, so a failed attempt row or a committed-but-lost reply would otherwise stay hidden
+ * behind a stale cache.
+ */
+export async function invalidateAgentTurnCaches(
   queryClient: ReturnType<typeof useQueryClient>,
   classId: number,
   sessionId: number,
@@ -31,6 +41,7 @@ async function invalidateAgentTurnCaches(
     queryClient.invalidateQueries({ queryKey: agentKeys.activity(classId, sessionId) }),
     queryClient.invalidateQueries({ queryKey: agentKeys.changes(classId, sessionId) }),
     queryClient.invalidateQueries({ queryKey: agentKeys.commands(classId, sessionId) }),
+    queryClient.invalidateQueries({ queryKey: agentKeys.dismissals(classId, sessionId) }),
     queryClient.invalidateQueries({ queryKey: profileKeys.forClass(classId) }),
     queryClient.invalidateQueries({ queryKey: draftKeys.sources(classId) }),
   ])
@@ -46,8 +57,15 @@ export function useAgentWorkspace(classId: number) {
 export function useAttachAgentWorkspace(classId: number) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ rootPath, displayName }: { rootPath: string; displayName?: string }) =>
-      api.attachAgentWorkspace(classId, rootPath, displayName),
+    mutationFn: ({
+      rootPath,
+      displayName,
+      readEnabled,
+    }: {
+      rootPath: string
+      displayName?: string
+      readEnabled?: boolean
+    }) => api.attachAgentWorkspace(classId, rootPath, { displayName, readEnabled }),
     onSuccess: (workspace) => queryClient.setQueryData(agentKeys.workspace(classId), workspace),
   })
 }
@@ -77,6 +95,32 @@ export function useAgentActivity(classId: number, sessionId: number | null) {
   })
 }
 
+export function useAgentAccessDismissals(classId: number, sessionId: number | null) {
+  return useQuery({
+    queryKey: agentKeys.dismissals(classId, sessionId ?? -1),
+    queryFn: ({ signal }) => api.listAgentAccessDismissals(classId, sessionId as number, signal),
+    enabled: sessionId !== null,
+    refetchInterval: 5_000,
+    select: (data) => new Set(data.dismissals.map((d) => d.scope)),
+  })
+}
+
+export function useDismissAgentAccess(classId: number, sessionId: number | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (scope: string) => api.dismissAgentAccess(classId, sessionId as number, scope),
+    onSuccess: () => {
+      // The dismissal is server state with a bounded lifetime: refresh it so the card
+      // stays dismissed across reloads, and the model's next ask sees it too.
+      if (sessionId !== null) {
+        void queryClient.invalidateQueries({
+          queryKey: agentKeys.dismissals(classId, sessionId),
+        })
+      }
+    },
+  })
+}
+
 export function useAgentChanges(classId: number, sessionId: number | null, enabled: boolean) {
   return useQuery({
     queryKey: agentKeys.changes(classId, sessionId ?? -1),
@@ -102,15 +146,32 @@ export function useRefreshAgentSession(classId: number, sessionId: number | null
     void queryClient.invalidateQueries({ queryKey: agentKeys.activity(classId, sessionId) })
     void queryClient.invalidateQueries({ queryKey: agentKeys.changes(classId, sessionId) })
     void queryClient.invalidateQueries({ queryKey: agentKeys.commands(classId, sessionId) })
+    void queryClient.invalidateQueries({ queryKey: agentKeys.dismissals(classId, sessionId) })
   }
 }
 
 export function useSendAgentChat(classId: number, sessionId: number | null) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ content, profile }: { content: string; profile: AgentProfile }) => {
+    mutationFn: ({
+      content,
+      profile,
+      operationId,
+    }: {
+      content: string
+      profile?: AgentProfile
+      operationId?: string
+    }) => {
       if (sessionId === null) throw new Error('Start a conversation before using agent tools.')
-      return api.sendAgentChat(classId, sessionId, content, profile)
+      return api.sendAgentChat(
+        classId,
+        sessionId,
+        content,
+        profile,
+        undefined,
+        undefined,
+        operationId,
+      )
     },
     onSuccess: async () => {
       if (sessionId === null) return
@@ -139,6 +200,28 @@ export function useRetryAgentChat(classId: number, sessionId: number | null) {
     mutationFn: () => {
       if (sessionId === null) throw new Error('Start a conversation before using agent tools.')
       return api.retryAgentChat(classId, sessionId)
+    },
+    onSuccess: async () => {
+      if (sessionId === null) return
+      await invalidateAgentTurnCaches(queryClient, classId, sessionId)
+    },
+    onError: async (error) => {
+      if (sessionId === null || !(error instanceof AgentChatError)) return
+      await invalidateAgentTurnCaches(queryClient, classId, sessionId)
+    },
+  })
+}
+
+/**
+ * Regenerate the conversation's last agent answer, superseding the reply it already has.
+ * Re-runs the turn even when it completed, so a completed answer can be re-answered.
+ */
+export function useRegenerateAgentChat(classId: number, sessionId: number | null) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => {
+      if (sessionId === null) throw new Error('Start a conversation before using agent tools.')
+      return api.regenerateAgentChat(classId, sessionId)
     },
     onSuccess: async () => {
       if (sessionId === null) return

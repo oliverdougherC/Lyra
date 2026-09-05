@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { AlertTriangle, Check, Info, RefreshCw, TriangleAlert } from 'lucide-react'
+import { AlertTriangle, Check, ChevronRight, Info, RefreshCw, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -22,6 +22,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 import { DesktopImportSection } from '@/components/settings/desktop-import-section'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { api, ApiError } from '@/lib/api'
 import { useClasses } from '@/lib/hooks/use-classes'
 import {
@@ -181,7 +182,7 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
       </header>
 
       <SettingsSection
-        title="Tutor model"
+        title="Setup"
         description="Connect the model that answers questions about your course materials."
       >
         <FieldGroup>
@@ -261,46 +262,6 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
           </Field>
 
           <Field>
-            <FieldLabel>Checking solutions</FieldLabel>
-            <div className="flex flex-wrap items-center gap-3">
-              <Button
-                variant="outline"
-                onClick={() => testTools.mutate()}
-                disabled={testTools.isPending || !hasEndpoint}
-              >
-                {testTools.isPending ? <Spinner /> : null}
-                Test tool support
-              </Button>
-              <ToolSupportOutcome settings={settings} pending={testTools.isPending} />
-            </div>
-            <FieldDescription>
-              Lyra checks each solution against a computer algebra system, which needs an endpoint
-              that supports tool calls. Without one, solving still works and every solution is
-              marked <span className="whitespace-nowrap">Not checked</span>.
-            </FieldDescription>
-          </Field>
-
-          <Field>
-            <FieldLabel>Reading scanned pages</FieldLabel>
-            <div className="flex flex-wrap items-center gap-3">
-              <Button
-                variant="outline"
-                onClick={() => testVision.mutate()}
-                disabled={testVision.isPending || !hasEndpoint}
-              >
-                {testVision.isPending ? <Spinner /> : null}
-                Test image support
-              </Button>
-              <VisionSupportOutcome settings={settings} pending={testVision.isPending} />
-            </div>
-            <FieldDescription>
-              A scanned page has no text to extract, so Lyra reads it by sending a picture of the
-              page to this endpoint. Without a model that can see images, scanned documents stay
-              unreadable and Lyra says so on the document rather than offering to read them.
-            </FieldDescription>
-          </Field>
-
-          <Field>
             <FieldLabel htmlFor="model">Model</FieldLabel>
             <div className="flex gap-2">
               <Select
@@ -340,44 +301,12 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
               really offers.
             </FieldDescription>
           </Field>
-
-          <Field>
-            <FieldLabel htmlFor="context-window">Context window</FieldLabel>
-            <Input
-              id="context-window"
-              type="number"
-              min={1024}
-              step={1024}
-              value={contextWindow}
-              onChange={(event) => setContextWindow(event.target.value)}
-              onBlur={() => {
-                const parsed = Number(contextWindow)
-                if (!Number.isFinite(parsed) || parsed < 1024) {
-                  setContextWindow(String(settings.context_window))
-                  return
-                }
-                if (parsed !== settings.context_window) void save({ context_window: parsed })
-              }}
-            />
-            {contextTooSmall ? (
-              <p className="text-danger-text flex items-start gap-1.5 text-sm">
-                <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-                Below 8192 tokens, retrieval has room for roughly one chunk and answers lose the
-                surrounding material.
-              </p>
-            ) : (
-              <FieldDescription>
-                Tokens the tutor model accepts. Lyra divides this between the system prompt,
-                history, retrieved material, and the answer.
-              </FieldDescription>
-            )}
-          </Field>
         </FieldGroup>
       </SettingsSection>
 
       <SettingsSection
-        title="Writer"
-        description="Choose what the writer may research and how it uses a capable endpoint."
+        title="Research"
+        description="Optional web research for the writer: what it may search, and how its key is stored."
       >
         <FieldGroup>
           <Field>
@@ -456,7 +385,138 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
             />
           </Field>
 
-          <ClassResearchOverrides />
+          <Alert>
+            <Info />
+            <AlertTitle>Exa receives public web requests only</AlertTitle>
+            <AlertDescription>
+              Lyra does not send your uploaded document text, private class facts, filesystem paths,
+              credentials, or prior private conversation content to Exa. Missing or failed Exa
+              configuration disables web research without making the rest of Lyra unhealthy.
+            </AlertDescription>
+          </Alert>
+        </FieldGroup>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Privacy"
+        description="See what stays on this machine and control what may leave it."
+      >
+        <PrivacySection settings={settings} onSave={save} />
+      </SettingsSection>
+
+      <SettingsSection
+        title="Appearance"
+        description="Choose the visual mode Lyra uses on this device."
+      >
+        <RadioGroup
+          value={theme}
+          onValueChange={(value) => setTheme(value as Theme)}
+          className="gap-2"
+        >
+          {THEME_CHOICES.map(([value, label, description]) => (
+            <Label
+              key={value}
+              htmlFor={`theme-${value}`}
+              className={`flex min-h-11 cursor-pointer items-center gap-3 rounded-md border px-3 py-2 transition-colors ${
+                theme === value
+                  ? 'border-accent-primary bg-accent-surface/50'
+                  : 'border-border bg-card hover:bg-muted'
+              }`}
+            >
+              <RadioGroupItem value={value} id={`theme-${value}`} />
+              <span
+                aria-hidden
+                className={`size-5 shrink-0 rounded-sm border ${THEME_SWATCHES[value]}`}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">{label}</span>
+                <span className="block text-sm text-muted-foreground">{description}</span>
+              </span>
+            </Label>
+          ))}
+        </RadioGroup>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Import existing Lyra data"
+        description="Bring in a previous checkout through a staged, verified desktop import. The source stays untouched."
+      >
+        <DesktopImportSection />
+      </SettingsSection>
+
+      <AdvancedSection>
+        <FieldGroup>
+          <Field>
+            <FieldLabel htmlFor="context-window">Context window</FieldLabel>
+            <Input
+              id="context-window"
+              type="number"
+              min={1024}
+              step={1024}
+              value={contextWindow}
+              onChange={(event) => setContextWindow(event.target.value)}
+              onBlur={() => {
+                const parsed = Number(contextWindow)
+                if (!Number.isFinite(parsed) || parsed < 1024) {
+                  setContextWindow(String(settings.context_window))
+                  return
+                }
+                if (parsed !== settings.context_window) void save({ context_window: parsed })
+              }}
+            />
+            {contextTooSmall ? (
+              <p className="text-danger-text flex items-start gap-1.5 text-sm">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+                Below 8192 tokens, retrieval has room for roughly one chunk and answers lose the
+                surrounding material.
+              </p>
+            ) : (
+              <FieldDescription>
+                Tokens the tutor model accepts. Lyra divides this between the system prompt,
+                history, retrieved material, and the answer.
+              </FieldDescription>
+            )}
+          </Field>
+
+          <Field>
+            <FieldLabel>Checking solutions</FieldLabel>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={() => testTools.mutate()}
+                disabled={testTools.isPending || !hasEndpoint}
+              >
+                {testTools.isPending ? <Spinner /> : null}
+                Test tool support
+              </Button>
+              <ToolSupportOutcome settings={settings} pending={testTools.isPending} />
+            </div>
+            <FieldDescription>
+              Lyra checks each solution against a computer algebra system, which needs an endpoint
+              that supports tool calls. Without one, solving still works and every solution is
+              marked <span className="whitespace-nowrap">Not checked</span>.
+            </FieldDescription>
+          </Field>
+
+          <Field>
+            <FieldLabel>Reading scanned pages</FieldLabel>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={() => testVision.mutate()}
+                disabled={testVision.isPending || !hasEndpoint}
+              >
+                {testVision.isPending ? <Spinner /> : null}
+                Test image support
+              </Button>
+              <VisionSupportOutcome settings={settings} pending={testVision.isPending} />
+            </div>
+            <FieldDescription>
+              A scanned page has no text to extract, so Lyra reads it by sending a picture of the
+              page to this endpoint. Without a model that can see images, scanned documents stay
+              unreadable and Lyra says so on the document rather than offering to read them.
+            </FieldDescription>
+          </Field>
 
           <Field orientation="horizontal">
             <div className="min-w-0 flex-1">
@@ -501,65 +561,44 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
             </FieldDescription>
           </Field>
 
-          <Alert>
-            <Info />
-            <AlertTitle>Exa receives public web requests only</AlertTitle>
-            <AlertDescription>
-              Lyra does not send your uploaded document text, private class facts, filesystem paths,
-              credentials, or prior private conversation content to Exa. Missing or failed Exa
-              configuration disables web research without making the rest of Lyra unhealthy.
-            </AlertDescription>
-          </Alert>
+          <ClassResearchOverrides />
         </FieldGroup>
-      </SettingsSection>
-
-      <SettingsSection
-        title="Import existing Lyra data"
-        description="Bring in a previous checkout through a staged, verified desktop import. The source stays untouched."
-      >
-        <DesktopImportSection />
-      </SettingsSection>
-
-      <SettingsSection
-        title="Privacy"
-        description="See what stays on this machine and control what may leave it."
-      >
-        <PrivacySection settings={settings} onSave={save} />
-      </SettingsSection>
-
-      <SettingsSection
-        title="Appearance"
-        description="Choose the visual mode Lyra uses on this device."
-      >
-        <RadioGroup
-          value={theme}
-          onValueChange={(value) => setTheme(value as Theme)}
-          className="gap-2"
-        >
-          {THEME_CHOICES.map(([value, label, description]) => (
-            <Label
-              key={value}
-              htmlFor={`theme-${value}`}
-              className={`flex min-h-11 cursor-pointer items-center gap-3 rounded-md border px-3 py-2 transition-colors ${
-                theme === value
-                  ? 'border-accent-primary bg-accent-surface/50'
-                  : 'border-border bg-card hover:bg-muted'
-              }`}
-            >
-              <RadioGroupItem value={value} id={`theme-${value}`} />
-              <span
-                aria-hidden
-                className={`size-5 shrink-0 rounded-sm border ${THEME_SWATCHES[value]}`}
-              />
-              <span className="min-w-0">
-                <span className="block text-sm font-medium">{label}</span>
-                <span className="block text-sm text-muted-foreground">{description}</span>
-              </span>
-            </Label>
-          ))}
-        </RadioGroup>
-      </SettingsSection>
+      </AdvancedSection>
     </div>
+  )
+}
+
+/**
+ * The most technical surface on the page: context size, endpoint capability checks, parallel
+ * writer tuning, and per-course research. Real configuration, but for the minority of setups
+ * that need it - so it stays collapsed by default and never competes with the sections a
+ * student actually uses.
+ */
+function AdvancedSection({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <section className="border-border/70 border-t pt-6">
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="focus-visible:ring-ring [&[data-state=open]>svg]:rotate-90 flex w-full items-center justify-between gap-3 rounded-md text-left focus-visible:ring-2 focus-visible:outline-none">
+          <div className="min-w-0">
+            <h2 className="font-heading text-xl leading-tight font-medium tracking-tight">
+              Advanced
+            </h2>
+            <p className="text-text-secondary mt-1 text-sm">
+              Runtime tuning and diagnostics for unusual setups: context size, endpoint capability
+              checks, parallel writer requests, and per-course research.
+            </p>
+          </div>
+          <ChevronRight
+            aria-hidden
+            className="size-5 shrink-0 text-text-tertiary transition-transform"
+          />
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <div className="mt-5">{children}</div>
+        </CollapsibleContent>
+      </Collapsible>
+    </section>
   )
 }
 

@@ -302,10 +302,14 @@ def discard_empty_sessions(conn: sqlite3.Connection) -> int:
     return cursor.rowcount
 
 
-def set_session_mode(
-    conn: sqlite3.Connection, session_id: int, mode: ChatMode
-) -> dict[str, object]:
-    """Persist the Guide/Show choice on the session and return the updated row.
+def update_session_mode(conn: sqlite3.Connection, session_id: int, mode: ChatMode) -> None:
+    """Write the Guide/Show choice without committing, for a caller's own transaction.
+
+    A turn that takes effect only once its preflight succeeds (the agent route refuses to
+    move the conversation's durable mode for a turn it is about to refuse) writes the mode
+    in the same transaction as its message and attempt, and commits once - so a rejected
+    oversized, retrieval-failed, or registry-failed request changes nothing durably. The
+    caller commits; this performs validation and the write only.
 
     Raises:
         NotFoundError: when no session carries that id.
@@ -316,6 +320,13 @@ def set_session_mode(
         raise ValueError(f"Unknown chat mode: {mode}")
     get_session(conn, session_id)
     conn.execute("update chat_sessions set mode = ? where id = ?", (mode, session_id))
+
+
+def set_session_mode(
+    conn: sqlite3.Connection, session_id: int, mode: ChatMode
+) -> dict[str, object]:
+    """Persist the Guide/Show choice on the session and return the updated row."""
+    update_session_mode(conn, session_id, mode)
     conn.commit()
     return get_session(conn, session_id)
 
@@ -336,12 +347,17 @@ def title_from_message(content: str) -> str:
     return f"{head[:cut] if cut > _TITLE_MIN_CHARS else head}..."
 
 
-def set_session_title_if_unset(conn: sqlite3.Connection, session_id: int, content: str) -> None:
-    """Name an untitled conversation after its first message.
+def set_session_title_if_unset_uncommitted(
+    conn: sqlite3.Connection, session_id: int, content: str
+) -> None:
+    """Name an untitled conversation after its first message, without committing.
 
-    A conversation is identified by what it is about, not by its position in a list:
-    numbering renumbers as conversations come and go, so the same chat changes name.
-    Only the first message titles a session; later ones leave the name alone.
+    The no-commit twin of `set_session_title_if_unset`: a caller that persists the first
+    message in its own transaction (the agent route, where the message, the attempt, and
+    the mode it moves to must land or not together) titles inside that transaction.
+
+    Raises:
+        NotFoundError: when no session carries that id.
     """
     row = conn.execute("select title from chat_sessions where id = ?", (session_id,)).fetchone()
     if row is None or (row["title"] or "").strip():
@@ -350,6 +366,16 @@ def set_session_title_if_unset(conn: sqlite3.Connection, session_id: int, conten
         "update chat_sessions set title = ? where id = ?",
         (title_from_message(content), session_id),
     )
+
+
+def set_session_title_if_unset(conn: sqlite3.Connection, session_id: int, content: str) -> None:
+    """Name an untitled conversation after its first message.
+
+    A conversation is identified by what it is about, not by its position in a list:
+    numbering renumbers as conversations come and go, so the same chat changes name.
+    Only the first message titles a session; later ones leave the name alone.
+    """
+    set_session_title_if_unset_uncommitted(conn, session_id, content)
     conn.commit()
 
 

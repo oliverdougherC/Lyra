@@ -116,6 +116,17 @@ export interface AgentAttempt {
   state: 'running' | 'completed' | 'failed' | 'stopped'
   stopped_reason: string | null
   detail: string | null
+  /**
+   * The logical-send identity the client minted for this send (PLA-313): the key the
+   * lost-response reconciliation matches against, never the message text - an identical
+   * earlier question in this conversation must not satisfy a newer send. This is the
+   * lineage's ROOT operation id, not the latest attempt's own: an internal fallback
+   * attempt (the tool-less continuation of an endpoint that refused the first tools
+   * request) completes with no id of its own, but the readback still names the send it
+   * belongs to. Null only for lineages that never carried one (retries, regenerations,
+   * legacy rows).
+   */
+  operation_id?: string | null
 }
 
 export interface WriterAttempt {
@@ -350,6 +361,11 @@ export interface AgentAuditEventRead {
   result_summary: Record<string, unknown> | null
 }
 
+export interface AgentAccessDismissalRead {
+  scope: string
+  dismissed_at: string
+}
+
 export interface AgentWorkspaceHunkRead {
   index: number
   hash: string
@@ -395,7 +411,7 @@ export interface AgentConfirmationRead {
   expires_at: string
 }
 
-export type AgentProfile = 'research' | 'code' | 'command'
+export type AgentProfile = 'research' | 'code' | 'command' | 'agent'
 
 export interface AgentChatActivity {
   audit_id: string
