@@ -88,7 +88,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           scroll, so that failure is now unreachable rather than merely unlikely. */}
       {/* The canvas, flush to the window on every route. `bleed` no longer changes the
           frame — there is no frame — only the reading measure and padding below. */}
-      <SidebarInset className="min-h-0 min-w-0 overflow-clip">
+      <SidebarInset
+        className={cn(
+          'min-h-0 min-w-0 overflow-clip',
+          !immersive && 'pb-[calc(5.5rem+env(safe-area-inset-bottom))] sm:pb-0',
+        )}
+      >
         <AppHeader collapsed={immersive} />
         {/* `main` is the one scroll container below the header, so the rail and header
             stay put on long routes while a full-height route (the workspace) can still
@@ -127,7 +132,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 the bottom nav rather than page inset. */}
             <div
               aria-hidden
-              className={cn('h-28 shrink-0 print:hidden', bleed ? 'sm:h-0' : 'sm:h-4 md:h-6')}
+              className={cn('shrink-0 print:hidden', bleed ? 'h-0' : 'h-4 md:h-6')}
             />
           </div>
         </main>

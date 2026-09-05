@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Layers, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { CardActions } from '@/components/study/card-actions'
 import { MathText } from '@/components/solutions/math-text'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -12,7 +13,7 @@ import { Kbd } from '@/components/ui/kbd'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ApiError } from '@/lib/api'
 import { formatCount } from '@/lib/format'
-import { useDeckSession, useReviewCard } from '@/lib/hooks/use-study'
+import { useDeck, useDeckSession, useReviewCard } from '@/lib/hooks/use-study'
 import {
   RATINGS,
   bucket,
@@ -20,7 +21,6 @@ import {
   nextIntervalLabel,
   type CardState,
 } from '@/lib/scheduler'
-import { cn } from '@/lib/utils'
 import type { Rating, SessionCard } from '@/types'
 
 const RATING_LABELS: Record<Rating, string> = {
@@ -49,7 +49,12 @@ export function DeckSession({ deckId }: { deckId: number }) {
 
   const [queue, setQueue] = useState<SessionCard[] | null>(null)
   const [total, setTotal] = useState(0)
+  const [actionsOpen, setActionsOpen] = useState(false)
+  const reviewingRef = useRef(false)
+  const faceRef = useRef<HTMLElement>(null)
+  const summaryRef = useRef<HTMLHeadingElement>(null)
   const [flipped, setFlipped] = useState(false)
+  const [retryRating, setRetryRating] = useState<Rating | null>(null)
   const [ratings, setRatings] = useState<Record<Rating, number>>({
     again: 0,
     hard: 0,
@@ -66,7 +71,7 @@ export function DeckSession({ deckId }: { deckId: number }) {
    * first request actually committed (PLA-296). The key represents "the review of this
    * card"; it is generated on first submit and reused until that card leaves the queue.
    */
-  const operationIds = useRef<Map<number, string>>(new Map())
+  const operationIds = useRef<Map<number, { id: string; rating: Rating }>>(new Map())
 
   // Seeded during render rather than in an effect, so the first card never flashes the
   // end screen for a frame. A finished session leaves the queue empty but not null, so
@@ -83,26 +88,37 @@ export function DeckSession({ deckId }: { deckId: number }) {
   const rate = useCallback(
     async (rating: Rating) => {
       const current = queue?.[0]
-      if (!current || reviewing) return
-      // Reuse this card's key if it already has one (a retry); otherwise mint one.
-      let operationId = operationIds.current.get(current.part_id)
-      if (operationId === undefined) {
-        operationId = crypto.randomUUID()
-        operationIds.current.set(current.part_id, operationId)
+      if (!current || reviewingRef.current || actionsOpen) return
+      // A lost response may already have committed. Retrying must confirm the same
+      // rating as well as the same key, or the summary would contradict saved history.
+      let operation = operationIds.current.get(current.part_id)
+      if (operation && operation.rating !== rating) return
+      reviewingRef.current = true
+      if (!operation) {
+        operation = { id: crypto.randomUUID(), rating }
+        operationIds.current.set(current.part_id, operation)
       }
       try {
-        const updated = await submitReview({ partId: current.part_id, rating, operationId })
+        const updated = await submitReview({
+          partId: current.part_id,
+          rating: operation.rating,
+          operationId: operation.id,
+        })
         operationIds.current.delete(current.part_id)
+        setRetryRating(null)
         setRatings((previous) => ({ ...previous, [rating]: previous[rating] + 1 }))
         setStates((previous) => new Map(previous).set(current.part_id, cardStateFromRead(updated)))
         setQueue((previous) => (previous ?? []).slice(1))
         setFlipped(false)
         setPresentedAt(new Date())
       } catch (caught) {
+        setRetryRating(rating)
         toast.error(caught instanceof ApiError ? caught.message : 'Could not record that review.')
+      } finally {
+        reviewingRef.current = false
       }
     },
-    [queue, reviewing, submitReview],
+    [queue, actionsOpen, submitReview],
   )
 
   // Space flips, 1-4 rate, except while typing: a field owns those keys. A focused button
@@ -110,6 +126,7 @@ export function DeckSession({ deckId }: { deckId: number }) {
   // it would rate or flip twice.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (actionsOpen || reviewingRef.current) return
       const target = event.target
       if (target instanceof HTMLElement) {
         if (target.isContentEditable) return
@@ -128,11 +145,25 @@ export function DeckSession({ deckId }: { deckId: number }) {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [flipped, flip, rate])
+  }, [flipped, flip, rate, actionsOpen])
+
+  useEffect(() => {
+    faceRef.current?.focus()
+  }, [flipped])
+
+  useEffect(() => {
+    if (queue?.length === 0) summaryRef.current?.focus()
+    else if (queue && total > queue.length && !actionsOpen) faceRef.current?.focus()
+  }, [queue, total, actionsOpen])
 
   async function restart() {
     operationIds.current.clear()
+    setRetryRating(null)
     const fresh = await session.refetch()
+    if (fresh.isError) {
+      toast.error('Could not load another session. Try again.')
+      return
+    }
     const next = fresh.data?.cards
     if (!next) return
     setQueue(next)
@@ -185,9 +216,13 @@ export function DeckSession({ deckId }: { deckId: number }) {
           <EmptyMedia variant="icon">
             <Layers className="text-text-tertiary size-8" />
           </EmptyMedia>
-          <EmptyTitle>Nothing to study</EmptyTitle>
-          <EmptyDescription>This deck has no cards yet.</EmptyDescription>
+          <EmptyTitle>No cards in this session</EmptyTitle>
+          <EmptyDescription>Start another session to check for more cards.</EmptyDescription>
         </EmptyHeader>
+        <DeckProgress deckId={deckId} />
+        <Button variant="outline" disabled={session.isFetching} onClick={() => void restart()}>
+          Study again
+        </Button>
       </Empty>
     )
   }
@@ -201,15 +236,22 @@ export function DeckSession({ deckId }: { deckId: number }) {
         aria-label="Session summary"
         className="flex flex-col items-center gap-4 py-10 text-center"
       >
-        <h2 className="font-heading text-text-primary text-2xl tracking-tight">Session complete</h2>
+        <h2
+          ref={summaryRef}
+          tabIndex={-1}
+          className="font-heading text-text-primary text-2xl tracking-tight focus:outline-none"
+        >
+          Session complete
+        </h2>
         <p className="text-text-secondary text-sm">
           You reviewed {formatCount(rated, 'card')}:{' '}
           {RATINGS.map((rating) => `${ratings[rating]} ${rating}`).join(' · ')}
         </p>
         <p className="text-text-tertiary text-sm">
-          Your deck now: new {bucketsAfter.new} · learning {bucketsAfter.learning} · mastered{' '}
-          {bucketsAfter.mastered}
+          Cards in this session: new {bucketsAfter.new} · learning {bucketsAfter.learning} ·
+          mastered {bucketsAfter.mastered}
         </p>
+        <DeckProgress deckId={deckId} />
         <Button variant="outline" onClick={() => void restart()} disabled={session.isFetching}>
           <RotateCcw className="size-4" />
           Study again
@@ -232,54 +274,69 @@ export function DeckSession({ deckId }: { deckId: number }) {
         <p className="text-text-tertiary text-sm">{current.card.topic}</p>
       </div>
 
-      {/* The flip is a CSS transform on a preserve-3d pair; under prefers-reduced-motion
-          the transition is dropped and the swap is instant. Both faces stay in the tree
-          with the hidden one aria-hidden, so the animation has something to animate. */}
-      <div className="[perspective:1200px]">
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label={
-            flipped
-              ? 'Card back. Press Space to see the front.'
-              : 'Card front. Press Space to flip.'
+      <section
+        ref={faceRef}
+        tabIndex={0}
+        aria-label={flipped ? 'Card answer' : 'Card question'}
+        className="border-border bg-card flex min-h-32 max-h-[30dvh] flex-col gap-3 overflow-y-auto rounded-lg border p-4 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none sm:min-h-48 sm:max-h-[40dvh] sm:p-6"
+      >
+        <span className="text-text-tertiary text-xs tracking-[0.14em] uppercase">
+          {flipped ? 'Answer' : 'Question'}
+        </span>
+        <MathText className="text-text-primary text-lg">
+          {flipped ? current.card.back : current.card.front}
+        </MathText>
+      </section>
+      <div className="flex items-center justify-between gap-2">
+        <Button variant="outline" onClick={flip} disabled={reviewing}>
+          {flipped ? 'Show question' : 'Show answer'}
+          <Kbd aria-hidden className="hidden sm:inline-flex">
+            Space
+          </Kbd>
+        </Button>
+        <CardActions
+          key={current.part_id}
+          deckId={deckId}
+          current={current}
+          disabled={reviewing}
+          onOpenChange={setActionsOpen}
+          onUpdated={(content) =>
+            setQueue((previous) =>
+              (previous ?? []).map((card) =>
+                card.part_id === current.part_id ? { ...card, card: content } : card,
+              ),
+            )
           }
-          onClick={flip}
-          onKeyDown={(event) => {
-            // Enter only: Space reaches the window handler above, which flips for any
-            // target that is not a control.
-            if (event.key === 'Enter') {
-              event.preventDefault()
-              flip()
-            }
+          onRemoved={() => {
+            operationIds.current.delete(current.part_id)
+            setRetryRating(null)
+            setStates((previous) => {
+              const next = new Map(previous)
+              next.delete(current.part_id)
+              return next
+            })
+            setQueue((previous) =>
+              (previous ?? []).filter((card) => card.part_id !== current.part_id),
+            )
+            setTotal((previous) => previous - 1)
+            setFlipped(false)
+            setPresentedAt(new Date())
           }}
-          className={cn(
-            'relative min-h-64 w-full cursor-pointer rounded-lg transition-transform duration-300',
-            '[transform-style:preserve-3d] motion-reduce:transition-none',
-            'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
-          )}
-          style={{ transform: flipped ? 'rotateY(180deg)' : 'rotateY(0deg)' }}
-        >
-          <div
-            aria-hidden={flipped}
-            className="border-border bg-card absolute inset-0 flex flex-col gap-3 overflow-y-auto rounded-lg border p-6 [backface-visibility:hidden]"
-          >
-            <span className="text-text-tertiary text-xs tracking-[0.14em] uppercase">Front</span>
-            <MathText className="text-text-primary text-lg">{current.card.front}</MathText>
-          </div>
-          <div
-            aria-hidden={!flipped}
-            className="border-border bg-card absolute inset-0 flex flex-col gap-3 overflow-y-auto rounded-lg border p-6 [backface-visibility:hidden] [transform:rotateY(180deg)]"
-          >
-            <span className="text-text-tertiary text-xs tracking-[0.14em] uppercase">Back</span>
-            <MathText className="text-text-primary text-lg">{current.card.back}</MathText>
-          </div>
-        </div>
+        />
       </div>
+      <p className="sr-only" role="status">
+        {flipped ? 'Answer shown.' : 'Question shown.'}
+      </p>
 
+      {retryRating ? (
+        <p role="alert" className="text-danger-text text-sm">
+          That {RATING_LABELS[retryRating]} review could not be confirmed. Choose{' '}
+          {RATING_LABELS[retryRating]} again to confirm it before using another rating.
+        </p>
+      ) : null}
       {flipped ? (
         <div
-          className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+          className="grid grid-cols-2 gap-2 min-[360px]:grid-cols-4"
           role="group"
           aria-label="Rate this card"
         >
@@ -287,18 +344,18 @@ export function DeckSession({ deckId }: { deckId: number }) {
             <Button
               key={rating}
               variant="outline"
-              disabled={reviewing}
+              disabled={reviewing || (retryRating !== null && rating !== retryRating)}
               onClick={(event) => {
                 // Focus goes back to the page, so the next Space flips the next card
                 // instead of pressing this button again.
                 event.currentTarget.blur()
                 void rate(rating)
               }}
-              className="flex h-auto flex-col gap-0.5 py-2"
+              className="flex h-auto flex-col gap-0.5 px-1 py-2"
             >
               <span className="flex items-center gap-1.5">
                 {RATING_LABELS[rating]}
-                <Kbd>{index + 1}</Kbd>
+                <Kbd className="hidden sm:inline-flex">{index + 1}</Kbd>
               </span>
               <span className="text-text-tertiary text-xs font-normal">
                 {nextIntervalLabel(currentState, rating, presentedAt)}
@@ -307,10 +364,36 @@ export function DeckSession({ deckId }: { deckId: number }) {
           ))}
         </div>
       ) : (
-        <p className="text-text-tertiary flex items-center gap-1.5 text-sm">
-          Press <Kbd>Space</Kbd> or click the card to flip it.
-        </p>
+        <p className="text-text-tertiary text-sm">Recall your answer, then choose Show answer.</p>
       )}
     </div>
+  )
+}
+
+/** Loaded after the last mutation, so remaining due counts cover the entire deck. */
+function DeckProgress({ deckId }: { deckId: number }) {
+  const deck = useDeck(deckId)
+  if (deck.isPending || deck.isFetching)
+    return (
+      <p role="status" className="text-text-tertiary text-sm">
+        Updating deck progress…
+      </p>
+    )
+  if (deck.isError)
+    return (
+      <div className="text-sm">
+        <p>Could not refresh deck progress.</p>
+        <Button variant="outline" size="sm" onClick={() => void deck.refetch()}>
+          Retry deck progress
+        </Button>
+      </div>
+    )
+  const due = deck.data.cards.filter(
+    (card) => !card.card_state || cardStateFromRead(card.card_state).dueAt.getTime() <= Date.now(),
+  ).length
+  return (
+    <p className="text-text-secondary text-sm">
+      Deck total: {formatCount(deck.data.cards.length, 'card')} · {due} due now
+    </p>
   )
 }

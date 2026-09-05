@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,8 @@ import { AgentWorkSurface } from '@/components/agent/work-surface'
 import { WorkspaceAttachProvider, WorkspaceContextChip } from '@/components/agent/workspace-attach'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
+import { chatKeys } from '@/lib/hooks/use-chat'
+import { agentKeys } from '@/lib/hooks/use-agent'
 import * as runtime from '@/lib/runtime'
 
 // The Details audit embeds the class source ledger, which needs the app router. These
@@ -85,6 +87,155 @@ beforeEach(() => {
 })
 
 describe('the contextual agent work surface (PLA-401)', () => {
+  it('keeps a failed folder path and its error available for correction and retry', async () => {
+    const attach = vi
+      .spyOn(api, 'attachAgentWorkspace')
+      .mockRejectedValueOnce(new Error('Folder not found'))
+      .mockResolvedValue(workspace())
+    const { wrapper } = createWrapper()
+    render(
+      <>
+        <AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />
+        <WorkspaceContextChip />
+      </>,
+      { wrapper },
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Attach folder' }))
+    const input = await screen.findByLabelText('Path to the folder')
+    fireEvent.change(input, { target: { value: '/tmp/starter' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    expect(await screen.findByText('Folder not found')).toBeInTheDocument()
+    expect(input).toHaveValue('/tmp/starter')
+    fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    expect(await screen.findByText('Workspace: proj')).toBeInTheDocument()
+    expect(attach).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['listAgentActivity', 'Activity'],
+    ['listAgentWorkspaceChanges', 'File proposals'],
+    ['listAgentCommands', 'Commands'],
+    ['listAgentAccessDismissals', 'Access requests'],
+  ] as const)('shows a recoverable failure for %s', async (method, label) => {
+    vi.mocked(api.getAgentWorkspace).mockResolvedValue(workspace())
+    vi.mocked(api[method]).mockRejectedValueOnce(new Error('offline'))
+    const { wrapper } = createWrapper()
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    expect(await screen.findByText(`${label} could not be loaded`)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: `Retry ${label.toLowerCase()}` }))
+    await waitFor(() =>
+      expect(screen.queryByText(`${label} could not be loaded`)).not.toBeInTheDocument(),
+    )
+  })
+
+  it('adopts live stale review even though the polled list only returns stored metadata', async () => {
+    vi.mocked(api.getAgentWorkspace).mockResolvedValue(workspace())
+    const stored = change({ current_content: null, proposed_content: null })
+    vi.mocked(api.listAgentWorkspaceChanges).mockResolvedValue([stored])
+    const review = vi
+      .spyOn(api, 'reviewAgentWorkspaceChange')
+      .mockResolvedValue(change({ state: 'stale', current_content: 'print("external edit")' }))
+    const confirm = vi.spyOn(api, 'confirmAgentWorkspaceChange')
+    const reject = vi
+      .spyOn(api, 'rejectAgentWorkspaceChange')
+      .mockResolvedValue({} as Awaited<ReturnType<typeof api.rejectAgentWorkspaceChange>>)
+    const { wrapper, queryClient } = createWrapper()
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    await userEvent.click(await screen.findByRole('button', { name: 'Accept remaining' }))
+    expect(await screen.findByText('Proposal is stale')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Current file' })).toHaveTextContent(
+      'print("external edit")',
+    )
+    expect(screen.getByRole('region', { name: 'Proposed file' })).toHaveTextContent(
+      'print("after")',
+    )
+    expect(confirm).not.toHaveBeenCalled()
+    await act(() =>
+      queryClient.invalidateQueries({ queryKey: agentKeys.changes(CLASS_ID, SESSION_ID) }),
+    )
+    expect(screen.getByRole('region', { name: 'Current file' })).toHaveTextContent(
+      'print("external edit")',
+    )
+    await userEvent.click(screen.getByRole('button', { name: 'Recheck file' }))
+    expect(review).toHaveBeenCalledTimes(2)
+    await userEvent.click(screen.getByRole('button', { name: 'Reject proposal' }))
+    await waitFor(() => expect(reject).toHaveBeenCalledWith(CLASS_ID, SESSION_ID, 1))
+  })
+
+  it('blocks cached failed-turn retry until history refresh succeeds', async () => {
+    const cached = [
+      message({
+        agent_attempt: { state: 'failed', stopped_reason: 'failed', detail: 'Try again' },
+      }),
+    ]
+    vi.mocked(api.listMessages)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(cached)
+    const retry = vi.spyOn(api, 'retryAgentChat')
+    const { wrapper, queryClient } = createWrapper()
+    queryClient.setQueryData(chatKeys.messages(SESSION_ID), cached)
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    await waitFor(() =>
+      expect(queryClient.getQueryState(chatKeys.messages(SESSION_ID))?.status).toBe('error'),
+    )
+    expect(screen.getByRole('button', { name: 'Retry this turn' })).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: 'Retry this turn' }))
+    expect(retry).not.toHaveBeenCalled()
+    await act(() => queryClient.invalidateQueries({ queryKey: chatKeys.messages(SESSION_ID) }))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Retry this turn' })).toBeEnabled(),
+    )
+  })
+
+  it('defers access continuation while cached activity cannot be refreshed', async () => {
+    const transcript = [
+      message({
+        agent_attempt: { state: 'stopped', stopped_reason: null, detail: 'Waiting for access' },
+      }),
+      message({
+        id: 2,
+        role: 'assistant',
+        content: 'Attach the folder first.',
+        created_at: '2026-09-02T00:00:02Z',
+      }),
+    ]
+    const events = [accessEvent({ target_id: 'attach', result_summary: { scope: 'attach' } })]
+    vi.mocked(api.listMessages).mockResolvedValue(transcript)
+    vi.mocked(api.listAgentActivity).mockRejectedValue(new Error('offline'))
+    vi.spyOn(api, 'attachAgentWorkspace').mockResolvedValue(workspace())
+    const regenerate = vi.spyOn(api, 'regenerateAgentChat').mockResolvedValue({
+      message_id: 2,
+      content: 'Read it.',
+      stopped: '',
+      detail: '',
+      activity: [],
+      source_ids: [],
+      profile_fact_ids: [],
+      workspace_change_ids: [],
+      command_request_ids: [],
+    })
+    const { wrapper, queryClient } = createWrapper()
+    queryClient.setQueryData(chatKeys.messages(SESSION_ID), transcript)
+    queryClient.setQueryData(agentKeys.activity(CLASS_ID, SESSION_ID), events)
+    render(<AgentWorkSurface classId={CLASS_ID} sessionId={SESSION_ID} />, { wrapper })
+    expect(await screen.findByText('Activity could not be loaded')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Attach a folder' }))
+    fireEvent.change(await screen.findByLabelText('Path to the folder'), {
+      target: { value: '/tmp/starter' },
+    })
+    await userEvent.click(screen.getByRole('button', { name: 'Attach' }))
+    await waitFor(() => expect(api.attachAgentWorkspace).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(screen.queryByLabelText('Path to the folder')).not.toBeInTheDocument(),
+    )
+    expect(regenerate).not.toHaveBeenCalled()
+    vi.mocked(api.listAgentActivity).mockResolvedValue(events)
+    await act(() =>
+      queryClient.invalidateQueries({ queryKey: agentKeys.activity(CLASS_ID, SESSION_ID) }),
+    )
+    await waitFor(() => expect(regenerate).toHaveBeenCalledTimes(1))
+  })
+
   it('asks for missing access as one compact card, and approving uses the ordinary grant path', async () => {
     vi.spyOn(api, 'getAgentWorkspace').mockResolvedValue(workspace({ read_enabled: false }))
     vi.spyOn(api, 'listAgentActivity').mockResolvedValue([accessEvent({ target_id: 'read' })])

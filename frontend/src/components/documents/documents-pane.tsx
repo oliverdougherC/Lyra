@@ -87,7 +87,9 @@ export function DocumentsPane({
   // refetches mid-selection does not hold onto rows that have since changed state.
   const [checkedIds, setCheckedIds] = useState<number[]>([])
   const [moving, setMoving] = useState<DocumentRead[]>([])
-  const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [deleting, setDeleting] = useState<DocumentRead[]>([])
+  const [deletingBusy, setDeletingBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const queueRef = useRef<File[]>([])
   const drainingRef = useRef(false)
   // Hoisted to the pane root: the collapsed strip header's Upload button must be able to
@@ -233,20 +235,10 @@ export function DocumentsPane({
     [recognizeDocument],
   )
 
-  const onDelete = useCallback(
-    (document: DocumentRead) => {
-      if (selectedDocumentId === document.id) onSelectDocument?.(null)
-      setCheckedIds((current) => current.filter((id) => id !== document.id))
-      deleteDocument.mutate(document.id, {
-        onSuccess: () => toast.success(`${document.filename} deleted.`),
-        onError: (caught) =>
-          toast.error(
-            caught instanceof ApiError ? caught.message : 'Could not delete that document.',
-          ),
-      })
-    },
-    [deleteDocument, onSelectDocument, selectedDocumentId],
-  )
+  const onDelete = useCallback((document: DocumentRead) => {
+    setDeleteError(null)
+    setDeleting([document])
+  }, [])
 
   /**
    * One document into a practice quiz, named after the file, at the study defaults. The
@@ -324,22 +316,33 @@ export function DocumentsPane({
   const documents = query
     ? allDocuments.filter((document) => document.filename.toLowerCase().includes(query))
     : allDocuments
-  const checked = documents.filter((document) => checkedIds.includes(document.id))
+  const checked = allDocuments.filter((document) => checkedIds.includes(document.id))
+  const hiddenCheckedCount = checked.filter((document) => !documents.includes(document)).length
   // The filter is worth offering once a list is long enough to hunt through, and only where
   // the list is the whole surface (manage), not the narrow chat column.
-  const showFilter = managing && allDocuments.length > 8
+  const showFilter = managing && (allDocuments.length > 8 || filter.length > 0)
 
-  async function onDeleteChecked() {
+  async function onDeleteConfirmed() {
+    if (deletingBusy) return
+    setDeletingBusy(true)
+    setDeleteError(null)
     const results = await Promise.allSettled(
-      checked.map((document) => deleteDocument.mutateAsync(document.id)),
+      deleting.map((document) => deleteDocument.mutateAsync(document.id)),
     )
-    const failed = results.filter((result) => result.status === 'rejected').length
-    if (failed < results.length) {
-      toast.success(`${formatCount(results.length - failed, 'file')} deleted.`)
+    const failed = deleting.filter((_, index) => results[index].status === 'rejected')
+    const deletedIds = deleting
+      .filter((_, index) => results[index].status === 'fulfilled')
+      .map((document) => document.id)
+    if (deletedIds.length > 0) {
+      toast.success(`${formatCount(deletedIds.length, 'file')} deleted.`)
+      setCheckedIds((current) => current.filter((id) => !deletedIds.includes(id)))
+      if (selectedDocumentId !== null && deletedIds.includes(selectedDocumentId))
+        onSelectDocument?.(null)
     }
-    if (failed > 0) toast.error(`${formatCount(failed, 'file')} could not be deleted.`)
-    setCheckedIds([])
-    setConfirmingDelete(false)
+    setDeleting(failed)
+    if (failed.length > 0)
+      setDeleteError(`${formatCount(failed.length, 'file')} could not be deleted. Try again.`)
+    setDeletingBusy(false)
   }
 
   return (
@@ -415,6 +418,7 @@ export function DocumentsPane({
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
           <span className="text-text-secondary text-sm tabular-nums">
             {formatCount(checked.length, 'file')} selected
+            {hiddenCheckedCount > 0 ? ` · ${hiddenCheckedCount} hidden by filter` : ''}
           </span>
           <Button variant="outline" size="sm" className="h-8" onClick={() => setMoving(checked)}>
             <FolderInput aria-hidden className="size-3.5" />
@@ -424,7 +428,10 @@ export function DocumentsPane({
             variant="outline"
             size="sm"
             className="text-danger-text hover:text-danger-text h-8"
-            onClick={() => setConfirmingDelete(true)}
+            onClick={() => {
+              setDeleteError(null)
+              setDeleting(checked)
+            }}
           >
             <Trash2 aria-hidden className="size-3.5" />
             Delete
@@ -479,7 +486,7 @@ export function DocumentsPane({
                 </Button>
               </AlertDescription>
             </Alert>
-          ) : documents.length === 0 ? (
+          ) : allDocuments.length === 0 ? (
             <Empty className="py-8">
               <EmptyHeader>
                 <EmptyMedia variant="icon">
@@ -494,9 +501,14 @@ export function DocumentsPane({
           ) : documents.length === 0 ? (
             // The list is non-empty but the filter matched nothing: say so plainly rather
             // than showing the same blank the truly-empty class shows.
-            <p className="text-text-tertiary px-1 py-6 text-center text-sm">
-              No documents match &ldquo;{filter.trim()}&rdquo;.
-            </p>
+            <div className="px-1 py-6 text-center">
+              <p className="text-text-tertiary text-sm">
+                No documents match &ldquo;{filter.trim()}&rdquo;.
+              </p>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => setFilter('')}>
+                Clear filter
+              </Button>
+            </div>
           ) : (
             // Plain list items: the row's own arrival is enough, and a re-animated entrance on
             // every poll (a busy class polls several times a second) would flicker the list.
@@ -553,41 +565,53 @@ export function DocumentsPane({
       </div>
 
       {managing ? (
-        <>
-          <MoveDocumentDialog
-            documents={moving}
-            classId={classId}
-            onOpenChange={(open) => {
-              if (!open) setMoving([])
-            }}
-            onMoved={() => setCheckedIds([])}
-          />
-          {/* Confirmed, unlike a single row's Delete. One file is a mistake you can see
-              coming; several at once is the click that empties a term's uploads. */}
-          <AlertDialog open={confirmingDelete} onOpenChange={setConfirmingDelete}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Delete {formatCount(checked.length, 'file')}?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This removes the files and everything Lyra indexed from them. Answers will stop
-                  citing them. It cannot be undone.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <Button
-                  variant="destructive"
-                  disabled={deleteDocument.isPending}
-                  onClick={() => void onDeleteChecked()}
-                >
-                  {deleteDocument.isPending ? <Spinner /> : null}
-                  Delete
-                </Button>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </>
+        <MoveDocumentDialog
+          documents={moving}
+          classId={classId}
+          onOpenChange={(open) => {
+            if (!open) setMoving([])
+          }}
+          onMoved={() => setCheckedIds([])}
+        />
       ) : null}
+      <AlertDialog
+        open={deleting.length > 0}
+        onOpenChange={(open) => {
+          if (!open && !deletingBusy) setDeleting([])
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {formatCount(deleting.length, 'file')}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the files and everything Lyra indexed from them. Answers will stop citing
+              them. It cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ul className="max-h-48 overflow-y-auto text-sm">
+            {deleting.map((document) => (
+              <li key={document.id} className="break-words">
+                {document.filename}
+              </li>
+            ))}
+          </ul>
+          {deleteError ? (
+            <p role="alert" className="text-danger-text text-sm">
+              {deleteError}
+            </p>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingBusy}>Cancel</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              disabled={deletingBusy}
+              onClick={() => void onDeleteConfirmed()}
+            >
+              {deletingBusy ? <Spinner /> : null}Delete
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

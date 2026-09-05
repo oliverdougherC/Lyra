@@ -20,6 +20,7 @@ import dynamic from '@/router/dynamic'
 import { useParams, useRouteAnchor, useRouter } from '@/router/hooks'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import type { GroupImperativeHandle } from 'react-resizable-panels'
 
 import { ChatPane } from '@/components/chat/chat-pane'
 import { BriefCard } from '@/components/drafts/brief-card'
@@ -133,10 +134,7 @@ function readId(value: string | string[] | undefined): number | null {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
 }
 
-type RailTab = 'live' | 'suggestion' | 'work' | 'comments' | 'chat'
-
-/** The consolidated work surface's sections: one tab, not three permanent ones. */
-type WorkSection = 'plan' | 'sources' | 'history'
+type RailTab = 'live' | 'suggestion' | 'plan' | 'sources' | 'comments' | 'chat'
 
 /**
  * Where the tools sit, and whether the application is on screen at all.
@@ -232,16 +230,15 @@ export default function DraftWorkspacePage() {
   const [draftDialogOpen, setDraftDialogOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [railTab, setRailTab] = useState<RailTab>('chat')
-  const [workSection, setWorkSection] = useState<WorkSection>('plan')
-  // Plan, sources, and history are the draft's working surfaces, not the conversation.
-  // They share one "work" tab in the rail picker instead of three permanent entries; the
-  // contextual ones (a live draft, a pending suggestion, review comments) still take the
-  // rail over when they are the point.
-  const openWork = (section: WorkSection) => {
-    setWorkSection(section)
-    setRailTab('work')
-  }
+  const [railTab, setRailTabState] = useState<RailTab>('chat')
+  const [compactDocument, setCompactDocument] = useState(false)
+  const setRailTab = useCallback((next: RailTab) => {
+    setCompactDocument(false)
+    setRailTabState(next)
+  }, [])
+  const openWork = (section: 'plan' | 'sources') => setRailTab(section)
+  const [addressing, setAddressing] = useState(false)
+  const addressingRef = useRef(false)
   /**
    * The writer conversation on screen: the one this visit created, else the draft's
    * newest. Held locally so the first message's session lands here the moment it exists
@@ -250,18 +247,20 @@ export default function DraftWorkspacePage() {
   const [writerSessionId, setWriterSessionId] = useState<number | null>(null)
   const activeWriterSessionId = writerSessionId ?? writerSessions.data?.[0]?.id ?? null
   const [railSide, setRailSide] = useLocalStorageState<RailSide>(RAIL_SIDE_KEY, 'right', parseSide)
-  // The split is the student's, and it is remembered. Below `xl` there is one column and
-  // nothing to split, so the group is not rendered at all rather than being disabled.
+  // Remember the wide split while keeping the same mounted panels at every viewport.
   const wide = useMediaQuery('(min-width: 1280px)')
+  const shortWorkspace = useMediaQuery('(max-width: 1279px) and (max-height: 500px)')
   const [railShare, setRailShare] = useLocalStorageState(
     RAIL_SHARE_KEY,
     DEFAULT_RAIL_SHARE,
     parseShare,
   )
   const documentFirstLayout = { document: 100 - railShare, rail: railShare }
-  const railFirstLayout = { rail: railShare, document: 100 - railShare }
+  const panelGroupRef = useRef<GroupImperativeHandle>(null)
+  useEffect(() => {
+    if (wide) panelGroupRef.current?.setLayout({ document: 100 - railShare, rail: railShare })
+  }, [wide, railShare])
   const [immersive, setImmersive] = useLocalStorageState(IMMERSIVE_KEY, false, parseImmersive)
-  const chatScrollRef = useRef<HTMLDivElement | null>(null)
   const railTabsRef = useRef<HTMLDivElement | null>(null)
 
   // The save engine is created once: the editor's onChange and the visibility flush both
@@ -702,7 +701,12 @@ export default function DraftWorkspacePage() {
   // the panel so the menu has the whole column to open into. `flex-1` still carries the
   // stacked mobile layout below `lg`, where the parent *is* a flex column.
   const documentPane = (
-    <div className="min-h-0 flex-1 overflow-y-auto xl:h-full print:overflow-visible">
+    <div
+      className={cn(
+        'min-h-0 flex-1 overflow-y-auto xl:h-full print:overflow-visible',
+        shortWorkspace && !compactDocument && 'hidden print:block',
+      )}
+    >
       {/* `inert` while a pass runs: the pass owns the document and the editor is a
           viewer following it - sections appear as they land. Typing into a body the
           server is rewriting would race the autosave against the pipeline, and the
@@ -767,10 +771,9 @@ export default function DraftWorkspacePage() {
   const railPane = (
     <aside
       className={cn(
-        // `xl:h-full` for the same reason the document column has it: inside a resizable
-        // panel the parent is not flex, so the tools fill the panel's height rather than
-        // collapsing to the tab bar - which is what keeps the chat composer at the bottom.
-        'border-border flex min-h-0 basis-[45%] shrink-0 flex-col border-t xl:h-full xl:basis-auto xl:shrink xl:border-t-0 print:hidden',
+        // Fill the panel so the transcript scrolls above the composer footer.
+        'border-border flex min-h-0 flex-1 flex-col border-t xl:border-t-0 print:hidden',
+        shortWorkspace && compactDocument && '[&_[data-slot=tabs-content]]:hidden',
         // The rail's one border is whichever edge faces the page.
         railSide === 'left' ? 'xl:border-r' : 'xl:border-l',
       )}
@@ -788,7 +791,14 @@ export default function DraftWorkspacePage() {
           <Label htmlFor="draft-tool-picker" className="sr-only">
             Draft tool
           </Label>
-          <Select value={railTab} onValueChange={(value) => setRailTab(value as RailTab)}>
+          <Select
+            value={shortWorkspace && compactDocument ? 'document' : railTab}
+            onValueChange={(value) => {
+              if (value === 'document') setCompactDocument(true)
+              else if (value === 'history') setHistoryOpen(true)
+              else setRailTab(value as RailTab)
+            }}
+          >
             <SelectTrigger
               id="draft-tool-picker"
               size="sm"
@@ -798,6 +808,7 @@ export default function DraftWorkspacePage() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent position="popper" align="start">
+              {shortWorkspace ? <SelectItem value="document">Document</SelectItem> : null}
               {activeLiveSuggestion ? (
                 <SelectItem value="live">Draft · Live draft</SelectItem>
               ) : null}
@@ -808,7 +819,9 @@ export default function DraftWorkspacePage() {
                   {commentThreads.data?.length ? ` (${commentThreads.data.length})` : ''}
                 </SelectItem>
               ) : null}
-              <SelectItem value="work">Details · plan, sources, history</SelectItem>
+              <SelectItem value="plan">Plan</SelectItem>
+              <SelectItem value="sources">Sources</SelectItem>
+              <SelectItem value="history">History</SelectItem>
               <SelectItem value="chat">Assistant</SelectItem>
             </SelectContent>
           </Select>
@@ -822,8 +835,13 @@ export default function DraftWorkspacePage() {
         </div>
 
         {activeLiveSuggestion ? (
-          <TabsContent value="live" className="min-h-0 flex-1 overflow-y-auto p-4">
+          <TabsContent
+            value="live"
+            forceMount
+            className="min-h-0 flex-1 overflow-y-auto p-4 data-[state=inactive]:hidden"
+          >
             <LiveDraftSuggestionPanel
+              key={activeLiveSuggestion.id}
               draftId={artifact.id}
               suggestion={activeLiveSuggestion}
               onFinalized={onLiveSuggestionFinalized}
@@ -850,57 +868,61 @@ export default function DraftWorkspacePage() {
           </TabsContent>
         ) : null}
 
-        <TabsContent value="work" className="min-h-0 flex-1 overflow-y-auto">
-          <div className="flex h-full flex-col gap-4 p-4">
-            <Select
-              value={workSection}
-              onValueChange={(value) => setWorkSection(value as WorkSection)}
-            >
-              <SelectTrigger size="sm" className="w-full" aria-label="Draft details section">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="plan">Plan</SelectItem>
-                <SelectItem value="sources">Sources</SelectItem>
-                <SelectItem value="history">History</SelectItem>
-              </SelectContent>
-            </Select>
-            {workSection === 'plan' ? (
-              <PlanPanel
-                draftId={artifact.id}
-                running={generating || startPass.isPending}
-                onRun={async () => {
-                  // The pass reads the body server-side; do not start it over stale text.
-                  if (!(await ensureBodySaved())) return
-                  await startPass.mutateAsync({ depth: 'standard' })
-                  toast.success('Lyra is continuing from the saved plan.')
-                }}
-              />
-            ) : workSection === 'sources' ? (
-              <SourceLedger classId={classId} />
-            ) : (
-              <div className="flex flex-col gap-3">
-                <p className="text-text-secondary text-sm">
-                  Snapshots and accepted suggestions, newest first. Restoring one writes a new
-                  version, so nothing is ever lost.
-                </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="self-start"
-                  onClick={() => setHistoryOpen(true)}
-                >
-                  View history
-                </Button>
-              </div>
-            )}
-          </div>
+        <TabsContent
+          value="plan"
+          forceMount
+          className="min-h-0 flex-1 overflow-y-auto p-4 data-[state=inactive]:hidden"
+        >
+          <PlanPanel
+            key={artifact.id}
+            draftId={artifact.id}
+            running={generating || startPass.isPending || addressing}
+            onRun={async () => {
+              if (!(await ensureBodySaved())) return
+              await startPass.mutateAsync({ depth: 'standard' })
+              toast.success('Lyra is continuing from the saved plan.')
+            }}
+          />
+        </TabsContent>
+        <TabsContent value="sources" className="min-h-0 flex-1 overflow-y-auto p-4">
+          <SourceLedger classId={classId} />
         </TabsContent>
 
         <TabsContent value="comments" className="min-h-0 flex-1 overflow-y-auto p-4">
           <CommentList
             draftId={artifact.id}
             onJump={(comment) => editorRef.current?.jumpToComment(comment.id) ?? false}
+            addressingDisabled={
+              generating ||
+              startPass.isPending ||
+              startReview.isPending ||
+              addressing ||
+              saveState === 'conflict'
+            }
+            onAddressComment={async (comment) => {
+              if (
+                addressingRef.current ||
+                generating ||
+                startPass.isPending ||
+                startReview.isPending
+              )
+                return
+              addressingRef.current = true
+              setAddressing(true)
+              try {
+                if (!(await ensureBodySaved())) return
+                await startPass.mutateAsync({
+                  instruction: `Address this review finding: ${comment.body}`,
+                  sections: comment.section_ref ? [comment.section_ref] : undefined,
+                  address_comment_id: comment.id,
+                  depth: 'standard',
+                })
+                toast.success('Lyra is addressing this comment.')
+              } finally {
+                addressingRef.current = false
+                setAddressing(false)
+              }
+            }}
           />
         </TabsContent>
 
@@ -910,65 +932,68 @@ export default function DraftWorkspacePage() {
           forceMount
           className="min-h-0 flex-1 data-[state=inactive]:hidden"
         >
-          <div ref={chatScrollRef} className="h-full overflow-y-auto p-4">
+          <div className="flex h-full min-h-0 flex-col overflow-hidden">
             {loaded ? (
               <>
-                <BriefCard draftId={loaded.id} />
-                {/* One assistant, no Guide/Show: the writer. Its turns narrate their
+                <div className="max-h-[30%] shrink-0 overflow-y-auto px-4 pt-4">
+                  <BriefCard draftId={loaded.id} />
+                </div>
+                <div className="min-h-0 flex-1">
+                  {/* One assistant, no Guide/Show: the writer. Its turns narrate their
                     tool calls, and a proposal it lands mid-turn arrives through the
                     pending-edit query the same way a pass's does. */}
-                <ChatPane
-                  classId={classId}
-                  className={className}
-                  selectedDocumentId={null}
-                  writer={{
-                    artifactId: loaded.id,
-                    onProposed: () => {
-                      void queryClient.invalidateQueries({
-                        queryKey: draftKeys.pending(loaded.id),
-                      })
-                    },
-                    onBrief: () => {
-                      void queryClient.invalidateQueries({
-                        queryKey: draftKeys.brief(loaded.id),
-                      })
-                    },
-                    onPass: () => {
-                      // The assistant queued a pass mid-turn. Land the student's
-                      // newest words first, then let the status poll pick it up.
-                      void engine.flush(latestMarkdownRef.current)
-                      void queryClient.invalidateQueries({
-                        queryKey: draftKeys.status(loaded.id),
-                      })
-                    },
-                    onReview: () => {
-                      // Same flush, different reason: the review's quotes must
-                      // anchor into the words as the student left them.
-                      void engine.flush(latestMarkdownRef.current)
-                      void queryClient.invalidateQueries({
-                        queryKey: draftKeys.status(loaded.id),
-                      })
-                      setRailTab('comments')
-                    },
-                    onComments: () => {
-                      // The writer replied under threads mid-turn.
-                      void queryClient.invalidateQueries({
-                        queryKey: draftKeys.comments(loaded.id),
-                      })
-                    },
-                  }}
-                  sessionId={activeWriterSessionId}
-                  layout="inline"
-                  scrollViewportRef={chatScrollRef}
-                  onSessionIdChange={setWriterSessionId}
-                  emptyState={
-                    <p className="text-text-tertiary text-sm">
-                      Talk to Lyra about this piece: what the assignment wants, what to write next,
-                      or what to fix. It reads the document and the class material before it
-                      answers.
-                    </p>
-                  }
-                />
+                  <ChatPane
+                    classId={classId}
+                    className={className}
+                    selectedDocumentId={null}
+                    writer={{
+                      artifactId: loaded.id,
+                      onProposed: () => {
+                        void queryClient.invalidateQueries({
+                          queryKey: draftKeys.pending(loaded.id),
+                        })
+                      },
+                      onBrief: () => {
+                        void queryClient.invalidateQueries({
+                          queryKey: draftKeys.brief(loaded.id),
+                        })
+                      },
+                      onPass: () => {
+                        // The assistant queued a pass mid-turn. Land the student's
+                        // newest words first, then let the status poll pick it up.
+                        void engine.flush(latestMarkdownRef.current)
+                        void queryClient.invalidateQueries({
+                          queryKey: draftKeys.status(loaded.id),
+                        })
+                      },
+                      onReview: () => {
+                        // Same flush, different reason: the review's quotes must
+                        // anchor into the words as the student left them.
+                        void engine.flush(latestMarkdownRef.current)
+                        void queryClient.invalidateQueries({
+                          queryKey: draftKeys.status(loaded.id),
+                        })
+                        setRailTab('comments')
+                      },
+                      onComments: () => {
+                        // The writer replied under threads mid-turn.
+                        void queryClient.invalidateQueries({
+                          queryKey: draftKeys.comments(loaded.id),
+                        })
+                      },
+                    }}
+                    sessionId={activeWriterSessionId}
+                    layout="assistant"
+                    onSessionIdChange={setWriterSessionId}
+                    emptyState={
+                      <p className="text-text-tertiary text-sm">
+                        Talk to Lyra about this piece: what the assignment wants, what to write
+                        next, or what to fix. It reads the document and the class material before it
+                        answers.
+                      </p>
+                    }
+                  />
+                </div>
               </>
             ) : null}
           </div>
@@ -1135,55 +1160,64 @@ export default function DraftWorkspacePage() {
         </Alert>
       ) : null}
 
-      {/* Below `xl` the two stack and the rail sits under the page, because there is one
-          column and the page is what it is for. Above it they share a draggable split:
+      {/* Short windows show one full-height surface at a time through the tool picker;
+          both stay mounted so switching never discards edits. Taller windows below `xl`
+          stack the rail under the page. Above it they share a draggable split:
           the measure was a hardcoded 760px against a fixed 380px rail, which on a wide
           window left the text in a narrow ribbon with a third of the screen of dead
           gutter either side, and gave the student no way to say otherwise. */}
-      {wide ? (
-        <ResizablePanelGroup
-          orientation="horizontal"
-          defaultLayout={railSide === 'left' ? railFirstLayout : documentFirstLayout}
-          onLayoutChanged={(layout, meta) => {
-            // Only a drag is a choice; the library reports its own recomputes here too.
-            if (!meta.isUserInteraction) return
-            const share = shareOf(layout, 'rail')
-            if (share) setRailShare(Math.round(share))
-          }}
-          className="min-h-0 flex-1"
-        >
-          {/* `flex flex-col` on each panel: the library sizes its inner content wrapper
-              with `flex-grow: 1`, which only fills when the panel is a flex container.
-              Without it the wrapper - and everything in it - collapses to content height,
-              which is what clipped the slash menu. */}
-          {railSide === 'left' ? (
-            <>
-              <ResizablePanel id="rail" minSize="20" maxSize="45" className="flex flex-col">
-                {railPane}
-              </ResizablePanel>
-              <ResizableHandle withHandle className="print:hidden" />
-              <ResizablePanel id="document" minSize="45" className="flex flex-col">
-                {documentPane}
-              </ResizablePanel>
-            </>
+      <ResizablePanelGroup
+        groupRef={panelGroupRef}
+        orientation={wide ? 'horizontal' : 'vertical'}
+        disabled={!wide}
+        defaultLayout={documentFirstLayout}
+        onLayoutChanged={(layout, meta) => {
+          if (!wide || !meta.isUserInteraction) return
+          const share = shareOf(layout, 'rail')
+          if (share) setRailShare(Math.round(share))
+        }}
+        className={cn(
+          'min-h-0 flex-1',
+          !wide && '[&>[data-panel]]:basis-0!',
+          !wide && !shortWorkspace && '[&>#document]:grow-[55]! [&>#rail]:grow-[45]!',
+          shortWorkspace &&
+            (compactDocument
+              ? '[&>#document]:grow! [&>#rail]:order-first [&>#rail]:grow-0! [&>#rail]:basis-auto!'
+              : '[&>#document]:hidden! [&>#rail]:grow!'),
+        )}
+      >
+        {(wide && railSide === 'left'
+          ? ['rail', 'separator', 'document']
+          : ['document', 'separator', 'rail']
+        ).map((panel) =>
+          panel === 'separator' ? (
+            <ResizableHandle
+              key="separator"
+              withHandle
+              className={cn('print:hidden', !wide && 'hidden')}
+            />
+          ) : panel === 'document' ? (
+            <ResizablePanel
+              key="document"
+              id="document"
+              minSize={wide ? '45' : '0'}
+              className="flex min-h-0 flex-col overflow-hidden!"
+            >
+              {documentPane}
+            </ResizablePanel>
           ) : (
-            <>
-              <ResizablePanel id="document" minSize="45" className="flex flex-col">
-                {documentPane}
-              </ResizablePanel>
-              <ResizableHandle withHandle className="print:hidden" />
-              <ResizablePanel id="rail" minSize="20" maxSize="45" className="flex flex-col">
-                {railPane}
-              </ResizablePanel>
-            </>
-          )}
-        </ResizablePanelGroup>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col">
-          {documentPane}
-          {railPane}
-        </div>
-      )}
+            <ResizablePanel
+              key="rail"
+              id="rail"
+              minSize={wide ? '20' : '0'}
+              maxSize={wide ? '45' : '100'}
+              className="flex min-h-0 flex-col overflow-hidden!"
+            >
+              {railPane}
+            </ResizablePanel>
+          ),
+        )}
+      </ResizablePanelGroup>
 
       {bodyPart ? (
         <RevisionHistory
@@ -1212,6 +1246,7 @@ export default function DraftWorkspacePage() {
 
       <DraftConflictDialog
         conflict={saveState === 'conflict' ? engine.conflict() : null}
+        localBody={latestMarkdown}
         onKeepMine={onKeepMyVersion}
         onUseServer={onUseServerVersion}
       />
@@ -1383,37 +1418,80 @@ function DraftTitle({
  * editor, and the version saved elsewhere is shown here. The choice is theirs, and the
  * dialog stays until they make it - there is no silent reload over their words.
  */
-function DraftConflictDialog({
+export function DraftConflictDialog({
   conflict,
+  localBody,
   onKeepMine,
   onUseServer,
 }: {
   conflict: SaveConflict | null
+  localBody: string
   onKeepMine: () => void
   onUseServer: () => void
 }) {
   return (
     <Dialog open={conflict !== null}>
-      <DialogContent className="max-w-xl" showCloseButton={false}>
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-4xl" showCloseButton={false}>
         <DialogHeader>
           <DialogTitle>This draft was changed somewhere else</DialogTitle>
           <DialogDescription>
-            Your latest writing was not saved, because a newer version of this draft was saved from
-            another place - likely this draft open in a second tab. Nothing was lost. Your writing
-            is still right here in the editor, and the other version is below. Choose which one to
-            keep.
+            Your latest writing is unsaved. Compare both versions and download a copy before
+            choosing which version to keep. You can combine text in your editor after choosing.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-2">
-          <p className="text-text-secondary text-sm font-medium">The version saved elsewhere</p>
-          <pre className="border-border bg-muted max-h-64 overflow-auto rounded-md border p-3 text-xs whitespace-pre-wrap">
-            {conflict?.serverBody === '' ? '(empty)' : conflict?.serverBody}
-          </pre>
-          <p className="text-text-tertiary text-xs">
-            Keeping your writing replaces the version above with what is in your editor. Using the
-            other version replaces your editor with the text above.
-          </p>
+        <div className="grid min-h-0 gap-4 sm:grid-cols-2">
+          {[
+            { label: 'Your unsaved writing', body: localBody },
+            { label: 'The version saved elsewhere', body: conflict?.serverBody ?? '' },
+          ].map(({ label, body }) => (
+            <section key={label} className="flex min-w-0 flex-col gap-2" aria-label={label}>
+              <h3 className="text-sm font-medium">{label}</h3>
+              <pre
+                tabIndex={0}
+                aria-label={label}
+                className="border-border bg-muted max-h-64 overflow-auto rounded-md border p-3 text-xs whitespace-pre-wrap"
+              >
+                {body || '(empty)'}
+              </pre>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(body)
+                    toast.success(`${label} copied.`)
+                  } catch {
+                    toast.error(
+                      'Could not copy. Use Download both versions to preserve your writing.',
+                    )
+                  }
+                }}
+              >
+                Copy {label.toLowerCase()}
+              </Button>
+            </section>
+          ))}
         </div>
+        <Button
+          variant="outline"
+          onClick={() => {
+            const content = `# Your unsaved writing\n\n${localBody}\n\n# The version saved elsewhere\n\n${conflict?.serverBody ?? ''}\n`
+            const url = URL.createObjectURL(
+              new Blob([content], { type: 'text/markdown;charset=utf-8' }),
+            )
+            const link = document.createElement('a')
+            link.href = url
+            link.download = 'draft-conflict-both-versions.md'
+            link.click()
+            window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+          }}
+        >
+          Download both versions
+        </Button>
+        <p className="text-text-tertiary text-xs">
+          Keeping your writing replaces the saved version. Using the other version replaces the text
+          in your editor. Download both versions first to preserve either text for merging.
+        </p>
         <DialogFooter>
           <Button variant="outline" onClick={onUseServer}>
             Use the other version
@@ -1592,9 +1670,9 @@ function DepthField({
   onChange: (depth: WriterDepth) => void
 }) {
   const descriptions: Record<WriterDepth, string> = {
-    quick: 'A light pass close to today’s speed.',
+    quick: 'A focused pass with fewer research and revision steps.',
     standard: 'A balanced process with critique and revision.',
-    deep: 'The largest research and revision budget; it may take an hour or more.',
+    deep: 'More extensive research, critique, and revision. May take an hour or more.',
   }
   return (
     <div className="grid gap-2">

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from backend.core import exa
 from backend.core.app_settings import (
+    TutorConfig,
     get_settings_row,
     resolve_tutor_config,
     update_settings_row,
@@ -175,8 +176,10 @@ def write_settings(payload: SettingsUpdate, conn: DbConn) -> SettingsRead:
         if values.get(column) is None:
             values.pop(column, None)
 
+    key_changed = False
     if "api_key" in values:
         api_key = values.pop("api_key")
+        key_changed = api_key is not None and (api_key or None) != secrets.get_api_key()
         if api_key == "":
             # The interface sends an empty string for "forget my key". A null means
             # "leave whatever is stored alone", which is the no-op below.
@@ -205,7 +208,12 @@ def write_settings(payload: SettingsUpdate, conn: DbConn) -> SettingsRead:
             values["remote_ack"] = 0
 
     model_changed = "model" in values and values["model"] != current["model"]
-    if endpoint_changed or model_changed:
+    if key_changed:
+        # Credentials can select different capabilities even at the same endpoint/model.
+        values.update(
+            tools_supported=None, tools_message=None, vision_supported=None, vision_message=None
+        )
+    if endpoint_changed or model_changed or key_changed:
         # The client remembers, per (endpoint, model), which `response_format` an
         # endpoint refused, and only ever demotes. A settings change is the one moment
         # the user is telling us the configuration is different - commonly the same URL
@@ -226,6 +234,16 @@ async def test_endpoint_connection(conn: DbConn) -> ConnectionTestResult:
     )
 
 
+def _probe_configuration_unchanged(conn: sqlite3.Connection, config: TutorConfig) -> bool:
+    """Do not attach an old in-flight measurement to a newly selected setup."""
+    current = get_settings_row(conn)
+    return (
+        _normalize_endpoint(current["endpoint_url"]) == config.endpoint_url
+        and current["model"] == config.model
+        and secrets.get_api_key() == config.api_key
+    )
+
+
 @router.post("/settings/test-tools", response_model=ToolSupportResult)
 async def test_endpoint_tools(conn: DbConn) -> ToolSupportResult:
     """Ask the endpoint for one trivial tool call, and record what happened.
@@ -238,6 +256,10 @@ async def test_endpoint_tools(conn: DbConn) -> ToolSupportResult:
     """
     config = resolve_tutor_config(conn)
     support = await client.probe_tool_support(config.endpoint_url, config.api_key, config.model)
+    if not _probe_configuration_unchanged(conn, config):
+        return ToolSupportResult(
+            ok=False, message="Connection settings changed. Test tool support again."
+        )
     update_settings_row(
         conn, {"tools_supported": int(support.ok), "tools_message": support.message}
     )
@@ -258,6 +280,10 @@ async def test_endpoint_vision(conn: DbConn) -> VisionSupportResult:
     """
     config = resolve_tutor_config(conn)
     support = await client.probe_vision_support(config.endpoint_url, config.api_key, config.model)
+    if not _probe_configuration_unchanged(conn, config):
+        return VisionSupportResult(
+            ok=False, message="Connection settings changed. Test image support again."
+        )
     update_settings_row(
         conn, {"vision_supported": int(support.ok), "vision_message": support.message}
     )

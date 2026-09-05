@@ -1,3 +1,4 @@
+import userEvent from '@testing-library/user-event'
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
@@ -70,4 +71,18 @@ describe('VerdictBadge', () => {
 
     expect(screen.getByText('Check failed')).toBeInTheDocument()
   })
+})
+
+it('opens verdict details from the keyboard and exposes the settings link', async () => {
+  render(<VerdictBadge verdict="unchecked" />)
+  await userEvent.tab()
+  expect(screen.getByRole('button', { name: 'Not checked: explanation' })).toHaveFocus()
+  await userEvent.keyboard('{Enter}')
+  expect(screen.getByText('Lyra did not check this solution.')).toBeVisible()
+  expect(screen.getByRole('link', { name: 'Check your endpoint settings' })).toHaveAttribute(
+    'href',
+    '/#/settings',
+  )
+  await userEvent.keyboard('{Escape}')
+  expect(screen.queryByText('Lyra did not check this solution.')).not.toBeInTheDocument()
 })

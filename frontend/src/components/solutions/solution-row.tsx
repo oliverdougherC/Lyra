@@ -103,7 +103,7 @@ export function SolutionRow({ classId, solution, onRename, onDelete }: SolutionR
                 variant="ghost"
                 size="icon"
                 aria-label={`Actions for ${solution.title}`}
-                className="size-8 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                className="size-8"
               >
                 <MoreVertical />
               </Button>

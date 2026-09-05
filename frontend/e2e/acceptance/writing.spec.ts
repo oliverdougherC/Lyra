@@ -12,6 +12,7 @@ import {
   apiGet,
   apiPost,
   apiPatch,
+  apiPut,
   createClass,
   createDraft,
   clearTutorState,
@@ -43,6 +44,51 @@ test.describe('Writing', () => {
     const body = await res.json()
     expect(body.title).toBe('My Essay')
     expect(body.body_version).toBe(0)
+  })
+
+  test('writer tools fit short and narrow viewports without hiding the composer', async ({
+    page,
+  }) => {
+    const draft = await createDraft(classId, 'Compact writer verification')
+    const brief = await apiPut(`/api/drafts/${draft.id}/brief`, {
+      assignment_type: 'Comparative essay',
+      summary: 'Explain the first and second laws using a worked example and course readings.',
+      audience: 'First-year physics students',
+      length_target: '1,500 words',
+    })
+    expect(brief.ok).toBe(true)
+    await page.goto(`/#/classes/${classId}/drafts/${draft.id}`)
+    const composer = page.getByRole('textbox', { name: 'Message Lyra', exact: true })
+    for (const viewport of [
+      { width: 640, height: 360 },
+      { width: 375, height: 667 },
+      { width: 1280, height: 720 },
+    ]) {
+      await page.setViewportSize(viewport)
+      await expect(composer).toBeVisible()
+      await expect
+        .poll(async () => {
+          const box = await composer.boundingBox()
+          return (
+            box !== null &&
+            box.height >= 36 &&
+            box.y >= 0 &&
+            box.y + box.height <= viewport.height &&
+            box.x >= 0 &&
+            box.x + box.width <= viewport.width
+          )
+        })
+        .toBe(true)
+      await composer.fill('Keep this question while I inspect the document.')
+      await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeEnabled()
+    }
+    await page.setViewportSize({ width: 640, height: 360 })
+    await page.getByRole('combobox', { name: 'Draft tool', exact: true }).click()
+    await page.getByRole('option', { name: 'Document', exact: true }).click()
+    await expect(page.getByRole('textbox', { name: 'Draft document', exact: true })).toBeVisible()
+    await page.getByRole('combobox', { name: 'Draft tool', exact: true }).click()
+    await page.getByRole('option', { name: 'Assistant', exact: true }).click()
+    await expect(composer).toHaveValue('Keep this question while I inspect the document.')
   })
 
   test('save body with CAS and reload to verify persistence', async () => {
@@ -125,10 +171,7 @@ test.describe('Writing', () => {
     await page.goto(`/classes/${classId}/drafts/${draft.id}`)
     await page.waitForLoadState('networkidle')
     await page.locator('[aria-label="Draft tool"]').click()
-    await page.getByRole('option', { name: 'Details · plan, sources, history' }).click()
-    await page.locator('[aria-label="Draft details section"]').click()
     await page.getByRole('option', { name: 'History' }).click()
-    await page.getByRole('button', { name: 'View history' }).click()
     const historySheet = page.locator('[data-slot="sheet-content"]')
     await expect(historySheet.getByText('Your edit')).toBeVisible()
     await expect(historySheet.getByText('Generated')).toHaveCount(0)

@@ -124,7 +124,7 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
   const [renaming, setRenaming] = useState<StudyTarget | null>(null)
   const [deleting, setDeleting] = useState<StudyTarget | null>(null)
 
-  const documentsLoaded = documents.data !== undefined
+  const documentsLoaded = documents.data !== undefined && !documents.isError
   const readyCount = (documents.data ?? []).filter((item) => item.state === 'ready').length
   // Every name already taken by a deck or a quiz, so a second quick create inside the
   // same minute gets numbered instead of a twin.
@@ -325,7 +325,7 @@ export function ClassStudyPanel({ classId }: { classId: number }) {
       <RenameDialog
         target={renaming ? { id: renaming.id, name: renaming.title } : null}
         title={renaming?.kind === 'quiz' ? 'Rename quiz' : 'Rename deck'}
-        description="It was named in a hurry, which is rarely what the work is."
+        description="Choose a name that helps you find this study tool."
         label="Name"
         pending={renameDeck.isPending || renameQuiz.isPending}
         onOpenChange={(open) => {
@@ -448,7 +448,7 @@ function StudyRow({
               variant="ghost"
               size="icon"
               aria-label={`Actions for ${artifact.title}`}
-              className="size-8 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+              className="size-8"
             >
               <MoreVertical />
             </Button>
@@ -481,9 +481,9 @@ const DIFFICULTY_OPTIONS: { value: QuizDifficulty; label: string }[] = [
   { value: 'exam', label: 'Exam' },
 ]
 
-/** Whole-number input state is text while typing; clamped to the API's range on submit. */
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
+/** Keep raw input untouched; reject invalid values instead of changing the request. */
+function validCount(raw: string, min: number, max: number): boolean {
+  return /^\d+$/.test(raw) && Number(raw) >= min && Number(raw) <= max
 }
 
 /**
@@ -515,8 +515,8 @@ function CreateStudyDialog({
   const [title, setTitle] = useState('')
   /** Null means the student has not touched the list: every ready document. */
   const [selected, setSelected] = useState<number[] | null>(null)
-  const [cardsPerTopic, setCardsPerTopic] = useState(4)
-  const [count, setCount] = useState(10)
+  const [cardsPerTopic, setCardsPerTopic] = useState('4')
+  const [count, setCount] = useState('10')
   const [difficulty, setDifficulty] = useState<QuizDifficulty>('intermediate')
   /** Null means every question type. */
   const [types, setTypes] = useState<QuizQuestionType[] | null>(null)
@@ -533,8 +533,8 @@ function CreateStudyDialog({
     setKindSeen(kind)
     setTitle(kind === null ? '' : quickStudyTitle(kind, existingTitles))
     setSelected(null)
-    setCardsPerTopic(4)
-    setCount(10)
+    setCardsPerTopic('4')
+    setCount('10')
     setDifficulty('intermediate')
     setTypes(null)
     setOptionsOpen(false)
@@ -564,8 +564,10 @@ function CreateStudyDialog({
     })
   }
 
+  const countValid = kind === 'deck' ? validCount(cardsPerTopic, 2, 6) : validCount(count, 3, 30)
+
   async function onSubmit() {
-    if (!kind) return
+    if (!kind || !countValid || documents.isError || pending) return
     const trimmed = title.trim()
     if (!trimmed || effectiveSelected.length === 0) return
     try {
@@ -574,12 +576,12 @@ function CreateStudyDialog({
           ? await createDeck.mutateAsync({
               title: trimmed,
               document_ids: effectiveSelected,
-              cards_per_topic: clamp(cardsPerTopic, 2, 6),
+              cards_per_topic: Number(cardsPerTopic),
             })
           : await createQuiz.mutateAsync({
               title: trimmed,
               document_ids: effectiveSelected,
-              count: clamp(count, 3, 30),
+              count: Number(count),
               difficulty,
               types: effectiveTypes,
             })
@@ -594,6 +596,8 @@ function CreateStudyDialog({
     title.trim().length > 0 &&
     effectiveSelected.length > 0 &&
     (kind !== 'quiz' || effectiveTypes.length > 0) &&
+    countValid &&
+    !documents.isError &&
     !pending
 
   return (
@@ -623,11 +627,22 @@ function CreateStudyDialog({
         <div className="grid gap-2">
           <Label>Source documents</Label>
           {documents.isError ? (
-            <p className="text-danger-text text-sm" role="alert">
-              {documents.error instanceof ApiError
-                ? documents.error.message
-                : 'Could not load the documents.'}
-            </p>
+            <div className="text-danger-text text-sm" role="alert">
+              <p>
+                {documents.error instanceof ApiError
+                  ? documents.error.message
+                  : 'Could not load the documents.'}
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2"
+                disabled={documents.isFetching}
+                onClick={() => void documents.refetch()}
+              >
+                Retry documents
+              </Button>
+            </div>
           ) : (
             <SourcePicker
               name="study-sources"
@@ -656,11 +671,13 @@ function CreateStudyDialog({
             />
             Options
             <span className="text-text-tertiary text-xs">
-              {kind === 'quiz'
-                ? `${clamp(count, 3, 30)} questions · ${
-                    DIFFICULTY_OPTIONS.find((option) => option.value === difficulty)?.label
-                  }`
-                : `${clamp(cardsPerTopic, 2, 6)} cards per topic`}
+              {!countValid
+                ? 'Check the count'
+                : kind === 'quiz'
+                  ? `${count} questions · ${
+                      DIFFICULTY_OPTIONS.find((option) => option.value === difficulty)?.label
+                    }`
+                  : `${cardsPerTopic} cards per topic`}
             </span>
           </CollapsibleTrigger>
           <CollapsibleContent className="flex flex-col gap-4 pt-3">
@@ -673,9 +690,17 @@ function CreateStudyDialog({
                   min={2}
                   max={6}
                   value={cardsPerTopic}
-                  onChange={(event) => setCardsPerTopic(Number(event.target.value))}
+                  onChange={(event) => setCardsPerTopic(event.target.value)}
+                  step={1}
+                  aria-invalid={!countValid}
+                  aria-describedby="cards-per-topic-help"
                   className="w-24"
                 />
+                {!countValid ? (
+                  <p id="cards-per-topic-help" role="alert" className="text-danger-text text-sm">
+                    Enter a whole number from 2 to 6.
+                  </p>
+                ) : null}
               </div>
             ) : null}
 
@@ -689,9 +714,17 @@ function CreateStudyDialog({
                     min={3}
                     max={30}
                     value={count}
-                    onChange={(event) => setCount(Number(event.target.value))}
+                    onChange={(event) => setCount(event.target.value)}
+                    step={1}
+                    aria-invalid={!countValid}
+                    aria-describedby="question-count-help"
                     className="w-24"
                   />
+                  {!countValid ? (
+                    <p id="question-count-help" role="alert" className="text-danger-text text-sm">
+                      Enter a whole number from 3 to 30.
+                    </p>
+                  ) : null}
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="quiz-difficulty">Difficulty</Label>

@@ -53,6 +53,16 @@ describe('WorkspaceChangeReviewRail', () => {
     expect(onAcceptHunk).not.toHaveBeenCalled()
   })
 
+  it('omits unsupported per-change actions and describes removed and added lines', () => {
+    render(
+      <WorkspaceChangeReviewRail change={CHANGE} onAcceptHunk={vi.fn()} onRejectAll={vi.fn()} />,
+    )
+    expect(screen.queryByRole('button', { name: 'Reject change 2' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Reject proposal' })).toBeEnabled()
+    expect(screen.getAllByText('Removed:')).toHaveLength(2)
+    expect(screen.getAllByText('Added:')).toHaveLength(2)
+  })
+
   it('swaps to side-by-side file review when the proposal is stale', () => {
     render(
       <WorkspaceChangeReviewRail

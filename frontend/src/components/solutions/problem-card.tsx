@@ -16,7 +16,6 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { formatCount } from '@/lib/format'
-import { statementLeadIn } from '@/lib/statement'
 import { cn } from '@/lib/utils'
 
 /** One problem as the review screen holds it, before it goes back to the backend. */
@@ -55,6 +54,7 @@ type ProblemCardProps = {
    * a whole replacement problem.
    */
   onRemovePart: (position: number) => void
+  onAddPart: () => void
 }
 
 export function ProblemCard({
@@ -67,6 +67,7 @@ export function ProblemCard({
   onSplit,
   onRemove,
   onRemovePart,
+  onAddPart,
 }: ProblemCardProps) {
   const [open, setOpen] = useState(false)
   const [editingLabel, setEditingLabel] = useState(false)
@@ -132,25 +133,54 @@ export function ProblemCard({
             // an ellipsis hid the half of the problem most likely to be misread: the
             // equations. A gate whose contents cannot be read is not a gate. The editor
             // above stays raw text, because the LaTeX is what a correction has to change.
-            <MathText className="text-text-secondary mt-2 text-sm">
-              {statementLeadIn(
-                problem.statement,
-                problem.parts.map((part) => part.label),
-              )}
-            </MathText>
+            <MathText className="text-text-secondary mt-2 text-sm">{problem.statement}</MathText>
           )}
 
           {problem.parts.length > 0 ? (
             <ul className="border-border mt-3 flex flex-col gap-2 border-l pl-3">
               {problem.parts.map((part, position) => (
                 <li key={part.key} className="flex items-start gap-2">
-                  <span className="text-text-tertiary shrink-0 pt-px text-xs">{part.label}</span>
-                  {/* Wrapped rather than truncated, for the same reason the statement
-                      above it is: a sub-part clipped at the pane's edge is the part of
-                      the question the student cannot check. */}
-                  <MathText className="text-text-secondary min-w-0 flex-1 text-sm">
-                    {part.statement}
-                  </MathText>
+                  {open ? (
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <Input
+                        aria-label={`Part ${position + 1} label of ${problem.label}`}
+                        value={part.label}
+                        placeholder="Part label"
+                        className="h-8 w-full max-w-40"
+                        onChange={(event) =>
+                          onChange({
+                            ...problem,
+                            edited: true,
+                            parts: problem.parts.map((entry, i) =>
+                              i === position ? { ...entry, label: event.target.value } : entry,
+                            ),
+                          })
+                        }
+                      />
+                      <Textarea
+                        aria-label={`Part ${position + 1} statement of ${problem.label}`}
+                        value={part.statement}
+                        onChange={(event) =>
+                          onChange({
+                            ...problem,
+                            edited: true,
+                            parts: problem.parts.map((entry, i) =>
+                              i === position ? { ...entry, statement: event.target.value } : entry,
+                            ),
+                          })
+                        }
+                      />
+                    </div>
+                  ) : (
+                    <>
+                      <span className="text-text-tertiary shrink-0 pt-px text-xs">
+                        {part.label}
+                      </span>
+                      <MathText className="text-text-secondary min-w-0 flex-1 text-sm">
+                        {part.statement}
+                      </MathText>
+                    </>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -163,6 +193,12 @@ export function ProblemCard({
                 </li>
               ))}
             </ul>
+          ) : null}
+
+          {open ? (
+            <Button variant="outline" size="sm" className="mt-3" onClick={onAddPart}>
+              Add a part
+            </Button>
           ) : null}
 
           {/* The one reading on this screen Lyra makes and the student confirms, rather

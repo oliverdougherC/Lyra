@@ -121,3 +121,66 @@ describe('DocumentsPane in the manage variant', () => {
     ).not.toBeInTheDocument()
   })
 })
+
+it('confirms single deletion in the chat pane and preserves selection when cancelled', async () => {
+  const remove = vi.spyOn(api, 'deleteDocument').mockResolvedValue(undefined)
+  const select = vi.fn()
+  render(<DocumentsPane classId={1} selectedDocumentId={5} onSelectDocument={select} />, {
+    wrapper: createWrapper().wrapper,
+  })
+  await userEvent.click(await screen.findByRole('button', { name: 'Actions for syllabus.pdf' }))
+  await userEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }))
+  const dialog = await screen.findByRole('alertdialog')
+  expect(within(dialog).getByText(/syllabus.pdf/)).toBeInTheDocument()
+  expect(remove).not.toHaveBeenCalled()
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+  expect(select).not.toHaveBeenCalled()
+})
+
+it('keeps hidden selected files explicit and offers recovery from an unmatched search', async () => {
+  vi.mocked(api.listDocuments).mockResolvedValue([
+    ...DOCUMENTS,
+    ...Array.from({ length: 7 }, (_, i) => ({
+      ...DOCUMENTS[0],
+      id: i + 10,
+      filename: `notes-${i}.pdf`,
+    })),
+  ])
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+  await userEvent.click(await screen.findByRole('button', { name: 'Select syllabus.pdf' }))
+  await userEvent.type(screen.getByRole('searchbox'), 'unmatched')
+  expect(screen.getByText(/No documents match/)).toBeInTheDocument()
+  expect(screen.queryByText('No documents yet')).not.toBeInTheDocument()
+  expect(screen.getByText(/1 file selected/)).toBeInTheDocument()
+  expect(screen.getByText(/1 hidden by filter/)).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  expect(
+    within(await screen.findByRole('alertdialog')).getByText('syllabus.pdf'),
+  ).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Clear filter' }))
+  expect(screen.getByRole('button', { name: 'Deselect syllabus.pdf' })).toBeInTheDocument()
+})
+
+it('retains failed deletes in the confirmation and selection while retiring successful files', async () => {
+  vi.spyOn(api, 'deleteDocument').mockImplementation(async (id) => {
+    if (id === 5) throw new Error('offline')
+  })
+  render(<DocumentsPane classId={1} variant="manage" />, { wrapper: createWrapper().wrapper })
+  await userEvent.click(await screen.findByRole('button', { name: 'Select homework_2.pdf' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Select syllabus.pdf' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Delete' }))
+  await userEvent.click(
+    within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete' }),
+  )
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    '1 file could not be deleted. Try again.',
+  )
+  expect(
+    within(screen.getByRole('alertdialog')).queryByText('homework_2.pdf'),
+  ).not.toBeInTheDocument()
+  expect(within(screen.getByRole('alertdialog')).getByText('syllabus.pdf')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+  expect(screen.getByText('1 file selected')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Deselect syllabus.pdf' })).toBeInTheDocument()
+})

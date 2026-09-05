@@ -106,26 +106,40 @@ describe('ClassWorkPanel filters', () => {
 
     // A filter click moves the `work` param into the actual hash route - not into the
     // document's query string, which the router never reads - and the list hands over.
-    await user.click(screen.getByRole('tab', { name: 'Solutions' }))
+    await user.click(screen.getByRole('button', { name: 'Solutions' }))
     await waitFor(() => expect(window.location.hash).toBe('#/classes/1?tab=work&work=solutions'))
     expect(await screen.findByRole('link', { name: /Homework 2/ })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /Fourier week/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /Signal notes draft/ })).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('tab', { name: 'Drafts' }))
+    await user.click(screen.getByRole('button', { name: 'Drafts' }))
     await waitFor(() => expect(window.location.hash).toBe('#/classes/1?tab=work&work=drafts'))
     expect(await screen.findByRole('link', { name: /Signal notes draft/ })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /Homework 2/ })).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('tab', { name: 'Chats' }))
+    await user.click(screen.getByRole('button', { name: 'Chats' }))
     await waitFor(() => expect(window.location.hash).toBe('#/classes/1?tab=work&work=chats'))
     expect(await screen.findByRole('link', { name: /Fourier week/ })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: /Homework 2/ })).not.toBeInTheDocument()
 
     // "All" drops the param: the route says what the list shows.
-    await user.click(screen.getByRole('tab', { name: 'All' }))
+    await user.click(screen.getByRole('button', { name: 'All' }))
     await waitFor(() => expect(window.location.hash).toBe('#/classes/1?tab=work'))
     expect(await screen.findByRole('link', { name: /Laplace transforms/ })).toBeInTheDocument()
+  })
+
+  it('lets keyboard users activate ordinary pressed filter buttons', async () => {
+    resetLocation('/#/classes/1?tab=work')
+    const { wrapper } = createWrapper()
+    render(<ClassWorkPanel classId={1} />, { wrapper })
+    await screen.findByRole('link', { name: /Fourier week/ })
+    const user = userEvent.setup()
+    await user.tab()
+    expect(screen.getByRole('button', { name: 'All' })).toHaveFocus()
+    await user.tab()
+    await user.keyboard(' ')
+    expect(screen.getByRole('button', { name: 'Chats' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByRole('tablist')).not.toBeInTheDocument()
   })
 
   it('reads a filtered URL on arrival, so a reload of the filtered view lands filtered', async () => {
@@ -135,7 +149,7 @@ describe('ClassWorkPanel filters', () => {
     render(<ClassWorkPanel classId={1} />, { wrapper })
 
     await screen.findByRole('link', { name: /Fourier week/ })
-    expect(screen.getByRole('tab', { name: 'Chats' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('button', { name: 'Chats' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.queryByRole('link', { name: /Homework 2/ })).not.toBeInTheDocument()
   })
 
@@ -147,5 +161,49 @@ describe('ClassWorkPanel filters', () => {
 
     await screen.findByRole('link', { name: /Fourier week/ })
     expect(screen.queryByRole('link', { name: /Laplace transforms/ })).not.toBeInTheDocument()
+  })
+})
+
+describe('Work recovery and readable states', () => {
+  it('keeps loaded categories visible and retries a failed category without claiming it is empty', async () => {
+    resetLocation('/#/classes/1?tab=work')
+    vi.mocked(api.listSolutions).mockRejectedValueOnce(new Error('offline'))
+    const { wrapper } = createWrapper()
+    render(<ClassWorkPanel classId={1} />, { wrapper })
+    expect(await screen.findByRole('link', { name: /Fourier week/ })).toBeInTheDocument()
+    expect(await screen.findByText('Could not load solutions')).toBeInTheDocument()
+    expect(screen.queryByText('Nothing here yet')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Retry solutions' }))
+    expect(await screen.findByRole('link', { name: /Homework 2/ })).toBeInTheDocument()
+    expect(screen.queryByText('Could not load solutions')).not.toBeInTheDocument()
+  })
+
+  it('shows a recovery state when every successful category is empty', async () => {
+    resetLocation('/#/classes/1?tab=work')
+    vi.mocked(api.listSessions).mockResolvedValue([])
+    vi.mocked(api.listDrafts).mockResolvedValue([])
+    vi.mocked(api.listStudy).mockResolvedValue({ decks: [], quizzes: [] })
+    vi.mocked(api.listSolutions).mockRejectedValue(new Error('offline'))
+    const { wrapper } = createWrapper()
+    render(<ClassWorkPanel classId={1} />, { wrapper })
+    await screen.findByText('Could not load solutions')
+    expect(screen.queryByText('Nothing here yet')).not.toBeInTheDocument()
+  })
+
+  it('offers understandable actions for review and queued work', async () => {
+    resetLocation('/#/classes/1?tab=work')
+    vi.mocked(api.listSolutions).mockResolvedValue([
+      { ...SOLUTION, state: 'awaiting_review', stage_detail: null },
+    ])
+    vi.mocked(api.listDrafts).mockResolvedValue([
+      { ...DRAFT, state: 'pending', stage_detail: null },
+    ])
+    const { wrapper } = createWrapper()
+    render(<ClassWorkPanel classId={1} />, { wrapper })
+    expect(
+      await screen.findByRole('link', { name: /Homework 2.*Review problems/ }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Signal notes draft.*Queued/ })).toBeInTheDocument()
+    expect(screen.queryByText('awaiting_review')).not.toBeInTheDocument()
   })
 })

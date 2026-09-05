@@ -117,7 +117,7 @@ describe('useStartPass', () => {
 })
 
 describe('useUpdateLiveDraftSuggestionBlock', () => {
-  it('optimistically updates the block and then replaces it with the server copy', async () => {
+  it('keeps unconfirmed edits local and applies the acknowledged server copy', async () => {
     const pending = deferred<(typeof LIVE_SUGGESTION.blocks)[number]>()
     vi.spyOn(api, 'updateLiveDraftSuggestionBlock').mockImplementation(() => pending.promise)
 
@@ -133,14 +133,10 @@ describe('useUpdateLiveDraftSuggestionBlock', () => {
       baseContent: 'Original introduction.',
     })
 
-    await waitFor(() => {
-      const optimistic = queryClient.getQueryData<LiveDraftSuggestion>(draftKeys.liveSuggestion(3))
-      expect(optimistic?.blocks[0]).toMatchObject({
-        content: 'Edited introduction.',
-        revision: 3,
-        user_revision: 1,
-      })
-    })
+    await waitFor(() => expect(api.updateLiveDraftSuggestionBlock).toHaveBeenCalled())
+    expect(
+      queryClient.getQueryData<LiveDraftSuggestion>(draftKeys.liveSuggestion(3))?.blocks[0],
+    ).toEqual(LIVE_SUGGESTION.blocks[0])
 
     pending.resolve({
       ...LIVE_SUGGESTION.blocks[0],
@@ -166,7 +162,7 @@ describe('useUpdateLiveDraftSuggestionBlock', () => {
     })
   })
 
-  it('rolls back and refetches when the server rejects the revision token', async () => {
+  it('preserves confirmed content and refetches when the server rejects the revision token', async () => {
     vi.spyOn(api, 'updateLiveDraftSuggestionBlock').mockRejectedValue(
       new ApiError(409, 'This block changed. Reload the live draft suggestion.'),
     )
@@ -193,5 +189,39 @@ describe('useUpdateLiveDraftSuggestionBlock', () => {
       user_revision: 0,
     })
     expect(invalidate).toHaveBeenCalledWith({ queryKey: draftKeys.liveSuggestion(3) })
+  })
+  it('does not roll back another paragraph when a concurrent save fails', async () => {
+    const first = deferred<(typeof LIVE_SUGGESTION.blocks)[number]>()
+    const second = { ...LIVE_SUGGESTION.blocks[0], id: 102 }
+    vi.spyOn(api, 'updateLiveDraftSuggestionBlock').mockImplementation(
+      async (_id, blockId, body) =>
+        blockId === 101 ? first.promise : { ...second, content: body.content, revision: 3 },
+    )
+    const { queryClient, wrapper } = createWrapper()
+    queryClient.setQueryData(draftKeys.liveSuggestion(3), {
+      ...LIVE_SUGGESTION,
+      blocks: [LIVE_SUGGESTION.blocks[0], second],
+    })
+    const { result } = renderHook(() => useUpdateLiveDraftSuggestionBlock(3), { wrapper })
+    const failed = result.current
+      .mutateAsync({
+        blockId: 101,
+        content: 'Fails',
+        expectedRevision: 2,
+        baseContent: 'Original introduction.',
+      })
+      .catch(() => undefined)
+    await waitFor(() => expect(api.updateLiveDraftSuggestionBlock).toHaveBeenCalledTimes(1))
+    await result.current.mutateAsync({
+      blockId: 102,
+      content: 'Saved second paragraph',
+      expectedRevision: 2,
+      baseContent: second.content,
+    })
+    first.reject(new Error('Offline'))
+    await failed
+    expect(
+      queryClient.getQueryData<LiveDraftSuggestion>(draftKeys.liveSuggestion(3))?.blocks[1],
+    ).toMatchObject({ content: 'Saved second paragraph', revision: 3 })
   })
 })

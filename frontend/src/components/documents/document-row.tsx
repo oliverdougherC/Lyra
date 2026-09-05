@@ -458,7 +458,7 @@ function DocumentOutline({ documentId }: { documentId: number }) {
   const [open, setOpen] = useState(false)
   // Only once it is opened. A closed disclosure is the default on every row of the list,
   // and this is a group-by over every chunk of what may be a book.
-  const { data, isPending } = useDocumentOutline(documentId, open)
+  const { data, isPending, isError, isFetching, refetch } = useDocumentOutline(documentId, open)
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -472,13 +472,24 @@ function DocumentOutline({ documentId }: { documentId: number }) {
       <CollapsibleContent className="pt-1.5">
         {isPending ? (
           <p className="text-text-tertiary text-xs">Reading the index...</p>
+        ) : isError ? (
+          <div className="space-y-1 text-xs" role="alert">
+            <p>Could not load outline.</p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isFetching}
+              onClick={() => void refetch()}
+            >
+              Retry outline
+            </Button>
+          </div>
         ) : !data || data.sections.length === 0 ? (
           // Said plainly rather than left blank. "No structure" and "this did not load" look
           // identical as an empty list, and only one of them is worth acting on.
           <p className="text-text-tertiary text-xs">
             No sections found. This document is indexed as{' '}
-            {formatCount(data?.chunk_count ?? 0, 'passage')} with no hierarchy, so questions about
-            it are answered by meaning alone.
+            {formatCount(data?.chunk_count ?? 0, 'passage')} without section headings.
           </p>
         ) : (
           <>

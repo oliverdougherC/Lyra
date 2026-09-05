@@ -112,6 +112,19 @@ describe('ChatPane', () => {
     } as Awaited<ReturnType<typeof api.createSession>>)
   })
 
+  it('blocks sending after a history failure and recovers with Retry', async () => {
+    vi.mocked(api.listMessages)
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue([message({ id: 11, content: 'Saved question' })])
+    renderWorkspace()
+    await userEvent.click(screen.getByRole('button', { name: 'Reopen chat' }))
+    expect(await screen.findByText('Could not load this conversation.')).toBeInTheDocument()
+    expect(screen.getByLabelText('Message Lyra')).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: 'Retry conversation' }))
+    expect(await screen.findByText('Saved question')).toBeInTheDocument()
+    expect(screen.getByLabelText('Message Lyra')).toBeEnabled()
+  })
+
   it('shows the first question once while the answer streams', async () => {
     // The server stores the question the moment the turn opens, so the first fetch of the
     // message list — which only becomes possible once the conversation exists — comes back

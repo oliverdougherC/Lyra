@@ -16,11 +16,13 @@ const COMMAND: AgentCommandRequest = {
 }
 
 describe('CommandConfirmationCard', () => {
-  it('shows the exact argv, cwd, timeout, and network warning before execution', () => {
+  it('shows the readable command and consequences with exact arguments available in Details', async () => {
     render(<CommandConfirmationCard command={COMMAND} />)
 
     expect(screen.getByText('Runs exactly as shown')).toBeInTheDocument()
     expect(screen.getByText('Network effects are possible')).toBeInTheDocument()
+    expect(screen.getByText('pytest -q tests/test_lab.py')).toBeInTheDocument()
+    await userEvent.click(screen.getByText('Argument details'))
     expect(screen.getByRole('list', { name: 'Command arguments' })).toHaveTextContent('0:pytest')
     expect(screen.getByText('lab-repo')).toBeInTheDocument()
     expect(screen.getByText('120 seconds')).toBeInTheDocument()
@@ -56,7 +58,7 @@ describe('CommandConfirmationCard', () => {
     expect(screen.getByText('Completed')).toBeInTheDocument()
     expect(screen.getByText('Exit 0')).toBeInTheDocument()
     expect(screen.getByText('Output truncated')).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: 'Stdout' })).toHaveTextContent('2 passed')
+    expect(screen.getByRole('region', { name: 'Output' })).toHaveTextContent('2 passed')
     expect(screen.queryByRole('button', { name: 'Confirm and run' })).not.toBeInTheDocument()
   })
 })

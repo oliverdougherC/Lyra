@@ -129,7 +129,17 @@ export function RevisionHistory({
             {revisions.isPending ? (
               [0, 1].map((row) => <Skeleton key={row} className="h-24 w-full rounded-md" />)
             ) : revisions.isError ? (
-              <p className="text-text-tertiary text-sm">Could not load the history.</p>
+              <div role="alert" className="space-y-2">
+                <p className="text-text-tertiary text-sm">Could not load the history.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={revisions.isFetching}
+                  onClick={() => void revisions.refetch()}
+                >
+                  {revisions.isFetching ? 'Retrying…' : 'Retry'}
+                </Button>
+              </div>
             ) : revisions.data.length === 0 ? (
               <p className="text-text-tertiary text-sm">Nothing has been written here yet.</p>
             ) : (

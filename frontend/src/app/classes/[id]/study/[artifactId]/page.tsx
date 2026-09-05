@@ -194,9 +194,11 @@ export default function StudySessionPage() {
         </Alert>
       ) : null}
 
-      {state === 'ready' && kind === 'flashcard_deck' ? <DeckSession deckId={artifactId} /> : null}
+      {state === 'ready' && kind === 'flashcard_deck' ? (
+        <DeckSession key={artifactId} deckId={artifactId} />
+      ) : null}
       {state === 'ready' && kind === 'quiz' ? (
-        <QuizRunner classId={classId} quizId={artifactId} />
+        <QuizRunner key={artifactId} classId={classId} quizId={artifactId} />
       ) : null}
     </div>
   )

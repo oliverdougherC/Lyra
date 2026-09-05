@@ -426,7 +426,7 @@ export async function sendChatAndWait(
  * Click the flashcard to flip it (front -> back or back -> front).
  */
 export async function flipCard(page: Page) {
-  await page.locator('[role="button"][aria-label*="Card"]').click()
+  await page.getByRole('button', { name: /^Show (answer|question)$/ }).click()
 }
 
 /**
