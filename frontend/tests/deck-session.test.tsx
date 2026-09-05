@@ -83,6 +83,7 @@ function reviewedState(rating: string): CardStateRead {
 
 beforeEach(() => {
   vi.restoreAllMocks()
+  sessionStorage.clear()
   vi.spyOn(api, 'getDeckSession').mockResolvedValue(SESSION)
   vi.spyOn(api, 'reviewCard').mockImplementation((_partId, rating) =>
     Promise.resolve(reviewedState(rating)),
@@ -284,4 +285,81 @@ describe('DeckSession', () => {
     expect(freshId).toBeTypeOf('string')
     expect(freshId).not.toBe(retryId)
   })
+})
+
+describe('durable rating recovery', () => {
+  it.each([false, true])(
+    'recovers after reload when first request committed=%s',
+    async (committedBeforeLoss) => {
+      vi.spyOn(api, 'getDeckSession').mockResolvedValue({ cards: [SESSION.cards[0]] })
+      const log = new Map<string, { rating: string; state: CardStateRead }>()
+      let fail = true
+      const review = vi.spyOn(api, 'reviewCard').mockImplementation(async (_partId, rating, id) => {
+        // The operation is durable before any network request, including the first.
+        expect(JSON.parse(sessionStorage.getItem('lyra:study-session:v1:8')!).operation).toEqual({
+          id,
+          rating,
+        })
+        if (!log.has(id) && (!fail || committedBeforeLoss))
+          log.set(id, { rating, state: reviewedState(rating) })
+        if (fail) {
+          fail = false
+          throw new Error('lost response')
+        }
+        expect(log.get(id)?.rating).toBe(rating)
+        return log.get(id)!.state
+      })
+      const first = render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+      await screen.findByText('What is the Fourier transform of a delta?')
+      await userEvent.keyboard(' ')
+      await userEvent.keyboard('4')
+      await screen.findByRole('alert')
+      expect(screen.getByRole('button', { name: /Again/ })).toBeDisabled()
+      await userEvent.keyboard('1')
+      expect(review).toHaveBeenCalledTimes(1)
+      first.unmount()
+
+      // A committed card may no longer be returned in the server's due queue.
+      vi.spyOn(api, 'getDeckSession').mockResolvedValue({ cards: [] })
+      const second = render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+      await screen.findByRole('alert')
+      expect(screen.getByRole('button', { name: /Again/ })).toBeDisabled()
+      await userEvent.click(screen.getByRole('button', { name: /Easy/ }))
+      await screen.findByText('Session complete')
+      expect(screen.getByText(/1 easy/)).toHaveTextContent('0 again')
+      expect(log.size).toBe(1)
+      expect(review.mock.calls[1]).toEqual(review.mock.calls[0])
+      const acknowledged = JSON.parse(sessionStorage.getItem('lyra:study-session:v1:8')!)
+      expect(acknowledged.operation).toBeNull()
+      expect(acknowledged.states[0][1].dueAt).toBe(
+        new Date(reviewedState('easy').due_at + 'Z').toISOString(),
+      )
+      second.unmount()
+      render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+      await screen.findByText('Session complete')
+      expect(screen.getByText(/1 easy/)).toHaveTextContent('0 again')
+      expect(review).toHaveBeenCalledTimes(2)
+    },
+  )
+
+  it('does not send a review when persisting its key fails', async () => {
+    render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+    await screen.findByText('What is the Fourier transform of a delta?')
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota')
+    })
+    await userEvent.keyboard(' ')
+    await userEvent.keyboard('4')
+    await screen.findByRole('alert')
+    expect(api.reviewCard).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /Again/ })).toBeDisabled()
+  })
+})
+
+it.each(['{', '{}'])('blocks reviews if stored recovery is invalid: %s', async (value) => {
+  sessionStorage.setItem('lyra:study-session:v1:8', value)
+  render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+  await screen.findByText('Could not restore this study session')
+  await userEvent.keyboard(' 4')
+  expect(api.reviewCard).not.toHaveBeenCalled()
 })

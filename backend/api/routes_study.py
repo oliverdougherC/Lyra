@@ -540,10 +540,15 @@ def review_card(part_id: int, payload: CardReview, conn: DbConn) -> dict[str, ob
     try:
         conn.execute("begin immediate")
         prior = conn.execute(
-            "select result_state from card_review_log where part_id = ? and op_id = ?",
+            "select rating, result_state from card_review_log where part_id = ? and op_id = ?",
             (part_id, payload.operation_id),
         ).fetchone()
         if prior is not None:
+            if prior["rating"] != payload.rating:
+                raise ConflictError(
+                    "This review operation already recorded a different rating. "
+                    "Retry the original rating to confirm it."
+                )
             conn.rollback()
             return json.loads(str(prior["result_state"]))
         # Re-read under the lock: the deck must still be ready and the card must still
@@ -911,11 +916,29 @@ def finish_attempt(attempt_id: int, conn: DbConn) -> dict[str, object]:
 
 
 def _cancel_study(artifact: dict[str, object], conn: sqlite3.Connection) -> dict[str, object]:
-    """Stop a queued or running study generation, keeping anything already written."""
-    if artifact["state"] not in (artifacts.PENDING, artifacts.GENERATING):
-        raise ConflictError(NOT_RUNNING_MESSAGE)
-    artifacts.set_artifact_state(conn, int(artifact["id"]), artifacts.CANCELLED)
-    return artifacts.get_artifact(conn, int(artifact["id"]))
+    """Cancel live work atomically; repeated cancellation returns its settled state."""
+    artifact_id = int(artifact["id"])
+    conn.execute("begin immediate")
+    try:
+        conn.execute(
+            "update artifacts set state = ?, stage_detail = NULL, updated_at = datetime('now') "
+            "where id = ? and state in (?, ?) and kind in (?, ?)",
+            (
+                artifacts.CANCELLED,
+                artifact_id,
+                artifacts.PENDING,
+                artifacts.GENERATING,
+                *study.STUDY_KINDS,
+            ),
+        )
+        settled = artifacts.get_artifact(conn, artifact_id)
+        if settled["state"] != artifacts.CANCELLED:
+            raise ConflictError(f"{NOT_RUNNING_MESSAGE} Current state: {settled['state']}.")
+        conn.commit()
+        return settled
+    except Exception:
+        conn.rollback()
+        raise
 
 
 @router.patch("/decks/{artifact_id}", response_model=None)

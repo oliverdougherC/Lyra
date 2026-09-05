@@ -5,15 +5,16 @@ so a test pins time and the API layer owns the wall clock. Scheduling state live
 `card_states` rows (migration 016), one per card part, and is rewritten in full on every
 review; there is no history here because the review log is the history.
 
-The model, in one paragraph. `stability` is estimated memory strength in days: a card
-with stability S should still be recallable about S days after its last success. It only
-grows on success and only shrinks, never below a positive floor, on a lapse. `difficulty`
-is a 1-10 ease knob kept for display; scheduling keys off the rating directly. Intervals
-equal the new stability, which is what makes the schedule expand as recall proves out.
+Success on a new card seeds its interval. Subsequent growth requires both a due card
+and at least 24 hours since its last rating. Early practice is still recorded, but keeps
+its strength, state, and deadline. A due learning/relearning success can graduate within
+24 hours without growth (one-day floor). Again always decays strength and schedules ten
+minutes. Stability and intervals are capped at 365 days, including legacy inflated state.
 """
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from math import isfinite
 
 RATINGS: tuple[str, ...] = ("again", "hard", "good", "easy")
 
@@ -31,8 +32,11 @@ MAX_DIFFICULTY = 10.0
 # pushes hardest toward difficult; `easy` is the one rating that lowers it.
 DIFFICULTY_DELTAS: dict[str, float] = {"again": 1.0, "hard": 0.5, "good": -0.1, "easy": -0.5}
 
-# Applied before scaling, so a fresh card never multiplies zero: the first success on a
-# new card schedules it a day out rather than never.
+# Keep legacy inflated states and new schedules within a useful, finite horizon.
+MAX_STABILITY_DAYS = 365.0
+MIN_SPACED_ELAPSED = timedelta(days=1)
+MAX_SCHEDULE_DATE = datetime(9999, 12, 31, 23, 59, 59, 999000, tzinfo=UTC)
+# Seed new cards and successful relearning at one day before any earned growth.
 STABILITY_SEED_FLOOR = 1.0
 STABILITY_FACTORS: dict[str, float] = {"hard": 1.2, "good": 2.0, "easy": 2.8}
 
@@ -101,6 +105,14 @@ def from_storage(value: str) -> datetime:
     return datetime.strptime(value, _STORAGE_FORMAT).replace(tzinfo=UTC)
 
 
+def _bounded(value: float, low: float, high: float, fallback: float) -> float:
+    return min(high, max(low, value)) if isfinite(value) else fallback
+
+
+def _due_after(now: datetime, interval: timedelta) -> datetime:
+    return now + min(interval, MAX_SCHEDULE_DATE - now)
+
+
 def review(card: CardState, rating: str, now: datetime) -> CardState:
     """Apply one rating and return the next state.
 
@@ -118,8 +130,13 @@ def review(card: CardState, rating: str, now: datetime) -> CardState:
     if rating not in RATINGS:
         raise ValueError(f"Unknown rating: {rating}")
 
-    difficulty = min(
-        MAX_DIFFICULTY, max(MIN_DIFFICULTY, card.difficulty + DIFFICULTY_DELTAS[rating])
+    strength = _bounded(card.stability, 0.0, MAX_STABILITY_DAYS, STABILITY_SEED_FLOOR)
+    difficulty = _bounded(
+        _bounded(card.difficulty, MIN_DIFFICULTY, MAX_DIFFICULTY, INITIAL_DIFFICULTY)
+        + DIFFICULTY_DELTAS[rating],
+        MIN_DIFFICULTY,
+        MAX_DIFFICULTY,
+        INITIAL_DIFFICULTY,
     )
 
     if rating == "again":
@@ -128,8 +145,8 @@ def review(card: CardState, rating: str, now: datetime) -> CardState:
         # relearning.
         state = RELEARNING if card.state in (REVIEW, RELEARNING) else LEARNING
         return CardState(
-            due_at=now + RELEARN_INTERVAL,
-            stability=max(card.stability * LAPSE_DECAY, LAPSE_FLOOR_DAYS),
+            due_at=_due_after(now, RELEARN_INTERVAL),
+            stability=max(strength * LAPSE_DECAY, LAPSE_FLOOR_DAYS),
             difficulty=difficulty,
             reps=card.reps + 1,
             lapses=card.lapses + 1,
@@ -137,12 +154,29 @@ def review(card: CardState, rating: str, now: datetime) -> CardState:
             last_review_at=now,
         )
 
-    stability = max(card.stability, STABILITY_SEED_FLOOR) * STABILITY_FACTORS[rating]
-    # A new card rated `easy` is one the learner already knows, so it fast-tracks to
-    # review; any other first success still wants a near-term second look.
-    state = REVIEW if rating == "easy" or card.state != NEW else LEARNING
+    fresh = card.state == NEW and card.reps == 0
+    due = card.due_at <= now
+    spaced = (
+        due
+        and card.last_review_at is not None
+        and (now - card.last_review_at >= MIN_SPACED_ELAPSED)
+    )
+    if fresh or spaced:
+        stability = min(
+            MAX_STABILITY_DAYS, max(strength, STABILITY_SEED_FLOOR) * STABILITY_FACTORS[rating]
+        )
+        state = REVIEW if rating == "easy" or card.state != NEW else LEARNING
+        due_at = _due_after(now, timedelta(days=stability))
+    elif due:
+        stability = max(strength, STABILITY_SEED_FLOOR)
+        state = REVIEW
+        due_at = _due_after(now, timedelta(days=stability))
+    else:
+        stability = strength
+        state = card.state
+        due_at = max(now, min(card.due_at, _due_after(now, timedelta(days=MAX_STABILITY_DAYS))))
     return CardState(
-        due_at=now + timedelta(days=stability),
+        due_at=due_at,
         stability=stability,
         difficulty=difficulty,
         reps=card.reps + 1,
