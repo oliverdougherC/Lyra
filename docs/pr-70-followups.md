@@ -125,3 +125,67 @@ Retained unsuccessful runs are not counted as passing evidence:
 Existing editor bundle-size advisories and backend dependency deprecation warnings remain.
 Hosted CI is tracked on the exact head in the PR and Linear evidence; local passes are not
 represented as hosted results. No merge was performed.
+
+## Failed-overwrite follow-up (reviewed head be6aed7)
+
+Review [issuecomment-5554629488](https://github.com/oliverdougherC/Lyra/pull/70#issuecomment-5554629488)
+identified truncation before a fallible write in `write_original_copy`. This follow-up adopts
+its explicitly permitted **no-overwrite policy**: existing destinations remain untouched,
+with an instruction to choose another filename. Successful replacement is deliberately not
+supported; a fresh filename succeeds. The PLA-409 revision barrier, original-byte endpoint,
+source-context recovery, and other remediation remain intact.
+
+On Unix, the production helper opens the parent directory once, creates an exclusive random
+0600 sibling with `openat(O_CREAT | O_EXCL | O_NOFOLLOW)`, writes all bytes and calls
+`sync_all`, then publishes with same-directory `linkat`. This atomic no-replace operation
+rejects any entry that appeared after validation, including symlinks and directories. The
+existing destination is never opened or truncated. Directory-relative cleanup removes only
+the temporary name created by this operation; failed exclusive creation never acquires cleanup
+ownership. A retained directory descriptor prevents parent renaming from redirecting cleanup.
+Non-Unix saving fails closed until an equally safe native implementation is supplied; the
+supported desktop product and native CI run on macOS. Filesystems without hard-link support
+return a pre-publication failure without creating the destination.
+
+Errors before publication preserve destination absence, or existing bytes under the early
+no-overwrite rejection. After successful publication, cleanup/directory-sync failure reports
+**the document was saved but cleanup or durability could not be confirmed**. There is no
+rollback claim. Cleanup is attempted on all owned-temporary exit paths, including through the
+drop guard; a persistent filesystem cleanup error can leave a temporary sibling. Native
+cancellation remains `Ok(false)`. The source pane recognizes only the two exact path-free
+native outcome messages, retaining generic reporting for arbitrary errors and the existing
+missing-original message. The action stays available to choose another filename.
+
+Changed files: `src-tauri/src/lib.rs`,
+`frontend/src/components/solutions/source-pane.tsx`, `frontend/tests/source-pane.test.tsx`,
+and this evidence record. The truncating destination-write path is removed; no dependencies,
+redesign, or changes to Agent 2's branch are included.
+
+Fresh verification is distinct from the historical signed-app verification above:
+
+- Native Rust: **34 passed** (eight production-helper filesystem tests and 26 existing tests).
+  Workspace/all-targets tests, all-features Clippy with warnings denied, and Rust formatting
+  passed. The helper cases cover exact binary bytes/private mode,
+  pre-write, partial-write (real 4096-byte prefix), flush, and publication fault checkpoints;
+  existing and absent destinations; successful save to another filename; cleanup;
+  symlink/dangling-symlink/directory/FIFO rejection; racing file/symlink/directory publication;
+  parent rename; and post-publication cleanup/durability errors with retained saved bytes.
+  Checkpoint failures are injected into the production helper, not a reimplementation; the
+  racing-entry cases additionally execute real OS `linkat` failures. Existing destinations
+  reject before reaching injected I/O stages because overwriting is explicitly prohibited.
+- Mocked frontend: the two native outcome assertions failed against the previous generic-error
+  rendering, then passed after the correction. Unknown path-bearing errors remain hidden.
+  The runtime/source-pane/external-link suites pass **46 tests**, including native cancellation.
+  These assertions do not execute the OS dialog.
+- Real-stack original-document recovery acceptance: **2 passed**, real HTTP/download byte
+  comparison and source/page/problem preservation, with a clean failure ledger and teardown.
+- Backend documents/settings regressions: **65 passed** (existing deprecation warnings only).
+- Frontend ESLint, TypeScript and Prettier checks passed. Hosted CI results are recorded
+  on the published head in the PR.
+
+Per the explicit instruction for this follow-up, the local packaged app was not rebuilt,
+replaced, or launched. Native filesystem verification above executes compiled production Rust;
+new macOS dialog/manual signed-bundle verification is not claimed. The required existing CI
+workflow retains its own build/test artifact lanes. PLA-431 and PLA-404 reads both returned
+HTTP 502 during this follow-up; reconciliation will be attempted again with the final evidence.
+Nothing is merged or marked Done; stacked PR #71 still needs its owner's base update and
+combined verification after this head is published.
