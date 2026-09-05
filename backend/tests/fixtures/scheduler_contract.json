@@ -1,0 +1,210 @@
+[
+  {
+    "name": "early learning preserves deadline and state",
+    "initial": {
+      "stability": 2,
+      "state": "learning",
+      "due_seconds": 172800,
+      "last_seconds": 0
+    },
+    "at_seconds": 1,
+    "rating": "easy",
+    "expected": {
+      "stability": 2,
+      "state": "learning",
+      "due_seconds": 172800
+    }
+  },
+  {
+    "name": "elapsed alone is not due",
+    "initial": {
+      "stability": 2,
+      "state": "learning",
+      "due_seconds": 172800,
+      "last_seconds": 0
+    },
+    "at_seconds": 86400,
+    "rating": "easy",
+    "expected": {
+      "stability": 2,
+      "state": "learning",
+      "due_seconds": 172800
+    }
+  },
+  {
+    "name": "due review with elapsed day grows",
+    "initial": {
+      "stability": 2,
+      "state": "learning",
+      "due_seconds": 172800,
+      "last_seconds": 0
+    },
+    "at_seconds": 172800,
+    "rating": "easy",
+    "expected": {
+      "stability": 5.6,
+      "state": "review",
+      "due_seconds": 656640
+    }
+  },
+  {
+    "name": "due alone does not prove elapsed recall",
+    "initial": {
+      "stability": 2,
+      "state": "review",
+      "due_seconds": 0,
+      "last_seconds": 0
+    },
+    "at_seconds": 1,
+    "rating": "easy",
+    "expected": {
+      "stability": 2,
+      "state": "review",
+      "due_seconds": 172801
+    }
+  },
+  {
+    "name": "missing review history earns no multiplier",
+    "initial": {
+      "stability": 2,
+      "state": "review",
+      "due_seconds": 0,
+      "last_seconds": null
+    },
+    "at_seconds": 86400,
+    "rating": "easy",
+    "expected": {
+      "stability": 2,
+      "state": "review",
+      "due_seconds": 259200
+    }
+  },
+  {
+    "name": "future review history earns no multiplier",
+    "initial": {
+      "stability": 2,
+      "state": "review",
+      "due_seconds": 0,
+      "last_seconds": 172800
+    },
+    "at_seconds": 86400,
+    "rating": "easy",
+    "expected": {
+      "stability": 2,
+      "state": "review",
+      "due_seconds": 259200
+    }
+  },
+  {
+    "name": "early relearning remains relearning",
+    "initial": {
+      "stability": 0.56,
+      "state": "relearning",
+      "due_seconds": 600,
+      "last_seconds": 0
+    },
+    "at_seconds": 1,
+    "rating": "good",
+    "expected": {
+      "stability": 0.56,
+      "state": "relearning",
+      "due_seconds": 600
+    }
+  },
+  {
+    "name": "due relearning graduates without growth",
+    "initial": {
+      "stability": 0.56,
+      "state": "relearning",
+      "due_seconds": 600,
+      "last_seconds": 0
+    },
+    "at_seconds": 600,
+    "rating": "good",
+    "expected": {
+      "stability": 1,
+      "state": "review",
+      "due_seconds": 87000
+    }
+  },
+  {
+    "name": "legacy early inflated deadline is repaired",
+    "initial": {
+      "stability": 1e+300,
+      "state": "review",
+      "due_seconds": 10000000000,
+      "last_seconds": 0
+    },
+    "at_seconds": 1,
+    "rating": "easy",
+    "expected": {
+      "stability": 365,
+      "state": "review",
+      "due_seconds": 31536001
+    }
+  },
+  {
+    "name": "legacy inflated due strength caps before growth",
+    "initial": {
+      "stability": 1e+300,
+      "state": "review",
+      "due_seconds": 0,
+      "last_seconds": -86400
+    },
+    "at_seconds": 0,
+    "rating": "easy",
+    "expected": {
+      "stability": 365,
+      "state": "review",
+      "due_seconds": 31536000
+    }
+  },
+  {
+    "name": "legacy inflated lapse decays after cap",
+    "initial": {
+      "stability": 1e+300,
+      "state": "review",
+      "due_seconds": 0,
+      "last_seconds": -86400
+    },
+    "at_seconds": 0,
+    "rating": "again",
+    "expected": {
+      "stability": 73,
+      "state": "relearning",
+      "due_seconds": 600
+    }
+  },
+  {
+    "name": "one second before elapsed threshold earns no growth",
+    "initial": {
+      "stability": 2,
+      "state": "review",
+      "due_seconds": 0,
+      "last_seconds": 0
+    },
+    "at_seconds": 86399,
+    "rating": "good",
+    "expected": {
+      "stability": 2,
+      "state": "review",
+      "due_seconds": 259199
+    }
+  },
+  {
+    "name": "elapsed threshold includes exactly twenty four hours",
+    "initial": {
+      "stability": 2,
+      "state": "review",
+      "due_seconds": 0,
+      "last_seconds": 0
+    },
+    "at_seconds": 86400,
+    "rating": "good",
+    "expected": {
+      "stability": 4,
+      "state": "review",
+      "due_seconds": 432000
+    }
+  }
+]

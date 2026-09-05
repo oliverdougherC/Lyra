@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import contractCases from '../../backend/tests/fixtures/scheduler_contract.json'
 
 import {
   MASTERED_STABILITY_DAYS,
@@ -75,7 +76,7 @@ it('good twice grows the interval monotonically', () => {
 })
 
 it('again on a review card relearns with a decayed positive stability', () => {
-  const graduated = reviewCard(reviewCard(newCardState(NOW), 'good', NOW), 'good', NOW)
+  const graduated = reviewCard(newCardState(NOW), 'easy', NOW)
   expect(graduated.state).toBe('review')
 
   const lapsed = reviewCard(graduated, 'again', NOW)
@@ -97,13 +98,13 @@ it('again on a card that never graduated stays learning', () => {
 })
 
 it('a lapse then a success returns to review', () => {
-  const graduated = reviewCard(reviewCard(newCardState(NOW), 'good', NOW), 'good', NOW)
+  const graduated = reviewCard(newCardState(NOW), 'easy', NOW)
   const lapsed = reviewCard(graduated, 'again', NOW)
-  const recovered = reviewCard(lapsed, 'good', NOW)
+  const recovered = reviewCard(lapsed, 'good', lapsed.dueAt)
 
   expect(recovered.state).toBe('review')
-  // The seed floor applies before scaling: the lapsed 0.8 is seeded to 1.0, then doubled.
-  expect(recovered.stability).toBeCloseTo(2.0)
+  // Due relearning graduates without multiplying evidence from immediate recall.
+  expect(recovered.stability).toBeCloseTo(1.0)
 })
 
 it.each([
@@ -204,11 +205,89 @@ describe('nextIntervalLabel', () => {
       stability: 10,
       reps: 4,
       state: 'review',
-      lastReviewAt: NOW,
+      lastReviewAt: new Date(NOW.getTime() - DAY_MS),
     })
     // 10 * 1.2 = 12 days: whole days, no decimal.
     expect(nextIntervalLabel(strong, 'hard', NOW)).toBe('12 d')
     // 10 * 2.8 = 28 days.
     expect(nextIntervalLabel(strong, 'easy', NOW)).toBe('28 d')
   })
+})
+
+it.each(contractCases)('$name (shared Python/TypeScript contract)', (testCase) => {
+  const initial = testCase.initial
+  const card = cardState({
+    dueAt: new Date(NOW.getTime() + initial.due_seconds * 1000),
+    stability: initial.stability,
+    state: initial.state as CardState['state'],
+    reps: 1,
+    lastReviewAt:
+      initial.last_seconds === null ? null : new Date(NOW.getTime() + initial.last_seconds * 1000),
+  })
+  const now = new Date(NOW.getTime() + testCase.at_seconds * 1000)
+  const rating = testCase.rating as Rating
+  const result = reviewCard(card, rating, now)
+  expect(result.stability).toBeCloseTo(testCase.expected.stability)
+  expect(result.state).toBe(testCase.expected.state)
+  expect(result.dueAt.getTime()).toBe(NOW.getTime() + testCase.expected.due_seconds * 1000)
+  expect(result.reps).toBe(2)
+  expect(result.lastReviewAt).toEqual(now)
+  expect(result.lapses).toBe(rating === 'again' ? 1 : 0)
+  expect(nextIntervalLabel(card, rating, now)).not.toMatch(/NaN|Infinity/)
+})
+
+it.each(['good', 'easy'] as const)(
+  '100 restart %s ratings preserve strength and deadline',
+  (rating) => {
+    const first = reviewCard(newCardState(NOW), rating, NOW)
+    let card = first
+    for (let second = 1; second <= 100; second++) {
+      const now = new Date(NOW.getTime() + second * 1000)
+      expect(studyOrder(new Map([[1, card]]), now)).toEqual([1])
+      expect(nextIntervalLabel(card, rating, now)).toBe(rating === 'good' ? '2 d' : '2.8 d')
+      card = reviewCard(card, rating, now)
+      expect(card.stability).toBe(first.stability)
+      expect(card.dueAt).toEqual(first.dueAt)
+      expect(card.state).toBe(first.state)
+      expect(bucket(card)).toBe('learning')
+    }
+    expect(card.reps).toBe(101)
+    expect(card.lastReviewAt).toEqual(new Date(NOW.getTime() + 100000))
+  },
+)
+
+it.each([Infinity, -Infinity, NaN, -1e300])(
+  'pathological strength %s stays finite',
+  (stability) => {
+    for (const rating of ['again', 'hard', 'good', 'easy'] as const) {
+      const card = { ...newCardState(NOW), stability, difficulty: NaN }
+      const result = reviewCard(card, rating, NOW)
+      expect(Number.isFinite(result.stability)).toBe(true)
+      expect(result.stability).toBeGreaterThanOrEqual(0)
+      expect(result.stability).toBeLessThanOrEqual(365)
+      expect(result.difficulty).toBeGreaterThanOrEqual(1)
+      expect(result.difficulty).toBeLessThanOrEqual(10)
+      expect(result.dueAt.getTime()).toBeLessThanOrEqual(NOW.getTime() + 365 * DAY_MS)
+      expect(nextIntervalLabel(card, rating, NOW)).not.toMatch(/NaN|Infinity/)
+    }
+  },
+)
+
+it.each(['again', 'hard', 'good', 'easy'] as const)(
+  '%s respects the Python date ceiling',
+  (rating) => {
+    const ceiling = new Date('9999-12-31T23:59:59.999Z')
+    const now = new Date(ceiling.getTime() - MINUTE_MS)
+    expect(reviewCard(newCardState(now), rating, now).dueAt).toEqual(ceiling)
+  },
+)
+
+it('invalid legacy dates cannot produce NaN interval previews', () => {
+  const card = cardState({
+    dueAt: new Date(NaN),
+    lastReviewAt: new Date(NaN),
+    reps: 1,
+    state: 'review',
+  })
+  expect(nextIntervalLabel(card, 'good', NOW)).toBe('Now')
 })

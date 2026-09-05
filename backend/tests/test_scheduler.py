@@ -5,7 +5,11 @@ what makes a schedule assertable down to the minute. The same cases are mirrored
 frontend/tests/scheduler.test.ts against the TypeScript port, so the two cannot drift.
 """
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from math import isfinite
+from pathlib import Path
 
 import pytest
 
@@ -48,7 +52,7 @@ def test_good_twice_grows_the_interval_monotonically() -> None:
 
 
 def test_again_on_a_review_card_relearns_with_a_decayed_positive_stability() -> None:
-    graduated = review(review(new_card_state(NOW), "good", NOW), "good", NOW)
+    graduated = review(new_card_state(NOW), "easy", NOW)
     assert graduated.state == "review"
 
     lapsed = review(graduated, "again", NOW)
@@ -70,13 +74,13 @@ def test_again_on_a_card_that_never_graduated_stays_learning() -> None:
 
 
 def test_a_lapse_then_a_success_returns_to_review() -> None:
-    graduated = review(review(new_card_state(NOW), "good", NOW), "good", NOW)
+    graduated = review(new_card_state(NOW), "easy", NOW)
     lapsed = review(graduated, "again", NOW)
-    recovered = review(lapsed, "good", NOW)
+    recovered = review(lapsed, "good", lapsed.due_at)
 
     assert recovered.state == "review"
-    # The seed floor applies before scaling: the lapsed 0.8 is seeded to 1.0, then doubled.
-    assert recovered.stability == pytest.approx(2.0)
+    # Due relearning graduates without multiplying evidence from immediate recall.
+    assert recovered.stability == pytest.approx(1.0)
 
 
 @pytest.mark.parametrize(
@@ -162,3 +166,69 @@ def test_study_order_is_deterministic_for_a_fixed_now() -> None:
 def test_an_unknown_rating_is_rejected() -> None:
     with pytest.raises(ValueError, match="Unknown rating"):
         review(new_card_state(NOW), "perfect", NOW)
+
+
+@pytest.mark.parametrize(
+    "case",
+    json.loads((Path(__file__).parent / "fixtures/scheduler_contract.json").read_text()),
+    ids=lambda case: case["name"],
+)
+def test_shared_scheduler_contract(case: dict) -> None:
+    initial = case["initial"]
+    card = replace(
+        new_card_state(NOW),
+        stability=initial["stability"],
+        state=initial["state"],
+        reps=1,
+        due_at=NOW + timedelta(seconds=initial["due_seconds"]),
+        last_review_at=(
+            None
+            if initial["last_seconds"] is None
+            else NOW + timedelta(seconds=initial["last_seconds"])
+        ),
+    )
+    now = NOW + timedelta(seconds=case["at_seconds"])
+    result = review(card, case["rating"], now)
+    expected = case["expected"]
+    assert result.stability == pytest.approx(expected["stability"])
+    assert result.state == expected["state"]
+    assert result.due_at == NOW + timedelta(seconds=expected["due_seconds"])
+    assert result.reps == 2
+    assert result.last_review_at == now
+    assert result.lapses == (1 if case["rating"] == "again" else 0)
+
+
+@pytest.mark.parametrize("rating", ["good", "easy"])
+def test_100_restart_practice_ratings_preserve_strength_and_deadline(rating: str) -> None:
+    first = review(new_card_state(NOW), rating, NOW)
+    card = first
+    for second in range(1, 101):
+        now = NOW + timedelta(seconds=second)
+        # Restart deliberately keeps upcoming cards in the available queue.
+        assert study_order({1: card}, now) == [1]
+        card = review(card, rating, now)
+        assert card.stability == first.stability
+        assert card.due_at == first.due_at
+        assert card.state == first.state
+        assert bucket(card) == "learning"
+    assert card.reps == 101
+    assert card.last_review_at == now
+
+
+@pytest.mark.parametrize("strength", [float("inf"), float("-inf"), float("nan"), -1e300])
+@pytest.mark.parametrize("rating", scheduler.RATINGS)
+def test_pathological_numbers_remain_finite(strength: float, rating: str) -> None:
+    card = replace(new_card_state(NOW), stability=strength, difficulty=float("nan"))
+    result = review(card, rating, NOW)
+    assert isfinite(result.stability)
+    assert 0 <= result.stability <= scheduler.MAX_STABILITY_DAYS
+    assert scheduler.MIN_DIFFICULTY <= result.difficulty <= scheduler.MAX_DIFFICULTY
+    assert NOW <= result.due_at <= NOW + timedelta(days=365)
+
+
+@pytest.mark.parametrize("rating", scheduler.RATINGS)
+def test_date_ceiling_is_safe(rating: str) -> None:
+    now = scheduler.MAX_SCHEDULE_DATE - timedelta(minutes=1)
+    result = review(new_card_state(now), rating, now)
+    assert result.due_at == scheduler.MAX_SCHEDULE_DATE
+    assert scheduler.from_storage(scheduler.to_storage(result.due_at)).year == 9999
