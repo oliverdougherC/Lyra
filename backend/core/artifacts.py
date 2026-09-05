@@ -550,6 +550,7 @@ def create_part(
     origin: str = GENERATED,
     solve_parts: str = TOGETHER,
     note: str | None = None,
+    commit: bool = True,
 ) -> int:
     """Create one part and return its id.
 
@@ -574,6 +575,8 @@ def create_part(
         note: Why this content exists, recorded on revision 1. Carries the student's
             correction on a re-solve, so the history sheet says what prompted the rewrite
             rather than showing two versions with no reason between them.
+        commit: False when a caller owns the transaction containing this part, its
+            revisions, and related rows. Defaults to committing standalone writes.
 
     Returns:
         The id of the new part.
@@ -618,7 +621,8 @@ def create_part(
     if content:
         _insert_revision(conn, part_id, content, origin, note)
     _touch_artifact(conn, artifact_id)
-    conn.commit()
+    if commit:
+        conn.commit()
     return part_id
 
 
@@ -1054,8 +1058,12 @@ def get_revision(conn: sqlite3.Connection, part_id: int, revision: int) -> dict[
     return dict(row)
 
 
-def set_provenance(conn: sqlite3.Connection, part_id: int, entries: list[ProvenanceEntry]) -> None:
+def set_provenance(
+    conn: sqlite3.Connection, part_id: int, entries: list[ProvenanceEntry], *, commit: bool = True
+) -> None:
     """Replace a part's provenance with `entries`.
+
+    With ``commit=False``, the caller owns the surrounding transaction.
 
     Replace rather than append, because a regenerated part was informed by whatever this
     run retrieved, not by that plus whatever the last run did. An empty list clears it,
@@ -1082,7 +1090,8 @@ def set_provenance(conn: sqlite3.Connection, part_id: int, entries: list[Provena
         ],
     )
     _touch_artifact(conn, int(part["artifact_id"]))
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def list_provenance(conn: sqlite3.Connection, part_id: int) -> list[dict[str, object]]:

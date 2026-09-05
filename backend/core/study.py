@@ -103,7 +103,7 @@ STUDY_KINDS: tuple[str, ...] = (artifacts.KIND_FLASHCARD_DECK, artifacts.KIND_QU
 
 
 class _GenerationCancelledError(Exception):
-    """The artifact was cancelled while the worker was running and should be left alone."""
+    """The generation has settled and a queued or late worker must leave it alone."""
 
 
 @dataclass(frozen=True)
@@ -261,18 +261,31 @@ def reconcile_interrupted(conn: sqlite3.Connection) -> tuple[int, int]:
             except (ValueError, TypeError, json.JSONDecodeError):
                 logger.warning("Study artifact %s has unparseable job metadata", artifact_id)
         if job is None:
-            # This is terminal: without reconstructable intent there is no safe replay.
-            # Use the ordinary failure path so an interrupted artifact cannot retain
-            # stale partial cards/questions while reporting `failed`.
-            _mark_failed(conn, artifact_id, LyraError(INTERRUPTED_MESSAGE))
-            failed += 1
+            failed += int(_mark_failed(conn, artifact_id, LyraError(INTERRUPTED_MESSAGE)))
             continue
-        if str(row["state"]) == artifacts.GENERATING:
-            # Discard whatever the interrupted run half-wrote before restarting it, so the
-            # fresh run cannot land duplicates beside the old partial output.
-            artifacts.delete_parts(conn, artifact_id)
-            artifacts.set_artifact_state(conn, artifact_id, artifacts.PENDING, None)
-        requeued.append(job)
+        # Re-read under the write lock: the scan above may predate cancel, completion,
+        # or deletion. Cleanup and reset belong to the same transaction.
+        conn.execute("begin immediate")
+        try:
+            current = conn.execute(
+                "select state from artifacts where id = ?", (artifact_id,)
+            ).fetchone()
+            if current is None or current["state"] not in (artifacts.PENDING, artifacts.GENERATING):
+                conn.commit()
+                continue
+            if current["state"] == artifacts.GENERATING:
+                conn.execute("delete from artifact_parts where artifact_id = ?", (artifact_id,))
+                conn.execute(
+                    "update artifacts set state = ?, stage_detail = NULL, "
+                    "problems_total = NULL, problems_done = 0, updated_at = datetime('now') "
+                    "where id = ? and state = ?",
+                    (artifacts.PENDING, artifact_id, artifacts.GENERATING),
+                )
+            conn.commit()
+            requeued.append(job)
+        except Exception:
+            conn.rollback()
+            raise
 
     for job in requeued:
         enqueue(job)
@@ -302,29 +315,156 @@ def run_generation(job: _Job) -> None:
         conn.close()
 
 
-def _mark_failed(conn: sqlite3.Connection, artifact_id: int, exc: Exception) -> None:
-    """Record the failure on the artifact row, keeping the stage it died in.
-
-    A failed generation must leave nothing that reads as a finished artifact: any parts a
-    partial run wrote are deleted here (PLA-299), so a failed deck never shows cards and a
-    failed quiz never shows questions. The delete shares the failure commit path below.
-    """
-    row = conn.execute("select state from artifacts where id = ?", (artifact_id,)).fetchone()
-    if row is None:
-        return
-    # A cancellation that landed between the worker's cancel checkpoints and this failure
-    # write wins: cancelling keeps whatever was already written, so a late failure must not
-    # overwrite `cancelled` with `failed` or delete the cards the cancel meant to keep.
-    if str(row["state"]) == artifacts.CANCELLED:
-        return
-    # Deleting the parts of an artifact that is being failed is safe across retry/restart:
-    # a re-run regenerates from scratch, and reconcile deletes parts before restarting too.
+def _mark_failed(conn: sqlite3.Connection, artifact_id: int, exc: Exception) -> bool:
+    """Fail and clean up only a live generation, in one short write transaction."""
+    conn.execute("begin immediate")
     try:
-        artifacts.delete_parts(conn, artifact_id)
-    except NotFoundError:
-        return
-    message = exc.message if isinstance(exc, LyraError) else str(exc)
-    artifacts.mark_artifact_failed(conn, artifact_id, str(row["state"]), message)
+        message = exc.message if isinstance(exc, LyraError) else str(exc)
+        changed = conn.execute(
+            "update artifacts set stage_detail = state, state = ?, error_message = ?, "
+            "updated_at = datetime('now') where id = ? and state in (?, ?) "
+            "and kind in (?, ?)",
+            (
+                artifacts.FAILED,
+                message,
+                artifact_id,
+                artifacts.PENDING,
+                artifacts.GENERATING,
+                *STUDY_KINDS,
+            ),
+        ).rowcount
+        if changed:
+            conn.execute("delete from artifact_parts where artifact_id = ?", (artifact_id,))
+        conn.commit()
+        return bool(changed)
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _set_stage(conn: sqlite3.Connection, artifact_id: int, stage: str) -> None:
+    """Publish a stage only while this generation is live; terminal states never move."""
+    changed = conn.execute(
+        "update artifacts set state = ?, stage_detail = ?, updated_at = datetime('now') "
+        "where id = ? and state in (?, ?) and kind in (?, ?)",
+        (
+            artifacts.GENERATING,
+            stage,
+            artifact_id,
+            artifacts.PENDING,
+            artifacts.GENERATING,
+            *STUDY_KINDS,
+        ),
+    ).rowcount
+    conn.commit()
+    if not changed:
+        _raise_stopped(conn, artifact_id)
+
+
+def _set_progress(conn: sqlite3.Connection, artifact_id: int, total: int, done: int) -> None:
+    changed = conn.execute(
+        "update artifacts set problems_total = ?, problems_done = ?, "
+        "updated_at = datetime('now') where id = ? and state = ? and kind in (?, ?)",
+        (total, done, artifact_id, artifacts.GENERATING, *STUDY_KINDS),
+    ).rowcount
+    conn.commit()
+    if not changed:
+        _raise_stopped(conn, artifact_id)
+
+
+def _increment_progress(conn: sqlite3.Connection, artifact_id: int) -> None:
+    changed = conn.execute(
+        "update artifacts set problems_done = problems_done + 1, "
+        "updated_at = datetime('now') where id = ? and state = ? and kind in (?, ?)",
+        (artifact_id, artifacts.GENERATING, *STUDY_KINDS),
+    ).rowcount
+    conn.commit()
+    if not changed:
+        _raise_stopped(conn, artifact_id)
+
+
+def _raise_stopped(conn: sqlite3.Connection, artifact_id: int) -> None:
+    # Preserve a useful 404 for deletion; all settled states stop queued/late workers.
+    artifacts.get_artifact(conn, artifact_id)
+    raise _GenerationCancelledError
+
+
+def _begin_completion(conn: sqlite3.Connection, job: _Job) -> None:
+    """Claim the persistence boundary. Caller commits content and READY together.
+
+    No retrieval or model calls are allowed inside this transaction. Cancellation and
+    deletion serialize against it, so they see either all completed content or none.
+    """
+    conn.execute("begin immediate")
+    artifact = artifacts.get_artifact(conn, job.artifact_id)
+    if artifact["state"] != artifacts.GENERATING:
+        raise _GenerationCancelledError
+    _validate_sources(conn, job, int(artifact["class_id"]))
+
+
+def _finish_completion(conn: sqlite3.Connection, artifact_id: int) -> None:
+    conn.execute(
+        "update artifacts set state = ?, stage_detail = NULL, updated_at = datetime('now') "
+        "where id = ? and state = ?",
+        (artifacts.READY, artifact_id, artifacts.GENERATING),
+    )
+
+
+def _complete_deck(
+    conn: sqlite3.Connection, job: _Job, topics: list[tuple[str, list[_ProposedCard]]]
+) -> None:
+    try:
+        _begin_completion(conn, job)
+        for _, cards in topics:
+            for card in cards:
+                for chunk in card.chunks:
+                    row = conn.execute(
+                        "select document_id from chunks where id = ?", (chunk.chunk_id,)
+                    ).fetchone()
+                    if row is None or int(row["document_id"]) != chunk.document_id:
+                        raise LyraError(
+                            "The source material changed during generation. Please try again."
+                        )
+        ordinal = 0
+        for topic, cards in topics:
+            _persist_topic_cards(conn, job, topic, ordinal, cards)
+            ordinal += len(cards)
+        _finish_completion(conn, job.artifact_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _complete_quiz(
+    conn: sqlite3.Connection, job: _Job, questions: list[dict[str, object]], source_ids: list[int]
+) -> None:
+    try:
+        _begin_completion(conn, job)
+        entries = [artifacts.ProvenanceEntry(document_id=value) for value in source_ids]
+        conn.execute(
+            "update artifacts set problems_total = ?, problems_done = ? where id = ?",
+            (job.count, len(questions), job.artifact_id),
+        )
+        for ordinal, question in enumerate(questions, start=1):
+            part_id = artifacts.create_part(
+                conn,
+                job.artifact_id,
+                artifacts.QUIZ_QUESTION,
+                ordinal,
+                label=str(question["topic"]),
+                content=json.dumps(question),
+                content_type=artifacts.JSON,
+                status=artifacts.PART_COMPLETE,
+                commit=False,
+            )
+            if entries:
+                artifacts.set_provenance(conn, part_id, entries, commit=False)
+        _finish_completion(conn, job.artifact_id)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _resolve_config(conn: sqlite3.Connection) -> TutorConfig:
@@ -349,27 +489,25 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
     _validate_sources(conn, job, class_id)
 
     _raise_if_cancelled(conn, job.artifact_id)
-    artifacts.set_artifact_state(
-        conn, job.artifact_id, artifacts.GENERATING, "Reading the material"
-    )
+    _set_stage(conn, job.artifact_id, "Reading the material")
     topics_prompt = prompts.build_topics_prompt("")
     fixed = _prompt_tokens(topics_prompt)
-    gathered, _ = _gather_source_text(conn, job.source_ids, _source_cap(config, fixed))
+    gathered, _ = _gather_source_text(
+        conn, job.source_ids, _source_cap(config, fixed), artifact_id=job.artifact_id
+    )
+    _validate_sources(conn, job, class_id)
     if not gathered:
         raise LyraError(NO_TOPICS_MESSAGE)
 
     _raise_if_cancelled(conn, job.artifact_id)
-    artifacts.set_artifact_state(
-        conn, job.artifact_id, artifacts.GENERATING, "Mapping study topics"
-    )
+    _set_stage(conn, job.artifact_id, "Mapping study topics")
     topics = _call_json(config, prompts.build_topics_prompt(gathered), prompts.TOPICS_SCHEMA)
     _raise_if_cancelled(conn, job.artifact_id)
     topic_names = [t.strip() for t in _json_list(topics, "topics") if str(t).strip()]
     if not topic_names:
         raise LyraError(NO_TOPICS_MESSAGE)
 
-    artifacts.set_problems_total(conn, job.artifact_id, len(topic_names))
-    artifacts.set_problems_done(conn, job.artifact_id, 0)
+    _set_progress(conn, job.artifact_id, len(topic_names), 0)
 
     failed: list[str] = []
     complete_topics: list[tuple[str, list[_ProposedCard]]] = []
@@ -378,13 +516,13 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
     seen_fronts: set[str] = set()
     for topic in topic_names:
         _raise_if_cancelled(conn, job.artifact_id)
-        artifacts.set_artifact_state(conn, job.artifact_id, artifacts.GENERATING, topic)
+        _set_stage(conn, job.artifact_id, topic)
         cards = _collect_topic_cards_bounded(conn, job, config, class_id, topic, seen_fronts)
         if len(cards) != job.cards_per_topic:
             failed.append(topic)
         else:
             complete_topics.append((topic, cards))
-        artifacts.increment_problems_done(conn, job.artifact_id)
+        _increment_progress(conn, job.artifact_id)
 
     # Truthful completion (PLA-299): every mapped topic must reach the exact requested
     # count after bounded recovery. Nothing has been persisted yet, so an undershoot in
@@ -394,14 +532,7 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
             _deck_incomplete_message(len(failed), len(topic_names), job.cards_per_topic)
         )
 
-    ordinal = 0
-    for topic, cards in complete_topics:
-        _raise_if_cancelled(conn, job.artifact_id)
-        _persist_topic_cards(conn, job, topic, ordinal, cards)
-        ordinal += len(cards)
-
-    _raise_if_cancelled(conn, job.artifact_id)
-    artifacts.set_artifact_state(conn, job.artifact_id, artifacts.READY, None)
+    _complete_deck(conn, job, complete_topics)
 
 
 def _collect_topic_cards_bounded(
@@ -536,12 +667,13 @@ def _persist_topic_cards(
             content=payload,
             content_type=artifacts.JSON,
             status=artifacts.PART_COMPLETE,
+            commit=False,
         )
-        _insert_card_state(conn, part_id)
+        _insert_card_state(conn, part_id, commit=False)
         _record_card_provenance(conn, part_id, topic, list(card.chunks))
 
 
-def _insert_card_state(conn: sqlite3.Connection, part_id: int) -> None:
+def _insert_card_state(conn: sqlite3.Connection, part_id: int, *, commit: bool = True) -> None:
     """Every card starts scheduling life as new, due immediately."""
     state = new_card_state(datetime.now(UTC))
     conn.execute(
@@ -558,7 +690,8 @@ def _insert_card_state(conn: sqlite3.Connection, part_id: int) -> None:
             state.state,
         ),
     )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def _record_card_provenance(
@@ -575,7 +708,7 @@ def _record_card_provenance(
         for chunk in chunks[:3]
     ]
     if entries:
-        artifacts.set_provenance(conn, part_id, entries)
+        artifacts.set_provenance(conn, part_id, entries, commit=False)
 
 
 def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
@@ -586,9 +719,7 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     _validate_sources(conn, job, class_id)
 
     _raise_if_cancelled(conn, job.artifact_id)
-    artifacts.set_artifact_state(
-        conn, job.artifact_id, artifacts.GENERATING, "Reading the material"
-    )
+    _set_stage(conn, job.artifact_id, "Reading the material")
     asked = list(job.types)
     # The source budget leaves room for the retry hint, so the second call fits the window
     # without re-gathering. The quiz prompt's fixed material is its system instruction.
@@ -597,12 +728,15 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     if source_room <= _RETRY_HINT_RESERVE:
         raise LyraError(CONTEXT_TOO_SMALL_MESSAGE)
     source_cap = source_room - _RETRY_HINT_RESERVE
-    gathered, source_ids = _gather_source_text(conn, job.source_ids, source_cap)
+    gathered, source_ids = _gather_source_text(
+        conn, job.source_ids, source_cap, artifact_id=job.artifact_id
+    )
+    _validate_sources(conn, job, class_id)
     if not gathered:
         raise LyraError(NO_QUESTIONS_MESSAGE)
 
     _raise_if_cancelled(conn, job.artifact_id)
-    artifacts.set_artifact_state(conn, job.artifact_id, artifacts.GENERATING, "Writing questions")
+    _set_stage(conn, job.artifact_id, "Writing questions")
     reply = _call_json(
         config,
         prompts.build_quiz_prompt(gathered, job.count, job.difficulty, asked),
@@ -615,6 +749,7 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     # Bounded recovery (PLA-299): one retry when the reply undershoots the requested count,
     # told exactly what was wrong so the deterministic re-send is not identical.
     if len(questions) < job.count:
+        _validate_sources(conn, job, class_id)
         hint = _quiz_retry_hint(failures)
         retry = _call_json(
             config,
@@ -643,35 +778,19 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
     # honestly true is which documents fed that material, and provenance degrades to exactly
     # that: document_id with no chunk or page, which list_provenance still resolves to a
     # filename the student can open.
-    source_entries = [
-        artifacts.ProvenanceEntry(document_id=document_id) for document_id in source_ids
-    ]
-    artifacts.set_problems_total(conn, job.artifact_id, job.count)
-    artifacts.set_problems_done(conn, job.artifact_id, len(questions))
-    for ordinal, question in enumerate(questions, start=1):
-        part_id = artifacts.create_part(
-            conn,
-            job.artifact_id,
-            artifacts.QUIZ_QUESTION,
-            ordinal,
-            label=str(question["topic"]),
-            content=json.dumps(question),
-            content_type=artifacts.JSON,
-            status=artifacts.PART_COMPLETE,
-        )
-        if source_entries:
-            artifacts.set_provenance(conn, part_id, source_entries)
-    _raise_if_cancelled(conn, job.artifact_id)
-    artifacts.set_artifact_state(conn, job.artifact_id, artifacts.READY)
+    _complete_quiz(conn, job, questions, source_ids)
 
 
 def _cancelled(conn: sqlite3.Connection, artifact_id: int) -> bool:
-    """Whether the artifact was cancelled and the worker should stop without writing more."""
-    return artifacts.get_artifact(conn, artifact_id)["state"] == artifacts.CANCELLED
+    """Whether generation has settled and the worker must stop without writing more."""
+    return artifacts.get_artifact(conn, artifact_id)["state"] not in (
+        artifacts.PENDING,
+        artifacts.GENERATING,
+    )
 
 
 def _raise_if_cancelled(conn: sqlite3.Connection, artifact_id: int) -> None:
-    """Turn a cancelled artifact into the control flow that leaves it unchanged."""
+    """Turn a settled artifact into control flow that leaves it unchanged."""
     if _cancelled(conn, artifact_id):
         raise _GenerationCancelledError
 

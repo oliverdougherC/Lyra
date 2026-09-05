@@ -376,7 +376,7 @@ def test_cancelling_a_ready_deck_is_refused(
     response = client.post(f"/api/decks/{deck_id}/cancel")
 
     assert response.status_code == 409
-    assert response.json()["detail"] == routes_study.NOT_RUNNING_MESSAGE
+    assert response.json()["detail"] == f"{routes_study.NOT_RUNNING_MESSAGE} Current state: ready."
 
 
 def test_an_attempt_grades_answers_and_scores_by_topic(
