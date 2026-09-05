@@ -35,6 +35,7 @@ import logging
 import queue
 import sqlite3
 import threading
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -51,7 +52,7 @@ from backend.llm import client, prompts
 from backend.llm.budget import generation_reserve
 from backend.llm.turn_budget import input_ceiling
 from backend.rag.retrieve import retrieve
-from backend.rag.tokens import estimate_tokens
+from backend.rag.tokens import CHARS_PER_TOKEN, estimate_tokens
 from backend.storage.database import connect
 
 logger = logging.getLogger(__name__)
@@ -480,7 +481,16 @@ def _propose_topic_cards(
         config,
         _prompt_tokens(_flashcard_messages(topic, job.cards_per_topic, [], retry_hint=retry_hint)),
     )
-    result = retrieve(conn, class_id, topic, min(TOPIC_RETRIEVAL_BUDGET, context_budget))
+    _validate_sources(conn, job, class_id)
+    _raise_if_cancelled(conn, job.artifact_id)
+    result = retrieve(
+        conn,
+        class_id,
+        topic,
+        min(TOPIC_RETRIEVAL_BUDGET, context_budget),
+        document_ids=job.source_ids,
+    )
+    _validate_sources(conn, job, class_id)
     kept_chunks = _trim_chunks(
         config,
         topic,
@@ -599,7 +609,7 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
         prompts.QUIZ_SCHEMA,
     )
     _raise_if_cancelled(conn, job.artifact_id)
-    questions, failures = _validate_questions(_json_list(reply, "questions"))
+    questions, failures = _validate_questions(_json_list(reply, "questions"), frozenset(asked))
     questions = _dedupe_questions(questions)
 
     # Bounded recovery (PLA-299): one retry when the reply undershoots the requested count,
@@ -614,7 +624,7 @@ def _generate_quiz(conn: sqlite3.Connection, job: _Job) -> None:
             prompts.QUIZ_SCHEMA,
         )
         _raise_if_cancelled(conn, job.artifact_id)
-        retried, _ = _validate_questions(_json_list(retry, "questions"))
+        retried, _ = _validate_questions(_json_list(retry, "questions"), frozenset(asked))
         retried = _dedupe_questions(retried)
         if len(retried) > len(questions):
             questions = retried
@@ -768,48 +778,65 @@ def _source_cap(config: TutorConfig, fixed_tokens: int) -> int:
     return room
 
 
+# Work is bounded even when an entire corpus consists of oversized chunks.
+_SOURCE_SCAN_LIMIT = 4096
+_DOCUMENT_SCAN_LIMIT = 256
+
+
 def _gather_source_text(
-    conn: sqlite3.Connection, source_ids: tuple[int, ...], total_cap: int
+    conn: sqlite3.Connection,
+    source_ids: tuple[int, ...],
+    total_cap: int,
+    *,
+    artifact_id: int | None = None,
 ) -> tuple[str, list[int]]:
-    """The source documents' chunk text, round-robined and capped to fit the budget.
+    """Read one chunk per document turn, retaining only text admitted by the budget.
 
-    One document at a time in turns, so a long textbook cannot spend the whole budget
-    before the syllabus is read once: each document gives at most DOCUMENT_TOKEN_CAP
-    estimated tokens, and the gathering stops once adding the next chunk would exceed
-    `total_cap`. A chunk is added only when it fits both the per-document cap and the total
-    cap (`spent + cost <= cap`), so the ceiling can never be overshot by one chunk - the
-    boundary bug PLA-298 calls out. `total_cap` is the context-window-derived budget, so
-    gathering trims deterministically rather than relying on the endpoint to reject an
-    oversized prompt.
-
-    Returns the joined text and the ids of the documents that actually contributed to it,
-    in source order. The latter is what a quiz question honestly traces to: the whole-
-    material call read this text, so the documents behind it are its provenance.
+    Keyset reads fetch metadata first, so even a giant rejected chunk never enters
+    Python. Scan ceilings bound no-fit work. Chunk order, document fairness, and both
+    token ceilings are preserved within this bounded scan; text is never sliced.
     """
     document_cap = min(DOCUMENT_TOKEN_CAP, total_cap)
-    queues: list[tuple[int, list[sqlite3.Row]]] = []
-    for document_id in source_ids:
-        rows = conn.execute(
-            "select content from chunks where document_id = ? order by id",
-            (document_id,),
-        ).fetchall()
-        if rows:
-            queues.append((document_id, list(rows)))
-
+    turns = deque((document_id, 0, 0) for document_id in dict.fromkeys(source_ids))
     gathered: list[str] = []
     per_document: dict[int, int] = {}
     total = 0
-    while queues and total < total_cap:
-        document_id, rows = queues.pop(0)
-        row = rows.pop(0)
-        cost = estimate_tokens(str(row["content"]))
+    scanned = 0
+    while turns and total < total_cap and scanned < _SOURCE_SCAN_LIMIT:
+        if artifact_id is not None:
+            _raise_if_cancelled(conn, artifact_id)
+        document_id, after_id, seen = turns.popleft()
+        row = conn.execute(
+            "select id, length(content) as characters, "
+            "length(cast(content as blob)) as byte_count from chunks "
+            "where document_id = ? and id > ? order by id limit 1",
+            (document_id, after_id),
+        ).fetchone()
+        scanned += 1
+        if row is None:
+            continue
+        chunk_id = int(row["id"])
+        cost = max(1, int(row["characters"]) // CHARS_PER_TOKEN)
         spent = per_document.get(document_id, 0)
-        if spent + cost <= document_cap and total + cost <= total_cap:
-            gathered.append(str(row["content"]))
-            per_document[document_id] = spent + cost
-            total += cost
-        if rows and per_document.get(document_id, 0) < document_cap:
-            queues.append((document_id, rows))
+        # UTF-8 uses at most four bytes per codepoint. This also bounds malformed
+        # text containing NUL, which SQLite length(text) stops counting early.
+        remaining = min(document_cap - spent, total_cap - total)
+        byte_cap = (remaining * CHARS_PER_TOKEN + CHARS_PER_TOKEN - 1) * 4
+        if cost <= remaining and int(row["byte_count"]) <= byte_cap:
+            content = conn.execute(
+                "select content from chunks where id = ? and document_id = ? "
+                "and length(content) = ? and length(cast(content as blob)) <= ?",
+                (chunk_id, document_id, row["characters"], byte_cap),
+            ).fetchone()
+            if content is not None:
+                text = str(content["content"])
+                cost = estimate_tokens(text)
+                if cost <= remaining:
+                    gathered.append(text)
+                    per_document[document_id] = spent + cost
+                    total += cost
+        if seen + 1 < _DOCUMENT_SCAN_LIMIT and per_document.get(document_id, 0) < document_cap:
+            turns.append((document_id, chunk_id, seen + 1))
     contributing = [document_id for document_id in source_ids if per_document.get(document_id, 0)]
     return "\n\n".join(gathered), contributing
 
@@ -984,6 +1011,7 @@ def _dedupe_questions(questions: list[dict[str, object]]) -> list[dict[str, obje
 
 def _validate_questions(
     items: list[object],
+    allowed_types: frozenset[str] | None = None,
 ) -> tuple[list[dict[str, object]], list[str]]:
     """Split a reply's questions into the valid ones and the reasons the rest failed.
 
@@ -996,7 +1024,7 @@ def _validate_questions(
         if not isinstance(item, dict):
             failures.append(f"question {index} is not an object")
             continue
-        problem = _question_problem(item)
+        problem = _question_problem(item, allowed_types)
         if problem is None:
             valid.append(item)
         else:
@@ -1004,28 +1032,34 @@ def _validate_questions(
     return valid, failures
 
 
-def _question_problem(item: dict[str, object]) -> str | None:
+def _question_problem(
+    item: dict[str, object], allowed_types: frozenset[str] | None = None
+) -> str | None:
     """The one rule a question breaks, or None when it is fit to serve."""
     kind = item.get("type")
-    question = str(item.get("question") or "").strip()
+    question = item.get("question")
     options = item.get("options")
-    explanation = str(item.get("explanation") or "").strip()
-    topic = str(item.get("topic") or "").strip()
+    explanation = item.get("explanation")
+    topic = item.get("topic")
     correct_index = item.get("correct_index")
 
-    if not question:
-        return "empty question"
-    if not explanation:
-        return "empty explanation"
-    if not topic:
-        return "missing topic"
+    if allowed_types is not None and (not isinstance(kind, str) or kind not in allowed_types):
+        return f"type {kind!r} was not requested"
+    if not isinstance(question, str) or not question.strip():
+        return "question must be a non-empty string"
+    if not isinstance(explanation, str) or not explanation.strip():
+        return "explanation must be a non-empty string"
+    if not isinstance(topic, str) or not topic.strip():
+        return "topic must be a non-empty string"
     if not isinstance(options, list) or not all(isinstance(o, str) for o in options):
         return "options must be a list of strings"
+    if any(not option.strip() for option in options):
+        return "options must contain non-whitespace answers"
     if not isinstance(correct_index, int) or isinstance(correct_index, bool):
         return "correct_index must be an integer"
 
     if kind == "mcq":
-        if len(options) != 4 or len(set(options)) != 4:
+        if len(options) != 4 or len({option.strip().casefold() for option in options}) != 4:
             return "mcq needs exactly four distinct options"
         if not 0 <= correct_index < 4:
             return "mcq correct_index out of range"
