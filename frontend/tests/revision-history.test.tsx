@@ -297,3 +297,15 @@ describe('RevisionHistory: the "shown now" marker is honest for drafts', () => {
     expect(within(rows[2]).getByRole('button', { name: 'Restore' })).toBeInTheDocument()
   })
 })
+
+it('retries history in place after a load error', async () => {
+  vi.mocked(api.listPartRevisions)
+    .mockRejectedValueOnce(new Error('offline'))
+    .mockResolvedValueOnce(REVISIONS)
+  render(<RevisionHistory artifactId={3} part={PART} onClose={vi.fn()} />, {
+    wrapper: createWrapper(),
+  })
+  await userEvent.click(await screen.findByRole('button', { name: 'Retry' }))
+  expect(await screen.findByText('an earlier draft')).toBeVisible()
+  expect(screen.queryByText('Could not load the history.')).not.toBeInTheDocument()
+})

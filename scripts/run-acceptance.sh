@@ -17,6 +17,7 @@
 #   ACCEPTANCE_FRONTEND_PORT  default 3000
 #   ACCEPTANCE_BACKEND_PORT   default 8000
 #   ACCEPTANCE_TUTOR_PORT     default 18900
+#   ACCEPTANCE_HELPER_PORT    default: an available ephemeral port for this run
 #
 # The script checks for port conflicts and refuses to start if its selected
 # frontend, backend, or tutor-fixture ports are already in use.

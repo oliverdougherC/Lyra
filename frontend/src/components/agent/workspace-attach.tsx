@@ -35,6 +35,10 @@ type WorkspaceAttachContextValue = {
   /** The attached workspace, `null` when the class has none. */
   workspace: AgentWorkspaceRead | null
   attachPending: boolean
+  attachError: string | null
+  workspaceError: boolean
+  workspaceReady: boolean
+  retryWorkspace: () => void
   /** Attach a folder the student chose, starting with read - the minimum for inspection. */
   attachFolder: (rootPath: string) => void
   /**
@@ -138,6 +142,12 @@ export function WorkspaceAttachProvider({
     return {
       workspace: workspace.data ?? null,
       attachPending: attach.isPending || updateGrants.isPending || detach.isPending,
+      attachError: attach.error?.message ?? null,
+      workspaceError: workspace.isError,
+      workspaceReady: workspace.isSuccess,
+      retryWorkspace: () => {
+        void workspace.refetch()
+      },
       attachFolder,
       beginAttach,
       approveAccess,
@@ -236,7 +246,9 @@ export function AttachPathEntry({
   onSubmit,
   onCancel,
   busy,
+  error,
 }: {
+  error?: string | null
   onSubmit: (rootPath: string) => void
   onCancel: () => void
   busy: boolean
@@ -247,9 +259,8 @@ export function AttachPathEntry({
       className="flex flex-col gap-2"
       onSubmit={(event) => {
         event.preventDefault()
-        if (!path.trim()) return
+        if (!path.trim() || busy) return
         onSubmit(path.trim())
-        setPath('')
       }}
     >
       <label htmlFor="agent-attach-path" className="text-sm font-medium">
@@ -258,9 +269,16 @@ export function AttachPathEntry({
       <Input
         id="agent-attach-path"
         value={path}
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? 'agent-attach-error' : undefined}
         placeholder="/absolute/path/to/repository"
         onChange={(event) => setPath(event.target.value)}
       />
+      {error ? (
+        <p id="agent-attach-error" role="alert" className="text-danger-text text-sm">
+          {error}
+        </p>
+      ) : null}
       <div className="flex items-center gap-2">
         <Button type="submit" size="sm" disabled={!path.trim() || busy}>
           Attach

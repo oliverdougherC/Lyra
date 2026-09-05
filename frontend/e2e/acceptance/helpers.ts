@@ -10,6 +10,7 @@
  */
 
 import { type Page, expect } from '@playwright/test'
+import { captureOwnedFixtures, survivingOwnedFixtures } from './process-ownership'
 
 /* ------------------------------------------------------------------ */
 /*  Port resolution                                                    */
@@ -18,6 +19,8 @@ import { type Page, expect } from '@playwright/test'
 const BACKEND_PORT = Number(process.env.ACCEPTANCE_BACKEND_PORT ?? 8000)
 const FRONTEND_PORT = Number(process.env.ACCEPTANCE_FRONTEND_PORT ?? 3000)
 const TUTOR_PORT = Number(process.env.ACCEPTANCE_TUTOR_PORT ?? 18_900)
+
+export const HELPER_PORT = Number(process.env.ACCEPTANCE_HELPER_PORT ?? 19500)
 
 export const BACKEND = `http://127.0.0.1:${BACKEND_PORT}`
 export const FRONTEND = `http://127.0.0.1:${FRONTEND_PORT}`
@@ -426,7 +429,7 @@ export async function sendChatAndWait(
  * Click the flashcard to flip it (front -> back or back -> front).
  */
 export async function flipCard(page: Page) {
-  await page.locator('[role="button"][aria-label*="Card"]').click()
+  await page.getByRole('button', { name: /^Show (answer|question)$/ }).click()
 }
 
 /**
@@ -523,23 +526,17 @@ export async function readAcceptanceState(): Promise<{
   runId: string
   dataDir: string
   backendPid: number
+  backendStartToken: string | null
   frontendPid: number
   backendPort: number
   frontendPort: number
   tutorPort: number
+  helperPort: number
 } | null> {
-  const { readdir, readFile } = await import('node:fs/promises')
-  const { resolve, join } = await import('node:path')
-  const projectRoot = resolve(__dirname, '..', '..', '..')
-
-  // Find the state file (unique per run)
-  const entries = await readdir(projectRoot)
-  const stateFiles = entries.filter(
-    (e) => e.startsWith('.acceptance-state-') && e.endsWith('.json'),
-  )
-  if (stateFiles.length === 0) return null
-
-  const raw = await readFile(join(projectRoot, stateFiles[0]), 'utf-8')
+  const { readFile } = await import('node:fs/promises')
+  const stateFile = process.env.ACCEPTANCE_STATE_FILE
+  if (!stateFile) return null
+  const raw = await readFile(stateFile, 'utf-8')
   return JSON.parse(raw)
 }
 
@@ -550,17 +547,24 @@ export async function readAcceptanceState(): Promise<{
  */
 export async function restartBackend(): Promise<void> {
   const { execSync, spawn } = await import('node:child_process')
-  const { readdir, readFile, writeFile } = await import('node:fs/promises')
-  const { resolve, join } = await import('node:path')
+  const { readFile, writeFile } = await import('node:fs/promises')
+  const { resolve } = await import('node:path')
   const projectRoot = resolve(__dirname, '..', '..', '..')
 
   const state = await readAcceptanceState()
   if (!state) throw new Error('Cannot restart backend: no state file found')
+  if (
+    isAlive(state.backendPid) &&
+    (!state.backendStartToken ||
+      survivingOwnedFixtures(new Map([[state.backendPid, state.backendStartToken]])).length === 0)
+  ) {
+    throw new Error('Cannot restart backend: recorded process identity no longer matches')
+  }
 
   // Kill the current backend. It was spawned detached (its own process group, pgid == pid), so
   // signal the WHOLE group: that reclaims the real uvicorn python grandchild and its fake-helper
   // great-grandchild. Signalling only the `uv` wrapper pid orphans them -- the old helper keeps
-  // holding port 19500 and the new backend cannot bring up its own. This is the same orphan-leak
+  // holding this run's helper port and the new backend cannot bring up its own. This is the same orphan-leak
   // class the teardown process-group fix addresses, applied to the in-run restart path.
   const killGroup = (sig: NodeJS.Signals): void => {
     try {
@@ -574,6 +578,7 @@ export async function restartBackend(): Promise<void> {
     }
   }
 
+  const ownedHelpers = captureOwnedFixtures([state.backendPid])
   killGroup('SIGTERM')
   const deadline = Date.now() + 5_000
   while (Date.now() < deadline) {
@@ -598,11 +603,10 @@ export async function restartBackend(): Promise<void> {
   }
 
   // A SIGKILLed uvicorn never runs its atexit helper-reclaim, so the old fake-helper may still hold
-  // the helper port (19500, fixed by the harness). Sweep any acceptance fake-helper by its unique
-  // command-line signature (it can never match a production Lyra process) and wait for that port to
-  // be free before spawning fresh -- otherwise the new backend's helper cannot bind.
-  await sweepFakeHelpers()
-  await waitForPortFree(19_500, 10_000)
+  // this run's helper port. Reclaim captured owned fixture identities and wait for that port
+  // to be free before spawning fresh -- an unrelated listener is never a cleanup target.
+  await sweepFakeHelpers(ownedHelpers)
+  await waitForPortFree(state.helperPort, 10_000)
 
   // Wait for the backend port to be free
   const portDeadline = Date.now() + 5_000
@@ -625,6 +629,7 @@ export async function restartBackend(): Promise<void> {
   for (const [k, v] of Object.entries(process.env)) {
     if (v !== undefined) backendEnv[k] = v
   }
+  backendEnv.ACCEPTANCE_HELPER_PORT = String(state.helperPort)
   backendEnv.LYRA_DATA_DIR = state.dataDir
   backendEnv.LYRA_HOST = '127.0.0.1'
   backendEnv.LYRA_PORT = String(state.backendPort)
@@ -703,14 +708,10 @@ export async function restartBackend(): Promise<void> {
     )
   }
 
-  const entries = await readdir(projectRoot)
-  const stateFiles = entries.filter(
-    (e) => e.startsWith('.acceptance-state-') && e.endsWith('.json'),
-  )
-  if (stateFiles.length === 0) {
-    throw new Error('restartBackend: acceptance state file disappeared; cannot record ownership')
+  const filePath = process.env.ACCEPTANCE_STATE_FILE
+  if (!filePath) {
+    throw new Error('restartBackend: current-run state file is unavailable')
   }
-  const filePath = join(projectRoot, stateFiles[0])
   const raw = await readFile(filePath, 'utf-8')
   const stateObj = JSON.parse(raw)
   stateObj.backendPid = newBackend.pid
@@ -730,22 +731,9 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** Kill any lingering acceptance fake-helper by its unique command-line signature. */
-async function sweepFakeHelpers(): Promise<void> {
-  const { execSync } = await import('node:child_process')
-  let listing: string
-  try {
-    listing = execSync('ps -axww -o pid=,command=', { encoding: 'utf-8', timeout: 5000 })
-  } catch {
-    return
-  }
-  const pids: number[] = []
-  for (const line of listing.split('\n')) {
-    if (!line.includes('e2e/acceptance/fake-helper.py')) continue
-    const field = line.trim().split(/\s+/)[0]
-    if (field && Number(field) !== process.pid) pids.push(Number(field))
-  }
-  for (const pid of pids) {
+/** Reclaim captured fixtures only while their birth token still matches. */
+async function sweepFakeHelpers(owned: Map<number, string>): Promise<void> {
+  for (const pid of survivingOwnedFixtures(owned)) {
     try {
       process.kill(pid, 'SIGKILL')
     } catch {

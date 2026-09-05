@@ -38,10 +38,14 @@ import type { ChatEvent, ChatMode, WriterActivity } from '@/types'
 const MODES: { value: ChatMode; label: string; hint: string }[] = [
   {
     value: 'guide',
-    label: 'Guide',
+    label: 'Guide me',
     hint: 'Lyra works toward your understanding - explaining, scaffolding, checking in - at a pace you can follow.',
   },
-  { value: 'show', label: 'Show', hint: 'Lyra works through the full answer, start to finish.' },
+  {
+    value: 'show',
+    label: 'Show solution',
+    hint: 'Lyra works through the full answer, start to finish.',
+  },
 ]
 
 /**
@@ -111,7 +115,7 @@ type ChatPaneProps = {
    * and follows the stream in the scroll container named by `scrollViewportRef`, which is
    * what lets a conversation open underneath the step it is about without covering it.
    */
-  layout?: 'pane' | 'inline'
+  layout?: 'pane' | 'inline' | 'assistant'
   /** The scrolling ancestor to follow, required by `inline`. */
   scrollViewportRef?: React.RefObject<HTMLDivElement | null>
   /** Called whenever the active conversation changes, so the URL can track it. */
@@ -195,7 +199,12 @@ export function ChatPane({
   // exactly when the Chat/Documents tab bar stops existing.
   const wide = useMediaQuery('(min-width: 1024px)')
   const queryClient = useQueryClient()
-  const { data: sessions, isPending: sessionsPending } = useSessions(classId)
+  const {
+    data: sessions,
+    isPending: sessionsPending,
+    isError: sessionsError,
+    refetch: retrySessions,
+  } = useSessions(classId)
   const createSession = useCreateSession(classId)
   const { data: settings } = useSettings()
   const { data: documents } = useDocuments(classId)
@@ -284,7 +293,15 @@ export function ChatPane({
     [documents, selectedDocumentId],
   )
 
-  const { data: persisted, isPending: messagesQueryPending } = useMessages(activeSessionId)
+  const {
+    data: persisted,
+    isPending: messagesQueryPending,
+    isError: messagesError,
+    refetch: retryMessages,
+  } = useMessages(activeSessionId)
+  const sessionListNeeded = !writer && !isDraft && sessionId === null
+  const historyError =
+    (sessionListNeeded && sessionsError) || (activeSessionId !== null && messagesError)
   /** A turn is in flight *and* it belongs to the conversation being read. */
   const showingTurn = !detached && pendingTurn !== null
   // A conversation that does not exist yet is not loading. Without this the query sits at
@@ -828,7 +845,13 @@ export function ChatPane({
   const send = useCallback(
     (content: string) => {
       const trimmed = content.trim()
-      if (trimmed.length === 0) return
+      if (
+        trimmed.length === 0 ||
+        historyError ||
+        messagesPending ||
+        (sessionListNeeded && sessionsPending)
+      )
+        return
       if (
         operationIdRef.current !== null &&
         submittedTextRef.current !== null &&
@@ -852,7 +875,7 @@ export function ChatPane({
         await runTurn('send', trimmed, target)
       })()
     },
-    [ensureSession, runTurn],
+    [ensureSession, runTurn, historyError, messagesPending, sessionListNeeded, sessionsPending],
   )
 
   /**
@@ -865,14 +888,30 @@ export function ChatPane({
   const autoSentRef = useRef(false)
   useEffect(() => {
     if (!initialSend || !initialAsk || autoSentRef.current) return
-    if (settings === undefined) return
+    if (
+      settings === undefined ||
+      historyError ||
+      messagesPending ||
+      (sessionListNeeded && sessionsPending)
+    )
+      return
     autoSentRef.current = true
     if (disabledReason) return
     // Deferred a tick so the send is not a state change inside the effect body itself;
     // the ref above already guarantees exactly one schedule, so there is no cleanup to
     // race against.
     window.setTimeout(() => send(initialAsk), 0)
-  }, [disabledReason, initialAsk, initialSend, send, settings])
+  }, [
+    disabledReason,
+    initialAsk,
+    initialSend,
+    send,
+    settings,
+    historyError,
+    messagesPending,
+    sessionListNeeded,
+    sessionsPending,
+  ])
 
   /**
    * Retry means answer again, not ask again. The question stays put and its reply is
@@ -1231,14 +1270,32 @@ export function ChatPane({
       ref={contentRef}
       className={cn(inline ? 'space-y-5' : 'mx-auto max-w-[860px] p-4 md:px-6')}
     >
+      {historyError ? (
+        <div role="alert" className="mb-4 rounded-md border border-danger-border p-3 text-sm">
+          <p>Could not load this conversation.</p>
+          <p className="text-text-secondary">Retry to load saved messages before continuing.</p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2"
+            onClick={() => {
+              if (sessionListNeeded && sessionsError) void retrySessions()
+              if (activeSessionId !== null && messagesError) void retryMessages()
+            }}
+          >
+            Retry conversation
+          </Button>
+        </div>
+      ) : null}
       {/* The writer never falls back to the class's newest session, so its empty state
           must not wait on the class session list either. */}
-      {(writer ? false : sessionsPending) || messagesPending ? (
+      {(sessionListNeeded && sessionsPending) || messagesPending ? (
         <div className="space-y-4" aria-busy="true" aria-label="Loading conversation">
           <Skeleton className="ml-auto h-12 w-2/3" />
           <Skeleton className="h-24 w-full" />
         </div>
-      ) : rendered.length === 0 && emptyState !== undefined ? (
+      ) : historyError && rendered.length === 0 ? null : rendered.length === 0 &&
+        emptyState !== undefined ? (
         emptyState
       ) : rendered.length === 0 ? (
         <EmptyConversation
@@ -1270,25 +1327,33 @@ export function ChatPane({
                   : undefined
               }
               onRevealComplete={isStreamingReply ? handleRevealComplete : undefined}
-              canRetry={!optimisticTurn && index === lastAssistantIndex && !writer}
+              canRetry={
+                !historyError &&
+                !messagesPending &&
+                !optimisticTurn &&
+                index === lastAssistantIndex &&
+                !writer
+              }
               onRetry={
-                writer
-                  ? !optimisticTurn &&
-                    index === lastUserIndex &&
-                    (message.writer_attempt?.state === 'failed' ||
-                      message.writer_attempt?.state === 'stopped')
-                    ? retryWriterTurn
-                    : undefined
-                  : !optimisticTurn &&
+                historyError || messagesPending
+                  ? undefined
+                  : writer
+                    ? !optimisticTurn &&
                       index === lastUserIndex &&
-                      (message.agent_attempt?.state === 'failed' ||
-                        message.agent_attempt?.state === 'stopped' ||
-                        message.tutor_attempt?.state === 'failed' ||
-                        message.tutor_attempt?.state === 'stopped')
-                    ? retryTutorTurn
-                    : message.role === 'assistant'
-                      ? regenerate
+                      (message.writer_attempt?.state === 'failed' ||
+                        message.writer_attempt?.state === 'stopped')
+                      ? retryWriterTurn
                       : undefined
+                    : !optimisticTurn &&
+                        index === lastUserIndex &&
+                        (message.agent_attempt?.state === 'failed' ||
+                          message.agent_attempt?.state === 'stopped' ||
+                          message.tutor_attempt?.state === 'failed' ||
+                          message.tutor_attempt?.state === 'stopped')
+                      ? retryTutorTurn
+                      : message.role === 'assistant'
+                        ? regenerate
+                        : undefined
               }
             />
           )
@@ -1306,10 +1371,11 @@ export function ChatPane({
       streaming={turnActive}
       stopping={stopping}
       disabledReason={disabledReason}
+      blocked={historyError || messagesPending || (sessionListNeeded && sessionsPending)}
       sourceControl={sourceControl}
       workspaceControl={workspaceControl}
       // Inline, the reader clicked to open this and the next thing they do is type.
-      autoFocus={inline}
+      autoFocus={inline || layout === 'assistant'}
     />
   )
 
@@ -1340,14 +1406,14 @@ export function ChatPane({
           a word the breadcrumb above it and the composer below it both already imply.
           Narrow, that header is already holding a breadcrumb, Profile, and the endpoint
           badge in 375px, so the controls stay in the pane instead of crushing it. */}
-      {wide ? (
+      {layout === 'assistant' ? null : wide ? (
         <HeaderActions>{paneControls}</HeaderActions>
       ) : (
         <div className="flex shrink-0 items-center gap-2 px-4 pt-3">{paneControls}</div>
       )}
 
       <div className="relative min-h-0 flex-1">
-        <ScrollArea viewportRef={viewportRef} className="h-full">
+        <ScrollArea viewportRef={ownViewportRef} className="h-full">
           {conversation}
         </ScrollArea>
 

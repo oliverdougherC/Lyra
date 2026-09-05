@@ -85,6 +85,10 @@ describe('ClassDraftsPanel', () => {
       '/#/classes/1/drafts/9',
     )
     expect(screen.getAllByText(/Edited /)).toHaveLength(2)
+    expect(screen.getByRole('button', { name: 'Actions for Lab report' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Actions for Lab report' })).not.toHaveClass(
+      'opacity-0',
+    )
   })
 
   it('shows the stage line instead of the edit time while a suggestion is running', async () => {

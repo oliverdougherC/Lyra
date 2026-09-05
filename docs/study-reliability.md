@@ -78,10 +78,26 @@ with 409; same-key/same-rating replay returns the original result without anothe
 | Study again | Start a fresh session and mint a fresh key for each genuine review |
 
 Unresolved interval buttons show confirmation status, not a speculative interval. Unavailable or
-malformed recovery storage blocks review explicitly rather than silently discarding a pending key.
+malformed recovery storage blocks recording explicitly rather than silently discarding a pending key.
+The student can retry storage access in place, or study without recording reviews while the raw
+recovery evidence remains untouched.
 Recovery is scoped to the current browser/webview session; it does not promise persistence after
-tab destruction. A terminal deck/card conflict preserves the pending key and surfaces the API
-failure. Previously unkeyed review-log entries remain compatible.
+tab destruction. A removed card preserves its pending operation as an explicitly unresolved record; it is never
+counted as confirmed. The student can continue valid remaining cards. An absent review log after
+deletion cannot establish whether an earlier request committed, because card deletion cascades
+to that log. Previously unkeyed review-log entries remain compatible.
+
+Every mounted session owns a per-deck lease. Writes compare the stored serialized revision, and
+post-await continuations check ownership before acknowledgement. Unmount releases the lease; a
+new route instance supersedes it. A delayed acknowledgement from the old route therefore cannot
+replace the newer queue, counters, states, or operation. Cancellation is not used as commit evidence.
+
+Restoration reads the complete authoritative deck, bypassing the ordinary query-cache freshness
+window. Membership, content, and scheduling state are reconciled without expanding the saved
+queue to newly added cards. Missing cards with no pending operation are excluded without ratings.
+A missing pending card needs explicit continuation that preserves its operation as unresolved.
+Cards absent only from the limited session endpoint remain eligible. Editing/removal callbacks
+and session restart persist coherent snapshots; restart excludes retained unresolved card IDs.
 
 ## Verification and release-quality scope
 
@@ -104,18 +120,50 @@ recorded model/endpoint configuration, and repeats on the merged release candida
 selected-source, malformed-format, cancellation, bounded-library, early/due-practice, and lost-ack
 cases above to that gate. The adjacent malformed-topic diagnostic gap is tracked as PLA-478.
 
-PLA-404 PR #70 was published during final verification at
-`532f5581ed655f939f13a3fa63f0f918caff901e`. Its study diff was inspected. A non-mutating
-`git merge-tree` check finds content conflicts in `deck-session.tsx` and
-`deck-session.test.tsx`; neither branch was merged. Rebase after that work reaches main.
-Keep its semantic card faces, focus management, CardActions, deck-wide progress, and layout.
-Combine its in-memory retry binding with this durable operation/snapshot contract using one
-review guard. Editing/removing a card must update the persisted snapshot too; do not let those
-actions discard an unresolved rating. Rerun session, source-picker, and acknowledgement-loss
-acceptance against the resolved integration. This branch does not claim that combined gate.
+## Durable recovery follow-up evidence
 
-The local review app was rebuilt with the frozen backend, signed with the existing Apple
-Development identity, and all 81 native code objects passed verification. The signed bundle's
+The reviewed product head was `0e8d522284206d174c2af48282bcf8f2908fbd52`.
+The new `study-recovery.spec.ts` runs production components against the actual card/review routes:
+
+- **Late continuation, failing before:** A commits with its response held; real SPA navigation
+  unmounts the run; the new run restores/replays A using its original payload; B commits with its
+  response lost. B's saved pending key is asserted before releasing A. Releasing the original A
+  response changes that operation from `{ id: <B key>, rating: good }` to `null` on the old product.
+  **Passing after:** the entire B snapshot remains equal, reload replays B's original payload,
+  and direct database reads show exactly one intended operation for each card.
+- **Stale cards, failing before:** after a saved session leaves the study route, the API deletes
+  its next card and corrects the following card. On returning through the actual SPA route,
+  the old product keeps the deleted head and never displays the corrected content.
+  **Passing after:** the complete deck read removes the deleted card, displays corrected content
+  and authoritative scheduling state, preserves confirmed counters, and survives another reload.
+- The eight production cases also cover deletion with an unresolved operation both before and
+  after commit, an existing pending card omitted from the limited 20-card response of a 25-card
+  deck, storage read failure, acknowledgement-write failure, and malformed storage. Unknown
+  deleted outcomes remain retained and uncounted; storage retry replays the original key.
+
+The baseline used the exact reviewed component/API, with only the safe acceptance ownership
+harness substituted. Initial selector/interceptor setup failures were discarded as product
+proof. A run using the old baseline teardown actually terminated neighboring acceptance
+backends; those affected results were invalidated. The final baseline and fixed runs use the
+combined ownership harness. The corrected teardown has real-process regressions for replacement
+backends, neighboring process/state survival, absent birth-token refusal, and strict failure-ledger
+reporting. No global command or state-file sweep remains. Helper fixtures also receive a
+per-run ephemeral port (optional `ACCEPTANCE_HELPER_PORT` override), retained through restart.
+All three backend harness cleanup routes require captured process identity instead of killing
+whatever occupies a port. An actual-route regression keeps an independent listener alive while
+all three cleanup attempts fail explicitly, then proves cleanup succeeds for a captured fixture.
+
+An initial simultaneous full-suite run exposed the former shared helper port 19500: one helper
+case failed in each neighboring suite. Those runs were invalidated and the final acceptance
+runs use isolated helper ports. Strict assertions and failure accounting were retained.
+
+The component/helper suite additionally covers storage changing between render and ownership
+claim, external revision changes, failed edit/remove persistence followed by restoration,
+read-only study returning to the preserved operation, and per-deck recovery controls.
+
+Historical evidence for the previously reviewed head: its local review app was rebuilt with the
+frozen backend, signed with the existing Apple Development identity, and all 81 native code
+objects passed verification. The signed bundle's
 frozen smoke reported authenticated ephemeral-loopback startup; native launch loaded existing
 classes and the backend process from this worktree's bundle. The signing helper was the existing
 local `scripts/sign_local_app.py` from the parallel checkout, kept outside this PR's code scope.

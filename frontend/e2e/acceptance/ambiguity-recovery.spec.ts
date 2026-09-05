@@ -22,7 +22,6 @@ import type { Page } from '@playwright/test'
 import {
   BACKEND,
   LYRA_HEADERS,
-  apiGet,
   apiPost,
   createClass,
   createSession,
@@ -374,19 +373,17 @@ test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
 
     // The expected injection is consumed from the backend failure ledger so the run's
     // accounting gate only sees genuinely unexpected failures.
-    const consumed = await (
-      await apiPost('/_acceptance/backend-failures/consume', {
-        method: 'POST',
-        route: '/api/classes/{class_id}/sessions/{session_id}/agent-chat',
+    // Response headers can arrive before the ASGI wrapper finishes cleanup and
+    // records the failure. Consume only this expected occurrence once it is published.
+    await expect
+      .poll(async () => {
+        const response = await apiPost('/_acceptance/backend-failures/consume', {
+          method: 'POST',
+          route: '/api/classes/{class_id}/sessions/{session_id}/agent-chat',
+        })
+        return ((await response.json()) as { ok: boolean }).ok
       })
-    ).json()
-    const ledger = (await apiGet('/_acceptance/backend-failures')).json()
-    expect(
-      consumed,
-      `unconsumed ledger: ${JSON.stringify((await ledger).unconsumed)}`,
-    ).toMatchObject({
-      ok: true,
-    })
+      .toBe(true)
 
     // The failed attempt is durable: exactly one user message, no assistant publication,
     // and the attempt state is 'failed' (truthful and retryable).

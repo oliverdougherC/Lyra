@@ -11,7 +11,7 @@
  */
 
 import { test, expect } from '@playwright/test'
-import { apiGet, BACKEND } from './helpers'
+import { apiGet, BACKEND, HELPER_PORT } from './helpers'
 
 const LYRA_HEADERS: Record<string, string> = {
   'Content-Type': 'application/json',
@@ -85,7 +85,7 @@ async function fullCleanup(): Promise<void> {
 
 test.describe('Helper supervision (PLA-301)', () => {
   // Guarantee every test starts from a free port with no stale ownership record. A prior spec
-  // (e.g. the adoption scenarios) may have left a foreign helper on 19500; without this, the
+  // (e.g. the adoption scenarios) may have left a foreign helper on this run’s helper port; without this, the
   // production supervisor would ADOPT it instead of spawning fresh, corrupting these assertions.
   test.beforeEach(async () => {
     await fullCleanup()
@@ -101,7 +101,7 @@ test.describe('Helper supervision (PLA-301)', () => {
     expect(result.ok).toBe(true)
     expect(result.pid).toBeTruthy()
     expect(result.birth_token).toBeTruthy()
-    expect(result.port).toBe(19500)
+    expect(result.port).toBe(HELPER_PORT)
 
     // Verify health through the real supervisor status check
     const status = await getHelperStatus()
@@ -114,20 +114,20 @@ test.describe('Helper supervision (PLA-301)', () => {
     expect(status.ownership_record).toBeTruthy()
     expect(status.ownership_record!.pid).toBe(result.pid)
     expect(status.ownership_record!.start_token).toBe(result.birth_token)
-    expect(status.ownership_record!.port).toBe(19500)
+    expect(status.ownership_record!.port).toBe(HELPER_PORT)
     expect(status.ownership_record!.model).toBe('acceptance-test-model')
 
     // Verify the fake helper endpoints respond correctly
-    const healthRes = await fetch(`http://127.0.0.1:19500/health`)
+    const healthRes = await fetch(`http://127.0.0.1:${HELPER_PORT}/health`)
     expect(healthRes.ok).toBe(true)
     const health = await healthRes.json()
     expect(health.status).toBe('ok')
 
-    const propsRes = await fetch(`http://127.0.0.1:19500/props`)
+    const propsRes = await fetch(`http://127.0.0.1:${HELPER_PORT}/props`)
     const props = await propsRes.json()
     expect(props.model_path).toBe('acceptance-test-model')
 
-    const modelsRes = await fetch(`http://127.0.0.1:19500/v1/models`)
+    const modelsRes = await fetch(`http://127.0.0.1:${HELPER_PORT}/v1/models`)
     const models = await modelsRes.json()
     expect(models.data[0].id).toBe('acceptance-test-model')
   })
@@ -185,7 +185,7 @@ test.describe('Helper supervision (PLA-301)', () => {
     const oldToken = result1.birth_token
 
     // Verify old model via the supervisor's owned process
-    const oldProps = await (await fetch('http://127.0.0.1:19500/props')).json()
+    const oldProps = await (await fetch(`http://127.0.0.1:${HELPER_PORT}/props`)).json()
     expect(oldProps.model_path).toBe('old-model')
 
     // Stop old, start new with different model (production replacement flow)
@@ -198,7 +198,7 @@ test.describe('Helper supervision (PLA-301)', () => {
     const newToken = result2.birth_token
 
     // Verify replacement model
-    const newProps = await (await fetch('http://127.0.0.1:19500/props')).json()
+    const newProps = await (await fetch(`http://127.0.0.1:${HELPER_PORT}/props`)).json()
     expect(newProps.model_path).toBe('new-model')
 
     // The supervisor recorded new ownership with a different birth token

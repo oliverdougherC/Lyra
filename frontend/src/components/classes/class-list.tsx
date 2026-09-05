@@ -2,6 +2,8 @@
 
 import { useMemo, useRef, useState } from 'react'
 import { Archive, GraduationCap, Plus } from 'lucide-react'
+import Link from '@/router/link'
+import { toast } from 'sonner'
 
 import { ClassCard, ClassCardSkeleton, NewClassCard } from '@/components/classes/class-card'
 import { ClassFormDialog } from '@/components/classes/class-form-dialog'
@@ -19,7 +21,7 @@ import {
 import { ApiError } from '@/lib/api'
 import { useAppShortcuts } from '@/lib/hooks/use-app-shortcuts'
 import { useClasses, useUpdateClass } from '@/lib/hooks/use-classes'
-import { formatCount, parseTimestamp } from '@/lib/format'
+import { parseTimestamp } from '@/lib/format'
 import type { ClassRead } from '@/types'
 
 const SKELETON_COUNT = 4
@@ -79,6 +81,8 @@ export function ClassList() {
       )
     : []
   const activeClasses = classes.filter((item) => !item.archived)
+  const [showArchived, setShowArchived] = useState(false)
+  const archivedClasses = classes.filter((item) => item.archived)
   const archivedCount = classes.length - activeClasses.length
 
   return (
@@ -96,10 +100,46 @@ export function ClassList() {
       </div>
 
       {archivedCount > 0 ? (
-        <p className="text-text-tertiary -mt-2 text-xs">
-          {formatCount(archivedCount, 'class')} archived. Open the sidebar&apos;s Archived section
-          to restore one.
-        </p>
+        <section className="space-y-3">
+          <Button
+            variant="outline"
+            size="sm"
+            aria-expanded={showArchived}
+            aria-controls="archived-classes"
+            onClick={() => setShowArchived((open) => !open)}
+          >
+            <Archive />
+            {showArchived ? 'Hide archived classes' : 'View archived classes'} ({archivedCount})
+          </Button>
+          {showArchived ? (
+            <ul id="archived-classes" className="divide-border divide-y border-y">
+              {archivedClasses.map((klass) => (
+                <li key={klass.id} className="flex items-center gap-3 py-3">
+                  <Link
+                    href={`/classes/${klass.id}`}
+                    className="min-w-0 flex-1 break-words text-sm underline underline-offset-4"
+                  >
+                    {klass.name}
+                  </Link>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={updateClass.isPending}
+                    aria-label={`Restore ${klass.name}`}
+                    onClick={() =>
+                      updateClass.mutate(
+                        { classId: klass.id, body: { archived: false } },
+                        { onError: () => toast.error('Could not restore this class. Try again.') },
+                      )
+                    }
+                  >
+                    Restore
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
       ) : null}
 
       {isPending ? (
@@ -137,7 +177,7 @@ export function ClassList() {
               </EmptyMedia>
               <EmptyTitle>All classes are archived</EmptyTitle>
               <EmptyDescription>
-                Restore a class from the sidebar&apos;s Archived section to see it here.
+                Choose View archived classes above to open or restore a class.
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>

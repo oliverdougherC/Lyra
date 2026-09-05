@@ -195,14 +195,16 @@ test.describe('Workspace hunk confirmation boundary (PLA-303)', () => {
     await expect(acceptBtn).toBeVisible({ timeout: 5_000 })
     await acceptBtn.click()
 
-    // The UI should show either:
-    // 1. A "Stale" or "Failed" badge on the card
-    // 2. A toast error about the stale/changed proposal
-    const staleOrFailedBadge = changeCard.locator('[data-slot="badge"]', {
-      hasText: /Stale|Failed/,
+    // Staleness remains visible on the proposal after the transient toast disappears.
+    const staleBadge = changeCard.locator('[data-slot="badge"]', {
+      hasText: 'Stale',
     })
-    const toastError = page.getByText(/proposal changed|review the updated/i)
-    await expect(staleOrFailedBadge.or(toastError)).toBeVisible({ timeout: 10_000 })
+    await expect(staleBadge).toBeVisible({ timeout: 10_000 })
+    await expect(
+      changeCard.getByText('print("externally modified")', { exact: true }),
+    ).toBeVisible()
+    await expect(changeCard.getByText('print("stale proposal")', { exact: true })).toBeVisible()
+    await expect(changeCard.getByRole('button', { name: /Accept remaining/i })).toHaveCount(0)
 
     // The stale proposal must NOT have been applied to disk
     const diskContent = await readFile(join(workspaceDir, 'greet.py'), 'utf-8')

@@ -371,7 +371,9 @@ describe('a section whose parts are questions of their own', () => {
     renderPanel(section([{}, { verdict: 'refuted', verdict_detail: 'The integral diverges.' }]))
 
     const heading = screen.getByRole('button', { name: /Properties of LTI Systems/ })
-    expect(within(heading).getByText('Check failed')).toBeInTheDocument()
+    expect(
+      within(heading.closest('[data-problem-heading]') as HTMLElement).getByText('Check failed'),
+    ).toBeInTheDocument()
     expect(screen.getByText('The integral diverges.')).toBeInTheDocument()
   })
 
@@ -438,4 +440,22 @@ describe('a section whose parts are questions of their own', () => {
 
     expect(tree.separate).toBe(false)
   })
+})
+
+it('opens verdict details without changing the problem accordion state', async () => {
+  renderPanel()
+  const trigger = document.querySelector('[data-slot="accordion-trigger"]') as HTMLButtonElement
+  const verdict = screen.getByRole('button', { name: 'Not checked: explanation' })
+  expect(trigger).not.toContainElement(verdict)
+  expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  await userEvent.click(verdict)
+  expect(screen.getByText('Lyra did not check this solution.')).toBeVisible()
+  expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  await userEvent.keyboard('{Escape}')
+  await userEvent.click(trigger)
+  expect(trigger).toHaveAttribute('aria-expanded', 'false')
+  verdict.focus()
+  await userEvent.keyboard('{Enter}')
+  expect(screen.getByText('Lyra did not check this solution.')).toBeVisible()
+  expect(trigger).toHaveAttribute('aria-expanded', 'false')
 })

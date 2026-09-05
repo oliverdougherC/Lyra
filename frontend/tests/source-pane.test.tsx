@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SourcePane, type ProblemRegion } from '@/components/solutions/source-pane'
+import { api } from '@/lib/api'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { DocumentRead, SolutionSource } from '@/types'
 
@@ -254,5 +255,49 @@ describe('SourcePane', () => {
 
     expect(firstRelease).toHaveBeenCalledTimes(1)
     expect(secondRelease).not.toHaveBeenCalled()
+  })
+})
+
+describe('source reading recovery', () => {
+  it('retries the failed page without changing the selected page', async () => {
+    immediateAssetUrl.mockReturnValue(null)
+    loadProtectedAssetSource
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ url: 'blob:retried' })
+    renderPane({ documentId: 7, pageNumber: 2 })
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry page' }))
+    await decodePages()
+    expect(screen.getByAltText('Page 2')).toBeInTheDocument()
+    expect(screen.getByText('page 2 of 3')).toBeInTheDocument()
+    expect(loadProtectedAssetSource).toHaveBeenCalledTimes(2)
+  })
+
+  it('offers document text even when the page cannot render', async () => {
+    immediateAssetUrl.mockReturnValue(null)
+    loadProtectedAssetSource.mockRejectedValue(new Error('render failed'))
+    vi.spyOn(api, 'getDocumentText').mockResolvedValue({
+      filename: DOCUMENT.filename,
+      text: 'Readable source equation',
+      truncated: false,
+    })
+    renderPane({ documentId: 7, pageNumber: 2 })
+    await userEvent.click(await screen.findByRole('button', { name: 'Read extracted text' }))
+    expect(await screen.findByText('Readable source equation')).toBeVisible()
+    expect(screen.getByText(/Extracted document text/)).toBeVisible()
+    await userEvent.click(screen.getByRole('button', { name: 'View page' }))
+    expect(screen.getByText('page 2 of 3')).toBeVisible()
+  })
+
+  it('zooms the source independently and resets without changing the page', async () => {
+    renderPane({ documentId: 7, pageNumber: 2 })
+    await decodePages()
+    await userEvent.click(screen.getByRole('button', { name: 'Zoom in source page' }))
+    expect(screen.getByText('125%')).toBeVisible()
+    expect(screen.getByAltText('Page 2').parentElement?.parentElement).toHaveStyle({
+      width: '125%',
+    })
+    await userEvent.click(screen.getByRole('button', { name: 'Reset zoom' }))
+    expect(screen.getByText('100%')).toBeVisible()
+    expect(screen.getByAltText('Page 2')).toBeVisible()
   })
 })

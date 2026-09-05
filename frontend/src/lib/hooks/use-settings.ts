@@ -22,6 +22,7 @@ export function useSettings() {
 export function useUpdateSettings() {
   const queryClient = useQueryClient()
   return useMutation({
+    scope: { id: 'settings-save' },
     mutationFn: (body: SettingsUpdate) => api.updateSettings(body),
     onSuccess: (settings) => queryClient.setQueryData(settingsKeys.all, settings),
   })

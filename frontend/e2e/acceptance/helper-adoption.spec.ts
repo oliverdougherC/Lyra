@@ -24,7 +24,7 @@
  */
 
 import { test, expect } from '@playwright/test'
-import { BACKEND } from './helpers'
+import { BACKEND, HELPER_PORT } from './helpers'
 
 const HEADERS: Record<string, string> = {
   'Content-Type': 'application/json',
@@ -98,7 +98,7 @@ async function scenarioRecord(displayName: string): Promise<Record<string, unkno
 /** True when nothing is serving the helper port (the reclaim signal). */
 async function portNotServing(): Promise<boolean> {
   try {
-    const res = await fetch('http://127.0.0.1:19500/health', { cache: 'no-store' })
+    const res = await fetch(`http://127.0.0.1:${HELPER_PORT}/health`, { cache: 'no-store' })
     return res.status !== 200
   } catch {
     // Connection refused / reset means the port is no longer serving.
@@ -176,7 +176,7 @@ test.describe('Helper supervision decisions (PLA-301)', () => {
     expect(adopt.healthy).toBe(true)
 
     // Exactly one helper is serving on the port (no duplicate spawned).
-    const models = await (await fetch('http://127.0.0.1:19500/v1/models')).json()
+    const models = await (await fetch(`http://127.0.0.1:${HELPER_PORT}/v1/models`)).json()
     expect(models.data.length).toBe(1)
 
     // Production stop() reclaims the adopted survivor. The termination path SIGTERMs the group,

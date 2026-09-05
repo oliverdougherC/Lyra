@@ -88,9 +88,30 @@ describe('SourcePicker', () => {
 
     const checkbox = screen.getByRole('checkbox', { name: /homework_5/ })
     expect(checkbox).toBeDisabled()
-    expect(screen.getByText('Already used above')).toBeInTheDocument()
+    expect(screen.getByText('Selected in the other source list')).toBeInTheDocument()
 
     await userEvent.click(checkbox)
     expect(onToggle).not.toHaveBeenCalled()
   })
+})
+
+it('searches a long list without discarding hidden selections', async () => {
+  render(
+    <SourcePicker
+      name="problem-set"
+      documents={Array.from({ length: 50 }, (_, i) => document(i + 1, `homework_${i + 1}.pdf`))}
+      loading={false}
+      selected={[1]}
+      onToggle={vi.fn()}
+      emptyLabel="Empty"
+    />,
+  )
+  await userEvent.type(
+    screen.getByRole('textbox', { name: 'Search problem-set documents' }),
+    'homework_50',
+  )
+  expect(screen.getAllByRole('checkbox')).toHaveLength(1)
+  expect(screen.getByText('1 selected (1 outside this search)')).toBeVisible()
+  await userEvent.clear(screen.getByRole('textbox'))
+  expect(screen.getByRole('checkbox', { name: /homework_1.pdf/ })).toBeChecked()
 })

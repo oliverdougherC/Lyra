@@ -154,9 +154,7 @@ export function SolutionStep({
 
       {editing ? null : (
         <div className="flex items-center gap-0.5 print:hidden">
-          {/* Always visible, unlike its neighbours. Asking is the thing a student most
-              wants from a step they do not follow, and an affordance that only exists once
-              you are already hovering the right row is one most readers never find. */}
+          {/* Keep every action discoverable on touch as well as with a pointer. */}
           <Button
             variant="ghost"
             size="sm"
@@ -172,7 +170,7 @@ export function SolutionStep({
             <MessageCircleQuestion className="size-3.5" />
             {asking ? 'Asking about this step' : 'Ask about this step'}
           </Button>
-          <div className="flex gap-0.5 opacity-0 transition-opacity group-focus-within/step:opacity-100 group-hover/step:opacity-100">
+          <div className="flex gap-0.5">
             <StepAction label="Edit" onClick={startEditing}>
               <Pencil className="size-3.5" />
             </StepAction>
