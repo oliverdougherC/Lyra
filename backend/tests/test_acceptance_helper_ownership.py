@@ -17,7 +17,9 @@ import time
 # A genuinely independent listener, outside the harness's ownership registry.
 neighbor = subprocess.Popen(
     [sys.executable, '-u', '-c',
-     'import socket,time; s=socket.socket(); s.bind(("127.0.0.1",0)); '
+     'import socket,time; s=socket.socket(); '
+     's.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); '
+     's.bind(("127.0.0.1",0)); '
      's.listen(); print(s.getsockname()[1], flush=True); '
      '\nwhile True:\n c,a=s.accept(); c.close()'],
     stdout=subprocess.PIPE, text=True, start_new_session=True,
@@ -45,7 +47,11 @@ try:
         neighbor.wait(timeout=5)
         owned = harness._spawn_foreign_sync('owned-fixture')
         try:
-            assert harness._wait_healthy_sync(), 'owned fixture did not start'
+            if not harness._wait_healthy_sync():
+                detail = (
+                    owned.stderr.read().decode() if owned.poll() is not None else 'still running'
+                )
+                raise AssertionError('owned fixture did not start: ' + detail)
             response = client.post('/_acceptance/helper/cleanup')
             assert response.status_code == 200, response.text
             assert owned.poll() is not None
