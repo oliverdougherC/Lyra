@@ -127,6 +127,105 @@ test.describe('Study tools', () => {
       }
     })
 
+    for (const timing of ['before commit', 'after commit'] as const) {
+      test(`PLA-477: recover Easy after response failure ${timing} and reload`, async ({
+        page,
+      }) => {
+        const created = await apiPost(`/api/classes/${classId}/decks`, {
+          title: `Recovery ${timing}`,
+          document_ids: [docId],
+          cards_per_topic: 2,
+        })
+        const deck = await created.json()
+        await waitForStudyReady('decks', deck.id)
+        const before = await (await apiGet(`/api/decks/${deck.id}/session`)).json()
+        const first = before.cards[0]
+        let failedPayload: { rating: string; operation_id: string } | undefined
+        let committed: { reps: number; stability: number; due_at: string } | undefined
+        // Forward to the real server first in the acknowledgement-loss case. Only
+        // the transport response is dropped; scheduling and logging are production code.
+        await page.route(
+          `**/api/cards/${first.part_id}/review`,
+          async (route) => {
+            failedPayload = route.request().postDataJSON()
+            if (timing === 'after commit') {
+              const response = await route.fetch()
+              expect(response.ok()).toBe(true)
+              committed = await response.json()
+            }
+            await route.abort('failed')
+          },
+          { times: 1 },
+        )
+        await page.goto(`/classes/${classId}/study/${deck.id}`)
+        await expect(page.getByText(/Card 1 of/)).toBeVisible()
+        await flipCard(page)
+        await rateCard(page, 'Easy')
+        await expect(page.getByText(/Easy review could not be confirmed/)).toBeVisible()
+        await expect(page.getByRole('button', { name: /^Again/ })).toBeDisabled()
+        await page.keyboard.press('1')
+        const during = await (await apiGet(`/api/decks/${deck.id}/session`)).json()
+        expect(
+          during.cards.find((card: { part_id: number }) => card.part_id === first.part_id)
+            .card_state.reps,
+        ).toBe(timing === 'after commit' ? 1 : 0)
+
+        await page.reload()
+        await expect(page.getByText(/Easy review could not be confirmed/)).toBeVisible()
+        await expect(page.getByRole('button', { name: /^Again/ })).toBeDisabled()
+        await rateCard(page, 'Easy')
+        await expect(page.getByText(/Card 2 of/)).toBeVisible()
+        expect(failedPayload?.rating).toBe('easy')
+        const replay = await apiPost(`/api/cards/${first.part_id}/review`, failedPayload)
+        expect(replay.ok).toBe(true)
+        const saved = await replay.json()
+        expect(saved.reps).toBe(1)
+        if (committed) expect(saved).toEqual(committed)
+        const mismatch = await apiPost(`/api/cards/${first.part_id}/review`, {
+          ...failedPayload,
+          rating: 'again',
+        })
+        expect(mismatch.status).toBe(409)
+        for (let i = 1; i < before.cards.length; i++) {
+          await flipCard(page)
+          await rateCard(page, 'Good')
+          if (i < before.cards.length - 1) {
+            await expect(page.getByText(`Card ${i + 2} of ${before.cards.length}`)).toBeVisible()
+          }
+        }
+        await waitForSessionSummary(page)
+        await expect(page.getByText(/0 again.*1 easy/)).toBeVisible()
+        await page.reload()
+        await waitForSessionSummary(page)
+        await expect(page.getByText(/0 again.*1 easy/)).toBeVisible()
+        const final = await (await apiGet(`/api/decks/${deck.id}/session`)).json()
+        const finalState = final.cards.find(
+          (card: { part_id: number }) => card.part_id === first.part_id,
+        ).card_state
+        expect(finalState.reps).toBe(1)
+        expect(finalState.due_at).toBe(saved.due_at)
+        expect(finalState.stability).toBe(saved.stability)
+      })
+    }
+
+    test('PLA-476: 100 distinct same-day reviews remain bounded and recorded', async () => {
+      const session = await (await apiGet(`/api/decks/${deckId}/session`)).json()
+      const card = session.cards[0]
+      const original = card.card_state
+      for (let i = 0; i < 100; i++) {
+        const response = await apiPost(`/api/cards/${card.part_id}/review`, {
+          rating: i % 2 ? 'good' : 'easy',
+          operation_id: `bounded-${deckId}-${i}`,
+        })
+        expect(response.ok).toBe(true)
+        const updated = await response.json()
+        expect(updated.reps).toBe(original.reps + i + 1)
+        expect(updated.stability).toBe(original.stability)
+        expect(updated.due_at).toBe(original.due_at)
+        expect(Number.isFinite(Date.parse(updated.due_at))).toBe(true)
+      }
+    })
+
     test('PLA-305: API-level idempotent replay with same operation_id', async () => {
       const sessionRes = await apiGet(`/api/decks/${deckId}/session`)
       const session = await sessionRes.json()
@@ -251,6 +350,29 @@ test.describe('Study tools', () => {
       await expect(page.getByText(/Question 1 of/)).toBeVisible({ timeout: 10_000 })
     })
   })
+
+  for (const kind of ['decks', 'quizzes'] as const) {
+    test(`PLA-472: ${kind} cancellation stays terminal after a queued worker starts`, async () => {
+      await enableSourceBarrier()
+      const response = await apiPost(`/api/classes/${classId}/${kind}`, {
+        title: 'Cancel queued study',
+        document_ids: [docId],
+        ...(kind === 'decks' ? { cards_per_topic: 2 } : { count: 3, types: ['mcq'] }),
+      })
+      expect(response.status).toBe(202)
+      const artifact = await response.json()
+      await waitForSourceBarrier()
+      const cancelled = await apiPost(`/api/${kind}/${artifact.id}/cancel`)
+      expect(cancelled.ok).toBe(true)
+      expect((await cancelled.json()).state).toBe('cancelled')
+      await releaseSourceBarrier()
+      const duplicate = await apiPost(`/api/${kind}/${artifact.id}/cancel`)
+      expect((await duplicate.json()).state).toBe('cancelled')
+      const status = await apiGet(`/api/${kind}/${artifact.id}/status`)
+      expect((await status.json()).state).toBe('cancelled')
+      expect((await apiGet(`/api/${kind}/${artifact.id}`)).ok).toBe(false)
+    })
+  }
 
   test('PLA-291: source invalidation AFTER study creation -- deterministic worker barrier', async () => {
     const res = await uploadDocument(classId, resolve(TEST_DATA, 'supplement.md'), 'supplement.md')

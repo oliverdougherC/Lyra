@@ -1736,3 +1736,39 @@ def test_topic_retrieval_retry_never_uses_excluded_document(
         assert {p["document_id"] for p in artifacts.list_provenance(db, int(part["id"]))} == {
             selected
         }
+
+
+@pytest.mark.parametrize("change", ["delete", "reindex"])
+def test_source_change_after_proposal_cannot_publish_stale_card_evidence(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    doc = _document(db, class_id)
+    artifact_id = _deck(db, class_id, doc)
+    original = study._complete_deck
+
+    def invalidate(conn: sqlite3.Connection, job: study._Job, topics: list) -> None:
+        # The model already saw valid selected chunks. Reindex can finish and return
+        # the same document to Ready before publication, so readiness alone is not proof.
+        if change == "delete":
+            db.execute("delete from documents where id = ?", (doc,))
+        else:
+            db.execute("delete from chunks where document_id = ?", (doc,))
+            db.execute(
+                "insert into chunks (document_id, class_id, content, token_count, page_number, "
+                "doc_type, embedding_model, embedding_dim) "
+                "values (?, ?, 'Replacement indexed text.', 10, 1, 'generic', 'test', 768)",
+                (doc, class_id),
+            )
+        db.commit()
+        original(conn, job, topics)
+
+    monkeypatch.setattr(study, "_complete_deck", invalidate)
+    llm.replies = [{"topics": ["sifting"]}, _cards("one")]
+    study.run_generation(_deck_job(artifact_id, doc, cards_per_topic=1))
+    assert len(llm.calls) == 2
+    assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.FAILED
+    assert artifacts.list_parts(db, artifact_id) == []
