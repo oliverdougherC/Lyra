@@ -103,9 +103,10 @@ Code/DOM coverage does not imply native input or screen-reader certification; se
 - PLA-418 and PLA-425: semantic math, inactive-face exclusion, keyboard flow, focus and live
   announcements are represented and automatically tested. Actual VoiceOver/NVDA use has not been
   run in this recovery. Do not describe their assistive-technology acceptance as fully verified.
-- PLA-431: Retry page and extracted-text recovery are implemented and tested. If page rendering
-  and extracted text are both unavailable, the interface instructs opening the original local
-  file but provides no in-app original-file action. This double-failure case remains unresolved.
+- PLA-431: the original-file double-failure gap and PLA-409 atomic-publication race received
+  targeted follow-ups in the same PR. See [follow-up evidence](pr-70-followups.md); the PR and
+  Linear records identify the exact follow-up head and hosted verification. Earlier totals below
+  remain historical recovery evidence.
 - PLA-407: browser composition flags and WebKit keyCode 229 are tested; physical CJK input in
   the packaged app is not certified. Compact CSS viewport tests are not native browser zoom.
 - Real-stack acceptance uses deterministic tutor/embedding fixtures. Real-model quality,

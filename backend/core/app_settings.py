@@ -100,6 +100,31 @@ def update_settings_row(conn: sqlite3.Connection, values: dict[str, object]) -> 
     conn.commit()
 
 
+def invalidate_probe_results(conn: sqlite3.Connection) -> None:
+    """Invalidate measurements before mutating a credential outside SQLite."""
+    conn.execute(
+        "update settings set probe_revision = probe_revision + 1, "
+        "tools_supported = null, tools_message = null, "
+        "vision_supported = null, vision_message = null where id = 1"
+    )
+    conn.commit()
+
+
+def publish_probe_result(
+    conn: sqlite3.Connection, revision: int, kind: str, ok: bool, message: str
+) -> bool:
+    """Validate and publish in one SQLite write, with no read/write race or secret."""
+    if kind not in ("tools", "vision"):
+        raise ValueError("Unknown probe kind")
+    cursor = conn.execute(
+        f"update settings set {kind}_supported = ?, {kind}_message = ? "  # noqa: S608
+        "where id = 1 and probe_revision = ?",
+        (int(ok), message, revision),
+    )
+    conn.commit()
+    return cursor.rowcount == 1
+
+
 def _changes_endpoint(conn: sqlite3.Connection, values: dict[str, object]) -> bool:
     """Whether this write points the tutor at a different server or model."""
     row = get_settings_row(conn)

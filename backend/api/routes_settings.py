@@ -6,6 +6,7 @@ the keychain abstraction, and never read back: responses carry only `*_key_set` 
 """
 
 import sqlite3
+from threading import RLock
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends
@@ -15,6 +16,8 @@ from backend.core import exa
 from backend.core.app_settings import (
     TutorConfig,
     get_settings_row,
+    invalidate_probe_results,
+    publish_probe_result,
     resolve_tutor_config,
     update_settings_row,
 )
@@ -26,6 +29,11 @@ from backend.storage.database import get_db
 router = APIRouter(prefix="/api", tags=["settings"])
 
 DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
+
+# The desktop backend is a single process. Coordinate credential writes and probe
+# snapshots only; no database transaction or lock spans the remote inference call.
+# Publication itself uses a persistent SQLite revision, including for other DB writers.
+_probe_snapshot_lock = RLock()
 
 
 class SettingsRead(BaseModel):
@@ -170,6 +178,11 @@ def read_settings(conn: DbConn) -> SettingsRead:
 
 @router.put("/settings", response_model=SettingsRead)
 def write_settings(payload: SettingsUpdate, conn: DbConn) -> SettingsRead:
+    with _probe_snapshot_lock:
+        return _write_settings(payload, conn)
+
+
+def _write_settings(payload: SettingsUpdate, conn: sqlite3.Connection) -> SettingsRead:
     current = get_settings_row(conn)
     values = payload.model_dump(exclude_unset=True)
     for column in ("allow_web_research", "parallel_requests", "parallel_concurrency"):
@@ -180,6 +193,11 @@ def write_settings(payload: SettingsUpdate, conn: DbConn) -> SettingsRead:
     if "api_key" in values:
         api_key = values.pop("api_key")
         key_changed = api_key is not None and (api_key or None) != secrets.get_api_key()
+        if key_changed:
+            # Commit invalidation BEFORE slow Keychain mutation. Already-running probes
+            # cannot publish; new snapshots wait until this write has finished. Even a
+            # failed credential mutation leaves capabilities safely unknown.
+            invalidate_probe_results(conn)
         if api_key == "":
             # The interface sends an empty string for "forget my key". A null means
             # "leave whatever is stored alone", which is the no-op below.
@@ -244,6 +262,14 @@ def _probe_configuration_unchanged(conn: sqlite3.Connection, config: TutorConfig
     )
 
 
+def _probe_snapshot(conn: sqlite3.Connection) -> tuple[int, TutorConfig]:
+    with _probe_snapshot_lock:
+        # Revision first: concurrent endpoint/model DB writes can only cause rejection,
+        # never associate a newer revision with an older configuration.
+        revision = int(get_settings_row(conn)["probe_revision"])
+        return revision, resolve_tutor_config(conn)
+
+
 @router.post("/settings/test-tools", response_model=ToolSupportResult)
 async def test_endpoint_tools(conn: DbConn) -> ToolSupportResult:
     """Ask the endpoint for one trivial tool call, and record what happened.
@@ -254,15 +280,14 @@ async def test_endpoint_tools(conn: DbConn) -> ToolSupportResult:
     this endpoint costs the student: without tool support, solutions are still produced
     and every one of them carries the verdict `Not checked`.
     """
-    config = resolve_tutor_config(conn)
+    revision, config = _probe_snapshot(conn)
     support = await client.probe_tool_support(config.endpoint_url, config.api_key, config.model)
-    if not _probe_configuration_unchanged(conn, config):
+    if not _probe_configuration_unchanged(conn, config) or not publish_probe_result(
+        conn, revision, "tools", support.ok, support.message
+    ):
         return ToolSupportResult(
             ok=False, message="Connection settings changed. Test tool support again."
         )
-    update_settings_row(
-        conn, {"tools_supported": int(support.ok), "tools_message": support.message}
-    )
     return ToolSupportResult(ok=support.ok, message=support.message)
 
 
@@ -278,15 +303,14 @@ async def test_endpoint_vision(conn: DbConn) -> VisionSupportResult:
     Stored, so recognition can offer or withhold itself without a network round trip on
     every document row.
     """
-    config = resolve_tutor_config(conn)
+    revision, config = _probe_snapshot(conn)
     support = await client.probe_vision_support(config.endpoint_url, config.api_key, config.model)
-    if not _probe_configuration_unchanged(conn, config):
+    if not _probe_configuration_unchanged(conn, config) or not publish_probe_result(
+        conn, revision, "vision", support.ok, support.message
+    ):
         return VisionSupportResult(
             ok=False, message="Connection settings changed. Test image support again."
         )
-    update_settings_row(
-        conn, {"vision_supported": int(support.ok), "vision_message": support.message}
-    )
     return VisionSupportResult(ok=support.ok, message=support.message)
 
 

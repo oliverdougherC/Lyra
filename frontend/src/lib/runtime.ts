@@ -1,3 +1,5 @@
+import { downloadBlob } from './external-links'
+
 export type RuntimeConfig = {
   apiBase: string
   sessionHeader: string | null
@@ -262,4 +264,22 @@ export function getImmediateRuntimeConfig(): RuntimeConfig | null {
   }
 
   return null
+}
+
+/** Save authenticated bytes through the native dialog, without exposing its selected path. */
+export async function saveOriginalDocument(
+  blob: Blob,
+  filename: string,
+): Promise<'saved' | 'cancelled' | 'downloaded'> {
+  const safeName = filename.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '') || 'document'
+  const invoke = tauriInvoke()
+  if (invoke) {
+    const saved = await invoke('save_original_document', {
+      filename: safeName,
+      bytes: Array.from(new Uint8Array(await blob.arrayBuffer())),
+    })
+    return saved ? 'saved' : 'cancelled'
+  }
+  downloadBlob(blob, safeName)
+  return 'downloaded'
 }

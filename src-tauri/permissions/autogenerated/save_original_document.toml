@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-original-document"
+description = "Enables the save_original_document command without any pre-configured scope."
+commands.allow = ["save_original_document"]
+
+[[permission]]
+identifier = "deny-save-original-document"
+description = "Denies the save_original_document command without any pre-configured scope."
+commands.deny = ["save_original_document"]

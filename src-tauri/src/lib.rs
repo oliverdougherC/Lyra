@@ -350,6 +350,78 @@ fn open_external_url(app: AppHandle, url: String) -> Result<(), CommandError> {
     })
 }
 
+/// The destination is chosen by the OS dialog and never returned to JavaScript.
+#[tauri::command]
+async fn save_original_document(
+    app: AppHandle,
+    filename: String,
+    bytes: Vec<u8>,
+) -> Result<bool, String> {
+    if bytes.len() > 50 * 1024 * 1024 {
+        return Err("The original document exceeds the upload limit.".into());
+    }
+    let filename: String = filename
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let filename = filename.trim_start_matches('.');
+    let selection = app
+        .dialog()
+        .file()
+        .set_title("Save original document")
+        .set_file_name(if filename.is_empty() {
+            "document"
+        } else {
+            filename
+        })
+        .blocking_save_file();
+    let Some(selection) = selection else {
+        return Ok(false);
+    };
+    let path = selection
+        .into_path()
+        .map_err(|_| "The selected destination is not a local file.".to_owned())?;
+    write_original_copy(&path, &bytes)
+        .map_err(|_| "The original document could not be saved to that destination.".to_owned())?;
+    Ok(true)
+}
+
+fn write_original_copy(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(not(unix))]
+    if path
+        .symlink_metadata()
+        .is_ok_and(|info| info.file_type().is_symlink())
+    {
+        return Err(std::io::Error::other(
+            "Refusing a symbolic link destination",
+        ));
+    }
+    let mut file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other(
+            "The destination is not a regular file",
+        ));
+    }
+    file.set_len(0)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
 #[tauri::command]
 async fn pick_import_directory(
     app: AppHandle,
@@ -419,6 +491,7 @@ pub fn run() {
             retry_backend,
             open_external_url,
             pick_import_directory,
+            save_original_document,
             pick_workspace_directory,
             publish_desktop_import
         ])
@@ -1816,5 +1889,30 @@ raise SystemExit("unsupported startup fixture mode")
 
         assert!(message.contains("owned helper reclamation invariant failed"));
         assert!(message.contains("\"after\":\"live\""));
+    }
+}
+
+#[cfg(test)]
+mod original_copy_tests {
+    use super::*;
+
+    #[test]
+    fn saves_exact_original_bytes_and_refuses_symlinks() {
+        let root =
+            std::env::temp_dir().join(format!("lyra-original-{}", random_secret_hex().unwrap()));
+        fs::create_dir(&root).unwrap();
+        let destination = root.join("original.pdf");
+        let bytes = b"%PDF original bytes";
+        write_original_copy(&destination, bytes).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), bytes);
+        #[cfg(unix)]
+        {
+            let link = root.join("link.pdf");
+            std::os::unix::fs::symlink(&destination, &link).unwrap();
+            assert!(write_original_copy(&link, b"overwrite").is_err());
+            assert_eq!(fs::read(&destination).unwrap(), bytes);
+        }
+        assert!(write_original_copy(&root, bytes).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 }
