@@ -804,3 +804,62 @@ def test_a_review_without_an_operation_id_is_rejected(
     response = client.post(f"/api/cards/{part_id}/review", json={"rating": "good"})
 
     assert response.status_code == 422
+
+
+def test_review_operation_rejects_changed_rating_after_lost_acknowledgement(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    deck_id = _deck(db, class_id, document_id)
+    part_id = _card(db, deck_id)
+    endpoint = f"/api/cards/{part_id}/review"
+    # The response is deliberately discarded by the client; the real route committed.
+    committed = client.post(endpoint, json={"rating": "easy", "operation_id": "lost-ack"})
+    assert committed.status_code == 200
+    conflict = client.post(endpoint, json={"rating": "again", "operation_id": "lost-ack"})
+    assert conflict.status_code == 409
+    assert "different rating" in conflict.json()["detail"]
+    replay = client.post(endpoint, json={"rating": "easy", "operation_id": "lost-ack"})
+    assert replay.json() == committed.json()
+    rows = db.execute("select rating from card_review_log where part_id = ?", (part_id,)).fetchall()
+    assert [row["rating"] for row in rows] == ["easy"]
+    assert replay.json()["reps"] == 1
+
+
+def test_review_retry_after_failure_before_commit_preserves_one_review(
+    client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document_id = _document(db, class_id)
+    deck_id = _deck(db, class_id, document_id)
+    part_id = _card(db, deck_id)
+    endpoint = f"/api/cards/{part_id}/review"
+    original = routes_study.scheduler.review
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("failure before commit")
+
+    monkeypatch.setattr(routes_study.scheduler, "review", fail)
+    with pytest.raises(RuntimeError, match="failure before commit"):
+        client.post(endpoint, json={"rating": "easy", "operation_id": "before-commit"})
+    assert db.execute("select count(*) from card_review_log").fetchone()[0] == 0
+    monkeypatch.setattr(routes_study.scheduler, "review", original)
+    saved = client.post(endpoint, json={"rating": "easy", "operation_id": "before-commit"})
+    replay = client.post(endpoint, json={"rating": "easy", "operation_id": "before-commit"})
+    assert saved.status_code == replay.status_code == 200
+    assert saved.json() == replay.json()
+    assert db.execute("select count(*) from card_review_log").fetchone()[0] == 1
+
+
+def test_legacy_unkeyed_review_does_not_conflict_with_new_operation(
+    client: TestClient, db: sqlite3.Connection, class_id: int
+) -> None:
+    document_id = _document(db, class_id)
+    deck_id = _deck(db, class_id, document_id)
+    part_id = _card(db, deck_id)
+    db.execute("insert into card_review_log (part_id, rating) values (?, 'again')", (part_id,))
+    db.commit()
+    response = client.post(
+        f"/api/cards/{part_id}/review", json={"rating": "easy", "operation_id": "new-key"}
+    )
+    assert response.status_code == 200
+    assert db.execute("select count(*) from card_review_log").fetchone()[0] == 2
