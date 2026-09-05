@@ -338,7 +338,9 @@ def test_a_first_message_on_a_fresh_install_provisions_the_embedding_model(
 
     downloads: list[tuple[str, str]] = []
 
-    def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+    def fake_download(
+        *, repo_id: str, filename: str, local_dir: object, revision: str | None
+    ) -> str:
         downloads.append((repo_id, filename))
         path = Path(str(local_dir)) / filename
         path.write_bytes(b"GGUF fake")
@@ -409,7 +411,9 @@ def test_a_first_message_on_a_true_clean_packaged_install_provisions_everything(
 
     downloads: list[tuple[str, str]] = []
 
-    def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+    def fake_download(
+        *, repo_id: str, filename: str, local_dir: object, revision: str | None
+    ) -> str:
         downloads.append((repo_id, filename))
         path = Path(str(local_dir)) / filename
         path.parent.mkdir(parents=True, exist_ok=True)

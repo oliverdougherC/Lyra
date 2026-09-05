@@ -32,6 +32,13 @@ logger = logging.getLogger(__name__)
 # below are one fact said twice; `test_model_provisioning.py` pins them together.
 EMBEDDING_REPO_ID = "nomic-ai/nomic-embed-text-v1.5-GGUF"
 EMBEDDING_FILENAME = "nomic-embed-text-v1.5.Q8_0.gguf"
+# The exact commit of the repository this file is downloaded from - the full SHA, never a
+# branch or a tag. A repository's default branch is mutable: a fresh install that downloads
+# from `main` receives whatever upstream holds today, and the bytes of a model file are the
+# model. This commit was the one the weights were downloaded, verified (146,146,432 bytes),
+# and run from on this feature, and the file is unchanged there. Immutable by construction:
+# a commit SHA in a git repository is a content address and cannot be moved.
+EMBEDDING_REVISION = "0188c9bf409793f810680a5a431e7b899c46104c"
 # Ceiling for the disk check, not the file size: the Q8_0 file weighs about 139 MB, and a
 # ceiling with margin refuses a machine that truly cannot take it without guessing the
 # file's exact byte count.
@@ -80,6 +87,10 @@ class ModelFile:
     filename: str
     # Ceiling for the pre-download disk check.
     download_bytes: int
+    # Immutable revision (full commit SHA) the file is downloaded from. `None` means
+    # "no pin configured" - a file whose bytes are not load-bearing may float; the
+    # embedding model, which is, carries one.
+    revision: str | None = None
 
     @property
     def path(self) -> Path:
@@ -92,6 +103,7 @@ EMBEDDING_WEIGHTS = ModelFile(
     repo_id=EMBEDDING_REPO_ID,
     filename=EMBEDDING_FILENAME,
     download_bytes=EMBEDDING_DOWNLOAD_BYTES,
+    revision=EMBEDDING_REVISION,
 )
 RERANK_WEIGHTS = ModelFile(
     display_name="local reranking model",
@@ -218,6 +230,10 @@ def _download(spec: ModelFile, target: Path, progress: Progress | None) -> None:
             repo_id=spec.repo_id,
             filename=spec.filename,
             local_dir=settings.models_dir,
+            # `None` (the optional OCR/rerank files) means "the repository's default
+            # branch"; a pinned spec passes its immutable revision, so a fresh install
+            # can never receive a different byte sequence than the one it was tested on.
+            revision=spec.revision,
         )
     except Exception as exc:
         logger.warning("Download of %s failed: %s", spec.filename, exc)
