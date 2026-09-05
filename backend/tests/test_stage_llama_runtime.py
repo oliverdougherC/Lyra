@@ -23,8 +23,13 @@ def _stage_success(monkeypatch: pytest.MonkeyPatch, downloads: list[tuple[str, P
     """Fakes a one-shot download of the pinned release whose extracted binary reports
     the pin - the shape of a correct release asset."""
 
-    def fake_download(url: str, destination: Path) -> None:
+    def fake_download(url: str, destination: Path, expected_sha256: str) -> None:
         downloads.append((url, destination))
+        # The download must carry the pin's digest for the exact asset it is fetching:
+        # the fetch resolves it, so staging and the developer path cannot diverge.
+        suffix = url.rsplit("/", 1)[-1]
+        suffix = suffix.removeprefix(f"llama-{fetch_models.LLAMA_RELEASE_TAG}-bin-")
+        assert expected_sha256 == fetch_models.ASSET_SHA256[suffix]
         destination.write_bytes(b"archive")
 
     def fake_extract(archive: Path, destination: Path) -> None:
@@ -93,7 +98,7 @@ def test_an_extracted_binary_that_reports_the_wrong_build_fails_staging(
     monkeypatch.setattr(
         fetch_models,
         "_download",
-        lambda url, destination: (
+        lambda url, destination, expected_sha256: (
             downloads.append((url, destination)),
             destination.write_bytes(b"archive"),
         ),
@@ -124,7 +129,7 @@ def test_an_extracted_binary_with_the_right_tag_and_the_wrong_commit_fails_stagi
     monkeypatch.setattr(
         fetch_models,
         "_download",
-        lambda url, destination: destination.write_bytes(b"archive"),
+        lambda url, destination, expected_sha256: destination.write_bytes(b"archive"),
     )
     monkeypatch.setattr(fetch_models, "_extract", fake_extract)
     monkeypatch.setattr(
@@ -148,7 +153,9 @@ def test_an_extracted_binary_that_will_not_report_fails_staging(
         (build / "llama-server").write_bytes(b"not a real binary")
 
     monkeypatch.setattr(
-        fetch_models, "_download", lambda url, destination: destination.write_bytes(b"archive")
+        fetch_models,
+        "_download",
+        lambda url, destination, expected_sha256: destination.write_bytes(b"archive"),
     )
     monkeypatch.setattr(fetch_models, "_extract", fake_extract)
     monkeypatch.setattr(fetch_models, "reported_build", lambda binary: None)
@@ -172,7 +179,7 @@ def test_the_ordinary_developer_fetch_refuses_a_build_that_is_not_the_pin(
     monkeypatch.setattr(
         fetch_models,
         "_download",
-        lambda url, destination: destination.write_bytes(b"archive"),
+        lambda url, destination, expected_sha256: destination.write_bytes(b"archive"),
     )
     monkeypatch.setattr(fetch_models, "_extract", fake_extract)
     monkeypatch.setattr(
@@ -199,7 +206,7 @@ def test_an_existing_build_that_is_not_the_pin_is_replaced_not_reused(
     monkeypatch.setattr(
         fetch_models,
         "_download",
-        lambda url, destination: (
+        lambda url, destination, expected_sha256: (
             downloads.append((url, destination)),
             destination.write_bytes(b"archive"),
         ),
