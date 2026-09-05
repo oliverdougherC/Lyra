@@ -110,9 +110,10 @@ test.describe('One ordinary class conversation (PLA-401)', () => {
     await page.waitForLoadState('networkidle')
 
     // Before any work is live, there is no work surface at all: the conversation is the
-    // surface. The composer's context row carries the workspace affordance.
+    // surface. The composer's input row carries the workspace affordance as a compact
+    // icon - its name lives in the accessible label, not in a button of words.
     await expect(page.locator('[aria-label="Agent work"]')).toHaveCount(0)
-    await expect(page.getByRole('button', { name: 'Attach folder' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Attach a folder' })).toBeVisible()
 
     // Script the whole turn-1 + continuation sequence, in model-call order:
     //  1. the turn's first round asks for the folder (the snapshot admits no workspace);

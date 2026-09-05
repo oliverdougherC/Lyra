@@ -502,6 +502,18 @@ for (const { width, height } of MATRIX) {
     expect(box!.y + box!.height, 'the composer is pushed out of the window').toBeLessThanOrEqual(
       height + 1,
     )
+    // The context marks - the material scope and the folder attach - ride the input line as
+    // compact marks, so the text entry keeps the majority of the row's width at every size
+    // (PLA-403: the two wide labeled controls used to hand the row over at the left).
+    const inputClaim = await page.evaluate(() => {
+      const input = document.querySelector('#message-composer') as HTMLElement
+      const well = input.closest('.rounded-2xl') as HTMLElement
+      return input.getBoundingClientRect().width / well.getBoundingClientRect().width
+    })
+    expect(
+      inputClaim,
+      `the composer's context marks take over the input row at ${width}px`,
+    ).toBeGreaterThanOrEqual(0.6)
     expectNavigationFits(chat, width)
 
     expect(pageErrors, 'a runtime error fired while the page held its layout').toEqual([])
@@ -670,6 +682,14 @@ for (const { width, height } of INTERACTION_MATRIX) {
       composerBox!.x + composerBox!.width,
       'the composer is clipped on the right',
     ).toBeLessThanOrEqual(width + 1)
+    // With the fullest context marks (a scoped document and an attached workspace, both
+    // long-named), the marks truncate inside their caps instead of crowding the text: the
+    // input keeps a typable width at the narrowest operated size (PLA-403).
+    const inputWidth = await composer.evaluate((el) => el.getBoundingClientRect().width)
+    expect(
+      inputWidth,
+      `the input lost its usable width at ${width}px with live context marks`,
+    ).toBeGreaterThanOrEqual(140)
 
     // There is exactly one composer and no Agent destination: the bridge is gone, and the
     // answer stays the dominant surface in the transcript.

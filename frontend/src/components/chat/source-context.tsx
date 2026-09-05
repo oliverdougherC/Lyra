@@ -44,6 +44,11 @@ type SourceContextProps = {
  * Files tab. The default is everything ready, which is what most questions want; scoping
  * to one document is a deliberate, visible choice that carries a small chip in the
  * composer until the student clears it.
+ *
+ * At rest this is one compact pill on the input row - the widest permanent mark the
+ * composer carries, and it stays narrow enough that a long filename truncates instead of
+ * taking the row from the text. The full picker (search, every file, the states of each)
+ * is one click away in the popover; nothing about it is exposed at rest.
  */
 export function SourceContext({
   documents,
@@ -91,10 +96,11 @@ export function SourceContext({
                 : 'Lyra reads all of this class\u2019s material. Choose what Lyra reads for this answer.'
             }
             className={cn(
-              'flex h-6 max-w-[9rem] items-center gap-1.5 rounded-full px-2 text-xs',
-              'text-text-secondary transition-colors hover:bg-muted hover:text-text-primary',
+              'flex h-6 max-w-[6.5rem] items-center gap-1.5 rounded-full px-2 text-xs',
+              'transition-colors hover:text-text-primary',
               'focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none',
-              'sm:max-w-[12rem]',
+              'sm:max-w-[9rem]',
+              selected ? 'bg-muted text-text-secondary' : 'text-text-tertiary hover:bg-muted',
             )}
           >
             <FileSearch aria-hidden className="size-3.5 shrink-0" />

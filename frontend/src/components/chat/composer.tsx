@@ -33,13 +33,14 @@ type ComposerProps = {
   /** Non-null disables the composer and explains why. */
   disabledReason: string | null
   /**
-   * The active source context, rendered in the composer's control row. Omitted for a
-   * composer that has no material to scope (the writer reads the class, not a pick).
+   * The active source context, rendered on the small mark line beneath the input. Omitted
+   * for a composer that has no material to scope (the writer reads the class, not a pick).
    */
   sourceControl?: ReactNode
   /**
-   * The attached local workspace, rendered beside the source context: the same compact
-   * chip, one glance answers "what does Lyra have on hand for this task".
+   * The attached local workspace, rendered beside the source context: one glance answers
+   * "what does Lyra have on hand for this task". Both marks are compact by contract -
+   * the input line is the composer, and these keep to the small line beneath it.
    */
   workspaceControl?: ReactNode
   /** Take focus on mount, for a composer the reader has just opened deliberately. */
@@ -119,75 +120,78 @@ export function Composer({
 
   return (
     <div className="space-y-2">
-      {/* A sheet of writing paper laid on the canvas: one row, the send control riding the
-          last line of type. The lift comes from the surface being genuinely a different
-          paper from the pane behind it, not from a heavier border. The shared control-row
-          height keeps this and the documents well across the seam on one line. */}
+      {/* A sheet of writing paper laid on the canvas: the input line is the well's whole
+          face, the send control riding it at the right. The lift comes from the surface
+          being genuinely a different paper from the pane behind it, not from a heavier
+          border. The context marks - what Lyra reads, the folder Lyra works in - keep to
+          a small quiet line beneath the type, left to the margin, so the input owns the
+          full width of the well in every window; each mark discloses its detail on click
+          rather than exposing it at rest. There is no toolbar and no reserved row: the
+          marks only exist when the composer has something to say about them. */}
       <div
         className={cn(
-          'flex min-h-[var(--pane-control-row)] items-end gap-2 rounded-2xl bg-card p-2.5',
+          'flex flex-col gap-1 rounded-2xl bg-card p-2.5',
           'border border-border/80 shadow-sm transition-[border-color,box-shadow] duration-200',
           'focus-within:border-accent-primary/60 focus-within:shadow-md',
         )}
       >
+        <div className="flex items-center gap-2">
+          <Textarea
+            ref={textareaRef}
+            rows={1}
+            id="message-composer"
+            name="message"
+            value={value}
+            disabled={streaming}
+            placeholder="Ask about your material…"
+            aria-label="Message Lyra"
+            onChange={(event) => onChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault()
+                // Keyboard send from the focused textarea: restore focus after the
+                // streaming turn. Button sends never set this, so a mouse send can
+                // never steal focus back.
+                send({ restoreFocusAfterStream: true })
+              }
+            }}
+            className="max-h-[160px] min-h-0 flex-1 resize-none border-0 bg-transparent px-2 py-1.5 text-[0.9375rem] leading-6 shadow-none focus-visible:ring-0 disabled:cursor-text disabled:bg-transparent disabled:opacity-100"
+          />
+
+          {streaming ? (
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="outline"
+              className={cn('size-9 shrink-0 rounded-full', stopping && 'animate-pulse')}
+              onClick={onStop}
+              aria-label={stopping ? 'Stopping…' : 'Stop generating'}
+            >
+              <Square className="size-3" />
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="icon-sm"
+              variant={hasDraft ? 'default' : 'ghost'}
+              className={cn(
+                'size-9 shrink-0 rounded-full transition-all duration-200',
+                hasDraft ? 'shadow-sm' : 'bg-muted text-text-tertiary',
+              )}
+              onClick={() => send()}
+              disabled={!hasDraft}
+              aria-label="Send message"
+            >
+              <ArrowUp className="size-4" />
+            </Button>
+          )}
+        </div>
         {sourceControl || workspaceControl ? (
-          <div
-            data-source-control
-            className="mb-1.5 flex shrink-0 items-center gap-1.5 text-text-tertiary"
-          >
+          <div data-source-control className="flex items-center gap-1.5 pl-2 text-text-tertiary">
             {sourceControl}
             {workspaceControl}
           </div>
         ) : null}
-        <Textarea
-          ref={textareaRef}
-          rows={1}
-          id="message-composer"
-          name="message"
-          value={value}
-          disabled={streaming}
-          placeholder="Ask about your material…"
-          aria-label="Message Lyra"
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
-              event.preventDefault()
-              // Keyboard send from the focused textarea: restore focus after the
-              // streaming turn. Button sends never set this, so a mouse send can
-              // never steal focus back.
-              send({ restoreFocusAfterStream: true })
-            }
-          }}
-          className="max-h-[160px] min-h-0 flex-1 resize-none border-0 bg-transparent px-2 py-1.5 text-[0.9375rem] leading-6 shadow-none focus-visible:ring-0 disabled:cursor-text disabled:bg-transparent disabled:opacity-100"
-        />
-
-        {streaming ? (
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            className={cn('size-9 shrink-0 rounded-full', stopping && 'animate-pulse')}
-            onClick={onStop}
-            aria-label={stopping ? 'Stopping…' : 'Stop generating'}
-          >
-            <Square className="size-3" />
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            size="icon-sm"
-            variant={hasDraft ? 'default' : 'ghost'}
-            className={cn(
-              'size-9 shrink-0 rounded-full transition-all duration-200',
-              hasDraft ? 'shadow-sm' : 'bg-muted text-text-tertiary',
-            )}
-            onClick={() => send()}
-            disabled={!hasDraft}
-            aria-label="Send message"
-          >
-            <ArrowUp className="size-4" />
-          </Button>
-        )}
       </div>
 
       {/* Shown until the first message is sent, and never on a phone, where there is no
