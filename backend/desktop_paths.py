@@ -42,18 +42,24 @@ def platform_logs_dir(app_name: str = APP_NAME) -> Path:
     return base / app_name / "logs"
 
 
-def bundled_runtime_dir(resource_root: Path) -> Path:
-    """Where the application bundle stages the llama runtime.
+def bundled_runtime_candidates(resource_root: Path) -> tuple[Path, ...]:
+    """Where the application bundle stages the pinned llama runtime.
 
-    The frozen backend's `resource_root` is the backend's own directory (`<app resources>
-    /lyra-backend`), and the Tauri bundle copies `resources/llama` next to it, so the
-    runtime sits beside the backend in the app's resources. On macOS that is
-    `Lyra.app/Contents/Resources/llama`; the same shape holds on Windows and Linux.
+    The Tauri build copies `resources/llama` next to `resources/lyra-backend`, so the
+    runtime's staging directory sits beside the frozen backend's onedir. The backend's
+    own `resource_root` is that onedir in the old PyInstaller layout, or its `_internal`
+    subdirectory in the current one, so both ancestors are candidates; the ones that
+    actually exist in the bundle are the ones searched. On macOS the result is
+    `Lyra.app/Contents/Resources/.../llama`; the same shape holds on Windows and Linux.
 
     The runtime stays inside the app bundle: it is signed and notarized with the rest of
     the application, and a clean install therefore has it on disk with no download step.
     """
-    return resource_root.parent / "llama"
+    candidates = (
+        resource_root.parent / "llama",
+        resource_root.parent.parent / "llama",
+    )
+    return tuple(candidate for candidate in candidates if candidate.is_dir())
 
 
 def default_resource_root() -> Path:

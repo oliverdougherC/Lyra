@@ -393,15 +393,16 @@ def test_a_first_message_on_a_true_clean_packaged_install_provisions_everything(
     assert not settings.embedding_model_path.exists()
     assert not settings.llama_dir.exists() or not any(settings.llama_dir.iterdir())
 
-    # The bundle's resource layout: the frozen backend's own directory, with the runtime
-    # staged next to it, exactly as `tauri.conf.json` lays it out.
-    backend_dir = tmp_path / "resources" / "lyra-backend"
-    backend_dir.mkdir(parents=True)
+    # The bundle's resource layout, exactly as the Tauri build lays it out: the frozen
+    # backend's onedir (its `resource_root` is the `_internal` directory) with the
+    # runtime staged next to the onedir.
+    internal_dir = tmp_path / "resources" / "lyra-backend" / "_internal"
+    internal_dir.mkdir(parents=True)
     bundled_binary = tmp_path / "resources" / "llama" / "llama-b10287" / "llama-server"
     bundled_binary.parent.mkdir(parents=True)
     bundled_binary.write_bytes(b"not a real binary")
     monkeypatch.setattr(settings, "packaged_mode", True)
-    monkeypatch.setattr(settings, "resource_root", backend_dir)
+    monkeypatch.setattr(settings, "resource_root", internal_dir)
 
     # The real retrieval path, which is the one that embeds the query.
     monkeypatch.setattr(routes_chat, "retrieve", retrieve_module.retrieve)

@@ -1215,9 +1215,9 @@ class LlamaServer:
         """
         dirs = [settings.llama_dir]
         if settings.packaged_mode and settings.resource_root is not None:
-            bundled = desktop_paths.bundled_runtime_dir(settings.resource_root)
-            if bundled not in dirs:
-                dirs.append(bundled)
+            for bundled in desktop_paths.bundled_runtime_candidates(settings.resource_root):
+                if bundled not in dirs:
+                    dirs.append(bundled)
         return tuple(dirs)
 
     def _find_binary(self) -> Path | None:

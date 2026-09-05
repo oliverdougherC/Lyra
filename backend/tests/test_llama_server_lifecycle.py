@@ -2018,18 +2018,21 @@ class TestRestartAdoptShutdownRecovery:
 
 
 def _stage_bundle_runtime(tmp_path: object) -> tuple[Path, Path]:
-    """The app bundle's resource layout: the frozen backend's directory, with the
-    runtime staged next to it, the way the Tauri build lays it out.
+    """The app bundle's resource layout: the frozen backend's onedir, its `_internal`
+    directory (where the frozen `resource_root` actually points), and the runtime
+    staged next to the onedir, the way the Tauri build lays it out.
 
-    Returns the backend's resource root (where the frozen backend's `resource_root`
-    points) and the staged binary.
+    Returns the backend's resource root (`_internal`, where the frozen
+    `resource_root` points) and the staged binary.
     """
     backend_dir = tmp_path / "resources" / "lyra-backend"
     backend_dir.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
+    internal_dir = backend_dir / "_internal"
+    internal_dir.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
     binary = tmp_path / "resources" / "llama" / "llama-b10287" / "llama-server"
     binary.parent.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
     binary.write_bytes(b"not a real binary")
-    return backend_dir, binary
+    return internal_dir, binary
 
 
 def _install_models_runtime() -> Path:
@@ -2045,10 +2048,10 @@ def test_a_runtime_in_the_models_directory_wins_over_the_bundled_one(
 ) -> None:
     """An explicitly installed runtime is a choice; the bundle is the fallback."""
     server = _make_server(monkeypatch)
-    backend_dir, _ = _stage_bundle_runtime(tmp_path)
+    resource_root, _ = _stage_bundle_runtime(tmp_path)
     models_binary = _install_models_runtime()
     monkeypatch.setattr(settings, "packaged_mode", True)
-    monkeypatch.setattr(settings, "resource_root", backend_dir)
+    monkeypatch.setattr(settings, "resource_root", resource_root)
 
     assert server._find_binary() == models_binary
 
@@ -2059,9 +2062,9 @@ def test_the_bundled_runtime_is_used_when_the_models_directory_is_empty(
     """The packaged clean install: no runtime in the user's models directory, so the
     runtime that ships inside the application is the one that serves."""
     server = _make_server(monkeypatch)
-    backend_dir, bundled_binary = _stage_bundle_runtime(tmp_path)
+    resource_root, bundled_binary = _stage_bundle_runtime(tmp_path)
     monkeypatch.setattr(settings, "packaged_mode", True)
-    monkeypatch.setattr(settings, "resource_root", backend_dir)
+    monkeypatch.setattr(settings, "resource_root", resource_root)
 
     assert server._find_binary() == bundled_binary
 
