@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from backend.config import settings
@@ -324,6 +324,34 @@ def read_document_page(document_id: int, page_number: int, conn: DbConn) -> File
         path,
         media_type="image/png",
         headers={"cache-control": "private, max-age=86400"},
+    )
+
+
+@router.get("/documents/{document_id}/original")
+def read_document_original(document_id: int, conn: DbConn) -> Response:
+    """Authenticated attachment, never a filesystem URL or an inline active document."""
+    row = conn.execute(
+        "select stored_path, filename from documents where id = ?", (document_id,)
+    ).fetchone()
+    if row is None:
+        raise NotFoundError("That document does not exist.")
+    try:
+        content = private.read_owned_bytes(
+            Path(str(row["stored_path"])),
+            root=settings.uploads_dir,
+            max_bytes=MAX_UPLOAD_BYTES,
+        )
+    except (OSError, ValueError, private.PrivacyContractError):
+        raise NotFoundError("The original document is missing or inaccessible.") from None
+    filename = _UNSAFE_FILENAME_CHARS.sub("_", str(row["filename"])) or "document"
+    return Response(
+        content,
+        media_type="application/octet-stream",
+        headers={
+            "content-disposition": f'attachment; filename="{filename}"',
+            "cache-control": "no-store",
+            "x-content-type-options": "nosniff",
+        },
     )
 
 

@@ -552,6 +552,40 @@ def publish_private_stream(
     return total
 
 
+def read_owned_bytes(path: Path, *, root: Path, max_bytes: int) -> bytes:
+    """Read a bounded original through the existing no-follow owned-tree boundary."""
+    path = _abspath(path)
+    parent_fd = None
+    descriptor = None
+    try:
+        if _HAS_OPENAT:
+            parent_fd = _open_tree_parent(path, root=root)
+            if parent_fd is None:
+                raise FileNotFoundError(path)
+            descriptor = os.open(
+                path.name,
+                os.O_RDONLY | _O_NOFOLLOW | _O_NONBLOCK | _O_CLOEXEC,
+                dir_fd=parent_fd,
+            )
+        else:
+            if not _tree_components_real(path, root=root):
+                raise FileNotFoundError(path)
+            _refuse_existing_symlink(path)
+            descriptor = _open_nofollow(path, is_dir=False)
+        _assert_owned_entry(os.fstat(descriptor), path, is_dir=False)
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
+            data = handle.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise ValueError("The original exceeds the upload limit")
+        return data
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
 def read_private_text(path: Path, *, encoding: str = "utf-8") -> str:
     """Read a private regular file without following a final-component symlink."""
     if not _POSIX:

@@ -89,7 +89,7 @@ function workItems(
       // it is blocked on, so the rail says so.
       note:
         solution.state === 'awaiting_review'
-          ? 'Waiting for you'
+          ? 'Review problems'
           : solution.state === 'solving' || solution.state === 'segmenting'
             ? 'Working'
             : null,

@@ -435,3 +435,162 @@ def test_repointing_the_endpoint_forgets_what_was_measured_about_vision(
 
     assert body["vision_supported"] is None
     assert body["vision_message"] is None
+
+
+@pytest.mark.parametrize("key", ["replacement-key", ""])
+def test_key_change_forgets_endpoint_capabilities(
+    client: TestClient, db: sqlite3.Connection, key: str
+) -> None:
+    client.put("/api/settings", json={"api_key": "original-key"})
+    update_settings_row(
+        db,
+        {
+            "tools_supported": 1,
+            "tools_message": "Works",
+            "vision_supported": 1,
+            "vision_message": "Works",
+        },
+    )
+    body = client.put("/api/settings", json={"api_key": key}).json()
+    assert body["tools_supported"] is None
+    assert body["vision_supported"] is None
+
+
+@pytest.mark.parametrize("kind", ["tools", "vision"])
+@pytest.mark.parametrize(
+    "change", [{"endpoint_url": None}, {"model": "new-model"}, {"api_key": "new-key"}]
+)
+def test_delayed_capability_probe_cannot_stamp_a_changed_configuration(
+    client: TestClient,
+    db: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    change: dict[str, object],
+) -> None:
+    client.put(
+        "/api/settings", json={"endpoint_url": "http://127.0.0.1:8080/v1", "api_key": "old-key"}
+    )
+
+    async def probe(endpoint: str, api_key: str | None, model: str | None):
+        routes_settings.write_settings(routes_settings.SettingsUpdate(**change), db)
+        support = client_module.ToolSupport if kind == "tools" else client_module.VisionSupport
+        return support(ok=True, message="Previous setup works")
+
+    monkeypatch.setattr(
+        client_module, "probe_tool_support" if kind == "tools" else "probe_vision_support", probe
+    )
+    response = client.post(f"/api/settings/test-{kind}")
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert "changed" in response.json()["message"]
+    assert get_settings_row(db)[f"{kind}_supported"] is None
+
+
+@pytest.mark.parametrize("kind", ["tools", "vision"])
+@pytest.mark.parametrize(
+    "change", [{"endpoint_url": None}, {"model": "new-model"}, {"api_key": "new-key"}]
+)
+def test_validated_probe_cannot_publish_after_configuration_changes(
+    client: TestClient,
+    db: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    change: dict[str, object],
+) -> None:
+    """Deterministically interleave a committed change after validation, before publication."""
+    client.put(
+        "/api/settings", json={"endpoint_url": "http://127.0.0.1:8080/v1", "api_key": "old-key"}
+    )
+    validate = routes_settings._probe_configuration_unchanged
+
+    def validate_then_change(conn, config):
+        unchanged = validate(conn, config)
+        assert unchanged
+        # This is a distinct connection and committed write, while the probe is paused
+        # at precisely the old comparison/publication boundary.
+        routes_settings.write_settings(routes_settings.SettingsUpdate(**change), db)
+        assert not db.in_transaction
+        return unchanged
+
+    async def probe(endpoint, api_key, model):
+        support = client_module.ToolSupport if kind == "tools" else client_module.VisionSupport
+        return support(ok=True, message="Previous setup works")
+
+    monkeypatch.setattr(routes_settings, "_probe_configuration_unchanged", validate_then_change)
+    monkeypatch.setattr(
+        client_module, "probe_tool_support" if kind == "tools" else "probe_vision_support", probe
+    )
+    response = client.post(f"/api/settings/test-{kind}")
+    assert response.status_code == 200
+    row = get_settings_row(db)
+    assert row[f"{kind}_supported"] is None
+    assert row[f"{kind}_message"] is None
+    assert response.json()["ok"] is False
+    assert "changed" in response.json()["message"]
+
+
+@pytest.mark.parametrize("kind", ["tools", "vision"])
+@pytest.mark.parametrize("column", ["endpoint_url", "model", "api_key"])
+def test_probe_revision_rejects_configuration_aba(
+    client: TestClient,
+    db: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    column: str,
+) -> None:
+    original = {
+        "endpoint_url": "http://127.0.0.1:8080/v1",
+        "model": "old-model",
+        "api_key": "old-key",
+    }
+    client.put("/api/settings", json=original)
+
+    async def probe(endpoint, api_key, model):
+        replacement = "http://127.0.0.1:9090/v1" if column == "endpoint_url" else "replacement"
+        for value in (replacement, original[column]):
+            if column == "api_key":
+                routes_settings.write_settings(routes_settings.SettingsUpdate(api_key=value), db)
+            else:
+                # Also cover non-route database writers: the migration trigger belongs
+                # to the settings row, not just this request handler.
+                update_settings_row(db, {column: value})
+        support = client_module.ToolSupport if kind == "tools" else client_module.VisionSupport
+        return support(ok=True, message="Pre-change setup works")
+
+    monkeypatch.setattr(
+        client_module, "probe_tool_support" if kind == "tools" else "probe_vision_support", probe
+    )
+    response = client.post(f"/api/settings/test-{kind}")
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert "changed" in response.json()["message"]
+    assert get_settings_row(db)[f"{kind}_supported"] is None
+
+
+def test_credential_invalidation_commits_before_keychain_io(
+    client: TestClient, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client.put("/api/settings", json={"endpoint_url": "http://127.0.0.1:8080/v1"})
+    revision = get_settings_row(db)["probe_revision"]
+    set_key = secrets.set_api_key
+
+    def slow_keychain(value):
+        # Called inside credential mutation, before the new credential is installed.
+        # A second connection may write, and old validated probes cannot publish.
+        other = connect()
+        try:
+            assert not routes_settings.publish_probe_result(other, revision, "tools", True, "old")
+            assert not routes_settings.publish_probe_result(other, revision, "vision", True, "old")
+            update_settings_row(other, {"context_window": 16384})
+        finally:
+            other.close()
+        set_key(value)
+
+    monkeypatch.setattr(secrets, "set_api_key", slow_keychain)
+    response = client.put("/api/settings", json={"api_key": "replacement"})
+    assert response.status_code == 200
+    assert response.json()["context_window"] == 16384
+    assert response.json()["tools_supported"] is None
+    assert response.json()["vision_supported"] is None
+    _, config = routes_settings._probe_snapshot(db)
+    assert config.api_key == "replacement"

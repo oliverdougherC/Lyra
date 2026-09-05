@@ -124,7 +124,7 @@ export function SuggestionPanel({
     return (
       <div className="flex flex-col gap-4">
         <PanelHeader
-          title={edit.note ?? 'Suggested changes'}
+          title={suggestionTitle(edit.note)}
           // A stale edit's hunks no longer anchor, so piecemeal review is gone.
           actions={null}
         />
@@ -167,7 +167,7 @@ export function SuggestionPanel({
   return (
     <div className="flex flex-col gap-4">
       <PanelHeader
-        title={edit.note ?? 'Suggested changes'}
+        title={suggestionTitle(edit.note)}
         actions={
           <div className="flex gap-2">
             <Button size="sm" disabled={busy} onClick={() => void acceptAll()}>
@@ -193,6 +193,17 @@ export function SuggestionPanel({
       </ul>
     </div>
   )
+}
+
+function suggestionTitle(note: string | null): string {
+  const purpose = note?.trim()
+  if (!purpose) return 'Suggested changes'
+  if (purpose.toLowerCase() === 'agentic long-form draft') return 'Draft suggestion'
+  if (purpose.toLowerCase() === 'structure the document') return 'Suggested outline'
+  if (/^revise\s+/i.test(purpose)) {
+    return `Suggested revision: ${purpose.replace(/^revise\s+/i, '')}`
+  }
+  return purpose
 }
 
 /** The instruction as the panel's name, with the whole-edit decisions beside it. */
@@ -238,6 +249,9 @@ function HunkCard({
             >
               <span aria-hidden className="w-3 shrink-0 text-center select-none">
                 {sign === ' ' ? '' : sign}
+              </span>
+              <span className="sr-only">
+                {sign === '+' ? 'Added: ' : sign === '-' ? 'Removed: ' : 'Unchanged: '}
               </span>
               <span className="break-words whitespace-pre-wrap">{text}</span>
             </div>

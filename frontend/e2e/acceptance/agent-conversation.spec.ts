@@ -263,7 +263,7 @@ test.describe('One ordinary class conversation (PLA-401)', () => {
 
     const commandCard = page.locator('[aria-label^="Command request"]')
     await expect(commandCard).toBeVisible({ timeout: 30_000 })
-    await expect(commandCard.getByText('python3')).toBeVisible()
+    await expect(commandCard.getByText('python3 test_parser.py', { exact: true })).toBeVisible()
     await expect(
       commandCard.getByText('Verify the parser skeleton against its test.'),
     ).toBeVisible()

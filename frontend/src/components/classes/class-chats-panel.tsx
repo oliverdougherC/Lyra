@@ -38,7 +38,7 @@ import type { SessionRead } from '@/types'
  * manageable, with no way to rename a bad auto-title or delete a conversation at all.
  */
 export function ClassChatsPanel({ classId }: { classId: number }) {
-  const { data: sessions, isPending } = useSessions(classId)
+  const { data: sessions, isPending, isError, refetch } = useSessions(classId)
   const renameSession = useRenameSession(classId)
   const deleteSession = useDeleteSession(classId)
   const [renaming, setRenaming] = useState<SessionRead | null>(null)
@@ -83,7 +83,15 @@ export function ClassChatsPanel({ classId }: { classId: number }) {
         ) : null}
       </div>
 
-      {list.length === 0 ? (
+      {isError ? (
+        <div role="alert" className="rounded-md border p-4 text-sm">
+          <p>Could not load conversations.</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => void refetch()}>
+            Retry conversations
+          </Button>
+        </div>
+      ) : null}
+      {list.length === 0 && isError ? null : list.length === 0 ? (
         <Empty className="py-12">
           <EmptyHeader>
             <EmptyMedia variant="icon">

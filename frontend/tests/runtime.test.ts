@@ -133,3 +133,31 @@ describe('desktop runtime bootstrap', () => {
     })
   })
 })
+
+describe('original document native save transport (mocked IPC)', () => {
+  it('passes exact bytes and only a safe suggested filename, never a filesystem path or URL', async () => {
+    const invoke = vi.fn().mockResolvedValue(true)
+    window.__TAURI_INTERNALS__ = { invoke }
+    const { saveOriginalDocument } = await loadRuntime()
+    const blob = {
+      arrayBuffer: async () => new Uint8Array([0, 37, 80, 68, 70, 255]).buffer,
+    } as Blob
+    await expect(saveOriginalDocument(blob, '../../original.pdf')).resolves.toBe('saved')
+    expect(invoke).toHaveBeenCalledWith('save_original_document', {
+      filename: '_.._original.pdf',
+      bytes: [0, 37, 80, 68, 70, 255],
+    })
+  })
+
+  it('distinguishes native cancellation and native failure from a saved file', async () => {
+    const invoke = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new Error('disk full'))
+    window.__TAURI_INTERNALS__ = { invoke }
+    const { saveOriginalDocument } = await loadRuntime()
+    const blob = { arrayBuffer: async () => new ArrayBuffer(0) } as Blob
+    await expect(saveOriginalDocument(blob, 'original.pdf')).resolves.toBe('cancelled')
+    await expect(saveOriginalDocument(blob, 'original.pdf')).rejects.toThrow('disk full')
+  })
+})

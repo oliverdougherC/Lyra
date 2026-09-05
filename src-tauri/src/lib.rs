@@ -350,6 +350,258 @@ fn open_external_url(app: AppHandle, url: String) -> Result<(), CommandError> {
     })
 }
 
+/// The destination is chosen by the OS dialog and never returned to JavaScript.
+#[tauri::command]
+async fn save_original_document(
+    app: AppHandle,
+    filename: String,
+    bytes: Vec<u8>,
+) -> Result<bool, String> {
+    if bytes.len() > 50 * 1024 * 1024 {
+        return Err("The original document exceeds the upload limit.".into());
+    }
+    let filename: String = filename
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let filename = filename.trim_start_matches('.');
+    let selection = app
+        .dialog()
+        .file()
+        .set_title("Save original document")
+        .set_file_name(if filename.is_empty() {
+            "document"
+        } else {
+            filename
+        })
+        .blocking_save_file();
+    let Some(selection) = selection else {
+        return Ok(false);
+    };
+    let path = selection
+        .into_path()
+        .map_err(|_| "The selected destination is not a local file.".to_owned())?;
+    write_original_copy(&path, &bytes).map_err(|error| error.user_message().to_owned())?;
+    Ok(true)
+}
+
+#[derive(Debug)]
+enum OriginalCopyError {
+    BeforePublication(std::io::Error),
+    DestinationExists,
+    Published(std::io::Error),
+}
+
+impl OriginalCopyError {
+    fn user_message(&self) -> &'static str {
+        match self {
+            Self::DestinationExists => "That destination already exists. Choose another filename to save the original document.",
+            Self::Published(_) => "The original document was saved, but final cleanup or durability could not be confirmed. Check the saved file before retrying.",
+            Self::BeforePublication(_) => "The original document could not be saved to that destination.",
+        }
+    }
+}
+
+impl From<std::io::Error> for OriginalCopyError {
+    fn from(error: std::io::Error) -> Self {
+        Self::BeforePublication(error)
+    }
+}
+
+impl fmt::Display for OriginalCopyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BeforePublication(error) => write!(
+                formatter,
+                "The original document could not be saved to that destination: {error}"
+            ),
+            Self::DestinationExists => formatter.write_str(
+                "That destination already exists. Choose another filename to save the original document.",
+            ),
+            Self::Published(error) => write!(
+                formatter,
+                "The original document was saved, but final cleanup or durability confirmation failed: {error}. Check the saved file before retrying."
+            ),
+        }
+    }
+}
+
+// The directory handle anchors creation, publication and cleanup to the same directory,
+// even if a parent path is renamed. linkat publishes atomically without ever replacing
+// an existing entry (including dangling symlinks and entries created during the write).
+#[cfg(unix)]
+fn write_original_copy(path: &Path, bytes: &[u8]) -> Result<(), OriginalCopyError> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    struct TemporaryCopy {
+        directory: File,
+        name: CString,
+        owned: bool,
+    }
+    impl TemporaryCopy {
+        fn remove(&mut self) -> std::io::Result<()> {
+            if self.owned {
+                // SAFETY: the owned directory fd and NUL-terminated name remain live.
+                if unsafe { libc::unlinkat(self.directory.as_raw_fd(), self.name.as_ptr(), 0) } != 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+                self.owned = false;
+            }
+            Ok(())
+        }
+    }
+    impl Drop for TemporaryCopy {
+        fn drop(&mut self) {
+            let _ = self.remove();
+        }
+    }
+
+    let invalid_path = || std::io::Error::other("The destination must name a local file");
+    let destination = CString::new(path.file_name().ok_or_else(invalid_path)?.as_bytes())
+        .map_err(|_| invalid_path())?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let directory = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
+        .open(parent)?;
+    // Do not open the destination: even special files must remain untouched.
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: valid fd/name and writable stat storage; metadata is never read on error.
+    let exists = unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            destination.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if exists == 0 {
+        return Err(OriginalCopyError::DestinationExists);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() != std::io::ErrorKind::NotFound {
+        return Err(error.into());
+    }
+
+    let name = CString::new(format!(
+        ".lyra-original-{}.tmp",
+        random_secret_hex().map_err(|error| std::io::Error::other(error.to_string()))?
+    ))
+    .unwrap();
+    // SAFETY: valid directory fd and NUL-terminated sibling name. O_EXCL establishes
+    // ownership before a cleanup guard is created; a collision is never removed.
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let mut temporary = TemporaryCopy {
+        directory,
+        name,
+        owned: true,
+    };
+    // SAFETY: openat returned a new fd whose ownership transfers exactly once.
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    #[cfg(test)]
+    original_copy_checkpoint(OriginalCopyStage::BeforeWrite, path)?;
+    // A bounded first write also provides a deterministic partial-write fault point.
+    let first_chunk = bytes.len().min(4096);
+    file.write_all(&bytes[..first_chunk])?;
+    #[cfg(test)]
+    original_copy_checkpoint(OriginalCopyStage::DuringWrite, path)?;
+    file.write_all(&bytes[first_chunk..])?;
+    #[cfg(test)]
+    original_copy_checkpoint(OriginalCopyStage::Flush, path)?;
+    file.sync_all()?;
+    #[cfg(test)]
+    original_copy_checkpoint(OriginalCopyStage::Publication, path)?;
+    // SAFETY: both names are relative to the same live directory fd. Flags=0 and
+    // linkat's no-replace semantics preserve any destination that appeared meanwhile.
+    let published = unsafe {
+        libc::linkat(
+            temporary.directory.as_raw_fd(),
+            temporary.name.as_ptr(),
+            temporary.directory.as_raw_fd(),
+            destination.as_ptr(),
+            0,
+        )
+    };
+    if published != 0 {
+        let error = std::io::Error::last_os_error();
+        return Err(if error.kind() == std::io::ErrorKind::AlreadyExists {
+            OriginalCopyError::DestinationExists
+        } else {
+            error.into()
+        });
+    }
+    // Publication has happened. Neither cleanup nor directory sync can roll it back;
+    // all subsequent errors must explicitly tell the caller that the file was saved.
+    #[cfg(test)]
+    original_copy_checkpoint(OriginalCopyStage::Cleanup, path)
+        .map_err(OriginalCopyError::Published)?;
+    temporary.remove().map_err(OriginalCopyError::Published)?;
+    #[cfg(test)]
+    original_copy_checkpoint(OriginalCopyStage::Durability, path)
+        .map_err(OriginalCopyError::Published)?;
+    temporary
+        .directory
+        .sync_all()
+        .map_err(OriginalCopyError::Published)
+}
+
+#[cfg(not(unix))]
+fn write_original_copy(_path: &Path, _bytes: &[u8]) -> Result<(), OriginalCopyError> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Atomic original-document saving is not supported on this platform",
+    )
+    .into())
+}
+
+#[cfg(all(test, unix))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OriginalCopyStage {
+    BeforeWrite,
+    DuringWrite,
+    Flush,
+    Publication,
+    Cleanup,
+    Durability,
+}
+
+#[cfg(all(test, unix))]
+type OriginalCopyHook = Box<dyn FnMut(OriginalCopyStage, &Path) -> std::io::Result<()>>;
+#[cfg(all(test, unix))]
+thread_local! {
+    static ORIGINAL_COPY_HOOK: std::cell::RefCell<Option<OriginalCopyHook>> = const { std::cell::RefCell::new(None) };
+}
+#[cfg(all(test, unix))]
+fn original_copy_checkpoint(stage: OriginalCopyStage, path: &Path) -> std::io::Result<()> {
+    ORIGINAL_COPY_HOOK.with(|hook| match hook.borrow_mut().as_mut() {
+        Some(hook) => hook(stage, path),
+        None => Ok(()),
+    })
+}
+
 #[tauri::command]
 async fn pick_import_directory(
     app: AppHandle,
@@ -419,6 +671,7 @@ pub fn run() {
             retry_backend,
             open_external_url,
             pick_import_directory,
+            save_original_document,
             pick_workspace_directory,
             publish_desktop_import
         ])
@@ -1816,5 +2069,250 @@ raise SystemExit("unsupported startup fixture mode")
 
         assert!(message.contains("owned helper reclamation invariant failed"));
         assert!(message.contains("\"after\":\"live\""));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod original_copy_tests {
+    use super::*;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir()
+                .join(format!("lyra-original-{}", random_secret_hex().unwrap()));
+            fs::create_dir(&root).unwrap();
+            Self(root)
+        }
+        fn destination(&self) -> PathBuf {
+            self.0.join("original.pdf")
+        }
+        fn assert_no_temporary_files(&self) {
+            assert!(fs::read_dir(&self.0).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".lyra-original-")));
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            ORIGINAL_COPY_HOOK.with(|hook| *hook.borrow_mut() = None);
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    fn inject_failure(failure: OriginalCopyStage) {
+        ORIGINAL_COPY_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |stage, path| {
+                if stage == failure {
+                    // Inspect the real private sibling at the actual production fault point.
+                    let sibling = fs::read_dir(path.parent().unwrap())
+                        .unwrap()
+                        .map(|entry| entry.unwrap().path())
+                        .find(|path| {
+                            path.file_name()
+                                .unwrap()
+                                .to_string_lossy()
+                                .starts_with(".lyra-original-")
+                        });
+                    if stage == OriginalCopyStage::DuringWrite {
+                        assert_eq!(fs::metadata(sibling.unwrap()).unwrap().len(), 4096);
+                    }
+                    Err(std::io::Error::other("injected native failure"))
+                } else {
+                    Ok(())
+                }
+            }))
+        });
+    }
+
+    #[test]
+    fn saves_exact_binary_bytes_privately_and_cleans_up() {
+        let fixture = Fixture::new();
+        let bytes = b"%PDF\0\xff original bytes\r\n";
+        write_original_copy(&fixture.destination(), bytes).unwrap();
+        assert_eq!(fs::read(fixture.destination()).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(fixture.destination())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        fixture.assert_no_temporary_files();
+    }
+
+    #[test]
+    fn prepublication_failures_leave_absent_destination_absent_and_clean_up() {
+        for stage in [
+            OriginalCopyStage::BeforeWrite,
+            OriginalCopyStage::DuringWrite,
+            OriginalCopyStage::Flush,
+            OriginalCopyStage::Publication,
+        ] {
+            let fixture = Fixture::new();
+            inject_failure(stage);
+            let error = write_original_copy(&fixture.destination(), &[42; 8192]).unwrap_err();
+            assert!(
+                matches!(error, OriginalCopyError::BeforePublication(_)),
+                "{stage:?}: {error}"
+            );
+            assert!(!fixture.destination().exists(), "{stage:?}");
+            fixture.assert_no_temporary_files();
+        }
+    }
+
+    #[test]
+    fn no_overwrite_preserves_existing_bytes_before_every_fault_point() {
+        for stage in [
+            OriginalCopyStage::BeforeWrite,
+            OriginalCopyStage::DuringWrite,
+            OriginalCopyStage::Flush,
+            OriginalCopyStage::Publication,
+        ] {
+            let fixture = Fixture::new();
+            fs::write(fixture.destination(), b"existing\0\xff bytes").unwrap();
+            inject_failure(stage);
+            let error = write_original_copy(&fixture.destination(), &[42; 8192]).unwrap_err();
+            // Existing files are rejected before any write/flush/publication is attempted.
+            assert!(matches!(error, OriginalCopyError::DestinationExists));
+            assert!(error.to_string().contains("Choose another filename"));
+            assert_eq!(
+                fs::read(fixture.destination()).unwrap(),
+                b"existing\0\xff bytes"
+            );
+            fixture.assert_no_temporary_files();
+        }
+    }
+
+    #[test]
+    fn no_overwrite_preserves_existing_file_and_allows_another_filename() {
+        let fixture = Fixture::new();
+        fs::write(fixture.destination(), b"existing").unwrap();
+        assert!(matches!(
+            write_original_copy(&fixture.destination(), b"new"),
+            Err(OriginalCopyError::DestinationExists)
+        ));
+        write_original_copy(&fixture.0.join("another.pdf"), b"new").unwrap();
+        assert_eq!(fs::read(fixture.destination()).unwrap(), b"existing");
+        assert_eq!(fs::read(fixture.0.join("another.pdf")).unwrap(), b"new");
+        fixture.assert_no_temporary_files();
+    }
+
+    #[test]
+    fn rejects_symlinks_directories_and_special_files_without_opening_them() {
+        let fixture = Fixture::new();
+        let target = fixture.0.join("target");
+        fs::write(&target, b"untouched").unwrap();
+        for exists in [true, false] {
+            let link = fixture.0.join(if exists { "link" } else { "dangling" });
+            symlink(
+                if exists {
+                    target.clone()
+                } else {
+                    fixture.0.join("absent")
+                },
+                &link,
+            )
+            .unwrap();
+            assert!(matches!(
+                write_original_copy(&link, b"new"),
+                Err(OriginalCopyError::DestinationExists)
+            ));
+            assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        }
+        assert_eq!(fs::read(&target).unwrap(), b"untouched");
+        assert!(!fixture.0.join("absent").exists());
+        assert!(write_original_copy(&fixture.0, b"new").is_err());
+        let fifo = fixture.0.join("fifo");
+        use std::os::unix::ffi::OsStrExt;
+        let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: the pathname is a live NUL-terminated CString.
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+        assert!(matches!(
+            write_original_copy(&fifo, b"new"),
+            Err(OriginalCopyError::DestinationExists)
+        ));
+        fixture.assert_no_temporary_files();
+    }
+
+    #[test]
+    fn publication_never_clobbers_racing_file_symlink_or_directory() {
+        for entry in ["file", "symlink", "directory"] {
+            let fixture = Fixture::new();
+            ORIGINAL_COPY_HOOK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move |stage, path| {
+                    if stage == OriginalCopyStage::Publication {
+                        match entry {
+                            "file" => fs::write(path, b"racing bytes")?,
+                            "symlink" => symlink("absent-target", path)?,
+                            "directory" => fs::create_dir(path)?,
+                            _ => unreachable!(),
+                        }
+                    }
+                    Ok(())
+                }))
+            });
+            assert!(matches!(
+                write_original_copy(&fixture.destination(), b"new"),
+                Err(OriginalCopyError::DestinationExists)
+            ));
+            match entry {
+                "file" => assert_eq!(fs::read(fixture.destination()).unwrap(), b"racing bytes"),
+                "symlink" => assert_eq!(
+                    fs::read_link(fixture.destination()).unwrap(),
+                    Path::new("absent-target")
+                ),
+                "directory" => assert!(fixture.destination().is_dir()),
+                _ => unreachable!(),
+            }
+            fixture.assert_no_temporary_files();
+        }
+    }
+
+    #[test]
+    fn postpublication_errors_report_saved_bytes_and_clean_up_without_rollback() {
+        for stage in [OriginalCopyStage::Cleanup, OriginalCopyStage::Durability] {
+            let fixture = Fixture::new();
+            inject_failure(stage);
+            let error =
+                write_original_copy(&fixture.destination(), b"published bytes").unwrap_err();
+            assert!(matches!(error, OriginalCopyError::Published(_)));
+            assert!(error.user_message().contains("was saved"));
+            assert!(!error.user_message().contains("could not be saved"));
+            assert_eq!(fs::read(fixture.destination()).unwrap(), b"published bytes");
+            fixture.assert_no_temporary_files();
+        }
+    }
+
+    #[test]
+    fn parent_rename_does_not_redirect_publication_or_cleanup() {
+        let fixture = Fixture::new();
+        let parent = fixture.0.join("parent");
+        let moved = fixture.0.join("moved");
+        fs::create_dir(&parent).unwrap();
+        let moved_for_hook = moved.clone();
+        ORIGINAL_COPY_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |stage, path| {
+                if stage == OriginalCopyStage::Publication {
+                    fs::rename(path.parent().unwrap(), &moved_for_hook)?;
+                    fs::create_dir(path.parent().unwrap())?;
+                    fs::write(path, b"different directory")?;
+                }
+                Ok(())
+            }))
+        });
+        write_original_copy(&parent.join("original.pdf"), b"saved bytes").unwrap();
+        assert_eq!(
+            fs::read(parent.join("original.pdf")).unwrap(),
+            b"different directory"
+        );
+        assert_eq!(
+            fs::read(moved.join("original.pdf")).unwrap(),
+            b"saved bytes"
+        );
+        assert_eq!(fs::read_dir(&moved).unwrap().count(), 1);
     }
 }

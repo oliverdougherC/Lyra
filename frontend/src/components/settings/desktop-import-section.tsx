@@ -119,13 +119,32 @@ export function DesktopImportSection() {
     )
   }
 
-  if (statusQuery.isError || !status?.available) {
+  if (statusQuery.isError) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Could not load import status</AlertTitle>
+        <AlertDescription>
+          <p>{errorMessage(statusQuery.error, 'Check your connection and try again.')}</p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={statusQuery.isFetching}
+            onClick={() => void statusQuery.refetch()}
+          >
+            Retry import status
+          </Button>
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  if (!status?.available) {
     return (
       <Alert>
         <Database />
         <AlertTitle>Available in the packaged desktop app</AlertTitle>
         <AlertDescription>
-          Folder selection and publication stay behind Lyra&apos;s native desktop boundary.
+          Open Lyra&apos;s desktop app to import classes and documents from an older installation.
         </AlertDescription>
       </Alert>
     )
@@ -161,22 +180,25 @@ export function DesktopImportSection() {
             This Lyra installation
           </p>
           <p>
-            <span className="text-text-secondary block">Database</span>
-            Lyra schema {preview.schema_version ?? 'detected'} · {preview.class_count} classes ·{' '}
-            {preview.document_count} documents
+            <span className="text-text-secondary block">Contents</span>
+            {preview.class_count} classes · {preview.document_count} documents
           </p>
           <p>
-            <span className="text-text-secondary block">Durable files</span>
-            {preview.total_entries} entries · {formatBytes(preview.total_bytes)} estimated
+            <span className="text-text-secondary block">Import size</span>
+            {formatBytes(preview.total_bytes)} estimated
           </p>
-          {preview.asset_summary ? (
-            <p className="sm:col-span-2">
-              <span className="text-text-secondary block">Optional assets</span>
-              {preview.asset_summary.selected_models} source model files detected;{' '}
-              {preview.asset_summary.selected_caches} disposable cache files excluded; current
-              install models and keys are preserved.
+          <details className="sm:col-span-2">
+            <summary className="cursor-pointer">Technical details</summary>
+            <p className="text-text-secondary mt-2">
+              Database schema {preview.schema_version ?? 'detected'} · {preview.total_entries} files
             </p>
-          ) : null}
+            {preview.asset_summary ? (
+              <p className="text-text-secondary">
+                {preview.asset_summary.selected_models} model files detected;{' '}
+                {preview.asset_summary.selected_caches} cache files excluded.
+              </p>
+            ) : null}
+          </details>
           {preview.old_runtime_active ? (
             <p className="text-danger-text sm:col-span-2">
               The old Lyra runtime appears active. Close it before importing.
@@ -184,9 +206,8 @@ export function DesktopImportSection() {
           ) : null}
           {staged ? (
             <p className="text-text-secondary sm:col-span-2">
-              Publication uses this verified staged copy for imported classes and documents. This
-              install&apos;s current settings, API keys, and downloaded models are carried forward
-              at restart, including changes made after staging.
+              Ready to import. Restart to finish; your current settings, API keys, and downloaded
+              models will be preserved.
             </p>
           ) : null}
           {preview.warnings.map((warning) => (
@@ -230,7 +251,7 @@ export function DesktopImportSection() {
             }
           >
             {startImport.isPending ? <Spinner /> : null}
-            {status.can_resume ? 'Resume import' : 'Stage import'}
+            {status.can_resume ? 'Resume import' : 'Prepare import'}
           </Button>
         ) : null}
         {staged ? (

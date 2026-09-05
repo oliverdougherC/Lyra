@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { CommentList } from '@/components/drafts/comment-list'
 import { api } from '@/lib/api'
+import { draftKeys } from '@/lib/hooks/use-drafts'
 import type { DraftComment } from '@/types'
 
 function createWrapper() {
@@ -15,7 +16,7 @@ function createWrapper() {
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   )
-  return { wrapper }
+  return { wrapper, queryClient }
 }
 
 let nextId = 1
@@ -46,7 +47,7 @@ describe('CommentList', () => {
     vi.spyOn(api, 'listComments').mockResolvedValue([])
     const { wrapper } = createWrapper()
 
-    render(<CommentList draftId={8} />, { wrapper })
+    render(<CommentList onAddressComment={vi.fn()} draftId={8} />, { wrapper })
 
     expect(await screen.findByText(/No comments yet/)).toBeInTheDocument()
   })
@@ -68,7 +69,7 @@ describe('CommentList', () => {
     ])
     const { wrapper } = createWrapper()
 
-    render(<CommentList draftId={8} />, { wrapper })
+    render(<CommentList onAddressComment={vi.fn()} draftId={8} />, { wrapper })
 
     const list = await screen.findByRole('list', { name: 'Open comments' })
     const bodies = within(list)
@@ -87,7 +88,7 @@ describe('CommentList', () => {
     ])
     const { wrapper } = createWrapper()
 
-    render(<CommentList draftId={8} />, { wrapper })
+    render(<CommentList onAddressComment={vi.fn()} draftId={8} />, { wrapper })
 
     expect(await screen.findByText('the pendulum swings')).toBeInTheDocument()
     expect(screen.getByText('On the whole document')).toBeInTheDocument()
@@ -105,7 +106,7 @@ describe('CommentList', () => {
     ])
     const { wrapper } = createWrapper()
 
-    render(<CommentList draftId={8} />, { wrapper })
+    render(<CommentList onAddressComment={vi.fn()} draftId={8} />, { wrapper })
 
     const section = await screen.findByRole('region', {
       name: 'Comments on passages that are gone',
@@ -125,7 +126,7 @@ describe('CommentList', () => {
       created_at: '2026-08-07 09:05:00',
     })
     const { wrapper } = createWrapper()
-    render(<CommentList draftId={8} />, { wrapper })
+    render(<CommentList onAddressComment={vi.fn()} draftId={8} />, { wrapper })
 
     await userEvent.click(await screen.findByRole('button', { name: /Reply/ }))
     const input = screen.getByRole('textbox', { name: 'Reply to this comment' })
@@ -144,7 +145,7 @@ describe('CommentList', () => {
     ])
     const resolveSpy = vi.spyOn(api, 'resolveComment').mockResolvedValue(thread({ id: 5 }))
     const { wrapper } = createWrapper()
-    render(<CommentList draftId={8} />, { wrapper })
+    render(<CommentList onAddressComment={vi.fn()} draftId={8} />, { wrapper })
 
     await userEvent.click(await screen.findByRole('button', { name: /Resolve/ }))
     expect(resolveSpy).toHaveBeenCalledWith(5, true)
@@ -152,22 +153,23 @@ describe('CommentList', () => {
     expect(resolveSpy).toHaveBeenCalledWith(6, false)
   })
 
-  it('starts a targeted pass to address a finding', async () => {
+  it('delegates addressing through the page save barrier', async () => {
     vi.spyOn(api, 'listComments').mockResolvedValue([
       thread({ id: 14, section_ref: 'methods', body: 'Connect this evidence to the claim.' }),
     ])
-    const passSpy = vi.spyOn(api, 'startDraftPass').mockResolvedValue({ id: 8 } as never)
+    const address = vi.fn().mockResolvedValue(undefined)
     const { wrapper } = createWrapper()
-    render(<CommentList draftId={8} />, { wrapper })
+    render(<CommentList onAddressComment={address} draftId={8} />, { wrapper })
 
     await userEvent.click(await screen.findByRole('button', { name: 'Address' }))
 
-    expect(passSpy).toHaveBeenCalledWith(8, {
-      instruction: 'Address this review finding: Connect this evidence to the claim.',
-      sections: ['methods'],
-      address_comment_id: 14,
-      depth: 'standard',
-    })
+    expect(address).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 14,
+        section_ref: 'methods',
+        body: 'Connect this evidence to the claim.',
+      }),
+    )
   })
 
   it('jumps to the anchor from the quote, and says so when there is none', async () => {
@@ -176,7 +178,7 @@ describe('CommentList', () => {
     ])
     const onJump = vi.fn().mockReturnValue(true)
     const { wrapper } = createWrapper()
-    render(<CommentList draftId={8} onJump={onJump} />, { wrapper })
+    render(<CommentList onAddressComment={vi.fn()} draftId={8} onJump={onJump} />, { wrapper })
 
     await userEvent.click(
       await screen.findByRole('button', { name: 'Show this passage in the document' }),
@@ -193,7 +195,7 @@ describe('CommentList', () => {
     vi.spyOn(api, 'resolveComment').mockResolvedValue(thread({ id: 4, resolved: 1 }))
     const onJump = vi.fn().mockReturnValue(true)
     const { wrapper } = createWrapper()
-    render(<CommentList draftId={8} onJump={onJump} />, { wrapper })
+    render(<CommentList onAddressComment={vi.fn()} draftId={8} onJump={onJump} />, { wrapper })
 
     await userEvent.click(await screen.findByText('Connect this to the result.'))
     expect(onJump).toHaveBeenCalledTimes(1)
@@ -219,12 +221,46 @@ describe('CommentList', () => {
     ])
     const { wrapper } = createWrapper()
 
-    render(<CommentList draftId={8} />, { wrapper })
+    render(<CommentList onAddressComment={vi.fn()} draftId={8} />, { wrapper })
 
     const resolvedSection = await screen.findByRole('region', { name: 'Resolved comments' })
     expect(within(resolvedSection).getByText('A settled one.')).toBeInTheDocument()
     // The writer's replies read as Lyra's.
     expect(screen.getByText(/Lyra:/)).toBeInTheDocument()
     expect(screen.getByText('I proposed a fix.')).toBeInTheDocument()
+  })
+  it('shows a retryable load failure instead of claiming comments are absent', async () => {
+    vi.spyOn(api, 'listComments')
+      .mockRejectedValueOnce(new Error('Offline'))
+      .mockResolvedValue([thread({ body: 'Recovered comment' })])
+    const { wrapper } = createWrapper()
+    render(<CommentList draftId={8} onAddressComment={vi.fn()} />, { wrapper })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Comments could not be refreshed')
+    expect(screen.queryByText(/No comments yet/)).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Retry comments' }))
+    expect(await screen.findByText('Recovered comment')).toBeInTheDocument()
+  })
+
+  it('disables every Address action during page-owned work', async () => {
+    vi.spyOn(api, 'listComments').mockResolvedValue([thread({}), thread({})])
+    const address = vi.fn()
+    const { wrapper } = createWrapper()
+    render(<CommentList draftId={8} onAddressComment={address} addressingDisabled />, { wrapper })
+    for (const button of await screen.findAllByRole('button', { name: 'Address' })) {
+      expect(button).toBeDisabled()
+      await userEvent.click(button)
+    }
+    expect(address).not.toHaveBeenCalled()
+  })
+  it('retains comments when a background refresh fails', async () => {
+    vi.spyOn(api, 'listComments').mockRejectedValue(new Error('Offline'))
+    const { wrapper, queryClient } = createWrapper()
+    queryClient.setQueryData(draftKeys.comments(8), [thread({ body: 'Previously saved comment' })])
+    render(<CommentList draftId={8} onAddressComment={vi.fn()} />, { wrapper })
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: draftKeys.comments(8) })
+    })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Showing saved comments')
+    expect(screen.getByText('Previously saved comment')).toBeInTheDocument()
   })
 })

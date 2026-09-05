@@ -11,6 +11,7 @@ import type {
   BriefWrite,
   DraftBodyUpdate,
   DraftPlanUpdate,
+  DraftPlan,
   DraftStatus,
   LiveDraftSuggestion,
   PassRequest,
@@ -257,7 +258,9 @@ export function useUpdateDraftPlan(draftId: number) {
   return useMutation({
     mutationFn: (body: DraftPlanUpdate) => api.updateDraftPlan(draftId, body),
     onSuccess: (plan) => {
-      queryClient.setQueryData(draftKeys.plan(draftId), plan)
+      queryClient.setQueryData<DraftPlan | null>(draftKeys.plan(draftId), (current) =>
+        current && current.version > plan.version ? current : plan,
+      )
       queryClient.invalidateQueries({ queryKey: draftKeys.detail(draftId) })
     },
   })
@@ -398,31 +401,10 @@ export function useUpdateLiveDraftSuggestionBlock(draftId: number) {
         expected_revision: expectedRevision,
         base_content: baseContent,
       }),
-    onMutate: async ({ blockId, content }) => {
+    onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: draftKeys.liveSuggestion(draftId) })
-      const previous = queryClient.getQueryData<LiveDraftSuggestion | null>(
-        draftKeys.liveSuggestion(draftId),
-      )
-      if (!previous) return { previous }
-      queryClient.setQueryData<LiveDraftSuggestion>(draftKeys.liveSuggestion(draftId), {
-        ...previous,
-        blocks: previous.blocks.map((block) =>
-          block.id === blockId
-            ? {
-                ...block,
-                content,
-                revision: block.revision + 1,
-                user_revision: block.user_revision + 1,
-              }
-            : block,
-        ),
-      })
-      return { previous }
     },
-    onError: (_error, _variables, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(draftKeys.liveSuggestion(draftId), context.previous)
-      }
+    onError: () => {
       queryClient.invalidateQueries({ queryKey: draftKeys.liveSuggestion(draftId) })
     },
     onSuccess: (updatedBlock) => {

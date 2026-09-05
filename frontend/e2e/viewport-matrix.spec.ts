@@ -193,7 +193,7 @@ const SETTINGS = {
   endpoint_url: 'http://127.0.0.1:8080/v1',
   api_key_set: false,
   api_key_storage: 'file',
-  model: null,
+  model: 'fixture-model',
   context_window: 8192,
   extraction_enabled: true,
   remote_ack: false,
@@ -488,6 +488,21 @@ for (const { width, height } of MATRIX) {
     const composer = page.locator('#message-composer')
     await expect(composer).toBeVisible()
     await expect(page.getByRole('button', { name: /Choose what Lyra reads/ })).toBeVisible()
+    // Test rendered dimensions: class assertions miss cascade and flex regressions.
+    const actions = page.getByRole('button', { name: /^(Copy message|Try this answer again)$/ })
+    await expect(actions).toHaveCount(3)
+    for (const action of await actions.all()) {
+      const actionBox = await action.boundingBox()
+      expect(actionBox).not.toBeNull()
+      expect(actionBox!.width).toBe(28)
+      expect(actionBox!.height).toBe(28)
+      const iconBox = await action.locator('svg').boundingBox()
+      expect(iconBox!.width).toBe(14)
+      expect(iconBox!.height).toBe(14)
+    }
+    const sendBox = await page.getByRole('button', { name: 'Send message' }).boundingBox()
+    expect(sendBox!.width).toBe(36)
+    expect(sendBox!.height).toBe(36)
     const chat = await measure(page)
     expect(
       chat.scrollWidth - chat.innerWidth,
@@ -532,6 +547,102 @@ const INTERACTION_MATRIX = [
   { width: 1024, height: 768 },
 ]
 
+for (const { width, height } of [
+  { width: 1280, height: 720 },
+  { width: 1024, height: 600 },
+  { width: 375, height: 667 },
+]) {
+  for (const count of [9, 30, 100]) {
+    test(`${width}x${height}: ${count} material choices stay contained and keyboard selectable`, async ({
+      page,
+    }) => {
+      await installClassMocks(page)
+      await page.route(`http://127.0.0.1:8000/api/classes/${CLASS_ID}/documents`, async (route) => {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(
+            Array.from({ length: count }, (_, index) => ({
+              ...DOCUMENTS[0],
+              id: 200 + index,
+              filename: `Lecture ${String(index + 1).padStart(3, '0')}.pdf`,
+            })),
+          ),
+        })
+      })
+      await page.setViewportSize({ width, height })
+      await page.goto(`/#/classes/${CLASS_ID}/chat?session=${SESSION_ID}`)
+      await page.getByRole('button', { name: /Choose what Lyra reads/ }).click()
+      const popover = page.locator('[data-slot="popover-content"]')
+      const lastFilename = `Lecture ${String(count).padStart(3, '0')}.pdf`
+      await expect(popover.getByRole('radio', { name: lastFilename })).toBeAttached()
+      const visibleEscapes = await popover.evaluate((panel) => {
+        const bounds = panel.getBoundingClientRect()
+        return Array.from(panel.querySelectorAll('[role="radio"]')).filter((radio) => {
+          const rect = radio.getBoundingClientRect()
+          const x = rect.x + rect.width / 2
+          const y = rect.y + rect.height / 2
+          if (x < 0 || x >= window.innerWidth || y < 0 || y >= window.innerHeight) return false
+          if (x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom)
+            return false
+          const hit = document.elementFromPoint(x, y)
+          return hit === radio || radio.contains(hit)
+        }).length
+      })
+      expect(
+        visibleEscapes,
+        'file choices are painted beyond their popover onto the composer',
+      ).toBe(0)
+      const panelBox = await popover.boundingBox()
+      expect(panelBox!.y).toBeGreaterThanOrEqual(0)
+      expect(panelBox!.x).toBeGreaterThanOrEqual(0)
+      expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(width)
+      expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(height)
+      // From the autofocus search box, Tab reaches the scrolling region and then
+      // the selected radio. End reaches the last file; Space selects it.
+      await expect(popover.getByRole('textbox')).toBeFocused()
+      await page.keyboard.press('Tab')
+      await expect(popover.getByRole('region', { name: 'Available material' })).toBeFocused()
+      await page.keyboard.press('Tab')
+      await expect(popover.getByRole('radio', { name: /All material/ })).toBeFocused()
+      await page.keyboard.press('End')
+      await expect(popover.getByRole('radio', { name: lastFilename })).toBeFocused()
+      await page.keyboard.press('Space')
+      await expect(popover).toBeHidden()
+      await expect(
+        page.getByRole('button', {
+          name: `Lyra reads only ${lastFilename}. Choose what Lyra reads for this answer.`,
+        }),
+      ).toBeVisible()
+      // Reopen and reach the bottom with scrolling as well as keyboard selection.
+      await page.getByRole('button', { name: /Choose what Lyra reads/ }).click()
+      const choices = popover.getByRole('region', { name: 'Available material' })
+      await choices.evaluate((region) => {
+        region.scrollTop = region.scrollHeight
+      })
+      await expect(popover.getByRole('radio', { name: lastFilename })).toBeInViewport()
+      await popover.getByRole('radio', { name: lastFilename }).click()
+    })
+  }
+}
+
+test('temporary sidebar reveals the chosen destination immediately', async ({ page }) => {
+  await installClassMocks(page)
+  await page.setViewportSize({ width: 768, height: 700 })
+  await page.goto(`/#/classes/${CLASS_ID}`)
+  await page.getByRole('button', { name: 'Show sidebar', exact: true }).click()
+  const drawer = page.getByRole('dialog', { name: 'Sidebar', exact: true })
+  await expect(drawer).toBeVisible()
+  await drawer.getByRole('link', { name: 'Settings', exact: true }).click()
+  await expect(drawer).toBeHidden()
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Show sidebar', exact: true }).click()
+  await drawer.getByRole('link', { name: 'ECE 203, Continuous-Time Signals', exact: true }).click()
+  await expect(drawer).toBeHidden()
+  await expect(
+    page.getByRole('heading', { name: 'Continuous-Time Signals', exact: true }),
+  ).toBeVisible()
+})
+
 for (const { width, height } of INTERACTION_MATRIX) {
   test(`${width}x${height}: the narrow window stays usable when operated`, async ({ page }) => {
     const pageErrors: string[] = []
@@ -561,29 +672,29 @@ for (const { width, height } of INTERACTION_MATRIX) {
     await expect(main.getByRole('link', { name: /Convolution and LTI systems/ })).toBeVisible()
 
     // Each filter updates the actual hash route and swaps in its own list.
-    await main.getByRole('tab', { name: 'Solutions', exact: true }).click()
+    await main.getByRole('button', { name: 'Solutions', exact: true }).click()
     await expect.poll(hash).toBe(`#/classes/${CLASS_ID}?tab=work&work=solutions`)
     await expect(main.getByRole('link', { name: /Homework 2/ })).toBeVisible()
     await expect(main.getByRole('link', { name: /Convolution and LTI systems/ })).toBeHidden()
 
-    await main.getByRole('tab', { name: 'Drafts', exact: true }).click()
+    await main.getByRole('button', { name: 'Drafts', exact: true }).click()
     await expect.poll(hash).toBe(`#/classes/${CLASS_ID}?tab=work&work=drafts`)
     await expect(main.getByRole('link', { name: /First draft of the essay/ })).toBeVisible()
     await expect(main.getByRole('link', { name: /Homework 2/ })).toBeHidden()
 
     // A filtered URL is a real location: reloading it lands on the filtered view.
-    await main.getByRole('tab', { name: 'Chats', exact: true }).click()
+    await main.getByRole('button', { name: 'Chats', exact: true }).click()
     await expect.poll(hash).toBe(`#/classes/${CLASS_ID}?tab=work&work=chats`)
     await page.reload()
     await page.waitForLoadState('networkidle')
-    await expect(main.getByRole('tab', { name: 'Chats', exact: true })).toHaveAttribute(
-      'aria-selected',
+    await expect(main.getByRole('button', { name: 'Chats', exact: true })).toHaveAttribute(
+      'aria-pressed',
       'true',
     )
     await expect(main.getByRole('link', { name: /Convolution and LTI systems/ })).toBeVisible()
 
     // "All" drops the param from the route and restores the combined list.
-    await main.getByRole('tab', { name: 'All', exact: true }).click()
+    await main.getByRole('button', { name: 'All', exact: true }).click()
     await expect.poll(hash).toBe(`#/classes/${CLASS_ID}?tab=work`)
     await expect(main.getByRole('link', { name: /Laplace transforms deck/ })).toBeVisible()
 

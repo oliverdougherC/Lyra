@@ -7,12 +7,10 @@
  */
 
 import { execSync } from 'node:child_process'
-import { readdir, readFile, rm, unlink } from 'node:fs/promises'
-import { resolve, join } from 'node:path'
+import { readFile, rm, unlink } from 'node:fs/promises'
 
 import { TutorFixture } from './tutor-fixture'
-
-const PROJECT_ROOT = resolve(__dirname, '..', '..', '..')
+import { captureOwnedFixtures, survivingOwnedFixtures } from './process-ownership'
 
 const SIGTERM_WAIT_MS = 5_000
 const SIGKILL_WAIT_MS = 3_000
@@ -21,6 +19,8 @@ export default async function globalTeardown() {
   console.log('\n  Tearing down acceptance stack...')
 
   const failures: string[] = []
+  const ownedPgids: number[] = []
+  const ownedFixtures = new Map<number, string>()
 
   const mem = (globalThis as Record<string, unknown>).__acceptanceState as
     | {
@@ -75,6 +75,14 @@ export default async function globalTeardown() {
     // replacement. Preferring the stale object here is exactly how the replacement
     // backend previously escaped ownership and had to be swept as an orphan.
     const persisted = await readPersistedState(mem.stateFile)
+    ownedPgids.push(
+      ...(persisted
+        ? verifiedStateRoots(persisted)
+        : [mem.backend, mem.frontend]
+            .filter((child) => child?.pid && child.exitCode === null && child.signalCode === null)
+            .map((child) => child.pid!)),
+    )
+    for (const [pid, token] of captureOwnedFixtures(ownedPgids)) ownedFixtures.set(pid, token)
 
     if (persisted && mem.frontend?.pid && persisted.frontendPid !== mem.frontend.pid) {
       console.log(
@@ -98,10 +106,6 @@ export default async function globalTeardown() {
     // of the owned process groups (detached leaders, so pgid == recorded pid) may remain.
     await verifyPortStopped(backendPort, 'backend', failures)
     await verifyPortStopped(frontendPort, 'frontend', failures)
-    const ownedPgids = [
-      persisted?.backendPid ?? mem.backend?.pid,
-      persisted?.frontendPid ?? mem.frontend?.pid,
-    ].filter((p): p is number => typeof p === 'number')
     verifyNoGroupMembers(ownedPgids, failures)
 
     try {
@@ -118,16 +122,15 @@ export default async function globalTeardown() {
     }
   } else {
     // Fall back to scanning for state files from this or prior runs.
-    await cleanupFromStateFiles()
+    await cleanupFromStateFiles(ownedFixtures)
   }
 
-  // Final sweep: the process-group kills above should have reclaimed everything, but the
+  // Final sweep is restricted to this run: another acceptance checkout may be active.
+  // The process-group kills above should have reclaimed everything, but the
   // zero-orphan gate requires proof, not trust. Any acceptance fixture still alive after
   // teardown (a uvicorn that outlived its group signal, a fake-helper whose parent died)
-  // is killed here and the run is FAILED. The matchers are unique to acceptance fixtures --
-  // production Lyra runs `backend.main:app`, never `acceptance.backend_harness:app` or
-  // `fake-helper.py` -- so a user's real server can never be touched.
-  const orphanCount = await sweepOrphanedFixtures()
+  // is killed here only when its captured birth token still proves this run owns it.
+  const orphanCount = await sweepOrphanedFixtures(ownedFixtures)
   if (orphanCount > 0) {
     failures.push(`${orphanCount} orphaned fixture process(es) required cleanup`)
   }
@@ -147,24 +150,8 @@ export default async function globalTeardown() {
 /*  Orphan fixture sweep                                               */
 /* ------------------------------------------------------------------ */
 
-// Command-line signatures that identify an acceptance fixture process and nothing else.
-const ORPHAN_PATTERNS = ['acceptance.backend_harness:app', 'e2e/acceptance/fake-helper.py']
-
-async function sweepOrphanedFixtures(): Promise<number> {
-  let listing: string
-  try {
-    listing = execSync('ps -axww -o pid=,command=', { encoding: 'utf-8', timeout: 5000 })
-  } catch {
-    return 0
-  }
-
-  const orphans: number[] = []
-  for (const line of listing.split('\n')) {
-    if (!ORPHAN_PATTERNS.some((p) => line.includes(p))) continue
-    const pidField = line.trim().split(/\s+/)[0]
-    if (!pidField || Number(pidField) === process.pid) continue
-    orphans.push(Number(pidField))
-  }
+async function sweepOrphanedFixtures(owned: Map<number, string>): Promise<number> {
+  const orphans = survivingOwnedFixtures(owned).filter((pid) => pid !== process.pid)
 
   if (orphans.length === 0) return 0
 
@@ -183,7 +170,7 @@ async function sweepOrphanedFixtures(): Promise<number> {
     await sleep(200)
   }
   for (const pid of orphans) {
-    if (!isProcessAlive(pid)) continue
+    if (!survivingOwnedFixtures(new Map([[pid, owned.get(pid) ?? '']])).includes(pid)) continue
     try {
       process.kill(pid, 'SIGKILL')
     } catch {
@@ -215,6 +202,13 @@ interface PersistedState {
   frontendPid: number
   backendStartToken: string | null
   frontendStartToken: string | null
+}
+
+function verifiedStateRoots(state: PersistedState): number[] {
+  const identities = new Map<number, string>()
+  if (state.backendStartToken) identities.set(state.backendPid, state.backendStartToken)
+  if (state.frontendStartToken) identities.set(state.frontendPid, state.frontendStartToken)
+  return survivingOwnedFixtures(identities)
 }
 
 async function readPersistedState(path: string): Promise<PersistedState | null> {
@@ -285,41 +279,21 @@ function verifyNoGroupMembers(pgids: number[], failures: string[]): void {
 /*  State file fallback                                                */
 /* ------------------------------------------------------------------ */
 
-async function cleanupFromStateFiles() {
-  try {
-    const entries = await readdir(PROJECT_ROOT)
-    const stateFiles = entries.filter(
-      (e) => e.startsWith('.acceptance-state-') && e.endsWith('.json'),
-    )
-
-    if (stateFiles.length === 0) {
-      console.log('  No state files found; nothing to clean up')
-      return
-    }
-
-    for (const file of stateFiles) {
-      const filePath = join(PROJECT_ROOT, file)
-      try {
-        const raw = await readFile(filePath, 'utf-8')
-        const state = JSON.parse(raw) as {
-          dataDir: string
-          backendPid: number
-          frontendPid: number
-          backendStartToken: string | null
-          frontendStartToken: string | null
-        }
-
-        await verifyAndKill(state.frontendPid, state.frontendStartToken, 'frontend')
-        await verifyAndKill(state.backendPid, state.backendStartToken, 'backend')
-        await cleanDataDir(state.dataDir)
-        await unlink(filePath)
-      } catch (err) {
-        console.warn(`  Could not process state file ${file}:`, err)
-      }
-    }
-  } catch (err) {
-    console.warn('  Could not scan for state files; manual cleanup may be needed:', err)
+async function cleanupFromStateFiles(owned: Map<number, string>) {
+  const filePath = process.env.ACCEPTANCE_STATE_FILE
+  if (!filePath) {
+    console.log('  No current-run state file; leaving other acceptance runs alone')
+    return
   }
+  const state = await readPersistedState(filePath)
+  if (!state) return
+  for (const [pid, token] of captureOwnedFixtures(verifiedStateRoots(state))) {
+    owned.set(pid, token)
+  }
+  await verifyAndKill(state.frontendPid, state.frontendStartToken, 'frontend')
+  await verifyAndKill(state.backendPid, state.backendStartToken, 'backend')
+  await cleanDataDir(state.dataDir)
+  await unlink(filePath)
 }
 
 /* ------------------------------------------------------------------ */

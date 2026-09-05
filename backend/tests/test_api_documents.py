@@ -410,3 +410,74 @@ def test_a_document_read_as_one_flat_blob_says_so_rather_than_returning_nothing(
 
 def test_the_outline_of_an_unknown_document_is_a_404(client: TestClient) -> None:
     assert client.get("/api/documents/9999/outline").status_code == 404
+
+
+def test_original_recovery_returns_actual_file(client, db, class_id):
+    document_id = _document(db, class_id)
+    response = client.get(f"/api/documents/{document_id}/original")
+    assert response.status_code == 200
+    assert response.content == b"pdf!"
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert "attachment" in response.headers["content-disposition"]
+    assert "stored_path" not in response.headers
+
+
+@pytest.mark.parametrize("unavailable", ["missing", "symlink", "outside", "directory"])
+def test_original_recovery_refuses_unavailable_or_unsafe_file(
+    client, db, class_id, tmp_path, unavailable
+):
+    document_id = _document(db, class_id)
+    path = Path(
+        db.execute("select stored_path from documents where id = ?", (document_id,)).fetchone()[0]
+    )
+    path.unlink()
+    outside = tmp_path / "private.txt"
+    outside.write_bytes(b"must not escape")
+    if unavailable == "symlink":
+        path.symlink_to(outside)
+    elif unavailable == "outside":
+        db.execute("update documents set stored_path = ? where id = ?", (str(outside), document_id))
+        db.commit()
+    elif unavailable == "directory":
+        path.mkdir()
+    response = client.get(f"/api/documents/{document_id}/original")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "The original document is missing or inaccessible."
+    assert str(tmp_path) not in response.text
+
+
+def test_original_recovery_retains_packaged_session_host_and_cors_guards(db, class_id, monkeypatch):
+    from backend.desktop_bootstrap import SESSION_HEADER
+    from backend.main import create_app
+
+    document_id = _document(db, class_id)
+    monkeypatch.setattr(settings, "packaged_mode", True)
+    app = create_app(session_secret="a" * 64)
+    app.dependency_overrides[get_db] = _request_db
+    client = TestClient(app)
+    url = f"/api/documents/{document_id}/original"
+    host = {"host": "127.0.0.1:8000"}
+    assert client.get(url, headers=host).status_code == 403
+    assert client.get(url + "?session=" + "a" * 64, headers=host).status_code == 403
+    assert client.get(url, headers={**host, SESSION_HEADER: "wrong"}).status_code == 403
+    authenticated = {**host, SESSION_HEADER: "a" * 64}
+    accepted = client.get(url, headers={**authenticated, "origin": "tauri://localhost"})
+    assert accepted.status_code == 200
+    assert accepted.content == b"pdf!"
+    assert accepted.headers["access-control-allow-origin"] == "tauri://localhost"
+    hostile_origin = client.get(url, headers={**authenticated, "origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in hostile_origin.headers
+    assert client.get(url, headers={**authenticated, "host": "evil.example"}).status_code == 400
+
+
+def test_original_recovery_refuses_symlinked_parent(client, db, class_id, tmp_path):
+    document_id = _document(db, class_id)
+    path = Path(
+        db.execute("select stored_path from documents where id = ?", (document_id,)).fetchone()[0]
+    )
+    moved = tmp_path / "outside-directory"
+    path.parent.rename(moved)
+    path.parent.symlink_to(moved, target_is_directory=True)
+    response = client.get(f"/api/documents/{document_id}/original")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "The original document is missing or inaccessible."

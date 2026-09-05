@@ -24,14 +24,26 @@ import type { DraftBrief } from '@/types'
  * a settled fact's amount of room.
  */
 export function BriefCard({ draftId }: { draftId: number }) {
-  const { data: brief, isPending } = useBrief(draftId)
+  const { data: brief, isPending, isError, refetch } = useBrief(draftId)
   const [editing, setEditing] = useState(false)
+  const errorNotice = isError ? (
+    <div className="mb-4 space-y-2" role="alert">
+      <p className="text-danger-text text-sm">
+        The brief could not be refreshed.{' '}
+        {brief ? 'Showing the saved brief.' : 'Try again to load it.'}
+      </p>
+      <Button variant="outline" size="sm" onClick={() => void refetch()}>
+        Retry brief
+      </Button>
+    </div>
+  ) : null
 
   if (isPending) return <Skeleton className="mb-4 h-10 w-full" />
   if (editing || (brief === null && editing)) {
     return <BriefForm draftId={draftId} brief={brief ?? null} onDone={() => setEditing(false)} />
   }
   if (!brief) {
+    if (isError) return errorNotice
     return (
       <div className="border-border/70 text-text-tertiary mb-4 flex items-center gap-2 rounded-md border border-dashed px-3 py-2 text-xs">
         <span className="min-w-0 flex-1">
@@ -48,7 +60,12 @@ export function BriefCard({ draftId }: { draftId: number }) {
       </div>
     )
   }
-  return <BriefSummary brief={brief} draftId={draftId} onEdit={() => setEditing(true)} />
+  return (
+    <>
+      {errorNotice}
+      <BriefSummary brief={brief} draftId={draftId} onEdit={() => setEditing(true)} />
+    </>
+  )
 }
 
 function BriefSummary({

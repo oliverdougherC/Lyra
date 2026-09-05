@@ -4,13 +4,17 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { SourcePane, type ProblemRegion } from '@/components/solutions/source-pane'
+import { api, ApiError } from '@/lib/api'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { DocumentRead, SolutionSource } from '@/types'
 
-const { immediateAssetUrl, loadProtectedAssetSource } = vi.hoisted(() => ({
-  immediateAssetUrl: vi.fn<(path: string) => string | null>(),
-  loadProtectedAssetSource: vi.fn(),
-}))
+const { immediateAssetUrl, loadProtectedAssetSource, fetchProtectedAsset, saveOriginalDocument } =
+  vi.hoisted(() => ({
+    immediateAssetUrl: vi.fn<(path: string) => string | null>(),
+    loadProtectedAssetSource: vi.fn(),
+    fetchProtectedAsset: vi.fn(),
+    saveOriginalDocument: vi.fn(),
+  }))
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api')
@@ -18,8 +22,14 @@ vi.mock('@/lib/api', async () => {
     ...actual,
     immediateAssetUrl,
     loadProtectedAssetSource,
+    fetchProtectedAsset,
   }
 })
+
+vi.mock('@/lib/runtime', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/runtime')>('@/lib/runtime')),
+  saveOriginalDocument,
+}))
 
 /**
  * Contract from docs/ui-phase-2.md: scrolling away from the anchored page does not change
@@ -254,5 +264,154 @@ describe('SourcePane', () => {
 
     expect(firstRelease).toHaveBeenCalledTimes(1)
     expect(secondRelease).not.toHaveBeenCalled()
+  })
+})
+
+describe('source reading recovery', () => {
+  it('retries the failed page without changing the selected page', async () => {
+    immediateAssetUrl.mockReturnValue(null)
+    loadProtectedAssetSource
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce({ url: 'blob:retried' })
+    renderPane({ documentId: 7, pageNumber: 2 })
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry page' }))
+    await decodePages()
+    expect(screen.getByAltText('Page 2')).toBeInTheDocument()
+    expect(screen.getByText('page 2 of 3')).toBeInTheDocument()
+    expect(loadProtectedAssetSource).toHaveBeenCalledTimes(2)
+  })
+
+  it('offers document text even when the page cannot render', async () => {
+    immediateAssetUrl.mockReturnValue(null)
+    loadProtectedAssetSource.mockRejectedValue(new Error('render failed'))
+    vi.spyOn(api, 'getDocumentText').mockResolvedValue({
+      filename: DOCUMENT.filename,
+      text: 'Readable source equation',
+      truncated: false,
+    })
+    renderPane({ documentId: 7, pageNumber: 2 })
+    await userEvent.click(await screen.findByRole('button', { name: 'Read extracted text' }))
+    expect(await screen.findByText('Readable source equation')).toBeVisible()
+    expect(screen.getByText(/Extracted document text/)).toBeVisible()
+    await userEvent.click(screen.getByRole('button', { name: 'View page' }))
+    expect(screen.getByText('page 2 of 3')).toBeVisible()
+  })
+
+  it('zooms the source independently and resets without changing the page', async () => {
+    renderPane({ documentId: 7, pageNumber: 2 })
+    await decodePages()
+    await userEvent.click(screen.getByRole('button', { name: 'Zoom in source page' }))
+    expect(screen.getByText('125%')).toBeVisible()
+    expect(screen.getByAltText('Page 2').parentElement?.parentElement).toHaveStyle({
+      width: '125%',
+    })
+    await userEvent.click(screen.getByRole('button', { name: 'Reset zoom' }))
+    expect(screen.getByText('100%')).toBeVisible()
+    expect(screen.getByAltText('Page 2')).toBeVisible()
+  })
+})
+
+describe('original document recovery', () => {
+  async function doubleFailure(empty = false) {
+    immediateAssetUrl.mockReturnValue(null)
+    loadProtectedAssetSource.mockRejectedValue(new Error('render failed'))
+    const text = vi.spyOn(api, 'getDocumentText')
+    if (empty) text.mockResolvedValue({ filename: DOCUMENT.filename, text: '', truncated: false })
+    else text.mockRejectedValue(new Error('text failed'))
+    const onSelectProblem = vi.fn()
+    renderPane(
+      { documentId: 7, pageNumber: 2 },
+      { regions: REGIONS, activeProblemId: 3, onSelectProblem },
+    )
+    await userEvent.click(await screen.findByRole('button', { name: 'Read extracted text' }))
+    return onSelectProblem
+  }
+
+  it.each([false, true])(
+    'saves the original after page and text failure (empty text: %s), retaining context',
+    async (empty) => {
+      const blob = new Blob(['original PDF bytes'])
+      fetchProtectedAsset.mockResolvedValue(blob)
+      saveOriginalDocument.mockResolvedValue('saved')
+      const onSelectProblem = await doubleFailure(empty)
+      await userEvent.click(await screen.findByRole('button', { name: 'Save original document' }))
+      expect(await screen.findByRole('status')).toHaveTextContent('Original document saved.')
+      expect(fetchProtectedAsset).toHaveBeenLastCalledWith(
+        '/api/documents/7/original',
+        expect.any(AbortSignal),
+      )
+      expect(saveOriginalDocument).toHaveBeenLastCalledWith(blob, DOCUMENT.filename)
+      expect(screen.getByTitle(DOCUMENT.filename)).toBeVisible()
+      expect(onSelectProblem).not.toHaveBeenCalled()
+      await userEvent.click(screen.getByRole('button', { name: 'View page' }))
+      expect(screen.getByText('page 2 of 3')).toBeVisible()
+    },
+  )
+
+  it('reports an unavailable original honestly without losing the selected page', async () => {
+    fetchProtectedAsset.mockRejectedValue(new ApiError(404, 'missing'))
+    saveOriginalDocument.mockClear()
+    await doubleFailure()
+    await userEvent.click(await screen.findByRole('button', { name: 'Save original document' }))
+    expect(
+      await screen.findByText('The original document is missing or inaccessible.'),
+    ).toBeVisible()
+    expect(saveOriginalDocument).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'View page' }))
+    expect(screen.getByText('page 2 of 3')).toBeVisible()
+  })
+
+  it('aborts a delayed original fetch when the reader leaves text recovery', async () => {
+    let resolve: (blob: Blob) => void = () => undefined
+    fetchProtectedAsset.mockImplementation(
+      () =>
+        new Promise<Blob>((done) => {
+          resolve = done
+        }),
+    )
+    saveOriginalDocument.mockClear()
+    await doubleFailure()
+    await userEvent.click(await screen.findByRole('button', { name: 'Save original document' }))
+    const signal = fetchProtectedAsset.mock.lastCall?.[1] as AbortSignal
+    await userEvent.click(screen.getByRole('button', { name: 'View page' }))
+    expect(signal.aborted).toBe(true)
+    await act(async () => resolve(new Blob(['late original'])))
+    expect(saveOriginalDocument).not.toHaveBeenCalled()
+    expect(screen.getByText('page 2 of 3')).toBeVisible()
+  })
+
+  it.each([
+    'That destination already exists. Choose another filename to save the original document.',
+    'The original document was saved, but final cleanup or durability could not be confirmed. Check the saved file before retrying.',
+  ])('preserves the native publication outcome: %s', async (message) => {
+    fetchProtectedAsset.mockResolvedValue(new Blob(['original']))
+    // Tauri rejects Result::Err(String) with a string, not an Error object.
+    saveOriginalDocument.mockRejectedValue(message)
+    await doubleFailure()
+    await userEvent.click(await screen.findByRole('button', { name: 'Save original document' }))
+    expect(await screen.findByText(message, { exact: true })).toHaveAttribute('role', 'alert')
+    expect(screen.getByRole('button', { name: 'Save original document' })).toBeEnabled()
+  })
+
+  it('does not expose arbitrary native error details', async () => {
+    fetchProtectedAsset.mockResolvedValue(new Blob(['original']))
+    saveOriginalDocument.mockRejectedValue('cannot open /private/user/destination.pdf')
+    await doubleFailure()
+    await userEvent.click(await screen.findByRole('button', { name: 'Save original document' }))
+    expect(
+      await screen.findByText(
+        'The original document could not be saved. Try again or choose another destination.',
+        { exact: true },
+      ),
+    ).toHaveAttribute('role', 'alert')
+    expect(screen.queryByText(/private\/user/)).not.toBeInTheDocument()
+  })
+
+  it('does not claim success when the native save is cancelled', async () => {
+    fetchProtectedAsset.mockResolvedValue(new Blob(['original']))
+    saveOriginalDocument.mockResolvedValue('cancelled')
+    await doubleFailure()
+    await userEvent.click(await screen.findByRole('button', { name: 'Save original document' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('Save cancelled.')
   })
 })

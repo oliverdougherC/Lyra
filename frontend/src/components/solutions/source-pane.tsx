@@ -1,13 +1,20 @@
 'use client'
 
-import { ChevronLeft, ChevronRight, FileText } from 'lucide-react'
+import { ChevronLeft, ChevronRight, FileText, ZoomIn, ZoomOut } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { Button } from '@/components/ui/button'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, documentPagePath, immediateAssetUrl, loadProtectedAssetSource } from '@/lib/api'
+import {
+  api,
+  documentPagePath,
+  immediateAssetUrl,
+  loadProtectedAssetSource,
+  fetchProtectedAsset,
+  ApiError,
+} from '@/lib/api'
+import { saveOriginalDocument } from '@/lib/runtime'
 import { truncateMiddle } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import type { DocumentRead, SolutionSource } from '@/types'
@@ -90,6 +97,8 @@ export function SourcePane({
   // The shape of the page on screen, learned when it decoded. Held here rather than inside
   // the image, because the width this column asks for is computed from it.
   const [pageAspect, setPageAspect] = useState<number | null>(null)
+  const [zoom, setZoom] = useState(1)
+  const [textView, setTextView] = useState(false)
   const problemSets = sources.filter((source) => source.role === 'problem_set')
   // Where the reader has navigated to by hand, which outranks the anchor until the
   // selected problem changes.
@@ -232,15 +241,62 @@ export function SourcePane({
         </span>
       </header>
 
+      {isPdf ? (
+        <div className="border-border flex shrink-0 flex-wrap items-center gap-1 border-b px-3 py-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-pressed={textView}
+            onClick={() => setTextView((value) => !value)}
+          >
+            {textView ? 'View page' : 'Read text'}
+          </Button>
+          {!textView ? (
+            <>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-8"
+                aria-label="Zoom out source page"
+                disabled={zoom <= 1}
+                onClick={() => setZoom((value) => Math.max(1, value - 0.25))}
+              >
+                <ZoomOut className="size-4" />
+              </Button>
+              <span aria-live="polite" className="text-text-secondary text-xs tabular-nums">
+                {Math.round(zoom * 100)}%
+              </span>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-8"
+                aria-label="Zoom in source page"
+                disabled={zoom >= 3}
+                onClick={() => setZoom((value) => Math.min(3, value + 0.25))}
+              >
+                <ZoomIn className="size-4" />
+              </Button>
+              {zoom !== 1 ? (
+                <Button size="sm" variant="ghost" onClick={() => setZoom(1)}>
+                  Reset zoom
+                </Button>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* The desk under the sheet: a slightly sunken tone, so the rendered page reads as
           a physical page lying on the workspace rather than a white rectangle in a form. */}
-      <ScrollArea
-        viewportRef={viewportRef}
-        scrollbar={false}
-        className="bg-muted/40 min-h-0 flex-1"
+      <div
+        ref={viewportRef}
+        role="region"
+        aria-label="Source content"
+        tabIndex={0}
+        className="bg-muted/40 min-h-0 flex-1 overflow-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <div className="p-5">
-          {isPdf ? (
+          {isPdf && !textView ? (
             // Keyed by document alone. Keying by page too remounted the element on every
             // turn, which is what made a page change blink.
             <PageImage
@@ -252,14 +308,22 @@ export function SourcePane({
               onSelect={onSelectProblem}
               onDecoded={setPageAspect}
               availableHeight={available}
+              availableWidth={paneSize ? Math.max(0, paneSize.width - PAGE_GUTTER_PX * 2) : null}
+              zoom={zoom}
+              onReadText={() => setTextView(true)}
             />
           ) : (
-            <SourceText documentId={documentId} />
+            <SourceText
+              key={documentId}
+              documentId={documentId}
+              isPdf={isPdf}
+              filename={filename ?? 'document'}
+            />
           )}
         </div>
-      </ScrollArea>
+      </div>
 
-      {isPdf && pages > 1 ? (
+      {isPdf && !textView && pages > 1 ? (
         <footer className="border-border flex items-center justify-center gap-3 border-t px-4 py-2">
           <Button
             variant="ghost"
@@ -308,6 +372,9 @@ function PageImage({
   onSelect,
   onDecoded,
   availableHeight = null,
+  availableWidth = null,
+  zoom = 1,
+  onReadText,
 }: {
   documentId: number
   page: number
@@ -318,8 +385,12 @@ function PageImage({
   onDecoded?: (aspect: number) => void
   /** The height the page has to stand in, inside the gutter. Null before it is measured. */
   availableHeight?: number | null
+  availableWidth?: number | null
+  zoom?: number
+  onReadText: () => void
 }) {
   const src = documentPagePath(documentId, page)
+  const [attempt, setAttempt] = useState(0)
   const [shown, setShown] = useState<{
     src: string
     page: number
@@ -346,6 +417,7 @@ function PageImage({
         current?.revoke?.()
         return { src: image.src, page, aspect, revoke: releaseShown }
       })
+      setFailedSrc(null)
       adopted = true
       if (aspect > 0) onDecoded?.(aspect)
     }
@@ -390,7 +462,7 @@ function PageImage({
       image.onerror = null
       if (!adopted) releaseShown?.()
     }
-  }, [src, page, onDecoded])
+  }, [src, page, onDecoded, attempt])
 
   useEffect(
     () => () => {
@@ -401,9 +473,24 @@ function PageImage({
 
   if (failed) {
     return (
-      <p className="text-text-tertiary py-8 text-center text-sm">
-        That page could not be rendered.
-      </p>
+      <div role="alert" className="text-text-tertiary space-y-3 py-8 text-center text-sm">
+        <p>That page could not be rendered.</p>
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setFailedSrc(null)
+              setAttempt((value) => value + 1)
+            }}
+          >
+            Retry page
+          </Button>
+          <Button variant="outline" size="sm" onClick={onReadText}>
+            Read extracted text
+          </Button>
+        </div>
+      </div>
     )
   }
 
@@ -424,10 +511,11 @@ function PageImage({
         shown.aspect > 0
           ? {
               aspectRatio: String(shown.aspect),
-              maxWidth:
-                availableHeight && availableHeight > 0
-                  ? `${availableHeight * shown.aspect}px`
-                  : undefined,
+              width:
+                availableWidth && availableWidth > 0
+                  ? `${Math.min(availableWidth, availableHeight && availableHeight > 0 ? availableHeight * shown.aspect : availableWidth) * zoom}px`
+                  : `${zoom * 100}%`,
+              maxWidth: 'none',
             }
           : undefined
       }
@@ -466,7 +554,74 @@ function PageImage({
   )
 }
 
-function SourceText({ documentId }: { documentId: number }) {
+// Only these path-free native outcomes may replace the generic save error.
+// Keep in sync with OriginalCopyError::user_message in the desktop command.
+const originalSaveOutcomes = new Set([
+  'That destination already exists. Choose another filename to save the original document.',
+  'The original document was saved, but final cleanup or durability could not be confirmed. Check the saved file before retrying.',
+])
+
+function OriginalRecovery({ documentId, filename }: { documentId: number; filename: string }) {
+  const controllerRef = useRef<AbortController | null>(null)
+  useEffect(() => () => controllerRef.current?.abort(), [])
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const [failed, setFailed] = useState(false)
+  async function save() {
+    const controller = new AbortController()
+    controllerRef.current = controller
+    setSaving(true)
+    setMessage('')
+    setFailed(false)
+    try {
+      const blob = await fetchProtectedAsset(
+        `/api/documents/${documentId}/original`,
+        controller.signal,
+      )
+      if (controller.signal.aborted) return
+      const result = await saveOriginalDocument(blob, filename)
+      setMessage(
+        result === 'saved'
+          ? 'Original document saved.'
+          : result === 'downloaded'
+            ? 'Original document download started.'
+            : 'Save cancelled.',
+      )
+    } catch (error) {
+      if (controller.signal.aborted) return
+      setFailed(true)
+      const nativeMessage =
+        typeof error === 'string' ? error : error instanceof Error ? error.message : ''
+      setMessage(
+        error instanceof ApiError && error.status === 404
+          ? 'The original document is missing or inaccessible.'
+          : originalSaveOutcomes.has(nativeMessage)
+            ? nativeMessage
+            : 'The original document could not be saved. Try again or choose another destination.',
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div className="mt-3 space-y-2">
+      <Button variant="outline" size="sm" disabled={saving} onClick={() => void save()}>
+        {saving ? 'Saving original…' : 'Save original document'}
+      </Button>
+      {message ? <p role={failed ? 'alert' : 'status'}>{message}</p> : null}
+    </div>
+  )
+}
+
+function SourceText({
+  documentId,
+  isPdf,
+  filename,
+}: {
+  documentId: number
+  isPdf: boolean
+  filename: string
+}) {
   const text = useQuery({
     queryKey: ['document-text', documentId],
     queryFn: ({ signal }) => api.getDocumentText(documentId, signal),
@@ -475,15 +630,36 @@ function SourceText({ documentId }: { documentId: number }) {
   if (text.isPending) return <Skeleton className="h-64 w-full rounded-md" />
   if (text.isError) {
     return (
-      <p className="text-text-tertiary py-8 text-center text-sm">
-        That document could not be read.
-      </p>
+      <div role="alert" className="text-text-tertiary space-y-3 py-8 text-center text-sm">
+        <p>That document could not be read.</p>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={text.isFetching}
+          onClick={() => void text.refetch()}
+        >
+          {text.isFetching ? 'Retrying…' : 'Retry text'}
+        </Button>
+        <OriginalRecovery documentId={documentId} filename={filename} />
+      </div>
     )
   }
 
   return (
     <div className="text-text-secondary text-sm">
-      <pre className="font-sans break-words whitespace-pre-wrap">{text.data.text}</pre>
+      {isPdf ? (
+        <p className="text-text-tertiary mb-4 text-xs">
+          Extracted document text. Page layout and diagrams are available in the page view.
+        </p>
+      ) : null}
+      {text.data.text.trim() ? (
+        <pre className="font-sans break-words whitespace-pre-wrap">{text.data.text}</pre>
+      ) : (
+        <div>
+          <p>No extracted text is available.</p>
+          <OriginalRecovery documentId={documentId} filename={filename} />
+        </div>
+      )}
       {text.data.truncated ? (
         <p className="text-text-tertiary mt-4 text-xs">
           Only the first part of this document is shown here.

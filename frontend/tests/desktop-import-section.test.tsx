@@ -113,15 +113,15 @@ describe('DesktopImportSection', () => {
     const user = userEvent.setup()
     render(<DesktopImportSection />)
 
-    expect(screen.getByText(/Lyra schema 40/)).toBeInTheDocument()
-    expect(screen.getByText('12 entries · 1.0 KiB estimated')).toBeInTheDocument()
+    expect(screen.getByText(/Database schema 40/)).toBeInTheDocument()
+    expect(screen.getByText('1.0 KiB estimated')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain('/private/')
 
     await user.click(screen.getByRole('button', { name: 'Choose old Lyra folder' }))
     expect(pickDesktopImportDirectory).toHaveBeenCalledTimes(1)
     expect(vi.mocked(usePreviewDesktopImport)().mutateAsync).toHaveBeenCalledWith('e'.repeat(64))
 
-    await user.click(screen.getByRole('button', { name: 'Stage import' }))
+    await user.click(screen.getByRole('button', { name: 'Prepare import' }))
     expect(vi.mocked(useStartDesktopImport)().mutateAsync).toHaveBeenCalledWith(
       expect.objectContaining({ selectionToken: 'e'.repeat(64) }),
     )

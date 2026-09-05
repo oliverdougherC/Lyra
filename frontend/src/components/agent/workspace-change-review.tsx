@@ -25,6 +25,7 @@ type WorkspaceChangeReviewRailProps = {
   onRejectHunk?: (hunk: WorkspaceChangeHunk) => void
   onAcceptAll?: () => void
   onRejectAll?: () => void
+  onRefresh?: () => void
 }
 
 export function WorkspaceChangeReviewRail({
@@ -34,6 +35,7 @@ export function WorkspaceChangeReviewRail({
   onRejectHunk,
   onAcceptAll,
   onRejectAll,
+  onRefresh,
 }: WorkspaceChangeReviewRailProps) {
   const acceptedCount = change.hunks.filter((hunk) => hunk.decision === 'accepted').length
   const rejectedCount = change.hunks.filter((hunk) => hunk.decision === 'rejected').length
@@ -77,16 +79,26 @@ export function WorkspaceChangeReviewRail({
             currentContent={change.currentContent}
             proposedContent={change.proposedContent}
             busy={busy}
-            onAcceptAll={onAcceptAll}
+            onRefresh={onRefresh}
             onRejectAll={onRejectAll}
           />
         ) : (
           <>
             <div className="flex flex-wrap gap-2">
+              {onRefresh ? (
+                <Button variant="outline" size="sm" disabled={busy} onClick={onRefresh}>
+                  Recheck file
+                </Button>
+              ) : null}
               {onAcceptAll ? (
                 <Button size="sm" disabled={busy || remaining.length === 0} onClick={onAcceptAll}>
                   Accept remaining
                 </Button>
+              ) : null}
+              {onRejectAll && !onRejectHunk ? (
+                <p className="text-text-secondary w-full text-xs">
+                  Accept changes individually, or reject the whole proposal.
+                </p>
               ) : null}
               {onRejectAll ? (
                 <Button variant="outline" size="sm" disabled={busy} onClick={onRejectAll}>
@@ -117,13 +129,13 @@ function StaleReview({
   currentContent,
   proposedContent,
   busy,
-  onAcceptAll,
+  onRefresh,
   onRejectAll,
 }: {
   currentContent?: string
   proposedContent?: string
   busy?: boolean
-  onAcceptAll?: () => void
+  onRefresh?: () => void
   onRejectAll?: () => void
 }) {
   return (
@@ -132,7 +144,7 @@ function StaleReview({
         <AlertTitle>Proposal is stale</AlertTitle>
         <AlertDescription>
           The file changed after this proposal was created. Review the current file beside the
-          proposed replacement before accepting or rejecting it.
+          proposal. Reject it and ask Lyra for an updated proposal to preserve your changes.
         </AlertDescription>
       </Alert>
       <div className="grid gap-3 md:grid-cols-2">
@@ -154,9 +166,9 @@ function StaleReview({
         </section>
       </div>
       <div className="flex flex-wrap gap-2">
-        {onAcceptAll ? (
-          <Button size="sm" disabled={busy} onClick={onAcceptAll}>
-            Replace file with proposal
+        {onRefresh ? (
+          <Button size="sm" disabled={busy} onClick={onRefresh}>
+            Recheck file
           </Button>
         ) : null}
         {onRejectAll ? (
@@ -214,32 +226,41 @@ function HunkCard({
               <span className="w-3 shrink-0 text-center select-none" aria-hidden>
                 {sign === ' ' ? '' : sign}
               </span>
-              <span className="break-words whitespace-pre-wrap">{text}</span>
+              <span className="min-w-0 break-words whitespace-pre-wrap">
+                {sign === '+' || sign === '-' ? (
+                  <span className="sr-only">{sign === '+' ? 'Added:' : 'Removed:'} </span>
+                ) : null}
+                {text}
+              </span>
             </div>
           )
         })}
       </div>
       <footer className="border-border flex gap-1 border-t px-2 py-1.5">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="shrink-0"
-          aria-label={`Accept change ${hunk.index + 1}`}
-          disabled={busy || settled || !onAccept}
-          onClick={() => onAccept?.(hunk)}
-        >
-          <Check className="size-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="shrink-0"
-          aria-label={`Reject change ${hunk.index + 1}`}
-          disabled={busy || settled || !onReject}
-          onClick={() => onReject?.(hunk)}
-        >
-          <X className="size-3.5" />
-        </Button>
+        {onAccept ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0"
+            aria-label={`Accept change ${hunk.index + 1}`}
+            disabled={busy || settled || !onAccept}
+            onClick={() => onAccept?.(hunk)}
+          >
+            <Check className="size-3.5" />
+          </Button>
+        ) : null}
+        {onReject ? (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0"
+            aria-label={`Reject change ${hunk.index + 1}`}
+            disabled={busy || settled || !onReject}
+            onClick={() => onReject?.(hunk)}
+          >
+            <X className="size-3.5" />
+          </Button>
+        ) : null}
       </footer>
     </article>
   )
