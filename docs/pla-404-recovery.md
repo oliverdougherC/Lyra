@@ -34,6 +34,10 @@ this register uses the actual Linear acceptance criteria.
 - Exercise the real-stack writer with a long transcript, expanded brief and visible composer/send
   control. Preserve existing saved-body, delayed response, conflict and live-paragraph regressions.
 - Update the recovered folder test to main's accessible label and format the integrated chat guard.
+- Acceptance exposed a response/accounting race and machine-wide fixture sweeps. Wait for the
+  exact expected failure-ledger entry; bind state lookup and process reclamation to this run,
+  retain captured detached descendants and birth tokens, and preserve the zero-orphan gate.
+  No product backend behavior changes were needed for these verification failures.
 
 ## Acceptance register
 
@@ -114,7 +118,7 @@ Code/DOM coverage does not imply native input or screen-reader certification; se
 
 Recovery verification (the PR description and parent Linear record hold final packaging/hosted-CI results):
 
-- Frontend: **867 tests across 87 files passed**; formatting, ESLint and TypeScript passed.
+- Frontend: **870 tests across 88 files passed**; formatting, ESLint and TypeScript passed.
 - Backend: **2,760 passed, 1 skipped**; Ruff formatting/lint passed. Initial full run had one
   timeout in the unchanged agent concurrency test's five-second pre-loop wait. Focused 41-test,
   prefix 50-test and full-suite reruns passed. No timeout inflation or product change hid it.
@@ -122,10 +126,26 @@ Recovery verification (the PR description and parent Linear record hold final pa
 - Production build passed; existing editor chunk-size warning remains. Production dependency
   audit found no known vulnerabilities. Contrast: **27 pairs, zero failures**; active-reference
   scan and diff-whitespace checks passed.
-- Frozen backend build and authenticated ephemeral-loopback smoke passed.
+- Real-stack acceptance: **113 passed**, clean failure ledger and teardown. The initial local
+  attempt had one accounting race followed by backend SIGTERM/connection failures during
+  concurrent runs; the scoped harness changes address the identified cross-run hazard.
+- Rust desktop tests: **26 passed**; Rust formatting passed.
+- Frozen backend build and authenticated ephemeral-loopback smoke passed. The local app was
+  rebuilt, signed with the existing Apple Development identity (79 code objects verified), and
+  passed the completed signed-bundle smoke. Native Classes and Settings loaded successfully in
+  an isolated profile, its app/backend exited, and the previous Lyra review app was restored.
 - Narrow flashcard screenshot compared against retained repair: visual verdict **95/pass**;
   the long answer stays contained and all ratings clear the fixed navigation.
 
 The totals in [the retained original report](ui-ux-remediation.md) describe its historical local
 run only. Fresh real-stack, signed-app and hosted-CI results belong to this published PR's exact
 head, and must not be inferred from the old report.
+
+## Parallel integration warning
+
+A read-only merge-tree check against [study reliability PR #71](https://github.com/oliverdougherC/Lyra/pull/71)
+finds conflicts in `frontend/src/components/study/deck-session.tsx` and
+`frontend/tests/deck-session.test.tsx`. Do not choose one side wholesale: preserve this batch's
+accessible card face, correction/removal controls, session/deck counts and layout, while integrating
+the other PR's persistent retry recovery. Whichever PR merges second needs a fresh rebase and
+combined study/acceptance verification. This PR has not merged either branch.
