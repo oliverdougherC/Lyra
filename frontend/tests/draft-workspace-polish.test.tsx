@@ -14,6 +14,8 @@ const controls = vi.hoisted(() => ({
   save: vi.fn(),
   start: vi.fn(),
   state: 'ready',
+  draftError: false,
+  retryDraft: vi.fn(),
   wide: false,
   live: null as LiveDraftSuggestion | null,
   draft: {
@@ -63,7 +65,11 @@ vi.mock('@/lib/hooks/use-classes', () => ({
 }))
 vi.mock('@/lib/hooks/use-drafts', async (original) => ({
   ...(await original<object>()),
-  useDraft: () => ({ data: controls.draft }),
+  useDraft: () => ({
+    data: controls.draft,
+    isError: controls.draftError,
+    refetch: controls.retryDraft,
+  }),
   useDraftStatus: () => ({ data: { state: controls.state } }),
   usePendingEdit: () => ({ data: null }),
   useComments: () => ({ data: controls.comments }),
@@ -124,6 +130,8 @@ async function openTool(name: string) {
 beforeEach(() => {
   controls.save.mockReset().mockResolvedValue({ version: 2 })
   controls.start.mockReset().mockResolvedValue({})
+  controls.draftError = false
+  controls.retryDraft.mockReset()
   controls.state = 'ready'
   controls.live = null
   controls.wide = false
@@ -166,6 +174,13 @@ describe('writer route coordination', () => {
     const paragraph = await screen.findByRole('textbox', { name: 'Introduction draft block' })
     await userEvent.clear(paragraph)
     await userEvent.type(paragraph, 'My unsaved paragraph')
+    controls.draftError = true
+    view.refresh()
+    expect(screen.getByRole('textbox', { name: 'Introduction draft block' })).toBe(paragraph)
+    await userEvent.click(screen.getByRole('button', { name: 'Retry draft' }))
+    expect(controls.retryDraft).toHaveBeenCalledOnce()
+    controls.draftError = false
+    view.refresh()
     controls.wide = true
     view.refresh()
     expect(screen.getByRole('textbox', { name: 'Introduction draft block' })).toBe(paragraph)
@@ -193,6 +208,12 @@ describe('writer route coordination', () => {
     const thesis = screen.getByRole('textbox', { name: 'Plan thesis' })
     await userEvent.clear(thesis)
     await userEvent.type(thesis, 'Unsaved thesis')
+    controls.draftError = true
+    view.refresh()
+    expect(screen.getByRole('textbox', { name: 'Plan thesis' })).toBe(thesis)
+    expect(thesis).toHaveValue('Unsaved thesis')
+    controls.draftError = false
+    view.refresh()
     const editor = screen.getByRole('textbox', { name: 'Editor' })
     controls.wide = true
     view.refresh()

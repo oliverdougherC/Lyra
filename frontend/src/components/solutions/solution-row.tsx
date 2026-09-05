@@ -18,7 +18,7 @@ import type { SolutionRead, SolutionState } from '@/types'
 export const SOLUTION_STATE_LABELS: Record<SolutionState, string> = {
   pending: 'Queued',
   segmenting: 'Reading the problem set',
-  awaiting_review: 'Waiting for you',
+  awaiting_review: 'Review problems',
   solving: 'Solving',
   ready: 'Ready',
   failed: 'Could not finish',

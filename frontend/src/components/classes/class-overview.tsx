@@ -98,7 +98,7 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
           key: `solution-${solution.id}`,
           href,
           title: solution.title,
-          word: { tone: 'info', text: 'Waiting for your check' },
+          word: { tone: 'info', text: 'Review problems' },
           time: null,
         })
       } else if (solution.state === 'failed') {

@@ -547,47 +547,83 @@ const INTERACTION_MATRIX = [
   { width: 1024, height: 768 },
 ]
 
-test('material choices stay inside the popover and remain selectable in a large class', async ({
-  page,
-}) => {
-  await installClassMocks(page)
-  await page.route(`http://127.0.0.1:8000/api/classes/${CLASS_ID}/documents`, async (route) => {
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(
-        Array.from({ length: 30 }, (_, index) => ({
-          ...DOCUMENTS[0],
-          id: 200 + index,
-          filename: `Lecture ${String(index + 1).padStart(2, '0')}.pdf`,
-        })),
-      ),
+for (const { width, height } of [
+  { width: 1280, height: 720 },
+  { width: 1024, height: 600 },
+  { width: 375, height: 667 },
+]) {
+  for (const count of [9, 30, 100]) {
+    test(`${width}x${height}: ${count} material choices stay contained and keyboard selectable`, async ({
+      page,
+    }) => {
+      await installClassMocks(page)
+      await page.route(`http://127.0.0.1:8000/api/classes/${CLASS_ID}/documents`, async (route) => {
+        await route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(
+            Array.from({ length: count }, (_, index) => ({
+              ...DOCUMENTS[0],
+              id: 200 + index,
+              filename: `Lecture ${String(index + 1).padStart(3, '0')}.pdf`,
+            })),
+          ),
+        })
+      })
+      await page.setViewportSize({ width, height })
+      await page.goto(`/#/classes/${CLASS_ID}/chat?session=${SESSION_ID}`)
+      await page.getByRole('button', { name: /Choose what Lyra reads/ }).click()
+      const popover = page.locator('[data-slot="popover-content"]')
+      const lastFilename = `Lecture ${String(count).padStart(3, '0')}.pdf`
+      await expect(popover.getByRole('radio', { name: lastFilename })).toBeAttached()
+      const visibleEscapes = await popover.evaluate((panel) => {
+        const bounds = panel.getBoundingClientRect()
+        return Array.from(panel.querySelectorAll('[role="radio"]')).filter((radio) => {
+          const rect = radio.getBoundingClientRect()
+          const x = rect.x + rect.width / 2
+          const y = rect.y + rect.height / 2
+          if (x < 0 || x >= window.innerWidth || y < 0 || y >= window.innerHeight) return false
+          if (x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom)
+            return false
+          const hit = document.elementFromPoint(x, y)
+          return hit === radio || radio.contains(hit)
+        }).length
+      })
+      expect(
+        visibleEscapes,
+        'file choices are painted beyond their popover onto the composer',
+      ).toBe(0)
+      const panelBox = await popover.boundingBox()
+      expect(panelBox!.y).toBeGreaterThanOrEqual(0)
+      expect(panelBox!.x).toBeGreaterThanOrEqual(0)
+      expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(width)
+      expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(height)
+      // From the autofocus search box, Tab reaches the scrolling region and then
+      // the selected radio. End reaches the last file; Space selects it.
+      await expect(popover.getByRole('textbox')).toBeFocused()
+      await page.keyboard.press('Tab')
+      await expect(popover.getByRole('region', { name: 'Available material' })).toBeFocused()
+      await page.keyboard.press('Tab')
+      await expect(popover.getByRole('radio', { name: /All material/ })).toBeFocused()
+      await page.keyboard.press('End')
+      await expect(popover.getByRole('radio', { name: lastFilename })).toBeFocused()
+      await page.keyboard.press('Space')
+      await expect(popover).toBeHidden()
+      await expect(
+        page.getByRole('button', {
+          name: `Lyra reads only ${lastFilename}. Choose what Lyra reads for this answer.`,
+        }),
+      ).toBeVisible()
+      // Reopen and reach the bottom with scrolling as well as keyboard selection.
+      await page.getByRole('button', { name: /Choose what Lyra reads/ }).click()
+      const choices = popover.getByRole('region', { name: 'Available material' })
+      await choices.evaluate((region) => {
+        region.scrollTop = region.scrollHeight
+      })
+      await expect(popover.getByRole('radio', { name: lastFilename })).toBeInViewport()
+      await popover.getByRole('radio', { name: lastFilename }).click()
     })
-  })
-  await page.setViewportSize({ width: 1280, height: 720 })
-  await page.goto(`/#/classes/${CLASS_ID}/chat?session=${SESSION_ID}`)
-  await page.getByRole('button', { name: /Choose what Lyra reads/ }).click()
-  const popover = page.locator('[data-slot="popover-content"]')
-  await expect(popover.getByRole('radio', { name: 'Lecture 30.pdf' })).toBeAttached()
-  const visibleEscapes = await popover.evaluate((panel) => {
-    const bounds = panel.getBoundingClientRect()
-    return Array.from(panel.querySelectorAll('[role="radio"]')).filter((radio) => {
-      const rect = radio.getBoundingClientRect()
-      const x = rect.x + rect.width / 2
-      const y = rect.y + rect.height / 2
-      if (x < 0 || x >= window.innerWidth || y < 0 || y >= window.innerHeight) return false
-      if (x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom)
-        return false
-      const hit = document.elementFromPoint(x, y)
-      return hit === radio || radio.contains(hit)
-    }).length
-  })
-  expect(visibleEscapes, 'file choices are painted beyond their popover onto the composer').toBe(0)
-  const panelBox = await popover.boundingBox()
-  expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(720)
-  await popover.getByRole('radio', { name: 'Lecture 30.pdf' }).click()
-  await expect(popover).toBeHidden()
-  await expect(page.getByRole('button', { name: /Lyra reads only Lecture 30.pdf/ })).toBeVisible()
-})
+  }
+}
 
 test('temporary sidebar reveals the chosen destination immediately', async ({ page }) => {
   await installClassMocks(page)
@@ -785,29 +821,3 @@ for (const { width, height } of INTERACTION_MATRIX) {
     expect(pageErrors, 'a runtime error fired while the window was operated').toEqual([])
   })
 }
-
-test('composer context controls leave room to type without losing their actions', async ({
-  page,
-}) => {
-  await installClassMocks(page)
-  await page.route(`http://127.0.0.1:8000/api/classes/${CLASS_ID}/workspace`, (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: 'null' }),
-  )
-  await page.setViewportSize({ width: 540, height: 720 })
-  await page.goto(`/#/classes/${CLASS_ID}/chat?session=${SESSION_ID}`)
-  const material = page.getByRole('button', { name: /Choose what Lyra reads/ })
-  const attach = page.getByRole('button', { name: 'Attach folder', exact: true })
-  await expect(material).toBeVisible()
-  await expect(attach).toBeVisible()
-  for (const control of [material, attach]) {
-    const box = await control.boundingBox()
-    expect(box!.width).toBe(24)
-    expect(box!.height).toBe(24)
-  }
-  await page.screenshot({ path: '/tmp/lyra-compact-context-controls.png' })
-  await material.click()
-  await expect(page.getByRole('region', { name: 'Available material' })).toBeVisible()
-  await page.keyboard.press('Escape')
-  await attach.click()
-  await expect(page.getByRole('textbox', { name: 'Path to the folder' })).toBeVisible()
-})

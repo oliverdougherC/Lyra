@@ -1371,11 +1371,7 @@ export function ChatPane({
       streaming={turnActive}
       stopping={stopping}
       disabledReason={disabledReason}
-      blocked={
-        historyError ||
-        messagesPending ||
-        (sessionListNeeded && sessionsPending)
-      }
+      blocked={historyError || messagesPending || (sessionListNeeded && sessionsPending)}
       sourceControl={sourceControl}
       workspaceControl={workspaceControl}
       // Inline, the reader clicked to open this and the next thing they do is type.

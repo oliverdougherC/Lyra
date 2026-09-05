@@ -1,3 +1,5 @@
+> Historical local completion report. For publication, current verification and remaining acceptance limits, see [PLA-404 recovery](pla-404-recovery.md).
+
 # UI/UX remediation for tester onboarding
 
 The 50 findings in [PLA-404](https://linear.app/platinum-labs/issue/PLA-404/resolve-uiux-audit-findings-before-broad-tester-onboarding) are implemented in this checkout. The changes preserve the existing design system and add no dependencies. This record describes the repairs and their verification; it does not certify packaged distribution or real-model answer quality.

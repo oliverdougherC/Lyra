@@ -644,7 +644,7 @@ export default function DraftWorkspacePage() {
     )
   }
 
-  if (draft.isError) {
+  if (draft.isError && !draft.data) {
     return (
       <Alert variant="destructive">
         <AlertTitle>Could not load this draft</AlertTitle>
@@ -1085,6 +1085,25 @@ export default function DraftWorkspacePage() {
           <ImmersiveToggle immersive={immersive} onToggle={() => setImmersive(!immersive)} />
         </div>
       </header>
+
+      {draft.isError ? (
+        <div
+          role="alert"
+          className="border-border flex shrink-0 items-center gap-3 border-b px-4 py-2 text-sm print:hidden"
+        >
+          <p className="min-w-0 flex-1">
+            The draft could not be refreshed. Your current writing and unsaved edits are still here.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={draft.isFetching}
+            onClick={() => void draft.refetch()}
+          >
+            Retry draft
+          </Button>
+        </div>
+      ) : null}
 
       {generating ? (
         <div

@@ -100,7 +100,7 @@ describe('the contextual agent work surface (PLA-401)', () => {
       </>,
       { wrapper },
     )
-    fireEvent.click(await screen.findByRole('button', { name: 'Attach folder' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Attach a folder' }))
     const input = await screen.findByLabelText('Path to the folder')
     fireEvent.change(input, { target: { value: '/tmp/starter' } })
     fireEvent.click(screen.getByRole('button', { name: 'Attach' }))
