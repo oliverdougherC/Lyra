@@ -4,7 +4,9 @@ Run once after installing the backend:
 
     python scripts/fetch_models.py
 
-Every download is skipped when its target already exists, so re-running is cheap.
+Every download is skipped when its target already exists and identifies as the pin, so
+re-running is cheap - and a target that does not identify as the pin is replaced, because
+a directory name is a label, not a guarantee of what the bytes inside are.
 
 The specialist OCR weights are **not** included in that. They are 2.8 GB, they are only
 worth having for bulk transcription of long scanned documents, and text recognition works
@@ -103,13 +105,13 @@ def find_llama_server(root: Path) -> Path | None:
     return None
 
 
-def installed_build(binary: Path) -> str | None:
-    """The build number a llama.cpp binary reports, or None if it will not say.
+def reported_build(binary: Path) -> tuple[str, str] | None:
+    """The build a llama.cpp binary reports for itself as `(tag, short commit)`, or None.
 
     `llama-server --version` prints `version: 10287 (b06aa774c)` to stderr. Asking the
     binary is the only way to know what is installed: the directory it was extracted into
     is named after whatever tag was pinned when it was downloaded, and that name does not
-    change when this file's pin moves.
+    change when this file's pin moves - the name of the file is a label, not its contents.
     """
     try:
         # S603: `binary` was located under the models directory by this script.
@@ -119,8 +121,56 @@ def installed_build(binary: Path) -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     output = (result.stderr + result.stdout).decode("utf-8", "replace")
-    match = re.search(r"version:\s*(\d+)", output)
-    return f"b{match.group(1)}" if match else None
+    match = re.search(r"version:\s*(\d+)\s*\(([0-9a-fA-F]+)\)", output)
+    return (f"b{match.group(1)}", match.group(2)) if match else None
+
+
+def installed_build(binary: Path) -> str | None:
+    """The build tag a llama.cpp binary reports, or None if it will not say."""
+    reported = reported_build(binary)
+    return reported[0] if reported is not None else None
+
+
+class LlamaBuildMismatchError(RuntimeError):
+    """An extracted or installed llama-server does not identify as the pinned build.
+
+    Raised only, and always, from `verify_llama_build`. A fetch or staging run that hits
+    this has installed nothing usable: the binary must not be run, and the bundle must
+    not be shipped.
+    """
+
+
+def verify_llama_build(binary: Path) -> str:
+    """Require the binary to identify as the configured pin - tag and commit - or fail.
+
+    This is the gate a freshly downloaded release asset has to pass: the archive's name
+    is what the release URL said, not what the bytes inside are, and a wrong or
+    republished asset must not reach a checkout or a bundle. It fails closed: a binary
+    that will not answer is a mismatch, never a warning.
+
+    Args:
+        binary: The extracted (or installed) llama-server.
+
+    Returns:
+        The reported build, e.g. `b10287 (b06aa774c)`.
+
+    Raises:
+        LlamaBuildMismatchError: The binary is not the pin.
+    """
+    reported = reported_build(binary)
+    if reported is None:
+        raise LlamaBuildMismatchError(
+            f"llama-server at {binary} did not report a version, and cannot be treated as "
+            f"{LLAMA_RELEASE_TAG}."
+        )
+    tag, commit = reported
+    if tag != LLAMA_RELEASE_TAG or not LLAMA_COMMIT.startswith(commit):
+        raise LlamaBuildMismatchError(
+            f"llama-server at {binary} reports {tag} ({commit}); the pin is "
+            f"{LLAMA_RELEASE_TAG} ({LLAMA_COMMIT}). The asset does not match the "
+            "configured build and was refused."
+        )
+    return f"{tag} ({commit})"
 
 
 def fetch_llama_server(target_dir: Path | None = None) -> Path:
@@ -134,18 +184,27 @@ def fetch_llama_server(target_dir: Path | None = None) -> Path:
     `target_dir` is where the build lands: the models directory for the checkout, or the
     Tauri resource tree when the same pin is being staged into the application bundle -
     one download, one extraction, and one build verification for both.
+
+    A fresh download is only trusted once the extracted binary identifies itself as the
+    pin (tag and commit, via `verify_llama_build`). A wrong or republished release asset
+    fails the fetch rather than getting installed and run, and the same gate decides
+    whether an already-present build is skipped or replaced, so a corrupted or swapped
+    binary can neither be staged into the app nor run from a checkout.
     """
     root = settings.llama_dir if target_dir is None else target_dir
     existing = find_llama_server(root)
     if existing is not None:
-        found = installed_build(existing)
-        if found == LLAMA_RELEASE_TAG:
-            print(f"llama-server {found} already present, skipping download.")
+        try:
+            verified = verify_llama_build(existing)
+        except LlamaBuildMismatchError:
+            print(
+                f"llama-server reports {installed_build(existing) or 'an unknown build'}, "
+                f"and the pin is {LLAMA_RELEASE_TAG} ({LLAMA_COMMIT[:9]}). "
+                "Downloading the pinned build."
+            )
+        else:
+            print(f"llama-server {verified} already present, skipping download.")
             return existing
-        print(
-            f"llama-server reports {found or 'an unknown build'}, and the pin is "
-            f"{LLAMA_RELEASE_TAG}. Downloading the pinned build."
-        )
 
     asset = f"llama-{LLAMA_RELEASE_TAG}-bin-{resolve_asset_suffix()}"
     root.mkdir(parents=True, exist_ok=True)
@@ -163,6 +222,9 @@ def fetch_llama_server(target_dir: Path | None = None) -> Path:
     if binary is None:
         raise ConfigurationError(f"The archive {asset} did not contain a llama-server binary.")
     binary.chmod(binary.stat().st_mode | 0o111)
+    # The download is only trusted once the extracted binary identifies as the pin:
+    # a wrong or republished asset fails the fetch, never the first spawn.
+    verify_llama_build(binary)
     return binary
 
 
