@@ -83,6 +83,7 @@ function reviewedState(rating: string): CardStateRead {
 
 beforeEach(() => {
   vi.restoreAllMocks()
+  sessionStorage.clear()
   vi.spyOn(api, 'getDeckSession').mockResolvedValue(SESSION)
   vi.spyOn(api, 'getDeck').mockResolvedValue({ cards: SESSION.cards } as never)
   vi.spyOn(api, 'reviewCard').mockImplementation((_partId, rating) =>
@@ -395,4 +396,319 @@ it('finishes a confirmed removal when a lost delete response is followed by alre
   expect(await screen.findByText('Card 1 of 1')).toBeVisible()
   expect(screen.getByText('What does linearity require?')).toBeVisible()
   expect(api.reviewCard).not.toHaveBeenCalled()
+})
+
+describe('durable rating recovery', () => {
+  it.each([false, true])(
+    'recovers after reload when first request committed=%s',
+    async (committedBeforeLoss) => {
+      vi.spyOn(api, 'getDeckSession').mockResolvedValue({ cards: [SESSION.cards[0]] })
+      const log = new Map<string, { rating: string; state: CardStateRead }>()
+      let fail = true
+      const review = vi.spyOn(api, 'reviewCard').mockImplementation(async (_partId, rating, id) => {
+        // The operation is durable before any network request, including the first.
+        expect(JSON.parse(sessionStorage.getItem('lyra:study-session:v1:8')!).operation).toEqual({
+          id,
+          rating,
+        })
+        if (!log.has(id) && (!fail || committedBeforeLoss))
+          log.set(id, { rating, state: reviewedState(rating) })
+        if (fail) {
+          fail = false
+          throw new Error('lost response')
+        }
+        expect(log.get(id)?.rating).toBe(rating)
+        return log.get(id)!.state
+      })
+      const first = render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+      await screen.findByText('What is the Fourier transform of a delta?')
+      await userEvent.keyboard(' ')
+      await userEvent.keyboard('4')
+      await screen.findByRole('alert')
+      expect(screen.getByRole('button', { name: /Again/ })).toBeDisabled()
+      await userEvent.keyboard('1')
+      expect(review).toHaveBeenCalledTimes(1)
+      first.unmount()
+
+      // A committed card may no longer be returned in the server's due queue.
+      vi.spyOn(api, 'getDeckSession').mockResolvedValue({ cards: [] })
+      const second = render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+      await screen.findByRole('alert')
+      expect(screen.getByRole('button', { name: /Again/ })).toBeDisabled()
+      await userEvent.click(screen.getByRole('button', { name: /Easy/ }))
+      await screen.findByText('Session complete')
+      expect(screen.getByText(/1 easy/)).toHaveTextContent('0 again')
+      expect(log.size).toBe(1)
+      expect(review.mock.calls[1]).toEqual(review.mock.calls[0])
+      const acknowledged = JSON.parse(sessionStorage.getItem('lyra:study-session:v1:8')!)
+      expect(acknowledged.operation).toBeNull()
+      expect(acknowledged.states[0][1].dueAt).toBe(
+        new Date(reviewedState('easy').due_at + 'Z').toISOString(),
+      )
+      second.unmount()
+      render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+      await screen.findByText('Session complete')
+      expect(screen.getByText(/1 easy/)).toHaveTextContent('0 again')
+      expect(review).toHaveBeenCalledTimes(2)
+    },
+  )
+
+  it('does not send a review when persisting its key fails', async () => {
+    render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+    await screen.findByText('What is the Fourier transform of a delta?')
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota')
+    })
+    await userEvent.keyboard(' ')
+    await userEvent.keyboard('4')
+    await screen.findByRole('alert')
+    expect(api.reviewCard).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Retry storage access' })).toBeInTheDocument()
+  })
+})
+
+it.each(['{', '{}'])('blocks reviews if stored recovery is invalid: %s', async (value) => {
+  sessionStorage.setItem('lyra:study-session:v1:8', value)
+  render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+  await screen.findByText('Could not restore this study session')
+  await userEvent.keyboard(' 4')
+  expect(api.reviewCard).not.toHaveBeenCalled()
+})
+
+describe('recovery ownership and authoritative cards', () => {
+  const saved = () => JSON.parse(sessionStorage.getItem('lyra:study-session:v1:8')!)
+  function seed(operation: { id: string; rating: string } | null = null) {
+    sessionStorage.setItem(
+      'lyra:study-session:v1:8',
+      JSON.stringify({
+        queue: SESSION.cards,
+        total: 2,
+        ratings: { again: 0, hard: 0, good: 0, easy: 0 },
+        states: [],
+        operation,
+      }),
+    )
+  }
+  it('old A continuation cannot replace B pending after navigate back and reload', async () => {
+    let releaseA!: (state: CardStateRead) => void
+    const log = new Map<string, CardStateRead>()
+    const review = vi.spyOn(api, 'reviewCard').mockImplementation((_part, rating, id) => {
+      if (!log.has(id)) log.set(id, reviewedState(rating))
+      if (review.mock.calls.length === 1)
+        return new Promise((resolve) => {
+          releaseA = resolve
+        })
+      if (review.mock.calls.length === 3) return new Promise(() => {})
+      return Promise.resolve(log.get(id)!)
+    })
+    const first = render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+    await screen.findByText(SESSION.cards[0].card.front)
+    await userEvent.keyboard(' 3')
+    await waitFor(() => expect(review).toHaveBeenCalledTimes(1))
+    const a = saved().operation
+    first.unmount()
+    const second = render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+    await screen.findByRole('button', { name: /Good/ })
+    await userEvent.click(screen.getByRole('button', { name: /Good/ }))
+    await screen.findByText(SESSION.cards[1].card.front)
+    expect(review.mock.calls[1][2]).toBe(a.id)
+    await userEvent.keyboard(' 2')
+    await waitFor(() => expect(review).toHaveBeenCalledTimes(3))
+    const b = saved()
+    releaseA(reviewedState('good'))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(saved()).toEqual(b)
+    second.unmount()
+    render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+    await screen.findByRole('button', { name: /Hard/ })
+    await userEvent.click(screen.getByRole('button', { name: /Hard/ }))
+    await screen.findByText('Session complete')
+    expect(review.mock.calls[3][2]).toBe(b.operation.id)
+    expect(log.size).toBe(2)
+    expect(saved().ratings).toEqual({ again: 0, hard: 1, good: 1, easy: 0 })
+  })
+  it('drops a deleted restored card instead of offering it forever', async () => {
+    seed()
+    vi.spyOn(api, 'getDeck').mockResolvedValue({ cards: [SESSION.cards[1]] } as never)
+    vi.spyOn(api, 'getDeckSession').mockResolvedValue({ cards: [SESSION.cards[1]] })
+    render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+    await screen.findByText(SESSION.cards[1].card.front)
+    expect(screen.queryByText(SESSION.cards[0].card.front)).not.toBeInTheDocument()
+    expect(saved().queue.map((card: SessionCard) => card.part_id)).toEqual([12])
+    expect(saved().total).toBe(1)
+    expect(saved().ratings.good).toBe(0)
+  })
+  it('refreshes corrected card content and state outside limited session', async () => {
+    seed({ id: 'original-key', rating: 'good' })
+    vi.spyOn(api, 'getDeckSession').mockResolvedValue({ cards: [SESSION.cards[1]] })
+    vi.spyOn(api, 'getDeck').mockResolvedValue({
+      cards: [
+        {
+          ...SESSION.cards[0],
+          card: { ...SESSION.cards[0].card, back: 'Corrected answer' },
+          card_state: reviewedState('good'),
+        },
+        SESSION.cards[1],
+      ],
+    } as never)
+    render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+    await screen.findByText('Corrected answer')
+    await userEvent.click(screen.getByRole('button', { name: /Good/ }))
+    await screen.findByText(SESSION.cards[1].card.front)
+    expect(api.reviewCard).toHaveBeenCalledWith(11, 'good', 'original-key')
+    expect(saved().ratings.good).toBe(1)
+  })
+  it('preserves removed unresolved operation and continues valid cards after 404', async () => {
+    seed({ id: 'uncertain-key', rating: 'easy' })
+    vi.spyOn(api, 'reviewCard').mockRejectedValueOnce(new ApiError(404, 'Card not found'))
+    render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+    await screen.findByRole('button', { name: /Easy/ })
+    await userEvent.click(screen.getByRole('button', { name: /Easy/ }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue remaining cards' }))
+    await screen.findByText(SESSION.cards[1].card.front)
+    expect(saved().unresolved).toEqual([
+      { partId: 11, operation: { id: 'uncertain-key', rating: 'easy' } },
+    ])
+    expect(saved().ratings.easy).toBe(0)
+    await userEvent.keyboard(' 3')
+    await screen.findByText('Session complete')
+    expect(saved().ratings.good).toBe(1)
+    expect(saved().ratings.easy).toBe(0)
+  })
+  it('offers read-only study for malformed storage without touching uncertain evidence', async () => {
+    sessionStorage.setItem('lyra:study-session:v1:8', '{broken')
+    render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Study without recording reviews' }),
+    )
+    await screen.findByText(SESSION.cards[0].card.front)
+    await userEvent.keyboard(' 3')
+    expect(api.reviewCard).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Next card (not recorded)' }))
+    await screen.findByText(SESSION.cards[1].card.front)
+    expect(sessionStorage.getItem('lyra:study-session:v1:8')).toBe('{broken')
+  })
+})
+
+it.each(['edit', 'remove'])(
+  'reconciles committed %s after snapshot write failure through in-place retry',
+  async (action) => {
+    sessionStorage.setItem(
+      'lyra:study-session:v1:8',
+      JSON.stringify({
+        queue: SESSION.cards,
+        total: 2,
+        ratings: { again: 0, hard: 0, good: 0, easy: 0 },
+        states: [],
+        operation: null,
+      }),
+    )
+    render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+    await userEvent.click(await screen.findByRole('button', { name: 'Card actions' }))
+    if (action === 'edit') {
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Edit card' }))
+      await userEvent.clear(screen.getByLabelText('Question'))
+      await userEvent.type(screen.getByLabelText('Question'), 'Persisted correction')
+      vi.spyOn(api, 'updateCard').mockImplementation(async (partId, card) => {
+        vi.mocked(api.getDeck).mockResolvedValue({
+          cards: [{ ...SESSION.cards[0], card }, SESSION.cards[1]],
+        } as never)
+        return { part_id: partId, card }
+      })
+    } else {
+      await userEvent.click(screen.getByRole('menuitem', { name: 'Remove card' }))
+      vi.spyOn(api, 'deleteCard').mockImplementation(async () => {
+        vi.mocked(api.getDeck).mockResolvedValue({ cards: [SESSION.cards[1]] } as never)
+      })
+    }
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+      throw new Error('quota')
+    })
+    await userEvent.click(
+      screen.getByRole('button', { name: action === 'edit' ? 'Save card' : 'Remove card' }),
+    )
+    await userEvent.click(await screen.findByRole('button', { name: 'Retry storage access' }))
+    await screen.findByText(
+      action === 'edit' ? 'Persisted correction' : SESSION.cards[1].card.front,
+    )
+    expect(screen.queryByText(SESSION.cards[0].card.front)).not.toBeInTheDocument()
+    expect(api.reviewCard).not.toHaveBeenCalled()
+  },
+)
+
+it('requires a fresh restore if recovery changes between render and ownership claim', async () => {
+  const key = 'lyra:study-session:v1:8'
+  const initial = {
+    queue: SESSION.cards,
+    total: 2,
+    ratings: { again: 0, hard: 0, good: 0, easy: 0 },
+    states: [],
+    operation: { id: 'A', rating: 'good' },
+  }
+  const newer = JSON.stringify({
+    ...initial,
+    queue: [SESSION.cards[1]],
+    ratings: { ...initial.ratings, good: 1 },
+    operation: { id: 'B', rating: 'hard' },
+  })
+  sessionStorage.setItem(key, JSON.stringify(initial))
+  const get = Storage.prototype.getItem
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementationOnce(function (this: Storage, name) {
+    const rendered = get.call(this, name)
+    this.setItem(key, newer)
+    return rendered
+  })
+  render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+  await screen.findByRole('button', { name: 'Retry storage access' })
+  expect(sessionStorage.getItem(key)).toBe(newer)
+  expect(api.reviewCard).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('button', { name: 'Retry storage access' }))
+  await userEvent.click(await screen.findByRole('button', { name: /Hard/ }))
+  await screen.findByText('Session complete')
+  expect(api.reviewCard).toHaveBeenCalledWith(12, 'hard', 'B')
+})
+
+it('returns from read-only study by restoring the original pending operation', async () => {
+  const key = 'lyra:study-session:v1:8'
+  const raw = JSON.stringify({
+    queue: SESSION.cards,
+    total: 2,
+    ratings: { again: 0, hard: 0, good: 0, easy: 0 },
+    states: [],
+    operation: { id: 'original-uncertain', rating: 'easy' },
+  })
+  sessionStorage.setItem(key, raw)
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementationOnce(() => {
+    throw new Error('storage unavailable')
+  })
+  render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Study without recording reviews' }),
+  )
+  await screen.findByText(SESSION.cards[0].card.front)
+  await userEvent.keyboard(' 3')
+  expect(api.reviewCard).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('button', { name: 'Next card (not recorded)' }))
+  await screen.findByText(SESSION.cards[1].card.front)
+  expect(sessionStorage.getItem(key)).toBe(raw)
+  await userEvent.click(screen.getByRole('button', { name: 'Retry recording reviews' }))
+  await userEvent.click(await screen.findByRole('button', { name: /Easy/ }))
+  await screen.findByText(SESSION.cards[1].card.front)
+  expect(api.reviewCard).toHaveBeenCalledWith(11, 'easy', 'original-uncertain')
+  expect(api.reviewCard).toHaveBeenCalledTimes(1)
+})
+
+it('does not carry read-only mode into another deck', async () => {
+  sessionStorage.setItem('lyra:study-session:v1:8', '{broken')
+  const view = render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+  await userEvent.click(
+    await screen.findByRole('button', { name: 'Study without recording reviews' }),
+  )
+  await screen.findByText(SESSION.cards[0].card.front)
+  view.rerender(<DeckSession deckId={9} />)
+  await screen.findByText(SESSION.cards[0].card.front)
+  expect(screen.queryByRole('button', { name: 'Retry recording reviews' })).not.toBeInTheDocument()
+  await userEvent.keyboard(' 3')
+  await waitFor(() => expect(api.reviewCard).toHaveBeenCalledTimes(1))
+  expect(sessionStorage.getItem('lyra:study-session:v1:8')).toBe('{broken')
 })

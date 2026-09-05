@@ -27,6 +27,7 @@
 import { type ChildProcess, execSync, spawn } from 'node:child_process'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { createServer } from 'node:net'
 import { join, resolve } from 'node:path'
 
 import { TutorFixture } from './tutor-fixture'
@@ -48,6 +49,9 @@ export default async function globalSetup() {
   const BACKEND_PORT = resolvePort('ACCEPTANCE_BACKEND_PORT', 8000)
   const FRONTEND_PORT = resolvePort('ACCEPTANCE_FRONTEND_PORT', 3000)
   const TUTOR_PORT = resolvePort('ACCEPTANCE_TUTOR_PORT', 18_900)
+  const HELPER_PORT = process.env.ACCEPTANCE_HELPER_PORT
+    ? Number(process.env.ACCEPTANCE_HELPER_PORT)
+    : await unusedPort()
 
   process.env.ACCEPTANCE_STATE_FILE = STATE_FILE
 
@@ -55,12 +59,14 @@ export default async function globalSetup() {
   process.env.ACCEPTANCE_BACKEND_PORT = String(BACKEND_PORT)
   process.env.ACCEPTANCE_FRONTEND_PORT = String(FRONTEND_PORT)
   process.env.ACCEPTANCE_TUTOR_PORT = String(TUTOR_PORT)
+  process.env.ACCEPTANCE_HELPER_PORT = String(HELPER_PORT)
 
   // ── 0. Guard against port conflicts ──────────────────────────────
   for (const [label, port] of [
     ['backend', BACKEND_PORT],
     ['frontend', FRONTEND_PORT],
     ['tutor', TUTOR_PORT],
+    ['helper', HELPER_PORT],
   ] as const) {
     if (await isPortInUse(port)) {
       throw new Error(
@@ -225,6 +231,7 @@ export default async function globalSetup() {
     backendPort: BACKEND_PORT,
     frontendPort: FRONTEND_PORT,
     tutorPort: TUTOR_PORT,
+    helperPort: HELPER_PORT,
     backendStartToken,
     frontendStartToken,
     startedAt: Date.now(),
@@ -372,4 +379,19 @@ function processStartToken(pid: number): string | null {
   } catch {
     return null
   }
+}
+
+/** Allocate a run-specific helper port; a later collision fails instead of killing its owner. */
+async function unusedPort(): Promise<number> {
+  const server = createServer()
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Cannot allocate helper port')
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  )
+  return address.port
 }

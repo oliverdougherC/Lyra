@@ -145,17 +145,6 @@ _SECTION_SQL = (
     "  and (c.section_number = ? or c.section_number like ?)\n"
 )
 
-# Document-scoped retrieval: the vector search runs over the pinned document's own chunks,
-# so its own top-K comes back. This used to be a post-filter on the class-wide KNN of
-# K = 8, which made the scope decorative: in a 36-document class the eight nearest
-# neighbours were routinely all from other documents, and "chat about this document"
-# frequently returned nothing from the document at all. Brute force over one document is
-# smaller than the class-wide KNN, so scoping costs nothing.
-_DOCUMENT_KNN_SQL = (
-    _SCORED_CHUNK_SELECT + f"where c.document_id = ? and {_READY_ONLY}\n"
-    "order by distance, c.id\nlimit ?"
-)
-
 # Ordered by id, which is document order, because that is what makes one problem's parts
 # contiguous and so lets `_sibling_run` tell two problems carrying the same number apart.
 # The run is put back into part order before it is emitted.
@@ -233,6 +222,8 @@ def retrieve(
     query: str,
     budget_tokens: int,
     document_id: int | None = None,
+    *,
+    document_ids: tuple[int, ...] | None = None,
 ) -> RetrievalResult:
     """Find the chunks of one class that best answer `query` and fit the budget.
 
@@ -245,22 +236,34 @@ def retrieve(
         document_id: Restrict the result to one document. The vector search then runs
             over that document's own chunks, so the document's best answers come back
             rather than whatever slice of it survived a class-wide search.
+        document_ids: Restrict every candidate path to this selected set before ranking.
+            An empty set returns no context; with document_id, the intersection is used.
 
     Returns:
         The ranked chunks that fit, and the trim reporting for the ones that did not.
         An empty result is normal, not an error.
     """
+    if document_ids is not None:
+        document_ids = tuple(sorted(set(document_ids)))
+        if document_id is not None:
+            document_ids = tuple(value for value in document_ids if value == document_id)
+        if not document_ids:
+            return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
+    elif document_id is not None:
+        document_ids = (document_id,)
     vector = embed_query(query)
-    resolved = _resolve_sections(conn, class_id, query, vector, budget_tokens, document_id)
+    resolved = _resolve_sections(
+        conn, class_id, query, vector, budget_tokens, document_id, document_ids
+    )
 
     # The KNN always fetches wide now: under fusion the surplus is the material the fused
     # ranking is computed over, and only the fused top-`K` is served, so none of it falls
     # into the budget unranked. The old no-reranker narrow fetch existed to keep the
     # surplus out of the budget, and the fused cut keeps it out instead.
     reranking = rerank_server.available
-    lexical = _lexical_ranks(conn, class_id, query, LEXICAL_FETCH_K, document_id)
-    if document_id is not None:
-        vector_chunks = _document_candidates(conn, document_id, vector, RERANK_FETCH_K)
+    lexical = _lexical_ranks(conn, class_id, query, LEXICAL_FETCH_K, document_id, document_ids)
+    if document_ids is not None:
+        vector_chunks = _document_candidates(conn, class_id, document_ids, vector, RERANK_FETCH_K)
     else:
         distances = _knn(conn, class_id, vector, RERANK_FETCH_K)
         vector_chunks = _load_candidates(conn, distances) if distances else []
@@ -309,6 +312,7 @@ def _resolve_sections(
     vector: list[float],
     budget_tokens: int,
     document_id: int | None,
+    document_ids: tuple[int, ...] | None = None,
 ) -> list[RetrievedChunk]:
     """Chunks of any section the query names outright, in reading order.
 
@@ -348,7 +352,10 @@ def _resolve_sections(
     for number in sorted(numbers):
         sql = _SECTION_SQL
         parameters: list[object] = [serialized, class_id, number, f"{number}.%"]
-        if document_id is not None:
+        if document_ids is not None:
+            sql += " and c.document_id in (" + ",".join("?" for _ in document_ids) + ")"
+            parameters.extend(document_ids)
+        elif document_id is not None:
             sql += " and c.document_id = ?"
             parameters.append(document_id)
         # Ordered by distance so the part of a long section that answers the question
@@ -387,7 +394,11 @@ def _knn(
 
 
 def _document_candidates(
-    conn: sqlite3.Connection, document_id: int, vector: list[float], limit: int
+    conn: sqlite3.Connection,
+    class_id: int,
+    document_ids: tuple[int, ...],
+    vector: list[float],
+    limit: int,
 ) -> list[RetrievedChunk]:
     """The pinned document's own nearest chunks, scored the way `_load_candidates` scores.
 
@@ -398,9 +409,13 @@ def _document_candidates(
     """
     now = datetime.now(UTC)
     chunks: list[RetrievedChunk] = []
-    rows = conn.execute(
-        _DOCUMENT_KNN_SQL, (sqlite_vec.serialize_float32(vector), document_id, limit)
-    )
+    placeholders = ",".join("?" for _ in document_ids)
+    sql = (
+        _SCORED_CHUNK_SELECT
+        + f"where c.class_id = ? and c.document_id in ({placeholders}) and {_READY_ONLY} "
+        + "order by distance, c.id limit ?"
+    )  # noqa: S608 - placeholders and static clauses only
+    rows = conn.execute(sql, (sqlite_vec.serialize_float32(vector), class_id, *document_ids, limit))
     for row in rows:
         similarity = 1.0 - float(row["distance"])
         score = similarity + RECENCY_COEFFICIENT * _recency_factor(row["created_at"], now)
@@ -455,6 +470,7 @@ def _lexical_ranks(
     query: str,
     limit: int,
     document_id: int | None = None,
+    document_ids: tuple[int, ...] | None = None,
 ) -> list[int]:
     """Chunk ids in BM25 order: the lexical ranking that fusion merges with the KNN's.
 
@@ -466,9 +482,9 @@ def _lexical_ranks(
     terms = _fts_terms(query)
     if not terms:
         return []
-    rows = _lexical_query(conn, class_id, " ".join(terms), limit, document_id)
+    rows = _lexical_query(conn, class_id, " ".join(terms), limit, document_id, document_ids)
     if not rows and len(terms) >= 2:
-        rows = _lexical_query(conn, class_id, " OR ".join(terms), limit, document_id)
+        rows = _lexical_query(conn, class_id, " OR ".join(terms), limit, document_id, document_ids)
     return rows
 
 
@@ -478,14 +494,18 @@ def _lexical_query(
     match: str,
     limit: int,
     document_id: int | None,
+    document_ids: tuple[int, ...] | None = None,
 ) -> list[int]:
     """One FTS5 match against the class partition, best (most negative) BM25 first."""
     sql = _LEXICAL_SQL
     parameters: list[object] = [match, class_id]
-    if document_id is not None:
+    if document_ids is not None:
+        sql += " and c.document_id in (" + ",".join("?" for _ in document_ids) + ")"
+        parameters.extend(document_ids)
+    elif document_id is not None:
         sql += " and c.document_id = ?"
         parameters.append(document_id)
-    sql += " order by bm25(chunks_fts) limit ?"
+    sql += " order by bm25(chunks_fts), c.id limit ?"
     parameters.append(limit)
     return [int(row["id"]) for row in conn.execute(sql, parameters)]
 

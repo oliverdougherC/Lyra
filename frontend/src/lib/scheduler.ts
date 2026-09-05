@@ -31,8 +31,11 @@ export const DIFFICULTY_DELTAS: Record<Rating, number> = {
   easy: -0.5,
 }
 
-// Applied before scaling, so a fresh card never multiplies zero: the first success on a
-// new card schedules it a day out rather than never.
+// Keep legacy inflated states and new schedules within a useful, finite horizon.
+export const MAX_STABILITY_DAYS = 365
+export const MIN_SPACED_ELAPSED_MS = 24 * 60 * 60 * 1000
+const MAX_SCHEDULE_MS = new Date('9999-12-31T23:59:59.999Z').getTime()
+// Seed new cards and successful relearning at one day before any earned growth.
 export const STABILITY_SEED_FLOOR = 1.0
 export const STABILITY_FACTORS: Record<Exclude<Rating, 'again'>, number> = {
   hard: 1.2,
@@ -99,6 +102,14 @@ export function cardStateFromRead(read: CardStateRead): CardState {
   }
 }
 
+function bounded(value: number, low: number, high: number, fallback: number): number {
+  return Number.isFinite(value) ? Math.min(high, Math.max(low, value)) : fallback
+}
+
+function dueAfter(now: Date, intervalMs: number): Date {
+  return new Date(Math.min(MAX_SCHEDULE_MS, now.getTime() + intervalMs))
+}
+
 /**
  * Apply one rating and return the next state. The input is not mutated.
  *
@@ -108,9 +119,13 @@ export function cardStateFromRead(read: CardStateRead): CardState {
 export function reviewCard(card: CardState, rating: Rating, now: Date): CardState {
   if (!RATINGS.includes(rating)) throw new Error(`Unknown rating: ${rating}`)
 
-  const difficulty = Math.min(
+  const strength = bounded(card.stability, 0, MAX_STABILITY_DAYS, STABILITY_SEED_FLOOR)
+  const difficulty = bounded(
+    bounded(card.difficulty, MIN_DIFFICULTY, MAX_DIFFICULTY, INITIAL_DIFFICULTY) +
+      DIFFICULTY_DELTAS[rating],
+    MIN_DIFFICULTY,
     MAX_DIFFICULTY,
-    Math.max(MIN_DIFFICULTY, card.difficulty + DIFFICULTY_DELTAS[rating]),
+    INITIAL_DIFFICULTY,
   )
 
   if (rating === 'again') {
@@ -118,8 +133,8 @@ export function reviewCard(card: CardState, rating: Rating, now: Date): CardStat
     // only a card that reached review (or was already relearning) enters relearning.
     const state = card.state === REVIEW || card.state === RELEARNING ? RELEARNING : LEARNING
     return {
-      dueAt: new Date(now.getTime() + RELEARN_INTERVAL_MS),
-      stability: Math.max(card.stability * LAPSE_DECAY, LAPSE_FLOOR_DAYS),
+      dueAt: dueAfter(now, RELEARN_INTERVAL_MS),
+      stability: Math.max(strength * LAPSE_DECAY, LAPSE_FLOOR_DAYS),
       difficulty,
       reps: card.reps + 1,
       lapses: card.lapses + 1,
@@ -128,12 +143,41 @@ export function reviewCard(card: CardState, rating: Rating, now: Date): CardStat
     }
   }
 
-  const stability = Math.max(card.stability, STABILITY_SEED_FLOOR) * STABILITY_FACTORS[rating]
-  // A new card rated `easy` is one the learner already knows, so it fast-tracks to
-  // review; any other first success still wants a near-term second look.
-  const state = rating === 'easy' || card.state !== NEW ? REVIEW : LEARNING
+  // Early successes preserve the deadline and strength. Growth requires a due card
+  // and 24h since its last rating; due relearning can graduate without multiplying.
+  const fresh = card.state === NEW && card.reps === 0
+  const due = card.dueAt.getTime() <= now.getTime()
+  const spaced =
+    due &&
+    card.lastReviewAt !== null &&
+    now.getTime() - card.lastReviewAt.getTime() >= MIN_SPACED_ELAPSED_MS
+  let stability: number
+  let state: CardSchedulingState
+  let dueAt: Date
+  if (fresh || spaced) {
+    stability = Math.min(
+      MAX_STABILITY_DAYS,
+      Math.max(strength, STABILITY_SEED_FLOOR) * STABILITY_FACTORS[rating],
+    )
+    state = rating === 'easy' || card.state !== NEW ? REVIEW : LEARNING
+    dueAt = dueAfter(now, stability * DAY_MS)
+  } else if (due) {
+    stability = Math.max(strength, STABILITY_SEED_FLOOR)
+    state = REVIEW
+    dueAt = dueAfter(now, stability * DAY_MS)
+  } else {
+    stability = strength
+    state = card.state
+    const deadline = Number.isFinite(card.dueAt.getTime()) ? card.dueAt.getTime() : now.getTime()
+    dueAt = new Date(
+      Math.max(
+        now.getTime(),
+        Math.min(deadline, dueAfter(now, MAX_STABILITY_DAYS * DAY_MS).getTime()),
+      ),
+    )
+  }
   return {
-    dueAt: new Date(now.getTime() + stability * DAY_MS),
+    dueAt,
     stability,
     difficulty,
     reps: card.reps + 1,
@@ -182,12 +226,13 @@ export function studyOrder(states: Map<number, CardState>, now: Date): number[] 
 
 /**
  * The wait a rating produces, for the button that offers it: "10 min", "1 d", "2.8 d".
- * A sub-day wait (which only an `again` produces) reads in minutes; longer waits read in
+ * Sub-day waits (including preserved early-practice deadlines) read in minutes; longer waits read in
  * days, one decimal under ten days and whole days above.
  */
 export function nextIntervalLabel(card: CardState, rating: Rating, now: Date): string {
   const dueAt = reviewCard(card, rating, now).dueAt
   const waitMs = Math.max(0, dueAt.getTime() - now.getTime())
+  if (waitMs === 0) return 'Now'
   if (waitMs < DAY_MS) return `${Math.max(1, Math.round(waitMs / MINUTE_MS))} min`
   const days = waitMs / DAY_MS
   if (days < 10) return `${Math.round(days * 10) / 10} d`

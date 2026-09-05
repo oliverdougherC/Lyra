@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Kbd } from '@/components/ui/kbd'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ApiError } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { formatCount } from '@/lib/format'
 import { useDeck, useDeckSession, useReviewCard } from '@/lib/hooks/use-study'
 import {
@@ -19,9 +19,16 @@ import {
   bucket,
   cardStateFromRead,
   nextIntervalLabel,
+  newCardState,
   type CardState,
 } from '@/lib/scheduler'
-import type { Rating, SessionCard } from '@/types'
+import {
+  readSessionRecoveryRecord,
+  ownSessionRecovery,
+  type SessionRecovery,
+  type ReviewOperation,
+} from '@/lib/study-session-recovery'
+import type { DeckDetail, Rating, SessionCard } from '@/types'
 
 const RATING_LABELS: Record<Rating, string> = {
   again: 'Again',
@@ -44,34 +51,125 @@ const RATING_KEYS: Record<string, Rating> = { '1': 'again', '2': 'hard', '3': 'g
  * second count kept in parallel.
  */
 export function DeckSession({ deckId }: { deckId: number }) {
+  return <DeckSessionRecoveryControls key={deckId} deckId={deckId} />
+}
+
+function DeckSessionRecoveryControls({ deckId }: { deckId: number }) {
+  const [attempt, setAttempt] = useState(0)
+  const [readOnly, setReadOnly] = useState(false)
+  function retryStorage() {
+    setReadOnly(false)
+    setAttempt((value) => value + 1)
+  }
+  return (
+    <>
+      {readOnly && (
+        <Button variant="outline" onClick={retryStorage}>
+          Retry recording reviews
+        </Button>
+      )}
+      <DeckSessionRun
+        key={attempt}
+        deckId={deckId}
+        readOnly={readOnly}
+        studyReadOnly={() => {
+          setReadOnly(true)
+          setAttempt((value) => value + 1)
+        }}
+        retryStorage={retryStorage}
+      />
+    </>
+  )
+}
+
+function DeckSessionRun({
+  deckId,
+  retryStorage,
+  readOnly,
+  studyReadOnly,
+}: {
+  deckId: number
+  retryStorage: () => void
+  readOnly: boolean
+  studyReadOnly: () => void
+}) {
+  const [authoritativeDeck, setAuthoritativeDeck] = useState<DeckDetail | null>(null)
+  const [authorityError, setAuthorityError] = useState(false)
   const session = useDeckSession(deckId)
   const { mutateAsync: submitReview, isPending: reviewing } = useReviewCard(deckId)
 
-  const [queue, setQueue] = useState<SessionCard[] | null>(null)
-  const [total, setTotal] = useState(0)
-  const [actionsOpen, setActionsOpen] = useState(false)
+  const [{ recovery, recoveryError, revision }] = useState(() => {
+    try {
+      return {
+        ...(readOnly ? { recovery: null, revision: null } : readSessionRecoveryRecord(deckId)),
+        recoveryError: false,
+      }
+    } catch {
+      return { recovery: null, recoveryError: true, revision: null }
+    }
+  })
+  const [queue, setQueue] = useState<SessionCard[] | null>(recovery?.queue ?? null)
+  const [total, setTotal] = useState(recovery?.total ?? 0)
+  const [flipped, setFlipped] = useState(Boolean(recovery?.operation))
+  const [retryRating, setRetryRating] = useState<Rating | null>(recovery?.operation?.rating ?? null)
   const reviewingRef = useRef(false)
+  const [actionsOpen, setActionsOpen] = useState(false)
   const faceRef = useRef<HTMLElement>(null)
   const summaryRef = useRef<HTMLHeadingElement>(null)
-  const [flipped, setFlipped] = useState(false)
-  const [retryRating, setRetryRating] = useState<Rating | null>(null)
-  const [ratings, setRatings] = useState<Record<Rating, number>>({
-    again: 0,
-    hard: 0,
-    good: 0,
-    easy: 0,
-  })
+  const owner = useRef<ReturnType<typeof ownSessionRecovery> | null>(null)
+  const [storageError, setStorageError] = useState(false)
+  const [missing, setMissing] = useState(false)
+  const [notice, setNotice] = useState('')
+  const unresolved = useRef(recovery?.unresolved ?? [])
+  const [reconciled, setReconciled] = useState(!recovery)
+  useEffect(() => {
+    if (!recovery) return
+    let active = true
+    void api
+      .getDeck(deckId)
+      .then((fresh) => {
+        if (active) setAuthoritativeDeck(fresh)
+      })
+      .catch(() => {
+        if (active) setAuthorityError(true)
+      })
+    return () => {
+      active = false
+    }
+  }, [deckId, recovery])
+  useEffect(() => {
+    if (readOnly || recoveryError) return
+    try {
+      owner.current = ownSessionRecovery(deckId, revision)
+    } catch {
+      setStorageError(true)
+    }
+    return () => owner.current?.release()
+  }, [deckId, readOnly, recoveryError, revision])
+  const persist = useCallback((value: SessionRecovery) => {
+    if (!owner.current) throw new Error('Browser storage is unavailable.')
+    try {
+      owner.current.save({ ...value, unresolved: unresolved.current })
+      setStorageError(false)
+    } catch (error) {
+      setStorageError(true)
+      throw error
+    }
+  }, [])
+  const [ratings, setRatings] = useState<Record<Rating, number>>(
+    recovery?.ratings ?? {
+      again: 0,
+      hard: 0,
+      good: 0,
+      easy: 0,
+    },
+  )
   /** The latest scheduling state the interface holds for each card in the session. */
-  const [states, setStates] = useState<Map<number, CardState>>(new Map())
+  const [states, setStates] = useState<Map<number, CardState>>(new Map(recovery?.states))
   /** When the current card came up; the interval labels are measured from it. */
   const [presentedAt, setPresentedAt] = useState(() => new Date())
-  /**
-   * One idempotency key per card review, keyed by part id. A retry after a failed or lost
-   * response reuses the same key, so the server applies the review once whether or not the
-   * first request actually committed (PLA-296). The key represents "the review of this
-   * card"; it is generated on first submit and reused until that card leaves the queue.
-   */
-  const operationIds = useRef<Map<number, { id: string; rating: Rating }>>(new Map())
+  // Persist the payload and key before sending; transport failure cannot change either.
+  const operation = useRef<ReviewOperation | null>(recovery?.operation ?? null)
 
   // Seeded during render rather than in an effect, so the first card never flashes the
   // end screen for a frame. A finished session leaves the queue empty but not null, so
@@ -83,42 +181,150 @@ export function DeckSession({ deckId }: { deckId: number }) {
     setStates(new Map(cards.map((card) => [card.part_id, cardStateFromRead(card.card_state)])))
   }
 
+  // Only the complete deck endpoint establishes membership; the due session is capped.
+  useEffect(() => {
+    if (reconciled || !queue || !authoritativeDeck || recoveryError) return
+    const authoritative = new Map(authoritativeDeck.cards.map((card) => [card.part_id, card]))
+    const nextStates = new Map(states)
+    for (const id of nextStates.keys()) {
+      const fresh = authoritative.get(id)
+      if (!fresh) nextStates.delete(id)
+      else
+        nextStates.set(
+          id,
+          fresh.card_state ? cardStateFromRead(fresh.card_state) : newCardState(new Date()),
+        )
+    }
+    const next = queue.flatMap((card, index) => {
+      const fresh = authoritative.get(card.part_id)
+      if (!fresh) {
+        if (index === 0 && operation.current) {
+          setMissing(true)
+          return [card]
+        }
+        nextStates.delete(card.part_id)
+        return []
+      }
+      const cardState = fresh.card_state ?? {
+        due_at: new Date().toISOString(),
+        stability: 0,
+        difficulty: 5,
+        reps: 0,
+        lapses: 0,
+        state: 'new' as const,
+        last_review_at: null,
+        bucket: 'new' as const,
+      }
+      const state = cardStateFromRead(cardState)
+      nextStates.set(card.part_id, state)
+      return [
+        {
+          ...card,
+          label: fresh.label,
+          card: fresh.card,
+          card_state: cardState,
+          due: state.dueAt.getTime() <= Date.now(),
+        },
+      ]
+    })
+    const nextTotal = total - (queue.length - next.length)
+    try {
+      persist({
+        queue: next,
+        total: nextTotal,
+        ratings,
+        states: [...nextStates],
+        operation: operation.current,
+      })
+      setQueue(next)
+      setTotal(nextTotal)
+      setStates(nextStates)
+      setReconciled(true)
+      if (next.length !== queue.length)
+        setNotice('Removed cards were left out of this session. They were not counted as reviews.')
+    } catch {
+      setStorageError(true)
+    }
+  }, [authoritativeDeck, queue, reconciled, recoveryError, states, total, ratings, persist])
+
   const flip = useCallback(() => setFlipped((current) => !current), [])
 
   const rate = useCallback(
     async (rating: Rating) => {
       const current = queue?.[0]
-      if (!current || reviewingRef.current || actionsOpen) return
-      // A lost response may already have committed. Retrying must confirm the same
-      // rating as well as the same key, or the summary would contradict saved history.
-      let operation = operationIds.current.get(current.part_id)
-      if (operation && operation.rating !== rating) return
+      if (
+        readOnly ||
+        !queue ||
+        !current ||
+        reviewingRef.current ||
+        recoveryError ||
+        !reconciled ||
+        actionsOpen ||
+        missing
+      )
+        return
+      if (operation.current && operation.current.rating !== rating) return
       reviewingRef.current = true
-      if (!operation) {
-        operation = { id: crypto.randomUUID(), rating }
-        operationIds.current.set(current.part_id, operation)
-      }
+      const pending = operation.current ?? { id: crypto.randomUUID(), rating }
+      operation.current = pending
       try {
+        persist({
+          queue,
+          total,
+          ratings,
+          states: [...states],
+          operation: pending,
+        })
         const updated = await submitReview({
           partId: current.part_id,
-          rating: operation.rating,
-          operationId: operation.id,
+          rating: pending.rating,
+          operationId: pending.id,
         })
-        operationIds.current.delete(current.part_id)
+        if (!owner.current?.current()) return
+        const nextRatings = { ...ratings, [pending.rating]: ratings[pending.rating] + 1 }
+        const nextStates = new Map(states).set(current.part_id, cardStateFromRead(updated))
+        const nextQueue = queue.slice(1)
+        // Acknowledge durably before advancing. If storage fails, replay the same key.
+        persist({
+          queue: nextQueue,
+          total,
+          ratings: nextRatings,
+          states: [...nextStates],
+          operation: null,
+        })
+        operation.current = null
         setRetryRating(null)
-        setRatings((previous) => ({ ...previous, [rating]: previous[rating] + 1 }))
-        setStates((previous) => new Map(previous).set(current.part_id, cardStateFromRead(updated)))
-        setQueue((previous) => (previous ?? []).slice(1))
+        setRatings(nextRatings)
+        setStates(nextStates)
+        setQueue(nextQueue)
         setFlipped(false)
         setPresentedAt(new Date())
       } catch (caught) {
-        setRetryRating(rating)
-        toast.error(caught instanceof ApiError ? caught.message : 'Could not record that review.')
+        if (!owner.current?.current()) return
+        if (caught instanceof ApiError && caught.status === 404) setMissing(true)
+        setRetryRating(pending.rating)
+        toast.error(
+          caught instanceof ApiError
+            ? caught.message
+            : 'Could not confirm that review. Retry the same rating.',
+        )
       } finally {
         reviewingRef.current = false
       }
     },
-    [queue, actionsOpen, submitReview],
+    [
+      queue,
+      total,
+      ratings,
+      states,
+      submitReview,
+      recoveryError,
+      reconciled,
+      actionsOpen,
+      missing,
+      persist,
+      readOnly,
+    ],
   )
 
   // Space flips, 1-4 rate, except while typing: a field owns those keys. A focused button
@@ -126,7 +332,7 @@ export function DeckSession({ deckId }: { deckId: number }) {
   // it would rate or flip twice.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (actionsOpen || reviewingRef.current) return
+      if (actionsOpen || reviewingRef.current || recoveryError || !reconciled || missing) return
       const target = event.target
       if (target instanceof HTMLElement) {
         if (target.isContentEditable) return
@@ -145,36 +351,118 @@ export function DeckSession({ deckId }: { deckId: number }) {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [flipped, flip, rate, actionsOpen])
+  }, [flipped, flip, rate, actionsOpen, recoveryError, reconciled, missing])
 
   useEffect(() => {
     faceRef.current?.focus()
   }, [flipped])
-
   useEffect(() => {
     if (queue?.length === 0) summaryRef.current?.focus()
     else if (queue && total > queue.length && !actionsOpen) faceRef.current?.focus()
   }, [queue, total, actionsOpen])
 
+  function removeCurrent(retainUncertain = false) {
+    if (!queue?.length) return
+    const current = queue[0]
+    const next = queue.slice(1)
+    const nextStates = new Map(states)
+    nextStates.delete(current.part_id)
+    const previousUnresolved = unresolved.current
+    if (retainUncertain && operation.current)
+      unresolved.current = [
+        ...unresolved.current,
+        { partId: current.part_id, operation: operation.current },
+      ]
+    try {
+      persist({ queue: next, total: total - 1, ratings, states: [...nextStates], operation: null })
+      operation.current = null
+      setRetryRating(null)
+      setMissing(false)
+      setQueue(next)
+      setTotal(total - 1)
+      setStates(nextStates)
+      setFlipped(false)
+      setPresentedAt(new Date())
+      if (retainUncertain)
+        setNotice(
+          'The removed card’s review outcome remains unknown. Its original operation is saved separately and is not counted as a confirmed review.',
+        )
+    } catch {
+      unresolved.current = previousUnresolved
+      setStorageError(true)
+    }
+  }
+
   async function restart() {
-    operationIds.current.clear()
-    setRetryRating(null)
+    if (readOnly) {
+      setQueue(null)
+      setTotal(0)
+      setFlipped(false)
+      return
+    }
     const fresh = await session.refetch()
     if (fresh.isError) {
       toast.error('Could not load another session. Try again.')
       return
     }
-    const next = fresh.data?.cards
+    if (!owner.current?.current()) return
+    const next = fresh.data?.cards.filter(
+      (card) => !unresolved.current.some((item) => item.partId === card.part_id),
+    )
     if (!next) return
+    const nextStates = new Map(
+      next.map((card) => [card.part_id, cardStateFromRead(card.card_state)]),
+    )
+    try {
+      persist({
+        queue: next,
+        total: next.length,
+        ratings: { again: 0, hard: 0, good: 0, easy: 0 },
+        states: [...nextStates],
+        operation: null,
+      })
+    } catch {
+      toast.error('Could not save the new session. Try again.')
+      return
+    }
+    operation.current = null
+    setRetryRating(null)
     setQueue(next)
     setTotal(next.length)
-    setStates(new Map(next.map((card) => [card.part_id, cardStateFromRead(card.card_state)])))
+    setStates(nextStates)
     setRatings({ again: 0, hard: 0, good: 0, easy: 0 })
     setFlipped(false)
     setPresentedAt(new Date())
   }
 
-  if (session.isPending) {
+  if (recoveryError) {
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Could not restore this study session</AlertTitle>
+        <AlertDescription>
+          Saved review recovery is unavailable or malformed. The original record has been preserved.
+          Restore browser storage access or repair the saved record, then retry here.
+          <Button onClick={retryStorage}>Retry storage access</Button>
+          <Button onClick={studyReadOnly}>Study without recording reviews</Button>
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  if (storageError || (!reconciled && authorityError))
+    return (
+      <Alert variant="destructive">
+        <AlertTitle>Could not restore this study session</AlertTitle>
+        <AlertDescription>
+          Recovery could not be saved or authoritative cards could not be loaded. The original
+          pending review is preserved.
+          <Button onClick={retryStorage}>Retry storage access</Button>
+          <Button onClick={studyReadOnly}>Study without recording reviews</Button>
+        </AlertDescription>
+      </Alert>
+    )
+
+  if (session.isPending || !reconciled) {
     return (
       <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading study session">
         <Skeleton className="h-4 w-24" />
@@ -219,6 +507,17 @@ export function DeckSession({ deckId }: { deckId: number }) {
           <EmptyTitle>No cards in this session</EmptyTitle>
           <EmptyDescription>Start another session to check for more cards.</EmptyDescription>
         </EmptyHeader>
+        {unresolved.current.length > 0 && (
+          <p role="status">
+            {unresolved.current.length} unresolved review outcome(s) remain saved and are not
+            included in confirmed counts.
+          </p>
+        )}
+        {readOnly && (
+          <p role="status">
+            Read-only study: no reviews were recorded. Saved recovery remains untouched.
+          </p>
+        )}
         <DeckProgress deckId={deckId} />
         <Button variant="outline" disabled={session.isFetching} onClick={() => void restart()}>
           Study again
@@ -251,6 +550,17 @@ export function DeckSession({ deckId }: { deckId: number }) {
           Cards in this session: new {bucketsAfter.new} · learning {bucketsAfter.learning} ·
           mastered {bucketsAfter.mastered}
         </p>
+        {unresolved.current.length > 0 && (
+          <p role="status">
+            {unresolved.current.length} unresolved review outcome(s) remain saved and are not
+            included in confirmed counts.
+          </p>
+        )}
+        {readOnly && (
+          <p role="status">
+            Read-only study: no reviews were recorded. Saved recovery remains untouched.
+          </p>
+        )}
         <DeckProgress deckId={deckId} />
         <Button variant="outline" onClick={() => void restart()} disabled={session.isFetching}>
           <RotateCcw className="size-4" />
@@ -298,43 +608,65 @@ export function DeckSession({ deckId }: { deckId: number }) {
           key={current.part_id}
           deckId={deckId}
           current={current}
-          disabled={reviewing}
+          disabled={readOnly || reviewing || Boolean(operation.current) || missing}
           onOpenChange={setActionsOpen}
-          onUpdated={(content) =>
-            setQueue((previous) =>
-              (previous ?? []).map((card) =>
-                card.part_id === current.part_id ? { ...card, card: content } : card,
-              ),
+          onUpdated={(content) => {
+            const next = queue.map((card) =>
+              card.part_id === current.part_id ? { ...card, card: content } : card,
             )
-          }
-          onRemoved={() => {
-            operationIds.current.delete(current.part_id)
-            setRetryRating(null)
-            setStates((previous) => {
-              const next = new Map(previous)
-              next.delete(current.part_id)
-              return next
-            })
-            setQueue((previous) =>
-              (previous ?? []).filter((card) => card.part_id !== current.part_id),
-            )
-            setTotal((previous) => previous - 1)
-            setFlipped(false)
-            setPresentedAt(new Date())
+            try {
+              persist({
+                queue: next,
+                total,
+                ratings,
+                states: [...states],
+                operation: operation.current,
+              })
+              setQueue(next)
+            } catch {
+              setStorageError(true)
+            }
           }}
+          onRemoved={() => removeCurrent()}
         />
       </div>
       <p className="sr-only" role="status">
         {flipped ? 'Answer shown.' : 'Question shown.'}
       </p>
 
-      {retryRating ? (
+      {readOnly && (
+        <p role="status">
+          Read-only study: reviews are not recorded. Saved uncertain review evidence remains
+          untouched.
+        </p>
+      )}
+      {notice && <p role="status">{notice}</p>}
+      {missing && (
+        <Alert variant="destructive">
+          <AlertTitle>This card is no longer available</AlertTitle>
+          <AlertDescription>
+            Its review outcome cannot be confirmed. Keep its original operation saved separately and
+            continue without counting it as a review.
+            <Button onClick={() => removeCurrent(true)}>Continue remaining cards</Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      {retryRating && !missing ? (
         <p role="alert" className="text-danger-text text-sm">
           That {RATING_LABELS[retryRating]} review could not be confirmed. Choose{' '}
           {RATING_LABELS[retryRating]} again to confirm it before using another rating.
         </p>
       ) : null}
-      {flipped ? (
+      {flipped && readOnly ? (
+        <Button
+          onClick={() => {
+            setQueue(queue.slice(1))
+            setFlipped(false)
+          }}
+        >
+          Next card (not recorded)
+        </Button>
+      ) : flipped ? (
         <div
           className="grid grid-cols-2 gap-2 min-[360px]:grid-cols-4"
           role="group"
@@ -344,7 +676,7 @@ export function DeckSession({ deckId }: { deckId: number }) {
             <Button
               key={rating}
               variant="outline"
-              disabled={reviewing || (retryRating !== null && rating !== retryRating)}
+              disabled={reviewing || missing || (retryRating !== null && rating !== retryRating)}
               onClick={(event) => {
                 // Focus goes back to the page, so the next Space flips the next card
                 // instead of pressing this button again.
@@ -358,18 +690,23 @@ export function DeckSession({ deckId }: { deckId: number }) {
                 <Kbd className="hidden sm:inline-flex">{index + 1}</Kbd>
               </span>
               <span className="text-text-tertiary text-xs font-normal">
-                {nextIntervalLabel(currentState, rating, presentedAt)}
+                {retryRating
+                  ? rating === retryRating
+                    ? 'Confirm review'
+                    : 'Awaiting confirmation'
+                  : nextIntervalLabel(currentState, rating, presentedAt)}
               </span>
             </Button>
           ))}
         </div>
       ) : (
-        <p className="text-text-tertiary text-sm">Recall your answer, then choose Show answer.</p>
+        <p className="text-text-tertiary flex items-center gap-1.5 text-sm">
+          Press <Kbd>Space</Kbd> or choose Show answer.
+        </p>
       )}
     </div>
   )
 }
-
 /** Loaded after the last mutation, so remaining due counts cover the entire deck. */
 function DeckProgress({ deckId }: { deckId: number }) {
   const deck = useDeck(deckId)

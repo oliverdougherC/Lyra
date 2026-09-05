@@ -20,6 +20,8 @@ const BACKEND_PORT = Number(process.env.ACCEPTANCE_BACKEND_PORT ?? 8000)
 const FRONTEND_PORT = Number(process.env.ACCEPTANCE_FRONTEND_PORT ?? 3000)
 const TUTOR_PORT = Number(process.env.ACCEPTANCE_TUTOR_PORT ?? 18_900)
 
+export const HELPER_PORT = Number(process.env.ACCEPTANCE_HELPER_PORT ?? 19500)
+
 export const BACKEND = `http://127.0.0.1:${BACKEND_PORT}`
 export const FRONTEND = `http://127.0.0.1:${FRONTEND_PORT}`
 export const TUTOR_CONTROL = `http://127.0.0.1:${TUTOR_PORT}/_control`
@@ -529,6 +531,7 @@ export async function readAcceptanceState(): Promise<{
   backendPort: number
   frontendPort: number
   tutorPort: number
+  helperPort: number
 } | null> {
   const { readFile } = await import('node:fs/promises')
   const stateFile = process.env.ACCEPTANCE_STATE_FILE
@@ -561,7 +564,7 @@ export async function restartBackend(): Promise<void> {
   // Kill the current backend. It was spawned detached (its own process group, pgid == pid), so
   // signal the WHOLE group: that reclaims the real uvicorn python grandchild and its fake-helper
   // great-grandchild. Signalling only the `uv` wrapper pid orphans them -- the old helper keeps
-  // holding port 19500 and the new backend cannot bring up its own. This is the same orphan-leak
+  // holding this run's helper port and the new backend cannot bring up its own. This is the same orphan-leak
   // class the teardown process-group fix addresses, applied to the in-run restart path.
   const killGroup = (sig: NodeJS.Signals): void => {
     try {
@@ -600,11 +603,10 @@ export async function restartBackend(): Promise<void> {
   }
 
   // A SIGKILLed uvicorn never runs its atexit helper-reclaim, so the old fake-helper may still hold
-  // the helper port (19500, fixed by the harness). Sweep any acceptance fake-helper by its unique
-  // command-line signature (it can never match a production Lyra process) and wait for that port to
-  // be free before spawning fresh -- otherwise the new backend's helper cannot bind.
+  // this run's helper port. Reclaim captured owned fixture identities and wait for that port
+  // to be free before spawning fresh -- an unrelated listener is never a cleanup target.
   await sweepFakeHelpers(ownedHelpers)
-  await waitForPortFree(19_500, 10_000)
+  await waitForPortFree(state.helperPort, 10_000)
 
   // Wait for the backend port to be free
   const portDeadline = Date.now() + 5_000
@@ -627,6 +629,7 @@ export async function restartBackend(): Promise<void> {
   for (const [k, v] of Object.entries(process.env)) {
     if (v !== undefined) backendEnv[k] = v
   }
+  backendEnv.ACCEPTANCE_HELPER_PORT = String(state.helperPort)
   backendEnv.LYRA_DATA_DIR = state.dataDir
   backendEnv.LYRA_HOST = '127.0.0.1'
   backendEnv.LYRA_PORT = String(state.backendPort)

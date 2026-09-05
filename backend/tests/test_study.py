@@ -67,12 +67,18 @@ def _stub_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
     points at rows that exist (the FK demands it), and the prompt is still checkable."""
 
     def _fake_retrieve(
-        conn: sqlite3.Connection, class_id: int, query: str, budget_tokens: int
+        conn: sqlite3.Connection,
+        class_id: int,
+        query: str,
+        budget_tokens: int,
+        *,
+        document_ids: tuple[int, ...] | None = None,
     ) -> RetrievalResult:
         rows = conn.execute(
             "select c.id, c.document_id, c.content, d.filename from chunks c "
-            "join documents d on d.id = c.document_id where c.class_id = ? limit 3",
-            (class_id,),
+            "join documents d on d.id = c.document_id where c.class_id = ? "
+            "and c.document_id in (select value from json_each(?)) limit 3",
+            (class_id, json.dumps(document_ids)),
         ).fetchall()
         chunks = [
             RetrievedChunk(
@@ -709,8 +715,8 @@ def test_a_quiz_undershoot_is_retried_once_with_the_failures_named(
             },
             "exactly one option",
         ),
-        ({**_mcq(), "explanation": ""}, "empty explanation"),
-        ({**_mcq(), "topic": ""}, "missing topic"),
+        ({**_mcq(), "explanation": ""}, "explanation must be a non-empty string"),
+        ({**_mcq(), "topic": ""}, "topic must be a non-empty string"),
         ({**_mcq(), "type": "essay"}, "unknown type"),
     ],
 )
@@ -797,49 +803,18 @@ def test_generation_fails_visibly_when_a_source_was_deleted(
 # ---------------------------------------------------------------------------
 
 
-def test_gathering_never_overshoots_the_total_cap() -> None:
-    """A chunk is added only when it fits; the boundary bug where `total < cap` admitted a
-    chunk that pushed `total` past `cap` is closed."""
-
-    class _Rows:
-        def __init__(self, contents: list[str]) -> None:
-            self._contents = contents
-
-        def fetchall(self) -> list[dict[str, str]]:
-            return [{"content": content} for content in self._contents]
-
-    # Two 400-token chunks fit a 1000 cap exactly-ish; a third 400 would overshoot to 1200.
-    text = "x" * 1600  # 400 estimated tokens each
-    calls: list[int] = []
-
-    class _Conn:
-        def execute(self, sql: str, params: tuple[object, ...]) -> _Rows:
-            calls.append(int(params[0]))
-            return _Rows([text, text, text])
-
-    gathered, contributing = study._gather_source_text(_Conn(), (7,), total_cap=1000)  # type: ignore[arg-type]
-    # 400 + 400 = 800 fits; the third (1200) is refused, so the cap is never exceeded.
-    assert gathered.count(text) == 2
+@pytest.mark.parametrize(("chunk_size", "expected"), [(1600, 2), (2000, 2)])
+def test_gathering_total_cap_and_exact_fit(chunk_size: int, expected: int) -> None:
+    with sqlite3.connect(":memory:") as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "create table chunks (id integer primary key, document_id integer, content text)"
+        )
+        text = "x" * chunk_size
+        conn.executemany("insert into chunks (document_id, content) values (7, ?)", [(text,)] * 3)
+        gathered, contributing = study._gather_source_text(conn, (7,), total_cap=1000)
+    assert gathered.count(text) == expected
     assert contributing == [7]
-
-
-def test_gathering_exact_fit_admits_the_boundary_chunk() -> None:
-    class _Rows:
-        def __init__(self, contents: list[str]) -> None:
-            self._contents = contents
-
-        def fetchall(self) -> list[dict[str, str]]:
-            return [{"content": content} for content in self._contents]
-
-    text = "x" * 2000  # exactly 500 estimated tokens
-
-    class _Conn:
-        def execute(self, sql: str, params: tuple[object, ...]) -> _Rows:
-            return _Rows([text, text])
-
-    gathered, _ = study._gather_source_text(_Conn(), (7,), total_cap=1000)  # type: ignore[arg-type]
-    # 500 + 500 == 1000 fits exactly; both chunks are admitted.
-    assert gathered.count(text) == 2
 
 
 def test_gathering_round_robins_and_caps(db: sqlite3.Connection, class_id: int) -> None:
@@ -1710,3 +1685,90 @@ def test_new_card_states_are_due_immediately(
     row = db.execute("select * from card_states").fetchone()
     due = scheduler.from_storage(str(row["due_at"]))
     assert before - timedelta(seconds=5) <= due <= datetime.now(UTC) + timedelta(seconds=5)
+
+
+@pytest.mark.parametrize("recover", [False, True])
+def test_mcq_only_contract_is_enforced_on_initial_and_retry(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    recover: bool,
+) -> None:
+    doc = _document(db, class_id)
+    artifact_id = _quiz(db, class_id, doc)
+    wrong = {**_mcq(), "type": "true_false", "options": ["True", "False"]}
+    llm.replies = [{"questions": [wrong]}, {"questions": [_mcq() if recover else wrong]}]
+    study.run_generation(_quiz_job(artifact_id, doc, count=1, types=("mcq",)))
+    assert len(llm.calls) == 2
+    assert artifacts.get_artifact(db, artifact_id)["state"] == (
+        artifacts.READY if recover else artifacts.FAILED
+    )
+    parts = artifacts.list_parts(db, artifact_id)
+    assert len(parts) == int(recover)
+    assert all(json.loads(str(part["content"]))["type"] == "mcq" for part in parts)
+
+
+def test_topic_retrieval_retry_never_uses_excluded_document(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from backend.rag import retrieve as retrieval
+    from backend.tests.test_retrieve import _days_ago, _insert_chunk, _insert_document, _vector
+
+    selected = _insert_document(db, class_id, "lecture.pdf", _days_ago(0))
+    excluded = _insert_document(db, class_id, "answer-key.pdf", _days_ago(0))
+    _insert_chunk(db, class_id, selected, "selected lecture sifting", 1.2)
+    for _ in range(80):
+        _insert_chunk(db, class_id, excluded, "FORBIDDEN answer-key sifting", 0)
+    monkeypatch.setattr(retrieval, "embed_query", lambda _: _vector(0))
+    monkeypatch.setattr(type(retrieval.rerank_server), "available", property(lambda _: False))
+    monkeypatch.setattr(study, "retrieve", retrieval.retrieve)
+    artifact_id = _deck(db, class_id, selected)
+    llm.replies = [{"topics": ["sifting"]}, _cards(), _cards("one")]
+    study.run_generation(_deck_job(artifact_id, selected, cards_per_topic=1))
+    assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.READY
+    assert len(llm.calls) == 3
+    assert "FORBIDDEN" not in str(llm.calls)
+    assert "selected lecture" in str(llm.calls[1:])
+    for part in artifacts.list_parts(db, artifact_id):
+        assert {p["document_id"] for p in artifacts.list_provenance(db, int(part["id"]))} == {
+            selected
+        }
+
+
+@pytest.mark.parametrize("change", ["delete", "reindex"])
+def test_source_change_after_proposal_cannot_publish_stale_card_evidence(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    doc = _document(db, class_id)
+    artifact_id = _deck(db, class_id, doc)
+    original = study._complete_deck
+
+    def invalidate(conn: sqlite3.Connection, job: study._Job, topics: list) -> None:
+        # The model already saw valid selected chunks. Reindex can finish and return
+        # the same document to Ready before publication, so readiness alone is not proof.
+        if change == "delete":
+            db.execute("delete from documents where id = ?", (doc,))
+        else:
+            db.execute("delete from chunks where document_id = ?", (doc,))
+            db.execute(
+                "insert into chunks (document_id, class_id, content, token_count, page_number, "
+                "doc_type, embedding_model, embedding_dim) "
+                "values (?, ?, 'Replacement indexed text.', 10, 1, 'generic', 'test', 768)",
+                (doc, class_id),
+            )
+        db.commit()
+        original(conn, job, topics)
+
+    monkeypatch.setattr(study, "_complete_deck", invalidate)
+    llm.replies = [{"topics": ["sifting"]}, _cards("one")]
+    study.run_generation(_deck_job(artifact_id, doc, cards_per_topic=1))
+    assert len(llm.calls) == 2
+    assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.FAILED
+    assert artifacts.list_parts(db, artifact_id) == []

@@ -121,8 +121,8 @@ export default async function globalTeardown() {
       /* already gone */
     }
   } else {
-    // Fall back to scanning for state files from this or prior runs.
-    await cleanupFromStateFiles(ownedFixtures)
+    // Fall back only to the state file explicitly published by this run.
+    await cleanupFromStateFiles(ownedFixtures, failures)
   }
 
   // Final sweep is restricted to this run: another acceptance checkout may be active.
@@ -279,7 +279,7 @@ function verifyNoGroupMembers(pgids: number[], failures: string[]): void {
 /*  State file fallback                                                */
 /* ------------------------------------------------------------------ */
 
-async function cleanupFromStateFiles(owned: Map<number, string>) {
+async function cleanupFromStateFiles(owned: Map<number, string>, failures: string[]) {
   const filePath = process.env.ACCEPTANCE_STATE_FILE
   if (!filePath) {
     console.log('  No current-run state file; leaving other acceptance runs alone')
@@ -287,11 +287,19 @@ async function cleanupFromStateFiles(owned: Map<number, string>) {
   }
   const state = await readPersistedState(filePath)
   if (!state) return
-  for (const [pid, token] of captureOwnedFixtures(verifiedStateRoots(state))) {
+  const roots = verifiedStateRoots(state)
+  for (const [pid, token] of captureOwnedFixtures(roots)) {
     owned.set(pid, token)
   }
   await verifyAndKill(state.frontendPid, state.frontendStartToken, 'frontend')
   await verifyAndKill(state.backendPid, state.backendStartToken, 'backend')
+  await verifyPortStopped(Number(process.env.ACCEPTANCE_BACKEND_PORT ?? 8000), 'backend', failures)
+  await verifyPortStopped(
+    Number(process.env.ACCEPTANCE_FRONTEND_PORT ?? 3000),
+    'frontend',
+    failures,
+  )
+  verifyNoGroupMembers(roots, failures)
   await cleanDataDir(state.dataDir)
   await unlink(filePath)
 }
@@ -378,12 +386,11 @@ async function verifyAndKill(
     return
   }
 
-  if (expectedToken) {
-    const currentToken = processStartToken(pid)
-    if (currentToken && currentToken !== expectedToken) {
-      console.log(`  ${label} (pid ${pid}): PID recycled (token mismatch), skipping`)
-      return
-    }
+  const currentToken = processStartToken(pid)
+  if (!expectedToken || currentToken !== expectedToken) {
+    throw new Error(
+      `Acceptance teardown cannot verify ${label} (pid ${pid}); refusing to signal an unowned process`,
+    )
   }
 
   const signalGroup = (sig: NodeJS.Signals): boolean => {

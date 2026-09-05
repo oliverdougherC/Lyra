@@ -18,7 +18,6 @@ import asyncio
 import atexit
 import contextlib
 import os
-import signal
 import subprocess
 import sys
 import threading
@@ -29,6 +28,7 @@ from pathlib import Path
 import backend.core.ingestion as _ingest_mod
 import backend.core.study as _study_mod
 import backend.rag.embed as _embed_mod
+from acceptance.helper_ownership import OwnedHelpers
 from backend.llm.llama_server import (
     LlamaServer,
     _load_ownership,
@@ -298,7 +298,8 @@ async def _consume_backend_failure(request: Request) -> JSONResponse:
 _FAKE_HELPER_PATH = (
     Path(__file__).resolve().parent.parent / "frontend" / "e2e" / "acceptance" / "fake-helper.py"
 )
-_ACCEPTANCE_HELPER_PORT = 19_500
+_ACCEPTANCE_HELPER_PORT = int(os.environ.get("ACCEPTANCE_HELPER_PORT", "19500"))
+_owned_helpers = OwnedHelpers()
 _fake_helper_instance: "FakeHelperServer | None" = None
 
 
@@ -322,6 +323,10 @@ class FakeHelperServer(LlamaServer):
         self._fake_model_name = model_name
         self._fake_fail_health = fail_health
         self._fake_slow_start = slow_start
+
+    def _await_health(self, process: "subprocess.Popen[bytes]") -> None:
+        _owned_helpers.capture(process)
+        super()._await_health(process)
 
     @property
     def port(self) -> int:
@@ -453,38 +458,13 @@ async def _cleanup_helper_ownership() -> JSONResponse:
 
 @_production_app.post("/_acceptance/helper/cleanup")
 async def _cleanup_helper_all() -> JSONResponse:
-    """Full per-test isolation reset for the acceptance helper.
-
-    Deterministically frees the helper port (kills any listener, retrying until it is
-    verifiably free), stops the tracked harness helper instance, and clears BOTH ownership
-    records ("acceptance-helper" and "acc-scenario"). This guarantees every helper test
-    starts from a free port with no stale record -- regardless of how a prior spec/test
-    left the fixture (a foreign wrong-model helper, an adopted survivor, etc.). Without it,
-    one spec's deliberately-left-alive foreign process gets ADOPTED by the next spec's
-    supervisor instead of being replaced, corrupting its assertions.
-    """
+    """Reset this run's captured fixtures; never reclaim an arbitrary port owner."""
     global _fake_helper_instance
 
     def _do_cleanup() -> None:
-        # 1. Free the port (kill any listener, retry until free).
-        deadline = time.monotonic() + 5.0
-        while True:
-            pids = _listener_pids_sync()
-            if not pids:
-                break
-            for pid in pids:
-                with contextlib.suppress(OSError, ValueError):
-                    os.killpg(os.getpgid(pid), signal.SIGKILL)
-                with contextlib.suppress(OSError):
-                    os.kill(pid, signal.SIGKILL)
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(0.15)
-        # 2. Stop the tracked harness helper instance (if any).
+        _owned_helpers.cleanup(_ACCEPTANCE_HELPER_PORT)
         if _fake_helper_instance is not None:
-            with contextlib.suppress(Exception):
-                _fake_helper_instance.stop()
-        # 3. Clear ownership records for both display names used by the helper specs.
+            _fake_helper_instance.stop()
         _remove_server_record("acceptance-helper")
         _remove_server_record("acc-scenario")
 
@@ -757,34 +737,8 @@ async def _scenario_write_stale_record(request: Request) -> JSONResponse:
 
 @_production_app.post("/_acceptance/scenario/kill-port")
 async def _scenario_kill_port() -> JSONResponse:
-    """Safety net: kill whatever is listening on the helper port (deterministic reset).
-
-    Retries until the port is VERIFIABLY free. A `uv run python` wrapper spawns its real
-    listener in a separate session (start_new_session=True), so we must kill the specific
-    listening PID(s) -- and a single lsof/kill pass can race a still-dying socket, so we
-    loop until no listener remains. This is the deterministic reset that keeps each helper
-    test starting from a free port regardless of how a prior test spawned its fixture.
-    """
-
-    def _kill_until_free() -> list[int]:
-        killed: list[int] = []
-        deadline = time.monotonic() + 5.0
-        while True:
-            pids = _listener_pids_sync()
-            if not pids:
-                break
-            for pid in pids:
-                with contextlib.suppress(OSError, ValueError):
-                    os.killpg(os.getpgid(pid), signal.SIGKILL)
-                with contextlib.suppress(OSError):
-                    os.kill(pid, signal.SIGKILL)
-                killed.append(pid)
-            if time.monotonic() >= deadline:
-                break
-            time.sleep(0.15)
-        return killed
-
-    killed = await asyncio.to_thread(_kill_until_free)
+    """Reset captured fixtures and fail if an unowned listener occupies the port."""
+    killed = await asyncio.to_thread(_scenario_kill_port_sync)
     return JSONResponse({"ok": True, "killed": killed})
 
 
@@ -857,9 +811,8 @@ async def _scenario_kill_foreign() -> JSONResponse:
     return JSONResponse({"ok": True, "was_running": True})
 
 
-def _scenario_kill_port_sync() -> None:
-    for pid in _listener_pids_sync():
-        _kill_pgid_sync(pid)
+def _scenario_kill_port_sync() -> list[int]:
+    return _owned_helpers.cleanup(_ACCEPTANCE_HELPER_PORT)
 
 
 def _wait_healthy_sync(timeout_seconds: float = 15.0) -> bool:
@@ -908,18 +861,9 @@ def _listener_pids_sync() -> list[int]:
     return pids
 
 
-def _kill_pgid_sync(pid: int) -> None:
-    """Kill a PID's whole process group (falls back to the PID alone)."""
-    try:
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
-    except (OSError, ValueError):
-        with contextlib.suppress(OSError):
-            os.kill(pid, signal.SIGKILL)
-
-
 def _spawn_foreign_sync(model: str) -> "subprocess.Popen[bytes]":
     """Spawn a plain `python fake-helper.py` (no uv wrapper) so the PID IS the listener."""
-    return subprocess.Popen(  # noqa: S603, S607 - sys.executable is an absolute path at runtime
+    process = subprocess.Popen(  # noqa: S603, S607 - sys.executable is an absolute path at runtime
         [
             sys.executable,
             str(_FAKE_HELPER_PATH),
@@ -932,6 +876,8 @@ def _spawn_foreign_sync(model: str) -> "subprocess.Popen[bytes]":
         stderr=subprocess.PIPE,
         start_new_session=True,
     )
+    _owned_helpers.capture(process)
+    return process
 
 
 def _reclaim_foreign_helper_on_exit() -> None:
