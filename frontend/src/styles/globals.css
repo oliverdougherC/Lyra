@@ -118,11 +118,10 @@
   --radius-sm: 5px;
   --radius-md: 8px;
   --radius-lg: 14px;
-  /* The workbench is one surface split into two columns, so the rules that open and close
-     each column have to read as a single line across the seam. Both panes size their action
-     bar's control row from this rather than from whatever their own contents measure: the
-     composer is sized by its send button, the dropzone by a smaller pair of controls, and
-     left alone they part company by 16px. */
+  /* The class Files tab sizes its upload well from this, so the drop target stays one
+     stable calm row as uploads come and go. The conversation's composer no longer shares
+     a line with anything - the chat page carries no documents column - and hugs its
+     input instead. */
   --pane-control-row: 3.75rem;
   /* Marble: a baked SVG texture, light mode only, on the stone ground behind chrome. Soft
      warm veining keyed into the alpha channel so it modulates the stone rather than tinting

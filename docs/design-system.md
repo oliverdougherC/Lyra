@@ -374,8 +374,9 @@ and then the specifics hold:
 A drop shadow is a light-theme device: on a dark canvas it darkens dark and reads as
 nothing, so dark carries a second, inset hairline of lifted paper along the top of each
 elevated surface instead. Full rounding is reserved for avatars, status dots, switches, and
-compact metadata badges. `--pane-control-row` sizes the action bars of the two workbench
-panes from one value so their control rows part the same line across the seam.
+compact metadata badges. `--pane-control-row` sizes the class Files tab's upload well, so
+the drop target stays one stable row as uploads come and go; the conversation's composer
+no longer shares that line and hugs its input instead.
 
 Spacing runs on Tailwind's built-in 4px scale; there are no parallel `--space-*` variables.
 
@@ -554,12 +555,19 @@ The distilled judgment calls, each one a scar from a workshop round:
   with the fleuron opening; the empty conversation is a title page - fleuron, nameplate,
   sentence, one verb, suggestions reading as a contents list.
 - **The composer**: one raised writing well - `rounded-2xl` paper on the canvas with
-  `shadow-sm`, an accent border and `shadow-md` on focus - with the send control riding the
-  last line of type at 36px, round. The hint ("Enter sends") sits below the well and leaves
-  after the first message; `--pane-control-row` keeps its control row level with the
-  documents dropzone across the seam. Above it, where the conversation ends at the well, the
-  content dissolves into the canvas over the last 40px rather than being sliced by a hard
-  edge: the one sanctioned gradient, the only thing saying the text continues.
+  `shadow-sm`, an accent border and `shadow-md` on focus - that hugs its input: the
+  input line is the well's whole face and the send control rides it at the right at 36px,
+  round. The two permanent context marks keep to a small quiet line beneath the type,
+  left to the margin: the material scope (a compact pill, "All material" by default and the
+  chosen document's name when scoped, with its own clear mark, that discloses the full
+  picker on click) and the folder attach (a 24px icon with a tooltip and an accessible
+  name, replaced by a compact workspace chip once a folder is attached). Because the marks
+  sit below rather than beside the text, the input owns the full width of the well in every
+  window, including a narrow laptop slice. There is no toolbar and no reserved control row.
+  The hint ("Enter sends") sits below the well and leaves after the first message. Above
+  it, where the conversation ends at the well, the content dissolves into the canvas over
+  the last 40px rather than being sliced by a hard edge: the one sanctioned gradient, the
+  only thing saying the text continues.
 
 ## Print
 

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AgentWorkSurface } from '@/components/agent/work-surface'
 import { WorkspaceAttachProvider, WorkspaceContextChip } from '@/components/agent/workspace-attach'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import * as runtime from '@/lib/runtime'
 
@@ -30,7 +31,10 @@ function createWrapper() {
   })
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={queryClient}>
-      <WorkspaceAttachProvider classId={CLASS_ID}>{children}</WorkspaceAttachProvider>
+      {/* The app wraps every route in one tooltip provider; the tests mirror that seam. */}
+      <TooltipProvider delayDuration={300}>
+        <WorkspaceAttachProvider classId={CLASS_ID}>{children}</WorkspaceAttachProvider>
+      </TooltipProvider>
     </QueryClientProvider>
   )
   return { queryClient, wrapper }
@@ -134,7 +138,7 @@ describe('the contextual agent work surface (PLA-401)', () => {
       { wrapper },
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Attach folder' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Attach a folder' }))
     // No native picker in the test environment: the bounded path entry stands in.
     const input = await screen.findByLabelText('Path to the folder')
     fireEvent.change(input, { target: { value: '/tmp/starter' } })
@@ -171,7 +175,7 @@ describe('the contextual agent work surface (PLA-401)', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Workspace options' }))
     await userEvent.click(await screen.findByText('Detach workspace'))
     await waitFor(() => expect(detach).toHaveBeenCalledWith(CLASS_ID))
-    await screen.findByRole('button', { name: 'Attach folder' })
+    await screen.findByRole('button', { name: 'Attach a folder' })
   })
 
   it('shows no access cards once every requested scope is granted', async () => {
@@ -270,7 +274,13 @@ describe('the contextual agent work surface (PLA-401)', () => {
     )
 
     await screen.findByText('To inspect this starter project, Lyra needs to open the folder.')
-    fireEvent.click(screen.getByRole('button', { name: 'Attach a folder' }))
+    // The card carries the attach verb; the composer's icon shares the name, so scope to
+    // the card that asked for the folder.
+    const attachCard = document.querySelector('[data-access-request="attach"]')
+    if (!attachCard) throw new Error('expected the attach-scope access card')
+    fireEvent.click(
+      within(attachCard as HTMLElement).getByRole('button', { name: 'Attach a folder' }),
+    )
     const input = await screen.findByLabelText('Path to the folder')
     fireEvent.change(input, { target: { value: '/tmp/starter' } })
     fireEvent.click(screen.getByRole('button', { name: 'Attach' }))

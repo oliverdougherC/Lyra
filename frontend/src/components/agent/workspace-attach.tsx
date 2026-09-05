@@ -12,6 +12,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Spinner } from '@/components/ui/spinner'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   useAttachAgentWorkspace,
   useAgentWorkspace,
@@ -161,10 +163,13 @@ export function useWorkspaceAttach(): WorkspaceAttachContextValue {
 }
 
 /**
- * The attached workspace as a composer context chip - the same weight as the source
- * context chip beside it, so "what Lyra has on hand for this task" reads in one glance:
- * the material the answer reads, and the local folder the work happens in. No dashboard,
- * no setup section: attach is a click, detach is a menu item.
+ * The attached workspace at the composer - the second of two small context marks on the
+ * quiet line beneath the input, so "what Lyra has on hand for this task" reads in one
+ * glance: the material the answer reads, and the local folder the work happens in. No
+ * dashboard, no setup section: with no folder attached the affordance is a 24px icon (a
+ * tooltip and an accessible name say what it does); once a folder is attached it becomes
+ * a compact chip whose menu item detaches. Either way the input line is never given over
+ * to setup.
  */
 export function WorkspaceContextChip() {
   const { workspace, attachPending, beginAttach, detach } = useWorkspaceAttach()
@@ -174,7 +179,7 @@ export function WorkspaceContextChip() {
       <div className="flex items-center gap-1" data-workspace-chip>
         <span
           aria-label={`Working in the attached folder ${workspace.display_name}`}
-          className="text-text-secondary inline-flex h-6 max-w-[11rem] items-center gap-1.5 rounded-full border border-border px-2 text-xs font-medium sm:max-w-[13rem]"
+          className="text-text-secondary inline-flex h-6 max-w-[7.5rem] items-center gap-1.5 rounded-full bg-muted px-2 text-xs sm:max-w-[10rem]"
         >
           <Folder aria-hidden className="size-3 shrink-0" />
           <span className="truncate">Workspace: {workspace.display_name}</span>
@@ -199,17 +204,26 @@ export function WorkspaceContextChip() {
   }
 
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      data-attach-folder
-      className="text-text-tertiary h-6 gap-1.5 rounded-full px-2 text-xs font-medium hover:text-text-primary"
-      disabled={attachPending}
-      onClick={() => void beginAttach()}
-    >
-      <Folder aria-hidden className="size-3 shrink-0" />
-      {attachPending ? 'Attaching…' : 'Attach folder'}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          data-attach-folder
+          aria-label={attachPending ? 'Attaching…' : 'Attach a folder'}
+          className="text-text-tertiary hover:text-text-primary size-6 rounded-full"
+          disabled={attachPending}
+          onClick={() => void beginAttach()}
+        >
+          {attachPending ? (
+            <Spinner aria-hidden role="presentation" className="size-3.5" />
+          ) : (
+            <Folder aria-hidden className="size-3.5 shrink-0" />
+          )}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>Attach a folder for Lyra to work in</TooltipContent>
+    </Tooltip>
   )
 }
 
