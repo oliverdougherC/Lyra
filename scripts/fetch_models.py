@@ -123,15 +123,20 @@ def installed_build(binary: Path) -> str | None:
     return f"b{match.group(1)}" if match else None
 
 
-def fetch_llama_server() -> Path:
+def fetch_llama_server(target_dir: Path | None = None) -> Path:
     """Download and extract the pinned llama.cpp release, unless it is already installed.
 
     "Already present" is not the same as "already correct", and the difference matters
     here: the specialist OCR path needs the `max_tiles` fix that landed in b10287, and an
     older binary reads dense pages at a coarser tile grid without saying so. So the
     existing binary is asked what it is, and replaced when it is not the pin.
+
+    `target_dir` is where the build lands: the models directory for the checkout, or the
+    Tauri resource tree when the same pin is being staged into the application bundle -
+    one download, one extraction, and one build verification for both.
     """
-    existing = find_llama_server(settings.llama_dir)
+    root = settings.llama_dir if target_dir is None else target_dir
+    existing = find_llama_server(root)
     if existing is not None:
         found = installed_build(existing)
         if found == LLAMA_RELEASE_TAG:
@@ -143,18 +148,18 @@ def fetch_llama_server() -> Path:
         )
 
     asset = f"llama-{LLAMA_RELEASE_TAG}-bin-{resolve_asset_suffix()}"
-    settings.llama_dir.mkdir(parents=True, exist_ok=True)
-    _remove_stale_builds()
-    archive = settings.llama_dir / asset
+    root.mkdir(parents=True, exist_ok=True)
+    _remove_stale_builds(root)
+    archive = root / asset
 
     print(f"Downloading {asset} ...")
     _download(f"{RELEASE_BASE_URL}/{LLAMA_RELEASE_TAG}/{asset}", archive)
     print(f"Extracting {asset} ...")
-    _extract(archive, settings.llama_dir)
+    _extract(archive, root)
     archive.unlink()
 
     # The archive layout differs per platform, so the binary is found, not assumed.
-    binary = find_llama_server(settings.llama_dir)
+    binary = find_llama_server(root)
     if binary is None:
         raise ConfigurationError(f"The archive {asset} did not contain a llama-server binary.")
     binary.chmod(binary.stat().st_mode | 0o111)
@@ -221,7 +226,7 @@ def fetch_ocr_weights() -> list[Path]:
     return landed
 
 
-def _remove_stale_builds() -> None:
+def _remove_stale_builds(root: Path | None = None) -> None:
     """Delete previously extracted builds that are not the pin.
 
     Exactly one build is kept, and that is the point rather than tidiness. Every consumer
@@ -230,7 +235,8 @@ def _remove_stale_builds() -> None:
     sorts before `llama-b10287`, so downloading the pinned build changed nothing at all
     until this ran. Only directories this script created are touched.
     """
-    for existing in sorted(settings.llama_dir.glob("llama-b*")):
+    llama_root = settings.llama_dir if root is None else root
+    for existing in sorted(llama_root.glob("llama-b*")):
         if not existing.is_dir() or existing.name == f"llama-{LLAMA_RELEASE_TAG}":
             continue
         if find_llama_server(existing) is None:

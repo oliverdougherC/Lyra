@@ -42,6 +42,20 @@ def platform_logs_dir(app_name: str = APP_NAME) -> Path:
     return base / app_name / "logs"
 
 
+def bundled_runtime_dir(resource_root: Path) -> Path:
+    """Where the application bundle stages the llama runtime.
+
+    The frozen backend's `resource_root` is the backend's own directory (`<app resources>
+    /lyra-backend`), and the Tauri bundle copies `resources/llama` next to it, so the
+    runtime sits beside the backend in the app's resources. On macOS that is
+    `Lyra.app/Contents/Resources/llama`; the same shape holds on Windows and Linux.
+
+    The runtime stays inside the app bundle: it is signed and notarized with the rest of
+    the application, and a clean install therefore has it on disk with no download step.
+    """
+    return resource_root.parent / "llama"
+
+
 def default_resource_root() -> Path:
     configured = os.environ.get("LYRA_RESOURCE_ROOT")
     if configured:

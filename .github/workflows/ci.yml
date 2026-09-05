@@ -325,6 +325,11 @@ jobs:
           uv run python scripts/frozen_backend_smoke.py dist/lyra-backend/lyra-backend
           uv run python packaging/stage_sidecar.py
 
+      - name: Stage pinned llama runtime into the bundle
+        run: |
+          uv run python scripts/stage_llama_runtime.py
+          test -n "$(find src-tauri/resources/llama -name 'llama-server' -type f | head -1)"
+
       - name: Build frontend
         working-directory: frontend
         run: pnpm build

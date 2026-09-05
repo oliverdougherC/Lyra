@@ -2,3 +2,5 @@
 !/resources/lyra-backend/.gitkeep
 /gen/schemas/
 /target/
+/resources/llama/*
+!/resources/llama/.gitkeep

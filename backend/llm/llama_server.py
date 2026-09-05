@@ -62,12 +62,20 @@ from typing import IO, Literal, Protocol
 
 import httpx
 
+from backend import desktop_paths
 from backend.config import settings
 from backend.core.errors import ConfigurationError
 
 logger = logging.getLogger(__name__)
 
 _BINARY_NAMES = ("llama-server", "llama-server.exe")
+
+# In the packaged product the runtime is part of the application, so a missing runtime
+# is a broken installation, not a fetch step. This is the only wording a student can see
+# for that state; no variant names a repo script.
+PACKAGED_MISSING_RUNTIME_MESSAGE = (
+    "The local model runtime is missing from this application. Reinstall Lyra to restore it."
+)
 _HEALTH_POLL_SECONDS = 1.0
 _HEALTH_REQUEST_TIMEOUT_SECONDS = 5.0
 _SHUTDOWN_GRACE_SECONDS = 5.0
@@ -1197,14 +1205,30 @@ class LlamaServer:
                     _remove_server_record(self._display_name)
             raise
 
+    def _binary_search_dirs(self) -> tuple[Path, ...]:
+        """Directories the runtime may live in, in priority order.
+
+        A runtime installed in the models directory always wins: that is where the source
+        checkout's fetch flow puts it, and a manual install there is an explicit choice.
+        In the packaged product the models directory is empty on a clean install, and the
+        runtime ships inside the application itself, staged next to the frozen backend.
+        """
+        dirs = [settings.llama_dir]
+        if settings.packaged_mode and settings.resource_root is not None:
+            bundled = desktop_paths.bundled_runtime_dir(settings.resource_root)
+            if bundled not in dirs:
+                dirs.append(bundled)
+        return tuple(dirs)
+
     def _find_binary(self) -> Path | None:
         if self._binary is not None and self._binary.exists():
             return self._binary
-        for name in _BINARY_NAMES:
-            for candidate in sorted(settings.llama_dir.rglob(name)):
-                if candidate.is_file():
-                    self._binary = candidate
-                    return candidate
+        for root in self._binary_search_dirs():
+            for name in _BINARY_NAMES:
+                for candidate in sorted(root.rglob(name)):
+                    if candidate.is_file():
+                        self._binary = candidate
+                        return candidate
         return None
 
     def _await_health(self, process: "subprocess.Popen[bytes]") -> None:

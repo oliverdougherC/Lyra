@@ -501,12 +501,16 @@ class TestFirstUseProvisioning:
     def test_status_reports_not_installed_before_any_download(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Before first use the model has not failed yet, so the status says it will
+        arrive on first use - failure wording is reserved for a failed attempt."""
         server = EmbeddingServer()
         monkeypatch.setattr(server, "_healthy", lambda: False)
 
         status = server.status()
 
         assert status.state == "not_installed"
+        assert status.detail == "The local embedding model will be downloaded on first use."
+        assert "could not" not in (status.detail or "")
         assert "fetch_models" not in (status.detail or "")
 
     def test_status_reports_downloading_while_provisioning(
@@ -539,3 +543,19 @@ class TestFirstUseProvisioning:
             downloader.join(timeout=10)
 
         assert server.status().state == "ready"
+
+    def test_a_packaged_install_with_a_missing_runtime_gets_no_script_instructions(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """In the product the runtime ships inside the application, so its absence is a
+        broken installation to reinstall - never a checkout command to run."""
+        monkeypatch.setattr(settings, "packaged_mode", True)
+        server = EmbeddingServer()
+        monkeypatch.setattr(server, "_healthy", lambda: False)
+
+        with pytest.raises(ConfigurationError) as caught:
+            server.ensure_running()
+
+        assert caught.value.message == llama_server.PACKAGED_MISSING_RUNTIME_MESSAGE
+        assert "fetch_models" not in caught.value.message
+        assert "python" not in caught.value.message

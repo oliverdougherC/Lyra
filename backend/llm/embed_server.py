@@ -12,6 +12,12 @@ run. The download metadata and mechanics live in `model_provisioning.py`, shared
 `scripts/fetch_models.py`, so the manual and automatic paths can never name a different
 file or a different folder.
 
+The runtime is the other half of the same promise. In the packaged product it ships
+inside the application (the Tauri bundle stages it next to the frozen backend), so a
+clean install can resolve it with nothing but its own files on disk; in a source
+checkout the developer fetches it with the script. Either way, nothing here tells a
+user to run a repo command to make embedding work.
+
 The lifecycle itself - spawn, adopt-and-verify, watch stderr, escalate on shutdown -
 lives in `llama_server.py`, shared with the OCR and reranking servers. This module is
 the embedding facts: which model, which flags, and what to tell the student when
@@ -23,22 +29,31 @@ from pathlib import Path
 from backend.config import settings
 from backend.core.errors import ConfigurationError
 from backend.llm import model_provisioning
-from backend.llm.llama_server import LlamaServer
+from backend.llm.llama_server import PACKAGED_MISSING_RUNTIME_MESSAGE, LlamaServer
 from backend.llm.model_provisioning import EMBEDDING_WEIGHTS
 
 _HEALTH_TIMEOUT_SECONDS = 120.0
 
-_MISSING_BINARY_MESSAGE = (
-    "The local embedding server is not installed yet. "
-    "Run `python scripts/fetch_models.py` to download it."
-)
-# The only path this message still reaches a user is a download that failed or was
-# interrupted: the model is absent and the automatic provisioner did not land it. It is
-# written for the student, not for whoever maintains the checkout.
-_MISSING_WEIGHTS_MESSAGE = (
-    "The local embedding model is missing, and Lyra could not download it. "
-    "Check your internet connection and try again."
-)
+
+def _missing_binary_message() -> str:
+    """What to say when the runtime that serves embeddings is absent.
+
+    In the packaged product the runtime ships inside the application, so absence means a
+    broken installation, not a step to run. In a source checkout the developer fetches
+    it with the script.
+    """
+    if settings.packaged_mode:
+        return PACKAGED_MISSING_RUNTIME_MESSAGE
+    return (
+        "The local embedding server is not installed yet. "
+        "Run `python scripts/fetch_models.py` to download it."
+    )
+
+
+# Before first use the model is simply not there yet; it arrives on first use. This is
+# the pre-attempt state, so it says what will happen, not what went wrong. A provision
+# attempt that actually fails reports itself, in `model_provisioning`.
+_MISSING_WEIGHTS_MESSAGE = "The local embedding model will be downloaded on first use."
 _START_FAILED_MESSAGE = "Local embedding model failed to start."
 
 
@@ -58,7 +73,7 @@ class EmbeddingServer(LlamaServer):
             # The base llama port itself; the OCR and reranking servers offset from it.
             port_offset=0,
             health_timeout_seconds=_HEALTH_TIMEOUT_SECONDS,
-            missing_binary_message=_MISSING_BINARY_MESSAGE,
+            missing_binary_message=_missing_binary_message(),
             start_failed_message=_START_FAILED_MESSAGE,
             weights_provisioner=self._provision_weights,
         )

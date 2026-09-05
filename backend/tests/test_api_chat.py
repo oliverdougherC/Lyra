@@ -378,6 +378,80 @@ def test_a_first_message_on_a_fresh_install_provisions_the_embedding_model(
     assert settings.embedding_model_path.exists()
 
 
+def test_a_first_message_on_a_true_clean_packaged_install_provisions_everything(
+    client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PLA-402 end-to-end: a genuine clean packaged install, not a mocked one.
+
+    The application-support models directory is empty - no weights, and no
+    `llama-server` anywhere in it. The runtime instead lives where the Tauri build
+    stages it, inside the application's resources next to the frozen backend. The first
+    message must resolve the real runtime, download the weights, and complete the turn
+    - with no restart, no terminal command, and no mock standing in for the resolution.
+    """
+    # The clean install: nothing in the user's models directory at all.
+    assert not settings.embedding_model_path.exists()
+    assert not settings.llama_dir.exists() or not any(settings.llama_dir.iterdir())
+
+    # The bundle's resource layout: the frozen backend's own directory, with the runtime
+    # staged next to it, exactly as `tauri.conf.json` lays it out.
+    backend_dir = tmp_path / "resources" / "lyra-backend"
+    backend_dir.mkdir(parents=True)
+    bundled_binary = tmp_path / "resources" / "llama" / "llama-b10287" / "llama-server"
+    bundled_binary.parent.mkdir(parents=True)
+    bundled_binary.write_bytes(b"not a real binary")
+    monkeypatch.setattr(settings, "packaged_mode", True)
+    monkeypatch.setattr(settings, "resource_root", backend_dir)
+
+    # The real retrieval path, which is the one that embeds the query.
+    monkeypatch.setattr(routes_chat, "retrieve", retrieve_module.retrieve)
+
+    downloads: list[tuple[str, str]] = []
+
+    def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+        downloads.append((repo_id, filename))
+        path = Path(str(local_dir)) / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"GGUF fake")
+        return str(path)
+
+    monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+
+    # A fake spawn: no real port, no health check. `_find_binary` is deliberately NOT
+    # mocked - the whole point is that the real resolution finds the bundled runtime.
+    monkeypatch.setattr(EmbeddingServer, "_healthy", lambda self: False)
+    monkeypatch.setattr(EmbeddingServer, "_await_health", lambda self, process: None)
+    monkeypatch.setattr(llama_server, "_record_server", lambda *args: None)
+    monkeypatch.setattr(llama_server.subprocess, "Popen", lambda argv, **kwargs: _AliveProcess())
+    # The embedding server's HTTP answers, at the width the real server serves.
+    monkeypatch.setattr(embed, "_client", _mock_embedding_client)
+
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Sure."))
+
+    try:
+        response = _send(client, session_id)
+    finally:
+        embedding_server.stop()
+
+    assert response.status_code == 200
+    frames = _frames(response.text)
+    assert [frame["type"] for frame in frames] == [
+        "start",
+        "status",
+        "status",
+        "status",
+        "token",
+        "done",
+    ]
+
+    # The runtime came from the bundle, and the weights landed in the user's models
+    # directory - never back into the application bundle.
+    assert downloads == [(EMBEDDING_WEIGHTS.repo_id, EMBEDDING_WEIGHTS.filename)]
+    assert embedding_server._binary == bundled_binary
+    assert settings.embedding_model_path.exists()
+    assert [p.name for p in bundled_binary.parent.iterdir()] == ["llama-server"]
+
+
 def test_a_trimmed_retrieval_adds_a_notice_immediately_after_start(
     client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
