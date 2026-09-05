@@ -161,9 +161,19 @@ The component/helper suite additionally covers storage changing between render a
 claim, external revision changes, failed edit/remove persistence followed by restoration,
 read-only study returning to the preserved operation, and per-deck recovery controls.
 
-Historical evidence for the previously reviewed head: its local review app was rebuilt with the
-frozen backend, signed with the existing Apple Development identity, and all 81 native code
-objects passed verification. The signed bundle's
-frozen smoke reported authenticated ephemeral-loopback startup; native launch loaded existing
-classes and the backend process from this worktree's bundle. The signing helper was the existing
-local `scripts/sign_local_app.py` from the parallel checkout, kept outside this PR's code scope.
+## Exact integration base and acceptance limits
+
+This follow-up integrates PR #70 at `be6aed74d7573ac3bba59239e08174bee9cf1813`
+(`codex/pla-404-recovered`). PR #70 remains unmerged; PR #71 is stacked on that exact base.
+The initially overlapping card and harness changes were resolved semantically before the
+new targeted #70 follow-up was merged. The resulting tree retains both sets of study tests,
+accessible card faces, focus and shortcut ownership, edit/remove confirmation, narrow layout,
+error retry, session-versus-deck counts, and the selected-source/quiz/cancellation/scheduler work.
+
+Final aggregate CI, signed-bundle and launch results are attached to PR #71 and PLA-477.
+Independent green PR heads are not combined evidence. PLA-477 remains In Review; PLA-151
+remains open for real-provider quality and release-candidate evaluation. Actual assistive
+technology, physical CJK/native zoom, notarization, and the clean 8 GB sustained-soak gates
+remain release acceptance work. Retained deleted outcomes cannot be reconstructed from a
+cascaded review log, and malformed storage supports unrecorded study until repaired. These
+limitations are explicit rather than fabricated acknowledgements or claims of release readiness.
