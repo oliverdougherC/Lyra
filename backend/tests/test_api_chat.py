@@ -9,6 +9,7 @@ wire.
 import json
 import sqlite3
 from collections.abc import AsyncIterator, Callable, Iterator
+from pathlib import Path
 
 import httpx
 import pytest
@@ -16,11 +17,18 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
+import backend.rag.retrieve as retrieve_module
 from backend.api import routes_chat
+from backend.config import settings
 from backend.core import app_settings, sessions
 from backend.core.errors import LyraError, UpstreamError
+from backend.llm import llama_server, model_provisioning
 from backend.llm.client import StreamDelta
+from backend.llm.embed_server import EmbeddingServer, embedding_server
+from backend.llm.model_provisioning import EMBEDDING_WEIGHTS
 from backend.llm.prompts import build_system_prompt
+from backend.rag import embed
+from backend.rag.embed import EMBEDDING_DIM
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect, get_db
@@ -155,6 +163,57 @@ def stub_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(routes_chat, "retrieve", _returns(NOTHING_RETRIEVED))
 
 
+@pytest.fixture(autouse=True)
+def _isolated_ownership(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Keep the durable server-ownership file per-test.
+
+    The first-use provisioning test below runs the real spawn path, which records
+    ownership; without this it would read and write the developer's real `.lyra`
+    directory, and a live checkout backend would be a stranger in the middle of it.
+    """
+    runtime_dir = tmp_path / "lyra_runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(llama_server, "_RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(llama_server, "_OWNERSHIP_FILE", runtime_dir / "server_ownership.json")
+
+
+class _AliveProcess:
+    """A spawned child that stays alive: poll() returns None until killed."""
+
+    pid = 2**30
+
+    def __init__(self) -> None:
+        self._killed = False
+
+    def poll(self) -> int | None:
+        return 1 if self._killed else None
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+    def kill(self) -> None:
+        self._killed = True
+
+    def terminate(self) -> None:
+        self._killed = True
+
+
+def _mock_embedding_client() -> httpx.Client:
+    """Answers the embedding server's endpoints like llama.cpp, at the real width."""
+
+    def _handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/tokenize"):
+            return httpx.Response(200, json={"tokens": [0]})
+        inputs = json.loads(request.content)["input"]
+        data = [
+            {"object": "embedding", "index": i, "embedding": [0.1] * EMBEDDING_DIM}
+            for i in range(len(inputs))
+        ]
+        return httpx.Response(200, json={"object": "list", "data": data})
+
+    return httpx.Client(transport=httpx.MockTransport(_handle), timeout=1.0)
+
+
 @pytest.fixture
 def client(db: sqlite3.Connection) -> Iterator[TestClient]:
     """A TestClient over an app carrying only the chat router.
@@ -261,6 +320,62 @@ def test_a_normal_turn_streams_start_then_tokens_then_done(
     assert answer == "The chain rule:\n\n$f'(g(x))g'(x)$"
     # The frame types are the contract; there is no sentinel to look for.
     assert "[DONE]" not in response.text
+
+
+def test_a_first_message_on_a_fresh_install_provisions_the_embedding_model(
+    client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PLA-402 regression: a clean install has no embedding weights on disk.
+
+    The message must not fail with "the model is not downloaded yet, run a script" -
+    the first use downloads the model to the application-managed models directory and
+    the turn completes, with no restart and no terminal command.
+    """
+    assert not settings.embedding_model_path.exists()
+
+    # The real retrieval path, which is the one that embeds the query.
+    monkeypatch.setattr(routes_chat, "retrieve", retrieve_module.retrieve)
+
+    downloads: list[tuple[str, str]] = []
+
+    def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+        downloads.append((repo_id, filename))
+        path = Path(str(local_dir)) / filename
+        path.write_bytes(b"GGUF fake")
+        return str(path)
+
+    monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+
+    # A fake spawn: no real binary, port, or health check.
+    monkeypatch.setattr(EmbeddingServer, "_healthy", lambda self: False)
+    monkeypatch.setattr(
+        EmbeddingServer, "_find_binary", lambda self: settings.models_dir / "llama-server"
+    )
+    monkeypatch.setattr(EmbeddingServer, "_await_health", lambda self, process: None)
+    monkeypatch.setattr(llama_server, "_record_server", lambda *args: None)
+    monkeypatch.setattr(llama_server.subprocess, "Popen", lambda argv, **kwargs: _AliveProcess())
+    # The embedding server's HTTP answers, at the width the real server serves.
+    monkeypatch.setattr(embed, "_client", _mock_embedding_client)
+
+    monkeypatch.setattr(routes_chat, "stream_chat", _stream_of("Sure."))
+
+    try:
+        response = _send(client, session_id)
+    finally:
+        embedding_server.stop()
+
+    assert response.status_code == 200
+    frames = _frames(response.text)
+    assert [frame["type"] for frame in frames] == [
+        "start",
+        "status",
+        "status",
+        "status",
+        "token",
+        "done",
+    ]
+    assert downloads == [(EMBEDDING_WEIGHTS.repo_id, EMBEDDING_WEIGHTS.filename)]
+    assert settings.embedding_model_path.exists()
 
 
 def test_a_trimmed_retrieval_adds_a_notice_immediately_after_start(

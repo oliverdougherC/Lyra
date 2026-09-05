@@ -30,6 +30,13 @@ def _install_weights() -> None:
     settings.ocr_mmproj_path.write_bytes(b"GGUF not really either")
 
 
+def _install_runtime() -> None:
+    """A stub `llama-server`, so the start path gets past the runtime check to the weights."""
+    binary = settings.llama_dir / "llama-server"
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.write_bytes(b"not a real binary")
+
+
 def test_the_weights_being_absent_is_a_state_rather_than_an_error(server: OcrServer) -> None:
     """The ordinary case. They are 2.8 GB and downloaded only when asked for, so every
     path has to cope with them missing."""
@@ -39,6 +46,9 @@ def test_the_weights_being_absent_is_a_state_rather_than_an_error(server: OcrSer
 def test_starting_without_the_weights_says_what_to_run_and_that_it_is_optional(
     server: OcrServer,
 ) -> None:
+    # The runtime is present: this is about the weights, and the runtime check runs first.
+    _install_runtime()
+
     with pytest.raises(ConfigurationError) as caught:
         server.ensure_running()
 

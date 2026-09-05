@@ -113,6 +113,7 @@ _STOP_REASON_IDLE_EVICTED = "idle_evicted"
 HelperState = Literal[
     "stopped",
     "loading",
+    "downloading",
     "ready",
     "idle_evicted",
     "failed",
@@ -469,12 +470,17 @@ class LlamaServer:
         health_timeout_seconds: float,
         missing_binary_message: str,
         start_failed_message: str,
+        weights_provisioner: Callable[[], None] | None = None,
     ) -> None:
         self._display_name = display_name
         self._port_offset = port_offset
         self._health_timeout_seconds = health_timeout_seconds
         self._missing_binary_message = missing_binary_message
         self._start_failed_message = start_failed_message
+        # None means "these weights are optional: absent is a configuration, and the
+        # caller degrades". Set only by servers whose weights are required
+        # infrastructure (the embedding server), which download them on first use.
+        self._weights_provisioner = weights_provisioner
         self._process: subprocess.Popen[bytes] | None = None
         self._binary: Path | None = None
         self._lock = threading.RLock()
@@ -510,6 +516,34 @@ class LlamaServer:
     def _argv(self, binary: Path) -> list[str]:
         """The full command line, including host and port."""
         raise NotImplementedError
+
+    def _ensure_weights(self) -> None:
+        """Make sure the weights are on disk, self-provisioning when this server can.
+
+        A server with no provisioner (the optional OCR and reranking paths) keeps the
+        existing behaviour: `_check_installed` raises in the server's own words and the
+        caller degrades. A server with one provisions: its weights are required
+        infrastructure, so the request that found them missing downloads them - the
+        download is deduplicated process-wide in `model_provisioning`, an interrupted
+        download leaves nothing that looks installed, and a failure raises the
+        provisioner's retryable error rather than a command to run.
+        """
+        try:
+            self._check_installed()
+        except ConfigurationError:
+            provisioner = self._weights_provisioner
+            if provisioner is None:
+                raise
+            provisioner()
+            self._check_installed()
+
+    def _download_state(self) -> str | None:
+        """A one-line progress detail while this server's weights are being downloaded.
+
+        `None` means no download is in flight. Overridden by the embedding server, whose
+        weights are the only ones Lyra downloads on first use.
+        """
+        return None
 
     # ------------------------------------------------------------------ address
 
@@ -582,6 +616,19 @@ class LlamaServer:
 
     def status(self) -> HelperStatus:
         """Current helper state without mutating lifecycle ownership."""
+        # Lock-free first: a weight download holds the lifecycle lock for the whole
+        # download, and this snapshot must not wait for it to answer "what is the helper
+        # doing". While one is in flight the lease count is reported as 0 - the lock it
+        # lives under is exactly the one being held - and the state is the progress.
+        download_detail = self._download_state()
+        if download_detail is not None:
+            return HelperStatus(
+                state="downloading",
+                lease_count=0,
+                owned=True,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+                detail=download_detail,
+            )
         with self._lock:
             starting = self._starting
             lease_count = self._lease_count
@@ -1049,7 +1096,9 @@ class LlamaServer:
 
     def _start_locked(self) -> None:
         """Spawn `llama-server` and block until healthy. Caller holds the lock."""
-        self._check_installed()
+        # The runtime check is cheap and network-free, so it comes first: a machine
+        # without the binary is told that before any download starts, and a
+        # download is only ever attempted for a runtime that can use it.
         binary = self._find_binary()
         if binary is None:
             raise ConfigurationError(self._missing_binary_message)
@@ -1058,6 +1107,12 @@ class LlamaServer:
             and time.monotonic() - self._failed_at < _START_FAILURE_COOLDOWN_SECONDS
         ):
             raise ConfigurationError(self._failure_message)
+
+        # Provisioning, if it is needed, happens before the spawn: the request that
+        # triggered the start waits for the download and then continues with a fresh
+        # spawn. A failed download is not remembered as a spawn failure - the next
+        # request retries the download rather than being held in the start cooldown.
+        self._ensure_weights()
 
         self._starting = True
         try:

@@ -6,15 +6,96 @@ the HTTP boundary so the real request building, batching, and parsing all run.
 """
 
 import json
+import threading
+import time
+from pathlib import Path
 
 import httpx
 import pytest
 
-from backend.core.errors import UpstreamError
+from backend.config import settings
+from backend.core.errors import ConfigurationError, UpstreamError
+from backend.llm import llama_server, model_provisioning
 from backend.llm.embed_server import EmbeddingServer
 from backend.rag import embed
 from backend.rag.embed import EMBEDDING_DIM, embed_documents, embed_query
 from backend.rag.tokens import estimate_tokens
+
+
+@pytest.fixture(autouse=True)
+def _isolated_ownership(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point the durable ownership file at a per-test directory.
+
+    The provisioning tests below run the real spawn path, which records ownership;
+    without this they would read and write the developer's real `.lyra` directory, and a
+    live checkout backend would be a stranger in the middle of the test.
+    """
+    runtime_dir = tmp_path / "lyra_runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(llama_server, "_RUNTIME_DIR", runtime_dir)
+    monkeypatch.setattr(llama_server, "_OWNERSHIP_FILE", runtime_dir / "server_ownership.json")
+
+
+class _AliveProcess:
+    """A spawned child that stays alive: poll() returns None until killed."""
+
+    pid = 2**30
+
+    def __init__(self) -> None:
+        self._killed = False
+
+    def poll(self) -> int | None:
+        return 1 if self._killed else None
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
+
+    def kill(self) -> None:
+        self._killed = True
+
+    def terminate(self) -> None:
+        self._killed = True
+
+
+class _FakeTimer:
+    """An idle-eviction timer that never fires on its own.
+
+    The real one is a non-daemon `threading.Timer`; if it outlives the test it keeps the
+    interpreter alive forever. Tests decide when eviction happens, by hand.
+    """
+
+    def __init__(self, delay: float, callback: object) -> None:
+        self.delay = delay
+        self._callback = callback
+        self.started = False
+        self.cancelled = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def cancel(self) -> None:
+        self.cancelled = True
+
+    def fire(self) -> None:
+        if not self.cancelled:
+            self._callback()  # type: ignore[misc]
+
+
+def _wire_a_fake_spawn(server: EmbeddingServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A spawn that lands a live fake process, with no real binary, port, or network."""
+    monkeypatch.setattr(server, "_healthy", lambda: False)
+    monkeypatch.setattr(server, "_find_binary", lambda: settings.models_dir / "llama-server")
+    monkeypatch.setattr(server, "_await_health", lambda process: None)
+    monkeypatch.setattr(llama_server, "_record_server", lambda *args: None)
+    monkeypatch.setattr(server, "_timer_factory", _FakeTimer)
+    monkeypatch.setattr(llama_server.subprocess, "Popen", lambda argv, **kwargs: _AliveProcess())
+
+
+def _land_embedding_weights(**kwargs: object) -> str:
+    """A successful `hf_hub_download` for the nomic file, in the models directory."""
+    path = Path(str(kwargs["local_dir"])) / model_provisioning.EMBEDDING_WEIGHTS.filename
+    path.write_bytes(b"GGUF fake")
+    return str(path)
 
 
 class StubEmbeddingApi:
@@ -277,3 +358,184 @@ def test_estimate_tokens_never_returns_zero() -> None:
     assert estimate_tokens("") == 1
     assert estimate_tokens("abc") == 1
     assert estimate_tokens("a" * 8) == 2
+
+
+# ------------------------------------------------------------------ first use (PLA-402)
+
+
+class TestFirstUseProvisioning:
+    """A missing embedding model provisions itself on first use.
+
+    A clean install has the runtime but not the weights. The first request that needs
+    embeddings must land the weights in the application-managed models directory and
+    continue - not hand the student a command to run, and not need a restart.
+    """
+
+    def test_a_missing_model_is_downloaded_on_first_use(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        server = EmbeddingServer()
+        assert not settings.embedding_model_path.exists()
+        _wire_a_fake_spawn(server, monkeypatch)
+
+        downloads: list[tuple[str, str]] = []
+
+        def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+            downloads.append((repo_id, filename))
+            return _land_embedding_weights(repo_id=repo_id, filename=filename, local_dir=local_dir)
+
+        monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+
+        server.ensure_running()
+
+        assert downloads == [
+            ("nomic-ai/nomic-embed-text-v1.5-GGUF", "nomic-embed-text-v1.5.Q8_0.gguf")
+        ]
+        assert settings.embedding_model_path.exists()
+        assert server._process is not None
+
+    def test_the_request_that_found_the_model_missing_gets_its_vectors(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`lease()` is the shape every real caller takes (`rag/embed.py`), and the whole
+        point is that that same request continues after provisioning.
+
+        `embed_documents` speaks to whatever `rag.embed` calls `embedding_server`, so a
+        local instance is pointed at through that name - the real embed path, without
+        leaving instance-level fakes on the process-wide singleton.
+        """
+        server = EmbeddingServer()
+        monkeypatch.setattr(embed, "embedding_server", server)
+        _wire_a_fake_spawn(server, monkeypatch)
+
+        downloads: list[str] = []
+
+        def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+            downloads.append(filename)
+            return _land_embedding_weights(repo_id=repo_id, filename=filename, local_dir=local_dir)
+
+        monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+
+        def fake_client() -> httpx.Client:
+            def handle(request: httpx.Request) -> httpx.Response:
+                if request.url.path.endswith("/tokenize"):
+                    return httpx.Response(200, json={"tokens": [0]})
+                inputs = json.loads(request.content)["input"]
+                data = [
+                    {"object": "embedding", "index": i, "embedding": [0.1] * EMBEDDING_DIM}
+                    for i in range(len(inputs))
+                ]
+                return httpx.Response(200, json={"object": "list", "data": data})
+
+            return httpx.Client(transport=httpx.MockTransport(handle), timeout=1.0)
+
+        monkeypatch.setattr(embed, "_client", fake_client)
+
+        try:
+            with server.lease():
+                vectors = embed_documents(["hello"])
+
+            assert len(vectors) == 1
+            assert len(vectors[0]) == EMBEDDING_DIM
+            assert downloads == ["nomic-embed-text-v1.5.Q8_0.gguf"]
+            assert server.active_leases == 0
+        finally:
+            # Reclaim the fake child and cancel its idle-eviction timer.
+            server.stop()
+
+    def test_concurrent_first_uses_share_one_download(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        server = EmbeddingServer()
+        _wire_a_fake_spawn(server, monkeypatch)
+
+        downloads: list[str] = []
+
+        def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+            downloads.append(filename)
+            time.sleep(0.05)
+            return _land_embedding_weights(repo_id=repo_id, filename=filename, local_dir=local_dir)
+
+        monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+
+        errors: list[Exception] = []
+
+        def worker() -> None:
+            try:
+                server.ensure_running()
+            except Exception as exc:  # noqa: BLE001 - the test records the outcome
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert not errors
+        assert downloads == ["nomic-embed-text-v1.5.Q8_0.gguf"]
+
+    def test_a_failed_download_is_a_simple_retryable_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        server = EmbeddingServer()
+        _wire_a_fake_spawn(server, monkeypatch)
+
+        def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+            raise httpx.ConnectError("network unreachable")
+
+        monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+
+        with pytest.raises(ConfigurationError) as caught:
+            server.ensure_running()
+
+        message = caught.value.message
+        assert "could not be downloaded" in message
+        assert "fetch_models" not in message
+        assert str(settings.models_dir) not in message
+        assert not settings.embedding_model_path.exists()
+        # A download failure is not remembered as a spawn failure: the next request
+        # retries the download instead of sitting in the start cooldown.
+        assert server._failure_message is None
+
+    def test_status_reports_not_installed_before_any_download(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        server = EmbeddingServer()
+        monkeypatch.setattr(server, "_healthy", lambda: False)
+
+        status = server.status()
+
+        assert status.state == "not_installed"
+        assert "fetch_models" not in (status.detail or "")
+
+    def test_status_reports_downloading_while_provisioning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        server = EmbeddingServer()
+        _wire_a_fake_spawn(server, monkeypatch)
+
+        release = threading.Event()
+        download_started = threading.Event()
+
+        def fake_download(*, repo_id: str, filename: str, local_dir: object) -> str:
+            download_started.set()
+            release.wait()
+            return _land_embedding_weights(repo_id=repo_id, filename=filename, local_dir=local_dir)
+
+        monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+
+        downloader = threading.Thread(target=server.ensure_running)
+        downloader.start()
+        download_started.wait(timeout=5)
+        try:
+            # The snapshot must not wait for the lock the downloader is holding.
+            status = server.status()
+
+            assert status.state == "downloading"
+            assert "embedding" in (status.detail or "").lower()
+        finally:
+            release.set()
+            downloader.join(timeout=10)
+
+        assert server.status().state == "ready"
