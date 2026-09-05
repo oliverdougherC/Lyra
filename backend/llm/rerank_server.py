@@ -27,7 +27,7 @@ from pathlib import Path
 
 from backend.config import settings
 from backend.core.errors import ConfigurationError
-from backend.llm.llama_server import LlamaServer
+from backend.llm.llama_server import PACKAGED_MISSING_RUNTIME_MESSAGE, LlamaServer
 
 _HEALTH_TIMEOUT_SECONDS = 120.0
 
@@ -54,10 +54,29 @@ MISSING_WEIGHTS_MESSAGE = (
     "download it, or leave it out and Lyra will rank search results by embedding "
     "similarity alone."
 )
+# A packaged install has no checkout to run scripts in: the same sentence, minus the
+# step the student cannot take.
+_PACKAGED_MISSING_WEIGHTS_MESSAGE = (
+    "The reranking model is not installed. "
+    "Lyra will rank search results by embedding similarity alone."
+)
 MISSING_BINARY_MESSAGE = (
     "The local model runtime is not installed yet. Run `python scripts/fetch_models.py`."
 )
 START_FAILED_MESSAGE = "The local reranking model failed to start."
+
+
+def _missing_weights_message() -> str:
+    if settings.packaged_mode:
+        return _PACKAGED_MISSING_WEIGHTS_MESSAGE
+    return MISSING_WEIGHTS_MESSAGE
+
+
+def _missing_binary_message() -> str:
+    """The packaged product ships the runtime in the app, so there is no fetch step there."""
+    if settings.packaged_mode:
+        return PACKAGED_MISSING_RUNTIME_MESSAGE
+    return MISSING_BINARY_MESSAGE
 
 
 class RerankServer(LlamaServer):
@@ -68,7 +87,7 @@ class RerankServer(LlamaServer):
             display_name="reranking",
             port_offset=RERANK_PORT_OFFSET,
             health_timeout_seconds=_HEALTH_TIMEOUT_SECONDS,
-            missing_binary_message=MISSING_BINARY_MESSAGE,
+            missing_binary_message=_missing_binary_message(),
             start_failed_message=START_FAILED_MESSAGE,
         )
 
@@ -82,7 +101,7 @@ class RerankServer(LlamaServer):
 
     def _check_installed(self) -> None:
         if not self.available:
-            raise ConfigurationError(MISSING_WEIGHTS_MESSAGE)
+            raise ConfigurationError(_missing_weights_message())
 
     def _argv(self, binary: Path) -> list[str]:
         return [

@@ -87,6 +87,11 @@ def test_the_weights_being_absent_is_a_state_rather_than_an_error(server: Rerank
 def test_starting_without_the_weights_says_what_to_run_and_that_it_is_optional(
     server: RerankServer,
 ) -> None:
+    # The runtime is present: this is about the weights, and the runtime check runs first.
+    binary = settings.llama_dir / "llama-server"
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.write_bytes(b"not a real binary")
+
     with pytest.raises(ConfigurationError) as caught:
         server.ensure_running()
 
@@ -95,6 +100,27 @@ def test_starting_without_the_weights_says_what_to_run_and_that_it_is_optional(
     # And that search still works without it, because it does. A student told only
     # "not installed" would think their class had broken.
     assert "embedding similarity" in message
+
+
+def test_a_packaged_install_cannot_be_told_to_run_a_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In the product there is no checkout in which to run a script, so the wording
+    keeps the fallback and drops the fetch step. (A new instance, built under the
+    packaged flag: the message is resolved at construction.)"""
+    monkeypatch.setattr(settings, "packaged_mode", True)
+    server = RerankServer()
+    binary = settings.llama_dir / "llama-server"
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.write_bytes(b"not a real binary")
+
+    with pytest.raises(ConfigurationError) as caught:
+        server.ensure_running()
+
+    assert "fetch_models" not in caught.value.message
+    assert "python" not in caught.value.message
+    # The fallback is still named: this is optional, and the message says so.
+    assert "embedding similarity" in caught.value.message
 
 
 def test_it_contends_with_neither_the_embedding_server_nor_the_ocr_server(

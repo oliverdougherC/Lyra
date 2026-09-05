@@ -22,7 +22,7 @@ from pathlib import Path
 
 from backend.config import settings
 from backend.core.errors import ConfigurationError
-from backend.llm.llama_server import LlamaServer
+from backend.llm.llama_server import PACKAGED_MISSING_RUNTIME_MESSAGE, LlamaServer
 
 # Loading several gigabytes rather than 146 megabytes, so a longer health deadline than
 # the embedding server's.
@@ -86,10 +86,29 @@ MISSING_WEIGHTS_MESSAGE = (
     "Run `python scripts/fetch_models.py --ocr` to download it, or leave it out and Lyra "
     "will read scanned pages with the model configured in Settings."
 )
+# A packaged install has no checkout to run scripts in: the same sentence, minus the
+# step the student cannot take.
+_PACKAGED_MISSING_WEIGHTS_MESSAGE = (
+    "The specialist text-recognition model is not installed. "
+    "Lyra will read scanned pages with the model configured in Settings instead."
+)
 MISSING_BINARY_MESSAGE = (
     "The local model runtime is not installed yet. Run `python scripts/fetch_models.py`."
 )
 START_FAILED_MESSAGE = "The specialist text-recognition model failed to start."
+
+
+def _missing_weights_message() -> str:
+    if settings.packaged_mode:
+        return _PACKAGED_MISSING_WEIGHTS_MESSAGE
+    return MISSING_WEIGHTS_MESSAGE
+
+
+def _missing_binary_message() -> str:
+    """The packaged product ships the runtime in the app, so there is no fetch step there."""
+    if settings.packaged_mode:
+        return PACKAGED_MISSING_RUNTIME_MESSAGE
+    return MISSING_BINARY_MESSAGE
 
 
 class OcrServer(LlamaServer):
@@ -100,7 +119,7 @@ class OcrServer(LlamaServer):
             display_name="text-recognition",
             port_offset=OCR_PORT_OFFSET,
             health_timeout_seconds=_HEALTH_TIMEOUT_SECONDS,
-            missing_binary_message=MISSING_BINARY_MESSAGE,
+            missing_binary_message=_missing_binary_message(),
             start_failed_message=START_FAILED_MESSAGE,
         )
 
@@ -114,7 +133,7 @@ class OcrServer(LlamaServer):
 
     def _check_installed(self) -> None:
         if not self.available:
-            raise ConfigurationError(MISSING_WEIGHTS_MESSAGE)
+            raise ConfigurationError(_missing_weights_message())
 
     def _argv(self, binary: Path) -> list[str]:
         return [

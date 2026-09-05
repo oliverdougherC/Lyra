@@ -28,7 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "resources": ["resources/lyra-backend/**/*"],
+    "resources": ["resources/lyra-backend/**/*", "resources/llama/**/*"],
     "icon": ["icons/icon.png"],
     "macOS": {
       "bundleName": "Lyra",

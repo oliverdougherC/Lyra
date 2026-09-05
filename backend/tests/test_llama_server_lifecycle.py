@@ -11,6 +11,7 @@ import io
 import os
 import signal
 import time
+from pathlib import Path
 
 import pytest
 
@@ -2011,3 +2012,86 @@ class TestRestartAdoptShutdownRecovery:
 
         assert instance._adopted_pid is None
         assert _read_server_record("reranking") is None
+
+
+# ------------------------------------------------------------------ binary resolution
+
+
+def _stage_bundle_runtime(tmp_path: object) -> tuple[Path, Path]:
+    """The app bundle's resource layout: the frozen backend's onedir, its `_internal`
+    directory (where the frozen `resource_root` actually points), and the runtime
+    staged next to the onedir, the way the Tauri build lays it out.
+
+    Returns the backend's resource root (`_internal`, where the frozen
+    `resource_root` points) and the staged binary.
+    """
+    backend_dir = tmp_path / "resources" / "lyra-backend"
+    backend_dir.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
+    internal_dir = backend_dir / "_internal"
+    internal_dir.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
+    binary = tmp_path / "resources" / "llama" / "llama-b10287" / "llama-server"
+    binary.parent.mkdir(parents=True, exist_ok=True)  # type: ignore[union-attr]
+    binary.write_bytes(b"not a real binary")
+    return internal_dir, binary
+
+
+def _install_models_runtime() -> Path:
+    """A runtime in the user's models directory, where the fetch flow puts it."""
+    binary = settings.llama_dir / "llama-b10287" / "llama-server"
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.write_bytes(b"not a real binary either")
+    return binary
+
+
+def test_a_runtime_in_the_models_directory_wins_over_the_bundled_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An explicitly installed runtime is a choice; the bundle is the fallback."""
+    server = _make_server(monkeypatch)
+    resource_root, _ = _stage_bundle_runtime(tmp_path)
+    models_binary = _install_models_runtime()
+    monkeypatch.setattr(settings, "packaged_mode", True)
+    monkeypatch.setattr(settings, "resource_root", resource_root)
+
+    assert server._find_binary() == models_binary
+
+
+def test_the_bundled_runtime_is_used_when_the_models_directory_is_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The packaged clean install: no runtime in the user's models directory, so the
+    runtime that ships inside the application is the one that serves."""
+    server = _make_server(monkeypatch)
+    resource_root, bundled_binary = _stage_bundle_runtime(tmp_path)
+    monkeypatch.setattr(settings, "packaged_mode", True)
+    monkeypatch.setattr(settings, "resource_root", resource_root)
+
+    assert server._find_binary() == bundled_binary
+
+
+def test_the_bundle_is_not_consulted_outside_packaged_mode(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A checkout resolves the runtime from its models directory only; the bundle
+    location is an application fact and says nothing about a development install."""
+    server = _make_server(monkeypatch)
+    _stage_bundle_runtime(tmp_path)
+    monkeypatch.setattr(settings, "resource_root", tmp_path / "resources" / "lyra-backend")
+
+    assert server._find_binary() is None
+
+
+def test_a_packaged_install_with_no_runtime_anywhere_gets_no_script_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing runtime in the product is a broken installation, so the wording says
+    that - never a command to run in a checkout the student does not have."""
+    monkeypatch.setattr(settings, "packaged_mode", True)
+    server = _make_server(monkeypatch)
+
+    with pytest.raises(ConfigurationError) as caught:
+        server.ensure_running()
+
+    assert caught.value.message == llama_server.PACKAGED_MISSING_RUNTIME_MESSAGE
+    assert "fetch_models" not in caught.value.message
+    assert "python" not in caught.value.message

@@ -28,6 +28,15 @@ from huggingface_hub import hf_hub_download
 
 from backend.config import settings
 from backend.core.errors import ConfigurationError
+from backend.llm.model_provisioning import (
+    EMBEDDING_WEIGHTS,
+    OCR_DOWNLOAD_BYTES,
+    OCR_FILENAMES,
+    OCR_REPO_ID,
+    RERANK_WEIGHTS,
+    ensure_weight,
+    require_disk_space,
+)
 
 # Pinned deliberately, and now pinned to a commit as well as a tag.
 #
@@ -56,38 +65,10 @@ ASSET_SUFFIXES: dict[tuple[str, str], str] = {
     ("win32", "ARM64"): "win-cpu-arm64.zip",
 }
 
-EMBEDDING_REPO_ID = "nomic-ai/nomic-embed-text-v1.5-GGUF"
-EMBEDDING_FILENAME = "nomic-embed-text-v1.5.Q8_0.gguf"
-
-# The reranker. A cross-encoder rather than a second embedder: it reads the question and a
-# passage together and scores the pair, which is the one thing a bi-encoder cannot do,
-# because a bi-encoder has to compress the passage before it has seen the question.
-#
-# `Q8_0` for the same reason the embedder is Q8_0. This model's whole job is to draw fine
-# distinctions between passages that a coarser model already found equally plausible, and
-# quantisation noise lands exactly there. 640 MB rather than 390 MB is a cheap way not to
-# spend the measurement on the quantisation.
-RERANK_REPO_ID = "gpustack/bge-reranker-v2-m3-GGUF"
-RERANK_FILENAME = "bge-reranker-v2-m3-Q8_0.gguf"
-
-# The specialist OCR path. Two files, because llama.cpp loads a multimodal model through
-# MTMD and needs the language model and its projector separately.
-#
-# `Q4_K_M` for the model and `bf16` for the projector, which is what the GGUF publisher's
-# own reference invocation uses. A smaller projector quantisation exists and is not taken:
-# the projector is what turns the page image into tokens, so it is the last place to save
-# 365 MB.
-OCR_REPO_ID = "sabafallah/Unlimited-OCR-GGUF"
-OCR_FILENAMES = ("unlimited-ocr-Q4_K_M.gguf", "mmproj-unlimited-ocr-bf16.gguf")
-
-# What the pair weighs, from the repository listing. Used for the disk check before any of
-# it is written, because running out of disk 2 GB into a 2.8 GB download leaves a partial
-# file and a confusing error rather than a refusal.
-OCR_DOWNLOAD_BYTES = 2_776_000_000
-
-# And leave this much free afterwards. A machine with 200 MB left is not a working machine,
-# and the ingestion pipeline writes rendered pages and extracted text as it goes.
-DISK_HEADROOM_BYTES = 2 * (1 << 30)
+# The weights metadata - repositories, file names, weights, and the download itself -
+# lives in `backend/llm/model_provisioning.py`, shared with the embedding server's
+# first-use download, so the manual path and the automatic path can never name a
+# different file or a different folder.
 
 BINARY_NAMES = ("llama-server", "llama-server.exe")
 DOWNLOAD_TIMEOUT_SECONDS = 600.0
@@ -142,15 +123,20 @@ def installed_build(binary: Path) -> str | None:
     return f"b{match.group(1)}" if match else None
 
 
-def fetch_llama_server() -> Path:
+def fetch_llama_server(target_dir: Path | None = None) -> Path:
     """Download and extract the pinned llama.cpp release, unless it is already installed.
 
     "Already present" is not the same as "already correct", and the difference matters
     here: the specialist OCR path needs the `max_tiles` fix that landed in b10287, and an
     older binary reads dense pages at a coarser tile grid without saying so. So the
     existing binary is asked what it is, and replaced when it is not the pin.
+
+    `target_dir` is where the build lands: the models directory for the checkout, or the
+    Tauri resource tree when the same pin is being staged into the application bundle -
+    one download, one extraction, and one build verification for both.
     """
-    existing = find_llama_server(settings.llama_dir)
+    root = settings.llama_dir if target_dir is None else target_dir
+    existing = find_llama_server(root)
     if existing is not None:
         found = installed_build(existing)
         if found == LLAMA_RELEASE_TAG:
@@ -162,18 +148,18 @@ def fetch_llama_server() -> Path:
         )
 
     asset = f"llama-{LLAMA_RELEASE_TAG}-bin-{resolve_asset_suffix()}"
-    settings.llama_dir.mkdir(parents=True, exist_ok=True)
-    _remove_stale_builds()
-    archive = settings.llama_dir / asset
+    root.mkdir(parents=True, exist_ok=True)
+    _remove_stale_builds(root)
+    archive = root / asset
 
     print(f"Downloading {asset} ...")
     _download(f"{RELEASE_BASE_URL}/{LLAMA_RELEASE_TAG}/{asset}", archive)
     print(f"Extracting {asset} ...")
-    _extract(archive, settings.llama_dir)
+    _extract(archive, root)
     archive.unlink()
 
     # The archive layout differs per platform, so the binary is found, not assumed.
-    binary = find_llama_server(settings.llama_dir)
+    binary = find_llama_server(root)
     if binary is None:
         raise ConfigurationError(f"The archive {asset} did not contain a llama-server binary.")
     binary.chmod(binary.stat().st_mode | 0o111)
@@ -182,36 +168,18 @@ def fetch_llama_server() -> Path:
 
 def fetch_embedding_weights() -> Path:
     """Download the nomic GGUF weights, unless they are already present."""
-    target = settings.embedding_model_path
-    if target.exists():
+    if EMBEDDING_WEIGHTS.path.exists():
         print("Embedding weights already present, skipping download.")
-        return target
-
-    settings.models_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading {EMBEDDING_FILENAME} ...")
-    downloaded = hf_hub_download(
-        repo_id=EMBEDDING_REPO_ID,
-        filename=EMBEDDING_FILENAME,
-        local_dir=settings.models_dir,
-    )
-    return Path(str(downloaded))
+        return EMBEDDING_WEIGHTS.path
+    return ensure_weight(EMBEDDING_WEIGHTS, progress=print)
 
 
 def fetch_rerank_weights() -> Path:
     """Download the reranker GGUF, unless it is already present."""
-    target = settings.rerank_model_path
-    if target.exists():
+    if RERANK_WEIGHTS.path.exists():
         print("Reranker weights already present, skipping download.")
-        return target
-
-    settings.models_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading {RERANK_FILENAME} ...")
-    downloaded = hf_hub_download(
-        repo_id=RERANK_REPO_ID,
-        filename=RERANK_FILENAME,
-        local_dir=settings.models_dir,
-    )
-    return Path(str(downloaded))
+        return RERANK_WEIGHTS.path
+    return ensure_weight(RERANK_WEIGHTS, progress=print)
 
 
 def fetch_ocr_weights() -> list[Path]:
@@ -233,7 +201,7 @@ def fetch_ocr_weights() -> list[Path]:
         print("OCR weights already present, skipping download.")
         return [settings.models_dir / name for name in OCR_FILENAMES]
 
-    _require_disk_space(settings.models_dir, OCR_DOWNLOAD_BYTES)
+    require_disk_space(settings.models_dir, OCR_DOWNLOAD_BYTES)
     print(
         f"Downloading {len(missing)} OCR file(s), about "
         f"{OCR_DOWNLOAD_BYTES / 1e9:.1f} GB. This is the specialist text-recognition path; "
@@ -258,23 +226,7 @@ def fetch_ocr_weights() -> list[Path]:
     return landed
 
 
-def _require_disk_space(target: Path, needed: int) -> None:
-    """Raise unless `target` has room for `needed` bytes plus the headroom.
-
-    Raises:
-        ConfigurationError: Naming both numbers, because "not enough space" without them
-            leaves the reader to go and find out how short they are.
-    """
-    free = shutil.disk_usage(target).free
-    if free >= needed + DISK_HEADROOM_BYTES:
-        return
-    raise ConfigurationError(
-        f"Not enough free disk space: this needs {needed / 1e9:.1f} GB plus "
-        f"{DISK_HEADROOM_BYTES / 1e9:.0f} GB of headroom, and {free / 1e9:.1f} GB is free."
-    )
-
-
-def _remove_stale_builds() -> None:
+def _remove_stale_builds(root: Path | None = None) -> None:
     """Delete previously extracted builds that are not the pin.
 
     Exactly one build is kept, and that is the point rather than tidiness. Every consumer
@@ -283,7 +235,8 @@ def _remove_stale_builds() -> None:
     sorts before `llama-b10287`, so downloading the pinned build changed nothing at all
     until this ran. Only directories this script created are touched.
     """
-    for existing in sorted(settings.llama_dir.glob("llama-b*")):
+    llama_root = settings.llama_dir if root is None else root
+    for existing in sorted(llama_root.glob("llama-b*")):
         if not existing.is_dir() or existing.name == f"llama-{LLAMA_RELEASE_TAG}":
             continue
         if find_llama_server(existing) is None:
