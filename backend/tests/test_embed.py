@@ -5,9 +5,11 @@ A missing or swapped task prefix, or a batch reassembled in the wrong order, sti
 the HTTP boundary so the real request building, batching, and parsing all run.
 """
 
+import hashlib
 import json
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -20,6 +22,19 @@ from backend.llm.embed_server import EmbeddingServer
 from backend.rag import embed
 from backend.rag.embed import EMBEDDING_DIM, embed_documents, embed_query
 from backend.rag.tokens import estimate_tokens
+
+
+@pytest.fixture(autouse=True)
+def _tiny_embedding_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.llm import embed_server
+
+    spec = replace(
+        model_provisioning.EMBEDDING_WEIGHTS,
+        expected_bytes=len(b"GGUF fake"),
+        sha256=hashlib.sha256(b"GGUF fake").hexdigest(),
+    )
+    monkeypatch.setattr(model_provisioning, "EMBEDDING_WEIGHTS", spec)
+    monkeypatch.setattr(embed_server, "EMBEDDING_WEIGHTS", spec)
 
 
 @pytest.fixture(autouse=True)
@@ -381,12 +396,17 @@ class TestFirstUseProvisioning:
         downloads: list[tuple[str, str]] = []
 
         def fake_download(
-            *, repo_id: str, filename: str, local_dir: object, revision: str | None
+            *,
+            repo_id: str,
+            filename: str,
+            local_dir: object,
+            revision: str | None,
+            max_bytes: int = 0,
         ) -> str:
             downloads.append((repo_id, filename))
             return _land_embedding_weights(repo_id=repo_id, filename=filename, local_dir=local_dir)
 
-        monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+        monkeypatch.setattr(model_provisioning, "_fetch_weight", fake_download)
 
         server.ensure_running()
 
@@ -413,12 +433,17 @@ class TestFirstUseProvisioning:
         downloads: list[str] = []
 
         def fake_download(
-            *, repo_id: str, filename: str, local_dir: object, revision: str | None
+            *,
+            repo_id: str,
+            filename: str,
+            local_dir: object,
+            revision: str | None,
+            max_bytes: int = 0,
         ) -> str:
             downloads.append(filename)
             return _land_embedding_weights(repo_id=repo_id, filename=filename, local_dir=local_dir)
 
-        monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+        monkeypatch.setattr(model_provisioning, "_fetch_weight", fake_download)
 
         def fake_client() -> httpx.Client:
             def handle(request: httpx.Request) -> httpx.Response:
@@ -456,13 +481,18 @@ class TestFirstUseProvisioning:
         downloads: list[str] = []
 
         def fake_download(
-            *, repo_id: str, filename: str, local_dir: object, revision: str | None
+            *,
+            repo_id: str,
+            filename: str,
+            local_dir: object,
+            revision: str | None,
+            max_bytes: int = 0,
         ) -> str:
             downloads.append(filename)
             time.sleep(0.05)
             return _land_embedding_weights(repo_id=repo_id, filename=filename, local_dir=local_dir)
 
-        monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+        monkeypatch.setattr(model_provisioning, "_fetch_weight", fake_download)
 
         errors: list[Exception] = []
 
@@ -488,11 +518,16 @@ class TestFirstUseProvisioning:
         _wire_a_fake_spawn(server, monkeypatch)
 
         def fake_download(
-            *, repo_id: str, filename: str, local_dir: object, revision: str | None
+            *,
+            repo_id: str,
+            filename: str,
+            local_dir: object,
+            revision: str | None,
+            max_bytes: int = 0,
         ) -> str:
             raise httpx.ConnectError("network unreachable")
 
-        monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+        monkeypatch.setattr(model_provisioning, "_fetch_weight", fake_download)
 
         with pytest.raises(ConfigurationError) as caught:
             server.ensure_running()
@@ -531,13 +566,18 @@ class TestFirstUseProvisioning:
         download_started = threading.Event()
 
         def fake_download(
-            *, repo_id: str, filename: str, local_dir: object, revision: str | None
+            *,
+            repo_id: str,
+            filename: str,
+            local_dir: object,
+            revision: str | None,
+            max_bytes: int = 0,
         ) -> str:
             download_started.set()
             release.wait()
             return _land_embedding_weights(repo_id=repo_id, filename=filename, local_dir=local_dir)
 
-        monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+        monkeypatch.setattr(model_provisioning, "_fetch_weight", fake_download)
 
         downloader = threading.Thread(target=server.ensure_running)
         downloader.start()

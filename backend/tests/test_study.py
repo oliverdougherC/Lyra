@@ -450,18 +450,38 @@ def test_zero_cards_after_retry_is_a_failed_deck(
     assert artifacts.list_parts(db, artifact_id) == []
 
 
+@pytest.mark.parametrize("topics", [[], [42], [None, False, {}, [], "", "  "]])
 def test_a_deck_with_no_topics_is_failed(
-    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM, topics: list[object]
 ) -> None:
     document_id = _document(db, class_id)
     artifact_id = _deck(db, class_id, document_id)
-    llm.replies = [{"topics": []}]
+    llm.replies = [{"topics": topics}]
 
     study.run_generation(_deck_job(artifact_id, document_id))
 
     artifact = artifacts.get_artifact(db, artifact_id)
     assert artifact["state"] == artifacts.FAILED
     assert artifact["error_message"] == study.NO_TOPICS_MESSAGE
+
+
+def test_deck_recovers_valid_string_topics_from_mixed_model_output(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [
+        {"topics": [42, None, {}, "  delta functions  ", ""]},
+        _cards("one", "two", "three", "four"),
+    ]
+
+    study.run_generation(_deck_job(artifact_id, document_id))
+
+    assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.READY
+    parts = artifacts.list_parts(db, artifact_id)
+    assert len(parts) == 4
+    assert all(json.loads(str(part["content"]))["topic"] == "delta functions" for part in parts)
+    assert len(llm.calls) == 2
 
 
 # ---------------------------------------------------------------------------

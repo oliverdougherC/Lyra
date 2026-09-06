@@ -6,15 +6,16 @@ whose result must never be logged.
 """
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from backend.core.errors import ConfigurationError
 from backend.llm.locality import is_local_endpoint
-from backend.storage.secrets import get_api_key
+from backend.storage.secrets import get_api_key, get_tutor_credential
 
 UPDATABLE_COLUMNS = frozenset(
     {
         "endpoint_url",
+        "tutor_credential_id",
         "model",
         "context_window",
         "extraction_enabled",
@@ -61,10 +62,11 @@ class TutorConfig:
     """
 
     endpoint_url: str
-    api_key: str | None
+    api_key: str | None = field(repr=False)
     model: str | None
     context_window: int
     tools_supported: bool | None = None
+    credential_id: str | None = None
 
 
 def get_settings_row(conn: sqlite3.Connection) -> sqlite3.Row:
@@ -172,11 +174,25 @@ def _tutor_config_from_row(row: sqlite3.Row) -> TutorConfig | None:
         return None
     return TutorConfig(
         endpoint_url=endpoint_url,
-        api_key=get_api_key(),
+        api_key=credential_for_row(row),
+        credential_id=row["tutor_credential_id"] if "tutor_credential_id" in row.keys() else None,  # noqa: SIM118
         model=row["model"],
         context_window=int(row["context_window"]),
         tools_supported=_tool_support_from_row(row),
     )
+
+
+def credential_for_row(row: sqlite3.Row) -> str | None:
+    endpoint = (row["endpoint_url"] or "").strip() or None
+    if "tutor_credential_id" in row.keys() and row["tutor_credential_id"]:  # noqa: SIM118
+        return get_tutor_credential(row["tutor_credential_id"], endpoint)
+    # Migration binds the pre-existing secret to its original endpoint. Endpoint-only
+    # changes never inherit it, even if a reader resolves a retained old settings row.
+    if "legacy_credential_endpoint" in row.keys():  # noqa: SIM118
+        authorized = (row["legacy_credential_endpoint"] or "").strip() or None
+        if authorized != endpoint:
+            return None
+    return get_api_key()
 
 
 def _tool_support_from_row(row: sqlite3.Row) -> bool | None:

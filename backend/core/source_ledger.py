@@ -66,11 +66,36 @@ def _decode_source(conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, obje
     source["excerpts"] = [
         dict(excerpt)
         for excerpt in conn.execute(
-            "select id, source_id, source_revision_id, section_ref, excerpt, created_at "
-            "from writer_source_excerpts where source_id = ? order by id",
+            "select e.id, e.source_id, e.source_revision_id, e.section_ref, e.excerpt, "
+            "e.created_at, r.revision as supporting_revision, "
+            "r.accessed_at as supporting_accessed_at "
+            "from writer_source_excerpts e left join writer_source_revisions r "
+            "on r.id = e.source_revision_id where e.source_id = ? order by e.id",
             (source["id"],),
         )
     ]
+    if source["source_type"] == WEB:
+        for excerpt in source["excerpts"]:
+            try:
+                supporting_id = _supporting_revision(conn, int(source["id"]), excerpt["excerpt"])
+            except ValueError:
+                excerpt.update(
+                    source_revision_id=None,
+                    supporting_revision=None,
+                    supporting_accessed_at=None,
+                    evidence_unavailable=True,
+                )
+                continue
+            supporting = conn.execute(
+                "select revision, accessed_at from writer_source_revisions where id = ?",
+                (supporting_id,),
+            ).fetchone()
+            excerpt.update(
+                source_revision_id=supporting_id,
+                supporting_revision=supporting["revision"],
+                supporting_accessed_at=supporting["accessed_at"],
+                evidence_unavailable=False,
+            )
     return source
 
 
@@ -96,6 +121,9 @@ def prompt_source(source: Mapping[str, object]) -> dict[str, object]:
                 {
                     "id": raw.get("id"),
                     "source_revision_id": raw.get("source_revision_id"),
+                    "supporting_revision": raw.get("supporting_revision"),
+                    "supporting_accessed_at": raw.get("supporting_accessed_at"),
+                    "evidence_unavailable": bool(raw.get("evidence_unavailable")),
                     "section_ref": (
                         _bounded(raw.get("section_ref"), MAX_SECTION_REF_CHARS)
                         if raw.get("section_ref")
@@ -159,31 +187,36 @@ def list_sources(
     return [prompt_source(_decode_source(conn, row)) for row in conn.execute(sql, values)]
 
 
-def _supports_exact_excerpt(conn: sqlite3.Connection, source_id: int, excerpt: str) -> bool:
+def _supporting_revision(conn: sqlite3.Connection, source_id: int, excerpt: str) -> int | None:
+    """Resolve immutable web evidence; course passages retain their upload evidence."""
     source = conn.execute(
-        "select source_type, document_id, snapshot from writer_sources where id = ?",
-        (source_id,),
+        "select source_type, document_id from writer_sources where id = ?", (source_id,)
     ).fetchone()
     if source is None:
         raise NotFoundError("That source does not exist.")
-    # An existing relied-on passage stays auditable even if its course upload was later
-    # deleted. This also lets replace_excerpts retain previously verified entries.
-    existing = conn.execute(
-        "select 1 from writer_source_excerpts where source_id = ? and excerpt = ? limit 1",
-        (source_id, excerpt),
-    ).fetchone()
-    if existing is not None:
-        return True
     if source["source_type"] == WEB:
-        return excerpt in str(source["snapshot"] or "")
-    document_id = source["document_id"]
-    if document_id is None:
-        return False
-    row = conn.execute(
-        "select 1 from chunks where document_id = ? and instr(content, ?) > 0 limit 1",
-        (document_id, excerpt),
-    ).fetchone()
-    return row is not None
+        # Prefer the original association when still supported, then any real snapshot.
+        row = conn.execute(
+            "select r.id from writer_source_revisions r where r.source_id = ? "
+            "and instr(r.snapshot, ?) > 0 order by exists ("
+            "select 1 from writer_source_excerpts e where e.source_id = r.source_id "
+            "and e.source_revision_id = r.id and e.excerpt = ?) desc, r.id limit 1",
+            (source_id, excerpt, excerpt),
+        ).fetchone()
+        if row is not None:
+            return int(row["id"])
+    else:
+        existing = conn.execute(
+            "select 1 from writer_source_excerpts where source_id = ? and excerpt = ? limit 1",
+            (source_id, excerpt),
+        ).fetchone()
+        chunk = conn.execute(
+            "select 1 from chunks where document_id = ? and instr(content, ?) > 0 limit 1",
+            (source["document_id"], excerpt),
+        ).fetchone()
+        if existing is not None or chunk is not None:
+            return None
+    raise ValueError("A relied-on excerpt must be an exact passage from its source")
 
 
 def _validated_excerpt(conn: sqlite3.Connection, source_id: int, excerpt: object) -> str:
@@ -192,8 +225,7 @@ def _validated_excerpt(conn: sqlite3.Connection, source_id: int, excerpt: object
         raise ValueError("Source excerpts cannot be empty")
     if len(clean) > MAX_RELIED_EXCERPT_CHARS:
         raise ValueError(f"A relied-on excerpt cannot exceed {MAX_RELIED_EXCERPT_CHARS} characters")
-    if not _supports_exact_excerpt(conn, source_id, clean):
-        raise ValueError("A relied-on excerpt must be an exact passage from its source")
+    _supporting_revision(conn, source_id, clean)
     return clean
 
 
@@ -202,10 +234,6 @@ def _replace_excerpts(
     source_id: int,
     excerpts: Sequence[str | Mapping[str, object]],
 ) -> None:
-    revision_row = conn.execute(
-        "select current_revision_id from writer_sources where id = ?", (source_id,)
-    ).fetchone()
-    revision_id = revision_row["current_revision_id"] if revision_row is not None else None
     payloads: list[tuple[int, int | None, str | None, str]] = []
     for item in excerpts:
         if isinstance(item, str):
@@ -218,8 +246,9 @@ def _replace_excerpts(
             section_ref = section_ref or None
         if section_ref and len(section_ref) > MAX_SECTION_REF_CHARS:
             raise ValueError("Source excerpt section_ref is too long")
+        clean = _validated_excerpt(conn, source_id, excerpt)
         payloads.append(
-            (source_id, revision_id, section_ref, _validated_excerpt(conn, source_id, excerpt))
+            (source_id, _supporting_revision(conn, source_id, clean), section_ref, clean)
         )
     conn.execute("delete from writer_source_excerpts where source_id = ?", (source_id,))
     conn.executemany(
@@ -413,14 +442,27 @@ def add_excerpt(
         (source_id, clean_ref, clean_excerpt),
     ).fetchone()
     if existing is not None:
-        return dict(existing)
+        supporting_id = _supporting_revision(conn, source_id, clean_excerpt)
+        if existing["source_revision_id"] != supporting_id:
+            conn.execute(
+                "update writer_source_excerpts set source_revision_id = ? where id = ?",
+                (supporting_id, existing["id"]),
+            )
+            if commit:
+                conn.commit()
+        return {**dict(existing), "source_revision_id": supporting_id}
     try:
         conn.execute("begin immediate")
         cursor = conn.execute(
             "insert into writer_source_excerpts "
             "(source_id, source_revision_id, section_ref, excerpt) "
-            "select id, current_revision_id, ?, ? from writer_sources where id = ?",
-            (clean_ref, clean_excerpt, source_id),
+            "values (?, ?, ?, ?)",
+            (
+                source_id,
+                _supporting_revision(conn, source_id, clean_excerpt),
+                clean_ref,
+                clean_excerpt,
+            ),
         )
         excerpt_id = int(cursor.lastrowid or 0)
         agent_attempts.link_target(

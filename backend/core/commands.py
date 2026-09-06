@@ -7,11 +7,12 @@ never a shell string, and never imports the application's environment wholesale.
 """
 
 import os
+import select
 import selectors
 import signal
 import subprocess
 import time
-from contextlib import suppress
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -101,17 +102,46 @@ def minimal_environment() -> dict[str, str]:
 
 
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
-        return
+    # The caller keeps the leader unreaped until cleanup. Its reserved PID prevents
+    # this owned group id from being recycled, even when the leader has exited.
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         return
+    except PermissionError:
+        if _leader_exited(process):
+            return
+        raise
+    time.sleep(0.1)
     try:
-        process.wait(timeout=1.0)
-    except subprocess.TimeoutExpired:
-        with suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # Darwin reports EPERM when the unreaped zombie is the only group member.
+        if not _leader_exited(process):
+            raise
+
+
+def _leader_exited(process: subprocess.Popen[bytes]) -> bool:
+    # Observe without reaping: descendants can outlive their group leader.
+    if hasattr(os, "waitid"):
+        return os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+    with closing(select.kqueue()) as queue:
+        return bool(
+            queue.control(
+                [
+                    select.kevent(
+                        process.pid,
+                        filter=select.KQ_FILTER_PROC,
+                        flags=select.KQ_EV_ADD,
+                        fflags=select.KQ_NOTE_EXIT,
+                    )
+                ],
+                1,
+                0,
+            )
+        )
 
 
 def _retain_chunk(
@@ -188,14 +218,17 @@ def run_command(
     timed_out = False
 
     try:
-        while selector.get_map():
-            elapsed = time.monotonic() - started
-            wait = timeout_seconds - elapsed
+        while True:
+            wait = timeout_seconds - (time.monotonic() - started)
             if wait <= 0:
                 timed_out = True
-                _terminate_process_group(process)
-                wait = 0
-            events = selector.select(min(max(wait, 0), 0.1))
+                break
+            if not selector.get_map():
+                if _leader_exited(process):
+                    break
+                time.sleep(min(wait, 0.01))
+                continue
+            events = selector.select(min(wait, 0.1))
             for key, _ in events:
                 stream = key.fileobj
                 chunk = os.read(stream.fileno(), _READ_SIZE)
@@ -204,27 +237,28 @@ def run_command(
                     continue
                 remaining, chunk_truncated = _retain_chunk(retained, key.data, chunk, remaining)
                 truncated = truncated or chunk_truncated
-            if timed_out and process.poll() is not None and not events:
-                # A killed descendant may have inherited a pipe briefly. Do not wait forever for it.
-                for key in list(selector.get_map().values()):
-                    selector.unregister(key.fileobj)
-            if process.poll() is not None and not events:
-                # Give EOF one final selector pass; regular pipe EOF is immediately readable.
-                for key, _ in selector.select(0):
-                    stream = key.fileobj
-                    chunk = os.read(stream.fileno(), _READ_SIZE)
-                    if chunk:
-                        remaining, chunk_truncated = _retain_chunk(
-                            retained, key.data, chunk, remaining
-                        )
-                        truncated = truncated or chunk_truncated
-                    selector.unregister(stream)
-        if process.poll() is None:
-            process.wait(timeout=1.0)
+            if _leader_exited(process):
+                break
     finally:
+        # Reclaim descendants even on success and while pipes are continuously readable.
+        # Signal before wait/poll: no group signal can reach a recycled leader PID.
+        _terminate_process_group(process)
+        process.wait(timeout=1.0)
+        # Keep already-buffered output after leader exit, with an absolute drain
+        # bound even if a deliberately detached process retains a pipe.
+        drain_until = time.monotonic() + 0.1
+        while selector.get_map() and time.monotonic() < drain_until:
+            events = selector.select(0)
+            if not events:
+                break
+            for key, _ in events:
+                chunk = os.read(key.fileobj.fileno(), _READ_SIZE)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                remaining, chunk_truncated = _retain_chunk(retained, key.data, chunk, remaining)
+                truncated = truncated or chunk_truncated
         selector.close()
-        if process.poll() is None:
-            _terminate_process_group(process)
         stdout.close()
         stderr.close()
 

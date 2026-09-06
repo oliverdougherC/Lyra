@@ -1530,3 +1530,50 @@ def test_draft_restore_refuses_a_solution_set(
         json={"revision": 1, "expected_version": 0},
     )
     assert response.status_code == 404
+
+
+def test_http_durable_draft_rejects_oversized_existing_body_before_inference(
+    client,
+    db,
+    class_id,
+    no_worker,
+    monkeypatch,
+):
+    from backend.core import writer_runs
+    from backend.core.app_settings import TutorConfig
+
+    body = "Student writing that must survive. " * 4000
+    artifact = artifacts.create_artifact(db, class_id, "Long essay", [], kind=artifacts.KIND_DRAFT)
+    part = artifacts.create_part(db, artifact["id"], artifacts.DRAFT_BODY, 1, content=body)
+    artifacts.set_artifact_state(db, artifact["id"], artifacts.READY)
+    monkeypatch.setattr(
+        writer_pipeline,
+        "resolve_tutor_access",
+        lambda *args: TutorAccess(
+            config=TutorConfig("http://127.0.0.1:9/v1", None, "m", 2048),
+            document_block=None,
+            remote_ack=True,
+        ),
+    )
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Over-budget request reached provider")
+
+    monkeypatch.setattr(writer_pipeline.client, "complete", forbidden)
+    response = client.post(f"/api/drafts/{artifact['id']}/pass", json={"depth": "quick"})
+    assert response.status_code == 202
+    assert len(no_worker) == 1 and no_worker[0].run_id is not None
+    writer_pipeline.run_pass(no_worker[0])
+    run = writer_runs.get_run(db, no_worker[0].run_id)
+    assert run["status"] == "failed"
+    assert "context window" in run["error_message"]
+    assert artifacts.get_part(db, part)["content"] == body
+    live = live_drafts.get_live_suggestion_for_run(db, run["id"])
+    assert live["status"] == "failed"
+    # Restart/retry creates a new intent and keeps the same refusal and student body.
+    assert (
+        client.post(f"/api/drafts/{artifact['id']}/pass", json={"depth": "quick"}).status_code
+        == 202
+    )
+    writer_pipeline.run_pass(no_worker[-1])
+    assert artifacts.get_part(db, part)["content"] == body

@@ -143,9 +143,15 @@ def read_workspace_snapshot(
     validate_path: PathValidator | None = None,
 ) -> WorkspaceSnapshot:
     """Read one validated text file from the attached workspace."""
-    validated = _validate_existing_file(Path(root), relative_path, validate_path=validate_path)
+    resolved_root = workspace_paths.canonical_workspace_root(root)
+    root_identity = workspace_paths._path_identity(resolved_root)
+    validated = _validate_existing_file(resolved_root, relative_path, validate_path=validate_path)
     target = _open_validated(validated)
-    content, file_stat = _read_text(target)
+    payload, file_stat = workspace_paths.read_workspace_bytes(
+        resolved_root, Path(validated.relative_path)
+    )
+    workspace_paths._require_identity(resolved_root, root_identity)
+    content = workspace_paths._decode_text_payload(payload)
     return WorkspaceSnapshot(
         relative_path=validated.relative_path,
         path=target,
@@ -394,7 +400,9 @@ def _atomic_replace(
     file_mode: int,
     validate_path: PathValidator | None,
 ) -> None:
-    snapshot = read_workspace_snapshot(root, relative_path, validate_path=validate_path)
+    resolved_root = workspace_paths.canonical_workspace_root(root)
+    root_identity = workspace_paths._path_identity(resolved_root)
+    snapshot = read_workspace_snapshot(resolved_root, relative_path, validate_path=validate_path)
     if snapshot.identity != expected_identity or snapshot.version != expected_version:
         raise ConflictError(_STALE_PROPOSAL_MESSAGE)
     if snapshot.content_hash != expected_hash:
@@ -402,11 +410,13 @@ def _atomic_replace(
     parent = snapshot.path.parent
     target_name = snapshot.path.name
     temp_name = f".{target_name}.{secrets.token_hex(16)}.tmp"
-    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     parent_fd: int | None = None
+    parent_context = workspace_paths.open_workspace_directory(
+        resolved_root, Path(snapshot.relative_path).parent, root_identity=root_identity
+    )
     temp_created = False
     try:
-        parent_fd = os.open(parent, directory_flags)
+        parent_fd = parent_context.__enter__()
         parent_opened = os.fstat(parent_fd)
         parent_current = os.lstat(parent)
         if FileIdentity.from_stat(parent_opened) != FileIdentity.from_stat(parent_current):
@@ -440,6 +450,7 @@ def _atomic_replace(
         latest_parent = os.lstat(parent)
         if FileIdentity.from_stat(latest_parent) != FileIdentity.from_stat(parent_opened):
             raise ConflictError(_STALE_PROPOSAL_MESSAGE)
+        workspace_paths._require_identity(resolved_root, root_identity)
         os.replace(
             temp_name,
             target_name,
@@ -460,7 +471,7 @@ def _atomic_replace(
             with suppress(OSError):
                 os.unlink(temp_name, dir_fd=parent_fd)
         if parent_fd is not None:
-            os.close(parent_fd)
+            parent_context.__exit__(None, None, None)
 
 
 def _validate_existing_file(
@@ -533,31 +544,6 @@ def _open_validated(validated: WorkspaceSnapshotPath) -> Path:
     return validated.path
 
 
-def _read_text(path: Path) -> tuple[str, os.stat_result]:
-    flags = os.O_RDONLY
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    fd: int | None = None
-    try:
-        fd = os.open(path, flags | nofollow)
-        file_stat = os.fstat(fd)
-        if not stat.S_ISREG(file_stat.st_mode):
-            raise LyraError(_INVALID_FILE_MESSAGE)
-        if file_stat.st_size > workspace_paths.MAX_TEXT_FILE_BYTES:
-            raise LyraError(_INVALID_FILE_MESSAGE)
-        with os.fdopen(fd, "rb", closefd=False) as handle:
-            content = handle.read(workspace_paths.MAX_TEXT_FILE_BYTES + 1)
-        if len(content) > workspace_paths.MAX_TEXT_FILE_BYTES or b"\x00" in content:
-            raise LyraError(_INVALID_FILE_MESSAGE)
-        return content.decode("utf-8"), file_stat
-    except OSError as exc:
-        raise LyraError(_INVALID_FILE_MESSAGE) from exc
-    except UnicodeDecodeError as exc:
-        raise LyraError(_INVALID_FILE_MESSAGE) from exc
-    finally:
-        if fd is not None:
-            os.close(fd)
-
-
 def _normalize_relative_path(relative_path: str) -> str:
     if not relative_path or "\\" in relative_path:
         raise LyraError(_INVALID_PATH_MESSAGE)
@@ -580,7 +566,7 @@ def _normalize_newlines(content: str, newline: str | None) -> str:
 
 
 def _read_relative_file(parent_fd: int, filename: str) -> tuple[str, os.stat_result]:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
     fd = os.open(filename, flags, dir_fd=parent_fd)
     try:
         file_stat = os.fstat(fd)

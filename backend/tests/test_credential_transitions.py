@@ -863,3 +863,103 @@ def test_deleting_exa_key_does_not_delete_the_tutor_key(
     secrets.reset_keyring_probe()
     assert secrets.get_api_key() == "sk-tutor"
     assert secrets.get_exa_api_key() is None
+
+
+@pytest.mark.parametrize("exa", [False, True])
+@pytest.mark.parametrize("delete", [False, True])
+def test_preoperation_outage_never_resurrects_old_key(isolated_secrets, monkeypatch, exa, delete):
+    username = secrets.EXA_USERNAME if exa else secrets.USERNAME
+    setter = secrets.set_exa_api_key if exa else secrets.set_api_key
+    getter = secrets.get_exa_api_key if exa else secrets.get_api_key
+    deleter = secrets.delete_exa_api_key if exa else secrets.delete_api_key
+    isolated_secrets.store[(secrets.SERVICE, username)] = "old-synthetic"
+    monkeypatch.setattr(secrets, "_keyring_ok", False)
+    if delete:
+        deleter()
+        deleter()
+    else:
+        setter("new-synthetic")
+    secrets.reset_keyring_probe()
+    assert getter() == (None if delete else "new-synthetic")
+
+
+@pytest.mark.parametrize("exa", [False, True])
+@pytest.mark.parametrize("operation", ["get_password", "set_password", "delete_password"])
+def test_postprobe_timeout_is_bounded_and_late_operation_cannot_win(
+    isolated_secrets, monkeypatch, exa, operation
+):
+    import threading
+    import time
+
+    username = secrets.EXA_USERNAME if exa else secrets.USERNAME
+    setter = secrets.set_exa_api_key if exa else secrets.set_api_key
+    getter = secrets.get_exa_api_key if exa else secrets.get_api_key
+    deleter = secrets.delete_exa_api_key if exa else secrets.delete_api_key
+    isolated_secrets.store[(secrets.SERVICE, username)] = "old-synthetic"
+    assert secrets._keyring_usable()
+    release = threading.Event()
+    entered = threading.Event()
+    original = getattr(isolated_secrets, operation)
+
+    def blocked(*args):
+        entered.set()
+        release.wait(3)
+        return original(*args)
+
+    monkeypatch.setattr(isolated_secrets, operation, blocked)
+    monkeypatch.setattr(secrets, "_PROBE_TIMEOUT_SECONDS", 0.03)
+    started = time.monotonic()
+    try:
+        try:
+            if operation == "set_password":
+                setter("late-synthetic")
+            elif operation == "delete_password":
+                deleter()
+            else:
+                getter()
+        except KeyError:
+            pass  # A pending mutation truthfully reports failure.
+        assert entered.is_set()
+        worker = secrets._operation_thread
+        for _ in range(10):
+            setter("new-synthetic")
+            assert secrets._operation_thread is worker
+        assert time.monotonic() - started < 1
+    finally:
+        release.set()
+        secrets._operation_thread.join(1)
+    secrets.reset_keyring_probe()
+    assert getter() == "new-synthetic"
+
+
+def test_immutable_slot_read_does_not_block_event_loop(isolated_secrets, monkeypatch):
+    import asyncio
+    import threading
+    import time
+
+    from backend.core.errors import ConfigurationError
+
+    identity = secrets.stage_tutor_credential("http://localhost/v1", "synthetic-slot-key")
+    secrets._slot_read_cache.clear()  # New process: no in-memory credential yet.
+    release = threading.Event()
+    original = isolated_secrets.get_password
+
+    def slow(*args):
+        release.wait(2)
+        return original(*args)
+
+    monkeypatch.setattr(isolated_secrets, "get_password", slow)
+
+    async def read():
+        started = time.monotonic()
+        with pytest.raises(ConfigurationError, match="Keychain is still responding"):
+            secrets.get_tutor_credential(identity, "http://localhost/v1")
+        assert time.monotonic() - started < 0.2
+        await asyncio.sleep(0)
+
+    try:
+        asyncio.run(read())
+    finally:
+        release.set()
+        secrets._operation_thread.join(1)
+    assert secrets.get_tutor_credential(identity, "http://localhost/v1") == "synthetic-slot-key"

@@ -1160,6 +1160,16 @@ async def _stream_turn(
         # _commit_reply_atomic, which was never reached.
         raise
     except LyraError as exc:
+        if conn is not None and (received or thought):
+            sessions.insert_message(
+                conn,
+                session_id,
+                "assistant",
+                "".join(received) + "\n\n[Incomplete reply: " + exc.message + "]",
+                thinking="".join(thought),
+                thinking_ms=thinking_ms,
+            )
+            conn.commit()
         if conn is not None and plan.attempt_id:
             tutor_attempts.fail_attempt(
                 conn,

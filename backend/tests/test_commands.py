@@ -1,5 +1,6 @@
 import os
 import sys
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -111,3 +112,51 @@ def test_relative_cwd_must_be_a_directory(tmp_path: Path) -> None:
     (tmp_path / "file").write_text("x")
     with pytest.raises(CommandValidationError):
         run_command(tmp_path, [sys.executable, "-c", "pass"], relative_cwd="file")
+
+
+@pytest.mark.parametrize(
+    "child_code",
+    [
+        "import time; time.sleep(30)",
+        "import os;\nwhile True: os.write(1, b'x' * 8192)",
+        "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)",
+    ],
+)
+def test_exited_leader_descendants_are_reclaimed(tmp_path: Path, child_code: str) -> None:
+    import signal
+    import time
+
+    pid_file = tmp_path / "child.pid"
+    code = (
+        "import subprocess,sys,pathlib; "
+        f"p=subprocess.Popen([sys.executable,'-c',{child_code!r}]); "
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(p.pid))"
+    )
+    try:
+        result = run_command(
+            tmp_path, [sys.executable, "-c", code], timeout_seconds=0.2, max_output_bytes=100
+        )
+        assert result.duration_seconds < 3
+        pid = int(pid_file.read_text())
+        for _ in range(100):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail("owned child survived command completion")
+    finally:
+        if pid_file.exists():
+            with suppress(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+
+
+def test_early_pipe_close_is_bounded_terminal_result(tmp_path: Path) -> None:
+    result = run_command(
+        tmp_path,
+        [sys.executable, "-c", "import os,time; os.close(1); os.close(2); time.sleep(30)"],
+        timeout_seconds=0.1,
+    )
+    assert result.state == "timed_out"
+    assert result.duration_seconds < 3

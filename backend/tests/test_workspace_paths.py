@@ -174,8 +174,9 @@ def test_search_workspace_enforces_result_cap_with_injected_runner(workspace_roo
     assert seen["argv"][0] == "rg"
     assert "needle $(touch nope)" in seen["argv"]
     assert seen["argv"][seen["argv"].index("needle $(touch nope)") - 1] == "--"
-    assert seen["cwd"] == workspace_root
-    assert seen["timeout"] == 7.5
+    assert seen["cwd"] != workspace_root
+    assert not seen["cwd"].exists()
+    assert 0 < seen["timeout"] <= 7.5
     assert seen["max_output_bytes"] == 4096
     assert result["truncated"] is True
     assert len(result["matches"]) == 2

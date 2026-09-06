@@ -285,7 +285,9 @@ async def test_ordinary_chat_never_carries_tool_definitions() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(json.loads(request.content))
-        return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"hi"}}]}\n\n')
+        return httpx.Response(
+            200, text='data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\n'
+        )
 
     transport = httpx.MockTransport(handler)
     async for _ in client.stream_chat(

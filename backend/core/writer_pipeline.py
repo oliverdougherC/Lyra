@@ -70,7 +70,9 @@ from backend.core.app_settings import (
 from backend.core.errors import LyraError, NotFoundError
 from backend.core.profiles import select_active_facts
 from backend.llm import budget, client, prompts, replies
+from backend.llm.turn_budget import input_ceiling
 from backend.rag.retrieve import retrieve
+from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect
 
 logger = logging.getLogger(__name__)
@@ -186,15 +188,24 @@ def enqueue(job: PassJob) -> None:
 def run_pass(job: PassJob) -> None:
     """Run one pass. The worker calls this; tests call it directly."""
     conn = connect()
+    _writer_local.run = (conn, job)
     try:
         if job.run_id is not None:
-            writer_runs.mark_running(conn, job.run_id)
+            run = writer_runs.mark_running(conn, job.run_id)
+            if run["status"] not in writer_runs.ACTIVE_STATUSES:
+                return
         _run(conn, job)
-        if job.run_id is not None and not _cancel_requested(conn, job):
+        if job.run_id is not None:
+            if _cancel_requested(conn, job):
+                return
             writer_runs.mark_completed(conn, job.run_id)
+            if _cancel_requested(conn, job):
+                return
         conn.execute(
-            "update artifacts set writer_job_completed_at = datetime('now') where id = ?",
-            (job.artifact_id,),
+            "update artifacts set writer_job_completed_at = datetime('now') where id = ? "
+            "and (? is null or not exists (select 1 from writer_runs "
+            "where artifact_id = ? and id > ?))",
+            (job.artifact_id, job.run_id, job.artifact_id, job.run_id),
         )
         conn.commit()
     except NotFoundError:
@@ -204,6 +215,8 @@ def run_pass(job: PassJob) -> None:
         conn.rollback()
         _settle_failed(conn, job, exc)
     finally:
+        if hasattr(_writer_local, "run"):
+            del _writer_local.run
         if hasattr(_writer_local, "deadline"):
             del _writer_local.deadline
         conn.close()
@@ -243,17 +256,7 @@ def _checkpoint(
 
 
 def _cancel_requested(conn: sqlite3.Connection, job: PassJob) -> bool:
-    if not writer_runs.cancel_requested(conn, job.run_id):
-        return False
-    if job.run_id is not None:
-        writer_runs.mark_cancelled(conn, job.run_id)
-    artifacts.set_artifact_state(conn, job.artifact_id, artifacts.CANCELLED, _PASS_CANCELLED_DETAIL)
-    conn.execute(
-        "update artifacts set writer_job_completed_at = datetime('now') where id = ?",
-        (job.artifact_id,),
-    )
-    conn.commit()
-    return True
+    return writer_runs.settle_cancellation(conn, job.run_id, _PASS_CANCELLED_DETAIL)
 
 
 def _resume_state(
@@ -375,13 +378,18 @@ def _settle_failed(conn: sqlite3.Connection, job: PassJob, exc: Exception) -> No
     misnamed section or an unreachable endpoint used to settle silently, looking like a
     pass that simply had nothing to suggest.
     """
+    if _cancel_requested(conn, job):
+        return
     row = conn.execute("select id from artifacts where id = ?", (job.artifact_id,)).fetchone()
     if row is None:
         return
     message = exc.message if isinstance(exc, LyraError) else str(exc)
-    artifacts.mark_artifact_failed(conn, job.artifact_id, _FAILED_DETAIL, message)
     if job.run_id is not None:
         writer_runs.mark_failed(conn, job.run_id, message)
+        if _cancel_requested(conn, job):
+            return
+    artifacts.mark_artifact_failed(conn, job.artifact_id, _FAILED_DETAIL, message)
+    if job.run_id is not None:
         live = live_drafts.get_live_suggestion_for_run(conn, job.run_id)
         if live is not None:
             live_drafts.update_live_suggestion(
@@ -395,6 +403,49 @@ def _settle_failed(conn: sqlite3.Connection, job: PassJob, exc: Exception) -> No
         (job.artifact_id,),
     )
     conn.commit()
+
+
+def _preflight_request(config, messages, max_tokens, schema=None) -> None:
+    """Reject oversized assembled requests without trimming student instructions/prose.
+
+    Uses the shared endpoint-independent estimator and 10% safety margin, including
+    message framing and JSON schema. Retrieval remains optional and bounded upstream.
+    """
+    material = {"messages": messages}
+    if schema is not None:
+        material["response_format"] = client._response_format(client.JSON_SCHEMA, schema)
+    measured = estimate_tokens(json.dumps(material, ensure_ascii=False))
+    if measured > input_ceiling(config.context_window, max_tokens):
+        raise LyraError(
+            "This writing request exceeds the configured tutor context window. "
+            "Your writing and saved suggestion are intact. Use a larger context window "
+            "or select a smaller section before retrying."
+        )
+
+
+async def _bounded_inference(operation, *, deadline=None, run=None):
+    """One absolute budget, including silent/chunking transports and cancellation."""
+    deadline = deadline if deadline is not None else getattr(_writer_local, "deadline", None)
+    run = run if run is not None else getattr(_writer_local, "run", None)
+    task = asyncio.create_task(operation)
+    try:
+        while True:
+            if run is not None and writer_runs.cancel_requested(run[0], run[1].run_id):
+                raise LyraError("The writing run was cancelled. Saved text was kept.")
+            remaining = deadline - time.monotonic() if deadline is not None else 0.05
+            if remaining <= 0:
+                raise LyraError("The writing time budget was exhausted. Saved text was kept.")
+            done, _ = await asyncio.wait({task}, timeout=min(0.05, remaining))
+            if task in done:
+                # Recheck before the caller publishes any model effects.
+                if run is not None and writer_runs.cancel_requested(run[0], run[1].run_id):
+                    raise LyraError("The writing run was cancelled. Saved text was kept.")
+                return task.result()
+    finally:
+        if not task.done():
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 def _complete(
@@ -416,18 +467,22 @@ def _complete(
     reserve = budget.generation_reserve(config.context_window)
     max_tokens = min(budget.tokens_for_words(target_words), reserve) if target_words else reserve
     timeout = _deadline_timeout()
+    _preflight_request(config, messages, max_tokens, schema)
     return asyncio.run(
-        client.complete(
-            config.endpoint_url,
-            config.api_key,
-            config.model,
-            messages,
-            request_timeout=timeout,
-            max_tokens=max_tokens,
-            truncated=truncated,
-            schema=schema,
-            temperature=client.DETERMINISTIC_TEMPERATURE if schema else None,
-            enable_thinking=enable_thinking,
+        _bounded_inference(
+            client.complete(
+                config.endpoint_url,
+                config.api_key,
+                config.model,
+                messages,
+                request_timeout=timeout,
+                max_tokens=max_tokens,
+                truncated=truncated,
+                fail_on_truncation=truncated is None,
+                schema=schema,
+                temperature=client.DETERMINISTIC_TEMPERATURE if schema else None,
+                enable_thinking=enable_thinking,
+            )
         )
     ).strip()
 
@@ -695,6 +750,18 @@ def _run_live_pipeline(
     ]
     if incomplete:
         raise LyraError("The live draft still has empty paragraph blocks: " + ", ".join(incomplete))
+    short = [
+        str(block["stable_key"])
+        for block in final["blocks"]
+        if not int(block["user_revision"])
+        and len(str(block["content"]).split()) < int(int(block["target_words"] or 180) * 0.8)
+    ]
+    if short:
+        raise LyraError(
+            "The live draft has paragraphs below their requested length: "
+            + ", ".join(short)
+            + ". The partial suggestion was kept for revision."
+        )
     live_drafts.finalize_to_pending_edit(
         conn,
         suggestion_id,
@@ -932,6 +999,30 @@ def _live_block_by_key(
     )
 
 
+def _live_paragraph_prompt(config: TutorConfig, title: str, **context) -> list[dict[str, str]]:
+    """Fit optional prose in a stable order; never remove assignment, plan, or evidence.
+
+    Neighboring prose and redundant research notes are conveniences. The fixed job,
+    document map, section plan and source ledger are mandatory and fail recoverably
+    when they cannot fit. Continuations still pass the final assembled-request check.
+    """
+    max_tokens = min(
+        budget.tokens_for_words(int(context["target_words"])),
+        budget.generation_reserve(config.context_window),
+    )
+    optional = iter(("previous_paragraph", "next_paragraph_summary", "research_block"))
+    while True:
+        messages = prompts.build_paragraph_draft_prompt(title, **context)
+        try:
+            _preflight_request(config, messages, max_tokens)
+            return messages
+        except LyraError:
+            key = next(optional, None)
+            if key is None:
+                raise
+            context[key] = ""
+
+
 def _draft_live_blocks(
     conn: sqlite3.Connection,
     job: PassJob,
@@ -975,7 +1066,8 @@ def _draft_live_blocks(
             if index + 1 < len(current_blocks)
             else None
         )
-        messages = prompts.build_paragraph_draft_prompt(
+        messages = _live_paragraph_prompt(
+            config,
             str(artifact["title"]),
             document_map=document_map,
             section_plan=json.dumps(section_plan, ensure_ascii=False, sort_keys=True),
@@ -1033,37 +1125,51 @@ def _stream_live_paragraph(
     )
 
     async def consume(call_messages: list[dict[str, str]]) -> int:
-        buffer = ""
+        _preflight_request(config, call_messages, max_tokens)
         written = 0
-        async for delta in client.stream_chat(
-            config.endpoint_url,
-            config.api_key,
-            config.model,
-            call_messages,
-            max_tokens=max_tokens,
-            request_timeout=_deadline_timeout(),
-            enable_thinking=False,
-        ):
-            if delta.channel != "answer" or not delta.text:
-                continue
-            buffer += delta.text
-            written += len(delta.text)
-            if len(buffer) >= LIVE_STREAM_FLUSH_CHARS:
+        buffer = ""
+        try:
+            async for delta in client.stream_chat(
+                config.endpoint_url,
+                config.api_key,
+                config.model,
+                call_messages,
+                max_tokens=max_tokens,
+                request_timeout=_deadline_timeout(),
+                enable_thinking=False,
+            ):
+                if writer_runs.cancel_requested(conn, job.run_id):
+                    raise LyraError("The writing run was cancelled. Saved text was kept.")
+                if delta.channel != "answer" or not delta.text:
+                    continue
+                written += len(delta.text)
+                buffer += delta.text
+                if len(buffer) >= LIVE_STREAM_FLUSH_CHARS:
+                    live_drafts.append_block_text(
+                        conn, suggestion_id, stable_key, buffer, status="drafting"
+                    )
+                    buffer = ""
+        finally:
+            # Preserve the last useful batch on EOF/cutoff/timeout, but never publish
+            # additional model effects after durable cancellation has been observed.
+            if buffer and not writer_runs.cancel_requested(conn, job.run_id):
                 live_drafts.append_block_text(
                     conn, suggestion_id, stable_key, buffer, status="drafting"
                 )
-                buffer = ""
-        if buffer:
-            live_drafts.append_block_text(
-                conn, suggestion_id, stable_key, buffer, status="drafting"
-            )
         return written
 
     call_messages = messages
     for attempt in range(LIVE_PARAGRAPH_ATTEMPTS):
-        written = asyncio.run(consume(call_messages))
+        written = asyncio.run(
+            _bounded_inference(consume(call_messages), deadline=job._deadline, run=(conn, job))
+        )
         result = _live_block_by_key(conn, suggestion_id, stable_key)
         if result is not None and (written > 0 or str(result["content"]).strip()):
+            if len(str(result["content"]).split()) < max(1, int(target_words * 0.8)):
+                raise LyraError(
+                    "The paragraph stopped below its requested length. "
+                    "The partial suggestion was kept; retry or revise it before accepting."
+                )
             return result
         if attempt + 1 < LIVE_PARAGRAPH_ATTEMPTS:
             live_drafts.update_live_suggestion(
@@ -1222,7 +1328,8 @@ def _review_live_chunks(
             section_plan = _section_plan(plan, section_ref, str(current["heading"] or "")) or {}
             revised = _complete(
                 config,
-                prompts.build_paragraph_draft_prompt(
+                _live_paragraph_prompt(
+                    config,
                     str(artifact["title"]),
                     document_map=document_map,
                     section_plan=json.dumps(section_plan, ensure_ascii=False, sort_keys=True),

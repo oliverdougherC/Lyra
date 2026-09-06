@@ -86,7 +86,24 @@ def render_citations(body: str, sources: Sequence[Mapping[str, object]] | None =
         detail = title
         if url:
             detail += f". {url}"
-        if accessed:
+        revisions = {
+            (excerpt.get("supporting_revision"), excerpt.get("supporting_accessed_at"))
+            for excerpt in source.get("excerpts", [])
+            if isinstance(excerpt, Mapping) and excerpt.get("supporting_revision") is not None
+        }
+        unavailable = any(
+            isinstance(excerpt, Mapping) and excerpt.get("evidence_unavailable")
+            for excerpt in source.get("excerpts", [])
+        )
+        if unavailable:
+            detail += ". Some historical supporting snapshots are unavailable"
+        if revisions:
+            references = [
+                f"revision {revision}" + (f" (saved {date})" if date else "")
+                for revision, date in sorted(revisions, key=lambda value: int(value[0]))
+            ]
+            detail += ". Supporting saved " + ", ".join(references)
+        elif accessed and not unavailable:
             detail += f". Accessed {accessed}"
         entries.append(f"{number}. {detail}.")
     return rendered.rstrip() + "\n\n" + "\n".join(entries) + "\n"

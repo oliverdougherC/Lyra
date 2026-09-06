@@ -195,6 +195,7 @@ export interface UserProfile {
 }
 
 export interface SettingsRead {
+  local_model_setup?: string
   endpoint_url: string | null
   model: string | null
   context_window: number
@@ -1163,6 +1164,10 @@ export interface DraftPlanUpdate {
 
 export interface SourceExcerpt {
   id: number
+  source_revision_id?: number | null
+  supporting_revision?: number | null
+  supporting_accessed_at?: string | null
+  evidence_unavailable?: boolean
   section_ref: string | null
   excerpt: string
 }

@@ -97,17 +97,15 @@ def request_cancel(conn: sqlite3.Connection, artifact_id: int) -> dict[str, obje
         return run
     conn.execute(
         "update writer_runs set status = ?, cancel_requested_at = datetime('now'), "
-        "updated_at = datetime('now') where id = ?",
-        (CANCEL_REQUESTED, int(run["id"])),
+        "updated_at = datetime('now') where id = ? and status in (?, ?)",
+        (CANCEL_REQUESTED, int(run["id"]), QUEUED, RUNNING),
     )
     conn.commit()
     return get_run(conn, int(run["id"]))
 
 
 def mark_running(conn: sqlite3.Connection, run_id: int) -> dict[str, object]:
-    run = get_run(conn, run_id)
-    next_status = CANCEL_REQUESTED if run["status"] == CANCEL_REQUESTED else RUNNING
-    return _set_status(conn, run_id, next_status)
+    return _set_status(conn, run_id, RUNNING)
 
 
 def checkpoint(
@@ -181,7 +179,55 @@ def queue_for_restart(conn: sqlite3.Connection, run_id: int, message: str) -> di
 def cancel_requested(conn: sqlite3.Connection, run_id: int | None) -> bool:
     if run_id is None:
         return False
-    return get_run(conn, run_id)["status"] == CANCEL_REQUESTED
+    return get_run(conn, run_id)["status"] in (CANCEL_REQUESTED, CANCELLED)
+
+
+def settle_cancellation(conn: sqlite3.Connection, run_id: int | None, detail: str) -> bool:
+    """Settle and mirror one cancelled run atomically without touching a newer run.
+
+    The first conditional write acquires SQLite's writer lock before a terminal run
+    frees the active-run slot. A new run can queue only after every mirror is settled.
+    Repeated callbacks may repair this run's own mirror, never a successor's artifact.
+    """
+    if run_id is None or not cancel_requested(conn, run_id):
+        return False
+    try:
+        conn.execute(
+            "update writer_runs set status = ?, error_message = null, "
+            "finished_at = datetime('now'), updated_at = datetime('now') "
+            "where id = ? and status = ?",
+            (CANCELLED, run_id, CANCEL_REQUESTED),
+        )
+        run = get_run(conn, run_id)
+        cancelled = run["status"] == CANCELLED
+        if cancelled:
+            conn.execute(
+                "update artifacts set state = ?, stage_detail = ?, "
+                "writer_job_completed_at = datetime('now'), updated_at = datetime('now') "
+                "where id = ? and not exists (select 1 from writer_runs "
+                "where artifact_id = ? and id > ?) "
+                "and (state != ? or stage_detail is not ? or writer_job_completed_at is null)",
+                (
+                    CANCELLED,
+                    detail,
+                    run["artifact_id"],
+                    run["artifact_id"],
+                    run_id,
+                    CANCELLED,
+                    detail,
+                ),
+            )
+            conn.execute(
+                "update live_draft_suggestions set status = ?, detail = ?, "
+                "version = version + 1, updated_at = datetime('now') "
+                "where run_id = ? and status != ?",
+                (CANCELLED, detail, run_id, CANCELLED),
+            )
+        conn.commit()
+        return cancelled
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def compatible_index(
@@ -240,17 +286,20 @@ def _finish(
     conn: sqlite3.Connection, run_id: int, status: str, *, message: str | None = None
 ) -> None:
     conn.execute(
-        "update writer_runs set status = ?, error_message = ?, finished_at = datetime('now'), "
-        "updated_at = datetime('now') where id = ?",
-        (status, message, run_id),
+        "update writer_runs set status = case when status = ? then ? else ? end, "
+        "error_message = case when status = ? then null else ? end, "
+        "finished_at = datetime('now'), updated_at = datetime('now') "
+        "where id = ? and status in (?, ?, ?)",
+        (CANCEL_REQUESTED, CANCELLED, status, CANCEL_REQUESTED, message, run_id, *ACTIVE_STATUSES),
     )
     conn.commit()
 
 
 def _set_status(conn: sqlite3.Connection, run_id: int, status: str) -> dict[str, object]:
     conn.execute(
-        "update writer_runs set status = ?, updated_at = datetime('now') where id = ?",
-        (status, run_id),
+        "update writer_runs set status = ?, updated_at = datetime('now') "
+        "where id = ? and status in (?, ?)",
+        (status, run_id, QUEUED, RUNNING),
     )
     conn.commit()
     return get_run(conn, run_id)

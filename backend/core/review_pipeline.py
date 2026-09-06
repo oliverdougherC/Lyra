@@ -171,13 +171,21 @@ def run_review(job: ReviewJob) -> None:
     conn = connect()
     try:
         if job.run_id is not None:
-            writer_runs.mark_running(conn, job.run_id)
+            run = writer_runs.mark_running(conn, job.run_id)
+            if run["status"] not in writer_runs.ACTIVE_STATUSES:
+                return
         _run(conn, job)
-        if job.run_id is not None and not _cancel_requested(conn, job):
+        if job.run_id is not None:
+            if _cancel_requested(conn, job):
+                return
             writer_runs.mark_completed(conn, job.run_id)
+            if _cancel_requested(conn, job):
+                return
         conn.execute(
-            "update artifacts set writer_job_completed_at = datetime('now') where id = ?",
-            (job.artifact_id,),
+            "update artifacts set writer_job_completed_at = datetime('now') where id = ? "
+            "and (? is null or not exists (select 1 from writer_runs "
+            "where artifact_id = ? and id > ?))",
+            (job.artifact_id, job.run_id, job.artifact_id, job.run_id),
         )
         conn.commit()
     except NotFoundError:
@@ -211,19 +219,7 @@ def _checkpoint(
 
 
 def _cancel_requested(conn: sqlite3.Connection, job: ReviewJob) -> bool:
-    if not writer_runs.cancel_requested(conn, job.run_id):
-        return False
-    if job.run_id is not None:
-        writer_runs.mark_cancelled(conn, job.run_id)
-    artifacts.set_artifact_state(
-        conn, job.artifact_id, artifacts.CANCELLED, _REVIEW_CANCELLED_DETAIL
-    )
-    conn.execute(
-        "update artifacts set writer_job_completed_at = datetime('now') where id = ?",
-        (job.artifact_id,),
-    )
-    conn.commit()
-    return True
+    return writer_runs.settle_cancellation(conn, job.run_id, _REVIEW_CANCELLED_DETAIL)
 
 
 def _checkpoint_data(
@@ -248,10 +244,14 @@ def _settle_failed(conn: sqlite3.Connection, job: ReviewJob, exc: Exception) -> 
     row = conn.execute("select id from artifacts where id = ?", (job.artifact_id,)).fetchone()
     if row is None:
         return
+    if _cancel_requested(conn, job):
+        return
     message = exc.message if isinstance(exc, LyraError) else str(exc)
-    artifacts.mark_artifact_failed(conn, job.artifact_id, _FAILED_DETAIL, message)
     if job.run_id is not None:
         writer_runs.mark_failed(conn, job.run_id, message)
+        if _cancel_requested(conn, job):
+            return
+    artifacts.mark_artifact_failed(conn, job.artifact_id, _FAILED_DETAIL, message)
     conn.execute(
         "update artifacts set writer_job_completed_at = datetime('now') where id = ?",
         (job.artifact_id,),

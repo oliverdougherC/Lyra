@@ -6,9 +6,11 @@ so what is under test is the turn: what is persisted, in what order, and what go
 wire.
 """
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -32,6 +34,21 @@ from backend.rag.embed import EMBEDDING_DIM
 from backend.rag.retrieve import RetrievalResult, RetrievedChunk
 from backend.rag.tokens import estimate_tokens
 from backend.storage.database import connect, get_db
+
+
+@pytest.fixture(autouse=True)
+def _tiny_embedding_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.llm import embed_server
+
+    spec = replace(
+        model_provisioning.EMBEDDING_WEIGHTS,
+        expected_bytes=len(b"GGUF fake"),
+        sha256=hashlib.sha256(b"GGUF fake").hexdigest(),
+    )
+    monkeypatch.setattr(model_provisioning, "EMBEDDING_WEIGHTS", spec)
+    monkeypatch.setattr(embed_server, "EMBEDDING_WEIGHTS", spec)
+    monkeypatch.setitem(globals(), "EMBEDDING_WEIGHTS", spec)
+
 
 StreamFactory = Callable[..., AsyncIterator[StreamDelta]]
 
@@ -339,14 +356,14 @@ def test_a_first_message_on_a_fresh_install_provisions_the_embedding_model(
     downloads: list[tuple[str, str]] = []
 
     def fake_download(
-        *, repo_id: str, filename: str, local_dir: object, revision: str | None
+        *, repo_id: str, filename: str, local_dir: object, revision: str | None, max_bytes: int = 0
     ) -> str:
         downloads.append((repo_id, filename))
         path = Path(str(local_dir)) / filename
         path.write_bytes(b"GGUF fake")
         return str(path)
 
-    monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+    monkeypatch.setattr(model_provisioning, "_fetch_weight", fake_download)
 
     # A fake spawn: no real binary, port, or health check.
     monkeypatch.setattr(EmbeddingServer, "_healthy", lambda self: False)
@@ -412,7 +429,7 @@ def test_a_first_message_on_a_true_clean_packaged_install_provisions_everything(
     downloads: list[tuple[str, str]] = []
 
     def fake_download(
-        *, repo_id: str, filename: str, local_dir: object, revision: str | None
+        *, repo_id: str, filename: str, local_dir: object, revision: str | None, max_bytes: int = 0
     ) -> str:
         downloads.append((repo_id, filename))
         path = Path(str(local_dir)) / filename
@@ -420,7 +437,7 @@ def test_a_first_message_on_a_true_clean_packaged_install_provisions_everything(
         path.write_bytes(b"GGUF fake")
         return str(path)
 
-    monkeypatch.setattr(model_provisioning, "hf_hub_download", fake_download)
+    monkeypatch.setattr(model_provisioning, "_fetch_weight", fake_download)
 
     # A fake spawn: no real port, no health check. `_find_binary` is deliberately NOT
     # mocked - the whole point is that the real resolution finds the bundled runtime.
@@ -549,8 +566,10 @@ def test_an_upstream_failure_mid_stream_arrives_as_an_error_frame(
         "composing_answer",
     ]
     assert frames[-1]["message"]
-    # A failed turn is one to retry, so no half-answer is stored to look complete later.
-    assert [message["role"] for message in sessions.list_messages(db, session_id)] == ["user"]
+    # A failed turn remains retryable; useful partial text is explicitly labelled.
+    messages = sessions.list_messages(db, session_id)
+    assert [message["role"] for message in messages] == ["user", "assistant"]
+    assert "Incomplete reply" in messages[-1]["content"]
 
 
 def test_the_requested_mode_is_persisted_on_the_session(
