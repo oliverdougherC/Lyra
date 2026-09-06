@@ -89,9 +89,11 @@ pub(crate) async fn desktop_backup_restore(app: AppHandle) -> Result<BackupResul
             return Ok(BackupResult { status: "cancelled".into(), label: String::new() });
         };
         let path = selection.into_path().map_err(|_| "Choose a local backup archive")?;
+        let window = app.get_webview_window("main").ok_or("Lyra main window is unavailable")?;
         let confirmed = app.dialog()
             .message("Restore this backup and replace the classes, documents, and drafts currently in Lyra? Your current data folder will be retained as a recovery copy. Lyra will reopen when restoration finishes.")
             .title("Restore backup?")
+            .parent(&window)
             .buttons(MessageDialogButtons::OkCancelCustom("Restore backup".into(), "Cancel".into()))
             .blocking_show();
         if !confirmed {

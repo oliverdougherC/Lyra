@@ -35,3 +35,21 @@ The refrozen sidecar SHA-256 `3d6a01dc7318c269983286388ca2dd7778286499e9fd4c2dd4
 The intermediate binary exposed a second genuine runtime defect: `with sqlite3.connect(...)` does not close the connection. Garbage collection in the frozen runtime closed a staged database after tar traversal listed its WAL/SHM files, producing FileNotFoundError as those transient files disappeared. Backup snapshot readers/writers now explicitly close before archiving; the regression holds strong connection references so garbage collection cannot hide a missing close. New backup readers/settings writers were fixed similarly. Existing updater migration/schema backup connections were inspected and already close explicitly before hashing. Backup/import/launcher checks now pass 145 tests. Helper failures emit only exception type and at most four code basenames/line numbers; no exception values or private path prefixes.
 
 For native UI acceptance the driver also supports `--prepare-only`, `--keep-profile`, and `--profile-root <new/empty outside-checkout directory>`. `.omx/release/native-ui-profile.json` records a retained synthetic profile, complete isolated launch environment, class 9001, and visible saved draft `/classes/9001/drafts/9001`; it has no endpoint or credentials configured and uses the null Keychain backend. The final signed-bundle binary must still run the same expanded driver; this result does not claim native-dialog or signed-app acceptance.
+
+
+## Actual native UI follow-up
+
+The development-signed candidate launched with a disposable populated profile and no real keys.
+Settings displayed version0.2.0-beta.0/build3.0.1 and Not checked; an explicit update check returned
+the honest unavailable-feed error. Native Save backup created a mode0600 archive and the app
+adopted its new authenticated backend session. Essay typing reached Saved.
+
+An unparented restore confirmation did not appear on macOS27. Attaching it to the main window
+fixed the actual native flow: the picker and confirmation appeared, restoration completed, and
+the app reopened. The restored essay matched the archive while newer edits remained in the
+retained prior profile. No real student profile or Keychain was modified by these tests.
+
+Native Print/PDF is **not certified**: the menu automation did not reliably activate Print.
+The native command and save-before-print regressions exist, but a physical menu/print-preview
+check remains required. This evidence does not establish clean-machine notarization, installed
+N-to-N+1, physical accessibility,8GB memory or sustained-soak acceptance.
