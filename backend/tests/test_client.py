@@ -312,19 +312,17 @@ async def test_a_json_frame_in_the_wrong_shape_is_an_unreadable_reply_not_a_cras
     assert caught.value.message == "The tutor endpoint returned a response that could not be read."
 
 
-async def test_a_stream_ending_without_done_is_logged_as_possibly_incomplete(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """A connection that closes cleanly without `[DONE]` looks exactly like a short reply.
-
-    The text is still delivered - yanking back words already read would cost a plausibly
-    complete answer - but the one place that can tell the difference has to say so.
-    """
-    with caplog.at_level(logging.WARNING, logger="backend.llm.client"):
-        deltas = await _collect('data: {"choices":[{"delta":{"content":"cut"}}]}\n')
-
+async def test_a_stream_ending_without_done_preserves_text_and_reports_incomplete() -> None:
+    deltas = []
+    transport = _transport(
+        lambda request: httpx.Response(
+            200, text='data: {"choices":[{"delta":{"content":"cut"}}]}\n'
+        )
+    )
+    with pytest.raises(client.StreamCompletionError, match="without confirmed completion"):
+        async for delta in client.stream_chat(_ENDPOINT, None, "m", [], transport=transport):
+            deltas.append(delta)
     assert _text(deltas, "answer") == "cut"
-    assert any("[DONE]" in record.getMessage() for record in caplog.records)
 
 
 async def test_complete_returns_the_message_content() -> None:

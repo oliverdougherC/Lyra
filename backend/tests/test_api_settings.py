@@ -105,7 +105,8 @@ def test_put_stores_the_key_without_returning_it(
 ) -> None:
     body = client.put("/api/settings", json={"api_key": "sk-secret"}).json()
 
-    assert fake_keyring.store[(secrets.SERVICE, secrets.USERNAME)] == "sk-secret"
+    assert "sk-secret" in fake_keyring.store.values()
+    assert any(username.startswith("tutor:") for _, username in fake_keyring.store)
     assert body["api_key_set"] is True
     assert "api_key" not in body
     assert "sk-secret" not in client.get("/api/settings").text
@@ -572,9 +573,9 @@ def test_credential_invalidation_commits_before_keychain_io(
 ) -> None:
     client.put("/api/settings", json={"endpoint_url": "http://127.0.0.1:8080/v1"})
     revision = get_settings_row(db)["probe_revision"]
-    set_key = secrets.set_api_key
+    set_key = secrets.stage_tutor_credential
 
-    def slow_keychain(value):
+    def slow_keychain(endpoint, value):
         # Called inside credential mutation, before the new credential is installed.
         # A second connection may write, and old validated probes cannot publish.
         other = connect()
@@ -584,9 +585,9 @@ def test_credential_invalidation_commits_before_keychain_io(
             update_settings_row(other, {"context_window": 16384})
         finally:
             other.close()
-        set_key(value)
+        return set_key(endpoint, value)
 
-    monkeypatch.setattr(secrets, "set_api_key", slow_keychain)
+    monkeypatch.setattr(secrets, "stage_tutor_credential", slow_keychain)
     response = client.put("/api/settings", json={"api_key": "replacement"})
     assert response.status_code == 200
     assert response.json()["context_window"] == 16384
@@ -594,3 +595,121 @@ def test_credential_invalidation_commits_before_keychain_io(
     assert response.json()["vision_supported"] is None
     _, config = routes_settings._probe_snapshot(db)
     assert config.api_key == "replacement"
+
+
+def test_endpoint_only_change_does_not_inherit_secret(client, db):
+    from backend.core.app_settings import resolve_tutor_config
+
+    client.put(
+        "/api/settings", json={"endpoint_url": "http://localhost:8080/v1", "api_key": "key-A"}
+    )
+    response = client.put("/api/settings", json={"endpoint_url": "http://localhost:9090/v1"})
+    assert response.json()["api_key_set"] is False
+    assert resolve_tutor_config(db).api_key is None
+
+
+def test_staged_secret_and_failed_commit_preserve_previous_snapshot(client, db, monkeypatch):
+    from backend.core.app_settings import _tutor_config_from_row, resolve_tutor_config
+
+    client.put(
+        "/api/settings", json={"endpoint_url": "http://localhost:8080/v1", "api_key": "key-A"}
+    )
+    retained = get_settings_row(db)
+    observed = []
+
+    def fail_commit(conn, values):
+        observed.append(resolve_tutor_config(conn))
+        observed.append(_tutor_config_from_row(retained))
+        raise OSError("synthetic disk failure")
+
+    monkeypatch.setattr(routes_settings, "update_settings_row", fail_commit)
+    with pytest.raises(OSError, match="synthetic disk failure"):
+        client.put(
+            "/api/settings", json={"endpoint_url": "http://localhost:9090/v1", "api_key": "key-B"}
+        )
+    observed.append(resolve_tutor_config(db))
+    assert all(
+        (item.endpoint_url, item.api_key) == ("http://localhost:8080/v1", "key-A")
+        for item in observed
+    )
+
+
+def test_retained_row_resolves_its_own_key_after_new_configuration_commits(client, db):
+    from backend.core.app_settings import _tutor_config_from_row, resolve_tutor_config
+
+    client.put(
+        "/api/settings", json={"endpoint_url": "http://localhost:8080/v1", "api_key": "key-A"}
+    )
+    retained = get_settings_row(db)
+    client.put(
+        "/api/settings", json={"endpoint_url": "http://localhost:9090/v1", "api_key": "key-B"}
+    )
+    assert _tutor_config_from_row(retained).api_key == "key-A"
+    assert resolve_tutor_config(db).api_key == "key-B"
+    client.put("/api/settings", json={"api_key": ""})
+    assert resolve_tutor_config(db).api_key is None
+    assert _tutor_config_from_row(retained).api_key is None
+
+
+def test_concurrent_saves_cannot_pair_staged_key_with_old_destination(client, db, monkeypatch):
+    import asyncio
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    import httpx
+
+    from backend.core.app_settings import resolve_tutor_config
+
+    client.put(
+        "/api/settings", json={"endpoint_url": "http://localhost:8080/v1", "api_key": "key-A"}
+    )
+    staged = threading.Event()
+    release = threading.Event()
+    original = secrets.stage_tutor_credential
+
+    def pause_stage(endpoint, value):
+        identity = original(endpoint, value)
+        if value == "key-B":
+            staged.set()
+            assert release.wait(3)
+        return identity
+
+    monkeypatch.setattr(secrets, "stage_tutor_credential", pause_stage)
+
+    def save(port, value):
+        conn = connect()
+        try:
+            return routes_settings.write_settings(
+                routes_settings.SettingsUpdate(
+                    endpoint_url=f"http://localhost:{port}/v1", api_key=value
+                ),
+                conn,
+            )
+        finally:
+            conn.close()
+
+    sent = []
+
+    async def send(config):
+        async def capture(request):
+            sent.append((str(request.url), request.headers.get("authorization")))
+            return httpx.Response(200)
+
+        async with routes_settings.client._client(
+            httpx.Timeout(1), config.api_key, httpx.MockTransport(capture)
+        ) as transport:
+            await transport.get(config.endpoint_url + "/models")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(save, 9090, "key-B")
+        assert staged.wait(3)
+        second = pool.submit(save, 7070, "key-C")
+        try:
+            asyncio.run(send(resolve_tutor_config(db)))
+            assert sent == [("http://localhost:8080/v1/models", "Bearer key-A")]
+        finally:
+            release.set()
+        first.result(3)
+        second.result(3)
+    asyncio.run(send(resolve_tutor_config(db)))
+    assert sent[-1] == ("http://localhost:7070/v1/models", "Bearer key-C")

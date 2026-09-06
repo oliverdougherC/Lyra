@@ -14,17 +14,23 @@ mechanics cannot drift apart: there is no second implementation that remembers a
 different file name or a different folder.
 """
 
+import hashlib
 import logging
+import os
 import shutil
+import stat
+import tempfile
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from huggingface_hub import hf_hub_download
+import httpx
 
 from backend.config import settings
 from backend.core.errors import ConfigurationError
+from backend.storage import private
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +45,8 @@ EMBEDDING_FILENAME = "nomic-embed-text-v1.5.Q8_0.gguf"
 # and run from on this feature, and the file is unchanged there. Immutable by construction:
 # a commit SHA in a git repository is a content address and cannot be moved.
 EMBEDDING_REVISION = "0188c9bf409793f810680a5a431e7b899c46104c"
+# Size and SHA-256 are the Git LFS object identity from the immutable repository tree:
+# https://huggingface.co/api/models/nomic-ai/nomic-embed-text-v1.5-GGUF/tree/0188c9bf409793f810680a5a431e7b899c46104c
 # Ceiling for the disk check, not the file size: the Q8_0 file weighs about 139 MB, and a
 # ceiling with margin refuses a machine that truly cannot take it without guessing the
 # file's exact byte count.
@@ -91,6 +99,8 @@ class ModelFile:
     # "no pin configured" - a file whose bytes are not load-bearing may float; the
     # embedding model, which is, carries one.
     revision: str | None = None
+    expected_bytes: int | None = None
+    sha256: str | None = None
 
     @property
     def path(self) -> Path:
@@ -104,6 +114,8 @@ EMBEDDING_WEIGHTS = ModelFile(
     filename=EMBEDDING_FILENAME,
     download_bytes=EMBEDDING_DOWNLOAD_BYTES,
     revision=EMBEDDING_REVISION,
+    expected_bytes=146_146_432,
+    sha256="3e24342164b3d94991ba9692fdc0dd08e3fd7362e0aacc396a9a5c54a544c3b7",
 )
 RERANK_WEIGHTS = ModelFile(
     display_name="local reranking model",
@@ -134,115 +146,233 @@ def require_disk_space(target: Path, needed: int) -> None:
     )
 
 
-# ------------------------------------------------------------------ in-flight downloads
+# One bounded transport attempt is shared by all concurrent callers. A cancelled
+# caller does not cancel setup needed by other callers; transport stops within the
+# overall deadline plus one bounded network read. No hidden automatic retry loop.
+DOWNLOAD_DEADLINE_SECONDS = 600.0
+NETWORK_TIMEOUT_SECONDS = 10.0
+_CHUNK_BYTES = 1 << 20
 
 
 class _DownloadInProgress:
-    """One in-flight download of a file, shared by every thread that asked for it."""
-
     def __init__(self) -> None:
-        # Set exactly once, by the leader's finally, so waiters can always wake.
         self.finished = threading.Event()
+        self.error: ConfigurationError | None = None
 
 
 _IN_FLIGHT: dict[str, _DownloadInProgress] = {}
 _REGISTRY_LOCK = threading.Lock()
+# Rehash after replacement, size/metadata change, or process restart. ctime catches
+# edits whose mtime was restored. Bound this cache for callers using disposable roots.
+_VERIFIED: dict[tuple[str, str | None], tuple[int, ...]] = {}
 
 
 def download_in_progress(filename: str) -> bool:
-    """Whether any thread is downloading `filename` right now."""
     with _REGISTRY_LOCK:
-        return filename in _IN_FLIGHT
+        return any(Path(path).name == filename for path in _IN_FLIGHT)
 
 
-# ------------------------------------------------------------------ the download
+def _fingerprint(info: os.stat_result) -> tuple[int, ...]:
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _cache_error() -> ConfigurationError:
+    return ConfigurationError(
+        "Local model storage is not a readable regular file. "
+        "Check the model storage location and its permissions, then try again."
+    )
+
+
+def verified_weight(spec: ModelFile, path: Path | None = None) -> bool:
+    """Validate legacy/downloaded weights without following file or directory symlinks."""
+    target = path if path is not None else spec.path
+    key = (str(target.absolute()), spec.sha256)
+    try:
+        directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise _cache_error() from exc
+    try:
+        try:
+            descriptor = os.open(
+                target.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory
+            )
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise _cache_error() from exc
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            os.close(descriptor)
+            raise _cache_error()
+        with os.fdopen(descriptor, "rb") as stream:
+            if info.st_size <= 0 or (
+                spec.expected_bytes is not None and info.st_size != spec.expected_bytes
+            ):
+                return False
+            stamp = _fingerprint(info)
+            with _REGISTRY_LOCK:
+                cached = _VERIFIED.get(key) == stamp
+            if not cached:
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: stream.read(_CHUNK_BYTES), b""):
+                    digest.update(chunk)
+                if spec.sha256 is not None and digest.hexdigest() != spec.sha256:
+                    return False
+            # A file changed/replaced while hashing must not become a verified hit.
+            current = os.stat(target.name, dir_fd=directory, follow_symlinks=False)
+            if _fingerprint(current) != stamp or not stat.S_ISREG(current.st_mode):
+                return False
+            with _REGISTRY_LOCK:
+                if len(_VERIFIED) >= 32:
+                    _VERIFIED.pop(next(iter(_VERIFIED)))
+                _VERIFIED[key] = stamp
+            return True
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise _cache_error() from exc
+    finally:
+        os.close(directory)
 
 
 Progress = Callable[[str], None]
 
 
+def download_description(spec: ModelFile = EMBEDDING_WEIGHTS) -> str:
+    size = spec.expected_bytes if spec.expected_bytes is not None else spec.download_bytes
+    return f"Downloading the {spec.display_name} ({size / 1e6:.0f} MB) from Hugging Face"
+
+
+def setup_disclosure() -> str:
+    size = EMBEDDING_WEIGHTS.expected_bytes or EMBEDDING_WEIGHTS.download_bytes
+    return (
+        "The first document task downloads a required local embedding model "
+        f"(about {size / 1e6:.0f} MB) "
+        "from Hugging Face to Lyra's local model storage. Downloading weights does not upload "
+        "course documents. Once cached and verified, local processing works offline; interrupted "
+        "downloads can be retried by retrying the task. Optional OCR and reranking weights "
+        "are not downloaded "
+        "automatically. Your configured remote tutor and Exa have separate data-sharing rules."
+    )
+
+
 def ensure_weight(spec: ModelFile, *, progress: Progress | None = None) -> Path:
-    """Return where `spec` lives, downloading it on first use if it is absent.
+    """Return verified weights, sharing one success or failure with concurrent waiters.
 
-    Idempotent: a present file is returned as-is. Process-wide thread-safe: concurrent
-    callers share one download - the first to arrive starts it and the rest wait for its
-    outcome - so a burst of first-use requests never starts duplicate downloads. A failed
-    download leaves nothing behind that a later check could mistake for installed, and
-    the next caller retries.
-
-    The download is atomic end to end. `hf_hub_download` writes to a process-unique
-    temporary file in the models directory and moves it into place only when complete,
-    verifying the transfer against the size the hub advertises on the way. An interrupted
-    download leaves only its temporary file, whose name can never be mistaken for the
-    model, and the next call starts fresh.
-
-    Args:
-        spec: Which file, and its ceiling for the disk check.
-        progress: Called with one short human-readable line before the download starts;
-            `None` means log the line instead.
-
-    Returns:
-        The local path of the weights.
-
-    Raises:
-        ConfigurationError: The disk cannot take the download, or the download failed.
-            The message is written for a user: no path, no command, no stack trace.
+    Invalid regular caches are replaced only after the candidate verifies. Unsafe
+    entries are rejected. An interrupted/failed attempt leaves the previous file intact;
+    a subsequent user request can retry. Optional assets are never requested here unless
+    the caller explicitly supplies their spec.
     """
     target = spec.path
-    if target.exists():
+    key = str(target.absolute())
+    with _REGISTRY_LOCK:
+        entry = _IN_FLIGHT.get(key)
+        is_leader = entry is None
+        if entry is None:
+            _IN_FLIGHT[key] = entry = _DownloadInProgress()
+    if not is_leader:
+        if not entry.finished.wait(DOWNLOAD_DEADLINE_SECONDS + NETWORK_TIMEOUT_SECONDS + 5):
+            raise ConfigurationError("Local model setup timed out. Please try again.")
+        if entry.error is not None:
+            raise ConfigurationError(entry.error.message)
+        if not verified_weight(spec):
+            raise ConfigurationError("Local model verification failed. Please try again.")
         return target
-
-    while True:
-        with _REGISTRY_LOCK:
-            entry = _IN_FLIGHT.get(spec.filename)
-            if entry is None:
-                _IN_FLIGHT[spec.filename] = entry = _DownloadInProgress()
-                is_leader = True
-            else:
-                is_leader = False
-
-        if not is_leader:
-            entry.finished.wait()
-            if target.exists():
-                return target
-            # The leader's download failed; this caller makes the next attempt.
-            continue
-
-        try:
+    try:
+        if not verified_weight(spec):
             _download(spec, target, progress)
-        finally:
-            with _REGISTRY_LOCK:
-                _IN_FLIGHT.pop(spec.filename, None)
-            entry.finished.set()
         return target
+    except ConfigurationError as exc:
+        entry.error = exc
+        raise
+    except (OSError, private.PrivacyContractError) as exc:
+        entry.error = _cache_error()
+        raise entry.error from exc
+    finally:
+        with _REGISTRY_LOCK:
+            _IN_FLIGHT.pop(key, None)
+            entry.finished.set()
+
+
+def _fetch_weight(
+    *, repo_id: str, filename: str, local_dir: Path, revision: str | None, max_bytes: int
+) -> str:
+    """Stream public model bytes without credentials, with bounded time and disk use."""
+    url = f"https://huggingface.co/{repo_id}/resolve/{revision or 'main'}/{filename}"
+    target = local_dir / filename
+    deadline = time.monotonic() + DOWNLOAD_DEADLINE_SECONDS
+    total = 0
+    with httpx.stream(
+        "GET",
+        url,
+        follow_redirects=True,
+        timeout=NETWORK_TIMEOUT_SECONDS,
+        headers={"Accept-Encoding": "identity"},
+    ) as response:
+        response.raise_for_status()
+        if response.headers.get("content-encoding", "identity") != "identity":
+            raise ValueError("unexpected model transfer encoding")
+        with target.open("xb") as stream:
+            # Check every received network chunk. Coalescing to 1 MiB can let a
+            # slow trickle hide inside the transport's buffering indefinitely.
+            for chunk in response.iter_raw():
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("model download deadline exceeded")
+                total += len(chunk)
+                if total > max_bytes:
+                    raise ValueError("model download exceeded the size limit")
+                stream.write(chunk)
+            stream.flush()
+            os.fsync(stream.fileno())
+    if time.monotonic() >= deadline:
+        raise TimeoutError("model download deadline exceeded")
+    return str(target)
 
 
 def _download(spec: ModelFile, target: Path, progress: Progress | None) -> None:
-    settings.models_dir.mkdir(parents=True, exist_ok=True)
+    private.secure_mkdir(settings.models_dir, root=settings.models_dir)
     require_disk_space(settings.models_dir, spec.download_bytes)
-    line = f"Downloading {spec.filename} ..."
+    line = download_description(spec)
     if progress is not None:
         progress(line)
     else:
         logger.info("%s", line)
     try:
-        hf_hub_download(
-            repo_id=spec.repo_id,
-            filename=spec.filename,
-            local_dir=settings.models_dir,
-            # `None` (the optional OCR/rerank files) means "the repository's default
-            # branch"; a pinned spec passes its immutable revision, so a fresh install
-            # can never receive a different byte sequence than the one it was tested on.
-            revision=spec.revision,
-        )
+        # The Hub destination is never the installed path. Only verified bytes may
+        # acquire that name; failed transfers cannot poison the next startup.
+        with tempfile.TemporaryDirectory(prefix=".lyra-model-", dir=settings.models_dir) as staging:
+            stage = Path(staging)
+            _fetch_weight(
+                repo_id=spec.repo_id,
+                filename=spec.filename,
+                local_dir=stage,
+                revision=spec.revision,
+                max_bytes=spec.expected_bytes or spec.download_bytes,
+            )
+            candidate = stage / spec.filename
+            if not verified_weight(spec, candidate):
+                raise ConfigurationError(
+                    f"The {spec.display_name} download failed verification. Please try again."
+                )
+            # Do not replace a verified asset another process already published.
+            if verified_weight(spec):
+                return
+            os.replace(candidate, target)
+            directory = os.open(settings.models_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    except ConfigurationError:
+        raise
     except Exception as exc:
-        logger.warning("Download of %s failed: %s", spec.filename, exc)
+        # Do not retain provider URLs, local paths, or raw exception payloads in logs.
+        logger.warning("Download of %s failed (%s)", spec.filename, type(exc).__name__)
         raise ConfigurationError(
             f"The {spec.display_name} could not be downloaded right now. "
-            "Check your internet connection and try again."
+            "Check your internet connection, free disk space and model-folder permissions, "
+            "then try again."
         ) from exc
-    if not target.exists():
-        raise ConfigurationError(
-            f"The {spec.display_name} could not be downloaded right now. "
-            "Check your internet connection and try again."
-        )

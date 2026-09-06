@@ -78,6 +78,38 @@ describe('Composer focus across a streaming turn (PLA-318)', () => {
     expect(node).toHaveFocus()
   })
 
+  it.each([false, true])(
+    'waits for delayed transcript readiness before restoring focus (moved: %s)',
+    (moved) => {
+      const onSend = vi.fn()
+      const { rerender } = render(<Chrome {...baseProps({ onSend })} />)
+      const node = textarea()
+      act(() => node.focus())
+      fireEvent.keyDown(node, { key: 'Enter' })
+      blurAsBrowserWould(node)
+      rerender(<Chrome {...baseProps({ onSend, streaming: true, blocked: true })} />)
+      rerender(
+        <Chrome
+          {...baseProps({ onSend, streaming: false, blocked: true, value: 'Next question' })}
+        />,
+      )
+      expect(node).toBeDisabled()
+      expect(node).not.toHaveFocus()
+      const other = screen.getByRole('button', { name: 'Open sources' })
+      if (moved) act(() => other.focus())
+      rerender(<Chrome {...baseProps({ onSend, blocked: false, value: 'Next question' })} />)
+      expect(node).toBeEnabled()
+      expect(node).toHaveValue('Next question')
+      expect(onSend).toHaveBeenCalledTimes(1)
+      if (moved) {
+        expect(other).toHaveFocus()
+        expect(node).not.toHaveFocus()
+      } else {
+        expect(node).toHaveFocus()
+      }
+    },
+  )
+
   it('restores with preventScroll so the transcript does not jump', () => {
     const onSend = vi.fn()
     const { rerender } = render(<Chrome {...baseProps({ onSend })} />)

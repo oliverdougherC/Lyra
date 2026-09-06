@@ -1,3 +1,4 @@
+import { isolatedBackendEnvironment } from './backend-environment'
 /**
  * Shared helpers for acceptance specs.
  *
@@ -657,7 +658,7 @@ export async function restartBackend(): Promise<void> {
     ],
     {
       cwd: projectRoot,
-      env: backendEnv as NodeJS.ProcessEnv,
+      env: isolatedBackendEnvironment(backendEnv),
       stdio: ['ignore', 'ignore', 'ignore'],
       detached: true,
     },

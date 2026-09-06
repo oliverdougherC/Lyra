@@ -151,9 +151,9 @@ def test_stale_file_never_resurfaces_after_keychain_recovery(
     isolated_secrets.get_error = keyring.errors.KeyringError("locked")
     monkeypatch.setattr(secrets, "_keyring_ok", None)
 
-    # The fallback file is gone, so get_api_key should return None, not "sk-stale".
-    result = secrets.get_api_key()
-    assert result is None, f"stale key resurfaced: {result!r}"
+    # The fallback is gone. Denied access is explicit, never absence or the stale key.
+    with pytest.raises(secrets.ConfigurationError, match="Unlock"):
+        secrets.get_api_key()
 
 
 # ---------------------------------------------------------------------------
@@ -205,11 +205,11 @@ def test_demotion_from_probe_failure(
     assert fallback.read_text().strip() == "sk-probe-fail"
 
 
-def test_blocking_probe_demotes_within_deadline(
+def test_blocking_probe_reports_pending_within_deadline(
     isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A keyring backend that blocks instead of raising must not hold the caller:
-    the probe hits its deadline, storage demotes to file, and the call returns."""
+    the probe hits its deadline and reports pending without declaring the key absent."""
     import time
 
     from backend.config import settings
@@ -223,11 +223,13 @@ def test_blocking_probe_demotes_within_deadline(
     monkeypatch.setattr(secrets, "_PROBE_TIMEOUT_SECONDS", 0.25)
 
     started = time.monotonic()
-    assert secrets._keyring_usable() is False
+    with pytest.raises(secrets.CredentialPendingError, match="responding"):
+        secrets._keyring_usable()
+    assert secrets._keyring_ok is None
     # Returned at the deadline, not after the backend's own (nonexistent) answer.
     assert time.monotonic() - started < 10
 
-    # And the demoted storage works: the value lands in the file fallback.
+    # An explicit replacement can still choose durable file authority while the read waits.
     secrets.set_api_key("sk-after-block")
     assert secrets.api_key_storage() == "file"
     assert (settings.data_dir / ".api_key").read_text().strip() == "sk-after-block"
@@ -483,9 +485,9 @@ def test_full_lifecycle_keychain_to_file_to_keychain(
     isolated_secrets.get_error = keyring.errors.KeyringError("locked again")
     monkeypatch.setattr(secrets, "_keyring_ok", None)
 
-    # Must NOT return "sk-v2" from the now-deleted fallback file.
-    result = secrets.get_api_key()
-    assert result is None, f"stale value resurfaced: {result!r}"
+    # Must NOT return "sk-v2" or falsely report that a denied Keychain is empty.
+    with pytest.raises(secrets.ConfigurationError, match="Unlock"):
+        secrets.get_api_key()
 
 
 # ---------------------------------------------------------------------------
@@ -863,3 +865,144 @@ def test_deleting_exa_key_does_not_delete_the_tutor_key(
     secrets.reset_keyring_probe()
     assert secrets.get_api_key() == "sk-tutor"
     assert secrets.get_exa_api_key() is None
+
+
+@pytest.mark.parametrize("exa", [False, True])
+@pytest.mark.parametrize("delete", [False, True])
+def test_preoperation_outage_never_resurrects_old_key(isolated_secrets, monkeypatch, exa, delete):
+    username = secrets.EXA_USERNAME if exa else secrets.USERNAME
+    setter = secrets.set_exa_api_key if exa else secrets.set_api_key
+    getter = secrets.get_exa_api_key if exa else secrets.get_api_key
+    deleter = secrets.delete_exa_api_key if exa else secrets.delete_api_key
+    isolated_secrets.store[(secrets.SERVICE, username)] = "old-synthetic"
+    monkeypatch.setattr(secrets, "_keyring_ok", False)
+    if delete:
+        deleter()
+        deleter()
+    else:
+        setter("new-synthetic")
+    secrets.reset_keyring_probe()
+    assert getter() == (None if delete else "new-synthetic")
+
+
+@pytest.mark.parametrize("exa", [False, True])
+@pytest.mark.parametrize("operation", ["get_password", "set_password", "delete_password"])
+def test_postprobe_timeout_is_bounded_and_late_operation_cannot_win(
+    isolated_secrets, monkeypatch, exa, operation
+):
+    import threading
+    import time
+
+    username = secrets.EXA_USERNAME if exa else secrets.USERNAME
+    setter = secrets.set_exa_api_key if exa else secrets.set_api_key
+    getter = secrets.get_exa_api_key if exa else secrets.get_api_key
+    deleter = secrets.delete_exa_api_key if exa else secrets.delete_api_key
+    isolated_secrets.store[(secrets.SERVICE, username)] = "old-synthetic"
+    assert secrets._keyring_usable()
+    release = threading.Event()
+    entered = threading.Event()
+    original = getattr(isolated_secrets, operation)
+
+    def blocked(*args):
+        entered.set()
+        release.wait(3)
+        return original(*args)
+
+    monkeypatch.setattr(isolated_secrets, operation, blocked)
+    monkeypatch.setattr(secrets, "_PROBE_TIMEOUT_SECONDS", 0.03)
+    started = time.monotonic()
+    try:
+        try:
+            if operation == "set_password":
+                setter("late-synthetic")
+            elif operation == "delete_password":
+                deleter()
+            else:
+                getter()
+        except (KeyError, secrets.CredentialPendingError):
+            pass  # A pending operation truthfully reports its incomplete state.
+        assert entered.is_set()
+        worker = secrets._operation_thread
+        for _ in range(10):
+            setter("new-synthetic")
+            assert secrets._operation_thread is worker
+        assert time.monotonic() - started < 1
+    finally:
+        release.set()
+        secrets._operation_thread.join(1)
+    secrets.reset_keyring_probe()
+    assert getter() == "new-synthetic"
+
+
+def test_immutable_slot_read_does_not_block_event_loop(isolated_secrets, monkeypatch):
+    import asyncio
+    import threading
+    import time
+
+    from backend.core.errors import ConfigurationError
+
+    identity = secrets.stage_tutor_credential("http://localhost/v1", "synthetic-slot-key")
+    secrets._slot_read_cache.clear()  # New process: no in-memory credential yet.
+    release = threading.Event()
+    original = isolated_secrets.get_password
+
+    def slow(*args):
+        release.wait(2)
+        return original(*args)
+
+    monkeypatch.setattr(isolated_secrets, "get_password", slow)
+
+    async def read():
+        started = time.monotonic()
+        with pytest.raises(ConfigurationError, match="Keychain is still responding"):
+            secrets.get_tutor_credential(identity, "http://localhost/v1")
+        assert time.monotonic() - started < 0.2
+        await asyncio.sleep(0)
+
+    try:
+        asyncio.run(read())
+    finally:
+        release.set()
+        secrets._operation_thread.join(1)
+    assert secrets.get_tutor_credential(identity, "http://localhost/v1") == "synthetic-slot-key"
+
+
+def test_forget_profile_slots_does_not_delete_shared_legacy_credential(isolated_secrets):
+    isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] = "synthetic-other-profile"
+    identity = secrets.stage_tutor_credential(
+        "https://synthetic.example/v1", "synthetic-profile-key"
+    )
+    secrets.forget_tutor_credentials()
+    assert (
+        isolated_secrets.store.get((secrets.SERVICE, secrets.USERNAME)) == "synthetic-other-profile"
+    )
+    assert secrets.get_tutor_credential(identity, "https://synthetic.example/v1") is None
+    assert (secrets.SERVICE, "tutor:" + identity) not in isolated_secrets.store
+
+
+def test_pending_worker_keeps_original_adapter_callable(isolated_secrets, monkeypatch):
+    import threading
+
+    release = threading.Event()
+    real_thread = threading.Thread
+    escaped = []
+    isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] = "synthetic-only"
+
+    def deferred_thread(*, target, **kwargs):
+        def delayed():
+            release.wait(2)
+            target()
+
+        return real_thread(target=delayed, **kwargs)
+
+    monkeypatch.setattr(secrets.threading, "Thread", deferred_thread)
+    monkeypatch.setattr(secrets, "_PROBE_TIMEOUT_SECONDS", 0.01)
+    try:
+        with pytest.raises(secrets.CredentialTimeout):
+            secrets._keyring_call("delete_password", secrets.SERVICE, secrets.USERNAME)
+        monkeypatch.setattr(isolated_secrets, "delete_password", lambda *args: escaped.append(True))
+    finally:
+        release.set()
+        secrets._operation_thread.join(1)
+    assert not escaped
+    assert (secrets.SERVICE, secrets.USERNAME) not in isolated_secrets.store

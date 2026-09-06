@@ -655,6 +655,18 @@ def _delta_fields(payload: str) -> tuple[str, str]:
     return (content if isinstance(content, str) else ""), reasoning
 
 
+class StreamCompletionError(UpstreamError):
+    """Partial text was delivered, but the provider did not certify completion."""
+
+    def __init__(self, outcome: str) -> None:
+        self.outcome = outcome
+        super().__init__(
+            "The tutor reply reached its output limit; the partial text was kept."
+            if outcome == "length"
+            else "The tutor stream ended without confirmed completion; the partial text was kept."
+        )
+
+
 async def stream_chat(
     endpoint: str,
     api_key: str | None,
@@ -699,6 +711,7 @@ async def stream_chat(
     )
     splitter = _ReasoningTagSplitter()
     finished = False
+    finish_reason = None
     async with _client(request_timeout or CHAT_TIMEOUT, api_key, transport) as client:
         try:
             async with client.stream("POST", url, json=body) as response:
@@ -714,22 +727,24 @@ async def stream_chat(
                         finished = True
                         break
                     content, reasoning = _delta_fields(payload)
+                    try:
+                        choices = json.loads(payload).get("choices", [])
+                        if choices and isinstance(choices[0], dict):
+                            finish_reason = choices[0].get("finish_reason") or finish_reason
+                    except (ValueError, AttributeError):
+                        pass
                     if reasoning:
                         yield StreamDelta("reasoning", reasoning)
                     for delta in splitter.feed(content) if content else ():
                         yield delta
-                if not finished:
-                    # A connection that closes cleanly without `[DONE]` looks exactly like
-                    # a short but complete reply, so the one place that can tell them
-                    # apart says so. Logged rather than raised: the text already reached
-                    # the reader, and yanking it back with an error would cost a plausibly
-                    # complete answer to punish a missing terminator.
-                    logger.warning(
-                        "Tutor endpoint stream ended without a [DONE] frame; "
-                        "the reply may be incomplete"
-                    )
                 for delta in splitter.flush():
                     yield delta
+                if finish_reason == "length":
+                    raise StreamCompletionError("length")
+                if finish_reason not in (None, "stop") or (
+                    not finished and finish_reason != "stop"
+                ):
+                    raise StreamCompletionError("unknown")
         except httpx.HTTPError as exc:
             raise _mapped_error(exc) from exc
 

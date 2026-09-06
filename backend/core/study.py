@@ -503,7 +503,11 @@ def _generate_deck(conn: sqlite3.Connection, job: _Job) -> None:
     _set_stage(conn, job.artifact_id, "Mapping study topics")
     topics = _call_json(config, prompts.build_topics_prompt(gathered), prompts.TOPICS_SCHEMA)
     _raise_if_cancelled(conn, job.artifact_id)
-    topic_names = [t.strip() for t in _json_list(topics, "topics") if str(t).strip()]
+    topic_names = [
+        topic.strip()
+        for topic in _json_list(topics, "topics")
+        if isinstance(topic, str) and topic.strip()
+    ]
     if not topic_names:
         raise LyraError(NO_TOPICS_MESSAGE)
 

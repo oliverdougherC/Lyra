@@ -1008,3 +1008,240 @@ def test_reset_preserves_in_progress_publication_recovery(
     assert response.status_code == 409
     assert desktop_import_module._stage_root_path().exists()
     assert desktop_import_module._publish_recovery_record_path().exists()
+
+
+def _configure_import_tutor(
+    monkeypatch,
+    *,
+    fallback=False,
+    endpoint="https://current.example/v1",
+    value="synthetic-current-key",
+):
+    import keyring.errors
+
+    from backend.storage import private, secrets
+
+    # This helper installs a new backend: do not inherit reachability cached by a
+    # different test/backend. Missing storage is distinct from a locked Keychain.
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
+    if fallback:
+
+        def unavailable(*_args, **_kwargs):
+            raise keyring.errors.NoKeyringError("synthetic missing keychain backend")
+
+        monkeypatch.setattr(secrets, "_keyring_call", unavailable)
+    private.write_private_text(
+        settings.data_dir / ".tutor_credential_generation", "current-generation"
+    )
+    identity = secrets.stage_tutor_credential(endpoint, value)
+    conn = connect()
+    try:
+        conn.execute(
+            "update settings set endpoint_url=?, model='synthetic', tutor_credential_id=?, "
+            "remote_ack=1 where id=1",
+            (endpoint, identity),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return identity
+
+
+def _assert_import_tutor_works(identity, endpoint="https://current.example/v1"):
+    import httpx
+
+    from backend.core.app_settings import resolve_tutor_config
+    from backend.llm import client as llm_client
+
+    conn = connect()
+    try:
+        config = resolve_tutor_config(conn)
+        assert config.credential_id == identity
+        assert config.endpoint_url == endpoint
+    finally:
+        conn.close()
+
+    def provider(request):
+        assert request.headers["Authorization"] == "Bearer synthetic-current-key"
+        assert str(request.url) == endpoint + "/models"
+        return httpx.Response(200, json={"data": [{"id": "synthetic"}]})
+
+    assert asyncio.run(
+        llm_client.list_models(
+            config.endpoint_url, config.api_key, transport=httpx.MockTransport(provider)
+        )
+    ) == ["synthetic"]
+
+
+@pytest.mark.parametrize("fallback", [False, True], ids=["keychain", "file"])
+@pytest.mark.parametrize("maximum_migration", [18, None], ids=["older-schema", "current-schema"])
+def test_import_preserves_active_credential_snapshot_and_space_accounting(
+    client,
+    tmp_path,
+    monkeypatch,
+    isolated_keychain,
+    fallback,
+    maximum_migration,
+):
+    from backend.storage import private
+
+    checkout = _seed_source_checkout(tmp_path, maximum_migration=maximum_migration)
+    isolated_keychain[("unrelated-service", "unrelated-account")] = "synthetic-unrelated-key"
+    identity = _configure_import_tutor(monkeypatch, fallback=fallback)
+    private.write_private_text(settings.data_dir / ".api_key.authority", "deleted")
+    private.write_private_text(settings.data_dir / ".exa_api_key.authority", "deleted")
+    expected = [
+        Path("credentials") / f"{identity}.json",
+        Path(".tutor_credential_generation"),
+        Path(".api_key.authority"),
+        Path(".exa_api_key.authority"),
+    ]
+    credential_bytes = sum((settings.data_dir / path).stat().st_size for path in expected)
+    assert desktop_import_module._profile_preserve_bytes() >= credential_bytes
+    token = _register_selection("credential-source", checkout)
+    assert (
+        client.post(
+            "/api/desktop-import/start",
+            json={
+                "selection_token": token,
+                "operation_id": "credential-stage",
+            },
+        ).status_code
+        == 200
+    )
+    _wait_for_status("staged")
+    for path in expected:
+        copied = desktop_import_module._stage_data_path() / path
+        assert copied.read_bytes() == (settings.data_dir / path).read_bytes()
+        assert copied.stat().st_mode & 0o777 == 0o600
+    assert desktop_import_module._staged_profile_bytes() >= credential_bytes
+    code, _ = _publish_cli(monkeypatch)
+    assert code == 0
+    _assert_import_tutor_works(identity)
+    assert (
+        isolated_keychain[("unrelated-service", "unrelated-account")] == "synthetic-unrelated-key"
+    )
+    assert (settings.uploads_dir / "1" / "1-lecture.pdf").read_bytes() == b"%PDF-1.7 source"
+
+
+@pytest.mark.parametrize("forget_after_staging", [False, True])
+def test_import_preserves_latest_tutor_and_exa_forget(
+    client,
+    tmp_path,
+    monkeypatch,
+    isolated_keychain,
+    forget_after_staging,
+):
+    from backend.storage import private, secrets
+
+    checkout = _seed_source_checkout(tmp_path)
+    # Reproduce the positive probe cache left by another credential test.
+    monkeypatch.setattr(secrets, "_keyring_ok", True)
+    identity = _configure_import_tutor(monkeypatch, fallback=True)
+    private.write_private_text(settings.data_dir / ".exa_api_key", "synthetic-old-exa")
+    private.write_private_text(settings.data_dir / ".exa_api_key.authority", "file")
+
+    def forget():
+        secrets.forget_tutor_credentials()
+        secrets.delete_exa_api_key()
+
+    if not forget_after_staging:
+        forget()
+    token = _register_selection("forget-source", checkout)
+    assert (
+        client.post(
+            "/api/desktop-import/start",
+            json={
+                "selection_token": token,
+                "operation_id": "forget-stage",
+            },
+        ).status_code
+        == 200
+    )
+    _wait_for_status("staged")
+    if forget_after_staging:
+        forget()
+    generation = (settings.data_dir / ".tutor_credential_generation").read_bytes()
+    assert _publish_cli(monkeypatch)[0] == 0
+    assert (settings.data_dir / ".tutor_credential_generation").read_bytes() == generation
+    assert secrets.get_tutor_credential(identity, "https://current.example/v1") is None
+    assert secrets.get_exa_api_key() is None
+    assert (settings.data_dir / ".api_key.authority").read_text() == "deleted"
+    assert (settings.data_dir / ".exa_api_key.authority").read_text() == "deleted"
+
+
+@pytest.mark.parametrize("publication", ["ordinary", "recovery", "rollback"])
+def test_late_credential_change_survives_import_publication_recovery_and_rollback(
+    client,
+    tmp_path,
+    monkeypatch,
+    isolated_keychain,
+    publication,
+):
+    checkout = _seed_source_checkout(tmp_path)
+    _configure_import_tutor(
+        monkeypatch,
+        fallback=True,
+        endpoint="https://earlier.example/v1",
+        value="synthetic-earlier-key",
+    )
+    token = _register_selection("late-credential-source", checkout)
+    assert (
+        client.post(
+            "/api/desktop-import/start",
+            json={
+                "selection_token": token,
+                "operation_id": "late-credential-stage",
+            },
+        ).status_code
+        == 200
+    )
+    _wait_for_status("staged")
+    identity = _configure_import_tutor(monkeypatch, fallback=True)
+    if publication == "recovery":
+        manifest = desktop_import_module._read_stage_manifest()
+        desktop_import_module._refresh_current_profile_into_stage(manifest)
+        desktop_import_module._initialize_publish_recovery()
+        settings.data_dir.replace(desktop_import_module._publish_backup_data_path())
+        desktop_import_module._patch_publish_recovery_record(phase="live_data_backed_up")
+    elif publication == "rollback":
+        monkeypatch.setattr(
+            desktop_import_module,
+            "_verify_live_import",
+            lambda: (_ for _ in ()).throw(RuntimeError("injected publish failure")),
+        )
+    code, _ = _publish_cli(monkeypatch)
+    assert code == (1 if publication == "rollback" else 0)
+    _assert_import_tutor_works(identity)
+    assert (settings.uploads_dir / "1" / "1-lecture.pdf").exists() == (publication != "rollback")
+    if publication == "rollback":
+        assert desktop_import_module._stage_ready_for_publish()
+
+
+def test_import_refuses_symlinked_live_credential_before_publication(
+    client,
+    tmp_path,
+    monkeypatch,
+):
+    checkout = _seed_source_checkout(tmp_path)
+    identity = _configure_import_tutor(monkeypatch, fallback=True)
+    token = _register_selection("symlink-credential-source", checkout)
+    assert (
+        client.post(
+            "/api/desktop-import/start",
+            json={
+                "selection_token": token,
+                "operation_id": "symlink-credential-stage",
+            },
+        ).status_code
+        == 200
+    )
+    _wait_for_status("staged")
+    outside = tmp_path / "unapproved-record.json"
+    outside.write_text("synthetic outside sentinel")
+    record = settings.data_dir / "credentials" / f"{identity}.json"
+    record.unlink()
+    record.symlink_to(outside)
+    assert _publish_cli(monkeypatch)[0] == 1
+    assert outside.read_text() == "synthetic outside sentinel"
+    assert not (settings.uploads_dir / "1" / "1-lecture.pdf").exists()

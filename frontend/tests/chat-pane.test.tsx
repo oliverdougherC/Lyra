@@ -1243,6 +1243,66 @@ describe('ChatPane contextual agent (PLA-401)', () => {
       releaseSend?.()
     })
 
+    it('waits for the stopped transcript to settle before accepting the next send', async () => {
+      vi.mocked(api.sendAgentChat).mockClear()
+      let stopTurn: ((value: Awaited<ReturnType<typeof api.sendAgentChat>>) => void) | undefined
+      let finishRefresh: ((value: MessageRead[]) => void) | undefined
+      let holdRefresh = false
+      let refreshStarted = false
+      const refreshing = new Promise<MessageRead[]>((resolve) => {
+        finishRefresh = resolve
+      })
+      vi.mocked(api.listMessages).mockImplementation(() => {
+        if (!holdRefresh) return Promise.resolve([])
+        refreshStarted = true
+        return refreshing
+      })
+      const stoppedResult: Awaited<ReturnType<typeof api.sendAgentChat>> = {
+        message_id: 0,
+        content: '',
+        stopped: 'stopped',
+        detail: 'Stopped.',
+        activity: [],
+        source_ids: [],
+        workspace_change_ids: [],
+        command_request_ids: [],
+        profile_fact_ids: [],
+      }
+      vi.mocked(api.sendAgentChat)
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              stopTurn = resolve
+            }),
+        )
+        .mockResolvedValueOnce({ ...stoppedResult, stopped: 'complete', content: 'Continued.' })
+      vi.mocked(api.stopAgentChat).mockImplementation(async () => {
+        holdRefresh = true
+        stopTurn?.(stoppedResult)
+        return { stopped: true, settling: false }
+      })
+      const user = userEvent.setup()
+      renderAgentPane()
+      const box = await screen.findByLabelText('Message Lyra')
+      await user.type(box, 'Stop this turn')
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(1))
+      await user.click(await screen.findByLabelText('Stop generating'))
+      await waitFor(() => expect(refreshStarted).toBe(true))
+      // The server is stopped, but the old optimistic turn still owns this pane until
+      // its durable transcript arrives. Exposing Send here used to erase an unsent turn.
+      expect(box).toBeDisabled()
+      expect(screen.getByLabelText('Send message')).toBeDisabled()
+      await act(async () =>
+        finishRefresh?.([message({ id: 1, role: 'user', content: 'Stop this turn' })]),
+      )
+      await waitFor(() => expect(box).toBeEnabled())
+      await user.type(box, 'Can you continue now?')
+      await user.click(screen.getByLabelText('Send message'))
+      await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
+      expect(vi.mocked(api.sendAgentChat).mock.calls[1][2]).toBe('Can you continue now?')
+    })
+
     it('keeps the conversation closed on a settling confirmation until the session is proven free', async () => {
       // The stop was latched and the cancellation delivered, but a late worker is still
       // inside a dispatch: NOT a stop yet. The pane stays in "Stopping…", the

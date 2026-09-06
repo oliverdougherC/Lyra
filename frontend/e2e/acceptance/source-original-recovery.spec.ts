@@ -70,6 +70,11 @@ print(json.dumps(dict(solutionId=solution_id, documentId=document_id, originalPa
 }
 
 async function showDoubleFailure(page: Page, fixture: RecoveryFixture) {
+  // Source text can load while document metadata resolves, before the PDF fallback
+  // is clicked. Observe that real response before navigation can populate its cache.
+  const textResponse = page.waitForResponse((response) =>
+    response.url().endsWith(`/api/documents/${fixture.documentId}/text`),
+  )
   await page.setViewportSize({ width: 1440, height: 1000 })
   await page.goto(`/classes/${fixture.classId}/solutions/${fixture.solutionId}`)
   await page
@@ -81,9 +86,6 @@ async function showDoubleFailure(page: Page, fixture: RecoveryFixture) {
   )
   await expect(page.getByText('page 2 of 3', { exact: true })).toBeVisible()
   await expect(page.getByText('That page could not be rendered.', { exact: true })).toBeVisible()
-  const textResponse = page.waitForResponse((response) =>
-    response.url().endsWith(`/api/documents/${fixture.documentId}/text`),
-  )
   await page.getByRole('button', { name: 'Read extracted text', exact: true }).click()
   const response = await textResponse
   expect(response.status()).toBe(200)

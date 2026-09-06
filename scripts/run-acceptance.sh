@@ -25,6 +25,9 @@
 
 set -euo pipefail
 
+# All Python descendants use private temporary credential files, never the login Keychain.
+export PYTHON_KEYRING_BACKEND=keyring.backends.fail.Keyring
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FRONTEND_PORT="${ACCEPTANCE_FRONTEND_PORT:-3000}"

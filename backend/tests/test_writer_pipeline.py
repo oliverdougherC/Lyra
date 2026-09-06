@@ -155,11 +155,13 @@ def _section_reply(heading: str, prose: str) -> str:
     return f"## {heading}\n\n{prose}\n"
 
 
+@pytest.mark.parametrize("short_review", [False, True])
 def test_a_durable_full_pass_uses_fixed_paragraph_stages_and_never_writes_the_document(
     db: sqlite3.Connection,
     class_id: int,
     model: _StubModel,
     monkeypatch: pytest.MonkeyPatch,
+    short_review: bool,
 ) -> None:
     artifact_id, part_id = _draft(db, class_id, content="My notes stay editable.\n")
     briefs.save_brief(
@@ -231,7 +233,7 @@ def test_a_durable_full_pass_uses_fixed_paragraph_stages_and_never_writes_the_do
             conn,
             suggestion_id,
             str(block["stable_key"]),
-            f"Paragraph {block['paragraph_ordinal']} prose.",
+            f"Paragraph {block['paragraph_ordinal']} prose. " * int(block["target_words"]),
             status="complete",
         )
 
@@ -281,6 +283,17 @@ def test_a_durable_full_pass_uses_fixed_paragraph_stages_and_never_writes_the_do
         '{"summary":"The chunk is coherent.","issues":[]}',
     ]
 
+    if short_review:
+
+        def shorten_review(
+            conn, job, artifact, config, class_id, suggestion_id, plan, document_map
+        ):
+            live_drafts.model_update_block(
+                conn, suggestion_id, "1.1:p1", content="Short revision.", status="complete"
+            )
+
+        monkeypatch.setattr(writer_pipeline, "_review_live_chunks", shorten_review)
+
     writer_pipeline.run_pass(
         writer_pipeline.PassJob(artifact_id, depth="quick", run_id=int(run["id"]))
     )
@@ -288,6 +301,12 @@ def test_a_durable_full_pass_uses_fixed_paragraph_stages_and_never_writes_the_do
     assert _body(db, part_id) == "My notes stay editable.\n"
     live = live_drafts.get_live_suggestion_for_run(db, int(run["id"]))
     assert live is not None
+    if short_review:
+        assert live["status"] == "failed"
+        assert "below their requested length" in live["detail"]
+        assert suggestions.pending_for_part(db, part_id) is None
+        assert "Short revision." in str(live["blocks"])
+        return
     assert live["stage"] == "completed"
     assert live["status"] == "ready"
     assert [block["stable_key"] for block in live["blocks"]] == [
@@ -775,7 +794,9 @@ def test_live_paragraph_retries_when_the_model_spends_the_first_call_only_reason
         if len(calls) == 1:
             yield writer_pipeline.client.StreamDelta("reasoning", "I should plan this paragraph.")
             return
-        yield writer_pipeline.client.StreamDelta("answer", "The paragraph begins immediately.")
+        yield writer_pipeline.client.StreamDelta(
+            "answer", "The paragraph begins immediately. " * 40
+        )
 
     monkeypatch.setattr(writer_pipeline.client, "stream_chat", fake_stream_chat)
 
@@ -792,7 +813,7 @@ def test_live_paragraph_retries_when_the_model_spends_the_first_call_only_reason
     assert calls[0][1]["enable_thinking"] is False
     assert calls[1][1]["enable_thinking"] is False
     assert "/no_think" in calls[1][0][-1]["content"]
-    assert completed["content"] == "The paragraph begins immediately."
+    assert completed["content"] == "The paragraph begins immediately. " * 40
 
 
 def test_empty_overall_revision_never_erases_completed_prose(

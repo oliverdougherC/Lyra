@@ -1,3 +1,4 @@
+import { isolatedBackendEnvironment } from './backend-environment'
 /**
  * Backup, credential transition, and recovery through the real stack.
  *
@@ -522,7 +523,11 @@ sys.exit(rc)
       ],
       {
         cwd: PROJECT_ROOT,
-        env: { ...process.env, LYRA_DATA_DIR: restoreDir, LYRA_PORT: String(drPort) },
+        env: isolatedBackendEnvironment({
+          ...process.env,
+          LYRA_DATA_DIR: restoreDir,
+          LYRA_PORT: String(drPort),
+        }),
         stdio: 'ignore',
         detached: true,
       },

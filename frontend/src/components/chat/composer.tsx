@@ -75,19 +75,19 @@ export function Composer({
     if (autoFocus) textareaRef.current?.focus({ preventScroll: true })
   }, [autoFocus])
 
-  // When streaming ends, return focus to the textarea a keyboard send took it from --
+  // When the turn and its transcript refresh finish, restore a keyboard send's focus --
   // unless the student deliberately focused another interactive control meanwhile
   // (then stealing focus back would be worse than the original loss).
   useEffect(() => {
-    if (streaming) return
+    if (streaming || blocked || disabledReason) return
     if (!restoreFocusAfterStream.current) return
-    restoreFocusAfterStream.current = false
     const node = textareaRef.current
     if (!node || node.disabled) return
+    restoreFocusAfterStream.current = false
     const active = document.activeElement
     if (active !== null && active !== document.body && active !== node) return
     node.focus({ preventScroll: true })
-  }, [streaming])
+  }, [streaming, blocked, disabledReason])
 
   // Auto-grow up to three rows, then let the textarea scroll internally.
   useLayoutEffect(() => {

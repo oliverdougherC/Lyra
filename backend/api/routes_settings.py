@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from backend.core import exa
 from backend.core.app_settings import (
     TutorConfig,
+    credential_for_row,
     get_settings_row,
     invalidate_probe_results,
     publish_probe_result,
@@ -65,6 +66,7 @@ class SettingsRead(BaseModel):
     parallel_concurrency: int
     exa_api_key_set: bool
     exa_api_key_storage: Literal["keychain", "file"]
+    local_model_setup: str
 
 
 class SettingsUpdate(BaseModel):
@@ -146,15 +148,22 @@ def _normalize_endpoint(value: object) -> str | None:
 
 def _settings_response(row: sqlite3.Row) -> SettingsRead:
     """Build the response, deriving locality from the stored endpoint."""
+    from backend.llm.model_provisioning import setup_disclosure
+
     endpoint_url = _normalize_endpoint(row["endpoint_url"])
     return SettingsRead(
+        local_model_setup=setup_disclosure(),
         endpoint_url=endpoint_url,
         model=row["model"],
         context_window=int(row["context_window"]),
         extraction_enabled=bool(row["extraction_enabled"]),
         remote_ack=bool(row["remote_ack"]),
-        api_key_set=secrets.has_api_key(),
-        api_key_storage=secrets.api_key_storage(),
+        api_key_set=credential_for_row(row) is not None,
+        api_key_storage=(
+            secrets.tutor_credential_storage(row["tutor_credential_id"])
+            if row["tutor_credential_id"]
+            else secrets.api_key_storage()
+        ),
         endpoint_is_local=is_local_endpoint(endpoint_url) if endpoint_url else None,
         endpoint_host=hostname_of(endpoint_url) if endpoint_url else None,
         embedding_model=row["embedding_model"],
@@ -190,20 +199,18 @@ def _write_settings(payload: SettingsUpdate, conn: sqlite3.Connection) -> Settin
             values.pop(column, None)
 
     key_changed = False
+    forget_key = values.get("api_key") == ""
     if "api_key" in values:
         api_key = values.pop("api_key")
-        key_changed = api_key is not None and (api_key or None) != secrets.get_api_key()
-        if key_changed:
-            # Commit invalidation BEFORE slow Keychain mutation. Already-running probes
-            # cannot publish; new snapshots wait until this write has finished. Even a
-            # failed credential mutation leaves capabilities safely unknown.
+        key_changed = api_key is not None and (api_key or None) != credential_for_row(current)
+        if api_key is not None:
+            # Stage an immutable slot before the DB transaction; no current slot or
+            # legacy credential is mutated. Commit selects endpoint + identity together.
             invalidate_probe_results(conn)
-        if api_key == "":
-            # The interface sends an empty string for "forget my key". A null means
-            # "leave whatever is stored alone", which is the no-op below.
-            secrets.delete_api_key()
-        elif api_key is not None:
-            secrets.set_api_key(api_key)
+            endpoint = _normalize_endpoint(values.get("endpoint_url", current["endpoint_url"]))
+            values["tutor_credential_id"] = secrets.stage_tutor_credential(
+                endpoint, api_key or None
+            )
 
     if "exa_api_key" in values:
         exa_api_key = values.pop("exa_api_key")
@@ -240,6 +247,8 @@ def _write_settings(payload: SettingsUpdate, conn: sqlite3.Connection) -> Settin
         client.reset_json_support()
 
     update_settings_row(conn, values)
+    if forget_key:
+        secrets.forget_tutor_credentials()
     return _settings_response(get_settings_row(conn))
 
 
@@ -258,16 +267,15 @@ def _probe_configuration_unchanged(conn: sqlite3.Connection, config: TutorConfig
     return (
         _normalize_endpoint(current["endpoint_url"]) == config.endpoint_url
         and current["model"] == config.model
-        and secrets.get_api_key() == config.api_key
+        and credential_for_row(current) == config.api_key
     )
 
 
 def _probe_snapshot(conn: sqlite3.Connection) -> tuple[int, TutorConfig]:
-    with _probe_snapshot_lock:
-        # Revision first: concurrent endpoint/model DB writes can only cause rejection,
-        # never associate a newer revision with an older configuration.
-        revision = int(get_settings_row(conn)["probe_revision"])
-        return revision, resolve_tutor_config(conn)
+    # No lock spans Keychain I/O. Immutable credentials belong to their settings
+    # row; every endpoint/model/credential commit advances the durable revision.
+    revision = int(get_settings_row(conn)["probe_revision"])
+    return revision, resolve_tutor_config(conn)
 
 
 @router.post("/settings/test-tools", response_model=ToolSupportResult)

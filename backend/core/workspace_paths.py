@@ -18,12 +18,16 @@ import hashlib
 import json
 import os
 import stat
+import tempfile
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from backend.core import commands
 from backend.core.errors import ConfigurationError, LyraError, NotFoundError
+from backend.storage.private import PrivacyContractError, _open_tree_parent
 
 MAX_TEXT_FILE_BYTES = 1_048_576
 DEFAULT_LIST_LIMIT = 200
@@ -33,7 +37,6 @@ DEFAULT_SEARCH_MATCHES_PER_FILE = 5
 DEFAULT_SEARCH_TIMEOUT_SECONDS = 5.0
 DEFAULT_SEARCH_MAX_OUTPUT_BYTES = 262_144
 MAX_SEARCH_QUERY_CHARS = 500
-_PROBE_BYTES = 4_096
 
 _IGNORED_DIRECTORY_NAMES = frozenset(
     {
@@ -142,9 +145,8 @@ def validate_workspace_file_path(root: str | Path, relative_path: str) -> Path:
     if _is_ignored_relative(relative):
         raise WorkspacePathError("That workspace file cannot be read.")
     target = _resolve_existing_path(resolved_root, relative, require_file=True)
-    details = _validated_regular_stat(target)
-    if not _is_text_file(target, details):
-        raise WorkspacePathError("That workspace file cannot be read.")
+    payload, _ = read_workspace_bytes(resolved_root, relative)
+    _decode_text_payload(payload)
     return target
 
 
@@ -165,21 +167,23 @@ def list_workspace(
     relative = _normalize_relative_path(relative_path)
     if _is_ignored_relative(relative):
         raise WorkspacePathError("That workspace path is not available.")
-    directory = _resolve_existing_path(resolved_root, relative, require_directory=True)
+    _resolve_existing_path(resolved_root, relative, require_directory=True)
 
     entries: list[dict[str, object]] = []
-    try:
-        with os.scandir(directory) as listing:
-            for entry in sorted(listing, key=lambda current: current.name.lower()):
-                relative_entry = _join_relative(relative, entry.name)
-                item = _build_listing_entry(entry, relative_entry, max_file_bytes=max_file_bytes)
-                if item is None:
-                    continue
-                entries.append(item)
-                if len(entries) > limit:
-                    break
-    except OSError as exc:
-        raise WorkspacePathError("That workspace path is not available.") from exc
+    with (
+        open_workspace_directory(resolved_root, relative) as directory_fd,
+        os.scandir(directory_fd) as listing,
+    ):
+        for entry in sorted(listing, key=lambda current: current.name.lower()):
+            relative_entry = _join_relative(relative, entry.name)
+            item = _build_listing_entry(
+                entry, relative_entry, parent_fd=directory_fd, max_file_bytes=max_file_bytes
+            )
+            if item is None:
+                continue
+            entries.append(item)
+            if len(entries) > limit:
+                break
 
     _require_identity(resolved_root, root_identity)
     return {
@@ -213,9 +217,8 @@ def read_workspace_file(
     relative = _normalize_relative_path(relative_path)
     if _is_ignored_relative(relative):
         raise WorkspacePathError("That workspace file cannot be read.")
-    target = _resolve_existing_path(resolved_root, relative, require_file=True)
-    initial = _validated_regular_stat(target)
-    payload = _read_regular_file_bytes(target, initial, max_bytes=max_bytes)
+    _resolve_existing_path(resolved_root, relative, require_file=True)
+    payload, _ = read_workspace_bytes(resolved_root, relative, max_bytes=max_bytes)
     _require_identity(resolved_root, root_identity)
     text = _decode_text_payload(payload)
 
@@ -282,7 +285,7 @@ def search_workspace(
     relative = _normalize_relative_path(relative_path)
     if _is_ignored_relative(relative):
         raise WorkspacePathError("That workspace path is not available.")
-    search_root = _resolve_existing_path(resolved_root, relative, require_directory=True)
+    _resolve_existing_path(resolved_root, relative, require_directory=True)
     include_glob = _normalize_glob(glob) if glob else None
 
     argv = _build_rg_argv(
@@ -292,12 +295,37 @@ def search_workspace(
         max_file_bytes=MAX_TEXT_FILE_BYTES,
     )
     command_runner = runner or _run_rg
-    result = command_runner(
-        argv,
-        cwd=search_root,
-        timeout_seconds=timeout_seconds,
-        max_output_bytes=max_output_bytes,
-    )
+    # Ripgrep must never traverse the live workspace: its own pathname walks could
+    # race an ancestor replacement. Copy only descriptor-read, policy-approved bytes
+    # into a private bounded snapshot and search that stable tree instead.
+    deadline = time.monotonic() + timeout_seconds
+    with tempfile.TemporaryDirectory(prefix="lyra-workspace-search-") as temporary:
+        snapshot_root = Path(temporary)
+        snapshot_directory = snapshot_root / relative
+        snapshot_directory.mkdir(parents=True, exist_ok=True)
+        # Preserve inherited ignore policy when searching a subtree. Ripgrep sees
+        # these verified ancestor files, never the mutable source ancestors.
+        ancestor = Path(".")
+        for component in relative.parts:
+            for name in (".gitignore", ".ignore", ".rgignore"):
+                try:
+                    payload, _ = read_workspace_bytes(resolved_root, ancestor / name)
+                    _decode_text_payload(payload)
+                except LyraError:
+                    continue
+                (snapshot_root / ancestor / name).write_bytes(payload)
+            ancestor /= component
+        with open_workspace_directory(resolved_root, relative) as directory_fd:
+            _snapshot_search_tree(directory_fd, snapshot_directory, relative, deadline, [0, 0])
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise WorkspaceSearchTimeoutError("That workspace search took too long.")
+        result = command_runner(
+            argv,
+            cwd=snapshot_directory,
+            timeout_seconds=remaining,
+            max_output_bytes=max_output_bytes,
+        )
     _require_identity(resolved_root, root_identity)
     if result.returncode not in (0, 1):
         raise WorkspaceSearchError("That workspace search could not be completed.")
@@ -333,7 +361,7 @@ def search_workspace(
 
 
 def _build_listing_entry(
-    entry: os.DirEntry[str], relative_entry: Path, *, max_file_bytes: int
+    entry: os.DirEntry[str], relative_entry: Path, *, parent_fd: int, max_file_bytes: int
 ) -> dict[str, object] | None:
     """Return one safe listing row, or None for ignored or disallowed entries."""
     if _is_ignored_relative(relative_entry):
@@ -354,8 +382,12 @@ def _build_listing_entry(
         return None
     if details.st_size > max_file_bytes:
         return None
-    candidate = Path(entry.path)
-    if not _is_text_file(candidate, details):
+    try:
+        payload, opened = _read_entry(parent_fd, entry.name, max_bytes=max_file_bytes)
+        _decode_text_payload(payload)
+        if (opened.st_dev, opened.st_ino) != (details.st_dev, details.st_ino):
+            return None
+    except LyraError:
         return None
     return {
         "name": entry.name,
@@ -417,31 +449,102 @@ def _require_identity(path: Path, identity: tuple[int, int]) -> None:
         raise WorkspacePathError("That workspace changed while it was being read.")
 
 
-def _validated_regular_stat(path: Path) -> os.stat_result:
-    details = _stat_existing(path)
-    if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
-        raise WorkspacePathError("That workspace file cannot be read.")
-    if details.st_size > MAX_TEXT_FILE_BYTES:
-        raise WorkspacePathError("That workspace file cannot be read.")
-    return details
-
-
-def _read_regular_file_bytes(path: Path, initial: os.stat_result, *, max_bytes: int) -> bytes:
+@contextmanager
+def open_workspace_directory(root: Path, relative: Path, *, root_identity=None):
+    """Pin the approved root then walk no-follow descriptors (macOS and Linux)."""
+    identity = root_identity or _path_identity(root)
+    fd = None
     try:
-        with path.open("rb") as handle:
-            opened = os.fstat(handle.fileno())
-            if not stat.S_ISREG(opened.st_mode):
-                raise WorkspacePathError("That workspace file cannot be read.")
-            if (opened.st_dev, opened.st_ino) != (initial.st_dev, initial.st_ino):
+        # Reuse the storage tree's existing no-follow descent primitive. Unlike its
+        # owned-file reader, this does not chmod or require ownership of user files.
+        fd = _open_tree_parent(root / ".workspace-descriptor", root=root)
+        if fd is None:
+            raise NotFoundError("That workspace path is not available.")
+        details = os.fstat(fd)
+        if (details.st_dev, details.st_ino) != identity:
+            raise WorkspacePathError("That workspace changed while it was being read.")
+        for component in relative.parts:
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        yield fd
+        _require_identity(root, identity)
+    except FileNotFoundError as exc:
+        raise NotFoundError("That workspace path is not available.") from exc
+    except (OSError, PrivacyContractError) as exc:
+        raise WorkspacePathError("That workspace path is not available.") from exc
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _read_entry(parent_fd: int, name: str, *, max_bytes: int):
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+        with os.fdopen(descriptor, "rb") as handle:
+            details = os.fstat(handle.fileno())
+            if not stat.S_ISREG(details.st_mode) or details.st_size > max_bytes:
                 raise WorkspacePathError("That workspace file cannot be read.")
             payload = handle.read(max_bytes + 1)
-    except WorkspacePathError:
-        raise
+        if len(payload) > max_bytes:
+            raise WorkspacePathError("That workspace file cannot be read.")
+        return payload, details
+    except FileNotFoundError as exc:
+        raise NotFoundError("That workspace path is not available.") from exc
     except OSError as exc:
         raise WorkspacePathError("That workspace file cannot be read.") from exc
-    if len(payload) > max_bytes:
+
+
+def read_workspace_bytes(root: Path, relative: Path, *, max_bytes=MAX_TEXT_FILE_BYTES):
+    """Read through a pinned parent; also shared by proposal snapshots."""
+    relative = _normalize_relative_path(relative.as_posix())
+    if _is_ignored_relative(relative):
         raise WorkspacePathError("That workspace file cannot be read.")
-    return payload
+    with open_workspace_directory(root, relative.parent) as parent_fd:
+        return _read_entry(parent_fd, relative.name, max_bytes=max_bytes)
+
+
+def _snapshot_search_tree(fd, destination, relative, deadline, budget):
+    with os.scandir(fd) as listing:
+        for entry in listing:
+            if time.monotonic() >= deadline:
+                raise WorkspaceSearchTimeoutError("That workspace search took too long.")
+            budget[0] += 1
+            if budget[0] > 10000:
+                raise WorkspaceSearchError(
+                    "That workspace search is too large; choose a subfolder."
+                )
+            child_relative = _join_relative(relative, entry.name)
+            if _is_ignored_relative(child_relative):
+                continue
+            try:
+                details = entry.stat(follow_symlinks=False)
+                if stat.S_ISDIR(details.st_mode):
+                    child_fd = os.open(
+                        entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd
+                    )
+                    try:
+                        child_destination = destination / entry.name
+                        child_destination.mkdir()
+                        _snapshot_search_tree(
+                            child_fd, child_destination, child_relative, deadline, budget
+                        )
+                    finally:
+                        os.close(child_fd)
+                elif stat.S_ISREG(details.st_mode):
+                    try:
+                        payload, _ = _read_entry(fd, entry.name, max_bytes=MAX_TEXT_FILE_BYTES)
+                        _decode_text_payload(payload)
+                    except LyraError:
+                        continue
+                    budget[1] += len(payload)
+                    if budget[1] > 32 * MAX_TEXT_FILE_BYTES:
+                        raise WorkspaceSearchError(
+                            "That workspace search is too large; choose a subfolder."
+                        )
+                    (destination / entry.name).write_bytes(payload)
+            except OSError as exc:
+                raise WorkspacePathError("That workspace changed while it was being read.") from exc
 
 
 def _decode_text_payload(payload: bytes) -> str:
@@ -451,29 +554,6 @@ def _decode_text_payload(payload: bytes) -> str:
         return payload.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise WorkspacePathError("That workspace file cannot be read.") from exc
-
-
-def _is_text_file(path: Path, details: os.stat_result) -> bool:
-    """Probe a small prefix; list entries skip anything that is probably binary."""
-    if details.st_size == 0:
-        return True
-    try:
-        with path.open("rb") as handle:
-            opened = os.fstat(handle.fileno())
-            if not stat.S_ISREG(opened.st_mode):
-                return False
-            if (opened.st_dev, opened.st_ino) != (details.st_dev, details.st_ino):
-                return False
-            payload = handle.read(_PROBE_BYTES)
-    except OSError:
-        return False
-    if b"\x00" in payload:
-        return False
-    try:
-        payload.decode("utf-8")
-    except UnicodeDecodeError:
-        return False
-    return True
 
 
 def _normalize_relative_path(relative_path: str) -> Path:
@@ -548,6 +628,7 @@ def _build_rg_argv(
         "--column",
         "--hidden",
         "--no-messages",
+        "--no-require-git",
         "--smart-case",
         "--threads",
         "1",

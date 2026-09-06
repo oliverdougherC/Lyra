@@ -4,10 +4,41 @@ import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
+import keyring
+import keyring.errors
 import pytest
 
 from backend.config import settings
 from backend.storage.database import connect, migrate
+
+
+@pytest.fixture(autouse=True)
+def isolated_keychain(monkeypatch: pytest.MonkeyPatch) -> dict[tuple[str, str], str]:
+    """Never let a unit/integration test touch the developer's OS credential store.
+
+    Module-local fake backends may still override the application's adapter. Patch
+    the public keyring API as a second boundary and force spawned Python processes
+    onto NullKeyring. Real Keychain acceptance belongs in a separately authorized
+    harness, never the ordinary pytest suite.
+    """
+    values: dict[tuple[str, str], str] = {}
+
+    def read(service: str, username: str) -> str | None:
+        return values.get((service, username))
+
+    def write(service: str, username: str, value: str) -> None:
+        values[(service, username)] = value
+
+    def delete(service: str, username: str) -> None:
+        if (service, username) not in values:
+            raise keyring.errors.PasswordDeleteError("No test credential exists.")
+        del values[(service, username)]
+
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.null.Keyring")
+    monkeypatch.setattr(keyring, "get_password", read)
+    monkeypatch.setattr(keyring, "set_password", write)
+    monkeypatch.setattr(keyring, "delete_password", delete)
+    return values
 
 
 @pytest.fixture(autouse=True)

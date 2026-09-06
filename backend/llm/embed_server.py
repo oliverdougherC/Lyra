@@ -89,14 +89,14 @@ class EmbeddingServer(LlamaServer):
 
     def _download_state(self) -> str | None:
         if model_provisioning.download_in_progress(EMBEDDING_WEIGHTS.filename):
-            return "Downloading the local embedding model"
+            return model_provisioning.download_description(EMBEDDING_WEIGHTS)
         return None
 
     def _model_path(self) -> Path:
         return settings.embedding_model_path
 
     def _check_installed(self) -> None:
-        if not settings.embedding_model_path.exists():
+        if not model_provisioning.verified_weight(EMBEDDING_WEIGHTS):
             raise ConfigurationError(_MISSING_WEIGHTS_MESSAGE)
 
     def _argv(self, binary: Path) -> list[str]:

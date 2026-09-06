@@ -847,6 +847,7 @@ export function ChatPane({
       const trimmed = content.trim()
       if (
         trimmed.length === 0 ||
+        showingTurn ||
         historyError ||
         messagesPending ||
         (sessionListNeeded && sessionsPending)
@@ -875,7 +876,15 @@ export function ChatPane({
         await runTurn('send', trimmed, target)
       })()
     },
-    [ensureSession, runTurn, historyError, messagesPending, sessionListNeeded, sessionsPending],
+    [
+      ensureSession,
+      runTurn,
+      historyError,
+      messagesPending,
+      sessionListNeeded,
+      sessionsPending,
+      showingTurn,
+    ],
   )
 
   /**
@@ -1371,7 +1380,9 @@ export function ChatPane({
       streaming={turnActive}
       stopping={stopping}
       disabledReason={disabledReason}
-      blocked={historyError || messagesPending || (sessionListNeeded && sessionsPending)}
+      blocked={
+        showingTurn || historyError || messagesPending || (sessionListNeeded && sessionsPending)
+      }
       sourceControl={sourceControl}
       workspaceControl={workspaceControl}
       // Inline, the reader clicked to open this and the next thing they do is type.

@@ -109,7 +109,7 @@ function SourceGroup({ title, sources }: { title: string; sources: DraftSource[]
                 <p className="text-text-primary text-sm font-medium">{source.title}</p>
                 {source.accessed_at ? (
                   <p className="text-text-tertiary mt-0.5 text-xs">
-                    Accessed {new Date(source.accessed_at).toLocaleDateString()}
+                    Last checked {new Date(source.accessed_at).toLocaleDateString()}
                   </p>
                 ) : null}
               </div>
@@ -132,6 +132,19 @@ function SourceGroup({ title, sources }: { title: string; sources: DraftSource[]
                   <li key={excerpt.id}>
                     {excerpt.section_ref ? (
                       <p className="text-text-tertiary text-[11px]">For {excerpt.section_ref}</p>
+                    ) : null}
+                    {excerpt.evidence_unavailable ? (
+                      <p className="text-text-tertiary text-[11px]">
+                        Saved supporting snapshot unavailable
+                      </p>
+                    ) : null}
+                    {excerpt.supporting_revision != null ? (
+                      <p className="text-text-tertiary text-[11px]">
+                        Saved revision {excerpt.supporting_revision}
+                        {excerpt.supporting_accessed_at
+                          ? ` · ${new Date(excerpt.supporting_accessed_at).toLocaleDateString()}`
+                          : ''}
+                      </p>
                     ) : null}
                     <blockquote className="text-text-secondary text-xs leading-5">
                       {excerpt.excerpt}

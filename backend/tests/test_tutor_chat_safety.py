@@ -587,7 +587,7 @@ class TestMidStreamFailure:
         user_msg = [m for m in messages if m["role"] == "user"][0]
         assert user_msg["tutor_attempt"]["state"] == "failed"
 
-    def test_mid_stream_failure_does_not_persist_partial_reply(
+    def test_mid_stream_failure_preserves_labelled_partial_reply(
         self,
         client: TestClient,
         db: sqlite3.Connection,
@@ -599,7 +599,9 @@ class TestMidStreamFailure:
 
         messages = _messages(client, session_id)
         assistant_msgs = [m for m in messages if m["role"] == "assistant"]
-        assert len(assistant_msgs) == 0
+        assert len(assistant_msgs) == 1
+        assert assistant_msgs[0]["content"].startswith("partial")
+        assert "Incomplete reply" in assistant_msgs[0]["content"]
 
 
 # ---------------------------------------------------------------------------
