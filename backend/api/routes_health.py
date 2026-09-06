@@ -60,6 +60,16 @@ def live() -> LiveHealth:
     return LiveHealth(status="ok")
 
 
+@router.get("/update-schema")
+def update_schema() -> dict[str, int]:
+    """Authenticated native update preflight; never contact a provider."""
+    conn = connect()
+    try:
+        return {"version": int(conn.execute("pragma user_version").fetchone()[0])}
+    finally:
+        conn.close()
+
+
 @router.get("/diagnostics")
 def diagnostics() -> dict[str, object]:
     """A structured, redacted snapshot of this install, safe to paste into a bug report."""

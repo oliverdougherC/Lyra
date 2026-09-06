@@ -4,3 +4,6 @@
 /target/
 /resources/llama/*
 !/resources/llama/.gitkeep
+
+/resources/notices/*
+!/resources/notices/.gitkeep

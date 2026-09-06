@@ -1,4 +1,9 @@
+mod backup;
+mod bounded_process;
 mod external_navigation;
+mod update_archive;
+mod update_recovery;
+mod updater;
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -102,9 +107,12 @@ struct SidecarReady {
     session_secret: String,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct AppState {
-    lifecycle: Mutex<Lifecycle>,
+    lifecycle: Arc<Mutex<Lifecycle>>,
+    quitting: Arc<std::sync::atomic::AtomicBool>,
+    updating: Arc<std::sync::atomic::AtomicBool>,
+    shutdown_complete: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Default)]
@@ -260,6 +268,11 @@ impl AppState {
         force_restart: bool,
     ) -> Result<BootstrapPayload, LaunchError> {
         let mut lifecycle = self.lifecycle.lock().map_err(|_| LaunchError::Poisoned)?;
+        if self.quitting.load(std::sync::atomic::Ordering::SeqCst)
+            || self.updating.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(LaunchError::Import("Lyra is shutting down"));
+        }
 
         if !force_restart {
             if let Some(existing) = lifecycle.backend.as_mut() {
@@ -286,21 +299,43 @@ impl AppState {
         Ok(bootstrap)
     }
 
-    fn shutdown(&self) {
-        let Ok(mut lifecycle) = self.lifecycle.lock() else {
-            return;
-        };
+    fn shutdown(&self) -> Result<(), LaunchError> {
+        let mut lifecycle = self.lifecycle.lock().map_err(|_| LaunchError::Poisoned)?;
         if let Some(existing) = lifecycle.backend.as_mut() {
             log_event("desktop shell is stopping its owned backend");
-            if let Err(error) = stop_backend(existing) {
-                log_event(&format!("terminal backend cleanup failed: {error}"));
-            }
+            stop_backend(existing)?;
         }
         lifecycle.backend = None;
+        Ok(())
+    }
+
+    fn replace_application(
+        &self,
+        install: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        // The supported installer moves the app bundle in several steps. Share the
+        // shutdown lock so a Quit worker cannot authorize exit between those moves.
+        // This method is called only inside spawn_blocking, never on the UI thread.
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| "Application lifecycle is unavailable.")?;
+        if self.quitting.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("Lyra is quitting; the update was not installed.".into());
+        }
+        if !self.updating.load(std::sync::atomic::Ordering::SeqCst) || lifecycle.backend.is_some() {
+            return Err("The backend must be stopped for application replacement.".into());
+        }
+        install()
     }
 
     fn publish_import(&self, app: &AppHandle) -> Result<BootstrapPayload, LaunchError> {
         let mut lifecycle = self.lifecycle.lock().map_err(|_| LaunchError::Poisoned)?;
+        if self.quitting.load(std::sync::atomic::Ordering::SeqCst)
+            || self.updating.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(LaunchError::Import("Lyra is shutting down"));
+        }
         let sidecar_path = if let Some(existing) = lifecycle.backend.as_mut() {
             let path = existing.sidecar_path.clone();
             log_event("desktop import publication is stopping the owned backend");
@@ -321,25 +356,33 @@ impl AppState {
 }
 
 #[tauri::command]
-fn desktop_bootstrap(
+async fn desktop_bootstrap(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<BootstrapPayload, CommandError> {
-    state.ensure_backend(&app, false).map_err(|error| {
-        log_event(&format!("backend bootstrap failed: {error}"));
-        error.into()
-    })
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.ensure_backend(&app, false))
+        .await
+        .map_err(|_| CommandError::from(LaunchError::Poisoned))?
+        .map_err(|error| {
+            log_event(&format!("backend bootstrap failed: {error}"));
+            error.into()
+        })
 }
 
 #[tauri::command]
-fn retry_backend(
+async fn retry_backend(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<BootstrapPayload, CommandError> {
-    state.ensure_backend(&app, true).map_err(|error| {
-        log_event(&format!("backend retry failed: {error}"));
-        error.into()
-    })
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.ensure_backend(&app, true))
+        .await
+        .map_err(|_| CommandError::from(LaunchError::Poisoned))?
+        .map_err(|error| {
+            log_event(&format!("backend retry failed: {error}"));
+            error.into()
+        })
 }
 
 #[tauri::command]
@@ -640,19 +683,67 @@ async fn pick_workspace_directory(app: AppHandle) -> Result<Option<String>, Comm
 }
 
 #[tauri::command]
-fn publish_desktop_import(
+async fn publish_desktop_import(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<BootstrapPayload, CommandError> {
-    state.publish_import(&app).map_err(|error| {
-        log_event(&format!("desktop import publication failed: {error}"));
-        error.into()
-    })
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.publish_import(&app))
+        .await
+        .map_err(|_| CommandError::from(LaunchError::Poisoned))?
+        .map_err(|error| {
+            log_event(&format!("desktop import publication failed: {error}"));
+            error.into()
+        })
+}
+
+pub(crate) async fn stop_for_update(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>().inner().clone();
+    state
+        .updating
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let restore = state.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || state.shutdown())
+        .await
+        .map_err(|_| "The update cleanup worker stopped unexpectedly".to_string())
+        .and_then(|result| result.map_err(|error| error.to_string()));
+    if result.is_err() {
+        restore
+            .updating
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    result
+}
+
+pub(crate) async fn resume_after_failed_update(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>().inner().clone();
+    state
+        .updating
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    tauri::async_runtime::spawn_blocking(move || state.ensure_backend(&app, false))
+        .await
+        .map_err(|_| "The update recovery worker stopped unexpectedly".to_string())?
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn desktop_print(app: AppHandle) -> Result<(), String> {
+    app.get_webview_window("main")
+        .ok_or_else(|| "The document window is unavailable".to_string())?
+        .print()
+        .map_err(|_| "The macOS print dialog could not be opened".to_string())
 }
 
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_updater::Builder::new()
+                .pubkey(include_str!("../updater-public-key.txt").trim())
+                .build(),
+        )
+        .manage(updater::UpdateState::default())
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)
@@ -668,22 +759,255 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             desktop_bootstrap,
+            desktop_print,
             retry_backend,
             open_external_url,
             pick_import_directory,
             save_original_document,
             pick_workspace_directory,
-            publish_desktop_import
+            publish_desktop_import,
+            backup::desktop_backup_create,
+            backup::desktop_backup_restore,
+            updater::desktop_update_status,
+            update_recovery::desktop_update_recovery,
+            updater::check_desktop_update,
+            updater::download_desktop_update,
+            updater::cancel_desktop_update,
+            updater::install_desktop_update,
+            updater::restart_desktop_update
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Lyra desktop shell");
 
     app.run(|app, event| {
-        if let tauri::RunEvent::Exit = event {
-            let state = app.state::<AppState>();
-            state.shutdown();
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            let state = app.state::<AppState>().inner().clone();
+            let app = app.clone();
+            let failed_app = app.clone();
+            handle_exit_request(
+                state,
+                code,
+                || api.prevent_exit(),
+                move |code| app.exit(code),
+                move || {
+                    failed_app.dialog().message(
+                        "Lyra could not confirm that its backend and helpers stopped. The app stayed open. Try Quit again; if the problem persists, contact support with the startup log."
+                    ).title("Lyra could not quit safely")
+                        .kind(tauri_plugin_dialog::MessageDialogKind::Error).show(|_| {});
+                },
+            );
         }
     });
+}
+
+// This is the signal/scheduling boundary registered with Tauri above. Tests use
+// the same handler with observable exit callbacks; they do not force process exit.
+fn handle_exit_request(
+    state: AppState,
+    code: Option<i32>,
+    prevent_exit: impl FnOnce(),
+    exit: impl FnOnce(i32) + Send + 'static,
+    cleanup_failed: impl FnOnce() + Send + 'static,
+) {
+    if state
+        .shutdown_complete
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return;
+    }
+    if state
+        .quitting
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        prevent_exit();
+        return;
+    }
+    prevent_exit();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(error) = state.shutdown() {
+            log_event(&format!("terminal backend cleanup failed: {error}"));
+            // A failed stop is not completion. Keep the shell alive and let another
+            // explicit Quit retry the same owned backend instead of stranding it.
+            state
+                .quitting
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            cleanup_failed();
+            return;
+        }
+        state
+            .shutdown_complete
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        exit(code.unwrap_or(0));
+    });
+}
+
+#[cfg(test)]
+mod exit_request_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn ordinary_quit_allows_its_cleanup_triggered_final_exit() {
+        let state = AppState::default();
+        let prevented = AtomicUsize::new(0);
+        let (final_tx, final_rx) = mpsc::channel();
+        handle_exit_request(
+            state.clone(),
+            None,
+            || {
+                prevented.fetch_add(1, Ordering::SeqCst);
+            },
+            move |code| {
+                final_tx.send(code).unwrap();
+            },
+            || panic!("unexpected cleanup failure"),
+        );
+        let code = final_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(prevented.load(Ordering::SeqCst), 1);
+        handle_exit_request(
+            state,
+            Some(code),
+            || {
+                prevented.fetch_add(1, Ordering::SeqCst);
+            },
+            |_| panic!("cleanup must not run twice"),
+            || panic!("unexpected cleanup failure"),
+        );
+        assert_eq!(
+            prevented.load(Ordering::SeqCst),
+            1,
+            "completed cleanup must admit the final ordinary exit"
+        );
+    }
+
+    #[test]
+    fn repeated_quit_during_cleanup_waits_without_spawning_another_worker() {
+        let state = AppState::default();
+        let held = state.lifecycle.lock().unwrap();
+        let (final_tx, final_rx) = mpsc::channel();
+        let prevented = AtomicUsize::new(0);
+        handle_exit_request(
+            state.clone(),
+            Some(7),
+            || {
+                prevented.fetch_add(1, Ordering::SeqCst);
+            },
+            move |code| {
+                final_tx.send(code).unwrap();
+            },
+            || panic!("unexpected cleanup failure"),
+        );
+        handle_exit_request(
+            state.clone(),
+            Some(9),
+            || {
+                prevented.fetch_add(1, Ordering::SeqCst);
+            },
+            |_| panic!("duplicate quit scheduled cleanup"),
+            || panic!("unexpected cleanup failure"),
+        );
+        assert_eq!(prevented.load(Ordering::SeqCst), 2);
+        assert!(!state.shutdown_complete.load(Ordering::SeqCst));
+        assert!(final_rx.try_recv().is_err());
+        drop(held);
+        assert_eq!(final_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 7);
+    }
+
+    #[test]
+    fn quit_cannot_complete_while_application_replacement_is_mutating() {
+        let state = AppState::default();
+        state.updating.store(true, Ordering::SeqCst);
+        let installer_state = state.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let installer = std::thread::spawn(move || {
+            installer_state.replace_application(|| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                Ok(())
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        handle_exit_request(
+            state.clone(),
+            None,
+            || {},
+            move |code| {
+                exit_tx.send(code).unwrap();
+            },
+            || panic!("cleanup failed"),
+        );
+        let premature_exit = exit_rx.recv_timeout(Duration::from_millis(100));
+        release_tx.send(()).unwrap();
+        installer.join().unwrap().unwrap();
+        assert!(
+            premature_exit.is_err(),
+            "Quit must not exit between the installer's app renames"
+        );
+        assert_eq!(exit_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 0);
+    }
+
+    #[test]
+    fn application_replacement_cannot_start_after_quit_latches() {
+        let state = AppState::default();
+        state.updating.store(true, Ordering::SeqCst);
+        state.quitting.store(true, Ordering::SeqCst);
+        let invoked = std::sync::atomic::AtomicBool::new(false);
+        let result = state.replace_application(|| {
+            invoked.store(true, Ordering::SeqCst);
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(
+            !invoked.load(Ordering::SeqCst),
+            "a queued install must not mutate after Quit"
+        );
+    }
+
+    #[test]
+    fn cleanup_failure_keeps_the_shell_open_and_allows_an_explicit_retry() {
+        let state = AppState::default();
+        let _ = std::panic::catch_unwind(|| {
+            let _held = state.lifecycle.lock().unwrap();
+            panic!("injected prior lifecycle failure");
+        });
+        let (failed_tx, failed_rx) = mpsc::channel();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        handle_exit_request(
+            state.clone(),
+            None,
+            || {},
+            move |code| {
+                exit_tx.send(code).unwrap();
+            },
+            move || {
+                failed_tx.send(()).unwrap();
+            },
+        );
+        failed_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(!state.shutdown_complete.load(Ordering::SeqCst));
+        assert!(!state.quitting.load(Ordering::SeqCst));
+        assert!(
+            exit_rx.try_recv().is_err(),
+            "failed cleanup must not request final exit"
+        );
+        // Repair the injected condition and retry the same production handler.
+        state.lifecycle.clear_poison();
+        let (retry_tx, retry_rx) = mpsc::channel();
+        handle_exit_request(
+            state.clone(),
+            None,
+            || {},
+            move |code| {
+                retry_tx.send(code).unwrap();
+            },
+            || panic!("retry failed"),
+        );
+        assert_eq!(retry_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 0);
+        assert!(state.shutdown_complete.load(Ordering::SeqCst));
+    }
 }
 
 fn launch_backend(app: &AppHandle) -> Result<ManagedBackend, LaunchError> {
@@ -1238,19 +1562,21 @@ fn write_import_selection(
 }
 
 fn run_import_publication(sidecar_path: &Path) -> Result<(), LaunchError> {
-    let status = Command::new(sidecar_path)
+    let mut command = Command::new(sidecar_path);
+    command
         .arg("--publish-desktop-import")
-        .env("LYRA_PACKAGED", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|_| LaunchError::Import("the staged data could not be published"))?;
+        .env("LYRA_PACKAGED", "1");
+    let output = bounded_process::run(&mut command, Duration::from_secs(60)).map_err(|_| {
+        LaunchError::Import(
+            "import publication did not finish; restart Lyra to recover the staged import",
+        )
+    })?;
+    let status = output.status;
     if status.success() {
         Ok(())
     } else {
         Err(LaunchError::Import(
-            "the staged data could not be published; the prior data was preserved",
+            "the staged data could not be published; restart Lyra to recover the staged import",
         ))
     }
 }
@@ -1421,8 +1747,7 @@ fn reclaim_helpers(sidecar_path: Option<&Path>) -> Result<(), LaunchError> {
 }
 
 fn run_reclaim_command(command: &mut Command, secret: &str) -> Result<(), String> {
-    let output = command
-        .output()
+    let output = bounded_process::run(command, Duration::from_secs(10))
         .map_err(|_| "helper reclaim command could not be started".to_string())?;
     if output.status.success() {
         return Ok(());

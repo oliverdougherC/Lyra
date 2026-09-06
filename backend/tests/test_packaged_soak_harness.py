@@ -43,6 +43,31 @@ def test_prepare_run_refuses_to_overwrite_existing_run_directory(tmp_path: Path)
         harness.prepare_run(tmp_path / "Lyra.app", tmp_path / "runs", "existing-run")
 
 
+def test_launch_environment_is_consumed_by_packaged_settings_outside_run_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from backend.config import Settings
+
+    monkeypatch.chdir(tmp_path)
+    plan_path = harness.prepare_run(Path("Lyra.app"), Path("runs"), "isolated")
+    payload = json.loads(plan_path.read_text())
+    root = plan_path.parent.resolve()
+    # Ambient source-checkout settings must not override the disposable profile.
+    monkeypatch.setenv("LYRA_DB_PATH", str(tmp_path / "student.db"))
+    for name, value in payload["launch_environment"].items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.chdir(tmp_path.parent)
+    settings = Settings(packaged_mode=True)
+    assert settings.data_dir == root / "profile"
+    assert settings.db_path == root / "profile" / "lyra.db"
+    assert settings.cache_dir == root / "cache"
+    assert settings.logs_dir == root / "logs"
+    assert settings.models_dir == root / "profile" / "models"
+    settings.ensure_directories()
+    assert settings.uploads_dir.is_dir()
+    assert settings.pages_dir.is_dir()
+
+
 def test_update_step_records_manual_outcome_without_changing_execution_ownership(
     tmp_path: Path,
 ) -> None:

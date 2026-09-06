@@ -2,17 +2,29 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-capability",
   "description": "Capability for Lyra's bundled desktop window.",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:app:default",
     "core:event:default",
     "core:window:default",
     "allow-desktop-bootstrap",
+    "allow-desktop-print",
     "allow-retry-backend",
     "allow-open-external-url",
     "allow-pick-import-directory",
     "allow-save-original-document",
     "allow-pick-workspace-directory",
-    "allow-publish-desktop-import"
+    "allow-publish-desktop-import",
+    "allow-desktop-update-status",
+    "allow-check-desktop-update",
+    "allow-download-desktop-update",
+    "allow-cancel-desktop-update",
+    "allow-install-desktop-update",
+    "allow-restart-desktop-update",
+    "allow-desktop-backup-create",
+    "allow-desktop-backup-restore",
+    "allow-desktop-update-recovery"
   ]
 }

@@ -11,23 +11,42 @@ Python, or local server platform. The shell selects an ephemeral loopback listen
 socket and per-launch credential over inherited descriptors/stdin, and reclaims the owned sidecar
 on quit.
 
-Build an unsigned review artifact from a contributor checkout with:
+Quit the running app gracefully before replacing its bundle. Build a development-signed local
+review artifact with the same identity across rebuilds:
 
 ```bash
-uv sync --extra packaging
+python3 scripts/release_metadata.py --check
+uv python install 3.12
+uv sync --python 3.12 --extra packaging
 uv run --extra packaging pyinstaller --clean --noconfirm packaging/lyra_backend.spec
 uv run python scripts/frozen_backend_smoke.py dist/lyra-backend/lyra-backend
 uv run python packaging/stage_sidecar.py
 pnpm --dir frontend install --frozen-lockfile
+pnpm --dir frontend licenses list --prod --json > frontend-licenses.json
+uv run python scripts/collect_distribution_notices.py --frontend-inventory frontend-licenses.json
 pnpm --dir frontend build
 pnpm --dir frontend tauri:build --bundles app --no-sign --ci
+python3 scripts/release_metadata.py --bundle src-tauri/target/release/bundle/macos/Lyra.app --source "$(git rev-parse HEAD)"
+uv run python scripts/sign_local_app.py src-tauri/target/release/bundle/macos/Lyra.app
+uv run python scripts/verify_macos_bundle.py src-tauri/target/release/bundle/macos/Lyra.app
+uv run python scripts/frozen_backend_smoke.py \
+  src-tauri/target/release/bundle/macos/Lyra.app/Contents/Resources/resources/lyra-backend/lyra-backend
 ./scripts/build_dmg.sh \
   src-tauri/target/release/bundle/macos/Lyra.app \
-  src-tauri/target/release/bundle/dmg/Lyra_0.1.0_aarch64.dmg
+  "src-tauri/target/release/bundle/dmg/Lyra_$(cat version.txt)_aarch64.dmg"
 ```
 
-This is unsigned/ad-hoc review evidence. Developer ID signing, notarization, and the final clean
-8 GB Mac gate remain release activities.
+The signing helper selects the sole valid Apple Development identity, or an exact
+`LYRA_LOCAL_SIGNING_IDENTITY` name/SHA-1 from `security find-identity -v -p codesigning`.
+It fails instead of silently using ad-hoc signing. It signs every native object inside-out and
+checks stable certificate-backed requirements for `com.lyra.desktop` and
+`com.lyra.desktop.backend`. Keep that identity across local rebuilds to preserve Keychain trust.
+Moving from old ad-hoc signatures or development to distribution identity may need one new
+Keychain approval; the helper does not read credentials or change Keychain access policies.
+
+Reopen the completed app and verify native launch after signing and the frozen smoke check.
+Development signing is local review evidence, **not** Developer ID distribution/notarization.
+The protected [release pipeline](releasing.md) owns public artifacts and update delivery.
 
 ## Contributor checkout
 

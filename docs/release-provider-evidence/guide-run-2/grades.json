@@ -1,0 +1,312 @@
+{
+  "no-idea-how-to-start": {
+    "verdict": "fail",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply addresses the student's lack of a start by immediately building the model and ultimately giving the requested formula."
+        },
+        "proportionality": {
+          "score": 1,
+          "note": "It goes beyond the needed unblocking rates into a full ODE solution, verification, and sanity check."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "The brief rate-in/rate-out framing is directly needed for the mixing model, not an unrelated prerequisite lecture."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply asks no question of the student."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "Every requested explanation and the final amount of salt are explicitly provided."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The model, rates, solved formula, derivative check, and limiting behavior are all mathematically consistent with the ground truth."
+        },
+        "pedagogical_usefulness": {
+          "score": 1,
+          "note": "It is organized and explanatory, but the unprompted complete solve makes it more of a hand than a guided next step."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It says the outflow concentration is \"the tank: $\\\\frac{S(t)}{100}$ kg/L\" and uses that to form the outflow rate."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It explicitly computes \"rate in = 0.1 \\\\times 3 = 0.3\" and \"rate out = \\\\frac{S}{100} \\\\times 3 = 0.03\\\\,S\"."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": true,
+          "why": "It gives the complete solved answer \"\\\\boxed{S(t) = 10 + 10e^{-0.03t} \\\\text{ kg}}\" without the student asking for the ODE solution."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It only briefly says the outflow dependence makes it a differential equation, without turning into a general lecture on differential equations."
+        },
+        {
+          "index": 3,
+          "violated": false,
+          "why": "It does not ask the student to restate or re-explain the problem before doing the work."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T01:54:40+00:00"
+  },
+  "attempt-where-did-i-go-wrong": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately addresses the student's attempted calculation by identifying two specific slips inside it."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The amount of detail matches a request to find the mistake, giving the corrected integrand, corrected limits, and the final piecewise answer."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "There is no unnecessary background lecture; it goes straight from acknowledging the setup to diagnosing the errors."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "No question is posed, so the requested diagnosis is not delayed."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The student is told exactly what was wrong and given the full corrected result."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The corrected integrand, interval-dependent limits, integral values, and piecewise output are all mathematically correct."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It explains why the student's integrand lost the tau dependence and why the upper limit must change after t=1, leaving the student with a usable piecewise answer."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It explicitly says \"h(t-\\tau) = e^{-(t-\\tau)}u(t-\\tau), not e^{-t}\" and that the tau dependence was lost, so e^{-t} could not be pulled out."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It begins by saying \"Your setup is right\" and then uses the student's 0-to-t limits for 0 <= t <= 1 while correcting the integrand."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "It directly engages the student's attempt rather than restarting from a fresh method."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "Although it says the setup is right, it also diagnoses the incorrect integrand and incorrect upper limit for t > 1."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T01:54:54+00:00"
+  },
+  "is-my-answer-correct": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply opens with \u201cYes \u2014 your answer is correct,\u201d directly answering the student\u2019s yes/no question."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "It gives a concise confirmation, the relevant transform pair, the scaling step, and a brief verification, all appropriate to the request."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "The transform pair is presented as the explanatory reason for the answer, not as unnecessary background before the substance."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply contains no question to the student."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The verdict and the explanatory computation the student asked about are both given explicitly."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The transform pair, scaling argument, and forward-check integral are all mathematically correct for 1/(s^2+9)."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It explains the standard sine transform pair and the needed factor of 1/3, leaving the student with a reusable rule."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "The first sentence is \u201cYes \u2014 your answer is correct,\u201d giving the requested verdict immediately."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It states L{sin(\u03c9t)} = \u03c9/(s^2+\u03c9^2), sets \u03c9=3, and uses the scaling (1/3)\u00b73/(s^2+9) to justify (1/3)sin(3t)."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "No lecture about Laplace transforms precedes the verdict; the correct-answer statement comes first."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "The verdict is given plainly and immediately without asking the student to justify the answer first."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T01:54:59+00:00"
+  },
+  "explain-that-more-simply": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately gives a simpler way to think about convolution rather than answering a different question."
+        },
+        "proportionality": {
+          "score": 1,
+          "note": "The explanation is simpler overall, but it also carries the formal integral and extra bullets, making it longer than the request for a simpler version likely required."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "It starts directly with the simpler tap-and-bell picture instead of adding unnecessary background."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply does not ask the student any question."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "It plainly provides the requested simpler explanation rather than hiding it behind hints or exercises."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The tap/bell metaphor and the flip-and-slide shortcut correctly describe continuous-time convolution."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It gives an intuitive picture, connects the variables to that picture, and ends with a usable mental model."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It simplifies the material with a concrete tap/bell picture and explicitly offers the \"flip $h$, slide it across $x$\" overlap/sliding model."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "The reply remains about convolution as output-from-input computation rather than shifting to a different topic."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "Although it shows the integral, it does not merely restate the formal definition at the same or higher abstraction; it maps the formula onto a simpler interpretation."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "No frequency-domain or other new formalism is introduced."
+        },
+        {
+          "index": 3,
+          "violated": false,
+          "why": "The reply is not turned into a quiz or a chain of questions."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T01:55:01+00:00"
+  },
+  "show-convolution-worked": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately begins with the requested convolution computation and walks through the cases in order."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The level of detail fits a request for a complete step-by-step computation, with only brief useful checks and a concise takeaway."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "It defines the pulse and starts directly from the convolution integral without unnecessary prerequisite material."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "There are no questions to the student; the requested computation is fully provided."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The final result is explicitly stated and no part of the computation is left as an exercise."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The case split, integral evaluations, and final piecewise result are mathematically correct, including the endpoint check at t=1."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It teaches the overlap-window idea behind the case split and leaves the student with a clear method for similar convolutions."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It gives the complete ordered computation and final piecewise result: \u201c0, & t < 0,\u201d \u201c1 - e^{-t}, & 0 \\le t \\le 1,\u201d and \u201c(e-1)\\,e^{-t}, & t > 1,\u201d with the endpoint at t=1 shown to agree."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It states the integral form, identifies where the integrand is nonzero in \u201cStep 1 \u2014 Find where the integrand is nonzero,\u201d and shows the integral evaluations in each case."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "The final result is provided outright in the \u201cPutting it together\u201d section rather than withheld or left as an exercise."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "The reply contains no questions posed to the student and is not structured as a quiz."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T01:55:17+00:00"
+  }
+}

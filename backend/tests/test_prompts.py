@@ -567,6 +567,7 @@ def test_guide_bounds_start_help_and_reduces_abstraction_for_simplification() ->
     show = _normalized(build_system_prompt("show", [], []))
     assert "one concrete first move" in guide
     assert "stop at a useful setup" in guide
+    assert "unless currently requested" in guide
     assert "less abstraction, not a second full lecture" in guide
     assert "same concrete mechanism in plain words" in guide
     assert "omit the formal definition or notation that caused difficulty" in guide

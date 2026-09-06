@@ -1,0 +1,7 @@
+{
+  "files_scanned": 47,
+  "sensitive_matches": [],
+  "owned_eval_processes_remaining": 0,
+  "normal_profile_mutations": "none by these evaluation runs; settings mode=ro and read-only credential retrieval",
+  "scope": "known current credentials, endpoint URL, home and temporary-profile path strings; all retained JSON parsed"
+}

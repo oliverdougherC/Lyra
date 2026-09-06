@@ -27,6 +27,9 @@ jobs:
       - name: Install backend dependencies
         run: uv sync --extra dev
 
+      - name: Check authoritative release metadata
+        run: python scripts/release_metadata.py --check
+
       - name: Check backend formatting
         run: uv run --extra dev ruff format --check backend scripts packaging
 
@@ -89,6 +92,12 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify pinned Release Please version behavior
+        run: |
+          npm install --prefix "$RUNNER_TEMP/release-please-check" --ignore-scripts --no-audit --no-fund release-please@17.3.0
+          cd ..
+          node scripts/release/test_release_please.cjs "$RUNNER_TEMP/release-please-check/node_modules/release-please"
 
       - name: Check frontend formatting
         run: pnpm format:check
@@ -288,8 +297,12 @@ jobs:
   desktop-macos-artifact:
     name: Desktop macOS artifact
     runs-on: macos-15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
@@ -330,6 +343,11 @@ jobs:
           uv run python scripts/stage_llama_runtime.py
           test -n "$(find src-tauri/resources/llama -name 'llama-server' -type f | head -1)"
 
+      - name: Collect distribution notices
+        run: |
+          pnpm --dir frontend licenses list --prod --json > "$RUNNER_TEMP/frontend-licenses.json"
+          uv run python scripts/collect_distribution_notices.py --frontend-inventory "$RUNNER_TEMP/frontend-licenses.json"
+
       - name: Build frontend
         working-directory: frontend
         run: pnpm build
@@ -338,11 +356,17 @@ jobs:
         working-directory: frontend
         run: pnpm tauri:build --bundles app --no-sign --ci
 
-      - name: Build reviewable unsigned DMG
+      - name: Embed exact unsigned review identity before creating the DMG
         run: >
-          ./scripts/build_dmg.sh
-          src-tauri/target/release/bundle/macos/Lyra.app
-          src-tauri/target/release/bundle/dmg/Lyra_0.1.0_aarch64.dmg
+          uv run python scripts/review_candidate_receipt.py prepare
+          --app src-tauri/target/release/bundle/macos/Lyra.app
+
+      - name: Build reviewable unsigned DMG
+        run: |
+          version="$(cat version.txt)"
+          ./scripts/build_dmg.sh \
+            src-tauri/target/release/bundle/macos/Lyra.app \
+            "review-artifact/Lyra_${version}_aarch64_UNSIGNED_REVIEW.dmg"
 
       - name: Generate desktop resource report
         run: |
@@ -351,17 +375,38 @@ jobs:
             echo "::error::No .app bundle was produced."
             exit 1
           fi
-          uv run python scripts/desktop_resource_report.py --root app="${bundle_root}" --output desktop-resource-report.json
+          uv run python scripts/desktop_resource_report.py --root app="${bundle_root}" --output review-artifact/desktop-resource-report.json
 
-      - name: Upload desktop artifact evidence
+      - name: Record unsigned candidate hashes and source receipts
+        run: |
+          version="$(cat version.txt)"
+          uv run python scripts/review_candidate_receipt.py receipt \
+            --dmg "review-artifact/Lyra_${version}_aarch64_UNSIGNED_REVIEW.dmg"
+
+      - name: Upload unsigned review candidate and receipts
+        id: review-artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lyra-desktop-macos
-          path: |
-            src-tauri/target/release/bundle/macos/*.app
-            src-tauri/target/release/bundle/dmg/*.dmg
-            desktop-resource-report.json
+          name: lyra-desktop-macos-unsigned-review
+          path: review-artifact/
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Link remotely retrievable unsigned review candidate
+        env:
+          ARTIFACT_URL: ${{ steps.review-artifact.outputs.artifact-url }}
+          ARTIFACT_DIGEST: ${{ steps.review-artifact.outputs.artifact-digest }}
+        run: |
+          python - <<'PYTHON'
+          import os
+          from pathlib import Path
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
+              summary.write("## Unsigned review candidate\n\n")
+              summary.write(f"[Download DMG and receipts]({os.environ['ARTIFACT_URL']})\n\n")
+              summary.write("**Not Developer ID signed, notarized, or approved for distribution.**\n\n")
+              summary.write("The receipt records the exact build/PR head, PR base, and separate CI test-merge SHA.\n\n")
+              summary.write(f"Actions archive SHA-256: `{os.environ['ARTIFACT_DIGEST']}`\n")
+          PYTHON
 
   ci-gate:
     name: CI Gate

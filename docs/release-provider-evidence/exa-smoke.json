@@ -1,0 +1,18 @@
+{
+  "provider": "Exa",
+  "query": "OpenStax calculus derivative definition",
+  "private_coursework_sent": false,
+  "production_client": true,
+  "search_status": "passed",
+  "result_count": 1,
+  "provenance_retained": true,
+  "source_urls": [
+    "https://openstax.org/books/calculus-volume-1/pages/3-1-defining-the-derivative"
+  ],
+  "content_statuses": [
+    "success"
+  ],
+  "content_text_present": true,
+  "content_bounded": true,
+  "duration_seconds": 1.1
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-backup-restore"
+description = "Enables the desktop_backup_restore command without any pre-configured scope."
+commands.allow = ["desktop_backup_restore"]
+
+[[permission]]
+identifier = "deny-desktop-backup-restore"
+description = "Denies the desktop_backup_restore command without any pre-configured scope."
+commands.deny = ["desktop_backup_restore"]

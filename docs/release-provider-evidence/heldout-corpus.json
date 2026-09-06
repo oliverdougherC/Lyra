@@ -1,0 +1,77 @@
+{
+  "about": [
+    "Two self-authored synthetic held-out release cases, written after the generic Guide clarification was frozen and before viewing its responses. Uses the unchanged evaluator rubric; no private coursework."
+  ],
+  "corpus_version": "release-heldout-1.0.0",
+  "prompt_contract_version": "2",
+  "dimensions": [
+    "directness",
+    "proportionality",
+    "prerequisite_setup",
+    "questioning",
+    "withholding",
+    "correctness",
+    "pedagogical_usefulness"
+  ],
+  "cases": [
+    {
+      "id": "heldout-dilution-first-move",
+      "mode": "guide",
+      "user": "I haven't learned this yet. What should I write down first?",
+      "history": [
+        {
+          "role": "user",
+          "content": "How can I prepare 250 mL of a 0.10 M salt solution using a 1.0 M stock solution?"
+        },
+        {
+          "role": "assistant",
+          "content": "This is a dilution problem: the amount of dissolved salt stays the same when you add water."
+        }
+      ],
+      "context": [],
+      "must": [
+        "Gives a concrete starting move based on conservation of solute, such as calculating the solute amount in the final solution or relating the stock and final concentration-volume products",
+        "Explains the quantities in that starting move in plain language and keeps their units consistent"
+      ],
+      "must_not": [
+        "Gives the fully solved stock volume of 25 mL or 0.025 L when only the first move was requested",
+        "Provides an entire solution or a full laboratory procedure instead of a useful first setup",
+        "Withholds the starting move behind a question or asks the student to repeat the problem"
+      ],
+      "may": [
+        "Writes 1.0 M times unknown volume equals 0.10 M times 250 mL, explaining that both volumes use mL",
+        "Names adding water as the physical reason concentration decreases without increasing solute"
+      ],
+      "notes": "Conservation of solute gives C_stock*V_stock=C_final*V_final. The setup is the appropriate first move. The final stock volume is 25 mL, but that is deliberately beyond the requested initial guidance."
+    },
+    {
+      "id": "heldout-conditional-probability-simpler",
+      "mode": "guide",
+      "user": "That notation lost me. Can you explain it with one everyday example?",
+      "history": [
+        {
+          "role": "user",
+          "content": "What is conditional probability?"
+        },
+        {
+          "role": "assistant",
+          "content": "Conditional probability is defined as P(A|B)=P(A intersection B)/P(B), where P(B)>0. It restricts the sample space to B and renormalizes the measure over that event."
+        }
+      ],
+      "context": [],
+      "must": [
+        "Explains the same idea through one familiar concrete example: knowing a condition limits the group under consideration, then probability counts the relevant members of that group",
+        "Uses plain language at a lower level of abstraction than the previous formal explanation"
+      ],
+      "must_not": [
+        "Repeats the symbolic conditional-probability definition or introduces Bayes theorem as the explanation of a request for less notation",
+        "Switches to another probability concept without explaining conditional probability",
+        "Makes the student answer a quiz instead of providing the explanation"
+      ],
+      "may": [
+        "Uses a small count such as4of10bus-riding students wearing hats, given that a student rides the bus"
+      ],
+      "notes": "Conditional probability changes the group under consideration after learning a condition. A good example restricts attention to the 10 bus riders, of whom 4 wear hats, so 4 in 10 of that restricted group wear hats. Simple numerical counts/fractions are fine; restating abstract symbolic quotient is not."
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
 /**
  * Global Vite/bootstrap error fallback. This component is intentionally independent of
@@ -124,6 +124,20 @@ export default function GlobalError({
 }) {
   // `error` is deliberately unused: reading it is how a fallback would leak.
   void error
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null)
+  const native = window.__TAURI__?.core?.invoke ?? window.__TAURI_INTERNALS__?.invoke
+  async function showRecovery() {
+    try {
+      await native?.('desktop_update_recovery')
+      setRecoveryMessage(
+        'Quit Lyra, then open the retained app in Finder. If your data was migrated, restore a compatible backup into a separate profile first.',
+      )
+    } catch {
+      setRecoveryMessage(
+        'No verified previous app could be opened. Your student data is retained. Use the recovery instructions for your release.',
+      )
+    }
+  }
 
   useEffect(() => {
     let dark = false
@@ -145,6 +159,12 @@ export default function GlobalError({
         <button type="button" className="gb-button" onClick={retry}>
           Try again
         </button>
+        {native && (
+          <button type="button" className="gb-button" onClick={() => void showRecovery()}>
+            Show previous Lyra app
+          </button>
+        )}
+        {recoveryMessage && <p role="status">{recoveryMessage}</p>}
       </div>
     </>
   )

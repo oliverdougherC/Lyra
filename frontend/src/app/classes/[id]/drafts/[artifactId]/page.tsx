@@ -20,6 +20,7 @@ import dynamic from '@/router/dynamic'
 import { useParams, useRouteAnchor, useRouter } from '@/router/hooks'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { printCurrentDocument } from '@/lib/runtime'
 import type { GroupImperativeHandle } from 'react-resizable-panels'
 
 import { ChatPane } from '@/components/chat/chat-pane'
@@ -607,6 +608,18 @@ export default function DraftWorkspacePage() {
     }
   }
 
+  async function printDraft() {
+    if (exporting || !(await ensureBodySaved())) return
+    setExporting(true)
+    try {
+      await printCurrentDocument()
+    } catch {
+      toast.error('Could not open the print dialog. Your saved writing is retained.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   // Reconcile a stale-version conflict by keeping the student's own writing: rebase onto
   // what the server holds now and write the local text over it. Nothing on screen is lost.
   function onKeepMyVersion() {
@@ -1072,7 +1085,7 @@ export default function DraftWorkspacePage() {
                   Export PDF
                 </DropdownMenuItem>
               ) : (
-                <DropdownMenuItem onSelect={() => window.print()}>
+                <DropdownMenuItem onSelect={() => void printDraft()} disabled={exporting}>
                   <Printer />
                   Print
                 </DropdownMenuItem>

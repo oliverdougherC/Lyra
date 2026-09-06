@@ -1,7 +1,7 @@
 # Security and CI Gates
 
 This document describes the required merge gate and the evidence it must aggregate on the desktop
-migration branch.
+release branches.
 
 ## Required merge gate
 
@@ -27,13 +27,22 @@ The aggregate gate currently requires these lanes:
 | `rust-desktop` | `cargo fmt`, `clippy`, `test`, and `audit` for the checked-in Tauri shell |
 | `desktop-macos-artifact` | Apple Silicon macOS frozen-sidecar smoke, app/DMG build, resource report, and uploaded artifact evidence |
 
-Two lanes retain a presence guard so older branches can still evaluate the stable aggregate gate:
+All listed lanes are mandatory. Failed, skipped, or cancelled required lanes fail CI Gate.
+The existing Default ruleset requires a current-base CI Gate result and has no bypass actors.
+PR checks do not authorize public release: the separate protected publisher verifies the exact
+trusted main revision and requires the release-signing/promotion environments.
 
-- `rust-desktop`
-- `desktop-macos-artifact`
+## Dependency maintenance and test credentials
 
-On this branch `src-tauri/Cargo.toml` exists, so both guards select the real Rust and macOS artifact
-work. The first hosted result is still pending until the branch is pushed.
+Routine version-update PRs remain suppressed under PLA-297. Rust is included alongside Python,
+frontend and Actions in the dependency configuration. Repository vulnerability alerts are enabled;
+automated security-fix PRs remain disabled to preserve the existing no-churn policy. Locked
+production audits and sensitive release-action pins are mandatory, independently of alerts.
+
+Local acceptance processes must use the forced failing Keyring backend and private profile paths.
+A data-directory override does not isolate the login Keychain. The harness now enforces that
+boundary on initial starts, restarts, direct helpers and backup/restore children. Unit tests use
+an in-memory public-keyring boundary; no ordinary suite may read or mutate the operator's store.
 
 ## Python security gate
 

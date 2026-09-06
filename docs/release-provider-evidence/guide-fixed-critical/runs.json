@@ -1,0 +1,99 @@
+{
+  "cases": {
+    "no-idea-how-to-start": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "Start with the balance: the salt amount $S(t)$ changes at the rate it comes in minus the rate it leaves.\n\n**Rate in:** the incoming brine is $0.1$ kg/L flowing at $3$ L/min, so salt enters at\n$$0.1 \\times 3 = 0.3 \\text{ kg/min}.$$\n\n**Rate out:** the tank is well-stirred, so the outflow has the same concentration as the tank. The volume stays at $100$ L (in and out rates match), so the concentration is $S(t)/100$ kg/L. Salt leaves at\n$$3 \\times \\frac{S(t)}{100} = \\frac{3S(t)}{100} \\text{ kg/min}.$$\n\nPut them together with $S(0) = 20$:\n$$\\frac{dS}{dt} = 0.3 - \\frac{3S}{100}.$$\n\nThat's the whole setup \u2014 the rest is just solving this first-order ODE. A useful hint: rewrite the right side as $0.03(10 - S)$. What does that tell you about what $S(t)$ does as $t$ gets large, and can you separate the variables from there?",
+      "generated_at": "2026-09-06T01:58:51+00:00",
+      "duration_seconds": 6.21,
+      "system_prompt_tokens": 1155,
+      "tool_schema_tokens": 1266,
+      "user": "I have no idea how to start.",
+      "mode": "guide"
+    },
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "status": "ok",
+      "response": "Two separate slips, both in that integral:\n\n**1. You dropped the $\\tau$-dependence.** $h(t-\\tau) = e^{-(t-\\tau)} = e^{-t}e^{\\tau}$, not $e^{-t}$. You can pull $e^{-t}$ out of the integral, but the $e^{\\tau}$ stays inside:\n\n$$\\int_0^t e^{-(t-\\tau)}\\,d\\tau = e^{-t}\\int_0^t e^{\\tau}\\,d\\tau = e^{-t}(e^t - 1) = 1 - e^{-t}$$\n\nI checked this: $\\int_0^t e^{-(t-\\tau)}d\\tau = 1 - e^{-t}$, not $te^{-t}$.\n\n**2. Your upper limit is only right for $t \\le 1$.** $x(\\tau)$ is a pulse: it's $1$ on $[0,1]$ and $0$ after. So the integral runs over $[0, \\min(t,1)]$, not $[0,t]$. For $t > 1$ the pulse has already ended, and the upper limit freezes at $1$:\n\n$$\\int_0^1 e^{-(t-\\tau)}\\,d\\tau = e^{-t}(e - 1) = (e-1)e^{-t}$$\n\n**The full answer is piecewise:**\n\n$$y(t) = \\begin{cases} 0, & t < 0 \\\\ 1 - e^{-t}, & 0 \\le t \\le 1 \\\\ (e-1)e^{-t}, & t > 1 \\end{cases}$$\n\nSanity check: at $t=1$ both middle pieces give $1 - e^{-1}$, so it's continuous \u2014 a good habit to verify whenever you split a convolution into cases.",
+      "generated_at": "2026-09-06T01:59:10+00:00",
+      "duration_seconds": 19.79,
+      "system_prompt_tokens": 1155,
+      "tool_schema_tokens": 1266,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide"
+    },
+    "is-my-answer-correct": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "Yes \u2014 that's correct.\n\nThe standard pair is $\\mathcal{L}\\{\\sin(at)\\} = \\dfrac{a}{s^2 + a^2}$. With $a = 3$:\n\n$$\\mathcal{L}\\{\\sin(3t)\\} = \\frac{3}{s^2 + 9}$$\n\nSo to get $1/(s^2+9)$ you scale by $1/3$:\n\n$$\\mathcal{L}^{-1}\\left\\{\\frac{1}{s^2+9}\\right\\} = \\frac{1}{3}\\sin(3t)$$\n\nQuick way to double-check any answer like this: run it forward. $\\mathcal{L}\\{\\tfrac{1}{3}\\sin(3t)\\} = \\tfrac{1}{3}\\cdot\\tfrac{3}{s^2+9} = \\tfrac{1}{s^2+9}$, which is exactly what you started with.",
+      "generated_at": "2026-09-06T01:59:13+00:00",
+      "duration_seconds": 3.12,
+      "system_prompt_tokens": 1155,
+      "tool_schema_tokens": 1266,
+      "user": "I got (1/3) sin(3t). Is my answer correct?",
+      "mode": "guide"
+    },
+    "explain-that-more-simply": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "Think of it as an echo.\n\nYou clap at different times. Each clap makes a sound that fades out over the next few seconds. The total sound you hear at any moment is: every clap you've made, each one quieter the longer ago it was, all added together.\n\nThat's convolution. The \"how quickly it fades\" is the system's response $h$, and the \"claps\" are the input $x$. The output at time $t$ is just all the past inputs, each faded by how long ago it happened, summed up.\n\nThe integral is only the fancy way of writing \"add up all the past inputs, each weighted by how much the system still remembers it.\"",
+      "generated_at": "2026-09-06T01:59:16+00:00",
+      "duration_seconds": 2.66,
+      "system_prompt_tokens": 1155,
+      "tool_schema_tokens": 1266,
+      "user": "Explain that more simply.",
+      "mode": "guide"
+    },
+    "show-convolution-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "status": "ok",
+      "response": "Here's the full computation. Let\n\n$$h(t) = u(t) - u(t-1) \\qquad\\text{(the unit pulse on } [0,1]\\text{)}$$\n\nand $g(t) = e^{-t}u(t)$. The convolution is\n\n$$(h*g)(t) = \\int_{-\\infty}^{\\infty} h(\\tau)\\, g(t-\\tau)\\, d\\tau = \\int_0^1 e^{-(t-\\tau)}\\, u(t-\\tau)\\, d\\tau.$$\n\n**Step 1 \u2014 Find where the integrand is nonzero.** The integrand is nonzero only when both factors are nonzero:\n\n- $h(\\tau) \\neq 0 \\iff 0 \\le \\tau \\le 1$,\n- $g(t-\\tau) \\neq 0 \\iff t - \\tau \\ge 0 \\iff \\tau \\le t$.\n\nSo the effective integration range is $0 \\le \\tau \\le \\min(1, t)$. That gives three cases.\n\n**Case 1: $t < 0$.** Then $\\tau \\le t < 0$ contradicts $\\tau \\ge 0$, so the range is empty:\n\n$$(h*g)(t) = 0.$$\n\n**Case 2: $0 \\le t \\le 1$.** Here $t \\le 1$, so the range is $0 \\le \\tau \\le t$:\n\n$$(h*g)(t) = \\int_0^t e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^t e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^t = e^{-t}(e^t - 1) = 1 - e^{-t}.$$\n\n**Case 3: $t > 1$.** Here $1 < t$, so the range is $0 \\le \\tau \\le 1$:\n\n$$(h*g)(t) = \\int_0^1 e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^1 e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^1 = (e - 1)\\,e^{-t}.$$\n\nI verified both integrals symbolically: $\\int_0^t e^{-(t-\\tau)}d\\tau = 1 - e^{-t}$ and $\\int_0^1 e^{-(t-\\tau)}d\\tau = (e-1)e^{-t}$, exactly as above.\n\n**Putting it together:**\n\n$$(h*g)(t) = \\begin{cases} 0, & t < 0,\\\\[4pt] 1 - e^{-t}, & 0 \\le t \\le 1,\\\\[4pt] (e-1)\\,e^{-t}, & t > 1. \\end{cases}$$\n\n**Sanity checks.** At $t = 1$ the two middle pieces agree: $1 - e^{-1} = (e-1)e^{-1}$, so the result is continuous. As $t \\to \\infty$ the output decays to $0$, which makes sense: the pulse is finite in energy and $e^{-t}u(t)$ is stable.\n\n**The idea to carry forward:** convolving with a pulse is \"integration over a sliding window.\" The pulse $h$ just tells you *where* to integrate \u2014 the window $[0,1]$ slides with $t$ \u2014 and the only bookkeeping that matters is where the window overlaps the support of the other signal. That overlap analysis (here: $\\tau \\le \\min(1,t)$) is what decides the case split, and the integral itself is then routine.",
+      "generated_at": "2026-09-06T01:59:32+00:00",
+      "duration_seconds": 15.78,
+      "system_prompt_tokens": 826,
+      "tool_schema_tokens": 1266,
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "mode": "show"
+    }
+  }
+}

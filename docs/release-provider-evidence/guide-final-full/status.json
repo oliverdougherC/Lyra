@@ -1,0 +1,6 @@
+{
+  "status": "aborted",
+  "prompt_source_sha256": "a997cf7dfe16aeb7827cef08b91ad0345598b17c33c89f27226412f1506657d3",
+  "reason": "Critical run completed4/6 with first-step and mathematical-correctness failures. Owned evaluation interrupted at start of full run; no full-corpus score claimed.",
+  "completed_cases": 0
+}

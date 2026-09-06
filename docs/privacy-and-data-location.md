@@ -1,6 +1,6 @@
 # Privacy and Data Location
 
-Lyra is local-first. It does not use accounts, telemetry, analytics, or update checks.
+Lyra is local-first. It does not use accounts, telemetry, analytics, or automatic update checks.
 
 ## Local data today
 
@@ -53,6 +53,8 @@ Network traffic happens only in explicit user-triggered cases:
 
 - Tutor traffic: when the configured OpenAI-compatible tutor endpoint is used
 - Web-research traffic: when Exa is configured, enabled, and used
+- First-use document helper model downloads: the required embedding weights (about 146 MB) are fetched from Hugging Face when first processing is requested. This download does not upload documents. Interrupted transfers can be retried; verified cached weights work offline. Optional OCR and reranking weights are not downloaded automatically
+- Application updates: an explicit check retrieves GitHub-hosted channel metadata; an explicit download retrieves the signed app archive. No update check occurs on launch.
 
 The tutor endpoint may be loopback-local or remote. Lyra treats non-loopback endpoints as remote,
 labels them as such, and requires acknowledgement before document text is sent there.
@@ -79,6 +81,9 @@ screened by the server-side query guard before the request is sent.
 - `./run restore --archive ... --data-dir ...` restores into a new target instead of overwriting an
   existing path.
 
-The packaged desktop migration does not relax those rules. The atomic backup/restore engine remains
-verified through the contributor boundary; a native archive file-selector flow is still a packaged
-release gate and is not claimed complete here.
+Settings also provides native Save backup and Restore backup dialogs. Restore validates into a
+private staging folder, retains the current profile as a recovery copy, and recovers interrupted
+publication on relaunch. Current credential authority is preserved so an old archive cannot
+resurrect a forgotten key or attach a current key to an archived endpoint. Backup archives may
+contain private fallback credentials; protect them like the original data. Keychain values are
+not exported. Final installed-app evidence is tracked in the release ledger.
