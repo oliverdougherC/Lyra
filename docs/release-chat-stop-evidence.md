@@ -16,3 +16,18 @@ Verification:
 - The real-stack check used a temporary archive of `b173199` with only this repair, its own Python 3.12 environment, independent production frontend output, ports 18144–18146 and disposable application data. `PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring` was verified and inherited by the backend child before imports; OS Keychain was not available to the run.
 
 PR 73 run `34006192578` failed a different test, the unavailable-original download response wait. Its trace was handed to the native acceptance owner; it is not claimed fixed here. The release owner owns committing this shared frontend repair into both PR stacks, rerunning required CI and rebuilding the desktop candidate.
+
+## Keyboard-focus follow-up
+
+The send-readiness repair exposed a focus-lifecycle mismatch in CI at `9501e9f` / `51faf`: the composer tried to restore keyboard focus when streaming ended, cleared its restoration flag, then discovered the textarea was still disabled for transcript settlement. Because the effect did not observe `blocked`, it never restored focus when the control became ready.
+
+The focus effect now retains the pending keyboard-focus intent until streaming, transcript blocking and any disabling explanation have cleared. It still respects focus the student deliberately moved to another control and preserves the `preventScroll` behavior. The lost-send readiness gate is unchanged.
+
+A deterministic delayed-readiness regression failed before the focus repair. Its companion verifies that focus moved elsewhere is not stolen and that draft text is preserved. Afterward:
+
+- **66 tests passed** across composer focus, chat pane, scope attachment and writer retry.
+- Typecheck, targeted ESLint, Prettier and diff checks passed.
+- The unchanged accessibility and ambiguity-recovery real-stack specs passed **14/14**, including Enter-send focus restoration and Stop followed by immediate session reuse.
+- Real-stack verification ran in its own archive, Python 3.12 environment, frontend output and disposable application data. `keyring.backends.fail.Keyring` was verified before startup and enforced by the acceptance harness. Teardown reported no owned processes or unconsumed failures.
+
+No timeouts, retries or acceptance assertions were weakened. The release owner retains responsibility for both review-stack commits, required CI and packaged delivery.
