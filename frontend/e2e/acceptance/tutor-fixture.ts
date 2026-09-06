@@ -38,9 +38,9 @@ interface QueuedResponse {
   content?: string
   stream?: boolean
   /**
-   * A complete chat.completion body, returned verbatim (non-streaming). Scripted model
-   * tool calls land here: the caller owns the exact shape, including tool_calls and
-   * finish_reason, so an acceptance journey can drive a multi-round agent turn.
+   * A complete chat.completion body, returned verbatim for non-streaming requests
+   * or translated into SSE deltas for streaming requests. Scripted model tool calls
+   * retain their arguments and finish_reason across either transport.
    */
   raw?: Record<string, unknown>
 }
@@ -285,8 +285,7 @@ export class TutorFixture {
     if (this.queue.length > 0) {
       const queued = this.queue.shift()!
       if (queued.raw) {
-        // A scripted completion (e.g. a model tool call): returned verbatim.
-        json(res, 200, queued.raw)
+        this.scriptedCompletion(res, queued.raw, wantStream)
         return
       }
       if (wantStream) {
@@ -398,37 +397,41 @@ export class TutorFixture {
         const msgs = (body.messages ?? []) as Array<{ role: string }>
         const hasToolResult = msgs.some((m) => m.role === 'tool')
         if (!hasToolResult) {
-          json(res, 200, {
-            id: `chatcmpl-writer-effect-${Date.now()}`,
-            object: 'chat.completion',
-            choices: [
-              {
-                index: 0,
-                message: {
-                  role: 'assistant',
-                  content: null,
-                  tool_calls: [
-                    {
-                      id: 'call_acceptance_save_brief',
-                      type: 'function',
-                      function: {
-                        name: 'save_brief',
-                        arguments: JSON.stringify({
-                          summary:
-                            'An acceptance-test essay on thermodynamics for the Fall 2026 readiness pass.',
-                          assignment_type: 'essay',
-                          audience: 'undergraduate',
-                          length_target: '500 words',
-                        }),
+          this.scriptedCompletion(
+            res,
+            {
+              id: `chatcmpl-writer-effect-${Date.now()}`,
+              object: 'chat.completion',
+              choices: [
+                {
+                  index: 0,
+                  message: {
+                    role: 'assistant',
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'call_acceptance_save_brief',
+                        type: 'function',
+                        function: {
+                          name: 'save_brief',
+                          arguments: JSON.stringify({
+                            summary:
+                              'An acceptance-test essay on thermodynamics for the Fall 2026 readiness pass.',
+                            assignment_type: 'essay',
+                            audience: 'undergraduate',
+                            length_target: '500 words',
+                          }),
+                        },
                       },
-                    },
-                  ],
+                    ],
+                  },
+                  finish_reason: 'tool_calls',
                 },
-                finish_reason: 'tool_calls',
-              },
-            ],
-            usage: { prompt_tokens: 100, completion_tokens: 40, total_tokens: 140 },
-          })
+              ],
+              usage: { prompt_tokens: 100, completion_tokens: 40, total_tokens: 140 },
+            },
+            wantStream,
+          )
         } else {
           json(res, 500, {
             error: { message: 'Injected post-effect failure', type: 'server_error' },
@@ -499,6 +502,57 @@ export class TutorFixture {
   }
 
   /* ---- streaming helpers ----------------------------------------- */
+
+  private scriptedCompletion(
+    res: ServerResponse,
+    completion: Record<string, unknown>,
+    wantStream: boolean,
+  ) {
+    if (!wantStream) {
+      json(res, 200, completion)
+      return
+    }
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+    })
+    const id = String(completion.id ?? `chatcmpl-scripted-${Date.now()}`)
+    const choices = completion.choices as Array<{
+      message: Record<string, unknown>
+      finish_reason: string
+    }>
+    const { tool_calls: toolCalls, ...textDelta } = choices[0].message
+    res.write(sseChunk(id, textDelta))
+    for (const [index, call] of (
+      (toolCalls ?? []) as Array<{
+        id: string
+        type: string
+        function: { name: string; arguments: string }
+      }>
+    ).entries()) {
+      // Exercise production fragment assembly before any tool can be dispatched.
+      const middle = Math.floor(call.function.arguments.length / 2)
+      res.write(
+        sseChunk(id, {
+          tool_calls: [
+            {
+              ...call,
+              index,
+              function: { ...call.function, arguments: call.function.arguments.slice(0, middle) },
+            },
+          ],
+        }),
+      )
+      res.write(
+        sseChunk(id, {
+          tool_calls: [{ index, function: { arguments: call.function.arguments.slice(middle) } }],
+        }),
+      )
+    }
+    res.write(sseChunk(id, {}, choices[0].finish_reason))
+    res.write('data: [DONE]\n\n')
+    res.end()
+  }
 
   private streamResponse(res: ServerResponse, content: string) {
     res.writeHead(200, {
@@ -622,7 +676,7 @@ function json(res: ServerResponse, status: number, body: unknown) {
   res.end(text)
 }
 
-function sseChunk(id: string, delta: Record<string, string>, finishReason?: string): string {
+function sseChunk(id: string, delta: Record<string, unknown>, finishReason?: string): string {
   return `data: ${JSON.stringify({
     id,
     object: 'chat.completion.chunk',
