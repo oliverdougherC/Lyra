@@ -561,6 +561,7 @@ def test_the_class_chat_surface_carries_the_contract_the_class_chat_sends(
     system = str(assembly.messages[0]["content"])
     # The mode contract the turn runs under (the full tutor prompt, not a stub).
     assert "Mode: Guide." in system
+    assert "omit closing questions and follow-up offers" in system
     assert "one concrete first move" in system
     assert "less abstraction, not a second full lecture" in system
     # The agent capability layer, appended on top of it.

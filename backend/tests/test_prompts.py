@@ -568,7 +568,14 @@ def test_guide_bounds_start_help_and_reduces_abstraction_for_simplification() ->
     assert "one concrete first move" in guide
     assert "stop at a useful setup" in guide
     assert "less abstraction, not a second full lecture" in guide
+    assert "same concrete mechanism in plain words" in guide
     assert "omit the formal definition or notation that caused difficulty" in guide
     assert "never withhold an explanation or answer the student asked for outright" in guide
     assert "direct, complete, worked explanation" in show
     assert "stop at a useful setup" not in show
+
+
+def test_guide_respects_explicit_no_question_requests_including_its_closing() -> None:
+    guide = _normalized(build_system_prompt("guide", [], []))
+    assert "if asked not to ask questions, teach directly" in guide
+    assert "omit closing questions and follow-up offers" in guide
