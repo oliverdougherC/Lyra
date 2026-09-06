@@ -13,3 +13,12 @@ Three focused regressions pass: initial ordinary Quit followed by final code-0 a
 Test boundary: the tests invoke the exact helper called by the registered event closure and run the actual AppState shutdown worker, with observable prevent/final-exit/error callbacks. They do not launch a GUI or pretend to execute Tauri's ordinary app.exit route. Locked Tauri2.11.5's supplied MockRuntime::request_exit is unimplemented, so it cannot honestly supply that runtime test. Packaged acceptance must rebuild and verify real macOS menu/keyboard Quit/relaunch, owned PID disappearance, and updater/restore restart separately. Tauri ExitRequestApi::prevent_exit ignores the special restart code, unlike ordinary Quit; these tests do not certify restart behavior.
 
 Remote delivery: the follow-up PR handoff and draft review candidate receipts record final exact source, CI and native observations. Source tests alone do not certify the native route. No Developer ID/notarization, real installed N-to-N+1 or public release pass is claimed.
+
+## Quit/install race follow-up
+
+
+The independent review identified an additional gap: updater replacement ran outside the lifecycle mutex after backend stop, so ordinary Quit could authorize final exit between the supported installer's bundle renames. The actual install call now goes through AppState::replace_application inside spawn_blocking. It holds the same lifecycle mutex as shutdown, checks that Quit is not already latched and that the backend is stopped under the update guard, then runs the supported installer. Native event handling still only latches/prevents Quit and schedules shutdown; it never waits for this mutex on the main thread.
+
+Two additional before/after regressions exercise the production replacement/exit boundaries: a barrier holds application mutation open while Quit is requested (final exit must remain pending until release), and an already-latched Quit must reject the replacement closure. Both fail before the guard and pass after. Logs: quit-install-race-before.log, quit-install-race-after.log, quit-install-race-clippy.log, quit-install-race-all-tests.log. This does not replace installed native Quit/update acceptance.
+
+After both repairs, **50 native library plus 6 example tests** and strict Clippy pass.

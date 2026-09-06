@@ -326,7 +326,10 @@ pub(crate) async fn install_desktop_update(
         tauri::async_runtime::spawn_blocking(move || crate::update_recovery::retain(&backup_app))
             .await.map_err(|_| "App backup stopped unexpectedly. Update stopped.")??;
         crate::stop_for_update(app.clone()).await?;
-        let installed = tauri::async_runtime::spawn_blocking(move || update.install(bytes)).await;
+        let install_state = app.state::<crate::AppState>().inner().clone();
+        let installed = tauri::async_runtime::spawn_blocking(move || {
+            install_state.replace_application(|| update.install(bytes).map_err(|error| error.to_string()))
+        }).await;
         if !matches!(&installed, Ok(Ok(()))) {
             let resumed = crate::resume_after_failed_update(app.clone()).await;
             return Err(if resumed.is_ok() { "Application replacement failed. Your backend resumed and data is retained. Check again to retry." } else { "Application replacement failed and the backend could not resume. Use Show previous Lyra app, quit this window, and open the retained app in Finder; your student data is retained." }.into());

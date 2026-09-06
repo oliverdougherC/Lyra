@@ -309,6 +309,26 @@ impl AppState {
         Ok(())
     }
 
+    fn replace_application(
+        &self,
+        install: impl FnOnce() -> Result<(), String>,
+    ) -> Result<(), String> {
+        // The supported installer moves the app bundle in several steps. Share the
+        // shutdown lock so a Quit worker cannot authorize exit between those moves.
+        // This method is called only inside spawn_blocking, never on the UI thread.
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| "Application lifecycle is unavailable.")?;
+        if self.quitting.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("Lyra is quitting; the update was not installed.".into());
+        }
+        if !self.updating.load(std::sync::atomic::Ordering::SeqCst) || lifecycle.backend.is_some() {
+            return Err("The backend must be stopped for application replacement.".into());
+        }
+        install()
+    }
+
     fn publish_import(&self, app: &AppHandle) -> Result<BootstrapPayload, LaunchError> {
         let mut lifecycle = self.lifecycle.lock().map_err(|_| LaunchError::Poisoned)?;
         if self.quitting.load(std::sync::atomic::Ordering::SeqCst)
@@ -892,6 +912,58 @@ mod exit_request_tests {
         assert!(final_rx.try_recv().is_err());
         drop(held);
         assert_eq!(final_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 7);
+    }
+
+    #[test]
+    fn quit_cannot_complete_while_application_replacement_is_mutating() {
+        let state = AppState::default();
+        state.updating.store(true, Ordering::SeqCst);
+        let installer_state = state.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let installer = std::thread::spawn(move || {
+            installer_state.replace_application(|| {
+                entered_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                Ok(())
+            })
+        });
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        handle_exit_request(
+            state.clone(),
+            None,
+            || {},
+            move |code| {
+                exit_tx.send(code).unwrap();
+            },
+            || panic!("cleanup failed"),
+        );
+        let premature_exit = exit_rx.recv_timeout(Duration::from_millis(100));
+        release_tx.send(()).unwrap();
+        installer.join().unwrap().unwrap();
+        assert!(
+            premature_exit.is_err(),
+            "Quit must not exit between the installer's app renames"
+        );
+        assert_eq!(exit_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 0);
+    }
+
+    #[test]
+    fn application_replacement_cannot_start_after_quit_latches() {
+        let state = AppState::default();
+        state.updating.store(true, Ordering::SeqCst);
+        state.quitting.store(true, Ordering::SeqCst);
+        let invoked = std::sync::atomic::AtomicBool::new(false);
+        let result = state.replace_application(|| {
+            invoked.store(true, Ordering::SeqCst);
+            Ok(())
+        });
+        assert!(result.is_err());
+        assert!(
+            !invoked.load(Ordering::SeqCst),
+            "a queued install must not mutate after Quit"
+        );
     }
 
     #[test]
