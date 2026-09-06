@@ -17,7 +17,6 @@ import {
   waitForDocumentReady,
   setTutorMode,
   clearTutorState,
-  apiPost,
   waitForTutorRequest,
   readSSEFrames,
   sendChatMessage,
@@ -269,6 +268,33 @@ test.describe('Tutor chat', () => {
     expect(afterMsgs.length).toBe(beforeCount)
   })
 
+  test('agent stream reports a retryable upstream failure in its terminal frame', async () => {
+    await setTutorMode('error-before-stream')
+    const session = await createSession(classId)
+    const response = await fetch(
+      `${BACKEND}/api/classes/${classId}/sessions/${session.id}/agent-chat`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Lyra-Client': 'acceptance-test',
+          'Accept': 'text/event-stream',
+        },
+        body: JSON.stringify({ content: 'This stream should fail' }),
+      },
+    )
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('text/event-stream')
+    const frames = await readSSEFrames(response)
+    expect(frames.at(-1)).toMatchObject({
+      type: 'error',
+      status: 502,
+      detail: 'The tutor endpoint returned an error.',
+      retryable: true,
+      stopped: 'upstream_failed',
+    })
+  })
+
   test('browser: send message, see response, retry after failure', async ({ page }) => {
     await setTutorMode('success')
 
@@ -300,6 +326,11 @@ test.describe('Tutor chat', () => {
     // agent_attempt.state='failed' and the failed user row renders the agent turn failure
     // with a Retry button.
     await setTutorMode('error-before-stream')
+    const failedResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname.endsWith('/agent-chat'),
+    )
     await sendChatMessage(page, 'This should fail')
 
     const failureIndicator = page.locator('[data-agent-turn-failure]')
@@ -308,21 +339,14 @@ test.describe('Tutor chat', () => {
     const retryButton = failureIndicator.locator('[aria-label="Try again"]')
     await expect(retryButton).toBeVisible({ timeout: 5_000 })
 
-    // The injected upstream failure made the agent endpoint answer 502: consume the expected
-    // failure from the backend failure ledger so the run's gate only sees unexpected ones.
-    const consumed = await (
-      await apiPost('/_acceptance/backend-failures/consume', {
-        method: 'POST',
-        route: '/api/classes/{class_id}/sessions/{session_id}/agent-chat',
-      })
-    ).json()
-    const ledger = (await apiGet('/_acceptance/backend-failures')).json()
-    expect(
-      consumed,
-      `unconsumed ledger: ${JSON.stringify((await ledger).unconsumed)}`,
-    ).toMatchObject({
-      ok: true,
-    })
+    // The agent reports an upstream failure inside its already-open SSE response.
+    // Verify that structured failure instead of consuming a nonexistent HTTP 502.
+    const failedResponse = await failedResponsePromise
+    expect(failedResponse.status()).toBe(200)
+    expect(failedResponse.headers()['content-type']).toContain('text/event-stream')
+    await expect(failureIndicator).toContainText('The tutor endpoint returned an error.')
+    const ledger = await (await apiGet('/_acceptance/backend-failures')).json()
+    expect(ledger.unconsumed).toEqual([])
 
     // Restore success mode and retry
     await setTutorMode('success')
