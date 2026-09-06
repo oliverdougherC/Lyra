@@ -259,6 +259,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Check local documentation links
+        run: python scripts/check_docs.py
+
       - name: Scan active docs and workflows
         run: python scripts/check_active_references.py
 

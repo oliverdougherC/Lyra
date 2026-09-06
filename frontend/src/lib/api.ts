@@ -188,6 +188,7 @@ type RequestOptions = {
   body?: unknown
   signal?: AbortSignal
   errorFactory?: (status: number, payload: unknown | undefined) => Error
+  accept?: string
 }
 
 function readDetail(payload: unknown, status: number): string {
@@ -354,6 +355,7 @@ async function send(path: string, options: RequestOptions = {}): Promise<Respons
   if (options.body !== undefined && !isFormData) {
     headers['content-type'] = 'application/json'
   }
+  if (options.accept) headers.accept = options.accept
   if (runtime.sessionHeader) {
     headers['X-Lyra-Session'] = runtime.sessionHeader
   }
@@ -637,23 +639,28 @@ export const api = {
     mode?: ChatMode,
     operationId?: string,
     signal?: AbortSignal,
+    onEvent?: (event: AgentStreamEvent) => void,
   ) =>
-    requestJson<AgentChatResult>(`/api/classes/${classId}/sessions/${sessionId}/agent-chat`, {
-      method: 'POST',
-      // The contextual turn omits the profile: the backend plans it (Workstream C). A scoped
-      // source, when the student selects one, grounds the turn like the tutor's context.
-      body: {
-        content,
-        ...(profile ? { profile } : null),
-        ...(documentId != null ? { document_id: documentId } : null),
-        // The student's Guide/Show choice rides the turn and is persisted on the session,
-        // so the agent's shared mode contract follows the same toggle as the tutor.
-        ...(mode ? { mode } : null),
-        ...(operationId ? { operation_id: operationId } : null),
+    requestAgentTurn(
+      `/api/classes/${classId}/sessions/${sessionId}/agent-chat`,
+      {
+        method: 'POST',
+        // The contextual turn omits the profile: the backend plans it (Workstream C). A scoped
+        // source, when the student selects one, grounds the turn like the tutor's context.
+        body: {
+          content,
+          ...(profile ? { profile } : null),
+          ...(documentId != null ? { document_id: documentId } : null),
+          // The student's Guide/Show choice rides the turn and is persisted on the session,
+          // so the agent's shared mode contract follows the same toggle as the tutor.
+          ...(mode ? { mode } : null),
+          ...(operationId ? { operation_id: operationId } : null),
+        },
+        signal,
+        errorFactory: agentChatErrorFactory,
       },
-      signal,
-      errorFactory: agentChatErrorFactory,
-    }),
+      onEvent,
+    ),
 
   // Retry the conversation's last failed agent turn, reusing its user message (PLA-295).
   // The server reuses the original message rather than appending a duplicate, and replays a
@@ -664,23 +671,28 @@ export const api = {
     sessionId: number,
     scope?: { mode?: ChatMode; documentId?: number | null },
     signal?: AbortSignal,
+    onEvent?: (event: AgentStreamEvent) => void,
   ) =>
-    requestJson<AgentChatResult>(`/api/classes/${classId}/sessions/${sessionId}/agent-chat/retry`, {
-      method: 'POST',
-      body:
-        scope == null
-          ? undefined
-          : {
-              ...(scope.mode ? { mode: scope.mode } : null),
-              // Property presence, not non-nullness (PLA-401 final pass): an explicit
-              // documentId of null is the real value "All material" and must ride the wire
-              // as an explicit null; only an ABSENT property means "the caller did not
-              // name a scope" (the server's persisted scope then owns the turn).
-              ...('documentId' in scope ? { document_id: scope.documentId } : null),
-            },
-      signal,
-      errorFactory: agentChatErrorFactory,
-    }),
+    requestAgentTurn(
+      `/api/classes/${classId}/sessions/${sessionId}/agent-chat/retry`,
+      {
+        method: 'POST',
+        body:
+          scope == null
+            ? undefined
+            : {
+                ...(scope.mode ? { mode: scope.mode } : null),
+                // Property presence, not non-nullness (PLA-401 final pass): an explicit
+                // documentId of null is the real value "All material" and must ride the wire
+                // as an explicit null; only an ABSENT property means "the caller did not
+                // name a scope" (the server's persisted scope then owns the turn).
+                ...('documentId' in scope ? { document_id: scope.documentId } : null),
+              },
+        signal,
+        errorFactory: agentChatErrorFactory,
+      },
+      onEvent,
+    ),
 
   // Answer the conversation's last agent question again, replacing the reply it has (PLA-316
   // class affordance). Unlike retry, this re-runs even a completed turn and supersedes the old
@@ -693,8 +705,9 @@ export const api = {
     sessionId: number,
     scope?: { mode?: ChatMode; documentId?: number | null },
     signal?: AbortSignal,
+    onEvent?: (event: AgentStreamEvent) => void,
   ) =>
-    requestJson<AgentChatResult>(
+    requestAgentTurn(
       `/api/classes/${classId}/sessions/${sessionId}/agent-chat/regenerate`,
       {
         method: 'POST',
@@ -713,6 +726,7 @@ export const api = {
         signal,
         errorFactory: agentChatErrorFactory,
       },
+      onEvent,
     ),
 
   // Explicit stop for the non-streaming agent turn: the handler cannot see its client's
@@ -1252,5 +1266,60 @@ async function streamTurn<StreamEvent>(
         // A frame we cannot parse is dropped rather than killing the stream.
       }
     }
+  }
+}
+
+export type AgentStreamEvent = { type: 'token' | 'reasoning'; text: string } | { type: 'reset' }
+
+/** Opt-in streaming keeps background actions and older JSON callers compatible. */
+async function requestAgentTurn(
+  path: string,
+  options: RequestOptions,
+  onEvent?: (event: AgentStreamEvent) => void,
+): Promise<AgentChatResult> {
+  if (!onEvent) return requestJson<AgentChatResult>(path, options)
+  const response = await send(path, { ...options, accept: 'text/event-stream' })
+  if (!response.headers.get('content-type')?.includes('text/event-stream')) {
+    return (await response.json()) as AgentChatResult
+  }
+  const reader = response.body?.getReader()
+  if (!reader) throw new ApiError(0, UNREACHABLE)
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let result: AgentChatResult | undefined
+  const consume = (line: string) => {
+    if (!line.startsWith('data:')) return
+    // Invalid frames and callback failures must not silently turn into successful replies.
+    const event = JSON.parse(line.slice(5).trim())
+    if (event.type === 'error') throw agentChatErrorFactory(event.status ?? 500, event)
+    if (event.type === 'result') result = event.result as AgentChatResult
+    else if (event.type === 'reset' || event.type === 'status') onEvent(event)
+    else if (
+      (event.type === 'token' || event.type === 'reasoning') &&
+      typeof event.text === 'string'
+    ) {
+      onEvent(event)
+    }
+  }
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      buffer += decoder.decode(value, { stream: !done })
+      let newline = buffer.indexOf('\n')
+      while (newline !== -1) {
+        consume(buffer.slice(0, newline).trim())
+        buffer = buffer.slice(newline + 1)
+        newline = buffer.indexOf('\n')
+      }
+      if (done) {
+        if (buffer.trim()) consume(buffer.trim())
+        break
+      }
+    }
+    if (!result) throw new ApiError(0, 'The answer stopped early. Try again.')
+    return result
+  } finally {
+    await reader.cancel().catch(() => undefined)
+    reader.releaseLock()
   }
 }

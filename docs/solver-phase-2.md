@@ -1,5 +1,9 @@
 # Homework Solver Specification
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 Phase 2. This document owns the solver's data model, job architecture, segmentation, solving,
 verification, and API. [ui-phase-2.md](ui-phase-2.md) owns its screens. Where the two disagree, this
 one wins on behavior and that one wins on layout.

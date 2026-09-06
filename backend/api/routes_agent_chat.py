@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
+import anyio
+from fastapi import APIRouter, Depends, Header
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from starlette.types import Receive, Scope, Send
 
 from backend.api.routes_chat import fit_retrieval_to_budget, require_document_allowed
 from backend.core import agent_attempts, agent_tools, profiles, sessions
@@ -49,7 +52,7 @@ from backend.storage.database import get_db
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agent"])
-DbConn = Annotated[sqlite3.Connection, Depends(get_db)]
+DbConn = Annotated[sqlite3.Connection, Depends(get_db, scope="request")]
 
 
 _SYSTEM_PROMPTS: dict[agent_tools.AgentProfile, str] = {
@@ -1238,6 +1241,8 @@ async def _run_agent_turn(
     regenerate: bool = False,
     scope: AgentTurnScopeRequest | None = None,
     gate: ToolStopGate,
+    on_delta: Callable[[llm_client.StreamDelta], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
 ) -> AgentChatResult | JSONResponse:
     """Plan, persist, and run one agent turn (a fresh send, or a retry when payload is None).
 
@@ -1465,11 +1470,23 @@ async def _run_agent_turn(
     activity = plan.activity
     activity.attempt_id = attempt_id
 
+    if on_status is not None:
+        on_status("composing_answer")
+    reasoning: list[str] = []
+
+    def receive_delta(delta: llm_client.StreamDelta) -> None:
+        if delta.channel == "reasoning":
+            reasoning.append(delta.text)
+        if on_delta is not None:
+            on_delta(delta)
+
     if plan.toolless:
         # The turn's surface has no tools (a known tool-incompatible endpoint, or a window
         # that cannot carry the tool schemas): one plain completion, settled exactly like a
         # tool run, with the same reply-commit and supersede semantics.
-        return await _run_toolless_turn(conn, session_id, plan, attempt_id, superseded)
+        return await _run_toolless_turn(
+            conn, session_id, plan, attempt_id, superseded, on_delta=on_delta
+        )
 
     try:
         result: ToolLoopResult = await run_tool_loop(
@@ -1480,6 +1497,7 @@ async def _run_agent_turn(
             registry=plan.registry,
             context_budget=plan.context_budget,
             stop_gate=gate,
+            **({"on_delta": receive_delta} if on_delta is not None else {}),
         )
     except BaseException as exc:
         # `run_tool_loop` reports upstream/timeout/limit failures through its result, not by
@@ -1553,7 +1571,9 @@ async def _run_agent_turn(
             document_id=document_id,
         )
         plan.activity.attempt_id = attempt_id
-        return await _run_toolless_turn(conn, session_id, plan, attempt_id, superseded)
+        return await _run_toolless_turn(
+            conn, session_id, plan, attempt_id, superseded, on_delta=on_delta
+        )
     tool_activity = _activity_events_payload(activity)
     answer = result.content.strip()
     if not result.complete:
@@ -1591,7 +1611,14 @@ async def _run_agent_turn(
         raise LyraError("The agent returned an empty response. Try again.")
     return AgentChatResult(
         message_id=_commit_reply(
-            conn, session_id, plan, attempt_id, superseded, answer, tool_activity
+            conn,
+            session_id,
+            plan,
+            attempt_id,
+            superseded,
+            answer,
+            tool_activity,
+            thinking="".join(reasoning),
         ),
         content=answer,
         stopped=result.stopped,
@@ -1612,6 +1639,8 @@ def _commit_reply(
     superseded: tuple[int, ...],
     answer: str,
     tool_activity: list[dict[str, object]],
+    *,
+    thinking: str = "",
 ) -> int:
     """Commit the assistant reply and the attempt's completion in one transaction.
 
@@ -1638,6 +1667,7 @@ def _commit_reply(
             retrieval_trimmed=plan.retrieval.trimmed,
             omitted_document_count=plan.retrieval.omitted_document_count,
             tool_activity=tool_activity,
+            thinking=thinking,
         )
         agent_attempts.mark_completed(conn, attempt_id, message_id)
         if superseded:
@@ -1679,6 +1709,8 @@ async def _run_toolless_turn(
     plan: AgentTurnPlan,
     attempt_id: int,
     superseded: tuple[int, ...],
+    *,
+    on_delta: Callable[[llm_client.StreamDelta], None] | None = None,
 ) -> AgentChatResult | JSONResponse:
     """Run a tool-less turn: one plain completion under the full tutor surface.
 
@@ -1689,13 +1721,30 @@ async def _run_toolless_turn(
     completion transaction. No tool work happens here - there is no registry to run - so a
     task that needs one is explained in the answer rather than attempted.
     """
+    reasoning: list[str] = []
     try:
-        answer = await llm_client.complete(
-            plan.config.endpoint_url,
-            plan.config.api_key,
-            plan.config.model,
-            plan.messages,
-        )
+        if on_delta is None:
+            answer = await llm_client.complete(
+                plan.config.endpoint_url,
+                plan.config.api_key,
+                plan.config.model,
+                plan.messages,
+            )
+        else:
+            fragments: list[str] = []
+            async for delta in llm_client.stream_chat(
+                plan.config.endpoint_url,
+                plan.config.api_key,
+                plan.config.model,
+                plan.messages,
+                require_complete=True,
+            ):
+                if delta.channel == "reasoning":
+                    reasoning.append(delta.text)
+                elif delta.channel == "answer":
+                    fragments.append(delta.text)
+                on_delta(delta)
+            answer = "".join(fragments)
     except UpstreamError as exc:
         # The endpoint failed: settle the attempt and answer with the same retryable body
         # the tool loop's UPSTREAM_FAILED result produces, so the UI and the retry affordance
@@ -1744,7 +1793,16 @@ async def _run_toolless_turn(
         )
         raise LyraError("The agent returned an empty response. Try again.")
     return AgentChatResult(
-        message_id=_commit_reply(conn, session_id, plan, attempt_id, superseded, answer, []),
+        message_id=_commit_reply(
+            conn,
+            session_id,
+            plan,
+            attempt_id,
+            superseded,
+            answer,
+            [],
+            thinking="".join(reasoning),
+        ),
         content=answer,
         stopped=llm_tools.COMPLETED,
         detail="",
@@ -1753,6 +1811,122 @@ async def _run_toolless_turn(
         workspace_change_ids=[],
         command_request_ids=[],
         profile_fact_ids=[],
+    )
+
+
+class _AgentStreamingResponse(StreamingResponse):
+    """Release even when sending headers fails before the generator starts."""
+
+    def __init__(self, content, session_id: int, turn_token: int, gate: ToolStopGate, **kwargs):
+        super().__init__(content, **kwargs)
+        self.session_id = session_id
+        self.turn_token = turn_token
+        self.gate = gate
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                try:
+                    await self.body_iterator.aclose()
+                finally:
+                    await _release_turn(self.session_id, self.turn_token, self.gate)
+
+
+def _stream_agent_turn(
+    conn: sqlite3.Connection,
+    class_id: int,
+    session_id: int,
+    turn_token: int,
+    gate: ToolStopGate,
+    *,
+    payload: AgentChatRequest | None,
+    scope: AgentTurnScopeRequest | None = None,
+    regenerate: bool = False,
+) -> StreamingResponse:
+    """Stream model deltas while retaining the request's DB and claim until quiescence.
+
+    The explicit request-scoped dependency survives response iteration. On disconnect,
+    shield settlement from Starlette's cancellation scope so neither a worker nor its
+    SQLite connection can outlive the turn claim.
+    """
+
+    async def events():
+        queue: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+
+        def receive(delta: llm_client.StreamDelta) -> None:
+            kind = "token" if delta.channel == "answer" else delta.channel
+            queue.put_nowait({"type": kind, "text": delta.text})
+
+        turn_task = asyncio.create_task(
+            _run_agent_turn(
+                conn,
+                class_id,
+                session_id,
+                turn_token,
+                payload=payload,
+                scope=scope,
+                regenerate=regenerate,
+                gate=gate,
+                on_delta=receive,
+                on_status=lambda stage: queue.put_nowait({"type": "status", "stage": stage}),
+            )
+        )
+        _register_inflight(session_id, turn_token, turn_task, gate)
+
+        async def finish() -> None:
+            try:
+                result = await _await_turn_or_stopped(turn_task)
+                if isinstance(result, JSONResponse):
+                    body = json.loads(result.body)
+                    frame = (
+                        {"type": "error", "status": result.status_code, **body}
+                        if result.status_code >= 400
+                        else {"type": "result", "result": body}
+                    )
+                else:
+                    frame = {"type": "result", "result": result.model_dump()}
+            except LyraError as exc:
+                frame = {
+                    "type": "error",
+                    "status": exc.status,
+                    "detail": exc.message,
+                    **(exc.extra or {}),
+                }
+            except Exception:
+                logger.exception("Agent stream failed on session %s", session_id)
+                frame = {
+                    "type": "error",
+                    "status": 500,
+                    "detail": "The agent turn did not complete. Try again.",
+                }
+            queue.put_nowait(frame)
+
+        completion = asyncio.create_task(finish())
+        try:
+            while True:
+                frame = await queue.get()
+                yield f"data: {json.dumps(frame)}\n\n"
+                if frame["type"] in {"result", "error"}:
+                    break
+        finally:
+            with anyio.CancelScope(shield=True):
+                if not turn_task.done():
+                    gate.request_stop()
+                    turn_task.cancel()
+                try:
+                    await completion
+                finally:
+                    await _release_turn(session_id, turn_token, gate)
+
+    return _AgentStreamingResponse(
+        events(),
+        session_id,
+        turn_token,
+        gate,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
@@ -1765,7 +1939,8 @@ async def send_agent_chat(
     session_id: int,
     payload: AgentChatRequest,
     conn: DbConn,
-) -> AgentChatResult | JSONResponse:
+    accept: Annotated[str | None, Header()] = None,
+) -> AgentChatResult | JSONResponse | StreamingResponse:
     _scoped_session(conn, class_id, session_id)
     # The claim is taken before `_plan_agent_turn` runs, not merely before persistence:
     # that preflight is read-only but history-dependent (it assembles and trims history,
@@ -1778,6 +1953,8 @@ async def send_agent_chat(
     # /stop endpoint that latches it: the state that makes "the turn is stopped" a truth
     # about the workers, not just about the task.
     gate = ToolStopGate()
+    if accept and "text/event-stream" in accept.lower():
+        return _stream_agent_turn(conn, class_id, session_id, turn_token, gate, payload=payload)
     # The turn runs in its own task (registered under the turn token, not this request
     # task): /stop cancels that task, and this request still completes with a bounded body
     # rather than the middleware's "No response returned." 500.
@@ -1811,7 +1988,8 @@ async def retry_agent_chat(
     class_id: int,
     session_id: int,
     payload: AgentTurnScopeRequest = _EMPTY_SCOPE,
-) -> AgentChatResult | JSONResponse:
+    accept: Annotated[str | None, Header()] = None,
+) -> AgentChatResult | JSONResponse | StreamingResponse:
     """Retry the conversation's last failed agent turn, reusing its user message (PLA-295).
 
     The retry answers the SAME logical turn: the source scope (selected document) and the
@@ -1825,6 +2003,10 @@ async def retry_agent_chat(
     _scoped_session(conn, class_id, session_id)
     turn_token = sessions.begin_turn(session_id)
     gate = ToolStopGate()
+    if accept and "text/event-stream" in accept.lower():
+        return _stream_agent_turn(
+            conn, class_id, session_id, turn_token, gate, payload=None, scope=payload
+        )
     # Same dedicated-task shape as a fresh send: Stop cancels the turn task, and the retry
     # request itself settles with a bounded body instead of a middleware 500.
     turn_task = asyncio.create_task(
@@ -1852,7 +2034,8 @@ async def regenerate_agent_chat(
     class_id: int,
     session_id: int,
     payload: AgentTurnScopeRequest = _EMPTY_SCOPE,
-) -> AgentChatResult | JSONResponse:
+    accept: Annotated[str | None, Header()] = None,
+) -> AgentChatResult | JSONResponse | StreamingResponse:
     """Answer the conversation's last agent question again, replacing the reply it has.
 
     A manual regeneration carries the CURRENT Guide/Show selection and source scope in its
@@ -1868,6 +2051,17 @@ async def regenerate_agent_chat(
     _scoped_session(conn, class_id, session_id)
     turn_token = sessions.begin_turn(session_id)
     gate = ToolStopGate()
+    if accept and "text/event-stream" in accept.lower():
+        return _stream_agent_turn(
+            conn,
+            class_id,
+            session_id,
+            turn_token,
+            gate,
+            payload=None,
+            scope=payload,
+            regenerate=True,
+        )
     # Same dedicated-task shape as a fresh send: Stop cancels the turn task, and the
     # regeneration request itself settles with a bounded body instead of a middleware 500.
     turn_task = asyncio.create_task(

@@ -39,6 +39,9 @@ const REVEAL_FAST_MS = 26
 const STEADY_THRESHOLD = 24
 const FAST_THRESHOLD = 64
 
+/** Keep a fast model from leaving seconds of unread text queued behind the stream. */
+const MAX_REVEAL_BACKLOG_MS = 500
+
 /** Long enough after the last word lands that the reveal reads as finished, not cut off. */
 const SETTLE_GRACE_MS = 220
 
@@ -213,39 +216,52 @@ export function useRevealCascade({
     const nodes = Array.from(
       rootRef.current?.querySelectorAll<HTMLElement>(`[${REVEAL_ATTRIBUTE}]`) ?? [],
     )
-    const fresh: HTMLElement[] = []
+    // Reconcile in reading order. Markdown can replace nodes or insert a newly
+    // completed inline element before words already in the queue.
+    const pending = nodes.filter((node) => {
+      const key = node.dataset.streamWord
+      return key && (scheduleRef.current.get(key) ?? Infinity) > now
+    })
+    const interval = Math.min(
+      revealIntervalFor(pending.length),
+      MAX_REVEAL_BACKLOG_MS / Math.max(1, pending.length),
+    )
+    let next = now
     nodes.forEach((node) => {
       const key = node.dataset.streamWord
       if (!key) return
-      const scheduledAt = scheduleRef.current.get(key)
-      if (scheduledAt !== undefined) {
-        // Already scheduled. Re-applying the delay matters when this is a new DOM node
-        // standing in for one React replaced: without it the unit would appear at once,
-        // ahead of every word still waiting in front of it.
-        reveal(node, Math.max(0, scheduledAt - now))
-        return
-      }
-      fresh.push(node)
+      const previous = scheduleRef.current.get(key)
+      // Already shown text keeps its original deadline, even if Markdown replaces
+      // the DOM node. Pending deadlines may move earlier, never later.
+      const scheduledAt = previous !== undefined ? Math.min(previous, next) : next
+      scheduleRef.current.set(key, scheduledAt)
+      reveal(node, scheduledAt, now)
+      // The list marker shares the first word's slot instead of arriving on an
+      // otherwise empty line. Its descendants still reveal word by word.
+      if (node.tagName !== 'LI' && scheduledAt >= now) next = scheduledAt + interval
     })
-
-    if (fresh.length === 0) return
-
-    const interval = revealIntervalFor(fresh.length)
-    // A burst, or the gap left by a hidden tab, lands far ahead of the schedule: restart
-    // the cascade from now rather than piling every word behind an unreachable delay.
-    const start = Math.max(nextRevealAtRef.current, now)
-    fresh.forEach((node, index) => {
-      const scheduledAt = start + index * interval
-      scheduleRef.current.set(node.dataset.streamWord as string, scheduledAt)
-      reveal(node, Math.max(0, scheduledAt - now))
-    })
-    nextRevealAtRef.current = start + fresh.length * interval
+    nextRevealAtRef.current = Math.max(
+      now,
+      ...nodes.map((node) => scheduleRef.current.get(node.dataset.streamWord ?? '') ?? now),
+    )
   }, [content, enabled])
 
   return rootRef
 }
 
-function reveal(node: HTMLElement, delayMs: number): void {
-  node.style.setProperty('--stream-word-delay', `${delayMs}ms`)
+// CSS animation delays are relative to when the animation was attached, not to
+// the most recent token. Rewriting a remaining delay every render shifts its clock.
+const animationStarts = new WeakMap<HTMLElement, number>()
+
+function reveal(node: HTMLElement, scheduledAt: number, now: number): void {
+  let start = animationStarts.get(node)
+  if (start === undefined || !node.classList.contains(REVEAL_VISIBLE_CLASS)) {
+    start = now
+    animationStarts.set(node, start)
+  }
+  // A negative delay resumes a replacement node at the elapsed position, so old
+  // list text cannot repeatedly fade from invisible as Markdown is reconstructed.
+  node.style.setProperty('--stream-word-delay', `${scheduledAt - start}ms`)
+  node.dataset.streamRevealAt = String(scheduledAt)
   node.classList.add(REVEAL_VISIBLE_CLASS)
 }

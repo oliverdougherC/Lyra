@@ -70,10 +70,9 @@ process started.
 
 ## macOS Apple Silicon CI note
 
-GitHub's current standard arm64 macOS runner labels include `macos-14`, `macos-15`, and
-`macos-latest`, each on Apple Silicon hardware according to GitHub's hosted-runner reference as of
-August 30, 2026. The desktop artifact lane should use one of those labels and treat runner availability
-as separate from the real clean-machine release soak.
+The exact hosted runner and toolchain versions live in
+[ci.yml](../.github/workflows/ci.yml). The artifact lane runs on Apple Silicon macOS.
+Runner availability and green automated checks do not replace a clean-device release soak.
 
 ## Release caveats
 

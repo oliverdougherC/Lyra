@@ -1,137 +1,69 @@
 # Lyra
 
-Lyra is a desktop-first, local-first AI study workspace for one student and their own course
-material. `Lyra.app` combines a thin `Tauri 2` shell, a static `Vite/React` frontend, and a frozen
-Python backend, with SQLite storage, optional Exa-backed web research, and a tutor endpoint that can
-be either loopback-local or remote.
+**Your course material, connected to the work you need to do.**
 
-## Download and install
+Lyra is a local-first study workspace for students on Mac. Bring your readings and assignments
+into a class, ask questions with source references, work through problems, practice with flashcards
+and quizzes, and develop drafts without losing track of the material behind them.
 
-The first public beta is **not published yet**. Review candidates are not approved tester releases.
-The permanent [Download Lyra Beta](https://oliverdougherc.github.io/Lyra/beta/) entrypoint will
-become available after the first approved publication. Until then, consult the
-[release evidence ledger](docs/release-evidence.md); an Actions artifact or draft release is not a
-public download.
+[Getting started](docs/beta-testing.md) · [Contributing](CONTRIBUTING.md) ·
+[Documentation](docs/README.md) · [Report a bug](https://github.com/oliverdougherC/Lyra/issues/new/choose)
 
-For an approved release, download the Apple Silicon DMG, open it, drag Lyra to Applications,
-then launch Lyra from Applications. Do not disable Gatekeeper to treat an unnotarized candidate
-as an approved release. App replacement preserves the separate student-data folder and Keychain.
+![Lyra class workspace with courses, study tools, writing, and source documents](docs/images/lyra-workspace.png)
 
-### Requirements and first use
+*Current frontend, shown with synthetic demo data. [Screenshot provenance](docs/images/README.md).*
 
-- Apple Silicon Mac; Intel Macs are not supported by this beta.
-- macOS 14 or newer: the bundled SQLite vector extension sets this floor. The final bundle's
-  complete native dependency inventory must confirm it before publication.
-- The 8 GB reference-device acceptance gate remains open; the development machine has 24 GB.
-  No 8 GB performance certification is claimed.
-- An OpenAI-compatible tutor endpoint and any key it requires. Lyra does not bundle a general
-  tutor model. Remote services may charge separately; configure the endpoint in Settings and
-  acknowledge remote document processing before using it.
-- Exa is optional and needs a separate user-owned key for web research.
+## Try Lyra
 
-Create a class, add course documents, then configure/test the tutor in Settings. First-use document
-processing downloads required embedding weights (about 146 MB) from Hugging Face; this needs
-network access and disk space even when the tutor is local. It does not upload course documents.
-Optional OCR/reranking weights are not downloaded automatically. The helper
-runtime is bundled. Cached local data remains available offline, while inference and web research
-need their configured services. Testers do not need a source checkout, Homebrew, Python, Node,
-a container runtime, or a terminal.
+**Preparing for the first public beta. No approved public download is available yet.**
+The initial target is Apple Silicon Macs running macOS 14 or newer. Intel support and performance
+on an 8 GB Mac have not been validated. Follow the
+[release evidence ledger](docs/release-evidence.md) for remaining acceptance gates.
 
-PDF export/print and archive backup/restore without contributor tools remain explicit installed-app
-release gates. Do not rely on developer-installed Pandoc/Typst as evidence for a clean tester Mac.
+Once a beta is approved, installation will be a DMG: open it, drag Lyra to Applications, and launch.
+Testers will not need a terminal, Python, Node, or a source checkout. Actions artifacts and draft
+releases are review candidates, not approved tester releases. Contributors can
+[run from source today](CONTRIBUTING.md#run-from-source).
 
-## What it does now
+## Study in one workspace
 
-- Create class workspaces and organize course documents by class.
-- Chat against uploaded material in a class-scoped workspace.
-- Generate solutions, flashcards, quizzes, and draft-writing artifacts.
-- Run a bounded general class agent with reviewable file and command proposals.
-- Configure an OpenAI-compatible tutor endpoint and optional Exa web research.
+- **Read and ask:** organize documents by class and follow answers back to their sources.
+- **Work through assignments:** prepare solutions and inspect the reasoning and verification.
+- **Practice:** generate flashcards and quizzes from selected course material, then review results.
+- **Write:** develop a plan, draft, and revisions with your sources alongside your work.
+- **Get help with class work:** review the assistant's proposed file changes before applying them.
 
-## Privacy and network behavior
+Generated answers and study material can be wrong. Check source references and your course's rules
+for AI assistance before relying on or submitting them.
 
-Lyra does not use accounts, telemetry, analytics, or automatic update checks.
+## Models and privacy
 
-Course files, extracted text, rendered pages, embeddings, and the SQLite database stay on the local
-machine. Network traffic happens only when the user deliberately:
+Lyra stores your course files, database, and working history on your Mac. There are no Lyra
+accounts, analytics, telemetry, or automatic update checks.
 
-- configures a tutor endpoint and sends a request to it; or
-- enables web research and uses Exa;
-- uses document processing that needs first-use helper model downloads; or
-- explicitly checks for or downloads an application update from GitHub.
+You supply an **OpenAI-compatible tutor endpoint**, either on your own machine or with a remote
+provider. Lyra does not bundle a general tutor model. Remote use requires acknowledgement in
+Settings and can send selected document text or, for requested text recognition, page images to
+that provider. Provider charges and policies apply. Optional web research uses your Exa key.
 
-Remote tutor endpoints are first-class and explicitly labeled. Lyra treats non-loopback endpoints as
-remote, requires acknowledgement before document text is sent there, and keeps Exa disabled until an
-API key is configured.
+Document search uses a local embedding model. Its first use downloads about 146 MB of weights;
+that download does not upload documents. See [models and first use](docs/beta-testing.md) and
+[privacy and data locations](docs/privacy-and-data-location.md) for network behavior, credentials,
+backups, and offline limits.
 
-## Release posture
+## Contribute
 
-This branch produces reviewable Apple Silicon `.app` and DMG artifacts. They are not a finished
-signed release: Developer ID signing, notarization, the physical clean-8-GB-Mac run, and the final
-release-candidate soak remain explicit gates.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests, and the pull request workflow.
+The app combines a Tauri desktop shell, Vite/React frontend, and packaged Python/FastAPI backend.
+[Architecture](docs/architecture.md) explains the boundaries;
+[local deployment](docs/local-deployment.md) explains how to rebuild and verify `Lyra.app`.
 
-## Contributor quick start
+Bug reports should include the app version, Mac model, reproduction steps, and a synthetic example
+where possible. Keep private course material and credentials out of public issues. Report
+vulnerabilities through the [private security process](SECURITY.md).
 
-Run the development stack from the repository root:
+## License
 
-```bash
-./run
-```
-
-Useful commands:
-
-```bash
-./run doctor
-./run status
-./run logs
-./run stop
-./scripts/run-acceptance.sh
-```
-
-`./run` is only the contributor lifecycle for this checkout. It starts the backend and Vite
-frontend so focused changes can be developed quickly; it is not an alternative installed product.
-For the real-backend browser suite, use `./scripts/run-acceptance.sh`.
-
-## Project layout
-
-```text
-backend/   FastAPI app, storage, retrieval, tutor orchestration, tests
-frontend/  Vite/React app, routes, components, browser tests
-docs/      Live product docs plus labelled historical records
-scripts/   Verification helpers, acceptance entrypoints, packaging evidence tools
-packaging/ PyInstaller spec, component inventory, sidecar staging
-src-tauri/ Thin native shell, capabilities, CSP, and lifecycle ownership
-```
-
-## Documentation
-
-User and release docs
-
-- [Architecture](docs/architecture.md)
-- [Local deployment](docs/local-deployment.md)
-- [Privacy and data location](docs/privacy-and-data-location.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [macOS Apple Silicon release checklist](docs/macos-apple-silicon-release-checklist.md)
-- [Release and update process](docs/releasing.md)
-- [Release evidence and outstanding gates](docs/release-evidence.md)
-- [Security reporting](SECURITY.md)
-- [Security and CI gates](docs/security-and-ci-gates.md)
-
-Contributor docs
-
-- [Code conventions](docs/conventions.md)
-- [Contributing, testing, and migrations](docs/contributing-testing-migrations.md)
-- [RAG pipeline](docs/rag-pipeline.md)
-- [Design system](docs/design-system.md)
-- [Desktop migration inventory](docs/desktop-migration-inventory.md)
-
-Historical records
-
-- [Integration handoff](docs/integration-handoff.md)
-- [Phase 2 handoff](docs/phase-2-handoff.md)
-- [Phase 3 handoff](docs/phase-3-handoff.md)
-- [Phase 3 verification handoff](docs/phase-3-verification-handoff.md)
-- [Phase 4 handoff](docs/phase-4-handoff.md)
-- [Phase 4 writer integration](docs/phase-4-writer-integration.md)
-- [Writer overhaul](docs/writer-overhaul.md)
-- [Writer roadmap archive](docs/writer-roadmap.md)
+Lyra source is licensed under [Apache License 2.0](LICENSE). Third-party components retain their
+own licenses. [Distribution notices](docs/distribution-notices.md) document dependency obligations
+and the unresolved PyMuPDF distribution review; the source license does not clear those release gates.

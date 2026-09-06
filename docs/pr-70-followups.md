@@ -1,5 +1,9 @@
 # PR #70 targeted review follow-ups
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 This completes the PLA-409 and PLA-431 review of
 `1960b4bd3d7c67341a2f1dd96398daad01d538c5`, on base
 `ae5957720d6ba5b4be387f7f9cfaa23d9546eea2`. The recovered PLA-404 implementation

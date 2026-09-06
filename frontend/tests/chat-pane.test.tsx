@@ -969,6 +969,7 @@ describe('ChatPane contextual agent (PLA-401)', () => {
   }
 
   beforeEach(() => {
+    vi.mocked(api.sendAgentChat).mockClear()
     vi.mocked(api.listSessions).mockResolvedValue([])
     const document: DocumentRead = {
       id: 5,
@@ -1025,6 +1026,42 @@ describe('ChatPane contextual agent (PLA-401)', () => {
     vi.mocked(api.createSession).mockResolvedValue(session)
   })
 
+  it('shows live agent reasoning and reveals answer words before the request completes', async () => {
+    vi.mocked(api.listMessages).mockResolvedValue([])
+    let emit: Parameters<typeof api.sendAgentChat>[8]
+    vi.mocked(api.sendAgentChat).mockImplementation((...args) => {
+      emit = args[8]
+      return new Promise(() => {})
+    })
+    const user = userEvent.setup()
+    const { container } = renderAgentPane()
+    await user.type(await screen.findByLabelText('Message Lyra'), 'Explain this')
+    await user.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(emit).toBeTypeOf('function'))
+
+    await act(async () => emit?.({ type: 'reasoning', text: 'Consider the period first.' }))
+    await user.click(screen.getByRole('button', { name: /Thinking/ }))
+    expect(screen.getByText('Consider the period first.')).toBeVisible()
+    await act(async () => emit?.({ type: 'token', text: 'The period' }))
+    expect(Array.from(container.querySelectorAll('.assistant-content')).at(-1)).toHaveTextContent(
+      'The period',
+    )
+    expect(container.querySelector('[data-stream-word]')).toHaveClass('stream-word-visible')
+    expect(screen.getByLabelText('Stop generating')).toBeInTheDocument()
+    await act(async () => emit?.({ type: 'token', text: ' is two seconds.' }))
+    expect(Array.from(container.querySelectorAll('.assistant-content')).at(-1)).toHaveTextContent(
+      'The period is two seconds.',
+    )
+
+    await act(async () => emit?.({ type: 'reset' }))
+    expect(container.querySelector('.assistant-content')).toBeNull()
+    expect(screen.getByText('Consider the period first.')).toBeVisible()
+    await act(async () => emit?.({ type: 'token', text: 'Revised answer' }))
+    expect(Array.from(container.querySelectorAll('.assistant-content')).at(-1)).toHaveTextContent(
+      'Revised answer',
+    )
+  })
+
   it('sends the turn to the agent endpoint with the scoped source and no profile', async () => {
     const transcript: MessageRead[] = []
     vi.mocked(api.listMessages).mockImplementation(async () => transcript)
@@ -1076,7 +1113,7 @@ describe('ChatPane contextual agent (PLA-401)', () => {
     vi.mocked(api.sendAgentChat).mockImplementation(async () => {
       transcript.push(
         message({ id: transcript.length + 1, role: 'user', content: 'A' }),
-        message({ id: transcript.length + 1, role: 'assistant', content: 'Reply A' }),
+        message({ id: transcript.length + 2, role: 'assistant', content: 'Reply A' }),
       )
       return {
         message_id: transcript.at(-1)!.id,
@@ -1100,8 +1137,11 @@ describe('ChatPane contextual agent (PLA-401)', () => {
     const firstOp = vi.mocked(api.sendAgentChat).mock.calls[0][6]
     expect(firstOp).toEqual(expect.any(String))
 
+    // The answer's word reveal finishes before the next turn becomes sendable.
+    await waitFor(() => expect(document.querySelector('[data-stream-word]')).toBeNull())
     // A different question mints a fresh key; the settled first one has been cleared.
     await user.type(box, 'Second question')
+    await waitFor(() => expect(screen.getByLabelText('Send message')).toBeEnabled())
     await user.click(screen.getByLabelText('Send message'))
     await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
     const secondOp = vi.mocked(api.sendAgentChat).mock.calls[1][6]

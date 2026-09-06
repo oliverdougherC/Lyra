@@ -6,6 +6,7 @@ import { beforeEach, expect, it, vi } from 'vitest'
 
 import { SettingsForm } from '@/components/settings/settings-form'
 import { api } from '@/lib/api'
+import { RouterProvider } from '@/router/hooks'
 import type { SettingsRead } from '@/types'
 
 const settings: SettingsRead = {
@@ -36,17 +37,37 @@ function createWrapper() {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   })
   return function TestWrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    return (
+      <QueryClientProvider client={client}>
+        <RouterProvider>{children}</RouterProvider>
+      </QueryClientProvider>
+    )
   }
 }
 
 beforeEach(() => {
   vi.restoreAllMocks()
+  window.history.replaceState(null, '', '/#/settings')
   vi.spyOn(api, 'listClasses').mockResolvedValue([])
   Element.prototype.hasPointerCapture = vi.fn(() => false)
   Element.prototype.setPointerCapture = vi.fn()
   Element.prototype.releasePointerCapture = vi.fn()
 })
+
+it.each(['extraction-enabled', 'endpoint-url', 'remote-ack', 'model'])(
+  'focuses and reveals the %s recovery control after settings load',
+  async (anchor) => {
+    window.history.replaceState(null, '', `/#/settings#${anchor}`)
+    const scroll = vi.spyOn(Element.prototype, 'scrollIntoView')
+    vi.spyOn(api, 'getSettings').mockResolvedValue({ ...settings, endpoint_is_local: false })
+    render(<SettingsForm />, { wrapper: createWrapper() })
+
+    const target = anchor === 'model' ? 'endpoint-url' : anchor
+    await waitFor(() => expect(document.getElementById(target)).toHaveFocus())
+    expect(scroll).toHaveBeenCalledWith({ block: 'center', inline: 'nearest' })
+    expect(screen.queryByRole('spinbutton', { name: 'Context window' })).not.toBeInTheDocument()
+  },
+)
 
 it('saves the explicit web-research and parallel capability switches', async () => {
   vi.spyOn(api, 'getSettings').mockResolvedValue(settings)

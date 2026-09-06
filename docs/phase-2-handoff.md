@@ -1,5 +1,9 @@
 # Phase 2 Handoff
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 Phase 2 is the homework solver. It is built, and it has been measured against a real course rather
 than against its own test fixtures.
 

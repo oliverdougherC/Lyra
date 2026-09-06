@@ -35,13 +35,14 @@ those variables.
 
 ## What stays on the machine
 
-These never need to leave the local machine for Lyra to function:
+Lyra stores these locally. Remote tutor features may send selected text or requested recognition
+images; local storage is not a promise that all processing stays offline:
 
 - uploaded course files
 - extracted text and rendered pages
 - the SQLite database and local caches
 - local helper runtimes and model weights
-- embeddings, OCR, and reranking inputs/outputs
+- embeddings and local reranking inputs/outputs
 
 Lyra continues to harden the data tree as private-to-user storage. The data directory and the
 directories it creates beneath it are owner-only, and sensitive files remain owner-readable and
@@ -51,13 +52,17 @@ owner-writable only.
 
 Network traffic happens only in explicit user-triggered cases:
 
-- Tutor traffic: when the configured OpenAI-compatible tutor endpoint is used
+- Tutor traffic: selected context when the configured OpenAI-compatible endpoint is used, including
+  page images when opt-in text recognition is requested. Recognition currently uses the configured
+  vision tutor, so acknowledged remote endpoints receive those images
 - Web-research traffic: when Exa is configured, enabled, and used
 - First-use document helper model downloads: the required embedding weights (about 146 MB) are fetched from Hugging Face when first processing is requested. This download does not upload documents. Interrupted transfers can be retried; verified cached weights work offline. Optional OCR and reranking weights are not downloaded automatically
 - Application updates: an explicit check retrieves GitHub-hosted channel metadata; an explicit download retrieves the signed app archive. No update check occurs on launch.
 
 The tutor endpoint may be loopback-local or remote. Lyra treats non-loopback endpoints as remote,
-labels them as such, and requires acknowledgement before document text is sent there.
+labels them as such, and requires acknowledgement before document text or requested recognition images are sent there. Explicit tutor and Exa
+connection tests also contact their configured services. Opening an external source link hands that
+URL to the system browser, which makes its own network requests.
 
 Exa is optional and disabled until an API key is configured. Lyra does not probe Exa during launch
 or readiness checks. When web research is used, only bounded search/fetch requests leave the

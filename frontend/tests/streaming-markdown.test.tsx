@@ -103,13 +103,13 @@ describe('StreamingMarkdown', () => {
       expect(items[0].querySelectorAll('span[data-stream-word]')).toHaveLength(1)
     })
 
-    it('reveals a numbered item ahead of the words on its line', () => {
+    it('reveals a numbered item with the first word on its line', () => {
       const { container } = render(<StreamingMarkdown content={'1. alpha beta'} streaming />)
       const units = words(container)
       const delayOf = (node: HTMLElement) =>
         Number.parseFloat(node.style.getPropertyValue('--stream-word-delay'))
       expect(units[0].tagName).toBe('LI')
-      expect(delayOf(units[0])).toBeLessThan(delayOf(units[1]))
+      expect(delayOf(units[0])).toBe(delayOf(units[1]))
     })
 
     it('keys equations by order, not by source offset', () => {

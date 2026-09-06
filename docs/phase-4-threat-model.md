@@ -1,6 +1,6 @@
 # Phase 4 Threat Model
 
-**Status:** active desktop-migration threat model as of August 30, 2026. This is the live security
+**Status:** maintained desktop threat model. This is the live security
 model for `Tauri 2 + Vite/React + packaged Python + Exa + remote-or-loopback tutor inference`, not
 the older pre-desktop runtime record.
 
@@ -10,9 +10,10 @@ The current security boundaries are:
 
 1. a desktop shell that hosts the frontend;
 2. a loopback Python backend that owns storage, jobs, and policy;
-3. optional local helper processes for embeddings, OCR, and reranking;
+3. optional local helper processes for embeddings, OCR infrastructure, and reranking;
 4. an OpenAI-compatible tutor endpoint that may be local or remote; and
-5. optional Exa-backed web research.
+5. optional Exa-backed web research; and
+6. native backup archives and explicitly requested signed application updates.
 
 Out of scope: a fully compromised local OS account, physical access, or a tutor endpoint the user
 intentionally chose and trusted.
@@ -58,7 +59,7 @@ flowchart LR
    storage, network, or confirmation rules.
 2. The backend stays loopback-bound and keeps Host/Origin protections even in desktop mode.
 3. Remote tutor use is explicit. Non-loopback endpoints are marked remote and require
-   acknowledgement before document text is sent there.
+   acknowledgement before document text or requested recognition images are sent there.
 4. Exa is opt-in. Missing Exa configuration disables web research without making the rest of Lyra
    unhealthy.
 5. Startup must not issue unsolicited provider traffic. Readiness reports configuration, not live
@@ -75,7 +76,8 @@ flowchart LR
 sent without an explicit acknowledgement.
 
 **Controls:** endpoint-locality detection, persisted acknowledgement, and per-turn consent checks
-before chat, drafting, solving, or agent traffic is sent.
+before chat, drafting, solving, agent traffic, or requested page recognition is sent.
+Current recognition uses the configured vision tutor, not the separate local OCR helper.
 
 ### T2. Web-research leakage through Exa
 
@@ -108,3 +110,13 @@ release, security, or support mistakes.
 
 **Controls:** the active-reference absence scan in CI, plus clear historical labeling on legacy
 handoff documents.
+
+### T6. Backup or update substitution
+
+**Path:** a malformed archive escapes its destination, restores obsolete credential authority,
+or replaces the app with untrusted/incompatible bytes.
+
+**Controls:** bounded archive validation, staged profile publication with recovery, retained current
+credential authority, update signature and origin validation, schema compatibility checks, and
+backup-first replacement. See [releasing](releasing.md), `backend/desktop_backup_archive.py`,
+`backend/desktop_backup.py`, and `src-tauri/src/updater.rs` for the current contracts.

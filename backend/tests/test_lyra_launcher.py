@@ -1421,28 +1421,36 @@ def test_recovers_healthy_backend_from_this_checkout(
     assert record["recovered"] is True
 
 
+@pytest.mark.parametrize(
+    ("host_option", "directory"),
+    [("--hostname", "ROOT"), ("--host", "FRONTEND"), ("--host", "foreign")],
+)
 def test_recovers_frontend_through_its_checkout_owned_process_group(
-    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, host_option: str, directory: str
 ) -> None:
     command = [
         "/opt/homebrew/bin/pnpm",
         "--dir",
         str(launcher.FRONTEND),
         "start",
-        "--hostname",
+        host_option,
         "127.0.0.1",
         "--port",
         "3000",
     ]
     monkeypatch.setattr(launcher, "listener_pids", lambda _port: (914,))
     monkeypatch.setattr(launcher, "process_group", lambda pid: 900 if pid in {900, 914} else None)
-    monkeypatch.setattr(launcher, "process_cwd", lambda pid: launcher.ROOT if pid == 900 else None)
+    cwd = launcher.ROOT.parent if directory == "foreign" else getattr(launcher, directory)
+    monkeypatch.setattr(launcher, "process_cwd", lambda pid: cwd if pid == 900 else None)
     monkeypatch.setattr(launcher, "process_command", lambda pid: command if pid == 900 else [])
     monkeypatch.setattr(launcher, "process_start_token", lambda _pid: "proc:900")
     monkeypatch.setattr(launcher, "url_ready", lambda _url: True)
 
     record = launcher.recover_checkout_component("frontend", 3000)
 
+    if directory == "foreign":
+        assert record is None
+        return
     assert record is not None
     assert record["pid"] == 900
     assert record["pgid"] == 900
@@ -2644,3 +2652,78 @@ def test_recovery_then_clean_relaunch_after_stale_state(
     assert "backend" not in relaunch_state["processes"]
     assert relaunch_state["desired_state"] == "stopped"
     assert relaunch_state["version"] == launcher.STATE_VERSION
+
+
+@pytest.mark.parametrize("version", [None, (20, 19, 0), (22, 12, 0)])
+def test_frontend_setup_rejects_node_unsupported_by_pinned_pnpm(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, version: tuple[int, ...] | None
+) -> None:
+    monkeypatch.setattr(launcher.shutil, "which", lambda name: name)
+    monkeypatch.setattr(launcher, "executable_version", lambda _path: version)
+    monkeypatch.setattr(
+        launcher, "run_checked", lambda *_args: pytest.fail("must reject before install")
+    )
+    with pytest.raises(launcher.LauncherError, match="22.13"):
+        launcher.ensure_frontend_environment({})
+
+
+@pytest.mark.parametrize("version", [(22, 13, 0), (24, 0, 0)])
+def test_frontend_setup_accepts_supported_node_without_reinstall(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, version: tuple[int, ...]
+) -> None:
+    (tmp_path / "node_modules").mkdir()
+    monkeypatch.setattr(launcher, "FRONTEND", tmp_path)
+    monkeypatch.setattr(launcher.shutil, "which", lambda name: name)
+    monkeypatch.setattr(launcher, "executable_version", lambda _path: version)
+    monkeypatch.setattr(launcher, "sha256_files", lambda _paths: "current")
+    assert launcher.ensure_frontend_environment({"frontend_fingerprint": "current"}) == "pnpm"
+
+
+def test_frontend_install_and_build_select_project_package_manager(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    monkeypatch.setattr(launcher, "FRONTEND", frontend)
+    monkeypatch.setattr(launcher, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(launcher, "FRONTEND_LOG", tmp_path / "frontend.log")
+    monkeypatch.setattr(launcher.shutil, "which", lambda name: name)
+    monkeypatch.setattr(launcher, "executable_version", lambda _path: (22, 13, 0))
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs.get("cwd")))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(launcher.subprocess, "run", run)
+    metadata = {}
+    launcher.ensure_frontend_environment(metadata)
+    launcher.ensure_frontend_build("pnpm", metadata)
+
+    assert len(calls) == 2
+    assert all(cwd == frontend for _, cwd in calls)
+    assert "--frozen-lockfile" in calls[0][0]
+    assert "build" in calls[1][0]
+
+
+@pytest.mark.parametrize("name", ["frontend", "backend", "supervisor"])
+def test_spawn_component_uses_project_directory_without_changing_backend_ownership(
+    launcher: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str
+) -> None:
+    monkeypatch.setattr(launcher, "LOG_DIR", tmp_path)
+    calls = []
+    process = SimpleNamespace(poll=lambda: None)
+
+    def spawn(command, **kwargs):
+        calls.append((command, kwargs))
+        return process
+
+    monkeypatch.setattr(launcher.subprocess, "Popen", spawn)
+    monkeypatch.setattr(launcher, "process_record", lambda *_args: owned_record())
+    monkeypatch.setattr(launcher.time, "sleep", lambda _seconds: None)
+    runtime = {"processes": {}}
+    launcher.spawn_component(name, ["test-command"], tmp_path / "spawn.log", runtime)
+
+    assert calls[0][1]["cwd"] == (launcher.FRONTEND if name == "frontend" else launcher.ROOT)
+    assert calls[0][1]["start_new_session"] is True
+    assert runtime["processes"][name] == owned_record()

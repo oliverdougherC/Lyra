@@ -1,5 +1,9 @@
 # Phase 3 Interface Specification
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 What large documents and text recognition change on screen, down to states, motion, and copy.
 Companion to [rag-pipeline.md](rag-pipeline.md), which owns the pipeline and its stages, and to
 [design-system.md](design-system.md), which owns tokens and generic component patterns. Where they

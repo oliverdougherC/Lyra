@@ -42,6 +42,7 @@ from backend.llm import replies
 from backend.llm.client import (
     DETERMINISTIC_TEMPERATURE,
     AssistantMessage,
+    StreamDelta,
     ToolCall,
     complete_with_tools,
 )
@@ -629,6 +630,7 @@ async def run_tool_loop(
     timeout_seconds: float = TIMEOUT_SECONDS,
     registry: dict[str, ToolDefinition] | None = None,
     on_call: Callable[[RecordedCall], None] | None = None,
+    on_delta: Callable[[StreamDelta], None] | None = None,
     context_budget: ContextBudget | None = None,
     stop_gate: ToolStopGate | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -648,6 +650,8 @@ async def run_tool_loop(
             narrate the loop while it runs. Runs on the event loop thread: keep it
             cheap, and it must not raise - one that does is logged and ignored, because
             a narration bug must not cost the pass.
+        on_delta: Optional live text observer. A reset before each successive model
+            round clears intermediate answer text while preserving reasoning.
         context_budget: When given, the loop does two things an unguarded loop does not.
             It caps every request at the budgeted `generation_reserve` output tokens, so the
             reserve held back in the context arithmetic is the reserve the endpoint is
@@ -697,6 +701,7 @@ async def run_tool_loop(
                 max_depth,
                 REGISTRY if registry is None else registry,
                 on_call,
+                on_delta,
                 context_budget,
                 stop_gate,
                 transport,
@@ -718,6 +723,7 @@ async def _drive(
     max_depth: int,
     registry: dict[str, ToolDefinition],
     on_call: Callable[[RecordedCall], None] | None,
+    on_delta: Callable[[StreamDelta], None] | None,
     context_budget: ContextBudget | None,
     stop_gate: ToolStopGate | None,
     transport: httpx.AsyncBaseTransport | None,
@@ -773,6 +779,8 @@ async def _drive(
                 detail=_OVERFLOW_DETAIL,
             )
         try:
+            if round_index and on_delta is not None:
+                on_delta(StreamDelta("reset", ""))
             answer = await complete_with_tools(
                 endpoint,
                 api_key,
@@ -782,6 +790,7 @@ async def _drive(
                 transport=transport,
                 temperature=DETERMINISTIC_TEMPERATURE,
                 max_tokens=max_tokens,
+                **({"on_delta": on_delta} if on_delta is not None else {}),
             )
         except ToolsUnsupportedError as exc:
             if round_index:
@@ -821,14 +830,15 @@ async def _drive(
                 detail=getattr(exc, "message", _UPSTREAM_DETAIL),
             )
 
-        if context_budget is not None and answer.truncated:
+        if answer.truncated and (context_budget is not None or on_delta is not None):
             # The endpoint cut this round off at the reserved output ceiling the loop sent as
             # `max_tokens`. A truncated reply is not a finished turn: its prose is a fragment,
             # not an answer to store, and its tool calls may be half-written, so none may be
             # dispatched. Settle honestly rather than treating the fragment as `COMPLETED` or
             # speculating on an incomplete tool request. Only guarded loops impose the ceiling,
             # so only they read truncation this way; an unguarded loop that never set a ceiling
-            # keeps its prior behaviour.
+            # keeps its prior behaviour. Live streams also enforce this guard: their
+            # assembled calls must never dispatch when generation was cut off.
             return ToolLoopResult(
                 content="",
                 calls=tuple(calls),

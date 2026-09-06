@@ -1,5 +1,9 @@
 # Desktop Migration Inventory
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 Status: implementation inventory created on 2026-08-30 for the desktop-runtime migration. The
 first sections preserve the source-checkout baseline; the implementation addendum and final
 verification sections record what this branch actually changed and proved.

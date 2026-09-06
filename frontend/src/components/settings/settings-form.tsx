@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Check, ChevronRight, Info, RefreshCw, TriangleAlert } from 'lucide-react'
 import { toast } from 'sonner'
@@ -40,6 +40,7 @@ import {
   useUpdateClassWriterSettings,
 } from '@/lib/hooks/use-settings'
 import { useTheme, type Theme } from '@/lib/theme'
+import { useNavigationVersion, useRouteAnchor } from '@/router/hooks'
 import type { ConnectionTestResult, SettingsRead, SettingsUpdate } from '@/types'
 import type { ClassRead } from '@/types'
 
@@ -60,7 +61,7 @@ type SaveState = { status: 'saving' | 'saved' | 'error'; patch: SettingsUpdate; 
 const MIN_RECOMMENDED_CONTEXT = 8192
 
 const THEME_CHOICES: [Theme, string, string][] = [
-  ['light', 'Light', 'Use the parchment palette by default.'],
+  ['light', 'Light', 'Use the reading-room palette by default.'],
   ['system', 'System', 'Follow your operating system setting.'],
   ['dark', 'Dark', 'Always use the dark palette.'],
 ]
@@ -79,6 +80,18 @@ type TestState =
 
 export function SettingsForm() {
   const { data: settings, isPending, isError, error, refetch } = useSettings()
+  const routeAnchor = useRouteAnchor()
+  const navigationVersion = useNavigationVersion()
+
+  useEffect(() => {
+    if (isPending || isError || !routeAnchor) return
+    if (!['extraction-enabled', 'endpoint-url', 'remote-ack', 'model'].includes(routeAnchor)) return
+    let target = document.getElementById(routeAnchor)
+    if (target?.matches(':disabled')) target = document.getElementById('endpoint-url')
+    if (!target) return
+    target.focus({ preventScroll: true })
+    target.scrollIntoView({ block: 'center', inline: 'nearest' })
+  }, [isPending, isError, routeAnchor, navigationVersion])
 
   if (isPending) return <SettingsSkeleton />
 

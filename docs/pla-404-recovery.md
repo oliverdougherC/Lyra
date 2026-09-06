@@ -1,5 +1,9 @@
 # PLA-404 recovery and review evidence
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 ## Recovery provenance
 
 Latest main at extraction: `ae5957720d6ba5b4be387f7f9cfaa23d9546eea2` (fetched September 5, 2026).

@@ -39,7 +39,17 @@ jobs:
         env:
           APP_ID: ${{ vars.RELEASE_APP_ID }}
           APP_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-        run: test -n "$APP_ID" && test -n "$APP_KEY"
+        run: |
+          missing=0
+          if [[ -z "$APP_ID" ]]; then
+            echo '::error::Missing RELEASE_APP_ID variable in release-automation. See docs/releasing.md.'
+            missing=1
+          fi
+          if [[ -z "$APP_KEY" ]]; then
+            echo '::error::Missing RELEASE_APP_PRIVATE_KEY secret in release-automation. See docs/releasing.md.'
+            missing=1
+          fi
+          exit "$missing"
       - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         if: github.event_name == 'push'
         id: app
@@ -57,7 +67,7 @@ jobs:
         if: steps.release.outputs.pr != ''
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
-          PR_NUMBER: ${{ fromJSON(steps.release.outputs.pr).number }}
+          PR_NUMBER: ${{ fromJSON(steps.release.outputs.pr || '{}').number }}
         run: |
           branch="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.ref)"
           git fetch origin "$branch"

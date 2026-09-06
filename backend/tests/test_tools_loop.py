@@ -100,3 +100,90 @@ async def test_an_unexpected_failure_is_logged_with_its_traceback(
     assert result.stopped == tools.UPSTREAM_FAILED
     record = next(record for record in caplog.records if "tutor endpoint" in record.getMessage())
     assert record.exc_info is not None
+
+
+async def test_live_tool_loop_resets_intermediate_answer_and_preserves_reasoning() -> None:
+    from backend.llm.client import StreamDelta
+
+    seen: list[StreamDelta] = []
+    round_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal round_count
+        round_count += 1
+        assert json.loads(request.content)["stream"] is True
+        if round_count == 1:
+            delta = {
+                "content": "Let me check.",
+                "reasoning": "First thought.",
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": "a",
+                        "function": {"name": "unknown", "arguments": "{}"},
+                    }
+                ],
+            }
+        else:
+            assert seen[-1] == StreamDelta("reset", "")
+            delta = {"content": "Final answer.", "reasoning": "Second thought."}
+        return httpx.Response(
+            200,
+            text="data: " + json.dumps({"choices": [{"delta": delta}]}) + "\n\ndata: [DONE]\n\n",
+        )
+
+    result = await tools.run_tool_loop(
+        _ENDPOINT,
+        None,
+        None,
+        _MESSAGES,
+        registry={},
+        transport=httpx.MockTransport(handler),
+        on_delta=seen.append,
+    )
+    assert result.stopped == tools.COMPLETED
+    assert result.content == "Final answer."
+    assert seen == [
+        StreamDelta("reasoning", "First thought."),
+        StreamDelta("answer", "Let me check."),
+        StreamDelta("reset", ""),
+        StreamDelta("reasoning", "Second thought."),
+        StreamDelta("answer", "Final answer."),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("ending", "expected"),
+    [
+        ("", tools.UPSTREAM_FAILED),
+        (
+            'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\ndata: [DONE]\n\n',
+            tools.OUTPUT_LIMIT,
+        ),
+    ],
+)
+async def test_streaming_loop_never_dispatches_an_unfinished_tool_call(
+    ending: str,
+    expected: str,
+) -> None:
+    delta = {
+        "tool_calls": [
+            {
+                "index": 0,
+                "id": "a",
+                "function": {"name": "unknown", "arguments": "{}"},
+            }
+        ]
+    }
+    body = "data: " + json.dumps({"choices": [{"delta": delta}]}) + "\n\n" + ending
+    result = await tools.run_tool_loop(
+        _ENDPOINT,
+        None,
+        None,
+        _MESSAGES,
+        registry={},
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text=body)),
+        on_delta=lambda delta: None,
+    )
+    assert result.stopped == expected
+    assert result.calls == ()

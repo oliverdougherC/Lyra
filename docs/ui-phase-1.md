@@ -1,5 +1,9 @@
 # Phase 1 Interface Specification
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 This document specifies every screen Lyra ships in Phase 1, down to states, motion, and copy. It is
 the companion to [design-system.md](design-system.md), which owns tokens and generic component
 patterns. Where the two disagree, design-system.md wins on tokens and this document wins on layout
