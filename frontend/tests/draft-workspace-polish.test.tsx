@@ -12,6 +12,8 @@ import type { LiveDraftSuggestion } from '@/types'
 
 const controls = vi.hoisted(() => ({
   save: vi.fn(),
+  print: vi.fn(),
+  exportAvailable: true,
   start: vi.fn(),
   state: 'ready',
   draftError: false,
@@ -74,10 +76,14 @@ vi.mock('@/lib/hooks/use-drafts', async (original) => ({
   usePendingEdit: () => ({ data: null }),
   useComments: () => ({ data: controls.comments }),
   useWriterSessions: () => ({ data: [] }),
-  useExportAvailability: () => ({ data: { available: true } }),
+  useExportAvailability: () => ({ data: { available: controls.exportAvailable } }),
   useLiveDraftSuggestion: () => ({ data: controls.live }),
   useStartPass: () => ({ mutateAsync: controls.start, isPending: false }),
   useUpdateBody: () => ({ mutateAsync: controls.save, isPending: false }),
+}))
+vi.mock('@/lib/runtime', async (original) => ({
+  ...(await original<object>()),
+  printCurrentDocument: controls.print,
 }))
 vi.mock('@/components/drafts/brief-card', () => ({ BriefCard: () => null }))
 vi.mock('@/components/drafts/source-ledger', () => ({ SourceLedger: () => <p>Source list</p> }))
@@ -129,6 +135,8 @@ async function openTool(name: string) {
 }
 beforeEach(() => {
   controls.save.mockReset().mockResolvedValue({ version: 2 })
+  controls.print.mockReset().mockResolvedValue(undefined)
+  controls.exportAvailable = true
   controls.start.mockReset().mockResolvedValue({})
   controls.draftError = false
   controls.retryDraft.mockReset()
@@ -317,5 +325,37 @@ describe('conflict preservation', () => {
     expect(screen.getByRole('button', { name: 'Download both versions' })).toBeEnabled()
     expect(keepMine).not.toHaveBeenCalled()
     expect(useServer).not.toHaveBeenCalled()
+  })
+})
+
+describe('native essay printing', () => {
+  it('saves pending writing before opening the native print dialog', async () => {
+    controls.exportAvailable = false
+    let finish!: (value: { version: number }) => void
+    controls.save.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    renderWorkspace()
+    const editor = screen.getByRole('textbox', { name: 'Editor' })
+    await userEvent.type(editor, ' changed')
+    await userEvent.click(screen.getByRole('button', { name: 'More draft actions' }))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Print' }))
+    await waitFor(() => expect(controls.save).toHaveBeenCalled())
+    expect(controls.print).not.toHaveBeenCalled()
+    await act(async () => finish({ version: 2 }))
+    await waitFor(() => expect(controls.print).toHaveBeenCalledOnce())
+  })
+  it('does not print when saving the latest writing fails', async () => {
+    controls.exportAvailable = false
+    controls.save.mockRejectedValue(new Error('Offline'))
+    renderWorkspace()
+    await userEvent.type(screen.getByRole('textbox', { name: 'Editor' }), ' changed')
+    await userEvent.click(screen.getByRole('button', { name: 'More draft actions' }))
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Print' }))
+    await waitFor(() => expect(controls.save).toHaveBeenCalled())
+    expect(controls.print).not.toHaveBeenCalled()
   })
 })

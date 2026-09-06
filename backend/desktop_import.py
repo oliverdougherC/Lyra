@@ -1343,7 +1343,7 @@ def _backup_database(source_conn: sqlite3.Connection, destination: Path) -> None
         target.close()
 
 
-def _rewrite_document_paths(stage_db: Path) -> None:
+def _rewrite_document_paths(stage_db: Path, *, stage_data: Path | None = None) -> None:
     conn = sqlite3.connect(str(stage_db))
     try:
         rows = conn.execute(
@@ -1355,6 +1355,7 @@ def _rewrite_document_paths(stage_db: Path) -> None:
                 int(class_id),
                 str(filename),
                 str(stored_path or ""),
+                stage_data=stage_data,
             )
             rewritten = settings.uploads_dir / str(class_id) / basename
             conn.execute(
@@ -1367,14 +1368,20 @@ def _rewrite_document_paths(stage_db: Path) -> None:
 
 
 def _expected_upload_basename(
-    document_id: int, class_id: int, filename: str, stored_path: str
+    document_id: int,
+    class_id: int,
+    filename: str,
+    stored_path: str,
+    *,
+    stage_data: Path | None = None,
 ) -> str:
     canonical = f"{document_id}-{_safe_filename(filename)}"
-    expected = _stage_data_path() / "uploads" / str(class_id) / canonical
+    source_root = stage_data if stage_data is not None else _stage_data_path()
+    expected = source_root / "uploads" / str(class_id) / canonical
     if expected.is_file():
         return canonical
     legacy = Path(stored_path).name
-    legacy_path = _stage_data_path() / "uploads" / str(class_id) / legacy
+    legacy_path = source_root / "uploads" / str(class_id) / legacy
     if legacy and legacy_path.is_file():
         return legacy
     raise RuntimeError("The selected data is missing one or more uploaded source files.")

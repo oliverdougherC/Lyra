@@ -1,27 +1,29 @@
 ---
-name: Bug report
-about: Report a broken behavior in Lyra
+name: Beta bug report
+about: Report a reproducible problem in the installed Lyra app
 title: 'bug: '
 type: Bug
 ---
 
-Before filing, check [README.md](../../README.md) and
-[docs/local-deployment.md](../../docs/local-deployment.md).
+For security vulnerabilities, use the [private reporting route](https://github.com/oliverdougherC/Lyra/security/advisories/new).
+Do not attach private documents, databases, API keys, or unredacted logs/screenshots.
+Use synthetic course material where possible. GitHub is tester intake; engineering tracking is in Linear.
 
-**Version:** e.g. 0.5.x-xxx
+## Build and device
+- Lyra version/build (Settings / About):
+- Download source:
+- macOS version:
+- Architecture (Apple Silicon model):
+- Memory:
+- Fresh install or update (previous version):
 
-## Describe the Bug
-<!-- A clear & concise description of the bug -->
+## What happened
+Describe expected and actual behavior.
 
-
-## Steps to Reproduce
+## Reproduction
 1.
 
-## Screenshots / Logs
-<!-- You can find logs in: Setting -> General -> Data Folder -> App Logs -->
-
-
-## Operating System
-- [ ] macOS
-- [ ] Windows
-- [ ] Linux
+## Recovery and evidence
+Did retry, quit/relaunch, or restoring a backup help? Was any work lost?
+Attach only redacted screenshots or a small synthetic example. Include the time of failure.
+For tutor problems, name the provider/model configuration but never include its key.

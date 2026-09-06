@@ -54,7 +54,8 @@ from backend.desktop_import import recover_desktop_import_publish
 from backend.llm.embed_server import embedding_server
 from backend.llm.ocr_server import ocr_server
 from backend.llm.rerank_server import rerank_server
-from backend.storage.database import connect, migrate
+from backend.storage.database import assert_schema_compatible, connect, migrate
+from backend.version import VERSION
 
 logger = logging.getLogger("lyra")
 
@@ -68,6 +69,7 @@ _INVALID_SESSION = "Request rejected: the packaged session header is missing or 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    assert_schema_compatible()
     if settings.packaged_mode:
         recovered = recover_desktop_import_publish()
         if recovered["status"] == "ok":
@@ -158,7 +160,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app(*, session_secret: str | None = None) -> FastAPI:
-    app = FastAPI(title="Lyra", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Lyra", version=VERSION, lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,

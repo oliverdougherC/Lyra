@@ -27,6 +27,9 @@ jobs:
       - name: Install backend dependencies
         run: uv sync --extra dev
 
+      - name: Check authoritative release metadata
+        run: python scripts/release_metadata.py --check
+
       - name: Check backend formatting
         run: uv run --extra dev ruff format --check backend scripts packaging
 
@@ -89,6 +92,12 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify pinned Release Please version behavior
+        run: |
+          npm install --prefix "$RUNNER_TEMP/release-please-check" --ignore-scripts --no-audit --no-fund release-please@17.3.0
+          cd ..
+          node scripts/release/test_release_please.cjs "$RUNNER_TEMP/release-please-check/node_modules/release-please"
 
       - name: Check frontend formatting
         run: pnpm format:check
@@ -339,10 +348,11 @@ jobs:
         run: pnpm tauri:build --bundles app --no-sign --ci
 
       - name: Build reviewable unsigned DMG
-        run: >
-          ./scripts/build_dmg.sh
-          src-tauri/target/release/bundle/macos/Lyra.app
-          src-tauri/target/release/bundle/dmg/Lyra_0.1.0_aarch64.dmg
+        run: |
+          version="$(cat version.txt)"
+          ./scripts/build_dmg.sh \
+            src-tauri/target/release/bundle/macos/Lyra.app \
+            "src-tauri/target/release/bundle/dmg/Lyra_${version}_aarch64.dmg"
 
       - name: Generate desktop resource report
         run: |

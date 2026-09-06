@@ -247,3 +247,11 @@ def test_ready_redacts_database_failure_details(
         "message": "Database is unavailable.",
     }
     assert "/Users/private/secret.db" not in response.text
+
+
+def test_update_schema_reads_actual_profile_version(client: TestClient) -> None:
+    with connect() as conn:
+        conn.execute("pragma user_version = 1")
+    response = client.get("/api/health/update-schema")
+    assert response.status_code == 200
+    assert response.json() == {"version": 1}

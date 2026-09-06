@@ -22,6 +22,8 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
+import { DesktopBackupSection } from '@/components/settings/desktop-backup-section'
+import { DesktopUpdateSection } from '@/components/settings/desktop-update-section'
 import { DesktopImportSection } from '@/components/settings/desktop-import-section'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { api, ApiError } from '@/lib/api'
@@ -282,6 +284,14 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
     )
   }
 
+  const unsavedSettings =
+    apiKey.length > 0 ||
+    exaApiKey.length > 0 ||
+    (endpoint.trim() || null) !== settings.endpoint_url ||
+    Number(contextWindow) !== settings.context_window ||
+    Number(parallelConcurrency) !== settings.parallel_concurrency ||
+    Object.values(saves).some((save) => save.status !== 'saved')
+
   const contextValue = Number(contextWindow)
   const contextTooSmall = Number.isFinite(contextValue) && contextValue < MIN_RECOMMENDED_CONTEXT
 
@@ -299,6 +309,9 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
         title="Setup"
         description="Connect the model that answers questions about your course materials."
       >
+        {settings.local_model_setup && (
+          <p className="text-text-secondary text-sm">{settings.local_model_setup}</p>
+        )}
         <FieldGroup>
           <Field>
             <FieldLabel htmlFor="endpoint-url">Endpoint URL</FieldLabel>
@@ -560,6 +573,9 @@ function SettingsSections({ settings }: { settings: SettingsRead }) {
       >
         <DesktopImportSection />
       </SettingsSection>
+
+      <DesktopBackupSection unsavedSettings={unsavedSettings} />
+      <DesktopUpdateSection unsavedSettings={unsavedSettings} />
 
       <AdvancedSection>
         <FieldGroup>

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-desktop-backup-create"
+description = "Enables the desktop_backup_create command without any pre-configured scope."
+commands.allow = ["desktop_backup_create"]
+
+[[permission]]
+identifier = "deny-desktop-backup-create"
+description = "Denies the desktop_backup_create command without any pre-configured scope."
+commands.deny = ["desktop_backup_create"]

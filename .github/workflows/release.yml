@@ -1,0 +1,205 @@
+name: Desktop release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Retry staging, or promote the existing reviewed candidate without rebuilding
+        type: choice
+        options: [stage, promote]
+        default: stage
+permissions:
+  contents: read
+concurrency:
+  group: lyra-release
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: release-automation
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      checks: read
+      actions: read
+    outputs:
+      candidate: ${{ steps.candidate.outputs.ready }}
+      version: ${{ steps.candidate.outputs.version }}
+      sha: ${{ steps.candidate.outputs.sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require release App configuration
+        if: github.event_name == 'push'
+        env:
+          APP_ID: ${{ vars.RELEASE_APP_ID }}
+          APP_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        run: test -n "$APP_ID" && test -n "$APP_KEY"
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        if: github.event_name == 'push'
+        id: app
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+        if: github.event_name == 'push'
+        id: release
+        with:
+          token: ${{ steps.app.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+      - name: Synchronize generated metadata on the release PR
+        if: steps.release.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          PR_NUMBER: ${{ fromJSON(steps.release.outputs.pr).number }}
+        run: |
+          branch="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.ref)"
+          git fetch origin "$branch"
+          git checkout -B "$branch" FETCH_HEAD
+          python3 scripts/release_metadata.py --sync
+          git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock frontend/package.json pyproject.toml uv.lock backend/version.py
+          if ! git diff --cached --quiet; then
+            git config user.name 'Lyra Release App'
+            git config user.email 'release-bot@users.noreply.github.com'
+            git commit -m 'Keep reviewed release metadata consistent with the authoritative version' -m 'Confidence: high' -m 'Scope-risk: narrow'
+            gh auth setup-git
+            git push origin "HEAD:$branch"
+          fi
+          git checkout --detach "$GITHUB_SHA"
+      - name: Resolve exact candidate and successful trusted CI
+        id: candidate
+        if: steps.release.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release/trusted_revision.py
+  stage:
+    needs: prepare
+    if: needs.prepare.outputs.candidate == 'true' && inputs.operation != 'promote'
+    runs-on: macos-15
+    environment: release-signing
+    permissions:
+      contents: write
+      actions: read
+    env:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - name: Restore retained candidate bytes for an idempotent retry
+        id: restore
+        env:
+          SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+        run: python3 scripts/release/restore_candidate.py
+      - name: Preflight distribution credentials
+        if: steps.restore.outputs.restored != 'true'
+        run: python3 scripts/release/preflight.py
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        if: steps.restore.outputs.restored != 'true'
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: steps.restore.outputs.restored != 'true'
+        with:
+          version: 11.17.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.restore.outputs.restored != 'true'
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        if: steps.restore.outputs.restored != 'true'
+      - name: Verify reviewed bundle metadata and install locked dependencies
+        if: steps.restore.outputs.restored != 'true'
+        run: |
+          test "$(uname -m)" = arm64
+          python3 scripts/release_metadata.py --check
+          uv python install 3.12
+          managed_python="$(uv python find --no-project --managed-python --resolve-links 3.12)"
+          uv sync --locked --python "$managed_python" --extra packaging
+          pnpm --dir frontend install --frozen-lockfile
+      - name: Freeze and stage complete native runtime
+        if: steps.restore.outputs.restored != 'true'
+        run: |
+          uv run --locked --extra packaging pyinstaller --clean --noconfirm packaging/lyra_backend.spec
+          uv run --locked python scripts/frozen_backend_smoke.py dist/lyra-backend/lyra-backend
+          uv run --locked python packaging/stage_sidecar.py
+          uv run --locked python scripts/stage_llama_runtime.py
+          pnpm --dir frontend licenses list --prod --json > "$RUNNER_TEMP/frontend-licenses.json"
+          uv run --locked python scripts/collect_distribution_notices.py --frontend-inventory "$RUNNER_TEMP/frontend-licenses.json"
+          pnpm --dir frontend build
+      - name: Build unsigned intermediate app for inside-out distribution signing
+        if: steps.restore.outputs.restored != 'true'
+        run: frontend/node_modules/.bin/tauri build --bundles app --no-sign --ci -- --locked
+      - name: Sign notarize staple and verify final app and DMG
+        if: steps.restore.outputs.restored != 'true'
+        run: |
+          bash scripts/release/sign_and_package.sh
+          cargo run --locked --manifest-path src-tauri/Cargo.toml --example verify_update_signature -- release-assets/Lyra.app.tar.gz release-assets/Lyra.app.tar.gz.sig > release-assets/updater-signature-verification.txt
+      - name: Record exact artifact identity
+        if: steps.restore.outputs.restored != 'true'
+        env:
+          SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          cp CHANGELOG.md release-assets/RELEASE_NOTES.md
+          python3 scripts/release_artifacts.py assemble release-assets --version "$(cat version.txt)" --source "$SOURCE_SHA"
+      - name: Retain review evidence before uploading any draft assets
+        if: always() && steps.restore.outputs.restored != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: lyra-signed-candidate-${{ github.run_attempt }}
+          path: release-assets/
+          if-no-files-found: ignore
+      - name: Upload missing draft assets without replacement
+        run: python3 scripts/release_artifacts.py stage release-assets
+      - name: Remove ephemeral signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/lyra-release.keychain-db" || true
+          rm -f "$RUNNER_TEMP/lyra-certificate.p12" "$RUNNER_TEMP/Lyra-notary.zip"
+  promote:
+    needs: [prepare, stage]
+    if: always() && needs.prepare.outputs.candidate == 'true' && (needs.stage.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'promote'))
+    runs-on: ubuntu-latest
+    environment: release-promotion
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - name: Require owner distribution license clearance
+        env:
+          LICENSE_REVIEWED: ${{ vars.DISTRIBUTION_LICENSE_REVIEWED }}
+        run: test "$LICENSE_REVIEWED" = true
+      - name: Validate and publish the staged bytes; update channels last
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+        run: python3 scripts/release/promote.py
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        with:
+          path: public-release/
+      - uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+      - name: Verify anonymous stable entrypoint and updater feed
+        run: |
+          channel="$(python3 scripts/release_metadata.py | python3 -c 'import json,sys; print(json.load(sys.stdin)["channel"])')"
+          base="https://oliverdougherC.github.io/Lyra/$channel"
+          curl --fail --retry 8 --retry-all-errors "$base/latest.json" -o published-feed.json
+          cmp published-feed.json release-assets/latest.json
+          curl --fail --retry 8 --retry-all-errors "$base/" -o /dev/null

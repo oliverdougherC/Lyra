@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import ipaddress
 import json
 import logging
 import os
+import re
 import socket
 import sys
+import traceback
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import TextIO
@@ -29,17 +32,48 @@ _LOG_MAX_BYTES = 1_048_576
 _LOG_BACKUPS = 3
 
 
-class _PrivacyFilter(logging.Filter):
-    """Bound path disclosure in packaged logs without touching exception semantics."""
+class _PrivacyFormatter(logging.Formatter):
+    """Render safe stack locations without exception values or source-code excerpts."""
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
-        home = str(Path.home())
-        if home:
-            message = message.replace(home, "<home>")
-        record.msg = message
-        record.args = ()
-        return True
+    def formatException(self, exc_info: tuple) -> str:  # noqa: N802
+        lines = []
+        seen = set()
+        exc = exc_info[1]
+        while exc is not None and id(exc) not in seen:
+            seen.add(id(exc))
+            lines.append(type(exc).__name__)
+            for frame in traceback.extract_tb(exc.__traceback__):
+                lines.append(f"  {Path(frame.filename).name}:{frame.lineno} in {frame.name}")
+            exc = exc.__cause__ or (None if exc.__suppress_context__ else exc.__context__)
+        return "\n".join(lines)
+
+    def format(self, record: logging.LogRecord) -> str:
+        safe = copy.copy(record)
+        # Other handlers may already have cached the unsafe standard traceback.
+        safe.exc_text = (
+            None if safe.exc_info else ("[exception details omitted]" if safe.exc_text else None)
+        )
+        rendered = super().format(safe)
+        rendered = rendered.replace(str(Path.home()), "<home>")
+        rendered = re.sub(
+            r"(?i)(bearer\s+|(?:api[_-]?key|token|secret|password)[\s=:]+)[^\s,;]+",
+            r"\1<redacted>",
+            rendered,
+        )
+        return re.sub(
+            r"(?<![\w:])/(?:Users|home|private|Volumes|var)/[^\s]+", "<private-path>", rendered
+        )
+
+
+class _PrivateRotatingFileHandler(RotatingFileHandler):
+    def _open(self) -> TextIO:
+        descriptor = os.open(
+            self.baseFilename,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        os.fchmod(descriptor, 0o600)
+        return os.fdopen(descriptor, self.mode, encoding=self.encoding, errors=self.errors)
 
 
 def configure_packaged_logging() -> Path:
@@ -49,15 +83,14 @@ def configure_packaged_logging() -> Path:
     logs_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(logs_dir, 0o700)
     path = logs_dir / "backend.log"
-    handler = RotatingFileHandler(
+    handler = _PrivateRotatingFileHandler(
         path,
         maxBytes=_LOG_MAX_BYTES,
         backupCount=_LOG_BACKUPS,
         encoding="utf-8",
     )
     os.chmod(path, 0o600)
-    handler.addFilter(_PrivacyFilter())
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    handler.setFormatter(_PrivacyFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     root.addHandler(handler)
@@ -183,6 +216,9 @@ async def run_packaged_backend(
 ) -> int:
     apply_bootstrap_environment(bootstrap)
     configure_packaged_logging()
+    from backend.desktop_backup import recover_restore
+
+    recover_restore()
     from backend.main import create_app
 
     sock = adopt_inherited_socket(bootstrap.socket_fd)
@@ -219,6 +255,16 @@ async def run_packaged_backend(
 
 
 def main(stdin_text: str | None = None, *, stream: TextIO | None = None) -> int:
+    for operation in ("create", "restore"):
+        flag = f"--desktop-backup-{operation}"
+        if flag in sys.argv[1:]:
+            os.environ.setdefault("LYRA_PACKAGED", "1")
+            from backend import desktop_backup
+
+            index = sys.argv.index(flag)
+            if index + 1 >= len(sys.argv):
+                return 2
+            return desktop_backup.main(operation, sys.argv[index + 1], stream=stream)
     if "--reclaim-helpers" in sys.argv[1:]:
         os.environ.setdefault("LYRA_PACKAGED", "1")
         from backend.llm import helper_reclaim

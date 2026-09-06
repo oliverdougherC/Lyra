@@ -1,3 +1,5 @@
+import { reportUpdateSaveState } from '../update-safety'
+
 /**
  * The draft autosave engine: a single-owner, versioned writer with an honest save state.
  *
@@ -148,10 +150,12 @@ export function createSaveEngine(opts: {
   let errorDetail: string | undefined
   // The state is a stream of transitions, not of keystrokes: the fortieth dirty in a row
   // says nothing the first did not.
+  const updateSaveOwner = Symbol('draft-save')
   let reported: SaveStateName = 'saved'
   let reportedDetail: string | undefined
 
   function report(state: SaveStateName, detail?: string): void {
+    reportUpdateSaveState(updateSaveOwner, state === 'saved')
     if (state === reported && detail === reportedDetail) return
     reported = state
     reportedDetail = detail

@@ -1,0 +1,1 @@
+Lyra updater signature regression fixture. This is not an application.

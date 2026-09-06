@@ -1,4 +1,9 @@
+mod backup;
+mod bounded_process;
 mod external_navigation;
+mod update_archive;
+mod update_recovery;
+mod updater;
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -102,9 +107,12 @@ struct SidecarReady {
     session_secret: String,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct AppState {
-    lifecycle: Mutex<Lifecycle>,
+    lifecycle: Arc<Mutex<Lifecycle>>,
+    quitting: Arc<std::sync::atomic::AtomicBool>,
+    updating: Arc<std::sync::atomic::AtomicBool>,
+    shutdown_complete: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Default)]
@@ -260,6 +268,11 @@ impl AppState {
         force_restart: bool,
     ) -> Result<BootstrapPayload, LaunchError> {
         let mut lifecycle = self.lifecycle.lock().map_err(|_| LaunchError::Poisoned)?;
+        if self.quitting.load(std::sync::atomic::Ordering::SeqCst)
+            || self.updating.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(LaunchError::Import("Lyra is shutting down"));
+        }
 
         if !force_restart {
             if let Some(existing) = lifecycle.backend.as_mut() {
@@ -286,21 +299,23 @@ impl AppState {
         Ok(bootstrap)
     }
 
-    fn shutdown(&self) {
-        let Ok(mut lifecycle) = self.lifecycle.lock() else {
-            return;
-        };
+    fn shutdown(&self) -> Result<(), LaunchError> {
+        let mut lifecycle = self.lifecycle.lock().map_err(|_| LaunchError::Poisoned)?;
         if let Some(existing) = lifecycle.backend.as_mut() {
             log_event("desktop shell is stopping its owned backend");
-            if let Err(error) = stop_backend(existing) {
-                log_event(&format!("terminal backend cleanup failed: {error}"));
-            }
+            stop_backend(existing)?;
         }
         lifecycle.backend = None;
+        Ok(())
     }
 
     fn publish_import(&self, app: &AppHandle) -> Result<BootstrapPayload, LaunchError> {
         let mut lifecycle = self.lifecycle.lock().map_err(|_| LaunchError::Poisoned)?;
+        if self.quitting.load(std::sync::atomic::Ordering::SeqCst)
+            || self.updating.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(LaunchError::Import("Lyra is shutting down"));
+        }
         let sidecar_path = if let Some(existing) = lifecycle.backend.as_mut() {
             let path = existing.sidecar_path.clone();
             log_event("desktop import publication is stopping the owned backend");
@@ -321,25 +336,33 @@ impl AppState {
 }
 
 #[tauri::command]
-fn desktop_bootstrap(
+async fn desktop_bootstrap(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<BootstrapPayload, CommandError> {
-    state.ensure_backend(&app, false).map_err(|error| {
-        log_event(&format!("backend bootstrap failed: {error}"));
-        error.into()
-    })
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.ensure_backend(&app, false))
+        .await
+        .map_err(|_| CommandError::from(LaunchError::Poisoned))?
+        .map_err(|error| {
+            log_event(&format!("backend bootstrap failed: {error}"));
+            error.into()
+        })
 }
 
 #[tauri::command]
-fn retry_backend(
+async fn retry_backend(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<BootstrapPayload, CommandError> {
-    state.ensure_backend(&app, true).map_err(|error| {
-        log_event(&format!("backend retry failed: {error}"));
-        error.into()
-    })
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.ensure_backend(&app, true))
+        .await
+        .map_err(|_| CommandError::from(LaunchError::Poisoned))?
+        .map_err(|error| {
+            log_event(&format!("backend retry failed: {error}"));
+            error.into()
+        })
 }
 
 #[tauri::command]
@@ -640,19 +663,67 @@ async fn pick_workspace_directory(app: AppHandle) -> Result<Option<String>, Comm
 }
 
 #[tauri::command]
-fn publish_desktop_import(
+async fn publish_desktop_import(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<BootstrapPayload, CommandError> {
-    state.publish_import(&app).map_err(|error| {
-        log_event(&format!("desktop import publication failed: {error}"));
-        error.into()
-    })
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.publish_import(&app))
+        .await
+        .map_err(|_| CommandError::from(LaunchError::Poisoned))?
+        .map_err(|error| {
+            log_event(&format!("desktop import publication failed: {error}"));
+            error.into()
+        })
+}
+
+pub(crate) async fn stop_for_update(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>().inner().clone();
+    state
+        .updating
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let restore = state.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || state.shutdown())
+        .await
+        .map_err(|_| "The update cleanup worker stopped unexpectedly".to_string())
+        .and_then(|result| result.map_err(|error| error.to_string()));
+    if result.is_err() {
+        restore
+            .updating
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    result
+}
+
+pub(crate) async fn resume_after_failed_update(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>().inner().clone();
+    state
+        .updating
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    tauri::async_runtime::spawn_blocking(move || state.ensure_backend(&app, false))
+        .await
+        .map_err(|_| "The update recovery worker stopped unexpectedly".to_string())?
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn desktop_print(app: AppHandle) -> Result<(), String> {
+    app.get_webview_window("main")
+        .ok_or_else(|| "The document window is unavailable".to_string())?
+        .print()
+        .map_err(|_| "The macOS print dialog could not be opened".to_string())
 }
 
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_updater::Builder::new()
+                .pubkey(include_str!("../updater-public-key.txt").trim())
+                .build(),
+        )
+        .manage(updater::UpdateState::default())
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)
@@ -668,20 +739,47 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             desktop_bootstrap,
+            desktop_print,
             retry_backend,
             open_external_url,
             pick_import_directory,
             save_original_document,
             pick_workspace_directory,
-            publish_desktop_import
+            publish_desktop_import,
+            backup::desktop_backup_create,
+            backup::desktop_backup_restore,
+            updater::desktop_update_status,
+            update_recovery::desktop_update_recovery,
+            updater::check_desktop_update,
+            updater::download_desktop_update,
+            updater::cancel_desktop_update,
+            updater::install_desktop_update,
+            updater::restart_desktop_update
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Lyra desktop shell");
 
     app.run(|app, event| {
-        if let tauri::RunEvent::Exit = event {
-            let state = app.state::<AppState>();
-            state.shutdown();
+        if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+            let state = app.state::<AppState>().inner().clone();
+            if state
+                .quitting
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                api.prevent_exit();
+                return;
+            }
+            api.prevent_exit();
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                if let Err(error) = state.shutdown() {
+                    log_event(&format!("terminal backend cleanup failed: {error}"));
+                }
+                state
+                    .shutdown_complete
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                app.exit(code.unwrap_or(0));
+            });
         }
     });
 }
@@ -1238,19 +1336,21 @@ fn write_import_selection(
 }
 
 fn run_import_publication(sidecar_path: &Path) -> Result<(), LaunchError> {
-    let status = Command::new(sidecar_path)
+    let mut command = Command::new(sidecar_path);
+    command
         .arg("--publish-desktop-import")
-        .env("LYRA_PACKAGED", "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|_| LaunchError::Import("the staged data could not be published"))?;
+        .env("LYRA_PACKAGED", "1");
+    let output = bounded_process::run(&mut command, Duration::from_secs(60)).map_err(|_| {
+        LaunchError::Import(
+            "import publication did not finish; restart Lyra to recover the staged import",
+        )
+    })?;
+    let status = output.status;
     if status.success() {
         Ok(())
     } else {
         Err(LaunchError::Import(
-            "the staged data could not be published; the prior data was preserved",
+            "the staged data could not be published; restart Lyra to recover the staged import",
         ))
     }
 }
@@ -1421,8 +1521,7 @@ fn reclaim_helpers(sidecar_path: Option<&Path>) -> Result<(), LaunchError> {
 }
 
 fn run_reclaim_command(command: &mut Command, secret: &str) -> Result<(), String> {
-    let output = command
-        .output()
+    let output = bounded_process::run(command, Duration::from_secs(10))
         .map_err(|_| "helper reclaim command could not be started".to_string())?;
     if output.status.success() {
         return Ok(());

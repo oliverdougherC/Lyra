@@ -160,7 +160,7 @@ def base_steps(app_name: str) -> list[dict[str, object]]:
 
 
 def build_plan(app_root: Path, work_root: Path, run_id: str) -> dict[str, object]:
-    root = run_root(work_root, run_id)
+    root = run_root(work_root, run_id).expanduser().resolve()
     return {
         "schema_version": SCHEMA_VERSION,
         "tool": "packaged_soak_harness",
@@ -175,11 +175,16 @@ def build_plan(app_root: Path, work_root: Path, run_id: str) -> dict[str, object
             "profile": "profile",
             "artifacts": "artifacts",
             "logs": "logs",
+            "cache": "cache",
         },
+        # This local execution plan contains private absolute paths. Redact them before
+        # publishing evidence. Relative paths depend on the app's launch directory.
         "launch_environment": {
-            "LYRA_DESKTOP_PROFILE_DIR": "profile",
-            "LYRA_DESKTOP_EVIDENCE_DIR": "artifacts",
-            "LYRA_DESKTOP_LOG_DIR": "logs",
+            "LYRA_DATA_DIR": str(root / "profile"),
+            "LYRA_DB_PATH": str(root / "profile" / "lyra.db"),
+            "LYRA_CACHE_DIR": str(root / "cache"),
+            "LYRA_LOGS_DIR": str(root / "logs"),
+            "LYRA_MODELS_DIR": str(root / "profile" / "models"),
         },
         "steps": base_steps(display_name(app_root)),
     }
@@ -190,12 +195,13 @@ def write_plan(plan_path: Path, payload: dict[str, object]) -> None:
 
 
 def prepare_run(app_root: Path, work_root: Path, run_id: str) -> Path:
-    root = run_root(work_root, run_id)
+    root = run_root(work_root, run_id).expanduser().resolve()
     if root.exists():
         raise FileExistsError(f"run directory already exists: {root}")
     (root / "profile").mkdir(parents=True)
     (root / "artifacts").mkdir()
     (root / "logs").mkdir()
+    (root / "cache").mkdir()
     plan = build_plan(app_root, work_root, run_id)
     plan_path = root / "plan.json"
     write_plan(plan_path, plan)

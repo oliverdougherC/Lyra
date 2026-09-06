@@ -208,6 +208,42 @@ export async function publishDesktopImport(): Promise<boolean> {
   }
 }
 
+export async function printCurrentDocument(): Promise<void> {
+  const invoke = tauriInvoke()
+  if (invoke) await invoke('desktop_print')
+  else window.print()
+}
+
+export async function runDesktopBackup(
+  command: 'desktop_backup_create' | 'desktop_backup_restore',
+): Promise<{ status: 'created' | 'restored' | 'cancelled'; label: string }> {
+  const invoke = tauriInvoke()
+  if (!invoke) throw new Error('Backup and restore are available in the desktop app.')
+  try {
+    const raw = await invoke(command)
+    if (!raw || typeof raw !== 'object') throw new Error('The backup response was invalid.')
+    const result = raw as Record<string, unknown>
+    if (
+      !['created', 'restored', 'cancelled'].includes(String(result.status)) ||
+      typeof result.label !== 'string'
+    ) {
+      throw new Error('The backup response was invalid.')
+    }
+    if (result.status !== 'cancelled') {
+      const restarted = await readTauriBootstrap()
+      if (!restarted) throw new Error('Lyra could not reopen its data after the backup operation.')
+      adoptRuntimeConfig(restarted)
+    }
+    return result as { status: 'created' | 'restored' | 'cancelled'; label: string }
+  } catch (error) {
+    // Native recovery restarts the backend even after a failed archive operation.
+    // Adopt the fresh session before allowing the student to retry or keep working.
+    const recovered = await readTauriBootstrap().catch(() => null)
+    if (recovered) adoptRuntimeConfig(recovered)
+    throw error
+  }
+}
+
 export async function initializeRuntimeConfig(): Promise<RuntimeConfig> {
   if (runtimeConfig) return runtimeConfig
   if (runtimePromise) return runtimePromise
