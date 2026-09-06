@@ -559,3 +559,16 @@ def test_writer_chat_prompt_omits_empty_blocks() -> None:
     assert "What this document is:" not in prompt
     assert "about this class" not in prompt
     assert "The document right now:\nThe document is empty." in prompt
+
+
+def test_guide_bounds_start_help_and_reduces_abstraction_for_simplification() -> None:
+    """PLA-461 prompt wiring; semantic success is measured on production class_chat."""
+    guide = _normalized(build_system_prompt("guide", [], []))
+    show = _normalized(build_system_prompt("show", [], []))
+    assert "one concrete first move" in guide
+    assert "stop at a useful setup" in guide
+    assert "less abstraction, not a second full lecture" in guide
+    assert "omit the formal definition or notation that caused difficulty" in guide
+    assert "never withhold an explanation or answer the student asked for outright" in guide
+    assert "direct, complete, worked explanation" in show
+    assert "stop at a useful setup" not in show
