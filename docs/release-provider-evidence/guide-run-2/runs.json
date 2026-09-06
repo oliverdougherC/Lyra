@@ -1,0 +1,113 @@
+{
+  "cases": {
+    "no-idea-how-to-start": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "status": "ok",
+      "response": "No problem \u2014 let's build it up piece by piece.\n\n**The core idea:** the salt amount $S(t)$ (kg) changes at the rate salt enters minus the rate it leaves:\n\n$$\\frac{dS}{dt} = \\text{rate in} - \\text{rate out}$$\n\n**Rate in:** the incoming brine is $0.1$ kg/L flowing at $3$ L/min, so\n\n$$\\text{rate in} = 0.1 \\times 3 = 0.3 \\text{ kg/min}$$\n\n**Rate out:** the tank is well-stirred, so the outflow has the same concentration as the tank: $\\frac{S(t)}{100}$ kg/L (volume stays 100 L since in = out). Flowing at $3$ L/min:\n\n$$\\text{rate out} = \\frac{S}{100} \\times 3 = 0.03\\,S$$\n\n**The equation:**\n\n$$\\frac{dS}{dt} = 0.3 - 0.03\\,S, \\qquad S(0) = 20$$\n\n**Solving:** factor out $0.03$: $\\frac{dS}{dt} = 0.03(10 - S)$. Separate and integrate:\n\n$$\\int \\frac{dS}{10 - S} = \\int 0.03\\, dt \\implies -\\ln(10 - S) = 0.03t + C$$\n\nSo $10 - S = C e^{-0.03t}$, i.e. $S(t) = 10 + C e^{-0.03t}$. Use $S(0) = 20$: $20 = 10 + C$, so $C = 10$.\n\n$$\\boxed{S(t) = 10 + 10e^{-0.03t} \\text{ kg}}$$\n\nI checked this by differentiating: $\\frac{dS}{dt} = -0.3e^{-0.03t}$, and $0.3 - 0.03S = 0.3 - 0.3 - 0.3e^{-0.03t} = -0.3e^{-0.03t}$ \u2014 they match, so the solution is correct.\n\n**Sanity check:** as $t \\to \\infty$, $S \\to 10$ kg. That makes sense \u2014 the tank eventually fills with the incoming $0.1$ kg/L brine, and $0.1 \\times 100 = 10$ kg.\n\nThe key move to remember: \"rate out\" always uses the *current* concentration in the tank, $\\frac{S(t)}{V}$, times the outflow rate. That's what makes it a differential equation rather than arithmetic.",
+      "generated_at": "2026-09-06T01:54:40+00:00",
+      "duration_seconds": 7.94,
+      "system_prompt_tokens": 1023,
+      "tool_schema_tokens": 1266,
+      "user": "I have no idea how to start.",
+      "mode": "guide"
+    },
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "ok": false
+        },
+        {
+          "name": "cas_integrate",
+          "ok": false
+        },
+        {
+          "name": "cas_integrate",
+          "ok": true
+        },
+        {
+          "name": "cas_integrate",
+          "ok": true
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "status": "ok",
+      "response": "Your setup is right \u2014 the convolution integral is the correct starting point. Two slips happened inside it:\n\n**1. The integrand.** $h(t-\\tau) = e^{-(t-\\tau)}u(t-\\tau)$, not $e^{-t}$. You evaluated $h$ at $t$ instead of at $t-\\tau$, so the $\\tau$ dependence vanished and you could pull it out of the integral. With the correct integrand, for $0 \\le t \\le 1$:\n\n$$y(t) = \\int_0^t e^{-(t-\\tau)}\\,d\\tau = 1 - e^{-t}$$\n\n(I checked this integral symbolically \u2014 it comes out exactly $1 - e^{-t}$.)\n\n**2. The upper limit.** $x(\\tau) = u(\\tau) - u(\\tau-1)$ is a pulse: it's 1 only on $0 \\le \\tau \\le 1$ and zero elsewhere. So the upper limit is $\\min(t, 1)$, not $t$. Your formula $t e^{-t}$ (and really any single formula) only works while $t \\le 1$. For $t > 1$ the pulse has ended, so you integrate over the whole pulse:\n\n$$y(t) = \\int_0^1 e^{-(t-\\tau)}\\,d\\tau = e^{1-t} - e^{-t} = (e-1)e^{-t}, \\qquad t > 1$$\n\n**Putting it together:**\n\n$$y(t) = \\begin{cases} 0, & t < 0 \\\\ 1 - e^{-t}, & 0 \\le t \\le 1 \\\\ (e-1)e^{-t}, & t > 1 \\end{cases}$$\n\nA good sanity check: at $t = 1$ both middle pieces give $1 - e^{-1}$, so the output is continuous \u2014 it rises while the pulse is inside the exponential's \"memory,\" then decays like $h$ itself once the pulse is gone.",
+      "generated_at": "2026-09-06T01:54:54+00:00",
+      "duration_seconds": 13.67,
+      "system_prompt_tokens": 1023,
+      "tool_schema_tokens": 1266,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide"
+    },
+    "is-my-answer-correct": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "ok": true
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "status": "ok",
+      "response": "Yes \u2014 your answer is correct.\n\n$$\\mathcal{L}^{-1}\\left\\{\\frac{1}{s^2+9}\\right\\} = \\frac{1}{3}\\sin(3t)$$\n\nThe move that gets you there: the standard pair is\n\n$$\\mathcal{L}\\{\\sin(\\omega t)\\} = \\frac{\\omega}{s^2+\\omega^2}$$\n\nHere $\\omega = 3$, so the numerator should be $3$, but yours is $1$. You fix that by scaling: $\\frac{1}{3}\\cdot\\frac{3}{s^2+9}$, which gives $\\frac{1}{3}\\sin(3t)$.\n\nI verified it by computing the Laplace transform forward: $\\int_0^\\infty \\frac{1}{3}\\sin(3t)\\,e^{-st}\\,dt = \\frac{1}{s^2+9}$, so it checks out.",
+      "generated_at": "2026-09-06T01:54:59+00:00",
+      "duration_seconds": 5.38,
+      "system_prompt_tokens": 1023,
+      "tool_schema_tokens": 1266,
+      "user": "I got (1/3) sin(3t). Is my answer correct?",
+      "mode": "guide"
+    },
+    "explain-that-more-simply": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "Convolution is just a way to compute the output of a system from its input.\n\nThink of it this way: imagine the system is a person who, when you tap them, rings a bell that fades out over a few seconds. That \"bell\" is the system's response, $h(t)$.\n\nNow instead of one tap, you give a whole sequence of taps \u2014 that's your input $x(t)$. The output is just all the bells ringing at once, each one starting when its tap happened and fading out on its own schedule.\n\nThe integral does exactly that bookkeeping:\n\n$$y(t) = \\int_{-\\infty}^{\\infty} x(\\tau)\\, h(t - \\tau)\\, d\\tau$$\n\n- $x(\\tau)$: how hard you tapped at time $\\tau$\n- $h(t - \\tau)$: how much of that tap's bell is still ringing at time $t$\n- the integral: adds up all the still-ringing bells\n\nSo convolution = \"smear each input value out over time according to the system's response, then add it all up.\"\n\nA useful mental shortcut: flip $h$, slide it across $x$, and at each position multiply and add \u2014 that's the same computation, and it's why people say convolution is \"flip and slide.\"",
+      "generated_at": "2026-09-06T01:55:01+00:00",
+      "duration_seconds": 2.47,
+      "system_prompt_tokens": 1023,
+      "tool_schema_tokens": 1266,
+      "user": "Explain that more simply.",
+      "mode": "guide"
+    },
+    "show-convolution-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "status": "ok",
+      "response": "Here's the full computation. Let\n\n$$h(t) = u(t) - u(t-1) \\qquad\\text{(the unit pulse on } [0,1]\\text{)}$$\n\nand $g(t) = e^{-t}u(t)$. The convolution is\n\n$$(h*g)(t) = \\int_{-\\infty}^{\\infty} h(\\tau)\\, g(t-\\tau)\\, d\\tau = \\int_0^1 e^{-(t-\\tau)}\\, u(t-\\tau)\\, d\\tau.$$\n\n**Step 1 \u2014 Find where the integrand is nonzero.** The integrand is nonzero only when both factors are nonzero:\n\n- $h(\\tau) \\neq 0 \\iff 0 \\le \\tau \\le 1$,\n- $g(t-\\tau) \\neq 0 \\iff t - \\tau \\ge 0 \\iff \\tau \\le t$.\n\nSo the effective integration range is $0 \\le \\tau \\le \\min(1, t)$. That gives three cases.\n\n**Case 1: $t < 0$.** Then $\\tau \\le t < 0$ contradicts $\\tau \\ge 0$, so the range is empty:\n\n$$(h*g)(t) = 0.$$\n\n**Case 2: $0 \\le t \\le 1$.** Here $t \\le 1$, so the range is $0 \\le \\tau \\le t$:\n\n$$(h*g)(t) = \\int_0^t e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^t e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^t = e^{-t}(e^t - 1) = 1 - e^{-t}.$$\n\n**Case 3: $t > 1$.** Here $1 < t$, so the range is $0 \\le \\tau \\le 1$:\n\n$$(h*g)(t) = \\int_0^1 e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^1 e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^1 = (e - 1)\\,e^{-t}.$$\n\nI verified both integrals symbolically: $\\int_0^t e^{-(t-\\tau)}d\\tau = 1 - e^{-t}$ and $\\int_0^1 e^{-(t-\\tau)}d\\tau = (e-1)e^{-t}$, exactly as above.\n\n**Putting it together:**\n\n$$(h*g)(t) = \\begin{cases} 0, & t < 0,\\\\[4pt] 1 - e^{-t}, & 0 \\le t \\le 1,\\\\[4pt] (e-1)\\,e^{-t}, & t > 1. \\end{cases}$$\n\n**Sanity checks.** At $t = 1$ the two middle pieces agree: $1 - e^{-1} = (e-1)e^{-1}$, so the result is continuous. As $t \\to \\infty$ the output decays to $0$, which makes sense: the pulse is finite in energy and $e^{-t}u(t)$ is stable.\n\n**The idea to carry forward:** convolving with a pulse is \"integration over a sliding window.\" The pulse $h$ just tells you *where* to integrate \u2014 the window $[0,1]$ slides with $t$ \u2014 and the only bookkeeping that matters is where the window overlaps the support of the other signal. That overlap analysis (here: $\\tau \\le \\min(1,t)$) is what decides the case split, and the integral itself is then routine.",
+      "generated_at": "2026-09-06T01:55:17+00:00",
+      "duration_seconds": 15.89,
+      "system_prompt_tokens": 826,
+      "tool_schema_tokens": 1266,
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "mode": "show"
+    }
+  }
+}

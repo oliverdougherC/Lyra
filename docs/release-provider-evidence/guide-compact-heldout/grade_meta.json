@@ -1,0 +1,14 @@
+{
+  "corpus_version": "release-heldout-1.0.0",
+  "prompt_contract_version": "2",
+  "tutor": {
+    "model": "Qwen3.8-27B",
+    "locality": "remote"
+  },
+  "judge": {
+    "model": "Qwen3.8-27B",
+    "locality": "remote",
+    "same_as_tutor": true
+  },
+  "graded_at": "2026-09-06T02:13:30+00:00"
+}

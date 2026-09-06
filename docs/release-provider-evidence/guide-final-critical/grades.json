@@ -1,0 +1,372 @@
+{
+  "no-idea-how-to-start": {
+    "verdict": "fail",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately gives the two rates the student needs to start and then continues to the full amount of salt after t minutes."
+        },
+        "proportionality": {
+          "score": 1,
+          "note": "The student only needed help starting, but the reply goes well beyond that by solving the differential equation, checking it, and adding a sanity check."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "The reply jumps straight into the mixing rates without adding unrelated prerequisite material."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply contains no questions to the student."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "All requested information is present, including the rates, the model, and the explicit formula for S(t)."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The rates, differential equation, initial condition, solution form, and final formula are all consistent and correct."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It is organized around the in-minus-out principle and explains why the outflow term depends on S(t), leaving the student with a usable model and solution."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It identifies the two rates and explicitly says the outflow concentration is S(t)/100 kg/L, so the outflow rate depends on S(t)."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It computes rate in as 0.1 x 3 = 0.3 kg/min and rate out as 3 x S(t)/100 = 3S/100 kg/min, i.e. 0.03S(t)."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": true,
+          "why": "It unpromptedly gives the full solved answer S(t) = 10 + 10e^{-3t/100}, equivalent to 10 + 10e^{-0.03t}."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It does not lecture about differential equations in general; it uses the differential-equation form only to solve this problem."
+        },
+        {
+          "index": 3,
+          "violated": false,
+          "why": "It does not ask the student to re-explain the problem before providing help."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T02:19:46+00:00"
+  },
+  "attempt-where-did-i-go-wrong": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately identifies the two specific mistakes in the student's attempt before presenting the corrected case split."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The level of detail is appropriate to diagnosing the attempt and giving the corrected convolution result."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "It does not introduce unnecessary prerequisite material before addressing the student's work."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "No questions are asked that would delay or replace the requested diagnosis."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The requested error diagnosis and the corrected pieces of y(t) are both explicitly provided."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The corrected integrand, limits, and resulting expressions match the ground-truth convolution."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It explains why the mistake occurred, separates the cases clearly, and includes a useful continuity/decay check."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It explicitly says \"h(t-\\tau) = e^{-(t-\\tau)}u(t-\\tau), not e^{-t}\" and that \"The \\tau is still in the exponent, so you can't pull it out of the integral.\""
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It begins by saying \"Your setup is right \u2014 the integral form and the lower limit 0 ... are correct\" and then uses the correct 0-to-t limits for 0 \\le t \\le 1."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "The reply directly addresses the student's attempt rather than starting a fresh method from the top."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It gives a brief positive comment but immediately diagnoses the integrand and upper-limit errors."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T02:20:00+00:00"
+  },
+  "is-my-answer-correct": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply answers the student's question immediately with \"Yes \u2014 your answer is correct.\""
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "It gives the requested verdict plus a short justification and verification, matching a correctness check."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "The standard Laplace pair used is needed for the explanation and does not delay the answer."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply does not ask the student to justify or perform an exercise before answering."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The correctness verdict and the reasoning behind the inverse transform are both fully provided."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The stated standard pair, scaling, inverse result, and verification integral are mathematically correct."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It explains why the factor 1/3 appears by comparing the numerator to the standard transform of sin(3t)."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "The first sentence is \"Yes \u2014 your answer is correct.\""
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It then states the standard pair, sets \u03c9=3, shows 1/(s\u00b2+9) = (1/3)\u00b73/(s\u00b2+9), and concludes the inverse is (1/3)sin(3t)."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "It does not lecture about Laplace transforms before the verdict; the verdict appears first."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It does not withhold the verdict or ask the student to justify the answer first; it explicitly confirms the answer."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T02:20:11+00:00"
+  },
+  "explain-that-more-simply": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately provides a simpler explanation of convolution in response to the student's request."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The level of detail matches a request for a simpler explanation without unnecessary expansion."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "It only briefly names the input and system response before giving the simplified picture."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply contains no questions to the student."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "It directly gives the requested simpler explanation rather than deferring it or turning it into a task."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The flip-slide-multiply-add description and echo analogy accurately describe convolution in plain language."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "The reply organizes the idea into a memorable procedure and a concrete analogy, helping the student build intuition."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It explains convolution as \"flip, slide, multiply, add up\" and supports it with a concrete echo/hallway example."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "The reply stays on convolution and uses a lower-abstraction picture rather than switching to another topic."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "It does not restate the formal integral definition; it uses plain procedural language instead."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It does not introduce frequency-domain or other new formalism to simplify the explanation."
+        },
+        {
+          "index": 3,
+          "violated": false,
+          "why": "The reply gives an explanation directly and does not turn the response into a quiz or set of questions."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T02:20:14+00:00"
+  },
+  "dont-ask-me-questions-teach-it": {
+    "verdict": "fail",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "It immediately states that an eigenvalue is the stretch factor in a special direction and then develops the definition and examples."
+        },
+        "proportionality": {
+          "score": 1,
+          "note": "It is more extensive than a simple explanation, adding a second example, a characteristic-polynomial method, and applications."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "It begins directly with the relevant mental model and definition rather than unrelated background."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply contains no question to the student and no offer to practice."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The requested explanation is given in full, including intuition, formal definition, and worked examples."
+        },
+        "correctness": {
+          "score": 0,
+          "note": "It incorrectly claims that A(1,-1) = (3,-3) = 2(1,-1) for the second matrix, which is false."
+        },
+        "pedagogical_usefulness": {
+          "score": 1,
+          "note": "It is organized and mostly clear, but the false eigenvector check undermines the example and leaves a misleading detail."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It directly teaches that an eigenvector lies on a direction preserved by the matrix and that the eigenvalue is the stretch factor, with concrete examples."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "The reply asks no questions and makes no offer for the student to practice."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "It ends with a statement about where eigenvalues appear, not with a question."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It does not ask what the student finds confusing before teaching; it begins with the explanation."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T02:20:26+00:00"
+  },
+  "show-convolution-worked": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply starts the requested step-by-step convolution computation immediately and presents the final piecewise result directly."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The level of detail is appropriate for a request to see the full step-by-step computation, with only a brief useful summary at the end."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "It only defines the two signals and the convolution integral needed for the requested computation, without unnecessary setup."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply contains no questions to the student."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The final result is explicitly given in the piecewise form and is not left as an exercise."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The three cases, integration limits, evaluated integrals, and final piecewise result match the ground truth, with the endpoint at t=1 handled consistently."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It organizes the computation around support overlap and sliding-window integration, explaining why the case split occurs and leaving the student with a reusable idea."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It shows the integral setup, support analysis, three case integrals, evaluations, and final result: \"0, t<0; 1-e^{-t}, 0<=t<=1; (e-1)e^{-t}, t>1\", which is equivalent to the required boundary behavior."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It names/uses the convolution integral form, identifies where the integrand is nonzero via the supports of h and g, and evaluates the integrals explicitly with antiderivatives."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "The final result is fully provided in the \"Putting it together\" section rather than withheld or assigned as an exercise."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "The reply is a direct worked computation and contains no quiz-style questions or prompts requiring the student to answer."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T02:20:42+00:00"
+  }
+}

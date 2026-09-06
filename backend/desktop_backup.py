@@ -16,6 +16,7 @@ import stat
 import sys
 import tarfile
 import tempfile
+import traceback
 import uuid
 from pathlib import Path
 
@@ -64,7 +65,9 @@ def _verify_database(path: Path) -> None:
         raise BackupError("The backup does not contain a regular Lyra database.")
     assert_schema_compatible(path)
     try:
-        with sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True) as connection:
+        with contextlib.closing(
+            sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+        ) as connection:
             result = connection.execute("pragma quick_check").fetchone()
             if result != ("ok",):
                 raise BackupError("The backup database failed its integrity check.")
@@ -206,7 +209,7 @@ def create_backup(target: Path) -> dict[str, str]:
 
 
 def _settings_snapshot(path: Path) -> dict[str, object] | None:
-    with sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True) as connection:
+    with contextlib.closing(sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)) as connection:
         connection.row_factory = sqlite3.Row
         if not connection.execute(
             "select 1 from sqlite_master where type='table' and name='settings'"
@@ -233,7 +236,7 @@ def _preserve_current_connections(root: Path, stage: Path) -> None:
         transferred = {
             key: value for key, value in current.items() if key in restored and key not in derived
         }
-        with sqlite3.connect(stage / "lyra.db") as connection:
+        with contextlib.closing(sqlite3.connect(stage / "lyra.db")) as connection, connection:
             if transferred:
                 assignments = ", ".join(
                     '"' + key.replace('"', '""') + '" = ?' for key in transferred
@@ -277,7 +280,7 @@ def _preserve_current_connections(root: Path, stage: Path) -> None:
         private.publish_private_text(stage / ".api_key.authority", "deleted")
         private.publish_private_text(stage / ".tutor_credential_generation", uuid.uuid4().hex)
         if restored is not None:
-            with sqlite3.connect(stage / "lyra.db") as connection:
+            with contextlib.closing(sqlite3.connect(stage / "lyra.db")) as connection, connection:
                 for key in ("tutor_credential_id", "legacy_credential_endpoint"):
                     if key in restored:
                         connection.execute(f"update settings set {key}=null where id=1")  # noqa: S608
@@ -342,7 +345,10 @@ def main(operation: str, selected_path: str, *, stream=None) -> int:
             result = restore_backup(Path(selected_path))
         else:
             raise BackupError("Unknown backup operation.")
-    except Exception:
+    except Exception as error:
+        frames = traceback.extract_tb(error.__traceback__)[-4:]
+        locations = ", ".join(f"{Path(frame.filename).name}:{frame.lineno}" for frame in frames)
+        print(f"Desktop backup failed: {type(error).__name__} at {locations}", file=sys.stderr)
         # Detailed arbitrary archive/path contents never enter native diagnostics.
         output.write(
             json.dumps(

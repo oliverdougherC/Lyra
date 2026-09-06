@@ -1,0 +1,7 @@
+tutor semantic eval (corpus release-heldout-1.0.0, contract 2, judge Qwen3.8-27B [remote, same as tutor])
+case                                     result     dire  prop  prer  ques  with  corr  peda
+heldout-dilution-first-move              pass          2     2     2     2     2     2     2
+heldout-conditional-probability-simpler  pass          2     2     2     2     2     2     2
+
+average (0-2): directness=2.0  proportionality=2.0  prerequisite_setup=2.0  questioning=2.0  withholding=2.0  correctness=2.0  pedagogical_usefulness=2.0
+pass rate: 2/2 (1.000)

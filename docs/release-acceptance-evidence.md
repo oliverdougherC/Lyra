@@ -22,7 +22,8 @@ Historical unmerged notes inside issues do not reopen that completed work.
 
 ## Exact remaining provider and quality gates
 
-All five quality issues below remain Todo. Every retained run needs exact app
+All five quality issues below were Todo at the initial audit read; the later
+source runs below do not close their acceptance gates. Every retained run needs exact app
 SHA/version, corpus/prompt/rubric versions, remote versus loopback locality,
 model/capabilities/context/generation settings, timestamps and repetitions.
 Never retain keys or credential-bearing/private endpoint URLs. Keep the same
@@ -38,9 +39,12 @@ model/configuration when attributing differences to packaging or recovery.
 
 The subsequent bounded real-service run used the configured remote Qwen3.8-27B
 endpoint and the production class-chat harness with synthetic material. The first
-13-case run reached terminal output but its same-model judge passed only 11/13;
-Guide first-step and simplification failures remain. A real Exa search/content
-smoke also passed. See [retained provider evidence](release-provider-evidence/README.md).
+13-case run reached terminal output but its same-model judge passed only 11/13.
+Bounded prompt repairs then corrected first-step scope and explicit no-question
+obedience; the latest critical run still passes only 4/6 under the unchanged
+rubric, with simplification/partial-attempt criteria and a displayed Show-limit
+inconsistency retained. A real Exa search/content smoke also passed. See
+[retained provider evidence](release-provider-evidence/README.md).
 These are source-working-tree results, not an immutable packaged-candidate pass
 or independent human judgment. Existing ignored local outputs remain historical.
 

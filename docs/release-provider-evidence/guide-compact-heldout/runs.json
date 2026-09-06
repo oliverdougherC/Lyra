@@ -1,0 +1,30 @@
+{
+  "cases": {
+    "heldout-dilution-first-move": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "Write down the dilution equation first:\n\n$$C_1 V_1 = C_2 V_2$$\n\nIt works because adding water changes the volume but not the amount of salt dissolved \u2014 the moles of solute are the same before and after.\n\nThen list what you know and what you need:\n\n- $C_1 = 1.0$ M (stock concentration)\n- $C_2 = 0.10$ M (target concentration)\n- $V_2 = 250$ mL (target volume)\n- $V_1 = ?$ (how much stock to use)\n\nPlugging in, your equation becomes $1.0 \\cdot V_1 = 0.10 \\cdot 250$. Your next move is to solve that for $V_1$ \u2014 try it, and I'll check your work.\n\nOne practical note for later: $V_1$ is the volume of stock you measure out, and you dilute it *up to* a total of 250 mL, not by adding 250 mL of water.",
+      "generated_at": "2026-09-06T02:13:04+00:00",
+      "duration_seconds": 4.88,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "I haven't learned this yet. What should I write down first?",
+      "mode": "guide"
+    },
+    "heldout-conditional-probability-simpler": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "Conditional probability is just \"the chance of something, *given that you already know something else*.\"\n\nOne example: a bag with 10 marbles \u2014 4 red, 6 blue.\n\n- With no information, the chance of pulling a red marble is $4/10$.\n- Now suppose you're told the marble is from the left half of the bag, and that half holds 3 red and 1 blue. The chance of red is now $3/4$.\n\nThe \"given\" information shrank the world you're considering: instead of all 10 marbles, you only look at the 4 in the left half.\n\nThe notation just says that out loud: $P(\\text{red} \\mid \\text{left half})$ reads \"probability of red, given left half.\" The vertical bar means \"given.\" That's the whole idea \u2014 new information changes the odds.",
+      "generated_at": "2026-09-06T02:13:09+00:00",
+      "duration_seconds": 5.13,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "That notation lost me. Can you explain it with one everyday example?",
+      "mode": "guide"
+    }
+  }
+}

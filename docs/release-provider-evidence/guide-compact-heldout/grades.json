@@ -1,0 +1,132 @@
+{
+  "heldout-dilution-first-move": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately tells the student to write down the dilution equation and sets up the knowns."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "It provides the requested first setup, a brief explanation, and a practical clarification without solving the problem."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "The only explanation is directly tied to why the dilution equation is the starting move."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The prompt for the student to solve for V1 comes after the requested setup and guides the next step."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The requested starting move is fully given rather than hidden behind a hint or question."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The conservation-of-solute setup, units, and practical note that the final volume should be made up to 250 mL are correct."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "It organizes the problem around C1V1=C2V2, explains the conservation reason, and leaves the student ready to solve for V1."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It gives the concrete starting move by writing and plugging into C1V1=C2V2 as 1.0\u00b7V1=0.10\u00b7250."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It identifies C1, C2, V2, and V1 in plain language and uses consistent concentration units of M and volume values in mL."
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "It stops at the setup and says \u201ctry it, and I\u2019ll check your work\u201d rather than giving 25 mL or 0.025 L."
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It provides only a useful first setup plus a brief practical note, not a full solution or laboratory procedure."
+        },
+        {
+          "index": 3,
+          "violated": false,
+          "why": "The starting move is stated explicitly before asking the student to try the next calculation."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T02:13:04+00:00"
+  },
+  "heldout-conditional-probability-simpler": {
+    "verdict": "pass",
+    "grading": {
+      "dimensions": {
+        "directness": {
+          "score": 2,
+          "note": "The reply immediately gives one everyday marble example and explains the conditional idea in the student's terms."
+        },
+        "proportionality": {
+          "score": 2,
+          "note": "The level of detail is appropriately brief for a request to explain with one everyday example."
+        },
+        "prerequisite_setup": {
+          "score": 2,
+          "note": "There is no unnecessary prerequisite lecture before the concrete explanation."
+        },
+        "questioning": {
+          "score": 2,
+          "note": "The reply does not ask the student any questions, so it does not delay the requested explanation."
+        },
+        "withholding": {
+          "score": 2,
+          "note": "The requested explanation is fully provided rather than turned into a hint, exercise, or quiz."
+        },
+        "correctness": {
+          "score": 2,
+          "note": "The marble counts and resulting probabilities are correct and consistent with the ground-truth idea."
+        },
+        "pedagogical_usefulness": {
+          "score": 2,
+          "note": "The reply teaches the core idea by showing how the condition restricts the group, and it connects that to the meaning of the vertical bar."
+        }
+      },
+      "must": [
+        {
+          "index": 1,
+          "met": true,
+          "why": "It uses one concrete marble example in which being told the marble is from the left half limits attention to 4 marbles, and red is counted as 3 of those 4."
+        },
+        {
+          "index": 2,
+          "met": true,
+          "why": "It explains the idea in plain language such as \"the chance of something, given that you already know something else\" and \"shrank the world you're considering.\""
+        }
+      ],
+      "must_not": [
+        {
+          "index": 1,
+          "violated": false,
+          "why": "It does not repeat the symbolic conditional-probability definition or invoke Bayes theorem; it only lightly notes that the vertical bar means \"given.\""
+        },
+        {
+          "index": 2,
+          "violated": false,
+          "why": "It remains focused on conditional probability and does not switch to another probability concept."
+        },
+        {
+          "index": 3,
+          "violated": false,
+          "why": "It provides the explanation directly rather than making the student answer a quiz."
+        }
+      ]
+    },
+    "generated_at": "2026-09-06T02:13:09+00:00"
+  }
+}

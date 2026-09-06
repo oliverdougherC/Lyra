@@ -148,3 +148,12 @@ Official references: [Release Please](https://github.com/googleapis/release-plea
 [GitHub token event behavior](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow),
 [Tauri macOS signing](https://v2.tauri.app/distribute/sign/macos/) and
 [Tauri updater](https://v2.tauri.app/plugin/updater/).
+
+
+## Internal 0.1.0 installations
+
+The internal 0.1.0 apps predate the updater and future-schema safeguard. Their first approved
+beta installation uses the DMG; a later installer cannot retrofit safety code into old copies.
+Keep the verified pre-migration backup and do not reopen an old internal binary on migrated
+student data. Use a separate restored profile for an older compatible app. New beta builds refuse
+future schemas before recovery writes; that guarantee must not be attributed to historical binaries.

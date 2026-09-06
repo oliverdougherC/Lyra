@@ -1,0 +1,18 @@
+tutor semantic eval (corpus 1.1.0, contract 2, judge Qwen3.8-27B [remote, same as tutor])
+case                             result     dire  prop  prer  ques  with  corr  peda
+explain-convolution              not_run    
+what-is-a-derivative             not_run    
+why-can-they-cancel-these-terms  not_run    
+no-idea-how-to-start             pass          2     2     2     2     2     2     2
+attempt-where-did-i-go-wrong     fail          2     2     2     2     2     2     2
+is-my-answer-correct             pass          2     2     2     2     2     2     2
+just-tell-me-the-answer          not_run    
+explain-that-more-simply         fail          2     2     2     2     2     2     1
+dont-ask-me-questions-teach-it   pass          2     2     2     2     2     2     2
+intuition-not-the-derivation     not_run    
+five-minutes-before-exam         not_run    
+show-convolution-worked          pass          2     2     2     2     2     1     2
+show-what-is-a-derivative        not_run    
+
+average (0-2): directness=2.0  proportionality=2.0  prerequisite_setup=2.0  questioning=2.0  withholding=2.0  correctness=1.83  pedagogical_usefulness=1.83
+pass rate: 4/6 (0.667)

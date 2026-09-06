@@ -8,7 +8,7 @@ import shutil
 import sqlite3
 import tarfile
 import time
-from contextlib import suppress
+from contextlib import closing, suppress
 from pathlib import Path, PurePosixPath
 
 BACKUP_VERSION = 1
@@ -95,8 +95,8 @@ def snapshot_sqlite_database(source: Path, destination: Path) -> None:
         # backup API includes that committed WAL; copying only the main file cannot.
         # Read through a second connection while the owner above prevents new writers.
         with (
-            sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True) as reader,
-            sqlite3.connect(str(destination)) as snapshot,
+            closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as reader,
+            closing(sqlite3.connect(str(destination))) as snapshot,
         ):
             reader.backup(snapshot)
             result = snapshot.execute("pragma quick_check").fetchone()

@@ -566,6 +566,8 @@ def test_the_class_chat_surface_carries_the_contract_the_class_chat_sends(
     assert "less abstraction, not a second full lecture" in system
     # The agent capability layer, appended on top of it.
     assert "You are Lyra's class agent" in system
+    assert "The latest user request sets the answer's scope" in system
+    assert "Use verified results only for the claims they actually check" in system
     # The case's retrieved context, rendered as the route renders it.
     assert "Retrieved context from the student's uploaded material:" in system
     assert "Lecture 4.pdf" in system

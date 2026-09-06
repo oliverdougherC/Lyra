@@ -22,12 +22,28 @@ The acceptance lane is rerunning the critical five and full thirteen unchanged c
 The intermediate compact critical run is retained under `guide-compact-critical`: **4/5** under the unchanged same-model grading. First-step help, the partial attempt, answer checking and Show passed. Simplification received 2/2 in all seven dimensions and omitted the previous integral/definitions, but still failed the fixture's specific overlap/sliding-window criterion. This failure is retained, not reclassified as a pass. Full-corpus and held-out runs on this exact compact prompt are owned by the acceptance lane; independent human review and rubric reconciliation remain outstanding.
 
 
-## Final generic instruction repair
+## No-question instruction repair
 
 The compact candidate's full thirteen-case run graded **11/13**, exposing a real additional failure: after “Don't ask me questions; teach it,” the answer ended with an unsolicited “Want me to…” question. Its two held-out cases passed, but that did not waive the explicit-request failure. All intermediate artifacts remain retained.
 
-The final wording explicitly honors requests for no questions, including closing questions and follow-up offers. Simplification now explains the same concrete mechanism in plain words instead of substituting a new analogy. Neither change names a corpus topic or changes the rubric. The Guide block is **1,090 characters versus 1,091 at baseline**, so it retains the existing small-context capacity.
+The next wording explicitly honors requests for no questions, including closing questions and follow-up offers. Simplification now explains the same concrete mechanism in plain words instead of substituting a new analogy. Neither change names a corpus topic or changes the rubric. The Guide block is **1,090 characters versus 1,091 at baseline**, so it retains the existing small-context capacity.
 
-Final prompt SHA-256: `a997cf7dfe16aeb7827cef08b91ad0345598b17c33c89f27226412f1506657d3`.
+No-question candidate SHA-256: `a997cf7dfe16aeb7827cef08b91ad0345598b17c33c89f27226412f1506657d3`.
 
 Three added or extended prompt/production-assembly wiring checks failed before these final changes. **285 tests passed** afterward across the same seven prompt/evaluation/tutor/API suites, including the existing budget boundaries. Ruff and diff checks passed. Acceptance has the frozen hash for fresh critical-six, full-thirteen and held-out-two runs; no human or final-provider pass is claimed here.
+
+
+## Final bounded scope and verification repair
+
+The `a997` critical-six run graded **4/6**. It obeyed the no-question request and simplified the convolution mechanism, but regressed to a complete ODE solution for initial guidance and introduced an incorrect eigenvector equality after checking only eigenvalues. Those are actual failures; the run and all earlier evidence are retained. Its automatic full run was stopped before evaluation rather than represented as a full pass.
+
+The final scoped change makes the **latest/current request** authoritative over earlier requests and over extra information returned by tools. The class-agent capability prompt now requires relevant tool results, limits verification claims to what was actually checked, and requires checking additional worked-example arithmetic. It does not add a topic-specific example, filter output, alter tool permissions, or weaken grading.
+
+Frozen source hashes:
+
+- `backend/llm/prompts.py`: `99383ff71f3d187ff79a3870522fcc52de7cd5db43df4d103c71cf9c1965bdd3`
+- `backend/api/routes_agent_chat.py`: `32d2036ed8179695b00b743e890f813dd31cd470bc902bb6c12da841dd619325` (class-agent prompt constants only)
+
+Guide length is **1,089 characters**, below baseline. Two extended wiring checks failed before the final patch; afterward **285 tests passed**, including small-context boundary tests. Ruff and diff checks passed. Acceptance is running critical-six first against both frozen source hashes. If the configured provider still fails critical teaching quality, that remains a genuine release-quality blocker; further benchmark-specific prompt tuning is not authorized.
+
+Final scoped critical-six result (`guide-scope-critical`): **4/6**, with the unchanged rubric and same-model judge. The first-step response stopped at the ODE setup; explicit no-question teaching was obeyed; the replacement eigenvector arithmetic was correct. Two failures remain: simplification still misses the fixture's specific overlap/sliding-window requirement, and feedback on a partial attempt does not acknowledge the interval where the student's proposed bounds are valid. The Show case passed the judge but received correctness 1/2 for an inconsistent displayed general integration bound despite the correct final piecewise answer. These limitations are retained as configured-provider quality evidence, not declared resolved. No additional full-corpus run or further prompt tuning was undertaken after this final bounded attempt. Independent human acceptance remains outstanding.

@@ -1,0 +1,255 @@
+{
+  "cases": {
+    "explain-convolution": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "**Mental model.** Convolution measures how much one function overlaps a flipped, sliding copy of another, at every position. Take $g$, flip it, slide it across $f$, and at each position $t$ multiply the two and add up the overlap. That sum is $(f*g)(t)$.\n\n**Definition.**\n$$(f * g)(t) = \\int_{-\\infty}^{\\infty} f(\\tau)\\, g(t - \\tau)\\, d\\tau$$\n\nThe discrete version is the same idea with a sum:\n$$(f * g)[n] = \\sum_k f[k]\\, g[n - k]$$\n\nThe $t - \\tau$ (or $n - k$) is the flip-and-slide: as $\\tau$ runs through all values, $g$ is evaluated at a reflected position.\n\n**Two pictures that make it click:**\n\n1. **Smoothing.** Convolving with a boxcar (a function that is $1$ on an interval of width $w$ and $0$ elsewhere) gives a moving average over a window of width $w$.\n2. **Systems.** For a linear time-invariant system, the output is the input convolved with the impulse response $h$: $y = x * h$. The system \"remembers\" past inputs, weighted by $h$.\n\n**Properties that make it useful:**\n\n- Commutative: $f * g = g * f$ \u2014 the flip is exactly what makes this work, so you can think of either function as the one being flipped.\n- The delta is the identity: $f * \\delta = f$.\n- Convolution theorem: convolution in the time domain is multiplication in the frequency domain. This is why it's the workhorse of signal processing, and why the FFT makes it fast.\n\n**Quick example.** Convolve $f = [1, 2, 3]$ with the 2-point boxcar $g = [1, 1]$:\n\n- $n=0$: $1$\n- $n=1$: $1 + 2 = 3$\n- $n=2$: $2 + 3 = 5$\n- $n=3$: $3$\n\nResult: $[1, 3, 5, 3]$ \u2014 the signal smoothed by a 2-point average.\n\nOne note: your uploaded materials don't cover convolution, so this is from general knowledge. If your course frames it differently \u2014 probability (sums of independent random variables), PDEs, or image processing \u2014 tell me and I'll match that framing.",
+      "generated_at": "2026-09-06T02:06:17+00:00",
+      "duration_seconds": 16.82,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "Explain convolution",
+      "mode": "guide"
+    },
+    "what-is-a-derivative": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "A derivative measures how fast a function is changing at a particular point.\n\n**Mental model:** If $f(t)$ is a car's position, then the derivative $f'(t)$ is its speed at that instant. The average speed over a trip is easy \u2014 total distance divided by total time. The derivative is what you get when you shrink that time interval down to zero: the speed at one exact moment, not averaged over any stretch.\n\n**Geometrically:** the derivative is the slope of the tangent line to the curve at that point. A steep curve has a large derivative; a flat spot has a derivative of zero.\n\n**Formally**, it's defined as a limit:\n\n$$f'(x) = \\lim_{h \\to 0} \\frac{f(x+h) - f(x)}{h}$$\n\nThat fraction is the slope of a secant line between two points $h$ apart; the limit takes the second point all the way to the first.\n\n**Quick example:** for $f(x) = x^2$, the derivative is $f'(x) = 2x$. At $x = 3$, the function is increasing at a rate of $6$ \u2014 meaning near $x = 3$, each small step of $\\Delta x$ in the input changes the output by roughly $6\\,\\Delta x$.\n\nOne useful habit: the derivative of a function is itself a function. You're not just computing one number; you're building a new function that tells you the rate of change everywhere.",
+      "generated_at": "2026-09-06T02:06:20+00:00",
+      "duration_seconds": 2.81,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "What is a derivative?",
+      "mode": "guide"
+    },
+    "why-can-they-cancel-these-terms": {
+      "tool_calls": [
+        {
+          "name": "cas_differentiate",
+          "ok": true
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "status": "ok",
+      "response": "Nothing is being canceled \u2014 that's the key. The $2x\\,dx$ isn't disappearing; it's being **renamed**.\n\nHere's the move, step by step:\n\n$$\\int 2x\\cos(x^2)\\,dx = \\int \\cos(x^2)\\cdot \\underbrace{2x\\,dx}_{du}$$\n\nYou set $u = x^2$, so $du = 2x\\,dx$. Now look at the original integral: it contains exactly two pieces, and both of them are now in your vocabulary:\n\n- $x^2$ inside the cosine $\\to$ that's $u$\n- $2x\\,dx$ sitting next to it $\\to$ that's $du$\n\nSo the whole integral gets rewritten as\n\n$$\\int \\cos(u)\\,du = \\sin(u) + C = \\sin(x^2) + C$$\n\nThe $2x\\,dx$ \"disappears\" the same way $x^2$ disappears \u2014 both were replaced by $u$ and $du$. It's a substitution, not a cancellation. You never divide anything out.\n\nWhy does this work? Because the chain rule runs in reverse. The chain rule says $\\frac{d}{dx}\\sin(x^2) = \\cos(x^2)\\cdot 2x$ \u2014 I checked that derivative symbolically and it comes out exactly $2x\\cos(x^2)$. So $\\sin(x^2)$ is an antiderivative of your integrand, which is precisely what the substitution found.\n\nThe telltale sign that this trick is available: the integrand contains a function $x^2$ **and** its derivative $2x$ right next to it. When you see that pairing, $u$-substitution is the move.",
+      "generated_at": "2026-09-06T02:06:30+00:00",
+      "duration_seconds": 10.64,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "Why can they cancel these terms? The 2x dx seems to just disappear.",
+      "mode": "guide"
+    },
+    "no-idea-how-to-start": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "Don't worry \u2014 mixing problems all follow the same one-line idea, so let's build it piece by piece.\n\n**The mental model:** the tank is a bucket where salt piles up. Salt *enters* at some rate and *leaves* at some rate, and the net change is\n\n$$\\frac{dS}{dt} = \\text{rate in} - \\text{rate out}$$\n\nwhere $S(t)$ is the kg of salt in the tank.\n\n**Step 1 \u2014 rate in.** The incoming brine is $0.1$ kg of salt per liter, and it arrives at $3$ L/min. Multiply concentration by flow:\n\n$$\\text{rate in} = 0.1 \\;\\frac{\\text{kg}}{\\text{L}} \\times 3 \\;\\frac{\\text{L}}{\\text{min}} = 0.3 \\;\\frac{\\text{kg}}{\\text{min}}$$\n\nThat's a constant \u2014 the inflow doesn't care what's in the tank.\n\n**Step 2 \u2014 rate out.** This is the part that trips people up. The liquid leaving is the *tank's own* mixture, so its concentration is whatever is in the tank right now. Since $3$ L/min goes in and $3$ L/min goes out, the volume stays $100$ L, so the concentration in the tank is $S(t)/100$ kg/L. The outflow carries that away at $3$ L/min:\n\n$$\\text{rate out} = \\frac{S(t)}{100} \\;\\frac{\\text{kg}}{\\text{L}} \\times 3 \\;\\frac{\\text{L}}{\\text{min}} = \\frac{3S(t)}{100}$$\n\n**Put it together:**\n\n$$\\frac{dS}{dt} = 0.3 - \\frac{3S}{100}, \\qquad S(0) = 20$$\n\nThat's your setup \u2014 a first-order linear ODE. Want me to solve it for $S(t)$?",
+      "generated_at": "2026-09-06T02:06:37+00:00",
+      "duration_seconds": 7.12,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "I have no idea how to start.",
+      "mode": "guide"
+    },
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "status": "ok",
+      "response": "Two slips, both in the integral you wrote:\n\n**1. The upper limit.** $x(\\tau) = u(\\tau) - u(\\tau-1)$ is 1 only on $0 \\le \\tau \\le 1$, not for all $\\tau \\ge 0$. So the upper limit is $\\min(t, 1)$, not $t$. For $t > 1$ you're integrating $x(\\tau)$ over a region where it's zero.\n\n**2. The integrand.** $h(t-\\tau) = e^{-(t-\\tau)}u(t-\\tau)$ \u2014 the $\\tau$ is still in the exponent. You dropped it and integrated $e^{-t}$ as a constant, which is what produced $t e^{-t}$.\n\nWith the lower limit from $u(t-\\tau)$ (i.e. $\\tau \\ge t$) and the pulse limits, the correct integral is:\n\n$$y(t) = \\int_{\\max(0,\\,t-1)}^{\\min(t,\\,1)} e^{-(t-\\tau)}\\, d\\tau$$\n\nwhich gives three cases:\n\n- $t < 0$: no overlap, $y(t) = 0$\n- $0 \\le t < 1$: $\\int_0^t e^{-(t-\\tau)}d\\tau = 1 - e^{-t}$\n- $t \\ge 1$: $\\int_{t-1}^{1} e^{-(t-\\tau)}d\\tau = (e-1)e^{-t}$\n\nI checked both integrals symbolically: $\\int_0^t e^{-(t-\\tau)}d\\tau = 1 - e^{-t}$ and $\\int_0^1 e^{-(t-\\tau)}d\\tau = (e-1)e^{-t}$, so the piecewise answer is confirmed.\n\nSanity check that makes sense of the shape: the pulse \"charges up\" the exponential response while it's on (rising to $1 - e^{-1}$ at $t=1$), then the input stops and the output decays as $e^{-t}$ from there \u2014 continuous at $t=1$, as it must be.",
+      "generated_at": "2026-09-06T02:06:58+00:00",
+      "duration_seconds": 20.71,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide"
+    },
+    "is-my-answer-correct": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "Yes, that's correct.\n\nThe standard pair is $\\mathcal{L}\\{\\sin(\\omega t)\\} = \\dfrac{\\omega}{s^2 + \\omega^2}$. With $\\omega = 3$:\n\n$$\\mathcal{L}\\{\\sin(3t)\\} = \\frac{3}{s^2 + 9}$$\n\nSo you just factor out the constant to match your numerator:\n\n$$\\frac{1}{s^2 + 9} = \\frac{1}{3}\\cdot\\frac{3}{s^2 + 9} \\quad\\Rightarrow\\quad \\mathcal{L}^{-1}\\!\\left\\{\\frac{1}{s^2 + 9}\\right\\} = \\frac{1}{3}\\sin(3t)$$\n\nThe only thing to watch for on problems like this is that the coefficient in front of $\\sin$ is $1/\\omega$, not $1$ \u2014 you handled that correctly.",
+      "generated_at": "2026-09-06T02:07:03+00:00",
+      "duration_seconds": 4.76,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "I got (1/3) sin(3t). Is my answer correct?",
+      "mode": "guide"
+    },
+    "just-tell-me-the-answer": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "status": "ok",
+      "response": "$$S(t) = 10 + 10\\,e^{-3t/100} \\text{ kg}$$\n\nQuick justification: the rate in is $0.1 \\times 3 = 0.3$ kg/min, and the rate out is $\\frac{S}{100} \\times 3 = 0.03S$ kg/min, so\n\n$$\\frac{dS}{dt} = 0.3 - 0.03S, \\qquad S(0) = 20.$$\n\nThis linear ODE has equilibrium $S = 10$, and solving with the initial condition gives the formula above (I verified it satisfies the ODE and $S(0)=20$). As $t \\to \\infty$ the tank approaches 10 kg of salt, which makes sense: the inflow concentration $0.1$ kg/L times 100 L is exactly 10 kg.",
+      "generated_at": "2026-09-06T02:07:07+00:00",
+      "duration_seconds": 4.28,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "Just tell me the answer.",
+      "mode": "guide"
+    },
+    "explain-that-more-simply": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "Think of it as a \"blurring\" or \"smearing\" operation.\n\nImagine you tap a bell once. It rings out with a certain shape \u2014 that's the system's response, $h(t)$. Now instead of one tap, you tap it many times at different moments with different strengths. The sound you hear at any moment is just all those little ripples added up.\n\nThat's all convolution does: it takes your input (all the taps, with their strengths and timings) and adds up how each one contributes to the output at the current moment. Older taps have already faded; recent ones are still loud. The integral is just the continuous version of \"add up all the contributions.\"\n\nSo: **input \u00d7 how the system responds, summed over all past times = output.**",
+      "generated_at": "2026-09-06T02:07:09+00:00",
+      "duration_seconds": 1.81,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "Explain that more simply.",
+      "mode": "guide"
+    },
+    "dont-ask-me-questions-teach-it": {
+      "tool_calls": [
+        {
+          "name": "cas_linalg",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": false
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": false
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        }
+      ],
+      "rounds": 4,
+      "toolless": false,
+      "status": "ok",
+      "response": "An eigenvalue is a number $\\lambda$ such that when you apply a matrix $A$ to a special vector $x$, the result is just that same vector scaled by $\\lambda$:\n\n$$A x = \\lambda x$$\n\nThe vector $x$ (nonzero) is the **eigenvector**. The key idea: most vectors get both stretched *and* rotated when a matrix acts on them. An eigenvector is one of the rare directions that only gets stretched (or flipped) \u2014 it stays on the same line through the origin. The eigenvalue tells you the stretch factor.\n\n**Concrete example.** Take $A = \\begin{pmatrix} 3 & 1 \\\\ 1 & 3 \\end{pmatrix}$.\n\n- Apply it to $x = \\begin{pmatrix} 1 \\\\ 1 \\end{pmatrix}$: you get $\\begin{pmatrix} 4 \\\\ 4 \\end{pmatrix} = 4\\begin{pmatrix} 1 \\\\ 1 \\end{pmatrix}$. The vector stayed on its line and got stretched by $4$. So $\\lambda = 4$ is an eigenvalue.\n- Apply it to $x = \\begin{pmatrix} 1 \\\\ -1 \\end{pmatrix}$: you get $\\begin{pmatrix} 2 \\\\ -2 \\end{pmatrix} = 2\\begin{pmatrix} 1 \\\\ -1 \\end{pmatrix}$. Stretched by $2$. So $\\lambda = 2$ is another eigenvalue.\n\nBoth directions are \"special\" \u2014 the matrix doesn't rotate them, only scales them.\n\n**How you'd find them in general.** Rearrange $A x = \\lambda x$ to $(A - \\lambda I)x = 0$. A nonzero $x$ exists only when $A - \\lambda I$ is singular, i.e. when its determinant is zero:\n\n$$\\det(A - \\lambda I) = 0$$\n\nThis is the **characteristic equation**. Solving it for $\\lambda$ gives the eigenvalues; plugging each back in gives the eigenvectors. For the example above, $\\det\\!\\begin{pmatrix} 3-\\lambda & 1 \\\\ 1 & 3-\\lambda \\end{pmatrix} = (3-\\lambda)^2 - 1 = 0$, which gives $\\lambda = 4$ and $\\lambda = 2$ \u2014 matching what we checked directly.\n\n**Why it matters.** Eigenvalues reveal a matrix's \"natural\" behavior: stability of a system, principal axes of a shape, dominant modes in physics, and so on. Diagonalizing a matrix (writing it in a basis of eigenvectors) turns hard repeated multiplications into simple scaling.\n\nWant me to walk through solving the characteristic equation step by step on a new matrix?",
+      "generated_at": "2026-09-06T02:07:22+00:00",
+      "duration_seconds": 13.01,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "Don't ask me questions; teach it.",
+      "mode": "guide"
+    },
+    "intuition-not-the-derivation": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "The flip is the direction of time. It's not a trick to make the formula work \u2014 it's what makes the sliding window respect causality.\n\nHere's the picture. To compute the output at time $t$, you slide a copy of $g$ across $f$ and measure the overlap. The copy has to be flipped so that the \"start\" of $g$ \u2014 the $g(0)$ end \u2014 sits at the current position $t$.\n\nWhy must the start be at the current position? Because $g$ is usually the impulse response, and the contribution of an input chunk at time $\\tau$ to the output at time $t$ is $g(t-\\tau)$: the impulse response evaluated at the *elapsed time* $t-\\tau$, how long ago the input happened. Now look at that factor as a function of $\\tau$, the variable you're sliding. As $\\tau$ increases toward $t$, the elapsed time $t-\\tau$ shrinks toward zero. So as you slide the copy of $g$ forward, you're reading it from its tail back toward its head. Reading a signal backward is a mirror image \u2014 that's the flip.\n\nIf you skipped the flip and used $g(\\tau-t)$ instead, you'd be evaluating the impulse response at a *negative* elapsed time \u2014 the part of the response that happens before the input even arrives. For a causal system that's zero, so you'd get the wrong answer (or a response that runs backward in time). The flip is exactly what makes the response smear forward, the way a real system does.\n\nA quick sanity check: let $f$ be a short pulse at $t=0$ and $g = e^{-t}u(t)$, a decaying exponential. The output is $e^{-t}u(t)$ \u2014 the pulse smeared *forward* in time. The flip is what makes it smear forward rather than backward.",
+      "generated_at": "2026-09-06T02:08:02+00:00",
+      "duration_seconds": 40.14,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "Give me the intuition, not the derivation. Why does convolution flip one of the signals?",
+      "mode": "guide"
+    },
+    "five-minutes-before-exam": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        }
+      ],
+      "rounds": 4,
+      "toolless": false,
+      "status": "ok",
+      "response": "Here's your five-minute cheat sheet. I'm using the standard angular-frequency convention \u2014 check which one your course uses, since the $2\\pi$ placement changes with the convention.\n\n**The pair**\n\n$$X(\\omega) = \\int_{-\\infty}^{\\infty} x(t)\\, e^{-i\\omega t}\\, dt, \\qquad x(t) = \\frac{1}{2\\pi}\\int_{-\\infty}^{\\infty} X(\\omega)\\, e^{i\\omega t}\\, d\\omega$$\n\n**Properties (the ones that show up on exams)**\n\n- Shift in time: $x(t-t_0) \\leftrightarrow e^{-i\\omega t_0}X(\\omega)$\n- Shift in frequency: $e^{i\\omega_0 t}x(t) \\leftrightarrow X(\\omega-\\omega_0)$\n- Scaling: $x(at) \\leftrightarrow \\frac{1}{|a|}X(\\omega/a)$\n- Differentiation: $\\frac{d}{dt}x(t) \\leftrightarrow i\\omega X(\\omega)$\n- Convolution: $x*y \\leftrightarrow X\\,Y$\n- Multiplication: $x\\,y \\leftrightarrow \\frac{1}{2\\pi}X*Y$\n- Parseval: $\\int |x(t)|^2 dt = \\frac{1}{2\\pi}\\int |X(\\omega)|^2 d\\omega$\n- Real signal: $X(-\\omega) = X^*(\\omega)$ (conjugate symmetry)\n\n**Pairs to memorize**\n\n- $\\delta(t) \\leftrightarrow 1$\n- $1 \\leftrightarrow 2\\pi\\,\\delta(\\omega)$\n- $e^{-t^2/2} \\leftrightarrow \\sqrt{2\\pi}\\,e^{-\\omega^2/2}$ (Gaussian maps to Gaussian \u2014 I verified this integral symbolically)\n- $e^{-a|t|} \\leftrightarrow \\frac{2a}{a^2+\\omega^2}$ (verified: for $a=1$, $\\omega=2$ the integral gives $2/5$)\n- $\\cos(\\omega_0 t) \\leftrightarrow \\pi[\\delta(\\omega-\\omega_0)+\\delta(\\omega+\\omega_0)]$\n- $u(t) \\leftrightarrow \\pi\\delta(\\omega) + \\frac{1}{i\\omega}$ (principal value)\n\n**Last-minute traps**\n\n1. If your course uses $f$ instead of $\\omega$, every $\\omega$ becomes $2\\pi f$ and the $2\\pi$ factors move.\n2. The sign in the exponent: forward transform has $e^{-i\\omega t}$, inverse has $e^{+i\\omega t}$.\n3. The $1/|a|$ in the scaling property \u2014 the absolute value is the part people forget.\n4. Convolution in time = multiplication in frequency, and vice versa (with the $1/2\\pi$).\n\nGood luck \u2014 you've got this.",
+      "generated_at": "2026-09-06T02:08:35+00:00",
+      "duration_seconds": 33.4,
+      "system_prompt_tokens": 992,
+      "tool_schema_tokens": 1266,
+      "user": "I'm studying five minutes before the exam. What are the essentials I should remember about the Fourier transform?",
+      "mode": "guide"
+    },
+    "show-convolution-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "status": "ok",
+      "response": "Here's the full computation. Let\n\n$$h(t) = u(t) - u(t-1) \\qquad\\text{(the unit pulse on } [0,1]\\text{)}$$\n\nand $g(t) = e^{-t}u(t)$. The convolution is\n\n$$(h*g)(t) = \\int_{-\\infty}^{\\infty} h(\\tau)\\, g(t-\\tau)\\, d\\tau = \\int_0^1 e^{-(t-\\tau)}\\, u(t-\\tau)\\, d\\tau.$$\n\n**Step 1 \u2014 Find where the integrand is nonzero.** The integrand is nonzero only when both factors are nonzero:\n\n- $h(\\tau) \\neq 0 \\iff 0 \\le \\tau \\le 1$,\n- $g(t-\\tau) \\neq 0 \\iff t - \\tau \\ge 0 \\iff \\tau \\le t$.\n\nSo the effective integration range is $0 \\le \\tau \\le \\min(1, t)$. That gives three cases.\n\n**Case 1: $t < 0$.** Then $\\tau \\le t < 0$ contradicts $\\tau \\ge 0$, so the range is empty:\n\n$$(h*g)(t) = 0.$$\n\n**Case 2: $0 \\le t \\le 1$.** Here $t \\le 1$, so the range is $0 \\le \\tau \\le t$:\n\n$$(h*g)(t) = \\int_0^t e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^t e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^t = e^{-t}(e^t - 1) = 1 - e^{-t}.$$\n\n**Case 3: $t > 1$.** Here $1 < t$, so the range is $0 \\le \\tau \\le 1$:\n\n$$(h*g)(t) = \\int_0^1 e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^1 e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^1 = (e - 1)\\,e^{-t}.$$\n\nI verified both integrals symbolically: $\\int_0^t e^{-(t-\\tau)}d\\tau = 1 - e^{-t}$ and $\\int_0^1 e^{-(t-\\tau)}d\\tau = (e-1)e^{-t}$, exactly as above.\n\n**Putting it together:**\n\n$$(h*g)(t) = \\begin{cases} 0, & t < 0,\\\\[4pt] 1 - e^{-t}, & 0 \\le t \\le 1,\\\\[4pt] (e-1)\\,e^{-t}, & t > 1. \\end{cases}$$\n\n**Sanity checks.** At $t = 1$ the two middle pieces agree: $1 - e^{-1} = (e-1)e^{-1}$, so the result is continuous. As $t \\to \\infty$ the output decays to $0$, which makes sense: the pulse is finite in energy and $e^{-t}u(t)$ is stable.\n\n**The idea to carry forward:** convolving with a pulse is \"integration over a sliding window.\" The pulse $h$ just tells you *where* to integrate \u2014 the window $[0,1]$ slides with $t$ \u2014 and the only bookkeeping that matters is where the window overlaps the support of the other signal. That overlap analysis (here: $\\tau \\le \\min(1,t)$) is what decides the case split, and the integral itself is then routine.",
+      "generated_at": "2026-09-06T02:08:51+00:00",
+      "duration_seconds": 15.76,
+      "system_prompt_tokens": 826,
+      "tool_schema_tokens": 1266,
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "mode": "show"
+    },
+    "show-what-is-a-derivative": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "A derivative is the **instantaneous rate of change** of a function at a point \u2014 the slope of the curve there. It's defined as a limit:\n\n$$f'(x) = \\lim_{h \\to 0} \\frac{f(x+h) - f(x)}{h}$$\n\n**What the pieces mean.** The fraction $\\frac{f(x+h)-f(x)}{h}$ is the slope of a *secant line* \u2014 a line through two points on the curve, $(x, f(x))$ and $(x+h, f(x+h))$. As $h$ shrinks toward $0$, those two points slide together, and the secant line rotates toward the *tangent line*. The derivative is the slope that line settles on.\n\n**Worked example: $f(x) = x^2$.**\n\n1. Start from the definition:\n$$f'(x) = \\lim_{h \\to 0} \\frac{(x+h)^2 - x^2}{h}$$\n2. Expand $(x+h)^2 = x^2 + 2xh + h^2$ (binomial rule):\n$$= \\lim_{h \\to 0} \\frac{x^2 + 2xh + h^2 - x^2}{h}$$\n3. Cancel $x^2 - x^2$:\n$$= \\lim_{h \\to 0} \\frac{2xh + h^2}{h}$$\n4. Factor $h$ out of the numerator and cancel it with the $h$ in the denominator:\n$$= \\lim_{h \\to 0} (2x + h)$$\n5. Now $h \\to 0$, so the $h$ term vanishes:\n$$f'(x) = 2x$$\n\nSo the slope of $x^2$ at any point $x$ is $2x$ \u2014 for instance, at $x=3$ the curve is rising with slope $6$.\n\n**The idea worth carrying forward.** A derivative is a *limit of average rates of change*. Every time you see a derivative, think: \"average slope over a tiny interval, then let the interval shrink to nothing.\" That single picture \u2014 secant line becoming tangent line \u2014 is what the whole definition is doing.",
+      "generated_at": "2026-09-06T02:08:57+00:00",
+      "duration_seconds": 6.03,
+      "system_prompt_tokens": 826,
+      "tool_schema_tokens": 1266,
+      "user": "What is a derivative?",
+      "mode": "show"
+    }
+  }
+}

@@ -1,0 +1,143 @@
+{
+  "cases": {
+    "no-idea-how-to-start": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "status": "ok",
+      "response": "No problem \u2014 the whole trick is one sentence: **the salt in the tank changes at the rate it comes in minus the rate it leaves.**\n\n**Rate in.** The incoming brine has 0.1 kg of salt per liter, and 3 L/min arrives, so salt enters at\n$$0.1 \\times 3 = 0.3 \\text{ kg/min}$$\n\u2014 a constant.\n\n**Rate out.** The tank is well-stirred, so the outflow has the same concentration as the tank. Since 3 L/min in = 3 L/min out, the volume stays 100 L, and the concentration is $S(t)/100$ kg/L. So salt leaves at\n$$3 \\times \\frac{S(t)}{100} = \\frac{3S(t)}{100} \\text{ kg/min}$$\n\n**The equation.** Put them together:\n$$\\frac{dS}{dt} = 0.3 - \\frac{3S}{100}, \\qquad S(0) = 20$$\n\n**Solve it.** This is linear and separable. The \"steady\" value where $dS/dt = 0$ is $S = 10$, and the solution has the form\n$$S(t) = 10 + C e^{-3t/100}$$\nPlugging in $S(0) = 20$ gives $C = 10$, so\n\n$$S(t) = 10 + 10 e^{-3t/100} \\text{ kg}$$\n\nI checked this by differentiating: $S'(t) = -0.3\\, e^{-3t/100}$, which equals $0.3 - 3S(t)/100$ exactly.\n\n**Sanity check:** as $t \\to \\infty$, $S \\to 10$ kg. That makes sense \u2014 the tank is being slowly replaced by 0.1 kg/L brine, and 100 L of that holds exactly 10 kg of salt. The 20 kg you started with just decays away.",
+      "generated_at": "2026-09-06T02:19:46+00:00",
+      "duration_seconds": 15.07,
+      "system_prompt_tokens": 1023,
+      "tool_schema_tokens": 1266,
+      "user": "I have no idea how to start.",
+      "mode": "guide"
+    },
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "ok": false
+        },
+        {
+          "name": "cas_integrate",
+          "ok": false
+        },
+        {
+          "name": "cas_integrate",
+          "ok": true
+        },
+        {
+          "name": "cas_integrate",
+          "ok": true
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "status": "ok",
+      "response": "Your setup is right \u2014 the integral form and the lower limit 0 (from $u(\\tau)$) are correct. Two things go wrong inside it:\n\n**1. The integrand.** $h(t-\\tau) = e^{-(t-\\tau)}u(t-\\tau)$, not $e^{-t}$. The $\\tau$ is still in the exponent, so you can't pull it out of the integral.\n\n**2. The upper limit.** $x(\\tau) = u(\\tau) - u(\\tau-1)$ is nonzero only on $0 \\le \\tau \\le 1$, so the upper limit is $\\min(t, 1)$, not $t$. Your answer $t e^{-t}$ is what you'd get if $x$ were just $u(t)$ \u2014 you effectively ignored the $-u(t-1)$.\n\nSo split into cases:\n\n- $t < 0$: $y(t) = 0$\n- $0 \\le t \\le 1$: $y(t) = \\int_0^t e^{-(t-\\tau)}\\,d\\tau = 1 - e^{-t}$\n- $t > 1$: $y(t) = \\int_0^1 e^{-(t-\\tau)}\\,d\\tau = e^{1-t} - e^{-t}$\n\nI checked both integrals symbolically: $\\int_0^t e^{-(t-\\tau)}d\\tau = 1 - e^{-t}$ and $\\int_0^1 e^{-(t-\\tau)}d\\tau = e^{1-t} - e^{-t}$. \u2713\n\nSanity check: at $t = 1$ the two pieces agree ($1 - e^{-1}$), and as $t \\to \\infty$ the output decays to 0 \u2014 the pulse's energy eventually leaves the system.",
+      "generated_at": "2026-09-06T02:20:00+00:00",
+      "duration_seconds": 13.99,
+      "system_prompt_tokens": 1023,
+      "tool_schema_tokens": 1266,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide"
+    },
+    "is-my-answer-correct": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_integrate",
+          "ok": false
+        },
+        {
+          "name": "cas_integrate",
+          "ok": true
+        }
+      ],
+      "rounds": 4,
+      "toolless": false,
+      "status": "ok",
+      "response": "Yes \u2014 your answer is correct.\n\n$$\\mathcal{L}^{-1}\\left\\{\\frac{1}{s^2+9}\\right\\} = \\frac{1}{3}\\sin(3t)$$\n\nThe way to see it: the standard pair is\n\n$$\\mathcal{L}\\{\\sin(\\omega t)\\} = \\frac{\\omega}{s^2+\\omega^2}$$\n\nHere $\\omega = 3$, so $\\mathcal{L}\\{\\sin(3t)\\} = \\frac{3}{s^2+9}$. Your numerator is $1$, not $3$, so you scale by $\\frac{1}{3}$:\n\n$$\\frac{1}{s^2+9} = \\frac{1}{3}\\cdot\\frac{3}{s^2+9} \\quad\\Longrightarrow\\quad \\mathcal{L}^{-1}\\left\\{\\frac{1}{s^2+9}\\right\\} = \\frac{1}{3}\\sin(3t)$$\n\nI verified it by computing the Laplace transform directly: $\\int_0^\\infty \\frac{1}{3}\\sin(3t)\\,e^{-st}\\,dt = \\frac{1}{s^2+9}$, which matches the original expression exactly.",
+      "generated_at": "2026-09-06T02:20:11+00:00",
+      "duration_seconds": 10.67,
+      "system_prompt_tokens": 1023,
+      "tool_schema_tokens": 1266,
+      "user": "I got (1/3) sin(3t). Is my answer correct?",
+      "mode": "guide"
+    },
+    "explain-that-more-simply": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "status": "ok",
+      "response": "Think of it as **flip, slide, multiply, add up**.\n\nYou have two signals:\n- $x(t)$ \u2014 the input (what's going in)\n- $h(t)$ \u2014 the system's \"shape\" (how it reacts to a single poke)\n\nTo find the output at one moment $t$:\n\n1. **Flip** $h$ so it runs backward in time.\n2. **Slide** it along the time axis.\n3. **Multiply** it point-by-point with $x$.\n4. **Add up** all those products.\n\nThat sum is $y(t)$.\n\nA concrete picture: imagine you're clapping in a long, echoing hallway. Each clap is a little piece of $x$. The hallway's echo pattern is $h$. The sound you hear at any instant is every past clap, each one fading out according to the echo pattern. Convolution is just the math version of \"sum up all the echoes still ringing.\"",
+      "generated_at": "2026-09-06T02:20:14+00:00",
+      "duration_seconds": 3.64,
+      "system_prompt_tokens": 1023,
+      "tool_schema_tokens": 1266,
+      "user": "Explain that more simply.",
+      "mode": "guide"
+    },
+    "dont-ask-me-questions-teach-it": {
+      "tool_calls": [
+        {
+          "name": "cas_linalg",
+          "ok": true
+        },
+        {
+          "name": "cas_linalg",
+          "ok": true
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "status": "ok",
+      "response": "An eigenvalue is the factor by which a matrix stretches a special direction.\n\n**The mental model.** A matrix $A$ is a transformation: it takes vectors in and gives vectors out. For most vectors, the output points in a *new* direction. But a few special vectors are lucky \u2014 after the transformation, they still point along the same line. They've only been stretched (or flipped). The stretch factor is the **eigenvalue** $\\lambda$, and the vector that survives on its own line is the **eigenvector** $x$.\n\n**The formal definition.** A number $\\lambda$ is an eigenvalue of $A$ if there exists a nonzero vector $x$ such that\n\n$$A x = \\lambda x$$\n\nThe nonzero condition matters: $Ax = 0 \\cdot x$ is true for every $A$ if you allow $x = 0$, so that would make every number an eigenvalue of everything.\n\n**Example 1 \u2014 the obvious case.** Take\n\n$$A = \\begin{pmatrix} 2 & 0 \\\\ 0 & 3 \\end{pmatrix}$$\n\nThis transformation stretches the $x$-axis by 2 and the $y$-axis by 3. Vectors on the axes stay on the axes, so the eigenvectors are the coordinate axes and the eigenvalues are $2$ and $3$ (I verified this with a linear-algebra tool: eigenvalues of $A$ are $2$ and $3$).\n\n**Example 2 \u2014 the less obvious case.** Take\n\n$$A = \\begin{pmatrix} 4 & 1 \\\\ 2 & 3 \\end{pmatrix}$$\n\nThis one mixes the coordinates, so you can't read the answer off. The eigenvalues are $5$ and $2$ (verified). Check them by hand:\n\n- $A\\begin{pmatrix}1\\\\1\\end{pmatrix} = \\begin{pmatrix}5\\\\5\\end{pmatrix} = 5\\begin{pmatrix}1\\\\1\\end{pmatrix}$ \u2014 the vector $(1,1)$ just gets stretched by 5.\n- $A\\begin{pmatrix}1\\\\-1\\end{pmatrix} = \\begin{pmatrix}3\\\\-3\\end{pmatrix} = 2\\begin{pmatrix}1\\\\-1\\end{pmatrix}$ \u2014 the vector $(1,-1)$ gets stretched by 2.\n\n**How you'd find them without guessing.** Rearrange $Ax = \\lambda x$ to $(A - \\lambda I)x = 0$. A nonzero $x$ exists exactly when $A - \\lambda I$ is singular, i.e. when its determinant vanishes:\n\n$$\\det(A - \\lambda I) = 0$$\n\nFor the second example: $\\det\\begin{pmatrix} 4-\\lambda & 1 \\\\ 2 & 3-\\lambda \\end{pmatrix} = (4-\\lambda)(3-\\lambda) - 2 = \\lambda^2 - 7\\lambda + 10 = (\\lambda-5)(\\lambda-2)$, giving $\\lambda = 5, 2$.\n\n**Why it's worth caring about.** The equation $Ax = \\lambda x$ says: \"in this direction, the transformation does nothing but scale.\" That's the simplest possible behavior, so eigenvalues expose the core of what a matrix does \u2014 which directions it amplifies, which it shrinks, which it flips. That's why they show up everywhere: stability of dynamical systems (eigenvalues inside vs. outside the unit circle), principal components in data, normal modes in physics, and so on.",
+      "generated_at": "2026-09-06T02:20:26+00:00",
+      "duration_seconds": 11.57,
+      "system_prompt_tokens": 1023,
+      "tool_schema_tokens": 1266,
+      "user": "Don't ask me questions; teach it.",
+      "mode": "guide"
+    },
+    "show-convolution-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        },
+        {
+          "name": "cas_evaluate",
+          "ok": true
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "status": "ok",
+      "response": "Here's the full computation. Let\n\n$$h(t) = u(t) - u(t-1) \\qquad\\text{(the unit pulse on } [0,1]\\text{)}$$\n\nand $g(t) = e^{-t}u(t)$. The convolution is\n\n$$(h*g)(t) = \\int_{-\\infty}^{\\infty} h(\\tau)\\, g(t-\\tau)\\, d\\tau = \\int_0^1 e^{-(t-\\tau)}\\, u(t-\\tau)\\, d\\tau.$$\n\n**Step 1 \u2014 Find where the integrand is nonzero.** The integrand is nonzero only when both factors are nonzero:\n\n- $h(\\tau) \\neq 0 \\iff 0 \\le \\tau \\le 1$,\n- $g(t-\\tau) \\neq 0 \\iff t - \\tau \\ge 0 \\iff \\tau \\le t$.\n\nSo the effective integration range is $0 \\le \\tau \\le \\min(1, t)$. That gives three cases.\n\n**Case 1: $t < 0$.** Then $\\tau \\le t < 0$ contradicts $\\tau \\ge 0$, so the range is empty:\n\n$$(h*g)(t) = 0.$$\n\n**Case 2: $0 \\le t \\le 1$.** Here $t \\le 1$, so the range is $0 \\le \\tau \\le t$:\n\n$$(h*g)(t) = \\int_0^t e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^t e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^t = e^{-t}(e^t - 1) = 1 - e^{-t}.$$\n\n**Case 3: $t > 1$.** Here $1 < t$, so the range is $0 \\le \\tau \\le 1$:\n\n$$(h*g)(t) = \\int_0^1 e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^1 e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^1 = (e - 1)\\,e^{-t}.$$\n\nI verified both integrals symbolically: $\\int_0^t e^{-(t-\\tau)}d\\tau = 1 - e^{-t}$ and $\\int_0^1 e^{-(t-\\tau)}d\\tau = (e-1)e^{-t}$, exactly as above.\n\n**Putting it together:**\n\n$$(h*g)(t) = \\begin{cases} 0, & t < 0,\\\\[4pt] 1 - e^{-t}, & 0 \\le t \\le 1,\\\\[4pt] (e-1)\\,e^{-t}, & t > 1. \\end{cases}$$\n\n**Sanity checks.** At $t = 1$ the two middle pieces agree: $1 - e^{-1} = (e-1)e^{-1}$, so the result is continuous. As $t \\to \\infty$ the output decays to $0$, which makes sense: the pulse is finite in energy and $e^{-t}u(t)$ is stable.\n\n**The idea to carry forward:** convolving with a pulse is \"integration over a sliding window.\" The pulse $h$ just tells you *where* to integrate \u2014 the window $[0,1]$ slides with $t$ \u2014 and the only bookkeeping that matters is where the window overlaps the support of the other signal. That overlap analysis (here: $\\tau \\le \\min(1,t)$) is what decides the case split, and the integral itself is then routine.",
+      "generated_at": "2026-09-06T02:20:42+00:00",
+      "duration_seconds": 15.68,
+      "system_prompt_tokens": 826,
+      "tool_schema_tokens": 1266,
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "mode": "show"
+    }
+  }
+}

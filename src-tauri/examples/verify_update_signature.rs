@@ -1,14 +1,28 @@
 //! Publisher verifier: the same maintained verifier and public key as the updater.
 use base64::Engine;
+#[path = "../src/update_archive.rs"]
+mod update_archive;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
-    if arguments.len() != 2 {
-        return Err("usage: verify_update_signature ARCHIVE SIGNATURE".into());
+    if arguments.len() != 2 && !(arguments.len() == 3 && arguments[2] == "--check-archive") {
+        return Err("usage: verify_update_signature ARCHIVE SIGNATURE [--check-archive]".into());
     }
     verify(
         &std::fs::read(&arguments[0])?,
         &std::fs::read_to_string(&arguments[1])?,
     )?;
+    if arguments.len() == 3 {
+        let schema: u64 = env!("LYRA_SCHEMA_VERSION").parse()?;
+        let feed = serde_json::json!({"lyra": {"schemaMin": 0, "schemaMax": schema}});
+        let size = update_archive::validate(
+            &std::fs::read(&arguments[0])?,
+            env!("CARGO_PKG_VERSION"),
+            &feed,
+        )?;
+        println!(
+            "Actual updater archive accepted by the installed parser ({size} unpacked bytes)."
+        );
+    }
     println!("Updater archive signature verified against the retained Lyra public key.");
     Ok(())
 }

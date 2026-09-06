@@ -147,7 +147,7 @@ jobs:
         if: steps.restore.outputs.restored != 'true'
         run: |
           bash scripts/release/sign_and_package.sh
-          cargo run --locked --manifest-path src-tauri/Cargo.toml --example verify_update_signature -- release-assets/Lyra.app.tar.gz release-assets/Lyra.app.tar.gz.sig > release-assets/updater-signature-verification.txt
+          cargo run --locked --manifest-path src-tauri/Cargo.toml --example verify_update_signature -- release-assets/Lyra.app.tar.gz release-assets/Lyra.app.tar.gz.sig --check-archive > release-assets/updater-signature-verification.txt
       - name: Record exact artifact identity
         if: steps.restore.outputs.restored != 'true'
         env:

@@ -327,3 +327,29 @@ def test_cross_profile_restore_rebases_document_path_to_copied_original(
         stored = Path(conn.execute("select stored_path from documents where id=1").fetchone()[0])
     assert stored == destination / "uploads" / "1" / "1-original.txt"
     assert stored.read_bytes() == source.read_bytes() == b"exact original bytes"
+
+
+def test_snapshot_closes_sqlite_handles_before_archiving(profile, tmp_path, monkeypatch):
+    import gc
+
+    original = sqlite3.connect
+    connections = []
+
+    class TrackedConnection(sqlite3.Connection):
+        closed = False
+
+        def close(self):
+            self.closed = True
+            super().close()
+
+    def connect(*args, **kwargs):
+        kwargs["factory"] = TrackedConnection
+        result = original(*args, **kwargs)
+        connections.append(result)  # prevent GC from masking missing explicit closes
+        return result
+
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    backup.archive.snapshot_sqlite_database(profile / "lyra.db", tmp_path / "snapshot.db")
+    assert len(connections) == 3
+    assert all(connection.closed for connection in connections)
+    gc.collect()

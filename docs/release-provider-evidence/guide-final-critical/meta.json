@@ -1,0 +1,23 @@
+{
+  "surface": "class_chat",
+  "corpus": "scripts/eval_corpora/tutor_semantic.json",
+  "corpus_version": "1.1.0",
+  "prompt_contract_version": "2",
+  "expected_contract_version": "2",
+  "model": "Qwen3.8-27B",
+  "context_window": 262144,
+  "endpoint_locality": "remote",
+  "class_id": 1,
+  "session_id": 1,
+  "environment": {
+    "deterministic": true,
+    "temp": true
+  },
+  "git_base": "56830f6c11893ca9e3a1ebadb45a7244a47756bd",
+  "working_tree_diff_sha256": "2267fe75d5a756e474ae89d7a2a380d342abfd08f341c84ab43fb963ec0743ea",
+  "evidence_scope": "source production planner/tool loop, synthetic corpus; not final packaged candidate",
+  "credential_source": "readonly installed settings snapshot; credentials retained only in memory",
+  "provider_class": "user-configured OpenAI-compatible remote endpoint",
+  "generation_parameters": "production defaults; harness per-case outer timeout180s",
+  "prompt_source_sha256": "a997cf7dfe16aeb7827cef08b91ad0345598b17c33c89f27226412f1506657d3"
+}
