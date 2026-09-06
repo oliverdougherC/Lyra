@@ -96,7 +96,7 @@ Before signing, `release_metadata.py --bundle <Lyra.app> --source <SHA>` embeds
 The updater binds unsigned feed metadata to this contract inside the signed archive.
 The app is notarized, stapled, checked with Gatekeeper and smoke-tested through its frozen
 backend. Only then is the DMG created, signed, separately notarized and stapled. The updater
-archive is created from the final app bytes and signed with the persistent Tauri key. The
+archive is created from the final app bytes with COPYFILE_DISABLE=1 and signed with the persistent Tauri key. This omits macOS AppleDouble pseudo-files outside Lyra.app while preserving code, ordinary file bytes and symlinks. The installed archive parser verifies the produced archive before staging. The
 maintained verifier checks it against the public key compiled into installed clients before
 any asset is uploaded; an incorrect private-key secret fails staging. Public fixture tests
 cover a matching signature, corruption and an unrelated key without CI secrets. Evidence

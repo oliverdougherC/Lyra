@@ -339,6 +339,11 @@ jobs:
           uv run python scripts/stage_llama_runtime.py
           test -n "$(find src-tauri/resources/llama -name 'llama-server' -type f | head -1)"
 
+      - name: Collect distribution notices
+        run: |
+          pnpm --dir frontend licenses list --prod --json > "$RUNNER_TEMP/frontend-licenses.json"
+          uv run python scripts/collect_distribution_notices.py --frontend-inventory "$RUNNER_TEMP/frontend-licenses.json"
+
       - name: Build frontend
         working-directory: frontend
         run: pnpm build

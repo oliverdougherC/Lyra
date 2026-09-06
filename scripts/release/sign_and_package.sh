@@ -51,5 +51,12 @@ xcrun stapler staple "$dmg"
 xcrun stapler validate "$dmg"
 spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg" 2> release-assets/dmg-gatekeeper.txt
 # Updater bytes are created only after final app signing, notarization and stapling.
-tar -czf release-assets/Lyra.app.tar.gz -C "$(dirname "$app")" Lyra.app
+COPYFILE_DISABLE=1 tar -czf release-assets/Lyra.app.tar.gz -C "$(dirname "$app")" Lyra.app
 frontend/node_modules/.bin/tauri signer sign release-assets/Lyra.app.tar.gz
+
+# Confirm the updater representation retains code signatures and the stapled ticket.
+archive_check="$(mktemp -d -t lyra-updater-check)"
+trap 'rm -rf -- "$archive_check"' EXIT
+tar -xzf release-assets/Lyra.app.tar.gz -C "$archive_check"
+codesign --verify --deep --strict "$archive_check/Lyra.app"
+xcrun stapler validate "$archive_check/Lyra.app" >> release-assets/app-gatekeeper.txt 2>&1

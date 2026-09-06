@@ -356,6 +356,21 @@ mod tests {
     const URL: &str =
         "https://github.com/oliverdougherC/Lyra/releases/download/v0.2.0-beta.0/Lyra.app.tar.gz";
     #[test]
+    fn packaged_plugin_configuration_is_deserializable_and_pinned() {
+        let app: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let config: tauri_plugin_updater::Config =
+            serde_json::from_value(app["plugins"]["updater"].clone()).unwrap();
+        assert_eq!(
+            config.pubkey.trim(),
+            include_str!("../updater-public-key.txt").trim()
+        );
+        assert!(config.endpoints.is_empty());
+        assert!(!config.dangerous_insecure_transport_protocol);
+        assert!(!config.dangerous_accept_invalid_certs);
+    }
+
+    #[test]
     fn refuses_wrong_architecture_identity_schema_origin_and_size() {
         assert_eq!(validate_manifest(&manifest(), URL, 44).unwrap(), 100);
         for (key, value) in [

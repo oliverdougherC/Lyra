@@ -67,6 +67,7 @@ def fixture_assets(tmp_path, monkeypatch):
     (tmp_path / "frozen-smoke.json").write_text('{"status":"passed"}')
     (tmp_path / "native-inventory.json").write_text('{"status":"passed"}')
     (tmp_path / "updater-signature-verification.txt").write_text(
+        "Actual updater archive accepted by the installed parser (1024 unpacked bytes).\n"
         "Updater archive signature verified against the retained Lyra public key.\n"
     )
     inner = {
@@ -247,4 +248,14 @@ def test_unsigned_metadata_cannot_claim_new_schema_for_old_signed_archive(tmp_pa
         path.write_text(json.dumps(value))
     checksum_payload(tmp_path)
     with pytest.raises(ValueError, match="Signed inner contract"):
+        validate(tmp_path)
+
+
+def test_signature_only_receipt_cannot_skip_installed_archive_parser(tmp_path, monkeypatch):
+    fixture_assets(tmp_path, monkeypatch)
+    (tmp_path / "updater-signature-verification.txt").write_text(
+        "Updater archive signature verified against the retained Lyra public key.\n"
+    )
+    checksum_payload(tmp_path)
+    with pytest.raises(ValueError, match="actual archive"):
         validate(tmp_path)

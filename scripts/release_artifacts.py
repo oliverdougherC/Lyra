@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tarfile
 from pathlib import Path
@@ -177,10 +178,14 @@ def validate(directory: Path) -> dict:
         raise ValueError("Frozen backend smoke evidence did not pass")
     if json.loads((directory / "native-inventory.json").read_text()).get("status") != "passed":
         raise ValueError("Complete signed native inventory did not pass")
-    if (directory / "updater-signature-verification.txt").read_text().strip() != (
-        "Updater archive signature verified against the retained Lyra public key."
+    if not re.fullmatch(
+        r"Actual updater archive accepted by the installed parser \([1-9]\d* unpacked bytes\)\.\n"
+        r"Updater archive signature verified against the retained Lyra public key\.",
+        (directory / "updater-signature-verification.txt").read_text().strip(),
     ):
-        raise ValueError("Pinned updater public-key verification evidence is missing")
+        raise ValueError(
+            "Pinned updater signature and actual archive verification evidence is missing"
+        )
     return info
 
 

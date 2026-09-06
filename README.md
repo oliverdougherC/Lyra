@@ -35,7 +35,7 @@ network access and disk space even when the tutor is local. It does not upload c
 Optional OCR/reranking weights are not downloaded automatically. The helper
 runtime is bundled. Cached local data remains available offline, while inference and web research
 need their configured services. Testers do not need a source checkout, Homebrew, Python, Node,
-Docker, or a terminal.
+a container runtime, or a terminal.
 
 PDF export/print and archive backup/restore without contributor tools remain explicit installed-app
 release gates. Do not rely on developer-installed Pandoc/Typst as evidence for a clean tester Mac.
