@@ -62,8 +62,36 @@ def fixture_assets(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_REPOSITORY", "oliverdougherC/Lyra")
     for name in required_assets("0.2.0-beta.1"):
         (tmp_path / name).write_text("fixture payload")
-    for name in ("app-notarization.json", "dmg-notarization.json"):
-        (tmp_path / name).write_text('{"status":"Accepted"}')
+    signing = {
+        "mode": "ad-hoc",
+        "developer_id_signed": False,
+        "notarized": False,
+        "hardened_runtime": True,
+        "objects": [
+            {
+                "path": path,
+                "entitlements": {"com.apple.security.cs.disable-library-validation": True}
+                if path.endswith("/lyra-backend")
+                else {},
+                "details": (
+                    "CodeDirectory v=20500 size=100 flags=0x10002(adhoc,runtime) "
+                    "hashes=1+3\nSignature=adhoc\n"
+                ),
+            }
+            for path in (".", "Contents/Resources/resources/lyra-backend/lyra-backend")
+        ],
+    }
+    (tmp_path / "distribution-signing.json").write_text(json.dumps(signing))
+    (tmp_path / "dmg-verification.json").write_text(
+        json.dumps(
+            {
+                "status": "passed",
+                "image_sha256": sha256(tmp_path / "Lyra_0.2.0-beta.1_aarch64.dmg"),
+                "signing": signing,
+                "frozen_smoke": {"status": "passed"},
+            }
+        )
+    )
     (tmp_path / "frozen-smoke.json").write_text('{"status":"passed"}')
     (tmp_path / "native-inventory.json").write_text('{"status":"passed"}')
     (tmp_path / "updater-signature-verification.txt").write_text(
@@ -97,6 +125,38 @@ def test_beta_only_site_uses_versioned_urls(tmp_path, monkeypatch):
     assert feed["lyra"]["size"] == (tmp_path / "Lyra.app.tar.gz").stat().st_size
     assert not (tmp_path / "public/stable").exists()
     assert "latest/download" not in (tmp_path / "public/beta/index.html").read_text()
+    page = (tmp_path / "public/beta/index.html").read_text()
+    assert "not notarized" in page
+    assert "Privacy &amp; Security" in page
+    assert "Open Anyway" in page
+
+
+def test_ad_hoc_distribution_needs_no_apple_evidence(tmp_path, monkeypatch):
+    info = fixture_assets(tmp_path, monkeypatch)
+    assert validate(tmp_path) == info
+    assert not any(
+        "notarization" in name or "gatekeeper" in name for name in required_assets(info["version"])
+    )
+
+
+@pytest.mark.parametrize(
+    "receipt",
+    [
+        {},
+        {"mode": "developer-id", "developer_id_signed": False, "notarized": False},
+        {"mode": "ad-hoc", "developer_id_signed": True, "notarized": False},
+        {"mode": "ad-hoc", "developer_id_signed": False, "notarized": True},
+        {"mode": "ad-hoc", "developer_id_signed": 0, "notarized": False},
+        {"mode": "ad-hoc", "developer_id_signed": False},
+        [],
+    ],
+)
+def test_invalid_distribution_receipt_rejected(tmp_path, monkeypatch, receipt):
+    fixture_assets(tmp_path, monkeypatch)
+    (tmp_path / "distribution-signing.json").write_text(json.dumps(receipt))
+    checksum_payload(tmp_path)
+    with pytest.raises(ValueError, match="signing"):
+        validate(tmp_path)
 
 
 def test_corrupt_asset_rejected(tmp_path, monkeypatch):
@@ -258,4 +318,16 @@ def test_signature_only_receipt_cannot_skip_installed_archive_parser(tmp_path, m
     )
     checksum_payload(tmp_path)
     with pytest.raises(ValueError, match="actual archive"):
+        validate(tmp_path)
+
+
+@pytest.mark.parametrize("field", ["status", "image_sha256", "signing", "frozen_smoke"])
+def test_dmg_readback_evidence_cannot_be_missing_or_mismatched(tmp_path, monkeypatch, field):
+    fixture_assets(tmp_path, monkeypatch)
+    path = tmp_path / "dmg-verification.json"
+    evidence = json.loads(path.read_text())
+    evidence[field] = {} if field in {"signing", "frozen_smoke"} else "wrong"
+    path.write_text(json.dumps(evidence))
+    checksum_payload(tmp_path)
+    with pytest.raises(ValueError):
         validate(tmp_path)

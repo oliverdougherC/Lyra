@@ -25,9 +25,6 @@ def main() -> None:
     candidate = download(info["tag"], directory)
     if candidate["source"] != os.environ["SOURCE_SHA"]:
         raise SystemExit("Candidate source differs from trusted revision")
-    for name in ("app-notarization.json", "dmg-notarization.json"):
-        if json.loads((directory / name).read_text())["status"] != "Accepted":
-            raise SystemExit("Notarization evidence is not accepted")
     if json.loads((directory / "frozen-smoke.json").read_text())["status"] != "passed":
         raise SystemExit("Final frozen backend smoke did not pass")
     releases = json.loads(gh("api", "--paginate", "--slurp", f"repos/{repo}/releases?per_page=100"))
