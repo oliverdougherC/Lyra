@@ -111,8 +111,13 @@ A dependency raising that floor fails the pipeline instead of silently widening 
 ## Signed bytes and immutable staging
 
 CI signs every real Mach-O and nested code bundle inside-out with an ad-hoc signature,
-then individually verifies them and the complete bundle. This requires no certificate or Apple
+with hardened runtime enabled, then individually verifies them and the complete bundle. This requires no certificate or Apple
 account. The backend retains `com.lyra.desktop.backend`; the app retains `com.lyra.desktop`.
+The Python sidecar and `llama-server` alone receive
+`com.apple.security.cs.disable-library-validation`: a real frozen smoke test with ad-hoc
+hardened signatures otherwise fails loading `libpython` because ad-hoc libraries lack matching
+Team IDs. The desktop shell receives no such exception. Both helpers are executed during
+packaging, and all native objects still require the hardened-runtime flag.
 Ad-hoc signatures provide code integrity but no Developer ID trust or stable certificate identity.
 Local review rebuilds continue using the persistent development identity documented in
 `docs/local-deployment.md`; CI distribution does not require that local identity.
@@ -123,7 +128,15 @@ The updater binds feed metadata to this contract inside the authenticated archiv
 The signed app passes native compatibility checks and its frozen-backend smoke check before
 DMG creation. The app and DMG are not notarized or stapled, and no Gatekeeper acceptance is
 claimed. `distribution-signing.json` records `mode: "ad-hoc"`,
-`developer_id_signed: false`, and `notarized: false`; promotion checks this declaration.
+`developer_id_signed: false`, `notarized: false`, and `hardened_runtime: true`. These values
+are derived from inspected `codesign -dv` output retained for every native object; promotion
+revalidates the observations and rejects missing runtime flags. The ad-hoc identity rules out
+Developer ID notarization; the receipt does not claim an Apple service lookup.
+
+After DMG creation, `hdiutil verify` checks the image, then a read-only mount is compared
+against the source app (files, modes, and symlinks). Every mounted code signature and runtime
+flag is inspected and the mounted frozen backend is smoke-tested. `dmg-verification.json`
+binds this evidence to the DMG checksum. Detachment runs even when verification fails.
 
 The updater archive is created from the final app bytes with `COPYFILE_DISABLE=1` and signed
 with the persistent Tauri key. This omits macOS AppleDouble pseudo-files outside Lyra.app while

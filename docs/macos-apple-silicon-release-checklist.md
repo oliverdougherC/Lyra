@@ -61,7 +61,10 @@ acceptance or soak completion.
 - [ ] Confirm the Python production dependency audit passed for the same commit.
 - [ ] Confirm the desktop artifact lane produced the package tested here.
 - [ ] Confirm `distribution-signing.json` declares `mode: "ad-hoc"`,
-      `developer_id_signed: false`, and `notarized: false`, and code signature verification passed.
+      `developer_id_signed: false`, `notarized: false`, and `hardened_runtime: true`, with
+      per-object inspected signature evidence.
+- [ ] Confirm `dmg-verification.json` matches the downloadable DMG checksum and records
+      successful read-only mount/readback, signature inspection, and mounted backend smoke.
 - [ ] Confirm the release/download page describes the first-launch approval requirement and does
       not claim notarization or Gatekeeper acceptance.
 - [ ] Record owner license clearance before setting `DISTRIBUTION_LICENSE_REVIEWED=true` in

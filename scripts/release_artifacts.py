@@ -88,6 +88,7 @@ def required_assets(version: str) -> set[str]:
         "SHA256SUMS",
         "RELEASE_NOTES.md",
         "distribution-signing.json",
+        "dmg-verification.json",
         "app-signing.txt",
         "frozen-smoke.json",
         "updater-signature-verification.txt",
@@ -169,13 +170,17 @@ def validate(directory: Path) -> dict:
     if any(inner.get(key) != value for key, value in expected_contract.items()):
         raise ValueError("Signed inner contract differs from publication metadata")
     signing = json.loads((directory / "distribution-signing.json").read_text())
-    if (
-        not isinstance(signing, dict)
-        or signing.get("mode") != "ad-hoc"
-        or signing.get("developer_id_signed") is not False
-        or signing.get("notarized") is not False
+    from release.signing_evidence import validate_evidence
+
+    validate_evidence(signing)
+    dmg = json.loads((directory / "dmg-verification.json").read_text())
+    if dmg.get("status") != "passed" or dmg.get("image_sha256") != sha256(
+        directory / f"Lyra_{info['version']}_aarch64.dmg"
     ):
-        raise ValueError("Distribution signing evidence must declare non-notarized ad-hoc signing")
+        raise ValueError("DMG readback evidence is missing or describes different bytes")
+    validate_evidence(dmg.get("signing"))
+    if dmg.get("frozen_smoke", {}).get("status") != "passed":
+        raise ValueError("Mounted DMG frozen smoke did not pass")
     if json.loads((directory / "frozen-smoke.json").read_text()).get("status") != "passed":
         raise ValueError("Frozen backend smoke evidence did not pass")
     if json.loads((directory / "native-inventory.json").read_text()).get("status") != "passed":
