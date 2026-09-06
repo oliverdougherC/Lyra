@@ -87,11 +87,8 @@ def required_assets(version: str) -> set[str]:
         "latest.json",
         "SHA256SUMS",
         "RELEASE_NOTES.md",
-        "app-notarization.json",
-        "dmg-notarization.json",
+        "distribution-signing.json",
         "app-signing.txt",
-        "app-gatekeeper.txt",
-        "dmg-gatekeeper.txt",
         "frozen-smoke.json",
         "updater-signature-verification.txt",
         "native-inventory.json",
@@ -171,9 +168,14 @@ def validate(directory: Path) -> dict:
     expected_contract.update({key: info[key] for key in ("version", "build", "source")})
     if any(inner.get(key) != value for key, value in expected_contract.items()):
         raise ValueError("Signed inner contract differs from publication metadata")
-    for name in ("app-notarization.json", "dmg-notarization.json"):
-        if json.loads((directory / name).read_text()).get("status") != "Accepted":
-            raise ValueError("Notarization evidence is not accepted")
+    signing = json.loads((directory / "distribution-signing.json").read_text())
+    if (
+        not isinstance(signing, dict)
+        or signing.get("mode") != "ad-hoc"
+        or signing.get("developer_id_signed") is not False
+        or signing.get("notarized") is not False
+    ):
+        raise ValueError("Distribution signing evidence must declare non-notarized ad-hoc signing")
     if json.loads((directory / "frozen-smoke.json").read_text()).get("status") != "passed":
         raise ValueError("Frozen backend smoke evidence did not pass")
     if json.loads((directory / "native-inventory.json").read_text()).get("status") != "passed":
@@ -227,6 +229,9 @@ def site(directory: Path, output: Path) -> None:
         f'<p><a href="{url}">Download Lyra {info["version"]}</a></p>'
         "<p>Open the DMG and drag Lyra to Applications. "
         "Tutor inference requires your own endpoint.</p>"
+        "<p>Lyra is not signed with an Apple Developer ID and is not notarized. "
+        "If macOS blocks the app, try opening Lyra, then go to System Settings &gt; "
+        "Privacy &amp; Security and choose Open Anyway. Confirm Open when prompted.</p>"
         "</html>\n"
     )
 

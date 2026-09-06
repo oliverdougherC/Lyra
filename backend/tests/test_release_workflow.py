@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -44,3 +45,35 @@ def test_release_app_preflight_names_missing_configuration_without_exposing_valu
     assert "fixture-private-key" not in output
     if missing:
         assert "docs/releasing.md" in output
+
+
+@pytest.mark.parametrize("key", ["", "synthetic-updater-key"])
+def test_distribution_preflight_needs_only_updater_key(key, tmp_path):
+    root = tmp_path / "src-tauri"
+    root.mkdir()
+    (root / "updater-public-key.txt").write_text("synthetic-public-key")
+    env = {name: value for name, value in os.environ.items() if not name.startswith("APPLE_")}
+    env["TAURI_SIGNING_PRIVATE_KEY"] = key
+    result = subprocess.run(  # noqa: S603
+        [sys.executable, str(WORKFLOW.parents[2] / "scripts/release/preflight.py")],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == (0 if key else 1)
+    assert "synthetic-updater-key" not in result.stdout + result.stderr
+    if not key:
+        assert "TAURI_SIGNING_PRIVATE_KEY" in result.stderr
+
+
+def test_release_does_not_request_apple_credentials():
+    workflow = yaml.safe_load(WORKFLOW.read_text())
+    stage = workflow["jobs"]["stage"]
+    assert not any(name.startswith("APPLE_") for name in stage["env"])
+    assert "TAURI_SIGNING_PRIVATE_KEY" in stage["env"]
+    script = (WORKFLOW.parents[2] / "scripts/release/sign_and_package.sh").read_text()
+    assert "notarytool" not in script
+    assert "stapler" not in script
+    assert "tauri signer sign" in script

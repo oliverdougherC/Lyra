@@ -97,12 +97,6 @@ jobs:
       contents: write
       actions: read
     env:
-      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       GH_TOKEN: ${{ github.token }}
@@ -150,10 +144,10 @@ jobs:
           pnpm --dir frontend licenses list --prod --json > "$RUNNER_TEMP/frontend-licenses.json"
           uv run --locked python scripts/collect_distribution_notices.py --frontend-inventory "$RUNNER_TEMP/frontend-licenses.json"
           pnpm --dir frontend build
-      - name: Build unsigned intermediate app for inside-out distribution signing
+      - name: Build app without Apple developer signing
         if: steps.restore.outputs.restored != 'true'
         run: frontend/node_modules/.bin/tauri build --bundles app --no-sign --ci -- --locked
-      - name: Sign notarize staple and verify final app and DMG
+      - name: Package and verify app without Apple notarization
         if: steps.restore.outputs.restored != 'true'
         run: |
           bash scripts/release/sign_and_package.sh
@@ -174,11 +168,6 @@ jobs:
           if-no-files-found: ignore
       - name: Upload missing draft assets without replacement
         run: python3 scripts/release_artifacts.py stage release-assets
-      - name: Remove ephemeral signing material
-        if: always()
-        run: |
-          security delete-keychain "$RUNNER_TEMP/lyra-release.keychain-db" || true
-          rm -f "$RUNNER_TEMP/lyra-certificate.p12" "$RUNNER_TEMP/Lyra-notary.zip"
   promote:
     needs: [prepare, stage]
     if: always() && needs.prepare.outputs.candidate == 'true' && (needs.stage.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'promote'))
