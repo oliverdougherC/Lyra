@@ -1021,10 +1021,13 @@ def _configure_import_tutor(
 
     from backend.storage import private, secrets
 
+    # This helper installs a new backend: do not inherit reachability cached by a
+    # different test/backend. Missing storage is distinct from a locked Keychain.
+    monkeypatch.setattr(secrets, "_keyring_ok", None)
     if fallback:
 
         def unavailable(*_args, **_kwargs):
-            raise keyring.errors.KeyringError("synthetic unavailable keychain")
+            raise keyring.errors.NoKeyringError("synthetic missing keychain backend")
 
         monkeypatch.setattr(secrets, "_keyring_call", unavailable)
     private.write_private_text(
@@ -1132,6 +1135,8 @@ def test_import_preserves_latest_tutor_and_exa_forget(
     from backend.storage import private, secrets
 
     checkout = _seed_source_checkout(tmp_path)
+    # Reproduce the positive probe cache left by another credential test.
+    monkeypatch.setattr(secrets, "_keyring_ok", True)
     identity = _configure_import_tutor(monkeypatch, fallback=True)
     private.write_private_text(settings.data_dir / ".exa_api_key", "synthetic-old-exa")
     private.write_private_text(settings.data_dir / ".exa_api_key.authority", "file")
