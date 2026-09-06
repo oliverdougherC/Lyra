@@ -3,8 +3,8 @@
 **Canonical, current reference.** This document describes the Ex Libris design system as the
 shipped application implements it today. Every value is verified against
 `frontend/src/styles/globals.css` (the single source of truth for colors, fonts, elevations,
-easings, the print palette, and the reduced-motion policy), `frontend/src/app/layout.tsx`
-(the font loads), the Ex Libris primitives, and the rule tests named in section 10. A value
+easings, local font loading, the print palette, and the reduced-motion policy),
+the Ex Libris primitives, and the rule tests named in section 10. A value
 here that disagrees with `globals.css` is a design-system defect, and it will not survive
 long: `scripts/check_contrast.py` recomputes the contrast pairs from the stylesheet itself,
 and `frontend/tests/ex-libris-rules.test.ts` gates the typography discipline.
@@ -174,15 +174,16 @@ component-local hex values, a Tailwind configuration, or a second token file.
 
 ## 4. Typography
 
-`frontend/src/app/layout.tsx` loads four faces through `next/font/google`, each as a CSS
-variable on `<html>` with `display: 'swap'` and the latin subset:
+`frontend/src/styles/globals.css` loads four bundled font families through `@font-face`
+with `font-display: swap`. Files live under `frontend/public/fonts/`; no runtime font-service
+request is required:
 
 | Face | Variable | Loaded weights | Role |
 | --- | --- | --- | --- |
 | Cinzel | `--font-cinzel` | 600 | Inscription: nameplates only |
-| EB Garamond | `--font-eb-garamond` | 400, 500, 600, each with italic | Print: everything read |
+| EB Garamond | `--font-eb-garamond` | 400, 500, 600 normal; 400 italic | Print: everything read |
 | Caveat | `--font-caveat` | 500 | The hand: the student's acts |
-| JetBrains Mono | `--font-jetbrains-mono` | the variable font, full range | Code, and only code |
+| JetBrains Mono | `--font-jetbrains-mono` | 400 | Code, and only code |
 
 `globals.css` maps them onto the font tokens, with fallbacks behind every face:
 
@@ -391,8 +392,7 @@ The application is one continuous surface, flush to the window (`AppShell`,
   and the app is the content, not the card. Closed, the rail slides off-canvas; the
   preference persists at `lyra-sidebar-open`.
 - **The header** is a 56px lintel on `bg-background/85` with a soft blur, carrying the
-  breadcrumb, the route's portaled title and actions, the privacy readout, and the class
-  profile button.
+  breadcrumb, the route's portaled title and actions, and class context.
 - **`main#main-content`** is the one scroll container below the header, so the rail and
   header stay put on long routes; pages set inside it at a 1320px cap with 16px padding
   (24px from 768px up).
@@ -420,8 +420,8 @@ one primary placement per verb per screen.
 The header crumb names the page: `Classes / [code] name`, with the course code traveling
 with the name whether or not the crumb links anywhere. Ancestor crumbs fold away below 640px:
 three crumbs at 375px truncates every one of them, and the current page is the one worth
-reading. The privacy readout stays on the lintel on every route, and a class route adds its
-code and a Profile button that opens the class profile sheet.
+reading. Class/profile actions belong to the current class surface; processing and privacy
+configuration are explained in Settings instead of repeated in the shell.
 
 ### Screens
 
@@ -502,8 +502,8 @@ The distilled judgment calls, each one a scar from a workshop round:
 
 ## 11. Assets and implementation notes
 
-- **Fonts** load through `next/font` in `frontend/src/app/layout.tsx` exactly as section 4
-  records them, each as a CSS variable on `<html>`. EB Garamond's italic exists solely as a
+- **Fonts** load from bundled files through `@font-face` in `frontend/src/styles/globals.css`,
+  as section 4 records them. EB Garamond's italic exists solely as a
   mathematics fallback where KaTeX is not in play.
 - **The marble** is a baked SVG texture - fractal-noise clouds plus a band-passed veining,
   alpha-keyed - recorded as one 600x600 data URI in `--stone-texture`, light mode only,

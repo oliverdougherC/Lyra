@@ -1,5 +1,9 @@
 # Phase 3 Handoff
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 Phase 3 makes a textbook as useful as a syllabus and accepts the documents Phase 1 rejected. It is
 built and it has been measured against a real 608-page book and a real scanned handout rather than
 against its own fixtures.

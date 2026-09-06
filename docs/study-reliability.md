@@ -1,9 +1,8 @@
 # Study reliability contracts
 
-This change addresses PLA-469, PLA-470, PLA-472, PLA-474, PLA-476, and PLA-477. Work began
-from fetched `origin/main` at `ae5957720d6ba5b4be387f7f9cfaa23d9546eea2`, in an isolated
-worktree so the unpublished PLA-404 UI work remained intact. No model prompts or dependencies
-were added.
+These are the maintained selected-source, cancellation, scheduling, and review recovery contracts.
+The dated integration evidence below records the original work; it does not state current PR or
+release status. Use the [release ledger](release-evidence.md) for current acceptance gates.
 
 ## Selected material and quiz publication
 
@@ -120,7 +119,10 @@ recorded model/endpoint configuration, and repeats on the merged release candida
 selected-source, malformed-format, cancellation, bounded-library, early/due-practice, and lost-ack
 cases above to that gate. The adjacent malformed-topic diagnostic gap is tracked as PLA-478.
 
-## Durable recovery follow-up evidence
+## Historical recovery follow-up evidence
+
+> The remaining sections preserve the original PR #70/#71 integration history. Both PRs later
+> merged; branch states and issue statuses below apply only to those recorded revisions.
 
 The reviewed product head was `0e8d522284206d174c2af48282bcf8f2908fbd52`.
 The new `study-recovery.spec.ts` runs production components against the actual card/review routes:

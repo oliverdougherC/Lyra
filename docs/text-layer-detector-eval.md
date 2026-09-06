@@ -1,5 +1,9 @@
 # Unusable text-layer detection (PLA-148)
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 Lyra already has a page-selective recognition substrate: `backend/rag/parse.py` decides,
 per page, whether the extracted text is worth indexing, and `backend/core/recognition.py`
 recognizes only the pages it drops. PLA-148 broadens the *decision*, not the substrate.

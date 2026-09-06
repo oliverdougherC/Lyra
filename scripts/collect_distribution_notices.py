@@ -24,6 +24,7 @@ def license_files(root: Path) -> list[Path]:
 
 def collect(output: Path, frontend_inventory: Path, rust_inventory: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
+    (output / "LYRA-LICENSE.txt").write_bytes(Path("LICENSE").read_bytes())
     for notice in Path("packaging/notices").glob("*.txt"):
         (output / notice.name).write_bytes(notice.read_bytes())
     inventory = []

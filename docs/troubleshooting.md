@@ -5,8 +5,8 @@ This guide covers the problems a student or contributor can usually fix without 
 ## First checks
 
 - Quit and reopen `Lyra.app` once. The shell will restart only the backend it owns.
-- If startup fails, use the fixed recovery screen and keep `~/Library/Logs/Lyra/backend.log` for a
-  bug report. It is bounded and redacts the home-directory prefix.
+- If startup fails, use the fixed recovery screen and inspect `~/Library/Logs/Lyra/backend.log`. It is
+  bounded and redacts the home-directory prefix; review any excerpt before sharing it.
 - Confirm `~/Library/Application Support/Lyra` remains present; replacing or deleting the app does
   not delete course data or optional models.
 
@@ -51,19 +51,21 @@ prerequisites.
 
 ## If backup or restore fails
 
-- For this migration review build, the proven atomic backup/restore engine remains available to
-  contributors through `./run backup` and `./run restore`; the native file-selector surface is a
-  remaining packaged-flow gate and must not be reported as complete.
+- In the desktop app, use Settings → Save backup or Restore backup. Finish saving edits first,
+  complete the native file dialog, and keep Lyra open while the archive is verified.
+- Restore stages and validates the archive before switching profiles and retains a recovery copy.
+  The installed-app acceptance limits remain in the [release ledger](release-evidence.md).
+- Contributors can also use `./run backup` and `./run restore` for checkout-owned data.
 - Choose a new archive path if backup says the target already exists.
-- Restore into a path that does not already exist.
+- For contributor CLI restore, choose a destination path that does not already exist.
 - If restore fails validation, keep the original archive and retry only after fixing the filesystem
   or path issue it reported.
 
 ## If you are filing a bug report
 
-- Export the packaged resource/runtime reports when reproducing a desktop issue; contributors may
-  also run `./run diagnostics` for the source stack.
-- The diagnostics bundle is redacted: no document text, no API keys, and no raw absolute private
-  paths.
+- Include the version/build from Settings, macOS version, device model/memory, and reproduction
+  steps. Contributors may run `./run diagnostics` for the source stack.
+- Diagnostics are designed to redact private information. Review them before sharing; never attach
+  raw course documents, databases, credentials, or unredacted screenshots.
 - If you are validating packaged-desktop evidence rather than checkout startup, pair that with
   `scripts/desktop_resource_report.py` output or a `scripts/packaged_soak_harness.py` run record.

@@ -1,5 +1,9 @@
 # Lyra desktop resource summary
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 - Commit: `14837fcf2f6ae011960a3d90079611eeabea1d92`
 - Machine: arm64, 24.0 GiB RAM
 - App bundle: 137.1 MiB

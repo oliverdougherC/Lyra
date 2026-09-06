@@ -1,6 +1,6 @@
 # Contributing, Testing, and Migrations
 
-This guide is for code, workflow, and schema changes on the desktop migration branch.
+This guide is for code, workflow, and schema changes in the maintained desktop app. Start with [CONTRIBUTING](../CONTRIBUTING.md) for setup.
 
 ## Before you change anything
 
@@ -14,8 +14,8 @@ This guide is for code, workflow, and schema changes on the desktop migration br
 Backend:
 
 ```bash
-uv run --extra dev ruff format --check backend scripts
-uv run --extra dev ruff check backend scripts
+uv run --extra dev ruff format --check backend scripts packaging
+uv run --extra dev ruff check backend scripts packaging
 uv run --extra dev pytest
 ```
 
@@ -57,7 +57,7 @@ python scripts/desktop_resource_report.py --root backend=backend --root frontend
 
 ## Rust and desktop-shell checks
 
-Run these when the branch contains `src-tauri/Cargo.toml`:
+Run these for desktop-shell changes:
 
 ```bash
 cargo fmt --manifest-path src-tauri/Cargo.toml --all --check
@@ -93,6 +93,8 @@ substitute for the actual packaged-app launch and restart checks.
 Before calling a change done:
 
 - run the smallest relevant local check set;
-- keep `CI Gate` green conceptually when editing workflow assumptions;
-- update live docs if you changed the current runtime contract;
+- verify the actual required `CI Gate` result before merging;
+- review documentation impact and update maintained guidance in the same PR;
+- run `uv run python scripts/check_docs.py` and the active-reference check;
+- rebuild, sign, smoke-check, and launch the desktop app using [local deployment](local-deployment.md);
 - keep historical docs clearly labelled when they still mention retired surfaces.

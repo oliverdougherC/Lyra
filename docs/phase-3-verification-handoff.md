@@ -1,5 +1,9 @@
 # Phase 3 Verification Handoff
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 You are the last set of hands on Phase 3. The phase is code-complete: a critical review pass
 found ~60 defects across the pipeline, and a close-out pass fixed everything it could and
 recorded what it could not. Your job is the part that unit tests cannot give: run the real

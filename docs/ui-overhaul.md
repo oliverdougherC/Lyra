@@ -1,5 +1,9 @@
 # UI Overhaul: Audit and Design Brief
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 > **2026-08-07 addendum.** The visual language question this brief deliberately left open is
 > now settled: the Ex Libris design system, workshopped to an approved interactive prototype.
 > [exlibris-design-system.md](exlibris-design-system.md) is the approved brief (a historical

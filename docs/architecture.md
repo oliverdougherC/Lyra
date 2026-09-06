@@ -11,9 +11,9 @@ Lyra is a single-user desktop study application whose implemented runtime is:
 - optional `Exa` web research
 - an OpenAI-compatible tutor endpoint that may be loopback-local or remote
 
-The contributor checkout still uses `./run` for focused development. Reviewable unsigned desktop
-artifacts build now; Developer ID signing, notarization, and the final physical release soak are not
-complete as of August 30, 2026.
+Use `./run --dev` for hot-reloading contributor development. The packaged app is the product.
+See [local deployment](local-deployment.md) for development signing and the
+[release evidence ledger](release-evidence.md) for current distribution gates.
 
 ## Topology
 
@@ -93,14 +93,15 @@ mocked transport in CI.
 
 Two inference surfaces exist and are deliberately separate:
 
-- Infrastructure models stay local. Embeddings, optional OCR, and optional reranking are managed by
-  Lyra and never leave the machine.
-- The tutor endpoint is user-configured and may be loopback-local or remote.
+- Embeddings and optional reranking run locally through managed helpers.
+- The tutor endpoint is user-configured and may be loopback-local or remote. The current opt-in
+  document recognition path also uses that endpoint, sending page images after locality/consent
+  checks. A separate local OCR helper exists, but ingestion currently selects the tutor path.
 
 Remote endpoints are supported as a real operating mode, not as a hidden fallback. The system:
 
 - labels endpoint locality in Settings;
-- requires acknowledgement before document text goes to a non-loopback endpoint; and
+- requires acknowledgement before document text or requested recognition images go to a non-loopback endpoint; and
 - preserves the same rule for chat, drafting, solving, and agent turns.
 
 ## Web research posture
@@ -126,5 +127,13 @@ minutes idle. Release evidence helpers include:
 - `scripts/desktop_runtime_report.py` for the retained Lyra/Tauri/WebKit process inventory, per-process resource sample, and explicit still-open physical gates
 - `scripts/packaged_soak_harness.py` for release-candidate soak preparation and manual evidence
 
-Those helpers support the migration; they do not claim the packaged app is signed, notarized, or
-release-ready.
+Those helpers provide bounded evidence; they do not establish release approval.
+
+## Backup and updates
+
+Native Settings commands coordinate profile backup/restore and explicit update checks. The shell
+pauses the backend around profile publication and app replacement, preserves recovery state, and
+restarts with a fresh session. Backup validation lives in `backend/desktop_backup_archive.py`;
+publication/recovery spans `backend/desktop_backup.py` and `src-tauri/src/backup.rs`. Updates verify
+trusted signed artifacts and schema compatibility before replacement; see
+[releasing](releasing.md) and `src-tauri/src/updater.rs`. No update check runs automatically at launch.

@@ -95,9 +95,8 @@ The route then joins, when present: the pinned step (`_STEP_CONTEXT_HEADING` +
 - **Citations/provenance**: the base citation rule is unchanged; the context renderer is
   unchanged.
 - **Context-window budgeting**: the turn budget, history trim, and retrieval fit check in
-  `routes_chat` are unchanged. The mode block's size was checked against the budget
-  tests' precondition (the system prompt fits its 15% share) - the v2 Guide block costs
-  ~272 tokens against ~102 in v1, and the budget tests pass on that size.
+  `routes_chat` are unchanged. Current prompt size is checked by the budget tests; measured token counts from the
+  original audit are not a guarantee for later prompt revisions.
 - **Retries/regeneration/concurrency, solution handoffs, safety invariants**: no route
   logic changed; only the mode prompt text, one comment, and the anchored-scope wording.
 
@@ -139,7 +138,10 @@ contract:
 Bumping `TUTOR_PROMPT_CONTRACT_VERSION` means the semantics moved; the corpus and the
 eval run then need a re-read against the new version, which the harness reports.
 
-## Model-facing instruction surfaces (PLA-401 audit, 2026-09-02)
+## Historical model-facing instruction audit (PLA-401, 2026-09-02)
+
+This table describes that audit revision. Later compact-prompt evaluation is recorded in
+[release guide prompt evidence](release-guide-prompt-evidence.md).
 
 Inventory of the surfaces this pass examined, and the findings:
 

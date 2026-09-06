@@ -21,11 +21,11 @@ uv sync --python 3.12 --extra packaging
 uv run --extra packaging pyinstaller --clean --noconfirm packaging/lyra_backend.spec
 uv run python scripts/frozen_backend_smoke.py dist/lyra-backend/lyra-backend
 uv run python packaging/stage_sidecar.py
-pnpm --dir frontend install --frozen-lockfile
-pnpm --dir frontend licenses list --prod --json > frontend-licenses.json
+(cd frontend && pnpm install --frozen-lockfile)
+(cd frontend && pnpm licenses list --prod --json) > frontend-licenses.json
 uv run python scripts/collect_distribution_notices.py --frontend-inventory frontend-licenses.json
-pnpm --dir frontend build
-pnpm --dir frontend tauri:build --bundles app --no-sign --ci
+(cd frontend && pnpm build)
+(cd frontend && pnpm tauri:build --bundles app --no-sign --ci)
 python3 scripts/release_metadata.py --bundle src-tauri/target/release/bundle/macos/Lyra.app --source "$(git rev-parse HEAD)"
 uv run python scripts/sign_local_app.py src-tauri/target/release/bundle/macos/Lyra.app
 uv run python scripts/verify_macos_bundle.py src-tauri/target/release/bundle/macos/Lyra.app
@@ -48,12 +48,22 @@ Reopen the completed app and verify native launch after signing and the frozen s
 Development signing is local review evidence, **not** Developer ID distribution/notarization.
 The protected [release pipeline](releasing.md) owns public artifacts and update delivery.
 
+### Stable Keychain approval
+
+Keychain remembers executable identity. Ad-hoc signing identifies a backend by its code hash,
+which changes on rebuild. The signing helper verifies certificate-backed designated requirements
+without `cdhash` for the app and backend. Reuse the same development certificate across rebuilds.
+Changing from an old ad-hoc build or switching certificates may require a new approval. macOS may
+also request permission to use the signing certificate private key; the helper does not modify
+application credential access controls.
+
 ## Contributor checkout
 
-Start the local development stack from the repository root:
+Install the prerequisites in [CONTRIBUTING](../CONTRIBUTING.md), then start the hot-reloading
+stack from the repository root:
 
 ```bash
-./run
+./run --dev
 ```
 
 Useful commands:
@@ -66,14 +76,9 @@ Useful commands:
 ./scripts/run-acceptance.sh
 ```
 
-Current host prerequisites for the checkout path:
-
-- Python `3.12+`
-- Node.js `20.9+`
-- `pnpm`
-- enough disk for local data, build output, and model files
-
-Rust is required for desktop-shell builds, not for focused frontend/backend contributor tests.
+`./run` without `--dev` builds and serves the frontend with Vite preview. Both modes use
+checkout-owned data. See [CONTRIBUTING](../CONTRIBUTING.md) for prerequisites and the complete
+first-run path. Rust is required for desktop-shell builds.
 
 ## Topology
 
@@ -117,7 +122,7 @@ Settings/workflow actions, not startup side effects.
 
 For browser-level verification:
 
-- `pnpm test:e2e` exercises the built frontend boundary.
+- `(cd frontend && pnpm test:e2e)` exercises the built frontend boundary.
 - `./scripts/run-acceptance.sh` runs the real-backend acceptance suite from a clean checkout.
 
 ## Data paths

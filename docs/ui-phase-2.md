@@ -1,5 +1,9 @@
 # Phase 2 Interface Specification
 
+> Historical record, retained for provenance. Measurements, task lists, screenshots, and setup
+> assumptions describe the recorded revision, not the current release. Start with the
+> [documentation index](README.md) for maintained guidance.
+
 The solver's screens, down to states, motion, and copy. Companion to
 [solver-phase-2.md](solver-phase-2.md), which owns the data model and behavior, and to
 [design-system.md](design-system.md), which owns tokens and generic component patterns. Where they
