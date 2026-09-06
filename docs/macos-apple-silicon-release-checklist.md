@@ -2,8 +2,9 @@
 
 Use this checklist for a packaged release candidate on a clean Apple Silicon Mac.
 
-This checklist does not imply the release is currently signed, notarized, or soak-complete. It is
-the evidence bar that must be met before those claims are made.
+CI distribution uses ad-hoc code signatures without Developer ID signing or notarization.
+This checklist records the actual candidate evidence; a green build does not prove first-launch
+acceptance or soak completion.
 
 ## 1. Candidate artifact
 
@@ -15,7 +16,10 @@ the evidence bar that must be met before those claims are made.
 ## 2. Clean first launch
 
 - [ ] Confirm the machine is Apple Silicon and running a supported macOS version.
-- [ ] Launch the packaged app without any pre-created profile state.
+- [ ] Launch the downloaded packaged app without any pre-created profile state.
+- [ ] Record any macOS first-launch warning. For the trusted candidate, test **System Settings →
+      Privacy & Security → Open Anyway** after attempting launch, following
+      [Apple’s instructions](https://support.apple.com/en-us/102445). Do not disable Gatekeeper globally.
 - [ ] Confirm the packaged frontend loads and the packaged Python backend reaches a usable state.
 - [ ] Confirm the app shows tutor locality and Exa configuration state honestly.
 - [ ] Confirm web research is unavailable by default until an Exa key is configured.
@@ -46,6 +50,8 @@ the evidence bar that must be met before those claims are made.
 
 - [ ] Record where the packaged runtime stores its profile, database, logs, and cached resources.
 - [ ] Confirm backups and restores still preserve the local data contract.
+- [ ] Test an installed update and record Keychain access prompts; ad-hoc signing can invalidate
+      prior “Always Allow” approvals. Verify credentials remain usable after user approval.
 - [ ] Confirm no document text, API keys, or private absolute paths leak into diagnostics.
 - [ ] Confirm deleting a document or class removes only the intended local data.
 
@@ -54,6 +60,13 @@ the evidence bar that must be met before those claims are made.
 - [ ] Confirm the merge commit passed `CI Gate`.
 - [ ] Confirm the Python production dependency audit passed for the same commit.
 - [ ] Confirm the desktop artifact lane produced the package tested here.
-- [ ] Confirm signing and notarization status from actual release evidence; do not infer either from
-      a green build alone.
+- [ ] Confirm `distribution-signing.json` declares `mode: "ad-hoc"`,
+      `developer_id_signed: false`, `notarized: false`, and `hardened_runtime: true`, with
+      per-object inspected signature evidence.
+- [ ] Confirm `dmg-verification.json` matches the downloadable DMG checksum and records
+      successful read-only mount/readback, signature inspection, and mounted backend smoke.
+- [ ] Confirm the release/download page describes the first-launch approval requirement and does
+      not claim notarization or Gatekeeper acceptance.
+- [ ] Record owner license clearance before setting `DISTRIBUTION_LICENSE_REVIEWED=true` in
+      `release-promotion`, and retain the required owner approval for the first public beta.
 - [ ] Confirm the release-candidate soak is complete before calling the package release-ready.
