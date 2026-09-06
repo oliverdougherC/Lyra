@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { cn } from '@/lib/utils'
@@ -119,18 +119,47 @@ type ThinkingIndicatorProps = {
   className?: string
 }
 
-export function ThinkingIndicator({ label, startedAt = null, className }: ThinkingIndicatorProps) {
+export function ThinkingIndicator(props: ThinkingIndicatorProps) {
+  // Retry may reuse the streaming row. A fresh turn must never inherit its old label
+  // or a pending throttled update.
+  return <LiveThinkingIndicator key={props.startedAt ?? 'untracked'} {...props} />
+}
+
+const LABEL_MIN_INTERVAL_MS = 800
+
+function LiveThinkingIndicator({ label, startedAt = null, className }: ThinkingIndicatorProps) {
+  const [visibleLabel, setVisibleLabel] = useState(label)
+  const lastChange = useRef(0)
+
+  useEffect(() => {
+    if (label === visibleLabel) return
+    const delay = Math.max(0, LABEL_MIN_INTERVAL_MS - (performance.now() - lastChange.current))
+    const timer = window.setTimeout(() => {
+      lastChange.current = performance.now()
+      setVisibleLabel(label)
+    }, delay)
+    return () => window.clearTimeout(timer)
+  }, [label, visibleLabel])
+
+  useEffect(() => {
+    lastChange.current = performance.now()
+  }, [])
+
   const seconds = useElapsedSeconds(startedAt)
 
   return (
     <div className={cn('flex items-center gap-2', className)} aria-busy="true">
       <BreatheLoader />
-      <span aria-live="polite" className="text-sm">
-        <span key={label} className="lyra-shimmer lyra-label-enter">
-          {label}
+      <span className="min-w-0 text-sm">
+        <span aria-live="polite">
+          <span key={visibleLabel} className="lyra-shimmer lyra-label-enter">
+            {visibleLabel}
+          </span>
         </span>
         {seconds === null ? null : (
-          <span className="text-text-tertiary ml-1.5 tabular-nums">{seconds}s</span>
+          <span aria-hidden className="text-text-tertiary ml-1.5 tabular-nums">
+            {seconds}s
+          </span>
         )}
       </span>
     </div>

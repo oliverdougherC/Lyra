@@ -34,6 +34,8 @@ type ComposerProps = {
   disabledReason: string | null
   /** Temporarily prevent sending while conversation history is unavailable. */
   blocked?: boolean
+  /** Keep writing available while the current turn owns Send. */
+  sendBlocked?: boolean
   /**
    * The active source context, rendered on the small mark line beneath the input. Omitted
    * for a composer that has no material to scope (the writer reads the class, not a pick).
@@ -58,14 +60,14 @@ export function Composer({
   stopping = false,
   disabledReason,
   blocked = false,
+  sendBlocked = false,
   sourceControl,
   workspaceControl,
   autoFocus = false,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  // Set on a keyboard send while the textarea owns focus: `disabled={streaming || blocked}` makes
-  // the browser blur the control, and nothing else would give focus back when the turn
-  // settles -- leaving a keyboard-only student stranded after every Enter-send.
+  // Streaming stays editable. If history becomes unavailable after a keyboard send,
+  // blocking still blurs the textarea; restore that focus once history is ready.
   const restoreFocusAfterStream = useRef(false)
   const [hintDismissed, setHintDismissed] = useLocalStorageState(HINT_KEY, false, parseDismissed)
 
@@ -99,14 +101,32 @@ export function Composer({
 
   const send = useCallback(
     (options?: { restoreFocusAfterStream?: boolean }) => {
-      if (streaming || blocked || disabledReason || value.trim().length === 0) return
+      if (
+        streaming ||
+        stopping ||
+        sendBlocked ||
+        blocked ||
+        disabledReason ||
+        value.trim().length === 0
+      )
+        return
       // Each send owns the flag outright: a mouse send clears any leftover from an
       // earlier keyboard send whose turn never actually streamed.
       restoreFocusAfterStream.current = options?.restoreFocusAfterStream ?? false
       if (!hintDismissed) setHintDismissed(true)
       onSend()
     },
-    [streaming, blocked, disabledReason, value, hintDismissed, setHintDismissed, onSend],
+    [
+      streaming,
+      stopping,
+      sendBlocked,
+      blocked,
+      disabledReason,
+      value,
+      hintDismissed,
+      setHintDismissed,
+      onSend,
+    ],
   )
   const hasDraft = value.trim().length > 0
 
@@ -145,7 +165,7 @@ export function Composer({
             id="message-composer"
             name="message"
             value={value}
-            disabled={streaming || blocked}
+            disabled={blocked}
             placeholder="Ask about your material…"
             aria-label="Message Lyra"
             onChange={(event) => onChange(event.target.value)}
@@ -183,7 +203,7 @@ export function Composer({
                 hasDraft ? 'shadow-sm' : 'bg-muted text-text-tertiary',
               )}
               onClick={() => send()}
-              disabled={!hasDraft || blocked}
+              disabled={!hasDraft || blocked || sendBlocked || stopping}
               aria-label="Send message"
             >
               <ArrowUp className="size-4" />

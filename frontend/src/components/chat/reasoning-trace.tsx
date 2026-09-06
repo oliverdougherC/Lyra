@@ -38,9 +38,16 @@ type ReasoningTraceProps = {
   streaming?: boolean
   /** When the turn started, for the live counter. */
   startedAt?: number | null
+  /** A concise summary of observable activity; never inferred from the thought. */
+  activityLabel?: string
 }
 
-export function ReasoningTrace({ text, streaming = false, startedAt = null }: ReasoningTraceProps) {
+export function ReasoningTrace({
+  text,
+  streaming = false,
+  startedAt = null,
+  activityLabel = 'Thinking',
+}: ReasoningTraceProps) {
   const [open, setOpen] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
   // The reader may scroll back through a long thought while it is still being written;
@@ -79,7 +86,7 @@ export function ReasoningTrace({ text, streaming = false, startedAt = null }: Re
             label: the elapsed duration is nominal, and it no longer travels with the
             stored message. */}
         {streaming ? (
-          <ThinkingIndicator label="Thinking" startedAt={startedAt} />
+          <ThinkingIndicator label={activityLabel} startedAt={startedAt} />
         ) : (
           <span className="text-xs">Thought</span>
         )}

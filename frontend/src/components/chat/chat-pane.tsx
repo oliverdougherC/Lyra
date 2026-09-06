@@ -217,6 +217,16 @@ export function ChatPane({
   const sessionId = sessionIdProp
   const [mode, setMode] = useState<ChatMode>('guide')
   const [draft, setDraft] = useState(initialAsk ?? '')
+  // Async turn cleanup may restore its submitted text only until the reader edits again.
+  // A revision also protects an intentionally empty follow-up from being overwritten.
+  const draftRevisionRef = useRef(0)
+  const changeDraft = useCallback((value: string) => {
+    draftRevisionRef.current += 1
+    setDraft(value)
+  }, [])
+  const sendingRef = useRef<symbol | null>(null)
+  const draftScopeVersionRef = useRef(0)
+  const [sending, setSending] = useState(false)
   const [pendingTurn, setPendingTurn] = useState<ChatMessage[] | null>(null)
   const [turnBase, setTurnBase] = useState<ChatMessage[] | null>(null)
   const [streamText, setStreamText] = useState('')
@@ -340,32 +350,42 @@ export function ChatPane({
    * chat, and browsing away again all used to create a row, which is why a class ended up
    * with a rail full of chats containing nothing.
    */
-  const ensureSession = useCallback(async (): Promise<number | null> => {
-    if (activeSessionId !== null) return activeSessionId
-    try {
-      if (writer) {
-        const session = await api.createWriterSession(writer.artifactId)
+  const ensureSession = useCallback(
+    async (owns: () => boolean): Promise<number | null> => {
+      if (activeSessionId !== null) return activeSessionId
+      try {
+        if (writer) {
+          const session = await api.createWriterSession(writer.artifactId)
+          if (!owns()) return null
+          turnSessionRef.current = session.id
+          onSessionIdChange?.(session.id)
+          return session.id
+        }
+        const session = await createSession.mutateAsync(anchorPartId)
+        if (!owns()) return null
         turnSessionRef.current = session.id
         onSessionIdChange?.(session.id)
+        if (session.mode !== 'writer') setMode(session.mode)
         return session.id
+      } catch {
+        toast.error(
+          writer
+            ? 'Could not start a conversation for this draft.'
+            : 'Could not start a conversation for this class.',
+        )
+        return null
       }
-      const session = await createSession.mutateAsync(anchorPartId)
-      turnSessionRef.current = session.id
-      onSessionIdChange?.(session.id)
-      if (session.mode !== 'writer') setMode(session.mode)
-      return session.id
-    } catch {
-      toast.error(
-        writer
-          ? 'Could not start a conversation for this draft.'
-          : 'Could not start a conversation for this class.',
-      )
-      return null
-    }
-  }, [activeSessionId, anchorPartId, createSession, onSessionIdChange, writer])
+    },
+    [activeSessionId, anchorPartId, createSession, onSessionIdChange, writer],
+  )
 
   useEffect(() => {
-    return () => abortRef.current?.abort()
+    return () => {
+      // Session creation can still be pending before a stream/controller exists.
+      // Revoke that send before its response can navigate or start an unmounted pane.
+      sendingRef.current = null
+      abortRef.current?.abort()
+    }
   }, [])
 
   const clearOptimisticTurn = useCallback(() => {
@@ -402,6 +422,26 @@ export function ChatPane({
    * returns to it. Layout, not passive: a frame of the old conversation under a click
    * that was meant to leave it is the flicker this is here to prevent.
    */
+  // Drafts belong to the displayed conversation and are cleared when navigating away.
+  // The first send assigning an ID to its own draft is a handoff, not navigation.
+  const draftScopeRef = useRef({
+    classId,
+    artifactId: writer?.artifactId,
+    sessionId: activeSessionId,
+  })
+  useLayoutEffect(() => {
+    const previous = draftScopeRef.current
+    const sameContext = previous.classId === classId && previous.artifactId === writer?.artifactId
+    if (sameContext && previous.sessionId === activeSessionId) return
+    draftScopeRef.current = { classId, artifactId: writer?.artifactId, sessionId: activeSessionId }
+    if (sameContext && previous.sessionId === null && activeSessionId === turnSessionRef.current)
+      return
+    draftScopeVersionRef.current += 1
+    sendingRef.current = null
+    setSending(false)
+    changeDraft('')
+  }, [activeSessionId, classId, writer?.artifactId, changeDraft])
+
   const shownSessionRef = useRef(activeSessionId)
   useLayoutEffect(() => {
     if (shownSessionRef.current === activeSessionId) return
@@ -421,11 +461,12 @@ export function ChatPane({
       // turn can settle after the pane has moved on, and refetching whatever is being read
       // now would leave the answer's own transcript holding a stale copy of itself.
       const turnSessionId = turnSessionRef.current
+      const owner = turnIdRef.current
       if (immediate) clearOptimisticTurn()
       if (turnSessionId !== null) {
         await queryClient.invalidateQueries({ queryKey: chatKeys.messages(turnSessionId) })
       }
-      if (!immediate) clearOptimisticTurn()
+      if (!immediate && turnIdRef.current === owner) clearOptimisticTurn()
     },
     [clearOptimisticTurn, queryClient],
   )
@@ -469,7 +510,7 @@ export function ChatPane({
    * and in which optimistic rows stand in for the answer while it streams.
    */
   const runTurn = useCallback(
-    async (kind: TurnKind, content: string, turnSessionId: number) => {
+    async (kind: TurnKind, content: string, turnSessionId: number, restoreDraft?: () => void) => {
       // One question at a time in a conversation — but only in that conversation. A turn
       // still running in the chat the student just left is not a reason the chat they
       // opened instead cannot be typed in, which is what `detached` says about it.
@@ -629,6 +670,7 @@ export function ChatPane({
                       controller.signal,
                       onAgentEvent,
                     )
+            if (!owns()) return
             if (result.stopped === 'stopped') {
               // The server settled this turn as STOPPED - our Stop, or the server's own
               // backstop - and completed the request with its bounded stopped body.
@@ -714,6 +756,7 @@ export function ChatPane({
                     onEvent,
                     controller.signal,
                     () => {
+                      if (!owns()) return
                       responseAcceptedRef.current = true
                       submittedTextRef.current = null
                       operationIdRef.current = null
@@ -726,7 +769,7 @@ export function ChatPane({
           if (outcomeRef.current === 'active') {
             setOutcome('stopped')
             if (submittedTextRef.current !== null) {
-              setDraft(submittedTextRef.current)
+              restoreDraft?.()
               submittedTextRef.current = null
             }
             if (streamTextRef.current.trim().length === 0) {
@@ -745,7 +788,7 @@ export function ChatPane({
             toast.error('Another turn is still in progress on this conversation.')
           }
           if (kind === 'send') {
-            setDraft(content)
+            restoreDraft?.()
             // PLA-313: a busy 409 means THIS attempt was not accepted; it says nothing
             // about whether the earlier ambiguous operation committed. Keep the
             // ambiguity key (operationIdRef) and its submitted-text bookmark so a later
@@ -774,6 +817,7 @@ export function ChatPane({
             // settled in. The screen above already fell back to the durable state, so
             // every branch shows the truth.
             const durable = await api.listMessages(turnSessionId).catch(() => null)
+            if (!owns()) return
             const operationId = operationIdRef.current
             const ownTurn =
               durable === null || operationId === null
@@ -791,20 +835,18 @@ export function ChatPane({
               // a re-run of the spent key.)
               if (ownTurn.agent_attempt?.state === 'completed') {
                 // The turn succeeded and only its acceptance was lost: the reply is in
-                // the transcript, the composer goes empty, and the next Send mints a
-                // fresh operation ID.
+                // the transcript; keep any follow-up draft and mint a fresh operation
+                // ID on the next Send.
                 submittedTextRef.current = null
                 operationIdRef.current = null
                 responseAcceptedRef.current = true
-                setDraft('')
                 toast.success('Your answer was already saved.')
               } else {
                 // Durable failed/stopped (or still settling) turn, no usable reply: the
-                // transcript shows the honest turn with its Retry. The composer goes
-                // empty - no prefill - and the spent key is retired as well.
+                // transcript shows the honest turn with its Retry. Keep any follow-up
+                // draft and retire the spent key.
                 submittedTextRef.current = null
                 operationIdRef.current = null
-                setDraft('')
                 toast.error(
                   caught instanceof ApiError ? caught.message : 'The answer stopped early.',
                 )
@@ -816,16 +858,15 @@ export function ChatPane({
               // commit and only the readback missed it - the server reconciles by that
               // same id instead of duplicating.
               if (submittedTextRef.current !== null) {
-                setDraft(submittedTextRef.current)
+                restoreDraft?.()
               }
               toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
             }
           } else {
-            // Non-agent turns keep their longstanding behavior: the question goes back in
-            // the box.
+            // Restore an unaccepted question only if no newer draft owns the box.
             toast.error(caught instanceof ApiError ? caught.message : 'The answer stopped early.')
             if (submittedTextRef.current !== null) {
-              setDraft(submittedTextRef.current)
+              restoreDraft?.()
             }
           }
         }
@@ -867,6 +908,7 @@ export function ChatPane({
     (content: string) => {
       const trimmed = content.trim()
       if (
+        sendingRef.current !== null ||
         trimmed.length === 0 ||
         showingTurn ||
         historyError ||
@@ -881,21 +923,36 @@ export function ChatPane({
       ) {
         operationIdRef.current = null
       }
+      const sendId = Symbol()
+      sendingRef.current = sendId
+      const scopeVersion = draftScopeVersionRef.current
+      const ownsSend = () => sendingRef.current === sendId
+      setSending(true)
+      const revision = draftRevisionRef.current
+      const restoreDraft = () => {
+        if (draftRevisionRef.current === revision) setDraft(content)
+      }
       operationIdRef.current ??= crypto.randomUUID()
       responseAcceptedRef.current = false
       submittedTextRef.current = trimmed
       setDraft('')
       void (async () => {
-        const target = await ensureSession()
+        const target = await ensureSession(ownsSend)
+        if (!ownsSend() || draftScopeVersionRef.current !== scopeVersion) return
         // The question goes back in the box rather than into the void: the conversation
         // could not be opened, so there is nowhere for it to have gone.
         if (target === null) {
-          setDraft(trimmed)
+          restoreDraft()
           submittedTextRef.current = null
           return
         }
-        await runTurn('send', trimmed, target)
-      })()
+        await runTurn('send', trimmed, target, restoreDraft)
+      })().finally(() => {
+        if (ownsSend()) {
+          sendingRef.current = null
+          setSending(false)
+        }
+      })
     },
     [
       ensureSession,
@@ -1333,7 +1390,7 @@ export function ChatPane({
           readyCount={readyCount}
           hasProfile={(profile?.facts.length ?? 0) > 0}
           suggestions={suggestions}
-          onPick={setDraft}
+          onPick={changeDraft}
         />
       ) : (
         rendered.map((message, index) => {
@@ -1395,15 +1452,14 @@ export function ChatPane({
   const composer = (
     <Composer
       value={draft}
-      onChange={setDraft}
+      onChange={changeDraft}
       onSend={() => send(draft)}
       onStop={stop}
       streaming={turnActive}
       stopping={stopping}
       disabledReason={disabledReason}
-      blocked={
-        showingTurn || historyError || messagesPending || (sessionListNeeded && sessionsPending)
-      }
+      sendBlocked={showingTurn || sending}
+      blocked={historyError || messagesPending || (sessionListNeeded && sessionsPending)}
       sourceControl={sourceControl}
       workspaceControl={workspaceControl}
       // Inline, the reader clicked to open this and the next thing they do is type.

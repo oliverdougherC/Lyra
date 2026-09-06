@@ -3,14 +3,11 @@
 import { useState } from 'react'
 import { AlertTriangle, Check, ChevronRight, Copy, RefreshCw, X } from 'lucide-react'
 
+import { activityLabel } from '@/components/chat/activity-label'
 import { LyraAvatar } from '@/components/chat/lyra-mark'
 import { ReasoningTrace } from '@/components/chat/reasoning-trace'
 import { StreamingMarkdown } from '@/components/chat/streaming-markdown'
-import {
-  stageLabel,
-  ThinkingIndicator,
-  type ProcessingStage,
-} from '@/components/chat/thinking-indicator'
+import { ThinkingIndicator, type ProcessingStage } from '@/components/chat/thinking-indicator'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -107,14 +104,15 @@ export function MessageRow({
   const hasAnswer = message.content.trim().length > 0
   // Thinking is only "in progress" while nothing has been answered yet: the first word of
   // the reply is what ends it, whichever channel the model is still writing on.
-  const thinkingNow = Boolean(streaming) && !hasAnswer && message.thinking.trim().length > 0
+  const active = Boolean(streaming) && !turnEnded
+  const thinkingNow = active && !hasAnswer && message.thinking.trim().length > 0
   const trail = activity ?? message.tool_activity
-  const working = Boolean(streaming) && !hasAnswer && trail.length > 0
-  const waiting = Boolean(streaming) && !hasAnswer && !thinkingNow && !working
+  const waiting = active && !hasAnswer && !thinkingNow
+  const label = activityLabel(trail, thinkingNow ? null : (processingStage ?? null))
 
   return (
     <div className={cn('group flex w-full gap-3', className)}>
-      <LyraAvatar thinking={Boolean(streaming) && !hasAnswer} />
+      <LyraAvatar thinking={active && !hasAnswer} />
       <div className="min-w-0 flex-1">
         {/* Live, the thought and the tool trail are visible while they move. Settled, the
             turn keeps one quiet record of how the answer was made - a single collapsed
@@ -127,20 +125,17 @@ export function MessageRow({
                 text={message.thinking}
                 streaming={thinkingNow}
                 startedAt={turnStartedAt}
+                activityLabel={label}
               />
             ) : null}
-            {trail.length > 0 ? <ActivityTrail entries={trail} working={working} /> : null}
+            {trail.length > 0 ? <ActivityTrail entries={trail} /> : null}
           </>
         ) : message.thinking.trim() || trail.length > 0 ? (
           <TurnDetails thinking={message.thinking} trail={trail} />
         ) : null}
 
         {waiting ? (
-          <ThinkingIndicator
-            label={stageLabel(processingStage ?? null)}
-            startedAt={turnStartedAt ?? null}
-            className="h-7"
-          />
+          <ThinkingIndicator label={label} startedAt={turnStartedAt ?? null} className="h-7" />
         ) : hasAnswer || !streaming ? (
           <StreamingMarkdown
             content={message.content}
@@ -170,30 +165,24 @@ export function MessageRow({
 
 /**
  * What a writer turn did on its way to the answer, one quiet line per tool call, in the
- * accent rail that marks Lyra's own work elsewhere. While the turn is running the last
- * line carries the pulse; settled, the trail reads as the reply's provenance. A failed
+ * accent rail that marks Lyra's own work elsewhere. Each frame is a completed call;
+ * the trail reads as the reply's provenance. A failed
  * call stays in the trail - the model was told and moved on, and hiding it would make
  * the record a story.
  */
-function ActivityTrail({ entries, working }: { entries: WriterActivity[]; working?: boolean }) {
+function ActivityTrail({ entries }: { entries: WriterActivity[] }) {
   return (
     <div
       className="border-accent-primary/40 mb-2 flex flex-col gap-1 border-l-2 py-0.5 pl-3"
       aria-label="What Lyra did for this reply"
     >
       {entries.map((entry, index) => {
-        const active = Boolean(working) && index === entries.length - 1
         return (
           <div
             key={`${index}-${entry.tool}`}
-            className={cn(
-              'flex items-center gap-1.5 text-xs',
-              active ? 'text-text-secondary' : 'text-text-tertiary',
-            )}
+            className="text-text-tertiary flex items-center gap-1.5 text-xs"
           >
-            {active ? (
-              <span className="bg-accent-primary size-1.5 shrink-0 animate-pulse rounded-full" />
-            ) : entry.ok ? (
+            {entry.ok ? (
               <Check className="text-accent-primary/70 size-3 shrink-0" />
             ) : (
               <X className="text-destructive/70 size-3 shrink-0" />

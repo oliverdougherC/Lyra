@@ -821,3 +821,79 @@ for (const { width, height } of INTERACTION_MATRIX) {
     expect(pageErrors, 'a runtime error fired while the window was operated').toEqual([])
   })
 }
+
+// Synthetic stream: exercise the real browser composer without contacting a tutor.
+test('follow-up typing survives activity and response completion without an overlapping send', async ({
+  page,
+}, testInfo) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', (error) => pageErrors.push(error.message))
+  await installClassMocks(page)
+  await page.setViewportSize({ width: 1080, height: 720 })
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window)
+    const fixture = window as typeof window & {
+      chatCalls: number
+      chatFrame: (event: unknown) => void
+      finishChat: () => void
+    }
+    fixture.chatCalls = 0
+    window.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (/\/sessions\/4\/(chat|agent-chat)$/.test(url) && init?.method === 'POST') {
+        fixture.chatCalls += 1
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              fixture.chatFrame = (event) =>
+                controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
+              fixture.finishChat = () => controller.close()
+              fixture.chatFrame({ type: 'status', stage: 'composing_answer' })
+            },
+          }),
+          { headers: { 'Content-Type': 'text/event-stream' } },
+        )
+      }
+      return originalFetch(input, init)
+    }
+  })
+  await page.goto(`/#/classes/${CLASS_ID}/chat?session=${SESSION_ID}`)
+  const composer = page.getByRole('textbox', { name: 'Message Lyra' })
+  await composer.fill('Explain stability.')
+  await composer.press('Enter')
+  await expect(page.getByRole('button', { name: 'Stop generating' })).toBeVisible()
+  await composer.fill('  Follow-up draft\nwith exact spacing.  ')
+  await composer.press('Enter')
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { chatCalls: number }).chatCalls))
+    .toBe(1)
+  await page.evaluate(() =>
+    (window as unknown as { chatFrame: (event: unknown) => void }).chatFrame({
+      type: 'status',
+      stage: 'reviewing_documents',
+    }),
+  )
+  await expect(
+    page.locator('[aria-live="polite"]').filter({ hasText: 'Looking through your material' }),
+  ).toBeVisible()
+  await page.screenshot({ path: testInfo.outputPath('chat-active-follow-up.png') })
+  await page.evaluate(() => {
+    const fixture = window as unknown as {
+      chatFrame: (event: unknown) => void
+      finishChat: () => void
+    }
+    fixture.chatFrame({ type: 'token', text: 'A bounded input produces a bounded output.' })
+    fixture.chatFrame({
+      type: 'result',
+      result: { content: 'A bounded input produces a bounded output.', message_id: 4 },
+    })
+    fixture.finishChat()
+  })
+  await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled()
+  await expect(composer).toHaveValue('  Follow-up draft\nwith exact spacing.  ')
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { chatCalls: number }).chatCalls))
+    .toBe(1)
+  expect(pageErrors).toEqual([])
+  await page.screenshot({ path: testInfo.outputPath('chat-completed-follow-up.png') })
+})
