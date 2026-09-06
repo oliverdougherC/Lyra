@@ -151,9 +151,9 @@ def test_stale_file_never_resurfaces_after_keychain_recovery(
     isolated_secrets.get_error = keyring.errors.KeyringError("locked")
     monkeypatch.setattr(secrets, "_keyring_ok", None)
 
-    # The fallback file is gone, so get_api_key should return None, not "sk-stale".
-    result = secrets.get_api_key()
-    assert result is None, f"stale key resurfaced: {result!r}"
+    # The fallback is gone. Denied access is explicit, never absence or the stale key.
+    with pytest.raises(secrets.ConfigurationError, match="Unlock"):
+        secrets.get_api_key()
 
 
 # ---------------------------------------------------------------------------
@@ -205,11 +205,11 @@ def test_demotion_from_probe_failure(
     assert fallback.read_text().strip() == "sk-probe-fail"
 
 
-def test_blocking_probe_demotes_within_deadline(
+def test_blocking_probe_reports_pending_within_deadline(
     isolated_secrets: FakeKeyring, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A keyring backend that blocks instead of raising must not hold the caller:
-    the probe hits its deadline, storage demotes to file, and the call returns."""
+    the probe hits its deadline and reports pending without declaring the key absent."""
     import time
 
     from backend.config import settings
@@ -223,11 +223,13 @@ def test_blocking_probe_demotes_within_deadline(
     monkeypatch.setattr(secrets, "_PROBE_TIMEOUT_SECONDS", 0.25)
 
     started = time.monotonic()
-    assert secrets._keyring_usable() is False
+    with pytest.raises(secrets.CredentialPendingError, match="responding"):
+        secrets._keyring_usable()
+    assert secrets._keyring_ok is None
     # Returned at the deadline, not after the backend's own (nonexistent) answer.
     assert time.monotonic() - started < 10
 
-    # And the demoted storage works: the value lands in the file fallback.
+    # An explicit replacement can still choose durable file authority while the read waits.
     secrets.set_api_key("sk-after-block")
     assert secrets.api_key_storage() == "file"
     assert (settings.data_dir / ".api_key").read_text().strip() == "sk-after-block"
@@ -483,9 +485,9 @@ def test_full_lifecycle_keychain_to_file_to_keychain(
     isolated_secrets.get_error = keyring.errors.KeyringError("locked again")
     monkeypatch.setattr(secrets, "_keyring_ok", None)
 
-    # Must NOT return "sk-v2" from the now-deleted fallback file.
-    result = secrets.get_api_key()
-    assert result is None, f"stale value resurfaced: {result!r}"
+    # Must NOT return "sk-v2" or falsely report that a denied Keychain is empty.
+    with pytest.raises(secrets.ConfigurationError, match="Unlock"):
+        secrets.get_api_key()
 
 
 # ---------------------------------------------------------------------------
@@ -917,8 +919,8 @@ def test_postprobe_timeout_is_bounded_and_late_operation_cannot_win(
                 deleter()
             else:
                 getter()
-        except KeyError:
-            pass  # A pending mutation truthfully reports failure.
+        except (KeyError, secrets.CredentialPendingError):
+            pass  # A pending operation truthfully reports its incomplete state.
         assert entered.is_set()
         worker = secrets._operation_thread
         for _ in range(10):

@@ -25,3 +25,11 @@ This is import publication evidence, not the separate backup restore test. Final
 head/CI and actual frozen publication/relaunch evidence are linked from the PR handoff
 and review-candidate receipts. No actual OS Keychain preservation or distribution
 signature/notarization pass is inferred from injected-store tests.
+
+An additional actual frozen before-repair run reproduced the failure through manager
+staging, successful `--publish-desktop-import`, and HTTP relaunch: the complete credential
+authority bundle was missing. Baseline frozen executable SHA-256:
+`a7fdf6d352e169c6c1b5a2818fc4dc651fcac51051c193edcfaaabe6f2568199`.
+Every process used FailKeyring, fresh synthetic credentials and a private loopback provider.
+The sanitized before/after JSON and reproduction driver accompany the remote candidate;
+private fixture locations are excluded. This is frozen publication, not native picker UI.

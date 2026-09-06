@@ -21,6 +21,7 @@ The key is never returned by any endpoint and never written to a log line.
 import asyncio
 import os
 import threading
+from collections import OrderedDict
 from contextlib import suppress
 from functools import wraps
 from pathlib import Path
@@ -31,6 +32,7 @@ import keyring
 import keyring.errors
 
 from backend.config import settings
+from backend.core.errors import ConfigurationError
 from backend.storage import private
 
 SERVICE = "lyra"
@@ -83,13 +85,19 @@ def _exa_key_file() -> Path:
 # A probe must never hold its caller: settings reads are on a hot path, and some
 # keyring backends block instead of raising (a keychain entry whose access control
 # the current process cannot satisfy). The probe therefore runs with a deadline; a
-# hang demotes to file storage the same way a KeyringError does.
+# pending read stays distinct from an unavailable backend or an absent credential.
 _PROBE_TIMEOUT_SECONDS = 5.0
 
 
 _operation_lock = threading.Lock()
 _operation_thread: threading.Thread | None = None
 _operation_backend: object | None = None
+_operation_request: tuple[str, tuple[str, ...]] | None = None
+_operation_outcome: dict = {}
+_pending_reads: OrderedDict[tuple[int, tuple[str, ...]], tuple[object, threading.Thread, dict]] = (
+    OrderedDict()
+)
+_MAX_PENDING_READS = 32
 _slot_read_cache: dict[tuple[int, str], str | None] = {}
 
 
@@ -97,11 +105,64 @@ class CredentialTimeout(keyring.errors.KeyringError):
     """A credential operation is still pending; no further Keychain mutation is started."""
 
 
+class CredentialPendingError(ConfigurationError):
+    """A read has not completed; this says nothing about whether a key exists."""
+
+    def __init__(self) -> None:
+        super().__init__("Keychain is still responding. Retry shortly.")
+
+
+def _remember_pending_read(backend, args, thread, outcome) -> None:
+    # The retained backend prevents identity reuse, and the cap bounds abandoned
+    # delivery slots. A different key may finish without losing this result.
+    key = (id(backend), args[:2])
+    _pending_reads[key] = (backend, thread, outcome)
+    _pending_reads.move_to_end(key)
+    while len(_pending_reads) > _MAX_PENDING_READS:
+        _pending_reads.popitem(last=False)
+
+
+def _pending_read_result(outcome):
+    if "error" in outcome:
+        error = outcome["error"]
+        if isinstance(error, keyring.errors.KeyringError) and not isinstance(
+            error, keyring.errors.NoKeyringError
+        ):
+            raise ConfigurationError(
+                "Keychain could not read the credential. Unlock it or allow access, then retry."
+            ) from error
+        raise error
+    return outcome.get("value")
+
+
 def _keyring_call(method: str, *args: str):
     global _operation_thread, _operation_backend
+    global _operation_request, _operation_outcome
     backend = _keyring()
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asynchronous = False
+    else:
+        asynchronous = True
+    request = (method, args)
+    read_key = (id(backend), args[:2])
     with _operation_lock:
+        if method == "get_password" and read_key in _pending_reads:
+            _, pending_thread, pending_outcome = _pending_reads[read_key]
+            if pending_thread.is_alive():
+                raise CredentialPendingError()
+            _pending_reads.pop(read_key)
+            return _pending_read_result(pending_outcome)
+        if method in ("set_password", "delete_password"):
+            # Remove delivery of any earlier read before attempting a mutation.
+            # Late readers may complete, but cannot republish a retired result.
+            _pending_reads.pop(read_key, None)
         if _operation_backend is backend and _operation_thread and _operation_thread.is_alive():
+            if method == "get_password":
+                if _operation_request == request:
+                    _remember_pending_read(backend, args, _operation_thread, _operation_outcome)
+                raise CredentialPendingError()
             raise CredentialTimeout("Keychain is still responding; retry later.")
         outcome = {}
         invoke_method = getattr(backend, method)
@@ -119,17 +180,30 @@ def _keyring_call(method: str, *args: str):
 
         thread = threading.Thread(target=invoke, name="lyra-keyring-operation", daemon=True)
         _operation_backend, _operation_thread = backend, thread
+        _operation_request, _operation_outcome = request, outcome
         thread.start()
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
+    if not asynchronous:
         thread.join(_PROBE_TIMEOUT_SECONDS)
     else:
-        # Async callers never wait for a Keychain prompt. Immutable slot reads are
-        # cached when this one worker finishes, so retry can use the result.
+        # Async callers never wait for a Keychain prompt. Keep a pending read
+        # distinct from an actual timeout/unavailable backend.
+        if thread.is_alive() and method == "get_password":
+            with _operation_lock:
+                # A completed read may have been superseded by a mutation while
+                # this caller waited for the lock. Never republish that old result.
+                if _operation_thread is thread and _operation_request == request:
+                    _remember_pending_read(backend, args, thread, outcome)
+            raise CredentialPendingError()
         thread.join(0)
     if thread.is_alive():
+        if method == "get_password":
+            with _operation_lock:
+                if _operation_thread is thread and _operation_request == request:
+                    _remember_pending_read(backend, args, thread, outcome)
+            raise CredentialPendingError()
         raise CredentialTimeout("Keychain did not respond in time; retry later.")
+    if method == "get_password":
+        return _pending_read_result(outcome)
     if "error" in outcome:
         raise outcome["error"]
     return outcome.get("value")
@@ -145,6 +219,17 @@ def _keyring_usable() -> bool:
         else:
             _keyring_ok = True
     return _keyring_ok
+
+
+def _keyring_writable() -> bool:
+    # A pending read is not evidence of missing credentials. An explicit write
+    # may nevertheless select durable file authority while that worker is busy.
+    if _operation_backend is _keyring() and _operation_thread and _operation_thread.is_alive():
+        return False
+    try:
+        return _keyring_usable()
+    except ConfigurationError:
+        return False
 
 
 def _publish_durable(path: Path, value: str) -> None:
@@ -231,7 +316,7 @@ def set_api_key(value: str) -> None:
     ambiguity, a ``KeyError`` is raised so the caller knows credential authority is
     unresolved and can surface that to the operator.
     """
-    keychain_was_reachable = _keyring_usable()
+    keychain_was_reachable = _keyring_writable()
     if keychain_was_reachable:
         try:
             _keyring_call("set_password", SERVICE, USERNAME, value)
@@ -273,11 +358,22 @@ def set_api_key(value: str) -> None:
 @_serialized
 def get_api_key() -> str | None:
     """The stored tutor API key, or None when none is set."""
+    global _keyring_ok
     if _deleted(_key_file()):
         return None
-    if not _file_is_authoritative(_key_file()) and _keyring_usable():
+    if not _file_is_authoritative(_key_file()) and _keyring_ok is not False:
         try:
-            return _keyring_call("get_password", SERVICE, USERNAME) or None
+            value = _keyring_call("get_password", SERVICE, USERNAME)
+            _keyring_ok = True
+            return value or None
+        except CredentialPendingError:
+            raise
+        except ConfigurationError:
+            # A readable fallback is still useful after an actual denied read.
+            # With no fallback, preserve the error instead of reporting no key.
+            if not _key_file().is_file():
+                raise
+            _demote_to_file()
         except keyring.errors.KeyringError:
             _demote_to_file()
     return _read_key_file()
@@ -295,10 +391,10 @@ def delete_api_key() -> None:
     Raises ``KeyError`` when the keychain entry cannot be deleted and may survive.
     The file credential is still removed so only the keychain ghost remains.
     """
-    if not _keyring_usable():
+    if not _keyring_writable():
         _mark_file_authority(_key_file(), deleted=True)
     keychain_entry_survived = False
-    if _keyring_usable():
+    if _keyring_writable():
         try:
             _keyring_call("delete_password", SERVICE, USERNAME)
         except keyring.errors.PasswordDeleteError:
@@ -322,7 +418,7 @@ def api_key_storage() -> Literal["keychain", "file"]:
 @_serialized
 def set_exa_api_key(value: str) -> None:
     """Store the Exa API key, replacing any existing one."""
-    keychain_was_reachable = _keyring_usable()
+    keychain_was_reachable = _keyring_writable()
     if keychain_was_reachable:
         try:
             _keyring_call("set_password", EXA_SERVICE, EXA_USERNAME, value)
@@ -356,11 +452,22 @@ def set_exa_api_key(value: str) -> None:
 @_serialized
 def get_exa_api_key() -> str | None:
     """The stored Exa API key, or None when none is set."""
+    global _keyring_ok
     if _deleted(_exa_key_file()):
         return None
-    if not _file_is_authoritative(_exa_key_file()) and _keyring_usable():
+    if not _file_is_authoritative(_exa_key_file()) and _keyring_ok is not False:
         try:
-            return _keyring_call("get_password", EXA_SERVICE, EXA_USERNAME) or None
+            value = _keyring_call("get_password", EXA_SERVICE, EXA_USERNAME)
+            _keyring_ok = True
+            return value or None
+        except CredentialPendingError:
+            raise
+        except ConfigurationError:
+            # A readable fallback is still useful after an actual denied read.
+            # With no fallback, preserve the error instead of reporting no key.
+            if not _exa_key_file().is_file():
+                raise
+            _demote_to_file()
         except keyring.errors.KeyringError:
             _demote_to_file()
     try:
@@ -378,10 +485,10 @@ def has_exa_api_key() -> bool:
 @_serialized
 def delete_exa_api_key() -> None:
     """Forget the stored Exa key. Idempotent."""
-    if not _keyring_usable():
+    if not _keyring_writable():
         _mark_file_authority(_exa_key_file(), deleted=True)
     keychain_entry_survived = False
-    if _keyring_usable():
+    if _keyring_writable():
         try:
             _keyring_call("delete_password", EXA_SERVICE, EXA_USERNAME)
         except keyring.errors.PasswordDeleteError:
