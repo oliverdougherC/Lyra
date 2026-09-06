@@ -1,3 +1,4 @@
+import { isolatedBackendEnvironment } from './backend-environment'
 /**
  * Acceptance global setup -- starts the full production-shaped stack.
  *
@@ -145,7 +146,7 @@ export default async function globalSetup() {
       ],
       {
         cwd: PROJECT_ROOT,
-        env: backendEnv as NodeJS.ProcessEnv,
+        env: isolatedBackendEnvironment(backendEnv),
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
       },

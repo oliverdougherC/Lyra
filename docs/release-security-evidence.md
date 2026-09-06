@@ -42,7 +42,8 @@ settings commit is never authoritative. Slots are retained so an already capture
 settings row cannot pair its endpoint with a newer key.
 
 Forget publishes a durable generation revocation, removes historical fallback values,
-clears the legacy fallback, and attempts bounded removal of the Keychain entries. A locked
+clears the legacy fallback, and attempts bounded removal of profile-owned UUID Keychain entries.
+The globally shared legacy Keychain entry is deliberately left untouched. A locked
 OS store may retain an encrypted obsolete entry until cleanup can run; the revoked slot
 cannot resolve through any retained settings row. Repeated Forget retries those entries.
 A later save receives a fresh identity in the new generation. Backups must preserve the
@@ -61,3 +62,44 @@ No client-level header rewrite or second endpoint authority was introduced. Exis
 resolver. Process cleanup owns only the new process group created for the confirmed argv;
 it is not an OS sandbox claim. Log redaction retains useful stack locations rather than
 attempting to recognize arbitrary private provider text inside exception values.
+
+## Follow-up: acceptance credential isolation incident
+
+The original installed profile's legacy tutor Keychain entry was reported absent during
+release acceptance. No live Keychain writes were performed by this investigation. A full
+ordinary backend pytest run, with the public host Keychain mutation methods replaced by
+recording spies and child processes forced onto a disabled backend, completed with **3031
+passed, 1 skipped, zero host mutation attempts**. This does not support attributing the
+incident to that ordinary test suite.
+
+The browser acceptance harness had a concrete unsafe path: the initial, restart, and
+backup-recovery backend children inherited the host's Keychain configuration, and
+`backup-recovery.spec.ts` exercised real credential save/check/Forget. The prior new
+Forget implementation unconditionally deleted the globally shared legacy tutor username,
+even when operating on an unrelated temporary profile with its own UUID slots. A fake
+regression reproduced that cross-profile deletion. This pathway is consistent with the
+observed missing entry; no OS audit event establishing the exact deletion invocation was
+available.
+
+Repairs:
+
+- Forget revokes the current profile via its durable tombstone and generation, and
+  physically cleans only UUID slots listed in that profile. It does not delete the
+  globally shared legacy Keychain entry. That encrypted legacy entry may remain in the
+  OS store but cannot resolve through this profile after Forget.
+- Ordinary pytest globally uses per-test in-memory public keyring methods; spawned Python
+  processes receive a disabled backend. Module-local specialized fakes remain supported.
+- Every browser-acceptance backend child explicitly selects
+  `keyring.backends.fail.Keyring`, overriding inherited settings. The direct Python
+  acceptance harness also installs this backend. FailKeyring deliberately raises so the
+  real application tests its private file fallback; NullKeyring would silently discard
+  writes and make credential acceptance meaningless.
+- The bounded worker captures its adapter callable before scheduling, so delayed test
+  callbacks cannot switch adapters after fixture teardown.
+
+The new cross-profile regression failed before the repair. Focused credential/settings
+checks passed (**101 tests**), the direct-child forbidden-host-backend roundtrip passed,
+and the frontend child-environment override test passed. The default installed profile,
+its restore-copy locations, and the two known checkout data folders had no credential-file
+recovery candidates. Only filenames/presence were inspected; no secret values were
+printed, no broad credential store was searched, and no replacement key was invented.

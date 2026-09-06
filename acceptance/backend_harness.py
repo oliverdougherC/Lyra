@@ -25,6 +25,9 @@ import time
 from collections import deque
 from pathlib import Path
 
+import keyring
+import keyring.backends.fail
+
 import backend.core.ingestion as _ingest_mod
 import backend.core.study as _study_mod
 import backend.rag.embed as _embed_mod
@@ -39,6 +42,11 @@ from backend.llm.llama_server import (
     _stop_tree,
 )
 from backend.rag.embed import EMBEDDING_DIM
+
+# Defense in depth for direct `uvicorn acceptance.backend_harness:app` launches.
+# FailKeyring forces the real credential implementation into private profile files;
+# NullKeyring would silently discard writes and invalidate set/check/delete tests.
+keyring.set_keyring(keyring.backends.fail.Keyring())
 
 # --------------------------------------------------------------------------
 # Worker source-validation barrier (PLA-291 acceptance testing).

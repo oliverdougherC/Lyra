@@ -104,10 +104,11 @@ def _keyring_call(method: str, *args: str):
         if _operation_backend is backend and _operation_thread and _operation_thread.is_alive():
             raise CredentialTimeout("Keychain is still responding; retry later.")
         outcome = {}
+        invoke_method = getattr(backend, method)
 
         def invoke():
             try:
-                outcome["value"] = getattr(backend, method)(*args)
+                outcome["value"] = invoke_method(*args)
                 if len(args) >= 2 and args[1].startswith("tutor:"):
                     if method == "get_password":
                         _slot_read_cache[(id(backend), args[1])] = outcome["value"]
@@ -492,8 +493,10 @@ def forget_tutor_credentials() -> None:
     _publish_durable(settings.data_dir / ".tutor_credential_generation", uuid.uuid4().hex)
     _mark_file_authority(_key_file(), deleted=True)
     _remove_key_file()
-    with suppress(keyring.errors.KeyringError):
-        _keyring_call("delete_password", SERVICE, USERNAME)
+    # The pre-slot legacy username is shared by every profile. This profile does
+    # not own it: deleting it would revoke another installed/dev profile's key.
+    # The local deletion tombstone above revokes its use here. Only UUID slots
+    # recorded in this profile are eligible for physical Keychain cleanup.
     for path in (settings.data_dir / "credentials").glob("*.json"):
         record = _credential_record(path.stem)
         was_keychain = record["storage"] in ("keychain", "revoked")

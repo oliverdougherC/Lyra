@@ -963,3 +963,44 @@ def test_immutable_slot_read_does_not_block_event_loop(isolated_secrets, monkeyp
         release.set()
         secrets._operation_thread.join(1)
     assert secrets.get_tutor_credential(identity, "http://localhost/v1") == "synthetic-slot-key"
+
+
+def test_forget_profile_slots_does_not_delete_shared_legacy_credential(isolated_secrets):
+    isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] = "synthetic-other-profile"
+    identity = secrets.stage_tutor_credential(
+        "https://synthetic.example/v1", "synthetic-profile-key"
+    )
+    secrets.forget_tutor_credentials()
+    assert (
+        isolated_secrets.store.get((secrets.SERVICE, secrets.USERNAME)) == "synthetic-other-profile"
+    )
+    assert secrets.get_tutor_credential(identity, "https://synthetic.example/v1") is None
+    assert (secrets.SERVICE, "tutor:" + identity) not in isolated_secrets.store
+
+
+def test_pending_worker_keeps_original_adapter_callable(isolated_secrets, monkeypatch):
+    import threading
+
+    release = threading.Event()
+    real_thread = threading.Thread
+    escaped = []
+    isolated_secrets.store[(secrets.SERVICE, secrets.USERNAME)] = "synthetic-only"
+
+    def deferred_thread(*, target, **kwargs):
+        def delayed():
+            release.wait(2)
+            target()
+
+        return real_thread(target=delayed, **kwargs)
+
+    monkeypatch.setattr(secrets.threading, "Thread", deferred_thread)
+    monkeypatch.setattr(secrets, "_PROBE_TIMEOUT_SECONDS", 0.01)
+    try:
+        with pytest.raises(secrets.CredentialTimeout):
+            secrets._keyring_call("delete_password", secrets.SERVICE, secrets.USERNAME)
+        monkeypatch.setattr(isolated_secrets, "delete_password", lambda *args: escaped.append(True))
+    finally:
+        release.set()
+        secrets._operation_thread.join(1)
+    assert not escaped
+    assert (secrets.SERVICE, secrets.USERNAME) not in isolated_secrets.store
