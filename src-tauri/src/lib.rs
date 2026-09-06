@@ -762,26 +762,180 @@ pub fn run() {
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
             let state = app.state::<AppState>().inner().clone();
-            if state
-                .quitting
-                .swap(true, std::sync::atomic::Ordering::SeqCst)
-            {
-                api.prevent_exit();
-                return;
-            }
-            api.prevent_exit();
             let app = app.clone();
-            tauri::async_runtime::spawn_blocking(move || {
-                if let Err(error) = state.shutdown() {
-                    log_event(&format!("terminal backend cleanup failed: {error}"));
-                }
-                state
-                    .shutdown_complete
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-                app.exit(code.unwrap_or(0));
-            });
+            let failed_app = app.clone();
+            handle_exit_request(
+                state,
+                code,
+                || api.prevent_exit(),
+                move |code| app.exit(code),
+                move || {
+                    failed_app.dialog().message(
+                        "Lyra could not confirm that its backend and helpers stopped. The app stayed open. Try Quit again; if the problem persists, contact support with the startup log."
+                    ).title("Lyra could not quit safely")
+                        .kind(tauri_plugin_dialog::MessageDialogKind::Error).show(|_| {});
+                },
+            );
         }
     });
+}
+
+// This is the signal/scheduling boundary registered with Tauri above. Tests use
+// the same handler with observable exit callbacks; they do not force process exit.
+fn handle_exit_request(
+    state: AppState,
+    code: Option<i32>,
+    prevent_exit: impl FnOnce(),
+    exit: impl FnOnce(i32) + Send + 'static,
+    cleanup_failed: impl FnOnce() + Send + 'static,
+) {
+    if state
+        .shutdown_complete
+        .load(std::sync::atomic::Ordering::SeqCst)
+    {
+        return;
+    }
+    if state
+        .quitting
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        prevent_exit();
+        return;
+    }
+    prevent_exit();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(error) = state.shutdown() {
+            log_event(&format!("terminal backend cleanup failed: {error}"));
+            // A failed stop is not completion. Keep the shell alive and let another
+            // explicit Quit retry the same owned backend instead of stranding it.
+            state
+                .quitting
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            cleanup_failed();
+            return;
+        }
+        state
+            .shutdown_complete
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        exit(code.unwrap_or(0));
+    });
+}
+
+#[cfg(test)]
+mod exit_request_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn ordinary_quit_allows_its_cleanup_triggered_final_exit() {
+        let state = AppState::default();
+        let prevented = AtomicUsize::new(0);
+        let (final_tx, final_rx) = mpsc::channel();
+        handle_exit_request(
+            state.clone(),
+            None,
+            || {
+                prevented.fetch_add(1, Ordering::SeqCst);
+            },
+            move |code| {
+                final_tx.send(code).unwrap();
+            },
+            || panic!("unexpected cleanup failure"),
+        );
+        let code = final_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(prevented.load(Ordering::SeqCst), 1);
+        handle_exit_request(
+            state,
+            Some(code),
+            || {
+                prevented.fetch_add(1, Ordering::SeqCst);
+            },
+            |_| panic!("cleanup must not run twice"),
+            || panic!("unexpected cleanup failure"),
+        );
+        assert_eq!(
+            prevented.load(Ordering::SeqCst),
+            1,
+            "completed cleanup must admit the final ordinary exit"
+        );
+    }
+
+    #[test]
+    fn repeated_quit_during_cleanup_waits_without_spawning_another_worker() {
+        let state = AppState::default();
+        let held = state.lifecycle.lock().unwrap();
+        let (final_tx, final_rx) = mpsc::channel();
+        let prevented = AtomicUsize::new(0);
+        handle_exit_request(
+            state.clone(),
+            Some(7),
+            || {
+                prevented.fetch_add(1, Ordering::SeqCst);
+            },
+            move |code| {
+                final_tx.send(code).unwrap();
+            },
+            || panic!("unexpected cleanup failure"),
+        );
+        handle_exit_request(
+            state.clone(),
+            Some(9),
+            || {
+                prevented.fetch_add(1, Ordering::SeqCst);
+            },
+            |_| panic!("duplicate quit scheduled cleanup"),
+            || panic!("unexpected cleanup failure"),
+        );
+        assert_eq!(prevented.load(Ordering::SeqCst), 2);
+        assert!(!state.shutdown_complete.load(Ordering::SeqCst));
+        assert!(final_rx.try_recv().is_err());
+        drop(held);
+        assert_eq!(final_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 7);
+    }
+
+    #[test]
+    fn cleanup_failure_keeps_the_shell_open_and_allows_an_explicit_retry() {
+        let state = AppState::default();
+        let _ = std::panic::catch_unwind(|| {
+            let _held = state.lifecycle.lock().unwrap();
+            panic!("injected prior lifecycle failure");
+        });
+        let (failed_tx, failed_rx) = mpsc::channel();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        handle_exit_request(
+            state.clone(),
+            None,
+            || {},
+            move |code| {
+                exit_tx.send(code).unwrap();
+            },
+            move || {
+                failed_tx.send(()).unwrap();
+            },
+        );
+        failed_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(!state.shutdown_complete.load(Ordering::SeqCst));
+        assert!(!state.quitting.load(Ordering::SeqCst));
+        assert!(
+            exit_rx.try_recv().is_err(),
+            "failed cleanup must not request final exit"
+        );
+        // Repair the injected condition and retry the same production handler.
+        state.lifecycle.clear_poison();
+        let (retry_tx, retry_rx) = mpsc::channel();
+        handle_exit_request(
+            state.clone(),
+            None,
+            || {},
+            move |code| {
+                retry_tx.send(code).unwrap();
+            },
+            || panic!("retry failed"),
+        );
+        assert_eq!(retry_rx.recv_timeout(Duration::from_secs(2)).unwrap(), 0);
+        assert!(state.shutdown_complete.load(Ordering::SeqCst));
+    }
 }
 
 fn launch_backend(app: &AppHandle) -> Result<ManagedBackend, LaunchError> {
