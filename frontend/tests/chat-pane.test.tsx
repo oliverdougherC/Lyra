@@ -1331,13 +1331,16 @@ describe('ChatPane contextual agent (PLA-401)', () => {
       await waitFor(() => expect(refreshStarted).toBe(true))
       // The server is stopped, but the old optimistic turn still owns this pane until
       // its durable transcript arrives. Exposing Send here used to erase an unsent turn.
-      expect(box).toBeDisabled()
+      expect(box).toBeEnabled()
       expect(screen.getByLabelText('Send message')).toBeDisabled()
+      await user.type(box, 'Can you continue now?')
+      await user.keyboard('{Enter}')
+      expect(api.sendAgentChat).toHaveBeenCalledTimes(1)
       await act(async () =>
         finishRefresh?.([message({ id: 1, role: 'user', content: 'Stop this turn' })]),
       )
-      await waitFor(() => expect(box).toBeEnabled())
-      await user.type(box, 'Can you continue now?')
+      await waitFor(() => expect(screen.getByLabelText('Send message')).toBeEnabled())
+      expect(box).toHaveValue('Can you continue now?')
       await user.click(screen.getByLabelText('Send message'))
       await waitFor(() => expect(api.sendAgentChat).toHaveBeenCalledTimes(2))
       expect(vi.mocked(api.sendAgentChat).mock.calls[1][2]).toBe('Can you continue now?')
@@ -1372,6 +1375,10 @@ describe('ChatPane contextual agent (PLA-401)', () => {
       await waitFor(() => expect(api.stopAgentChatStatus).toHaveBeenCalledTimes(1))
       expect(screen.getByLabelText('Stopping…')).toBeInTheDocument()
       expect(screen.queryByLabelText('Send message')).not.toBeInTheDocument()
+      expect(box).toBeEnabled()
+      await user.type(box, 'Follow up while stopping')
+      await user.keyboard('{Enter}')
+      expect(api.sendAgentChat).toHaveBeenCalledTimes(1)
 
       // The backend proves the session free: only now does the turn settle as stopped,
       // the send key is spent, and the conversation re-enables.
@@ -1379,6 +1386,7 @@ describe('ChatPane contextual agent (PLA-401)', () => {
       await waitFor(() => expect(screen.getByLabelText('Send message')).toBeInTheDocument())
       expect(screen.queryByLabelText('Stopping…')).not.toBeInTheDocument()
       expect(screen.queryByLabelText('Stop generating')).not.toBeInTheDocument()
+      expect(box).toHaveValue('Follow up while stopping')
       releaseSend?.()
     })
 

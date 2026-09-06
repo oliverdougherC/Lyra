@@ -64,6 +64,42 @@ describe('the activity trail on a message', () => {
     expect(screen.getByText('Reading section "Introduction"')).toBeInTheDocument()
   })
 
+  it('summarizes an observed tool alongside expandable reasoning, without leaking its text', async () => {
+    renderRow(
+      <MessageRow
+        message={message({ content: '', thinking: 'Secret intermediate answer' })}
+        streaming
+        activity={[TRAIL[0]]}
+      />,
+    )
+    const trigger = screen.getByRole('button', { name: /Read a section/ })
+    expect(screen.queryByText('Secret intermediate answer')).not.toBeInTheDocument()
+    await userEvent.click(trigger)
+    expect(screen.getByText('Secret intermediate answer')).toBeVisible()
+  })
+
+  it('clears live activity as soon as the turn ends, while keeping details', () => {
+    const { container } = renderRow(
+      <MessageRow
+        message={message({ content: '', thinking: 'A thought' })}
+        streaming
+        turnEnded
+        activity={[TRAIL[0]]}
+      />,
+    )
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Thought' })).toBeInTheDocument()
+    expect(screen.getByText(TRAIL[0].label)).toBeInTheDocument()
+  })
+
+  it('shows a concise activity status without reasoning and keeps failed outcomes honest', () => {
+    const { container } = renderRow(
+      <MessageRow message={message({ content: '' })} streaming activity={TRAIL} />,
+    )
+    expect(screen.getByText('Thinking')).toBeInTheDocument()
+    expect(container.querySelector('.animate-pulse')).toBeNull()
+  })
+
   it('renders no trail at all on an ordinary tutor message', () => {
     renderRow(<MessageRow message={message({})} />)
 

@@ -33,6 +33,20 @@ A local tutor needs its own running server. A remote tutor needs network access 
 provider account. Local-network hosts are treated as remote too. Image recognition requires a
 vision-capable tutor; normal text chat capability alone does not establish image support.
 
+## Draft a follow-up while Lyra responds
+
+In class chat and the writing assistant, you can type the next message while a response is
+running or finishing its reveal. **Send** becomes available once that turn has ended; typing
+never queues or sends a request. **Stop** remains available during generation, and sending
+waits for cancellation to be confirmed. A failed response does not replace your newer typing.
+
+Unsent text belongs to the conversation currently on screen. Switching conversations, classes,
+or writing documents clears it; copy anything you want to keep before navigating away.
+
+During a response, brief activity labels report observed processing stages or completed tool
+actions. When no usable activity signal is available, Lyra shows **Thinking**. These labels are
+activity summaries, and the expandable details remain separate from the answer.
+
 ## Downloads, optional services, and offline use
 
 Document search uses local `nomic-embed-text-v1.5` embeddings. First processing downloads about

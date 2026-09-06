@@ -3,16 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { Composer } from '@/components/chat/composer'
 
-/**
- * PLA-318: `disabled={streaming}` makes the browser blur the focused textarea on an
- * Enter-send, and before the fix nothing restored focus when the turn settled -- a
- * keyboard-only student had to Tab/click back into the composer after every answer.
- *
- * The contract under test: a keyboard send remembers that the textarea owned focus,
- * restores it (with preventScroll) when streaming ends, and never steals focus from a
- * control the student deliberately moved to while the answer streamed. Button sends
- * never trigger restoration at all.
- */
+/** Keyboard sends retain focus during streaming; genuine history blocking still restores
+ * it after readiness without stealing focus from another control. */
 
 const noop = () => {}
 
@@ -58,7 +50,7 @@ function blurAsBrowserWould(node: HTMLElement) {
 }
 
 describe('Composer focus across a streaming turn (PLA-318)', () => {
-  it('keyboard send: focus returns to the textarea when streaming ends', () => {
+  it('keyboard send: focus stays in the editable textarea throughout streaming', () => {
     const onSend = vi.fn()
     const { rerender } = render(<Chrome {...baseProps({ onSend })} />)
 
@@ -69,10 +61,9 @@ describe('Composer focus across a streaming turn (PLA-318)', () => {
     fireEvent.keyDown(node, { key: 'Enter' })
     expect(onSend).toHaveBeenCalledTimes(1)
 
-    blurAsBrowserWould(node)
     rerender(<Chrome {...baseProps({ onSend, streaming: true })} />)
-    expect(node).toBeDisabled()
-    expect(node).not.toHaveFocus()
+    expect(node).toBeEnabled()
+    expect(node).toHaveFocus()
 
     rerender(<Chrome {...baseProps({ onSend, streaming: false })} />)
     expect(node).toHaveFocus()
