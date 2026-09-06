@@ -45,8 +45,17 @@ HASH_CHUNK_BYTES = 1024 * 1024
 _RUNNING_STATES = {"queued", "running", "cancel_requested"}
 _RESUMABLE_STATES = _RUNNING_STATES | {"cancelled", "failed"}
 _SOURCE_IMPORT_DIRECTORIES = ("uploads", "text")
-_PROFILE_PRESERVE_DIRECTORIES = ("models",)
-_PROFILE_PRESERVE_FILES = (".api_key", ".exa_api_key", ".permissions-hardened")
+_PROFILE_PRESERVE_DIRECTORIES = ("models", "credentials")
+# Settings' selected immutable credential reference travels with its records and
+# authority/revocation metadata. The current profile wins, including absent files.
+_PROFILE_PRESERVE_FILES = (
+    ".api_key",
+    ".exa_api_key",
+    ".permissions-hardened",
+    ".tutor_credential_generation",
+    ".api_key.authority",
+    ".exa_api_key.authority",
+)
 _DESTINATION_AUXILIARY_PREFIXES = ("chunk_embeddings", "chunks_fts")
 _STAGED_STATUS = "staged"
 _AWAITING_PUBLISH_PHASE = "awaiting_publish"
@@ -792,6 +801,8 @@ def _profile_preserve_bytes() -> int:
     total = 0
     for directory in _PROFILE_PRESERVE_DIRECTORIES:
         root = settings.data_dir / directory
+        if root.is_symlink():
+            raise LyraError("This installation's existing profile contains an unsafe file.")
         if not root.exists():
             continue
         for current in sorted(root.rglob("*")):
@@ -801,6 +812,8 @@ def _profile_preserve_bytes() -> int:
                 total += current.stat().st_size
     for filename in _PROFILE_PRESERVE_FILES:
         current = settings.data_dir / filename
+        if current.is_symlink():
+            raise LyraError("This installation's existing profile contains an unsafe file.")
         if current.exists():
             total += current.stat().st_size
     return total
@@ -817,14 +830,27 @@ def _copy_profile_into_stage() -> None:
         destination = _stage_data_path() / directory
         if destination.exists():
             shutil.rmtree(destination)
+        if source.is_symlink():
+            raise LyraError("This installation's existing profile contains an unsafe file.")
         if source.exists():
-            copy_tree_without_links(source, destination)
+            if directory == "credentials":
+                private.secure_mkdir(destination, root=_stage_data_path())
+                for entry in source.iterdir():
+                    payload = private.read_owned_bytes(
+                        entry, root=settings.data_dir, max_bytes=1_048_576
+                    )
+                    private.write_private_bytes(destination / entry.name, payload)
+            else:
+                copy_tree_without_links(source, destination)
     for filename in _PROFILE_PRESERVE_FILES:
         source = settings.data_dir / filename
         destination = _stage_data_path() / filename
         destination.unlink(missing_ok=True)
+        if source.is_symlink():
+            raise LyraError("This installation's existing profile contains an unsafe file.")
         if source.exists():
-            copy_regular_file(source, destination)
+            payload = private.read_owned_bytes(source, root=settings.data_dir, max_bytes=1_048_576)
+            private.write_private_bytes(destination, payload)
 
 
 def _merge_destination_profile(stage_db: Path) -> None:
