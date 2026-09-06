@@ -273,3 +273,82 @@ it.each([false, true])(
     expect(streamWriterChat).not.toHaveBeenCalled()
   },
 )
+
+describe.each([false, true])('New Chat handoff ownership (writer: %s)', (writer) => {
+  it('clears a New Chat draft when manually returning to the still-running conversation', async () => {
+    const turn = holdStream(writer)
+    const view = mount(writer)
+    await waitFor(() => expect(input()).toBeEnabled())
+    edit('Original question')
+    enter()
+    await waitFor(() => expect(turn.stream).toHaveBeenCalledTimes(1))
+    view.rerender(view.pane(null))
+    await waitFor(() => expect(input()).toBeEnabled())
+    edit(FOLLOW_UP)
+    view.rerender(view.pane(7))
+    expect(input()).toHaveValue('')
+    expect(turn.stream).toHaveBeenCalledTimes(1)
+  })
+
+  it('revokes pending New Chat creation when returning to the still-running conversation', async () => {
+    const turn = holdStream(writer)
+    let resolve!: (session: Awaited<ReturnType<typeof api.createSession>>) => void
+    const creating = new Promise<Awaited<ReturnType<typeof api.createSession>>>((done) => {
+      resolve = done
+    })
+    const create = writer ? vi.mocked(api.createWriterSession) : vi.mocked(api.createSession)
+    create.mockReturnValue(creating)
+    const onSessionIdChange = vi.fn()
+    const view = mount(writer, 7, onSessionIdChange)
+    await waitFor(() => expect(input()).toBeEnabled())
+    edit('Original question')
+    enter()
+    await waitFor(() => expect(turn.stream).toHaveBeenCalledTimes(1))
+    view.rerender(view.pane(null))
+    await waitFor(() => expect(input()).toBeEnabled())
+    edit('Question for New Chat')
+    enter()
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    view.rerender(view.pane(7))
+    await act(async () =>
+      resolve({ id: 9, mode: writer ? 'writer' : 'guide' } as Awaited<
+        ReturnType<typeof api.createSession>
+      >),
+    )
+    expect(onSessionIdChange).not.toHaveBeenCalled()
+    expect(turn.stream).toHaveBeenCalledTimes(1)
+    expect(input()).toHaveValue('')
+  })
+})
+
+it.each([false, true])(
+  'preserves the real creation handoff exactly once (writer: %s)',
+  async (writer) => {
+    const turn = holdStream(writer)
+    let resolve!: (session: Awaited<ReturnType<typeof api.createSession>>) => void
+    const creating = new Promise<Awaited<ReturnType<typeof api.createSession>>>((done) => {
+      resolve = done
+    })
+    const create = writer ? vi.mocked(api.createWriterSession) : vi.mocked(api.createSession)
+    create.mockReturnValue(creating)
+    const onSessionIdChange = vi.fn((id: number) => view.rerender(view.pane(id)))
+    const view = mount(writer, null, onSessionIdChange)
+    await waitFor(() => expect(input()).toBeEnabled())
+    edit('First question')
+    enter()
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1))
+    edit(FOLLOW_UP)
+    await act(async () =>
+      resolve({ id: 9, mode: writer ? 'writer' : 'guide' } as Awaited<
+        ReturnType<typeof api.createSession>
+      >),
+    )
+    await waitFor(() => expect(turn.stream).toHaveBeenCalledTimes(1))
+    expect(onSessionIdChange).toHaveBeenCalledExactlyOnceWith(9)
+    expect(input()).toHaveValue(FOLLOW_UP)
+    view.rerender(view.pane(null))
+    edit('A different New Chat draft')
+    view.rerender(view.pane(9))
+    expect(input()).toHaveValue('')
+  },
+)

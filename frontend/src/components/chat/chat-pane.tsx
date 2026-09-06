@@ -226,6 +226,9 @@ export function ChatPane({
   }, [])
   const sendingRef = useRef<symbol | null>(null)
   const draftScopeVersionRef = useRef(0)
+  // Only session creation may authorize a null → ID transition. A running turn's
+  // session ID is also used when manually returning to it, so it cannot prove a handoff.
+  const expectedHandoffRef = useRef<{ sessionId: number; scopeVersion: number } | null>(null)
   const [sending, setSending] = useState(false)
   const [pendingTurn, setPendingTurn] = useState<ChatMessage[] | null>(null)
   const [turnBase, setTurnBase] = useState<ChatMessage[] | null>(null)
@@ -358,12 +361,20 @@ export function ChatPane({
           const session = await api.createWriterSession(writer.artifactId)
           if (!owns()) return null
           turnSessionRef.current = session.id
+          expectedHandoffRef.current = {
+            sessionId: session.id,
+            scopeVersion: draftScopeVersionRef.current,
+          }
           onSessionIdChange?.(session.id)
           return session.id
         }
         const session = await createSession.mutateAsync(anchorPartId)
         if (!owns()) return null
         turnSessionRef.current = session.id
+        expectedHandoffRef.current = {
+          sessionId: session.id,
+          scopeVersion: draftScopeVersionRef.current,
+        }
         onSessionIdChange?.(session.id)
         if (session.mode !== 'writer') setMode(session.mode)
         return session.id
@@ -384,6 +395,7 @@ export function ChatPane({
       // Session creation can still be pending before a stream/controller exists.
       // Revoke that send before its response can navigate or start an unmounted pane.
       sendingRef.current = null
+      expectedHandoffRef.current = null
       abortRef.current?.abort()
     }
   }, [])
@@ -434,7 +446,15 @@ export function ChatPane({
     const sameContext = previous.classId === classId && previous.artifactId === writer?.artifactId
     if (sameContext && previous.sessionId === activeSessionId) return
     draftScopeRef.current = { classId, artifactId: writer?.artifactId, sessionId: activeSessionId }
-    if (sameContext && previous.sessionId === null && activeSessionId === turnSessionRef.current)
+    const handoff = expectedHandoffRef.current
+    // Consume once, even when navigation went somewhere other than the created session.
+    expectedHandoffRef.current = null
+    if (
+      sameContext &&
+      previous.sessionId === null &&
+      activeSessionId === handoff?.sessionId &&
+      handoff.scopeVersion === draftScopeVersionRef.current
+    )
       return
     draftScopeVersionRef.current += 1
     sendingRef.current = null
@@ -923,6 +943,7 @@ export function ChatPane({
       ) {
         operationIdRef.current = null
       }
+      expectedHandoffRef.current = null
       const sendId = Symbol()
       sendingRef.current = sendId
       const scopeVersion = draftScopeVersionRef.current
