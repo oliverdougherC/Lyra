@@ -582,17 +582,29 @@ export function ChatPane({
 
       try {
         if (agent) {
-          // The contextual agent answers in place: one non-streaming turn that plans the
-          // work, runs its tools, and returns the full reply. Its durable artifacts (access
-          // requests, proposed edits, commands, activity) are surfaced by the surrounding
-          // work surface. Retry and regenerate take the same shape: the server reuses the
-          // last user message (retry) or re-answers and supersedes the last reply
-          // (regenerate), and each returns the one reply.
+          // Feed live agent deltas through the same reasoning and reveal path as tutor
+          // turns. A new tool round replaces its intermediate prose, retaining reasoning.
+          const onAgentEvent = (event: import('@/lib/api').AgentStreamEvent) => {
+            if (!owns()) return
+            if (event.type === 'reset') {
+              assistantText = ''
+              streamTextRef.current = ''
+              setStreamText('')
+            } else {
+              onEvent(event)
+            }
+          }
           const agentDocumentId = scopedDocument?.id ?? null
           try {
             const result =
               kind === 'tutor-retry'
-                ? await api.retryAgentChat(classId, turnSessionId, undefined, controller.signal)
+                ? await api.retryAgentChat(
+                    classId,
+                    turnSessionId,
+                    undefined,
+                    controller.signal,
+                    onAgentEvent,
+                  )
                 : kind === 'regenerate'
                   ? await api.regenerateAgentChat(
                       classId,
@@ -601,6 +613,7 @@ export function ChatPane({
                       // a body-less one (the just-in-time continuation) keeps the stored scope.
                       { mode: activeMode, documentId: agentDocumentId },
                       controller.signal,
+                      onAgentEvent,
                     )
                   : await api.sendAgentChat(
                       classId,
@@ -614,6 +627,7 @@ export function ChatPane({
                       // instead of duplicating.
                       operationIdRef.current ?? undefined,
                       controller.signal,
+                      onAgentEvent,
                     )
             if (result.stopped === 'stopped') {
               // The server settled this turn as STOPPED - our Stop, or the server's own
@@ -632,6 +646,13 @@ export function ChatPane({
                 }
               }
             } else {
+              // Replayed operations and older servers return a complete JSON answer.
+              // Keep it in the optimistic renderer until its reveal has drained too.
+              if (owns() && result.content !== assistantText) {
+                assistantText = result.content
+                streamTextRef.current = assistantText
+                setStreamText(assistantText)
+              }
               onEvent({ type: 'done', message_id: result.message_id })
               if (kind === 'send') {
                 // The operation is durably settled: the reply committed (or the failure is

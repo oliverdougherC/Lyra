@@ -665,8 +665,9 @@ def command_has_option(command: Sequence[str], option: str, value: str) -> bool:
 def command_matches_component(name: str, command: Sequence[str], port: int) -> bool:
     """Recognize only launcher commands tied to this exact checkout and fixed port."""
 
-    host_option = "--hostname" if name == "frontend" else "--host"
-    if not command_has_option(command, host_option, "127.0.0.1"):
+    # Preserve recovery of pre-Vite launcher records while using Vite's host flag.
+    host_options = ("--host", "--hostname") if name == "frontend" else ("--host",)
+    if not any(command_has_option(command, option, "127.0.0.1") for option in host_options):
         return False
     if not command_has_option(command, "--port", str(port)):
         return False
@@ -692,7 +693,10 @@ def recover_checkout_component(name: str, port: int) -> dict[str, Any] | None:
     pgid = process_group(listener_pid)
     if not isinstance(pgid, int) or pgid <= 0 or process_group(pgid) != pgid:
         return None
-    if process_cwd(pgid) != ROOT.resolve():
+    checkout_directories = {ROOT.resolve()}
+    if name == "frontend":
+        checkout_directories.add(FRONTEND.resolve())
+    if process_cwd(pgid) not in checkout_directories:
         return None
     command = process_command(pgid)
     if not command_matches_component(name, command, port):
@@ -827,14 +831,14 @@ def ensure_frontend_environment(metadata: dict[str, Any]) -> str:
     pnpm = shutil.which("pnpm")
     if not pnpm:
         raise LauncherError(
-            "pnpm is required but was not found. Install Node.js 20+ and pnpm, "
+            "pnpm is required but was not found. Install Node.js 22.13+ and pnpm, "
             "then run ./run again. See https://pnpm.io/installation"
         )
     node = shutil.which("node")
     node_version = executable_version(node) if node else None
-    if not node_version or node_version < (20, 9):
+    if not node_version or node_version < (22, 13):
         found = ".".join(map(str, node_version)) if node_version else "not found"
-        raise LauncherError(f"Node.js 20.9 or newer is required (found {found})")
+        raise LauncherError(f"Node.js 22.13 or newer is required (found {found})")
 
     install_inputs = [
         FRONTEND / "package.json",
@@ -848,6 +852,7 @@ def ensure_frontend_environment(metadata: dict[str, Any]) -> str:
         run_checked(
             [pnpm, "--dir", str(FRONTEND), "install", "--frozen-lockfile"],
             "install frontend dependencies",
+            cwd=FRONTEND,
         )
         metadata["frontend_fingerprint"] = fingerprint
         atomic_write_json(INSTALL_FILE, metadata)
@@ -896,7 +901,7 @@ def ensure_frontend_build(pnpm: str, metadata: dict[str, Any]) -> None:
         log.write(f"\n--- production build {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
         result = subprocess.run(  # noqa: S603
             [pnpm, "--dir", str(FRONTEND), "build"],
-            cwd=ROOT,
+            cwd=FRONTEND,
             check=False,
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -1038,7 +1043,7 @@ def spawn_component(
         try:
             process = subprocess.Popen(  # noqa: S603
                 list(command),
-                cwd=ROOT,
+                cwd=FRONTEND if name == "frontend" else ROOT,
                 env=environment,
                 stdin=subprocess.DEVNULL,
                 stdout=log,
@@ -1487,7 +1492,7 @@ def start(args: argparse.Namespace) -> int:
                 "--dir",
                 str(FRONTEND),
                 script,
-                "--hostname",
+                "--host",
                 "127.0.0.1",
                 "--port",
                 str(FRONTEND_PORT),
@@ -1852,10 +1857,10 @@ def doctor(args: argparse.Namespace) -> int:
     pnpm = shutil.which("pnpm")
     node = shutil.which("node")
     node_version = executable_version(node) if node else None
-    if pnpm and node_version and node_version >= (20, 9):
+    if pnpm and node_version and node_version >= (22, 13):
         ok(f"Node {'.'.join(map(str, node_version))} and pnpm are available")
     else:
-        warn("Node.js 20.9+ and pnpm are required")
+        warn("Node.js 22.13+ and pnpm are required")
         failures += 1
     if (FRONTEND / "node_modules").is_dir():
         ok("frontend dependencies are installed")

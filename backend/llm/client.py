@@ -13,9 +13,9 @@ markers inline in the content stream, so `_ReasoningTagSplitter` pulls them back
 model that does not think at all trips neither path and streams exactly as before.
 
 Tool calling lives here too, and is used only by the verification loop in `llm/tools.py`.
-It is non-streaming: the caller wants whole tool calls rather than fragments, and nobody
-reads a verification pass live. Tool definitions are never sent on an ordinary chat turn,
-so an endpoint that cannot accept them still carries the whole Phase 1 conversation.
+Background verification uses complete replies; interactive callers can opt into live
+text deltas while tool-call fragments are assembled before dispatch. Tool definitions are
+only sent when requested by the caller.
 
 Every failure becomes an `UpstreamError` with a message written for the user. Those messages,
 and any log line this module writes, never contain the endpoint URL, the API key, or the
@@ -27,7 +27,7 @@ import base64
 import json
 import logging
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Literal
 
@@ -224,7 +224,7 @@ _THINK_OPEN = ("<think>", "<thinking>")
 _THINK_CLOSE = ("</think>", "</thinking>")
 _LONGEST_TAG = max(len(tag) for tag in _THINK_OPEN + _THINK_CLOSE)
 
-Channel = Literal["answer", "reasoning"]
+Channel = Literal["answer", "reasoning", "reset"]
 
 
 @dataclass(frozen=True)
@@ -322,6 +322,7 @@ class StreamDelta:
 
     `answer` is the reply the student reads. `reasoning` is the model thinking out loud,
     which the interface shows separately and never mixes into the answer.
+    `reset` starts a successive tool round and clears only the intermediate answer.
     """
 
     channel: Channel
@@ -633,7 +634,11 @@ def _delta_fields(payload: str) -> tuple[str, str]:
         return "", ""
     if "error" in frame:
         raise _stream_error(frame["error"])
-    choices = frame.get("choices") or []
+    choices = frame.get("choices")
+    if choices is None:
+        return "", ""
+    if not isinstance(choices, list):
+        raise UpstreamError(_ERROR_UNREADABLE)
     if not choices:
         return "", ""
     first = choices[0]
@@ -677,6 +682,7 @@ async def stream_chat(
     max_tokens: int | None = None,
     request_timeout: httpx.Timeout | None = None,
     enable_thinking: bool | None = None,
+    require_complete: bool = False,
 ) -> AsyncIterator[StreamDelta]:
     """Stream assistant deltas from the tutor endpoint, split by channel.
 
@@ -691,6 +697,9 @@ async def stream_chat(
             timeout while interactive chat keeps the default.
         enable_thinking: Optional chat-template control for local reasoning models. It is
             left unset for ordinary chat and disabled for fixed paragraph execution jobs.
+
+        require_complete: Reject a missing stream terminator or output-token truncation
+            so a durable caller never saves a partial reply as a completed answer.
 
     Yields:
         Non-empty `StreamDelta` fragments in arrival order, each tagged `answer` or
@@ -733,10 +742,14 @@ async def stream_chat(
                             finish_reason = choices[0].get("finish_reason") or finish_reason
                     except (ValueError, AttributeError):
                         pass
+                    if require_complete and finish_reason == "length":
+                        raise UpstreamError(_ERROR_TRUNCATED)
                     if reasoning:
                         yield StreamDelta("reasoning", reasoning)
                     for delta in splitter.feed(content) if content else ():
                         yield delta
+                if require_complete and not finished:
+                    raise UpstreamError(_ERROR_MIDREPLY)
                 for delta in splitter.flush():
                     yield delta
                 if finish_reason == "length":
@@ -934,6 +947,108 @@ def _read_tool_calls(message: dict[str, object]) -> tuple[ToolCall, ...]:
     return tuple(calls)
 
 
+async def _collect_tool_stream(
+    response: httpx.Response, on_delta: Callable[[StreamDelta], None]
+) -> AssistantMessage:
+    """Emit text immediately, but never dispatch a tool from an unfinished stream."""
+    splitter = _ReasoningTagSplitter()
+    content_parts: list[str] = []
+    fragments: dict[int, dict[str, str]] = {}
+    truncated = False
+    finished = False
+    saw_choice = False
+
+    def emit(delta: StreamDelta) -> None:
+        if delta.channel == "answer":
+            content_parts.append(delta.text)
+        on_delta(delta)
+
+    async for raw_line in response.aiter_lines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        payload = line[len("data:") :].strip()
+        if payload == "[DONE]":
+            finished = True
+            break
+        content, reasoning = _delta_fields(payload)
+        if reasoning:
+            emit(StreamDelta("reasoning", reasoning))
+        for delta in splitter.feed(content) if content else ():
+            emit(delta)
+        try:
+            frame = json.loads(payload)
+        except ValueError:
+            continue
+        choices = frame.get("choices") if isinstance(frame, dict) else None
+        if not choices:
+            continue
+        first = choices[0]
+        saw_choice = True
+        truncated = truncated or first.get("finish_reason") == "length"
+        delta = first.get("delta") or {}
+        raw_calls = delta.get("tool_calls") or []
+        if not isinstance(raw_calls, list):
+            raise UpstreamError(_ERROR_UNREADABLE)
+        for raw_call in raw_calls:
+            if not isinstance(raw_call, dict):
+                raise UpstreamError(_ERROR_UNREADABLE)
+            index = raw_call.get("index")
+            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                raise UpstreamError(_ERROR_UNREADABLE)
+            call = fragments.setdefault(index, {"id": "", "name": "", "arguments": ""})
+            function = raw_call.get("function") or {}
+            if not isinstance(function, dict):
+                raise UpstreamError(_ERROR_UNREADABLE)
+            for key, value in (
+                ("id", raw_call.get("id")),
+                ("name", function.get("name")),
+                ("arguments", function.get("arguments")),
+            ):
+                if value is not None:
+                    if not isinstance(value, str):
+                        raise UpstreamError(_ERROR_UNREADABLE)
+                    call[key] += value
+
+    if not finished or not saw_choice:
+        raise UpstreamError(_ERROR_MIDREPLY)
+    for delta in splitter.flush():
+        emit(delta)
+    if not truncated and any(not call["name"] for call in fragments.values()):
+        raise UpstreamError(_ERROR_UNREADABLE)
+    return AssistantMessage(
+        content="".join(content_parts),
+        tool_calls=tuple(
+            ToolCall(
+                id=call["id"] or f"call_{index}",
+                name=call["name"],
+                arguments=call["arguments"],
+            )
+            for index, call in sorted(fragments.items())
+        ),
+        truncated=truncated,
+    )
+
+
+def _check_tools_status(response: httpx.Response) -> None:
+    """Keep streaming and complete requests on the same bounded error mapping."""
+    if response.status_code == 400:
+        # A 400 is usually "this endpoint does not implement tool calling", but the
+        # same status is also how an endpoint rejects a prompt its real tokenizer
+        # finds too large - the case PLA-290 accepts can slip past the local
+        # estimate. Classify the body (and drop it): a context complaint is an
+        # upstream failure, not a capability verdict, so the loop does not tell the
+        # settings screen tools are unsupported over a prompt that was merely too big.
+        if _classify_upstream(_upstream_message(response)) == _UPSTREAM_CONTEXT:
+            logger.info("Tutor endpoint rejected a tools request as exceeding its context")
+            error = UpstreamError(_ERROR_TOOLS_CONTEXT)
+            error.upstream_status = 400  # type: ignore[attr-defined]
+            raise error
+        logger.info("Tutor endpoint rejected a request carrying tool definitions")
+        raise ToolsUnsupportedError(_ERROR_NO_TOOLS)
+    response.raise_for_status()
+
+
 async def complete_with_tools(
     endpoint: str,
     api_key: str | None,
@@ -945,12 +1060,12 @@ async def complete_with_tools(
     temperature: float | None = None,
     max_tokens: int | None = None,
     request_timeout: httpx.Timeout | None = None,
+    on_delta: Callable[[StreamDelta], None] | None = None,
 ) -> AssistantMessage:
-    """Run one non-streaming turn with tool definitions attached.
+    """Run one turn with tool definitions, optionally reporting live text deltas.
 
-    Not streamed, deliberately. The caller is the verification loop, which wants whole
-    tool calls rather than fragments and which nobody is reading live, so streaming would
-    add reassembly for no benefit.
+    Tool calls are always returned whole; only answer and reasoning text reaches the
+    callback. Without a callback the existing non-streaming request is preserved.
 
     Args:
         endpoint: Endpoint base URL including its version suffix.
@@ -963,6 +1078,7 @@ async def complete_with_tools(
             agent loop passes the exact generation reserve it budgeted, so the endpoint is
             told to cap this round at the same number of output tokens Lyra held back for
             it; a cut-off reply comes back with `truncated` set.
+        on_delta: Optional live answer/reasoning observer, invoked synchronously.
         request_timeout: The httpx timeouts for this call. Defaults to `TOOL_TIMEOUT`,
             which is right for the verification loop and minutes too patient for the
             capability probe, which passes its own.
@@ -991,26 +1107,23 @@ async def complete_with_tools(
     """
     url = f"{_base_url(endpoint)}/chat/completions"
     body = _chat_body(
-        model, messages, stream=False, tools=tools, max_tokens=max_tokens, temperature=temperature
+        model,
+        messages,
+        stream=on_delta is not None,
+        tools=tools,
+        max_tokens=max_tokens,
+        temperature=temperature,
     )
     async with _client(request_timeout or TOOL_TIMEOUT, api_key, transport) as client:
         try:
+            if on_delta is not None:
+                async with client.stream("POST", url, json=body) as response:
+                    if response.status_code >= 400:
+                        await response.aread()
+                    _check_tools_status(response)
+                    return await _collect_tool_stream(response, on_delta)
             response = await client.post(url, json=body)
-            if response.status_code == 400:
-                # A 400 is usually "this endpoint does not implement tool calling", but the
-                # same status is also how an endpoint rejects a prompt its real tokenizer
-                # finds too large - the case PLA-290 accepts can slip past the local
-                # estimate. Classify the body (and drop it): a context complaint is an
-                # upstream failure, not a capability verdict, so the loop does not tell the
-                # settings screen tools are unsupported over a prompt that was merely too big.
-                if _classify_upstream(_upstream_message(response)) == _UPSTREAM_CONTEXT:
-                    logger.info("Tutor endpoint rejected a tools request as exceeding its context")
-                    error = UpstreamError(_ERROR_TOOLS_CONTEXT)
-                    error.upstream_status = 400  # type: ignore[attr-defined]
-                    raise error
-                logger.info("Tutor endpoint rejected a request carrying tool definitions")
-                raise ToolsUnsupportedError(_ERROR_NO_TOOLS)
-            response.raise_for_status()
+            _check_tools_status(response)
             payload = response.json()
         except httpx.HTTPError as exc:
             raise _mapped_error(exc) from exc

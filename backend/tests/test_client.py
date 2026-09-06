@@ -988,3 +988,207 @@ async def test_a_background_caller_gets_a_longer_deadline_than_a_chat_turn() -> 
     await _complete(_transport(handler))
 
     assert seen == [client.BACKGROUND_TIMEOUT.read, client.CHAT_TIMEOUT.read]
+
+
+async def test_tool_stream_emits_live_reasoning_and_reassembles_interleaved_calls() -> None:
+    seen: list[client.StreamDelta] = []
+    chunks = [
+        {"reasoning_content": "Checking"},
+        {"content": "<thi"},
+        {"content": "nk>math</think>One "},
+        {
+            "tool_calls": [
+                {"index": 1, "id": "b", "function": {"name": "sec", "arguments": '{"b":'}},
+                {"index": 0, "id": "a", "function": {"name": "fir", "arguments": '{"a":'}},
+            ]
+        },
+        {
+            "content": "moment",
+            "tool_calls": [
+                {"index": 0, "function": {"name": "st", "arguments": "1}"}},
+                {"index": 1, "function": {"name": "ond", "arguments": "2}"}},
+            ],
+        },
+    ]
+
+    class LiveStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for index, delta in enumerate(chunks):
+                if index == 1:
+                    assert seen == [client.StreamDelta("reasoning", "Checking")]
+                yield ("data: " + json.dumps({"choices": [{"delta": delta}]}) + "\n\n").encode()
+            yield b'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+            yield b"data: [DONE]\n\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["stream"] is True
+        return httpx.Response(200, stream=LiveStream())
+
+    result = await client.complete_with_tools(
+        _ENDPOINT,
+        None,
+        None,
+        [],
+        [_SCHEMA_TOOL],
+        transport=_transport(handler),
+        on_delta=seen.append,
+    )
+    assert result.content == "One moment"
+    assert result.tool_calls == (
+        client.ToolCall("a", "first", '{"a":1}'),
+        client.ToolCall("b", "second", '{"b":2}'),
+    )
+    assert "".join(item.text for item in seen if item.channel == "reasoning") == "Checkingmath"
+    assert "".join(item.text for item in seen if item.channel == "answer") == result.content
+    assert not result.truncated
+
+
+@pytest.mark.parametrize("finish", ["stop", "length"])
+async def test_tool_stream_preserves_truncation(finish: str) -> None:
+    body = _body(
+        json.dumps({"choices": [{"delta": {"content": "partial"}, "finish_reason": finish}]})
+    )
+    result = await client.complete_with_tools(
+        _ENDPOINT,
+        None,
+        None,
+        [],
+        [_SCHEMA_TOOL],
+        transport=_transport(lambda request: httpx.Response(200, text=body)),
+        on_delta=lambda delta: None,
+    )
+    assert result.truncated is (finish == "length")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',
+        _body('{"error":{"message":"private context overflow"}}'),
+    ],
+)
+async def test_tool_stream_rejects_missing_done_and_in_band_failure(body: str) -> None:
+    with pytest.raises(UpstreamError):
+        await client.complete_with_tools(
+            _ENDPOINT,
+            None,
+            None,
+            [],
+            [_SCHEMA_TOOL],
+            transport=_transport(lambda request: httpx.Response(200, text=body)),
+            on_delta=lambda delta: None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("detail", "error_type"),
+    [("tools unsupported", ToolsUnsupportedError), ("context overflow", UpstreamError)],
+)
+async def test_tool_stream_keeps_status_classification(detail: str, error_type: type) -> None:
+    with pytest.raises(error_type):
+        await client.complete_with_tools(
+            _ENDPOINT,
+            None,
+            None,
+            [],
+            [_SCHEMA_TOOL],
+            transport=_transport(
+                lambda request: httpx.Response(400, json={"error": {"message": detail}})
+            ),
+            on_delta=lambda delta: None,
+        )
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (
+            'data: {"choices":[{"delta":{"content":"partial"}}]}\n',
+            "The tutor endpoint failed partway through the reply.",
+        ),
+        (
+            _body('{"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}'),
+            "The tutor endpoint's reply hit the output-token ceiling and was cut off "
+            "before it finished.",
+        ),
+    ],
+)
+async def test_strict_chat_stream_rejects_incomplete_answers(body: str, message: str) -> None:
+    with pytest.raises(UpstreamError) as caught:
+        _ = [
+            delta
+            async for delta in client.stream_chat(
+                _ENDPOINT,
+                None,
+                None,
+                [],
+                transport=_transport(lambda request: httpx.Response(200, text=body)),
+                require_complete=True,
+            )
+        ]
+    assert caught.value.message == message
+
+
+async def test_strict_chat_stream_keeps_complete_reasoning_and_answer_deltas() -> None:
+    body = _body(
+        '{"choices":[{"delta":{"reasoning_content":"Thought"}}]}',
+        '{"choices":[{"delta":{"content":"Answer"}}]}',
+        '{"choices":[{"delta":{},"finish_reason":"stop"}]}',
+    )
+    deltas = [
+        delta
+        async for delta in client.stream_chat(
+            _ENDPOINT,
+            None,
+            None,
+            [],
+            transport=_transport(lambda request: httpx.Response(200, text=body)),
+            require_complete=True,
+        )
+    ]
+    assert deltas == [
+        client.StreamDelta("reasoning", "Thought"),
+        client.StreamDelta("answer", "Answer"),
+    ]
+
+
+async def test_default_chat_stream_delivers_partial_text_then_reports_truncation() -> None:
+    body = _body('{"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}')
+    seen: list[client.StreamDelta] = []
+    with pytest.raises(client.StreamCompletionError) as caught:
+        async for delta in client.stream_chat(
+            _ENDPOINT,
+            None,
+            None,
+            [],
+            transport=_transport(lambda request: httpx.Response(200, text=body)),
+        ):
+            seen.append(delta)
+    assert seen == [client.StreamDelta("answer", "partial")]
+    assert caught.value.outcome == "length"
+
+
+@pytest.mark.parametrize("choices", [{"private": "upstream detail"}, 1, "invalid"])
+@pytest.mark.parametrize("tools", [False, True])
+async def test_malformed_stream_choices_raise_bounded_upstream_error(choices, tools) -> None:
+    body = _body(json.dumps({"choices": choices}))
+    transport = _transport(lambda request: httpx.Response(200, text=body))
+    with pytest.raises(UpstreamError) as caught:
+        if tools:
+            await client.complete_with_tools(
+                _ENDPOINT,
+                None,
+                None,
+                [],
+                [_SCHEMA_TOOL],
+                transport=transport,
+                on_delta=lambda delta: None,
+            )
+        else:
+            _ = [
+                delta
+                async for delta in client.stream_chat(
+                    _ENDPOINT, None, None, [], transport=transport, require_complete=True
+                )
+            ]
+    assert caught.value.message == client._ERROR_UNREADABLE
