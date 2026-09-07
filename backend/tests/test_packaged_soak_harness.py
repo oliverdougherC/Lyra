@@ -97,3 +97,29 @@ def test_load_plan_rejects_unsupported_schema(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="unsupported plan schema"):
         harness.load_plan(plan)
+
+
+def test_manual_soak_does_not_inherit_host_keychain(tmp_path: Path) -> None:
+    payload = harness.build_plan(tmp_path / "Lyra.app", tmp_path, "isolated")
+    assert payload["launch_environment"]["PYTHON_KEYRING_BACKEND"] == (
+        "keyring.backends.fail.Keyring"
+    )
+
+
+def test_failed_observation_can_be_recorded(tmp_path: Path) -> None:
+    plan = harness.prepare_run(tmp_path / "Lyra.app", tmp_path / "runs", "failure")
+    harness.main(
+        [
+            "record",
+            "--plan",
+            str(plan),
+            "--step",
+            "verify-first-launch",
+            "--status",
+            "failed",
+            "--note",
+            "Observed startup failure",
+        ]
+    )
+    steps = harness.load_plan(plan)["steps"]
+    assert next(step for step in steps if step["id"] == "verify-first-launch")["status"] == "failed"
