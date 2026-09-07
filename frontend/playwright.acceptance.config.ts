@@ -1,8 +1,9 @@
 /**
  * Playwright config for real-stack acceptance tests.
  *
- * Unlike the smoke tests in playwright.config.ts, these tests do NOT intercept
- * /api/** traffic.  The global setup starts the real FastAPI backend (with
+ * Unlike the smoke tests in playwright.config.ts, these tests use real API responses.
+ * Selected recovery/loading cases delay or drop those responses at the transport boundary.
+ * The global setup starts the real FastAPI backend (with
  * deterministic embedding fixtures), a fake tutor endpoint, and the production
  * Vite frontend. Every browser request flows through the real application
  * stack, exercising the full composition.
@@ -40,7 +41,7 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'off',
-    // Do NOT set up any route interception — the whole point is real traffic
+    // Keep real backend responses; transport fault gates must not substitute fixture payloads.
   },
 
   projects: [

@@ -38,7 +38,10 @@ together; the historical #84 totals cannot substitute. A successful gate job who
 stayed pending was retried as infrastructure recovery; its original receipt was retained.
 The scheduled macOS WebKit lane previously failed before browser execution because its Python
 lacked SQLite extension loading. It now selects the same managed Python as desktop CI and runs
-the existing resource/extension smoke before acceptance; no browser test or required gate was removed.
+the existing resource/extension smoke before acceptance. The recovered lane also exposed three
+harness assumptions: macOS keyboard traversal, a fleeting loading state, and a forced click into a
+recovery toast. Tests now require a real focused class link, hold and release the actual API response,
+and send through the enabled composer keyboard path; no case or durable-operation assertion was removed.
 
 ### Remaining acceptance boundaries
 
