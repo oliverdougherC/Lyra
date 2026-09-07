@@ -1,0 +1,31 @@
+{
+  "source_sha": "3f9c84f93de6902aa1e0e60cebafeb3c18a3787b",
+  "app_version": "0.2.0-beta.0",
+  "build": "3.0.1",
+  "bundle_tree_sha256": "b1b35044f46dcd68153266ac683b119fffb6ab7fbbb20601e4a7347c78e2da34",
+  "manifest_method": "sha256 of sorted relative path,NUL,andsha256(filebytes);symlinks hash symlink:target",
+  "file_count": 204,
+  "native_objects": 77,
+  "architecture": "arm64",
+  "minimum_system_version": "14.0",
+  "development_signature": "certificate-backed stable requirements,78objects; signing helper passed",
+  "frozen_smoke": {
+    "authenticated": true,
+    "ephemeral_loopback": true,
+    "status": "passed"
+  },
+  "native_launch": {
+    "status": "passed",
+    "app_pid": 72438,
+    "backend_pid": 72444,
+    "process_selectors_all_four_matched": true,
+    "null_keychain_both_processes": true,
+    "isolated_database_integrity": "ok",
+    "isolated_class_count": 0,
+    "ui_observation": "CUA accessibility: Classes, No classes yet, New class; no startup error",
+    "quit": "normal Cmd-Q; both PIDs externally confirmed exited; no UI read after quit"
+  },
+  "packaged_semantic_evaluation": "not_run",
+  "human_review": "not_run",
+  "os_version": "27.0"
+}

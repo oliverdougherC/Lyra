@@ -1,0 +1,88 @@
+{
+  "baseline_sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+  "quality_gate": "not_passed",
+  "human_review": "not_run",
+  "integrated_packaged_semantic_rerun": "not_run",
+  "model": "Qwen3.8-27B",
+  "endpoint_locality": "remote/non-loopback",
+  "guide": {
+    "final_semantic_source_sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+    "review_kind": "independent_agent",
+    "critical_failures": [
+      {
+        "run": "guide-remediation-1",
+        "case": "attempt-where-did-i-go-wrong",
+        "reason": "Credits setup and diagnoses lost variable dependence, but does not acknowledge that student bounds are valid on0<t<1, an explicit partial-attempt criterion. Repeat2 factors correctly but still attributes t*exp(-t) to both errors without distinguishing the valid-bound interval."
+      },
+      {
+        "run": "guide-remediation-1",
+        "case": "just-tell-me-the-answer",
+        "reason": "Correct formula but claims exact derivative verification despite sole CAS comparison equal:false; lowercase e was symbolic and no exp retry occurred."
+      },
+      {
+        "run": "guide-remediation-1",
+        "case": "dont-ask-me-questions-teach-it",
+        "reason": "Correct eigenpairs but wrong intermediate characteristic polynomial constant12 instead of18."
+      },
+      {
+        "run": "guide-remediation-2",
+        "case": "attempt-where-did-i-go-wrong",
+        "reason": "Credits setup and diagnoses lost variable dependence, but does not acknowledge that student bounds are valid on0<t<1, an explicit partial-attempt criterion. Repeat2 factors correctly but still attributes t*exp(-t) to both errors without distinguishing the valid-bound interval."
+      },
+      {
+        "run": "guide-remediation-2",
+        "case": "just-tell-me-the-answer",
+        "reason": "Correct formula but claims exact derivative verification despite sole CAS comparison equal:false; lowercase e was symbolic and no exp retry occurred."
+      },
+      {
+        "run": "guide-osmosis-remediation-1",
+        "case": "simpler-osmosis",
+        "reason": "Says pure-water side becomes more diluted as water leaves and promises sides become similar; false volunteered equilibrium description."
+      },
+      {
+        "run": "guide-osmosis-remediation-2",
+        "case": "simpler-osmosis",
+        "reason": "Says pure-water side becomes more diluted as water leaves and promises sides become similar; false volunteered equilibrium description."
+      }
+    ],
+    "baseline_self_judge": "13/13 passed despite four independently identified critical failures",
+    "fresh_transfer": "3 cases,2 repeats each passed"
+  },
+  "solver": {
+    "final_representative_source_sha": "f460dbe989abdc25ec206e5e31943ccf24bdf00e",
+    "joint_questions_visible_before": 0,
+    "joint_questions_visible_after": 3,
+    "joint_question_repeats": 2,
+    "retained_solves": 28,
+    "segmentation_passes": 4,
+    "critical_final_answer_failures_identified": 0,
+    "conceptual_irrelevant_tool_calls": "persisted in all4final conceptual runs"
+  },
+  "study": {
+    "full_final_deck_source_sha": "700d02f63cdec1fb18f4e30a998d58db745ab7a0",
+    "final_circuits": "2 repeats passed independent review",
+    "final_ecology": "repeat1 failed483.488s; repeat2 cancelled164s,not evaluable",
+    "controlled_flashcard_cap_replay": "3f9c84f:8192tokens44.221s vs65536tokens337.3s; still malformed/truncated,not a deck pass",
+    "gate": "not_passed"
+  },
+  "owner_decisions": [
+    "Do not accept the tested model configuration while critical semantic failures remain.",
+    "Provide/choose an authorized candidate configuration or further quality work, then rerun on the integrated immutable app and obtain actual human review."
+  ],
+  "source_scope": "No merges or releases authorized or performed.",
+  "final_production_sha": "519c874f5fd42fcae4aa21fed5cfe4fec1b0e105",
+  "software_verification": {
+    "backend": {
+      "command": "uv run python -m pytest backend/tests -q",
+      "passed": 3183,
+      "skipped": 1
+    },
+    "frontend": {
+      "command": "pnpm test (from frontend)",
+      "passed": 1014
+    },
+    "latest_study_regressions": 269,
+    "signed_native_startup": "passed with isolated selectors,clean database,and normal app/backend exit",
+    "model_acceptance": "not_passed"
+  }
+}
