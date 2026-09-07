@@ -1,0 +1,40 @@
+{
+  "surface": "class_chat",
+  "corpus": "tutor_semantic.json",
+  "evidence_version": 2,
+  "app": {
+    "sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+    "dirty": true
+  },
+  "hashes": {
+    "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+    "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+    "prompts": "b6ed20c9d01bcfda7295f2c890c7b663e3e133157030fa64675babd3fe7d5a71",
+    "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+    "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+  },
+  "model": "Qwen3.8-27B",
+  "model_identity_source": "configured; server identity not independently verified",
+  "context_window": 262144,
+  "context_window_source": "configured; maximum not independently measured",
+  "endpoint_locality": "remote",
+  "capabilities": {
+    "stored_tools_supported": null
+  },
+  "review": {
+    "deterministic": "integrity checks only",
+    "model_judge": "separate grade stage",
+    "independent_agent": "not_run",
+    "human": "not_run"
+  },
+  "synthetic_environment": true,
+  "corpus_version": "1.2.0",
+  "prompt_contract_version": "2",
+  "expected_contract_version": "2",
+  "class_id": 1,
+  "session_id": 1,
+  "environment": {
+    "deterministic": true,
+    "temp": true
+  }
+}

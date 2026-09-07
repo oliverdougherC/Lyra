@@ -1,0 +1,470 @@
+{
+  "issue": "PLA-150",
+  "review_kind": "implementation_owner_semantic_review",
+  "actual_human_review": "not_run",
+  "independent_agent_review": "separate peer review requested; not represented by this file",
+  "final_tested_sha": "f460dbe989abdc25ec206e5e31943ccf24bdf00e",
+  "critical_failures": [
+    {
+      "stage": "solver-baseline",
+      "case_id": "stats-multipart",
+      "repeats": [
+        1,
+        2
+      ],
+      "criterion": "Verifier sees every requested question",
+      "finding": "All three requested child questions absent from verifier problem context; generated answers happened to be complete and correct."
+    }
+  ],
+  "remaining_limitations": [
+    "Prompt calibration did not eliminate irrelevant conceptual computations: all four final conceptual runs still make irrelevant calls.",
+    "No final-SHA rerun of rate-units, rate-heldout, assumption-heldout or segmentation; earlier exact source hashes and repeats retained.",
+    "No actual human acceptance, authenticated-provider coverage, OCR/embedding/course retrieval acceptance, or universal model-quality claim.",
+    "Configured model identity/context are not independently certified capability measurements.",
+    "A successful CAS or units check establishes only that calculation, not conceptual interpretations.",
+    "History answers group wage ledgers among independent records; ledgers may originate with the same owner. Source independence must be checked, not assumed. The answer still supplies valid corroboration categories.",
+    "Statistics answers use outlier informally for the high reading time; no formal outlier criterion was specified or established. The mean/median calculations and influence explanation are correct."
+  ],
+  "runs": [
+    {
+      "stage": "solver-baseline",
+      "case_id": "segmentation",
+      "repeat": 1,
+      "latency_seconds": 19.901,
+      "owner_review": "pass",
+      "scope": "five original questions and multipart dependency preserved"
+    },
+    {
+      "stage": "solver-baseline",
+      "case_id": "rate-units",
+      "repeat": 1,
+      "latency_seconds": 9.936,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 6,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified"
+    },
+    {
+      "stage": "solver-baseline",
+      "case_id": "stats-multipart",
+      "repeat": 1,
+      "latency_seconds": 16.715,
+      "owner_review": "critical_fail_verifier_context; answer_correct",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 6,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified",
+      "requested_questions_in_verifier": 0
+    },
+    {
+      "stage": "solver-baseline",
+      "case_id": "biology-prose",
+      "repeat": 1,
+      "latency_seconds": 15.78,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 2,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "uncheckable",
+      "irrelevant_computation_calls": 2
+    },
+    {
+      "stage": "solver-baseline",
+      "case_id": "rate-heldout",
+      "repeat": 1,
+      "latency_seconds": 18.655,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 10,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified"
+    },
+    {
+      "stage": "solver-baseline",
+      "case_id": "assumption-heldout",
+      "repeat": 1,
+      "latency_seconds": 24.609,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 5,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified"
+    },
+    {
+      "stage": "solver-baseline",
+      "case_id": "segmentation",
+      "repeat": 2,
+      "latency_seconds": 19.038,
+      "owner_review": "pass",
+      "scope": "five original questions and multipart dependency preserved"
+    },
+    {
+      "stage": "solver-baseline",
+      "case_id": "rate-units",
+      "repeat": 2,
+      "latency_seconds": 9.161,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 6,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified"
+    },
+    {
+      "stage": "solver-baseline",
+      "case_id": "stats-multipart",
+      "repeat": 2,
+      "latency_seconds": 16.077,
+      "owner_review": "critical_fail_verifier_context; answer_correct",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 6,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified",
+      "requested_questions_in_verifier": 0
+    },
+    {
+      "stage": "solver-baseline",
+      "case_id": "biology-prose",
+      "repeat": 2,
+      "latency_seconds": 16.748,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 2,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "uncheckable",
+      "irrelevant_computation_calls": 2
+    },
+    {
+      "stage": "solver-baseline",
+      "case_id": "rate-heldout",
+      "repeat": 2,
+      "latency_seconds": 21.838,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 10,
+      "failed_tool_calls": 1,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified"
+    },
+    {
+      "stage": "solver-baseline",
+      "case_id": "assumption-heldout",
+      "repeat": 2,
+      "latency_seconds": 19.894,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 4,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified"
+    },
+    {
+      "stage": "solver-improved",
+      "case_id": "segmentation",
+      "repeat": 1,
+      "latency_seconds": 17.769,
+      "owner_review": "pass",
+      "scope": "five original questions and multipart dependency preserved"
+    },
+    {
+      "stage": "solver-improved",
+      "case_id": "rate-units",
+      "repeat": 1,
+      "latency_seconds": 12.74,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 6,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified"
+    },
+    {
+      "stage": "solver-improved",
+      "case_id": "stats-multipart",
+      "repeat": 1,
+      "latency_seconds": 23.307,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 4,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified",
+      "requested_questions_in_verifier": 3
+    },
+    {
+      "stage": "solver-improved",
+      "case_id": "biology-prose",
+      "repeat": 1,
+      "latency_seconds": 24.585,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 3,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "uncheckable",
+      "irrelevant_computation_calls": 3
+    },
+    {
+      "stage": "solver-improved",
+      "case_id": "rate-heldout",
+      "repeat": 1,
+      "latency_seconds": 18.516,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 10,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified"
+    },
+    {
+      "stage": "solver-improved",
+      "case_id": "assumption-heldout",
+      "repeat": 1,
+      "latency_seconds": 24.674,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 3,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified"
+    },
+    {
+      "stage": "solver-improved",
+      "case_id": "segmentation",
+      "repeat": 2,
+      "latency_seconds": 19.335,
+      "owner_review": "pass",
+      "scope": "five original questions and multipart dependency preserved"
+    },
+    {
+      "stage": "solver-improved",
+      "case_id": "rate-units",
+      "repeat": 2,
+      "latency_seconds": 13.494,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 6,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified"
+    },
+    {
+      "stage": "solver-improved",
+      "case_id": "stats-multipart",
+      "repeat": 2,
+      "latency_seconds": 26.013,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 5,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified",
+      "requested_questions_in_verifier": 3
+    },
+    {
+      "stage": "solver-improved",
+      "case_id": "biology-prose",
+      "repeat": 2,
+      "latency_seconds": 26.696,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 3,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "uncheckable",
+      "irrelevant_computation_calls": 3
+    },
+    {
+      "stage": "solver-improved",
+      "case_id": "rate-heldout",
+      "repeat": 2,
+      "latency_seconds": 17.465,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 5,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified"
+    },
+    {
+      "stage": "solver-improved",
+      "case_id": "assumption-heldout",
+      "repeat": 2,
+      "latency_seconds": 21.075,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 4,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified"
+    },
+    {
+      "stage": "solver-history-baseline",
+      "case_id": "history-heldout",
+      "repeat": 1,
+      "latency_seconds": 23.905,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 3,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "uncheckable",
+      "irrelevant_computation_calls": 3
+    },
+    {
+      "stage": "solver-history-baseline",
+      "case_id": "history-heldout",
+      "repeat": 2,
+      "latency_seconds": 20.311,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 1,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "uncheckable",
+      "irrelevant_computation_calls": 1
+    },
+    {
+      "stage": "solver-final",
+      "case_id": "stats-multipart",
+      "repeat": 1,
+      "latency_seconds": 14.317,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 4,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified",
+      "requested_questions_in_verifier": 3
+    },
+    {
+      "stage": "solver-final",
+      "case_id": "biology-prose",
+      "repeat": 1,
+      "latency_seconds": 19.656,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 2,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "uncheckable",
+      "irrelevant_computation_calls": 2
+    },
+    {
+      "stage": "solver-final",
+      "case_id": "history-heldout",
+      "repeat": 1,
+      "latency_seconds": 16.811,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 1,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "uncheckable",
+      "irrelevant_computation_calls": 1
+    },
+    {
+      "stage": "solver-final",
+      "case_id": "stats-multipart",
+      "repeat": 2,
+      "latency_seconds": 13.484,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 4,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "verified",
+      "requested_questions_in_verifier": 3
+    },
+    {
+      "stage": "solver-final",
+      "case_id": "biology-prose",
+      "repeat": 2,
+      "latency_seconds": 17.339,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 2,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "uncheckable",
+      "irrelevant_computation_calls": 2
+    },
+    {
+      "stage": "solver-final",
+      "case_id": "history-heldout",
+      "repeat": 2,
+      "latency_seconds": 19.783,
+      "owner_review": "pass",
+      "scope": "answer correctness, units/assumptions, honest verdict",
+      "tool_calls": 1,
+      "failed_tool_calls": 0,
+      "loop_stop_reasons": [
+        "completed"
+      ],
+      "verdict": "uncheckable",
+      "irrelevant_computation_calls": 1
+    }
+  ]
+}

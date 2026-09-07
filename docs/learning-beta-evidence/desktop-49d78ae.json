@@ -1,0 +1,20 @@
+{
+  "source_sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+  "app_version": "0.2.0-beta.0",
+  "build": "3.0.1",
+  "bundle_tree_sha256": "b4079e8debd24ab10343289d52ef3c8276738d82dfb876ffc7ac584b754a9f38",
+  "manifest_method": "sha256 of sorted relative path,NUL,andsha256(filebytes);symlinks hash symlink:target",
+  "file_count": 204,
+  "native_objects": 77,
+  "architecture": "arm64",
+  "minimum_system_version": "14.0",
+  "development_signature": "certificate-backed stable requirements,78objects; signing helper passed",
+  "frozen_smoke": {
+    "authenticated": true,
+    "ephemeral_loopback": true,
+    "status": "passed"
+  },
+  "native_launch": "pending sharedhostslot",
+  "packaged_semantic_evaluation": "not_run",
+  "human_review": "not_run"
+}

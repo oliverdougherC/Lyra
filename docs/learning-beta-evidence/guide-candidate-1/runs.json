@@ -1,0 +1,1060 @@
+{
+  "cases": {
+    "explain-convolution": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "(u(tau) - u(tau - 1)) * (u(t - tau) - u(t - tau - 1))",
+            "variable": "tau",
+            "lower": "-oo",
+            "upper": "oo"
+          },
+          "raw_arguments": "{\"expression\": \"(u(tau) - u(tau - 1)) * (u(t - tau) - u(t - tau - 1))\", \"variable\": \"tau\", \"lower\": \"-oo\", \"upper\": \"oo\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "Integral((Heaviside(tau) - Heaviside(tau - 1))*(Heaviside(t - tau) - Heaviside(t - tau - 1)), (tau, -oo, oo))",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(1, tau, 0, t)",
+            "compare_to": "t"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(1, tau, 0, t)\", \"compare_to\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(1, tau, t-1, 1)",
+            "compare_to": "2 - t"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(1, tau, t-1, 1)\", \"compare_to\": \"2 - t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Convolution is a way of combining two functions by sliding one over the other and measuring how much they overlap at each position.\n\n**The mental model.** Imagine one function is a fixed \"window\" and the other is a \"stamp.\" To compute the convolution at time $t$:\n\n1. Flip one function in time (mirror it).\n2. Slide it so its origin sits at $t$.\n3. Multiply the two functions point by point and add up (integrate) the product.\n\nDo this for every $t$, and you get a new function. The result at each $t$ is a measure of \"how well the flipped, shifted copy of one function matches the other.\"\n\n**The definition.**\n\n$$(f * g)(t) = \\int_{-\\infty}^{\\infty} f(\\tau)\\, g(t - \\tau)\\, d\\tau$$\n\nThe flip is what the $t - \\tau$ does: as $\\tau$ runs through all values, $g$ is evaluated at a mirrored, shifted time. That's why convolution is sometimes described as \"flip, slide, multiply, integrate.\"\n\n**Why it matters.**\n\n- **Systems:** For any linear time-invariant system, the output is the input convolved with the system's impulse response: $y(t) = x(t) * h(t)$. The impulse response tells you the system's \"shape,\" and convolution applies that shape to any input.\n- **Probability:** The distribution of the sum of two independent random variables is the convolution of their individual distributions.\n- **Images:** Blurring is convolution with a small smoothing kernel.\n\n**A concrete example.** Convolve two unit rectangles \u2014 $f = g = 1$ on $[0,1]$ and $0$ elsewhere. The overlap of the two rectangles as you slide them:\n\n- For $0 < t < 1$, the overlap has width $t$, so $(f*f)(t) = t$.\n- For $1 < t < 2$, the overlap has width $2 - t$, so $(f*f)(t) = 2 - t$.\n\nI checked both integrals symbolically, and they come out exactly that way. The result is a **triangle wave** rising from 0 to 1 and falling back to 0 \u2014 a rectangle convolved with itself becomes a triangle. That's a good intuition for what convolution \"does\": it smooths and blends the shapes of the two functions.\n\n**Useful properties:** it's commutative ($f * g = g * f$), associative, and the delta function $\\delta(t)$ is the identity: $f * \\delta = f$.\n\nIf you tell me which context you're hitting this in \u2014 signals, probability, or something else \u2014 I can tailor the example to it.",
+      "generated_at": "2026-09-07T00:36:44+00:00",
+      "duration_seconds": 27.38,
+      "system_prompt_tokens": 1126,
+      "assembled_prompt_sha256": "3aa523d8b300d485ac793f3d78542d71df9730a4d401b04683577f58332e544c",
+      "tool_schema_tokens": 1266,
+      "user": "Explain convolution",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "what-is-a-derivative": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "A derivative is **how fast a function is changing at a single point**. That's the whole idea; everything else is just a way to pin it down.\n\n**The mental model.** Picture a curve. At any one spot, the curve is leaning in some direction \u2014 that lean is the slope of the little straight line that just touches the curve there (the *tangent line*). The derivative is exactly that slope. If the curve is flat, the derivative is 0; if it's steep, the derivative is large; if it's going downhill, the derivative is negative.\n\nA real-world version: your car's position over time is a curve. The derivative of that curve at a moment is your speed *right now* \u2014 the speedometer reading. So a derivative is \"instantaneous rate of change.\"\n\n**The formal definition.** To get the slope at one point, you first measure the slope of a secant line between two nearby points, then let the second point slide in until the two points are essentially the same:\n\n$$f'(x) = \\lim_{h \\to 0} \\frac{f(x+h) - f(x)}{h}$$\n\nThe fraction $\\frac{f(x+h)-f(x)}{h}$ is the average slope over a tiny interval of width $h$; the limit shrinks that interval to zero, leaving the slope at the point itself.\n\n**A quick example.** Take $f(x) = x^2$. Its derivative is $f'(x) = 2x$. So at $x = 3$, the curve is leaning with slope $2 \\cdot 3 = 6$ \u2014 it's rising fairly steeply there. At $x = 0$ the slope is $0$, which matches the picture: the bottom of the parabola is flat.\n\nSo: derivative = slope at a point = instantaneous rate of change. Want me to show how you actually compute one from the limit, or work through a trickier example?",
+      "generated_at": "2026-09-07T00:36:51+00:00",
+      "duration_seconds": 6.76,
+      "system_prompt_tokens": 1126,
+      "assembled_prompt_sha256": "594c12eca78a61d403b7ffe2711e06ed05cad044d9ebd84ac76ac2354b1a96ae",
+      "tool_schema_tokens": 1266,
+      "user": "What is a derivative?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "why-can-they-cancel-these-terms": {
+      "tool_calls": [
+        {
+          "name": "cas_differentiate",
+          "arguments": {
+            "expression": "sin(x**2)",
+            "variable": "x"
+          },
+          "raw_arguments": "{\"expression\": \"sin(x**2)\", \"variable\": \"x\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "2*x*cos(x**2)"
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "2*x*cos(x**2)",
+            "variable": "x"
+          },
+          "raw_arguments": "{\"expression\": \"2*x*cos(x**2)\", \"variable\": \"x\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "sin(x**2)",
+            "definite": false
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Nothing is being cancelled \u2014 the $2x\\,dx$ is being **renamed**, not removed. That's the key to seeing why it works.\n\n**The mental model.** The chain rule says that if you differentiate a function of $u(x)$, you get the derivative with respect to $u$ times $u'(x)$:\n\n$$\\frac{d}{dx}\\sin(x^2) = \\cos(x^2)\\cdot 2x$$\n\nI checked that derivative, and it comes out exactly $2x\\cos(x^2)$ \u2014 your integrand. So your integrand is *already* in the form \"derivative of the inside, times a function of the inside.\" Substitution just makes that structure visible.\n\n**Where the $2x\\,dx$ goes.** When you set $u = x^2$, the chain rule gives $du = 2x\\,dx$. Notice $2x\\,dx$ is one indivisible piece \u2014 a product, not two separate factors you can cancel. So the substitution is:\n\n$$\\int 2x\\cos(x^2)\\,dx = \\int \\cos(u)\\,du$$\n\nThe $2x\\,dx$ didn't vanish; it was replaced by $du$. It's exactly like renaming a variable: $\\int \\cos(u)\\,du$ and $\\int \\cos(t)\\,dt$ are the same integral.\n\n**Why \"cancelling\" is the wrong picture.** If you treated $du = 2x\\,dx$ as a fraction and cancelled $2x\\,dx$ from both sides, you'd be dividing by something that isn't a number. The reason the step is legal is the chain rule in reverse: you're finding a function $F(u)$ whose derivative with respect to $x$ is your integrand, and $F(u(x))$ is that function.\n\n**The check that always works.** Integrate in $u$: $\\int \\cos(u)\\,du = \\sin(u) + C$. Substitute back: $\\sin(x^2) + C$. Then differentiate:\n\n$$\\frac{d}{dx}\\sin(x^2) = \\cos(x^2)\\cdot 2x = 2x\\cos(x^2)$$\n\nYou get your original integrand back, so the answer is right. That differentiation check is the real justification \u2014 the \"cancellation\" is just a shorthand for it.",
+      "generated_at": "2026-09-07T00:37:06+00:00",
+      "duration_seconds": 15.71,
+      "system_prompt_tokens": 1126,
+      "assembled_prompt_sha256": "a27ede385009051a9f255f2ec8d91ef2a95698e8e4111895d587f038f01b2d88",
+      "tool_schema_tokens": 1266,
+      "user": "Why can they cancel these terms? The 2x dx seems to just disappear.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "no-idea-how-to-start": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "The trick is to think in rates: the salt in the tank changes at the rate it comes in minus the rate it leaves.\n\nLet $S(t)$ be the kilograms of salt in the tank at time $t$.\n\n**Rate in.** The incoming brine is $0.1$ kg/L flowing at $3$ L/min, so salt enters at\n$$0.1 \\times 3 = 0.3 \\text{ kg/min}$$\n\u2014 a constant.\n\n**Rate out.** The outflow carries the tank's *own* concentration. Since in and out are both $3$ L/min, the volume stays at $100$ L, so the concentration in the tank is $S(t)/100$ kg/L. Salt leaves at\n$$\\frac{S(t)}{100} \\times 3 = \\frac{3S}{100} \\text{ kg/min}$$\n\nPut them together:\n$$\\frac{dS}{dt} = 0.3 - \\frac{3S}{100}, \\qquad S(0) = 20$$\n\nThat's the whole setup \u2014 a first-order linear ODE (separable, or solvable with an integrating factor). Want me to walk through solving it?",
+      "generated_at": "2026-09-07T00:37:17+00:00",
+      "duration_seconds": 10.7,
+      "system_prompt_tokens": 1126,
+      "assembled_prompt_sha256": "01628bcccabcd3085258f69d949b505e5305f4aa2ba96d2400661b70acee2a16",
+      "tool_schema_tokens": 1266,
+      "user": "I have no idea how to start.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate((u(tau) - u(tau-1))*exp(-(0.5-tau))*u(0.5-tau), tau, 0, oo)",
+            "compare_to": "1 - exp(-0.5)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate((u(tau) - u(tau-1))*exp(-(0.5-tau))*u(0.5-tau), tau, 0, oo)\", \"compare_to\": \"1 - exp(-0.5)\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "That computation took too long and was stopped."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate((u(tau) - u(tau-1))*exp(-(2-tau))*u(2-tau), tau, 0, oo)",
+            "compare_to": "(exp(1) - 1)*exp(-2)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate((u(tau) - u(tau-1))*exp(-(2-tau))*u(2-tau), tau, 0, oo)\", \"compare_to\": \"(exp(1) - 1)*exp(-2)\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "That computation took too long and was stopped."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(exp(-(t-tau)), tau, 0, t)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(exp(-(t-tau)), tau, 0, t)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "1 - exp(-t)"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(exp(-(t-tau)), tau, 0, 1)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(exp(-(t-tau)), tau, 0, 1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "-(1 - E)*exp(-t)"
+          }
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Your setup is right \u2014 the convolution integral with $x(\\tau)$ nonzero only where the pulse is, and $h(t-\\tau)$ causal. The first mistake is in the integrand itself.\n\n**What went wrong:** you wrote $h(t-\\tau) = e^{-t}$. But\n\n$$h(t-\\tau) = e^{-(t-\\tau)}\\,u(t-\\tau) = e^{-t}\\,e^{\\tau}\\,u(t-\\tau)$$\n\nThe $\\tau$-dependence $e^{\\tau}$ is part of the integrand \u2014 dropping it is what turned the integral into $t e^{-t}$.\n\n**Second issue (limits):** $x(\\tau) = u(\\tau) - u(\\tau-1)$ is 1 only on $0 \\le \\tau \\le 1$, so the upper limit is $\\min(t, 1)$, not $t$. That matters once $t > 1$.\n\n**Corrected, in your method:**\n\n$$y(t) = \\int_0^{\\min(t,1)} e^{-(t-\\tau)}\\,d\\tau = e^{-t}\\int_0^{\\min(t,1)} e^{\\tau}\\,d\\tau = e^{-t}\\left(e^{\\min(t,1)} - 1\\right)$$\n\nwhich gives the piecewise answer:\n\n$$y(t) = \\begin{cases} 0, & t < 0 \\\\ 1 - e^{-t}, & 0 \\le t \\le 1 \\\\ (e-1)e^{-t}, & t > 1 \\end{cases}$$\n\nI checked both integrals symbolically: $\\int_0^t e^{-(t-\\tau)}d\\tau = 1 - e^{-t}$ and $\\int_0^1 e^{-(t-\\tau)}d\\tau = (e-1)e^{-t}$.\n\nSanity check: at $t=1$ both pieces give $1 - e^{-1}$, so the curve is continuous \u2014 it rises to a peak at $t=1$ and then decays, which makes sense: the pulse stops feeding the exponential tail after $t=1$.",
+      "generated_at": "2026-09-07T00:38:19+00:00",
+      "duration_seconds": 61.59,
+      "system_prompt_tokens": 1126,
+      "assembled_prompt_sha256": "4993b2e38cd73e94696e064db5c49278b6681a5a1e3ccc6c79727807e5061d7e",
+      "tool_schema_tokens": 1266,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "is-my-answer-correct": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "(1/3)*sin(3*t)*e^(-s*t)",
+            "variable": "t",
+            "lower": "0",
+            "upper": "oo"
+          },
+          "raw_arguments": "{\"expression\": \"(1/3)*sin(3*t)*e^(-s*t)\", \"variable\": \"t\", \"lower\": \"0\", \"upper\": \"oo\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "The computation failed: TypeError"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "laplace((1/3)*sin(3*t), t, s)"
+          },
+          "raw_arguments": "{\"expression\": \"laplace((1/3)*sin(3*t), t, s)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "laplace(sin(3*t)/3, t, s)"
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "(1/3)*sin(3*t)*exp(-s*t)",
+            "variable": "t",
+            "lower": "0",
+            "upper": "oo"
+          },
+          "raw_arguments": "{\"expression\": \"(1/3)*sin(3*t)*exp(-s*t)\", \"variable\": \"t\", \"lower\": \"0\", \"upper\": \"oo\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "Piecewise((1/(9*(s**2/9 + 1)), Abs(arg(s)) < pi/2), (Integral(exp(-s*t)*sin(3*t)/3, (t, 0, oo)), True))",
+            "definite": true
+          }
+        }
+      ],
+      "rounds": 4,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Yes, your answer is correct.\n\nThe standard pair is\n\n$$\\mathcal{L}\\{\\sin(\\omega t)\\} = \\frac{\\omega}{s^2 + \\omega^2}$$\n\nWith $\\omega = 3$, that gives $\\mathcal{L}\\{\\sin(3t)\\} = \\frac{3}{s^2+9}$, so you need $\\frac{1}{3}$ in front to get exactly $\\frac{1}{s^2+9}$.\n\nI verified it by computing the Laplace integral directly:\n\n$$\\int_0^\\infty \\frac{1}{3}\\sin(3t)\\,e^{-st}\\,dt = \\frac{1}{s^2+9}$$\n\nwhich matches the original expression, so $\\mathcal{L}^{-1}\\left\\{\\frac{1}{s^2+9}\\right\\} = \\frac{1}{3}\\sin(3t)$.",
+      "generated_at": "2026-09-07T00:38:31+00:00",
+      "duration_seconds": 12.14,
+      "system_prompt_tokens": 1126,
+      "assembled_prompt_sha256": "9a109b8c6124f02ddebe65e5a76b069d65d2bc49f7af19b1e7ed8403d2582143",
+      "tool_schema_tokens": 1266,
+      "user": "I got (1/3) sin(3t). Is my answer correct?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "just-tell-me-the-answer": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "diff(10 + 10*exp(-3*t/100), t)",
+            "compare_to": "0.3 - 3*(10 + 10*exp(-3*t/100))/100"
+          },
+          "raw_arguments": "{\"expression\": \"diff(10 + 10*exp(-3*t/100), t)\", \"compare_to\": \"0.3 - 3*(10 + 10*exp(-3*t/100))/100\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "$$S(t) = 10 + 10\\,e^{-0.03t} \\text{ kg}$$\n\nQuick reason: the ODE is $\\frac{dS}{dt} = 0.3 - 0.03S$ (in: $0.1 \\times 3 = 0.3$ kg/min; out: $0.1 \\times S$... actually $\\frac{S}{100} \\times 3 = 0.03S$ kg/min), with $S(0) = 20$. The solution approaches the equilibrium $S = 10$ kg, and I verified it satisfies the ODE.",
+      "generated_at": "2026-09-07T00:38:37+00:00",
+      "duration_seconds": 5.72,
+      "system_prompt_tokens": 1126,
+      "assembled_prompt_sha256": "530c335ac65265a49d57cce0a95e1a0e7975be07f24a23e3ad12d0e7cf9159e2",
+      "tool_schema_tokens": 1266,
+      "user": "Just tell me the answer.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "explain-that-more-simply": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Think of the system as having a fixed \"shape\" \u2014 how it reacts to a single quick poke. That shape is its fingerprint.\n\nNow your real input isn't one poke; it's a long stream of tiny pokes, each with some size. The output at any moment is just all those tiny pokes' fingerprints, added up. Each poke's fingerprint is shifted in time (because the poke happened at a different moment) and scaled by how big the poke was.\n\nSo convolution is really one move: **slide** the system's fingerprint along the input, **multiply** where they overlap, and **add it all up**. That sum is the output at that instant.\n\nIn symbols, that \"slide, multiply, add\" is exactly\n\n$$y(t) = \\int_{-\\infty}^{\\infty} x(\\tau)\\, h(t-\\tau)\\, d\\tau$$\n\nwhere $x(\\tau)$ is the input's poke at time $\\tau$, and $h(t-\\tau)$ is the fingerprint shifted so it lines up with that poke. The integral is just the \"add it all up\" part.",
+      "generated_at": "2026-09-07T00:38:42+00:00",
+      "duration_seconds": 5.04,
+      "system_prompt_tokens": 1126,
+      "assembled_prompt_sha256": "0f0e0ad9ed0d277ac04903e749253e87c9dc19fd725ca95b777e4c7a79248abd",
+      "tool_schema_tokens": 1266,
+      "user": "Explain that more simply.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "dont-ask-me-questions-teach-it": {
+      "tool_calls": [
+        {
+          "name": "cas_linalg",
+          "arguments": {
+            "operation": "eigenvalues",
+            "matrix": [
+              [
+                "2",
+                "0"
+              ],
+              [
+                "0",
+                "3"
+              ]
+            ]
+          },
+          "raw_arguments": "{\"operation\": \"eigenvalues\", \"matrix\": [[\"2\", \"0\"], [\"0\", \"3\"]]}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": {
+              "2": 1,
+              "3": 1
+            }
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "[[2,0],[0,3]]*[[1],[0]]",
+            "compare_to": "[[2],[0]]"
+          },
+          "raw_arguments": "{\"expression\": \"[[2,0],[0,3]]*[[1],[0]]\", \"compare_to\": \"[[2],[0]]\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "expression contains characters that are not mathematical notation."
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "An eigenvalue is a number that tells you how a matrix stretches space along a special direction.\n\n**The mental model.** A matrix $A$ is a machine that takes a vector in and spits a vector out \u2014 usually in a *different* direction. Most vectors get rotated or skewed. But a few special directions are lucky: a vector pointing along one of them comes out pointing the same way (or exactly backwards). It's only been stretched, not turned.\n\n- The **eigenvector** $x$ is that special direction.\n- The **eigenvalue** $\\lambda$ is the stretch factor: how much longer (or shorter, or flipped) the vector became.\n\n**The formal statement.** A number $\\lambda$ is an eigenvalue of $A$ if there exists a nonzero vector $x$ such that\n\n$$A x = \\lambda x$$\n\nThe nonzero condition matters: $x = 0$ would make the equation true for any $\\lambda$, which is useless.\n\n**A concrete example.** Take $A = \\begin{bmatrix} 2 & 0 \\\\ 0 & 3 \\end{bmatrix}$. Apply it to $x = \\begin{bmatrix} 1 \\\\ 0 \\end{bmatrix}$:\n\n$$A x = \\begin{bmatrix} 2 & 0 \\\\ 0 & 3 \\end{bmatrix} \\begin{bmatrix} 1 \\\\ 0 \\end{bmatrix} = \\begin{bmatrix} 2 \\\\ 0 \\end{bmatrix} = 2 \\begin{bmatrix} 1 \\\\ 0 \\end{bmatrix}$$\n\nThe output is the same direction, just twice as long. So $\\lambda = 2$ is an eigenvalue, with eigenvector $\\begin{bmatrix} 1 \\\\ 0 \\end{bmatrix}$. (I checked: the eigenvalues of this matrix are exactly $2$ and $3$.)\n\n**How you'd find them in general.** Rearrange $Ax = \\lambda x$ to $(A - \\lambda I)x = 0$. A nonzero $x$ exists exactly when the matrix $A - \\lambda I$ is singular, i.e. its determinant is zero:\n\n$$\\det(A - \\lambda I) = 0$$\n\nThis is the **characteristic equation**. Solve it for $\\lambda$ to get the eigenvalues, then plug each one back in to find the matching eigenvectors.\n\n**Why it matters.** Eigenvalues let you \"diagonalize\" a matrix: in the basis of eigenvectors, the matrix just scales each axis independently. That's why powers of a matrix, differential equations, and stability analysis all reduce to eigenvalue problems.",
+      "generated_at": "2026-09-07T00:38:54+00:00",
+      "duration_seconds": 12.55,
+      "system_prompt_tokens": 1126,
+      "assembled_prompt_sha256": "3149cd6433a226127a023dd1b4ab3c72345f0dc4af465cdece96c9c1dbda2995",
+      "tool_schema_tokens": 1266,
+      "user": "Don't ask me questions; teach it.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "intuition-not-the-derivation": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "The flip is just a change of coordinates. The kernel $g$ is naturally indexed by **how long ago** something happened, and \"how long ago\" is a backwards-pointing axis.\n\n**The age picture.** Think of $g$ as an impulse response: \"if the input fires at time 0, the output $s$ seconds later is $g(s)$.\" So $g$ is a lookup table of *age \u2192 contribution*. Now ask for the output at time $t$. The input that fired at time $\\tau$ is $t - \\tau$ seconds old, so its contribution to the present is $g(t - \\tau)$. That's the entire flip: you're reading the response table by age, and age is measured backwards from the present.\n\n**The sliding picture.** To get the output at every $t$, you slide $g$ along $f$ and take a dot product at each position. The flip decides which way the kernel's \"future\" (its positive-time part) points:\n\n- **Flipped** (convolution): $g$'s positive-time part sits to the *left* of $t$, overlapping $f$'s *past*. The present output only sees past inputs.\n- **Not flipped** (correlation): $g$'s positive-time part sits to the *right* of $t$, overlapping $f$'s *future*.\n\nYou can see the stakes concretely: if $g$ is supported on $[0, \\infty)$, then $g(t - \\tau) \\neq 0$ only when $\\tau \\leq t$ \u2014 the output at $t$ depends on the input's past. Drop the flip and the same condition becomes $\\tau \\geq t$: a system that responds to inputs *before they happen*. The flip is what makes convolution a memory of the past, i.e., a causal operation.\n\nOne more tell that the flip is doing real work: it's exactly what makes convolution commutative, $f * g = g * f$. Correlation, which skips the flip, isn't commutative \u2014 it treats one signal as the template and the other as the data. The flip makes the two signals symmetric in the overlap.",
+      "generated_at": "2026-09-07T00:39:26+00:00",
+      "duration_seconds": 31.63,
+      "system_prompt_tokens": 1126,
+      "assembled_prompt_sha256": "725f2a96039988043956977e0ad6b50c4a7d0236aba45c2c838eb24d0364f057",
+      "tool_schema_tokens": 1266,
+      "user": "Give me the intuition, not the derivation. Why does convolution flip one of the signals?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "five-minutes-before-exam": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Here's the high-yield version for a 5-minute cram.\n\n**The definition (memorize this first)**\n\n$$F(\\omega) = \\int_{-\\infty}^{\\infty} f(t)\\, e^{-i\\omega t}\\, dt \\qquad\\qquad f(t) = \\frac{1}{2\\pi}\\int_{-\\infty}^{\\infty} F(\\omega)\\, e^{i\\omega t}\\, d\\omega$$\n\nNote the sign flip: forward is $e^{-i\\omega t}$, inverse is $e^{+i\\omega t}$, and the $\\tfrac{1}{2\\pi}$ lives on the inverse side.\n\n**One-line intuition:** $F(\\omega)$ tells you how much of frequency $\\omega$ is in the signal. A narrow pulse in time spreads wide in frequency, and vice versa.\n\n**Properties that show up on exams**\n\n- Linearity: $a f + b g \\leftrightarrow a F + b G$\n- Time shift: $f(t - t_0) \\leftrightarrow e^{-i\\omega t_0} F(\\omega)$\n- Frequency shift: $e^{i\\omega_0 t} f(t) \\leftrightarrow F(\\omega - \\omega_0)$\n- Time scaling: $f(a t) \\leftrightarrow \\tfrac{1}{|a|}\\, F(\\omega/a)$\n- Differentiation: $f'(t) \\leftrightarrow i\\omega\\, F(\\omega)$\n- Convolution: $(f * g)(t) \\leftrightarrow F(\\omega)\\, G(\\omega)$\n- Parseval: $\\int |f(t)|^2 dt = \\tfrac{1}{2\\pi}\\int |F(\\omega)|^2 d\\omega$\n\n**A few pairs worth knowing cold**\n\n- $\\delta(t) \\leftrightarrow 1$\n- $1 \\leftrightarrow 2\\pi\\,\\delta(\\omega)$\n- $e^{-a t}u(t) \\leftrightarrow \\tfrac{1}{a + i\\omega}$, for $a>0$\n- $e^{-t^2/2} \\leftrightarrow \\sqrt{2\\pi}\\, e^{-\\omega^2/2}$\n\n**Pitfalls that cost points**\n\n- Forgetting the $\\tfrac{1}{2\\pi}$ (or putting it on the wrong side).\n- Mixing up the sign in the exponent.\n- Forgetting the $\\tfrac{1}{|a|}$ factor in time scaling.\n- Real signal $\\Rightarrow$ Hermitian symmetry: $F(-\\omega) = F^*(\\omega)$, so you only need half the spectrum.\n\nIf you only have 60 seconds, lock in the definition, the differentiation rule, and the convolution rule \u2014 those three carry the most weight.",
+      "generated_at": "2026-09-07T00:39:46+00:00",
+      "duration_seconds": 20.23,
+      "system_prompt_tokens": 1126,
+      "assembled_prompt_sha256": "e4a84ff8fc841754c5b710848e83751cfd999feaa1a373e1ea10103e2da5b101",
+      "tool_schema_tokens": 1266,
+      "user": "I'm studying five minutes before the exam. What are the essentials I should remember about the Fourier transform?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "show-convolution-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "e^{-(t - tau)}",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"e^{-(t - tau)}\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "expression contains characters that are not mathematical notation."
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "e^{-(t - tau)}",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "1"
+          },
+          "raw_arguments": "{\"expression\": \"e^{-(t - tau)}\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "expression contains characters that are not mathematical notation."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate((u(tau) - u(tau - 1)) * e^{-(t - tau)} * u(t - tau), tau, -oo, oo)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate((u(tau) - u(tau - 1)) * e^{-(t - tau)} * u(t - tau), tau, -oo, oo)\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "expression contains characters that are not mathematical notation."
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t - tau))",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t - tau))",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "1"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate((u(tau) - u(tau - 1)) * exp(-(t - tau)) * u(t - tau), tau, -oo, oo)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate((u(tau) - u(tau - 1)) * exp(-(t - tau)) * u(t - tau), tau, -oo, oo)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "-exp(-t)*Integral((-Heaviside(tau) + Heaviside(tau - 1))*exp(tau)*Heaviside(t - tau), (tau, -oo, oo))"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "1/(s*(s+1))",
+            "compare_to": "1/s - 1/(s+1)"
+          },
+          "raw_arguments": "{\"expression\": \"1/(s*(s+1))\", \"compare_to\": \"1/s - 1/(s+1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(1 - exp(-s))/(s*(s+1))"
+          },
+          "raw_arguments": "{\"expression\": \"(1 - exp(-s))/(s*(s+1))\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "(exp(s) - 1)*exp(-s)/(s*(s + 1))"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(1 - exp(-t)) - (1 - exp(-(t-1)))*u(t-1)"
+          },
+          "raw_arguments": "{\"expression\": \"(1 - exp(-t)) - (1 - exp(-(t-1)))*u(t-1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "exp(1 - t)*Heaviside(t - 1) - Heaviside(t - 1) + 1 - exp(-t)"
+          }
+        }
+      ],
+      "rounds": 4,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Here's the result, then the full derivation.\n\n## The answer\n\nLet $x(t) = u(t) - u(t-1)$ (the unit pulse on $[0,1]$) and $h(t) = e^{-t}u(t)$. Their convolution $y(t) = (x * h)(t)$ is\n\n$$\ny(t) =\n\\begin{cases}\n0, & t < 0 \\\\[4pt]\n1 - e^{-t}, & 0 \\le t \\le 1 \\\\[4pt]\ne^{-(t-1)} - e^{-t} = (e-1)\\,e^{-t}, & t > 1\n\\end{cases}\n$$\n\nIt rises from $0$ to $1 - e^{-1}$ over $[0,1]$, then decays exponentially.\n\n## Step 1 \u2014 Write the convolution integral\n\nBy definition,\n\n$$\ny(t) = \\int_{-\\infty}^{\\infty} x(\\tau)\\,h(t-\\tau)\\,d\\tau = \\int_{-\\infty}^{\\infty} \\big[u(\\tau)-u(\\tau-1)\\big]\\, e^{-(t-\\tau)}\\,u(t-\\tau)\\,d\\tau.\n$$\n\n## Step 2 \u2014 Find where the integrand is nonzero\n\nThis is the whole game: the integrand is a product of three \"switches,\" and it is nonzero only where **all** of them are on at once.\n\n- $u(\\tau) - u(\\tau-1) \\neq 0$ requires $0 \\le \\tau \\le 1$ (the pulse).\n- $u(t-\\tau) \\neq 0$ requires $t - \\tau \\ge 0$, i.e. $\\tau \\le t$ (the exponential's support).\n\nSo the integration window is $\\tau \\in [0,\\, \\min(1,\\,t)]$, and only when $t > 0$. That single fact splits the problem into the three cases above.\n\n## Step 3 \u2014 Evaluate each case\n\n**Case $t < 0$:** the window is empty, so $y(t) = 0$.\n\n**Case $0 \\le t \\le 1$:** here $\\min(1,t) = t$, so\n\n$$\ny(t) = \\int_{0}^{t} e^{-(t-\\tau)}\\,d\\tau.\n$$\n\nTreat $t$ as constant and integrate in $\\tau$: $\\int e^{-(t-\\tau)}d\\tau = -e^{-(t-\\tau)}$, so\n\n$$\ny(t) = \\Big[-e^{-(t-\\tau)}\\Big]_{0}^{t} = -e^{0} + e^{-t} \\cdot (-1)\\cdot(-1) = 1 - e^{-t}.\n$$\n\n(Checked: the CAS returns $1 - e^{-t}$ for $\\int_0^t e^{-(t-\\tau)}d\\tau$.)\n\n**Case $t > 1$:** here $\\min(1,t) = 1$, so\n\n$$\ny(t) = \\int_{0}^{1} e^{-(t-\\tau)}\\,d\\tau = e^{-t}\\int_{0}^{1} e^{\\tau}\\,d\\tau = e^{-t}\\Big[e^{\\tau}\\Big]_{0}^{1} = e^{-t}(e - 1) = e^{-(t-1)} - e^{-t}.\n$$\n\n(Checked: the CAS returns $e^{1-t} - e^{-t}$, which is the same expression.)\n\n## Step 4 \u2014 Cross-check with Laplace transforms\n\nConvolution in time is multiplication in the $s$-domain:\n\n$$\nX(s) = \\frac{1 - e^{-s}}{s}, \\qquad H(s) = \\frac{1}{s+1}, \\qquad Y(s) = \\frac{1 - e^{-s}}{s(s+1)}.\n$$\n\nUsing the partial fraction $\\dfrac{1}{s(s+1)} = \\dfrac{1}{s} - \\dfrac{1}{s+1}$ (verified equal),\n\n$$\nY(s) = \\left(\\frac{1}{s} - \\frac{1}{s+1}\\right) - e^{-s}\\left(\\frac{1}{s} - \\frac{1}{s+1}\\right).\n$$\n\nInverting term by term, with the shift rule $\\mathcal{L}^{-1}\\{e^{-s}F(s)\\} = f(t-1)u(t-1)$:\n\n$$\ny(t) = \\big(1 - e^{-t}\\big)u(t) - \\big(1 - e^{-(t-1)}\\big)u(t-1),\n$$\n\nwhich is exactly the piecewise function above. Both methods agree.\n\n## The idea to carry forward\n\nThe convolution of a **finite pulse** with a **causal** function is governed entirely by *where the two supports overlap* as $t$ slides. You don't integrate over $(-\\infty,\\infty)$ blindly \u2014 you find the window $[0,\\min(1,t)]$ first, and that window's changing length is what creates the piecewise structure: a \"filling up\" phase while the pulse is still entering, then a \"draining\" phase once it has fully passed. Whenever you see a pulse convolved with a causal kernel, look for that overlap window before touching the integral.",
+      "generated_at": "2026-09-07T00:40:43+00:00",
+      "duration_seconds": 56.86,
+      "system_prompt_tokens": 860,
+      "assembled_prompt_sha256": "9e8c36b2ec07d4eceb0f6dcecb2032a9f1ada8d8b2306ed37c9e0155da388fa5",
+      "tool_schema_tokens": 1266,
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "show-what-is-a-derivative": {
+      "tool_calls": [
+        {
+          "name": "cas_differentiate",
+          "arguments": {
+            "expression": "x**2",
+            "variable": "x"
+          },
+          "raw_arguments": "{\"expression\": \"x**2\", \"variable\": \"x\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "2*x"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "limit(((x+h)**2 - x**2)/h, h, 0)",
+            "compare_to": "2*x"
+          },
+          "raw_arguments": "{\"expression\": \"limit(((x+h)**2 - x**2)/h, h, 0)\", \"compare_to\": \"2*x\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "A derivative measures how a function changes at each point \u2014 the **instantaneous rate of change**. Formally, for a function $f$, the derivative at a point $a$ is defined by the limit\n\n$$f'(a) = \\lim_{h \\to 0} \\frac{f(a+h) - f(a)}{h}$$\n\nThe fraction $\\frac{f(a+h) - f(a)}{h}$ is the **difference quotient**: it's the slope of the secant line through $(a, f(a))$ and $(a+h, f(a+h))$. Taking the limit as $h \\to 0$ shrinks that secant line down to the **tangent line** at $a$, so the derivative is also the slope of the tangent line. If the limit exists, $f$ is differentiable at $a$; if not (for example, $f(x) = |x|$ at $x = 0$, where the left and right slopes disagree), the derivative doesn't exist there.\n\n**Worked example.** Let $f(x) = x^2$. Compute the difference quotient:\n\n$$\\frac{f(x+h) - f(x)}{h} = \\frac{(x+h)^2 - x^2}{h} = \\frac{x^2 + 2xh + h^2 - x^2}{h} = \\frac{2xh + h^2}{h} = 2x + h$$\n\nNow take the limit as $h \\to 0$: the $h$ term vanishes, leaving\n\n$$f'(x) = 2x$$\n\nI checked this both ways with a symbolic tool: differentiating $x^2$ directly gives $2x$, and evaluating the limit definition $\\lim_{h\\to 0} \\frac{(x+h)^2 - x^2}{h}$ gives exactly $2x$ as well.\n\n**What it means in practice.** If $f(t)$ is a position, then $f'(t)$ is the velocity \u2014 how fast position is changing at that instant. In general, $f'(x)$ tells you how much $f$ is increasing or decreasing per unit of $x$ at that point: positive means rising, negative means falling, zero means a flat spot (a possible peak or valley).\n\nCommon notations for the same object: $f'(x)$, $\\frac{df}{dx}$, or $\\frac{d}{dx}f(x)$.\n\n**The idea to carry forward:** a derivative is a limit of average rates of change \u2014 secant slopes pinched down to a tangent slope. Everything else in differential calculus (power rule, chain rule, optimization) is built on that one definition.",
+      "generated_at": "2026-09-07T00:41:08+00:00",
+      "duration_seconds": 25.15,
+      "system_prompt_tokens": 860,
+      "assembled_prompt_sha256": "a658ce2842fb5628426083908a19f6841c3970c2162da4e78c5e59cbe1372b2f",
+      "tool_schema_tokens": 1266,
+      "user": "What is a derivative?",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "75b232212a85dd9cc058240d284ee560fc63caa8311271d1c671fc9b9e629eae",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

@@ -1,0 +1,283 @@
+[
+  {
+    "run": "guide-baseline-1",
+    "case_count": 13,
+    "source_sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+    "corpus_version": "1.1.0",
+    "terminal_statuses": {
+      "explain-convolution": "ok",
+      "what-is-a-derivative": "ok",
+      "why-can-they-cancel-these-terms": "ok",
+      "no-idea-how-to-start": "ok",
+      "attempt-where-did-i-go-wrong": "ok",
+      "is-my-answer-correct": "ok",
+      "just-tell-me-the-answer": "ok",
+      "explain-that-more-simply": "ok",
+      "dont-ask-me-questions-teach-it": "ok",
+      "intuition-not-the-derivation": "ok",
+      "five-minutes-before-exam": "ok",
+      "show-convolution-worked": "ok",
+      "show-what-is-a-derivative": "ok"
+    },
+    "latency_seconds": {
+      "mean": 12.64,
+      "median": 10.23,
+      "min": 1.8,
+      "max": 35.64
+    },
+    "evidence": "guide-baseline-1/runs.json"
+  },
+  {
+    "run": "guide-baseline-2",
+    "case_count": 6,
+    "source_sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+    "corpus_version": "1.2.0",
+    "terminal_statuses": {
+      "no-idea-how-to-start": "ok",
+      "attempt-where-did-i-go-wrong": "ok",
+      "just-tell-me-the-answer": "ok",
+      "explain-that-more-simply": "ok",
+      "dont-ask-me-questions-teach-it": "ok",
+      "show-convolution-worked": "ok"
+    },
+    "latency_seconds": {
+      "mean": 20.45,
+      "median": 21.71,
+      "min": 2.49,
+      "max": 33.75
+    },
+    "evidence": "guide-baseline-2/runs.json"
+  },
+  {
+    "run": "guide-candidate-1",
+    "case_count": 13,
+    "source_sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+    "corpus_version": "1.2.0",
+    "terminal_statuses": {
+      "explain-convolution": "ok",
+      "what-is-a-derivative": "ok",
+      "why-can-they-cancel-these-terms": "ok",
+      "no-idea-how-to-start": "ok",
+      "attempt-where-did-i-go-wrong": "ok",
+      "is-my-answer-correct": "ok",
+      "just-tell-me-the-answer": "ok",
+      "explain-that-more-simply": "ok",
+      "dont-ask-me-questions-teach-it": "ok",
+      "intuition-not-the-derivation": "ok",
+      "five-minutes-before-exam": "ok",
+      "show-convolution-worked": "ok",
+      "show-what-is-a-derivative": "ok"
+    },
+    "latency_seconds": {
+      "mean": 22.42,
+      "median": 15.71,
+      "min": 5.04,
+      "max": 61.59
+    },
+    "evidence": "guide-candidate-1/runs.json"
+  },
+  {
+    "run": "guide-final-1",
+    "case_count": 13,
+    "source_sha": "f460dbe989abdc25ec206e5e31943ccf24bdf00e",
+    "corpus_version": "1.2.0",
+    "terminal_statuses": {
+      "explain-convolution": "ok",
+      "what-is-a-derivative": "ok",
+      "why-can-they-cancel-these-terms": "ok",
+      "no-idea-how-to-start": "ok",
+      "attempt-where-did-i-go-wrong": "ok",
+      "is-my-answer-correct": "ok",
+      "just-tell-me-the-answer": "ok",
+      "explain-that-more-simply": "ok",
+      "dont-ask-me-questions-teach-it": "ok",
+      "intuition-not-the-derivation": "ok",
+      "five-minutes-before-exam": "ok",
+      "show-convolution-worked": "ok",
+      "show-what-is-a-derivative": "ok"
+    },
+    "latency_seconds": {
+      "mean": 13.58,
+      "median": 14.47,
+      "min": 4.35,
+      "max": 28.99
+    },
+    "evidence": "guide-final-1/runs.json"
+  },
+  {
+    "run": "guide-final-2",
+    "case_count": 7,
+    "source_sha": "f460dbe989abdc25ec206e5e31943ccf24bdf00e",
+    "corpus_version": "1.2.0",
+    "terminal_statuses": {
+      "no-idea-how-to-start": "ok",
+      "attempt-where-did-i-go-wrong": "ok",
+      "just-tell-me-the-answer": "ok",
+      "explain-that-more-simply": "ok",
+      "dont-ask-me-questions-teach-it": "ok",
+      "intuition-not-the-derivation": "ok",
+      "show-convolution-worked": "ok"
+    },
+    "latency_seconds": {
+      "mean": 14.84,
+      "median": 14.86,
+      "min": 4.95,
+      "max": 31.83
+    },
+    "evidence": "guide-final-2/runs.json"
+  },
+  {
+    "run": "guide-heldout-1",
+    "case_count": 6,
+    "source_sha": "f460dbe989abdc25ec206e5e31943ccf24bdf00e",
+    "corpus_version": "beta-heldout-1.0.0",
+    "terminal_statuses": {
+      "start-quadratic": "ok",
+      "attempt-distribution": "ok",
+      "simpler-osmosis": "ok",
+      "direct-pvalue": "ok",
+      "guide-to-worked": "ok",
+      "show-to-one-step": "ok"
+    },
+    "latency_seconds": {
+      "mean": 5.8,
+      "median": 5.0,
+      "min": 1.41,
+      "max": 12.67
+    },
+    "evidence": "guide-heldout-1/runs.json"
+  },
+  {
+    "run": "guide-heldout-2",
+    "case_count": 6,
+    "source_sha": "700d02f63cdec1fb18f4e30a998d58db745ab7a0",
+    "corpus_version": "beta-heldout-1.0.0",
+    "terminal_statuses": {
+      "start-quadratic": "ok",
+      "attempt-distribution": "ok",
+      "simpler-osmosis": "ok",
+      "direct-pvalue": "ok",
+      "guide-to-worked": "ok",
+      "show-to-one-step": "ok"
+    },
+    "latency_seconds": {
+      "mean": 5.41,
+      "median": 4.72,
+      "min": 1.41,
+      "max": 11.04
+    },
+    "evidence": "guide-heldout-2/runs.json"
+  },
+  {
+    "run": "guide-osmosis-remediation-1",
+    "case_count": 1,
+    "source_sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+    "corpus_version": "beta-heldout-1.0.0",
+    "terminal_statuses": {
+      "simpler-osmosis": "ok"
+    },
+    "latency_seconds": {
+      "mean": 3.03,
+      "median": 3.03,
+      "min": 3.03,
+      "max": 3.03
+    },
+    "evidence": "guide-osmosis-remediation-1/runs.json"
+  },
+  {
+    "run": "guide-osmosis-remediation-2",
+    "case_count": 1,
+    "source_sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+    "corpus_version": "beta-heldout-1.0.0",
+    "terminal_statuses": {
+      "simpler-osmosis": "ok"
+    },
+    "latency_seconds": {
+      "mean": 2.81,
+      "median": 2.81,
+      "min": 2.81,
+      "max": 2.81
+    },
+    "evidence": "guide-osmosis-remediation-2/runs.json"
+  },
+  {
+    "run": "guide-remediation-1",
+    "case_count": 7,
+    "source_sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+    "corpus_version": "1.2.0",
+    "terminal_statuses": {
+      "no-idea-how-to-start": "ok",
+      "attempt-where-did-i-go-wrong": "ok",
+      "just-tell-me-the-answer": "ok",
+      "explain-that-more-simply": "ok",
+      "dont-ask-me-questions-teach-it": "ok",
+      "show-convolution-worked": "ok",
+      "show-what-is-a-derivative": "ok"
+    },
+    "latency_seconds": {
+      "mean": 15.81,
+      "median": 17.2,
+      "min": 3.2,
+      "max": 31.02
+    },
+    "evidence": "guide-remediation-1/runs.json"
+  },
+  {
+    "run": "guide-remediation-2",
+    "case_count": 7,
+    "source_sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+    "corpus_version": "1.2.0",
+    "terminal_statuses": {
+      "no-idea-how-to-start": "ok",
+      "attempt-where-did-i-go-wrong": "ok",
+      "just-tell-me-the-answer": "ok",
+      "explain-that-more-simply": "ok",
+      "dont-ask-me-questions-teach-it": "ok",
+      "show-convolution-worked": "ok",
+      "show-what-is-a-derivative": "ok"
+    },
+    "latency_seconds": {
+      "mean": 14.42,
+      "median": 12.08,
+      "min": 3.32,
+      "max": 28.1
+    },
+    "evidence": "guide-remediation-2/runs.json"
+  },
+  {
+    "run": "guide-transfer-1",
+    "case_count": 3,
+    "source_sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+    "corpus_version": "beta-transfer-2.0.0",
+    "terminal_statuses": {
+      "transfer-ratio-attempt": "ok",
+      "transfer-simple-feedback": "ok",
+      "transfer-show-probability": "ok"
+    },
+    "latency_seconds": {
+      "mean": 9.31,
+      "median": 7.63,
+      "min": 6.29,
+      "max": 14.01
+    },
+    "evidence": "guide-transfer-1/runs.json"
+  },
+  {
+    "run": "guide-transfer-2",
+    "case_count": 3,
+    "source_sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+    "corpus_version": "beta-transfer-2.0.0",
+    "terminal_statuses": {
+      "transfer-ratio-attempt": "ok",
+      "transfer-simple-feedback": "ok",
+      "transfer-show-probability": "ok"
+    },
+    "latency_seconds": {
+      "mean": 8.8,
+      "median": 7.28,
+      "min": 6.84,
+      "max": 12.27
+    },
+    "evidence": "guide-transfer-2/runs.json"
+  }
+]

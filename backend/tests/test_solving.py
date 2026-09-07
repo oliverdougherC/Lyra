@@ -1264,3 +1264,25 @@ def test_a_reference_the_prompt_never_showed_cannot_be_cited_against(
     block = format_reference_block([(one.filename, one.text) for one in references])
     assert "[1] real_key.pdf" in block
     assert "blank_key.pdf" not in block
+
+
+def test_joint_problem_verification_includes_every_requested_part(
+    db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A check must see the questions, including a missing answer it should refute."""
+    questions = ["Calculate the mean in minutes.", "Calculate the median in minutes."]
+    artifact_id, _ = _section(db, class_id, questions, solve_parts=artifacts.TOGETHER)
+    fake_solver(monkeypatch, _SOLUTION, tool_support=True)
+    asked = []
+
+    def verify(config, statement, label, solution, **kwargs):
+        asked.append(statement)
+        return verification.VerificationOutcome(artifacts.UNCHECKED, "Synthetic check.")
+
+    monkeypatch.setattr(solver.verification, "verify", verify)
+    solver.run_solve(artifact_id)
+
+    assert len(asked) == 1
+    assert _STEM in asked[0]
+    assert all(question in asked[0] for question in questions)
+    assert "(a)" in asked[0] and "(b)" in asked[0]
