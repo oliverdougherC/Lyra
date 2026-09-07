@@ -2050,9 +2050,25 @@ def format_ledger_block(entries: list[Mapping[str, object]] | None) -> str:
     """Render source ids and relied-on excerpts without inventing citation syntax."""
     if not entries:
         return ""
-    return "Source ledger (cite only these stable source IDs):\n" + json.dumps(
-        [dict(entry) for entry in entries], ensure_ascii=False, sort_keys=True
-    )
+    sources = []
+    for entry in entries:
+        source = dict(entry)
+        source_id = source.pop("id", source.get("source_id"))
+        source["source_id"] = source_id
+        source["citation_marker"] = f"[@lyra:{source_id}]"
+        source["excerpts"] = [
+            {
+                **{key: value for key, value in excerpt.items() if key != "id"},
+                **({"excerpt_id": excerpt["id"]} if "id" in excerpt else {}),
+            }
+            for excerpt in source.get("excerpts", [])
+            if isinstance(excerpt, Mapping)
+        ]
+        sources.append(source)
+    return (
+        "Source ledger: copy citation_marker exactly to cite source_id; excerpt_id and "
+        "source_revision_id identify evidence records, never citation targets.\n"
+    ) + json.dumps(sources, ensure_ascii=False, sort_keys=True)
 
 
 def build_skeptic_prompt(

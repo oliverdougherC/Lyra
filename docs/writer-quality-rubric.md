@@ -205,3 +205,8 @@ comments but stops the stale review. A closing message distinguishes no new find
 comments that remain open. Length targets in a brief apply to the complete assignment unless a
 section plan explicitly allocates a share; interpretation and personal testimony are not treated
 as invented merely because they are not quoted by a source.
+
+Targeted section replacements also validate model-owned citation IDs before landing and reject
+unrelated or repeated headings using the document parser. Ledger prompts distinguish source
+citation markers from excerpt and revision identities. These checks preserve untouched student
+passages; they do not establish semantic support or detect every prose-only repetition.

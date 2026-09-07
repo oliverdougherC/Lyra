@@ -3156,6 +3156,32 @@ def _run_section(
     reply = mathnorm.normalize(reply)
     if not reply or reply == target.text.strip():
         return False, incomplete
+    reply = source_ledger.normalize_model_citations(
+        reply, [int(source["id"]) for source in source_ledger.list_sources(conn, class_id)]
+    )
+    # A section replacement must not smuggle neighboring sections into its span.
+    # Use the editor's heading parser so fenced code is not mistaken for structure.
+    def heading_signature(section: sections.Section) -> tuple[int, str]:
+        words = section.title.split(maxsplit=1)
+        if len(words) == 2 and all(part.isdigit() for part in words[0].rstrip(".").split(".")):
+            return section.level, words[1].casefold()
+        return section.level, section.title.casefold()
+
+    allowed_headings = [
+        heading_signature(section)
+        for section in sections.parse(target.text)
+        if section.level > 0
+    ]
+    for section in sections.parse(reply):
+        if section.level == 0:
+            continue
+        heading = heading_signature(section)
+        if heading not in allowed_headings:
+            raise LyraError(
+                "The replacement included an unrelated or repeated section heading. "
+                "The existing writing and saved proposal were kept."
+            )
+        allowed_headings.remove(heading)
     # Sections carry their trailing separation; a stripped model reply must not glue
     # the next heading onto its last paragraph.
     replacement = reply + ("\n" if not reply.endswith("\n") else "")
