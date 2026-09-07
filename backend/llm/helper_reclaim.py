@@ -38,6 +38,9 @@ def reclaim_owned_helpers(*, services: Sequence[str] | None = None) -> dict[str,
     failures = 0
 
     for service in selected:
+        _HELPERS[service].close_admission_for_app_quit()
+
+    for service in selected:
         helper = _HELPERS[service]
         try:
             before = _record_state(service)
