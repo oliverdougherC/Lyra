@@ -210,3 +210,8 @@ Targeted section replacements also validate model-owned citation IDs before land
 unrelated or repeated headings using the document parser. Ledger prompts distinguish source
 citation markers from excerpt and revision identities. These checks preserve untouched student
 passages; they do not establish semantic support or detect every prose-only repetition.
+
+Full-proposal planning keeps the original brief, request, and assignment analysis through
+section mapping. Existing notes are reference material, not a mandatory proposal outline.
+Saved source context and supporting revision metadata inform strategy calls; each snapshot
+excerpt is bounded, omissions are labeled, and normal whole-request budget checks still apply.

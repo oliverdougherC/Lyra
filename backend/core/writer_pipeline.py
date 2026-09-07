@@ -870,6 +870,17 @@ def _build_live_plan(
     query = str(analysis.get("task") or artifact["title"])
     result = retrieve(conn, class_id, query, STRUCTURE_RETRIEVAL_BUDGET)
     context_block = prompts.format_context_block([vars(chunk) for chunk in result.chunks])
+    ledger = source_ledger.list_sources(conn, class_id)
+    saved_context = source_ledger.saved_source_context(
+        conn, class_id, [int(source["id"]) for source in ledger]
+    )
+    if ledger:
+        context_block += (
+            "\n\n"
+            + prompts.format_ledger_block(ledger)
+            + "\nSaved source context (omitted content is not evidence of absence):\n"
+            + json.dumps(saved_context, ensure_ascii=False, sort_keys=True)
+        )
     thesis_reply = _complete(
         config,
         prompts.build_plan_thesis_prompt(str(artifact["title"]), analysis, context_block),
@@ -894,8 +905,18 @@ def _build_live_plan(
             thesis,
             argument_map,
             _target_words(conn, job),
-            context_block,
-            sections.outline(body),
+            context_block
+            + "\n\nOriginal assignment brief:\n"
+            + brief_block
+            + "\nStudent request:\n"
+            + (job.instruction or "Create a separate draft proposal.")
+            + "\nAssignment analysis:\n"
+            + json.dumps(analysis, ensure_ascii=False, sort_keys=True)
+            + "\nExisting notes outline (reference only, not required proposal structure):\n"
+            + sections.outline(body)
+            + "\nPlan the separate proposal to satisfy the brief and student request. "
+            "The accepted notes remain unchanged; "
+            "their headings need not become proposal sections.",
         ),
         schema=prompts.PLAN_SECTIONS_SCHEMA,
     )
