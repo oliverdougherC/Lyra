@@ -29,8 +29,8 @@ attestation, not independent verification of a PyMuPDF commercial license or of 
 compliance; retain the dependency inventory and obligations. The statement did not confirm
 that an encrypted off-device updater backup exists.
 
-Current gate receipts and the final candidate identity will be appended in the runtime/release
-handoff. Keep production updater-key backup confirmation, dependency distribution clearance,
+Current gate receipts, exact review-candidate hashes and the issue matrix are in the
+[runtime/release decision packet](runtime-release-decision-2026-09-06.md). Keep production updater-key backup confirmation, dependency distribution clearance,
 anonymous matching download/feed, installed update/rollback, physical input/accessibility and
 8 GB sustained/sleep-wake acceptance open until direct evidence exists.
 
