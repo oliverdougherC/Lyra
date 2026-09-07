@@ -12,7 +12,7 @@ from backend.core.app_settings import TutorAccess, TutorConfig
 
 
 @pytest.fixture
-def live_run(db, class_id, monkeypatch):
+def live_run(db, class_id, monkeypatch, request):
     jobs = []
     monkeypatch.setattr(writer_pipeline, "enqueue", jobs.append)
     monkeypatch.setattr(
@@ -28,6 +28,8 @@ def live_run(db, class_id, monkeypatch):
         draft = client.post(f"/api/classes/{class_id}/drafts", json={"title": "Bus memo"}).json()
         artifact_id = draft["id"]
         body = "I missed the last bus again. Keep this student sentence exactly."
+        if getattr(request, "param", None) == "long":
+            body += " Meaningful student argument." * 20000
         current = client.get(f"/api/drafts/{artifact_id}").json()
         assert (
             client.patch(
@@ -300,3 +302,124 @@ def test_research_schema_uses_the_same_id_type_as_saved_evidence(db, class_id):
         ]
         == "integer"
     )
+
+
+def test_existing_plan_cannot_hide_assignment_or_student_voice_from_live_review(
+    live_run, db, monkeypatch
+):
+    from backend.core import briefs
+
+    _, job, _, body = live_run
+    restriction = "Do not invent costs, staffing claims, or personal observations."
+    briefs.save_brief(db, job.artifact_id, summary=restriction)
+    seen = []
+
+    def complete(config, messages, schema=None, **kwargs):
+        seen.append("\n".join(message["content"] for message in messages))
+        if schema is writer_pipeline.prompts.TRANSITION_REVIEW_SCHEMA:
+            return '{"needs_change":false,"rationale":"clear","revised_next_paragraph":""}'
+        return '{"summary":"clear","issues":[]}'
+
+    monkeypatch.setattr(writer_pipeline, "_complete", complete)
+    writer_pipeline.run_pass(job)
+    assert seen
+    assert all(restriction in prompt and body in prompt for prompt in seen)
+
+
+def test_targeted_prose_reserves_output_for_writing(monkeypatch):
+    from backend.core.app_settings import TutorConfig
+
+    seen = []
+
+    async def complete(*args, **kwargs):
+        seen.append((kwargs["max_tokens"], kwargs["enable_thinking"]))
+        return "A narrowly corrected passage."
+
+    monkeypatch.setattr(writer_pipeline.client, "complete", complete)
+    writer_pipeline._complete(
+        TutorConfig("http://127.0.0.1:9/v1", None, "fixture", 8192),
+        [{"role": "user", "content": "Correct this passage only."}],
+        target_words=200,
+    )
+    assert seen == [(480, False)]
+
+
+@pytest.mark.parametrize("live_run", ["long"], indirect=True)
+def test_existing_plan_cannot_bypass_mandatory_prose_budget(live_run, monkeypatch):
+    client, job, _, body = live_run
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("The saved plan must not hide oversized mandatory student prose")
+
+    monkeypatch.setattr(writer_pipeline, "_complete", forbidden)
+    writer_pipeline.run_pass(job)
+    status = client.get(f"/api/drafts/{job.artifact_id}/status").json()
+    assert status["run_status"] == "failed"
+    assert "context window" in status["error_message"]
+    assert client.get(f"/api/drafts/{job.artifact_id}").json()["body"] == body
+
+
+def test_scoped_writer_evidence_retains_supporting_revision(db, class_id):
+    from backend.core import source_ledger
+
+    original = source_ledger.upsert_source(
+        db,
+        class_id,
+        source_type="web",
+        title="Synthetic measurements",
+        url="https://synthetic.invalid/revisions",
+        snapshot="The earlier count was 10.",
+        excerpts=["The earlier count was 10."],
+    )
+    source_ledger.upsert_source(
+        db,
+        class_id,
+        source_type="web",
+        title="Synthetic measurements",
+        url="https://synthetic.invalid/revisions",
+        snapshot="The corrected count is 20.",
+    )
+    entries = writer_pipeline._ledger_entries(db, class_id, {"source_ids": [original["id"]]}, "1")
+    excerpt = entries[0]["excerpts"][0]
+    assert excerpt["id"] == original["excerpts"][0]["id"]
+    assert excerpt["source_revision_id"] == original["current_revision_id"]
+    assert excerpt["supporting_revision"] == 1
+
+
+@pytest.mark.parametrize("marker", ["known", "unknown"])
+def test_live_model_citations_are_resolvable_before_publication(live_run, db, class_id, marker):
+    from backend.core import source_ledger
+
+    client, job, sid, body = live_run
+    source = source_ledger.upsert_source(
+        db,
+        class_id,
+        source_type="web",
+        title="Synthetic observations",
+        url="https://synthetic.invalid/citation",
+        snapshot="The survey measured ridership.",
+        excerpts=["The survey measured ridership."],
+    )
+    plan = writer_plans.get_active_plan(db, job.artifact_id)
+    writer_plans.update_plan_section(db, plan["id"], "1", source_ids=[source["id"]])
+    block = live_drafts.get_live_suggestion(db, sid)["blocks"][0]
+    reference = source["id"] if marker == "known" else 999999
+    live_drafts.model_update_block(
+        db,
+        sid,
+        block["stable_key"],
+        content=block["content"] + f" [@{reference}]",
+        status="complete",
+    )
+    writer_runs.checkpoint(db, job.run_id, stage="finalizing")
+    writer_pipeline.run_pass(job)
+    status = client.get(f"/api/drafts/{job.artifact_id}/status").json()
+    if marker == "known":
+        assert status["run_status"] == "completed"
+        proposal = client.get(f"/api/drafts/{job.artifact_id}/pending").json()["proposed_content"]
+        assert f"[@lyra:{reference}]" in proposal
+        assert f"[@{reference}]" not in proposal
+    else:
+        assert status["run_status"] == "failed"
+        assert client.get(f"/api/drafts/{job.artifact_id}/pending").json() is None
+    assert client.get(f"/api/drafts/{job.artifact_id}").json()["body"] == body

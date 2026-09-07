@@ -35,6 +35,9 @@ SCENARIOS = (
     "restart_inference",
     "restart_between_sections",
     "restart_review",
+    "restart_persistence",
+    "edit_restart",
+    "edit_cancel_retry",
     "cancel_retry",
     "rate_limit",
     "transient",
@@ -382,6 +385,68 @@ def deterministic_metrics(
     }
 
 
+def section_boundary(
+    status: dict[str, Any],
+    live: dict[str, Any] | None,
+    operation: str,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Require a finished SECTION, not merely a finished paragraph or reviewer lens."""
+    if operation != "pass":
+        return None
+    selected = payload.get("sections", [])
+    if selected:
+        done = status.get("problems_done") or 0
+        if len(selected) > 1 and 0 < done < len(selected):
+            return {
+                "kind": "selected_section_counter",
+                "selected_sections": selected,
+                "completed_section_count": done,
+                "next_selected_section": selected[done],
+            }
+        return None
+    if not live or live.get("run_id") != status.get("run_id"):
+        return None
+    blocks = live.get("blocks", [])
+    unfinished = next((i for i, b in enumerate(blocks) if b.get("status") != "complete"), None)
+    if unfinished is None or unfinished == 0:
+        return None
+    previous = blocks[unfinished - 1].get("section_ref")
+    following = blocks[unfinished].get("section_ref")
+    if not previous or not following or previous == following:
+        return None
+    preceding = [b for b in blocks if b.get("section_ref") == previous]
+    if not preceding or any(b.get("status") != "complete" for b in preceding):
+        return None
+    return {
+        "kind": "complete_section_before_next_unfinished_section",
+        "completed_section_ref": previous,
+        "next_section_ref": following,
+        "completed_block_ids": [b["id"] for b in preceding],
+        "first_unfinished_block_id": blocks[unfinished]["id"],
+        "live_snapshot": live,
+    }
+
+
+def retained_user_edit(edit: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    live_blocks = (after.get("live_suggestion") or {}).get("blocks", [])
+    historical = after.get("durable_rows", {}).get("live_draft_blocks", [])
+
+    def retained(block: dict[str, Any]) -> bool:
+        return (
+            block.get("content") == edit["edited_content"]
+            and (block.get("user_revision") or 0) >= edit["user_revision"]
+        )
+
+    return {
+        "current_live_user_edit_preserved": any(retained(b) for b in live_blocks),
+        "historical_user_edit_preserved": any(
+            b.get("id") == edit["block_id"] and retained(b) for b in historical
+        ),
+        "historical_matching_block_ids": [b["id"] for b in historical if retained(b)],
+    }
+
+
 def run_case(
     args: argparse.Namespace,
     case: dict[str, Any],
@@ -466,25 +531,91 @@ def run_case(
                 if provider
                 else active and time.monotonic() - started > args.interrupt_after
             )
+            boundary = None
+            live = None
+            if active and not evidence["intervention_observed"]:
+                if scenario in ("restart_between_sections", "edit_restart", "edit_cancel_retry"):
+                    live = backend.request("GET", f"/api/drafts/{aid}/live-suggestion")
+                if scenario == "restart_between_sections":
+                    boundary = section_boundary(status, live, operation, payload)
+                elif (
+                    scenario in ("edit_restart", "edit_cancel_retry")
+                    and operation == "pass"
+                    and live
+                ):
+                    complete = next(
+                        (
+                            b
+                            for b in live.get("blocks", [])
+                            if b.get("status") == "complete"
+                            and b.get("kind") == "paragraph"
+                            and b.get("content")
+                        ),
+                        None,
+                    )
+                    if live.get("run_id") == status.get("run_id") and complete:
+                        boundary = {
+                            "kind": "completed_live_block_before_user_edit",
+                            "block": complete,
+                            "live_snapshot": live,
+                        }
+                elif scenario == "restart_persistence" and operation == "review":
+                    persisted = backend.request("GET", f"/api/drafts/{aid}/comments")
+                    initial_ids = {c["id"] for c in evidence["before"]["comments"]}
+                    added = [c for c in persisted if c["id"] not in initial_ids]
+                    if added:
+                        boundary = {
+                            "kind": "new_comment_observed_via_http",
+                            "new_comment_ids": [c["id"] for c in added],
+                            "comments_snapshot": persisted,
+                        }
             trigger = (
                 (scenario in ("restart_inference", "cancel_retry") and observed_inference)
-                or (
-                    scenario == "restart_between_sections"
-                    and (status.get("problems_done") or 0) > 0
-                )
+                or boundary is not None
                 or (
                     scenario == "restart_review"
                     and "review" in str(status.get("stage_detail", "")).lower()
                 )
             )
             if trigger and active and not evidence["intervention_observed"]:
+                if boundary and scenario in ("edit_restart", "edit_cancel_retry"):
+                    block = boundary["block"]
+                    edited = block["content"].rstrip() + (
+                        " I want this paragraph to keep my uncertainty visible rather than "
+                        "sound more certain than the evidence allows."
+                    )
+                    updated = backend.request(
+                        "PATCH",
+                        f"/api/drafts/{aid}/live-suggestion/blocks/{block['id']}",
+                        {"expected_revision": block["revision"], "content": edited},
+                    )
+                    evidence["user_edit"] = {
+                        "block_id": block["id"],
+                        "stable_key": block.get("stable_key"),
+                        "original_content": block["content"],
+                        "edited_content": updated["content"],
+                        "user_revision": updated["user_revision"],
+                        "original_revision": block["revision"],
+                        "edited_revision": updated["revision"],
+                    }
                 evidence["intervention_observed"] = True
                 evidence["intervention_boundary"] = status
+                if boundary:
+                    evidence["observed_boundary"] = boundary
                 evidence["boundary_evidence"] = (
                     "provider_request_observed" if provider else "active_status_elapsed_proxy"
                 )
                 evidence["at_interruption"] = capture(backend, aid, cid)
-                if scenario == "cancel_retry":
+                captured_status = evidence["at_interruption"]["status"].get("run_status")
+                if captured_status not in ("queued", "running", "cancel_requested"):
+                    evidence["intervention_observed"] = False
+                    evidence["not_run_reason"] = (
+                        "Run settled before the observed boundary could be interrupted."
+                    )
+                    continue
+                if boundary:
+                    evidence["boundary_evidence"] = boundary["kind"]
+                if scenario in ("cancel_retry", "edit_cancel_retry"):
                     backend.request("POST", f"/api/drafts/{aid}/cancel")
                 else:
                     backend.restart()
@@ -493,7 +624,7 @@ def run_case(
             if status.get("run_status") in TERMINAL:
                 if (
                     evidence["intervention_observed"]
-                    and scenario.startswith(("restart_", "cancel_"))
+                    and scenario.startswith(("restart_", "cancel_", "edit_"))
                     and status.get("run_status") != "completed"
                     and not retry_started
                 ):
@@ -511,6 +642,10 @@ def run_case(
             backend.start()
         evidence["after"] = capture(backend, aid, cid)
         evidence["deterministic"] = deterministic_metrics(case, body, evidence["after"])
+        if evidence.get("user_edit"):
+            evidence["deterministic"].update(
+                retained_user_edit(evidence["user_edit"], evidence["after"])
+            )
         if provider and scenario in (
             "rate_limit",
             "transient",
@@ -525,6 +660,18 @@ def run_case(
                 evidence["not_run_reason"] = (
                     "Requested fault boundary was not reached by this transport."
                 )
+        evidence["scenario_status"] = (
+            "control"
+            if scenario == "uninterrupted"
+            else "observed"
+            if evidence["intervention_observed"]
+            else "not_run"
+        )
+        if evidence["scenario_status"] == "not_run":
+            evidence.setdefault(
+                "not_run_reason",
+                "The requested durable boundary was not observed while the run was active.",
+            )
         evidence["status"] = "recorded"
     except Exception as exc:
         evidence["status"] = "blocked"
@@ -695,6 +842,7 @@ def main(argv: list[str] | None = None) -> int:
                         "file": filename,
                         "run_id": evidence.get("after", {}).get("status", {}).get("run_id"),
                         "intervention_observed": evidence["intervention_observed"],
+                        "scenario_status": evidence.get("scenario_status", "blocked"),
                     }
                 )
                 (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n")

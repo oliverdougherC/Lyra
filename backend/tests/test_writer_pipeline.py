@@ -1448,6 +1448,8 @@ def test_parallel_research_and_drafting_use_the_same_inputs_and_land_as_serial(
     writer_pipeline.run_pass(writer_pipeline.PassJob(serial_id))
 
     db.execute("delete from writer_source_excerpts where source_id = ?", (source_id,))
+    # Replay the same synthetic identifiers, including preserved excerpt provenance.
+    db.execute("delete from sqlite_sequence where name = 'writer_source_excerpts'")
     db.commit()
     mode = "parallel"
     db.execute("update settings set parallel_requests = 1, parallel_concurrency = 2 where id = 1")

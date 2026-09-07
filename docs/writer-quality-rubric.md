@@ -175,3 +175,15 @@ IDs to match the saved ledger. Structured calls request direct output through th
 optional thinking control. If a compatible endpoint explicitly rejects that field with HTTP 400,
 the same captured request retries once without it; other failures retain their prior semantics.
 The schema and source-validation contract are not downgraded by that field negotiation.
+
+A saved plan does not replace the assignment or student prose: both are mandatory live-generation
+context and are preflighted before research. Targeted critiques read the current nonstale proposal
+and receive the original student requirements; later corrections cannot overrule those requirements.
+Research can inspect bounded saved-source context with explicit omission and revision labels.
+Model-owned live blocks normalize known numeric citation shorthand to the application's marker;
+unknown references stop publication. User-edited text is not silently reformatted.
+
+A matching failed or cancelled full-pass retry retains the previous live blocks, user revisions,
+and reviewed-work checkpoint in its current successor suggestion. This is conservative: changed
+request, depth, original body, plan, brief, provider configuration, or source state starts fresh
+instead of mixing incompatible work. Prior rows are retained; no terminal run is resurrected.

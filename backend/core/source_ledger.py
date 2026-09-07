@@ -1,6 +1,7 @@
 """Per-class source ledger shared by research, drafting, critique, and review."""
 
 import hashlib
+import re
 import sqlite3
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -28,6 +29,58 @@ _SOURCE_COLUMNS = (
 _PROMPT_SOURCE_COLUMNS = (
     "id, class_id, source_type, document_id, url, title, accessed_at, current_revision_id"
 )
+
+
+def normalize_model_citations(text: str, allowed_source_ids: Sequence[int]) -> str:
+    """Validate model-owned references, canonicalizing known numeric shorthand only."""
+    allowed = set(allowed_source_ids)
+
+    def replace(match: re.Match[str]) -> str:
+        marker = re.fullmatch(r"(?:lyra:)?([0-9]+)", match.group(1))
+        if match.group(2) != "]" or marker is None or int(marker.group(1)) not in allowed:
+            raise ValueError("The model cited an unknown or invalid source; saved prose was kept.")
+        return f"[@lyra:{int(marker.group(1))}]"
+
+    return re.sub(r"\[@([^\]\n]*)(\]|(?=\n)|$)", replace, text)
+
+
+def saved_source_context(
+    conn: sqlite3.Connection, class_id: int, source_ids: Sequence[int]
+) -> list[dict[str, object]]:
+    """Bounded current snapshot candidates; relied-on historical excerpts stay separate."""
+    context: list[dict[str, object]] = []
+    for source_id in dict.fromkeys(source_ids):
+        source = get_source(conn, source_id, class_id=class_id)
+        revision_id = source.get("current_revision_id")
+        revision = None
+        content = ""
+        if revision_id is not None:
+            row = conn.execute(
+                "select id, revision, snapshot, accessed_at, truncated "
+                "from writer_source_revisions where source_id = ? and id = ?",
+                (source_id, revision_id),
+            ).fetchone()
+            if row is not None:
+                revision = dict(row)
+                content = str(revision["snapshot"] or "")
+        elif source["source_type"] == COURSE:
+            content = str(source.get("snapshot") or "")
+        context.append(
+            {
+                "source_id": source_id,
+                "title": source["title"],
+                "source_revision_id": revision_id,
+                "revision": revision["revision"] if revision else None,
+                "accessed_at": revision["accessed_at"] if revision else source["accessed_at"],
+                "provenance": "immutable_revision" if revision else "unversioned_or_unavailable",
+                "content": content[:4000],
+                "omitted": len(content) > 4000,
+                "snapshot_truncated": bool(revision["truncated"]) if revision else None,
+                "evidence_unavailable": not content.strip(),
+                "note": "Current saved context only. Omitted content is not evidence of absence.",
+            }
+        )
+    return context
 
 
 def _normalize_url(url: str) -> str:

@@ -15,6 +15,7 @@ from scripts.eval_writer import (
     isolated_environment,
     redact,
     run_case,
+    section_boundary,
     seed,
 )
 from scripts.writer_eval_provider import FaultProvider
@@ -60,7 +61,9 @@ def test_config_requires_explicit_remote_consent():
         configuration(args)
 
 
-@pytest.mark.parametrize("scenario", ["uninterrupted", "restart_inference", "cancel_retry"])
+@pytest.mark.parametrize(
+    "scenario", ["uninterrupted", "restart_inference", "cancel_retry", "restart_persistence"]
+)
 def test_durable_http_review_has_real_run_id_and_preserves_prose(scenario):
     provider = FaultProvider(delay=0.01)
     case = {
@@ -107,6 +110,11 @@ def test_durable_http_review_has_real_run_id_and_preserves_prose(scenario):
     if scenario != "uninterrupted":
         assert result["intervention_observed"]
     assert result["deterministic"]["duplicate_comment_signatures"] == 0
+    if scenario == "restart_persistence":
+        assert result["observed_boundary"]["kind"] == "new_comment_observed_via_http"
+        ids = result["observed_boundary"]["new_comment_ids"]
+        assert ids
+        assert set(ids) <= {c["id"] for c in result["after"]["comments"]}
 
 
 def test_redacts_nested_provider_echoes_without_scrubbing_synthetic_sources():
@@ -175,3 +183,81 @@ def test_course_source_deletion_uses_http_and_preserves_saved_evidence(tmp_path)
         )
     finally:
         backend.stop()
+
+
+def test_section_boundary_does_not_confuse_a_paragraph_with_a_section():
+    status = {"run_id": 7, "problems_done": 1}
+    live = {
+        "run_id": 7,
+        "blocks": [
+            {"id": 1, "section_ref": "1", "status": "complete"},
+            {"id": 2, "section_ref": "1", "status": "drafting"},
+            {"id": 3, "section_ref": "2", "status": "pending"},
+        ],
+    }
+    assert section_boundary(status, live, "pass", {}) is None
+    live["blocks"][1]["status"] = "complete"
+    boundary = section_boundary(status, live, "pass", {})
+    assert boundary["completed_section_ref"] == "1"
+    assert boundary["next_section_ref"] == "2"
+    assert boundary["completed_block_ids"] == [1, 2]
+    assert section_boundary(status, live, "review", {}) is None
+    assert section_boundary(status, {**live, "run_id": 6}, "pass", {}) is None
+    assert (
+        section_boundary(status, None, "pass", {"sections": ["1", "2"]})["kind"]
+        == "selected_section_counter"
+    )
+    assert section_boundary(status, None, "review", {"sections": ["1", "2"]}) is None
+
+
+@pytest.mark.parametrize(
+    "scenario", ["restart_between_sections", "edit_restart", "edit_cancel_retry"]
+)
+def test_live_http_section_boundary_and_user_edit_survive_restart(scenario):
+    corpus = json.loads((ROOT / "scripts/eval_corpora/writer_quality.v1.json").read_text())
+    case = next(c for c in corpus["cases"] if c["id"] == "full_live_draft_from_student_notes")
+    provider = FaultProvider(delay=0.2)
+    args = argparse.Namespace(
+        source_root=ROOT,
+        backend_executable=None,
+        dimensions=["student_voice"],
+        context_window=32768,
+        allow_remote=False,
+        api_key_env="UNUSED_EVAL_KEY",
+        timeout=30,
+        interrupt_after=0.1,
+    )
+    try:
+        result = run_case(
+            args,
+            case,
+            scenario,
+            {"endpoint_url": provider.endpoint, "model": "synthetic-writer-v1"},
+            provider,
+        )
+    finally:
+        provider.close()
+    assert result["status"] == "recorded", result
+    assert result["intervention_observed"], result
+    assert result["deterministic"]["body_unchanged"]
+    assert result["after"]["status"]["run_id"] >= 1
+    if scenario == "restart_between_sections":
+        boundary = result["observed_boundary"]
+        assert boundary["completed_section_ref"] != boundary["next_section_ref"]
+        assert boundary["kind"] == "complete_section_before_next_unfinished_section"
+    else:
+        assert result["user_edit"]["user_revision"] > 0
+        assert result["user_edit"]["edited_content"] != result["user_edit"]["original_content"]
+        assert result["deterministic"]["current_live_user_edit_preserved"], result
+        assert result["deterministic"]["historical_user_edit_preserved"], result
+        if scenario == "edit_cancel_retry":
+            assert result["after_interruption"]["status"]["run_status"] == "cancelled"
+            predecessor = result["after_interruption"]["status"]["run_id"]
+            successor = result["after"]["status"]["run_id"]
+            assert successor != predecessor
+            assert result["after"]["status"]["run_status"] == "completed", result
+            assert result["after"]["live_suggestion"]["run_id"] == successor
+            assert any(
+                b["user_revision"] > 0 and b["content"] == result["user_edit"]["edited_content"]
+                for b in result["after"]["live_suggestion"]["blocks"]
+            )

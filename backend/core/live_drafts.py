@@ -9,9 +9,9 @@ without mutating the document body.
 import hashlib
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
-from backend.core import artifacts, mathnorm
+from backend.core import artifacts, mathnorm, writer_runs
 from backend.core.errors import ConflictError, NotFoundError
 
 NOT_A_LIVE_SUGGESTION_MESSAGE = "That live suggestion does not exist."
@@ -219,6 +219,102 @@ def create_live_suggestion(
             conn.rollback()
         raise
     return get_live_suggestion(conn, suggestion_id)
+
+
+def resume_previous_suggestion(
+    conn: sqlite3.Connection,
+    suggestion_id: int,
+    generation_identity: Callable[[], dict[str, object]],
+) -> bool:
+    """Copy compatible failed work into its successor without reviving the old run.
+
+    The fingerprint callback reads current plan/brief/source state under the same
+    writer lock as ownership, base validation, block copying and checkpoint publication.
+    Old suggestions without a fingerprint are deliberately ineligible.
+    """
+    try:
+        conn.execute("begin immediate")
+        _require_model_ownership(conn, suggestion_id)
+        current = get_live_suggestion(conn, suggestion_id)
+        run = writer_runs.get_run(conn, int(current["run_id"]))
+        previous_row = conn.execute(
+            "select id from writer_runs where artifact_id = ? and id < ? order by id desc limit 1",
+            (current["artifact_id"], run["id"]),
+        ).fetchone()
+        if current["blocks"] or previous_row is None or run["job_kind"] != writer_runs.PASS:
+            conn.rollback()
+            return False
+        previous = writer_runs.get_run(conn, int(previous_row["id"]))
+        checkpoint = previous["checkpoint"]
+        if (
+            previous["status"] not in (writer_runs.FAILED, writer_runs.CANCELLED)
+            or previous["job_kind"] != writer_runs.PASS
+            or previous["depth"] != run["depth"]
+            or previous["request"] != run["request"]
+            or not isinstance(checkpoint, dict)
+            or checkpoint.get("stage") not in {"drafting", "transitions", "reviewing", "finalizing"}
+        ):
+            conn.rollback()
+            return False
+        old = get_live_suggestion_for_run(conn, int(previous["id"]))
+        body = str(_body_part(conn, int(current["artifact_id"]))["content"])
+        if (
+            old is None
+            or not old["blocks"]
+            or old["stage"] != checkpoint["stage"]
+            or old["base_hash"] != current["base_hash"]
+            or old["base_hash"] != _sha256(str(old["base_content"]))
+            or current["base_hash"] != _sha256(str(current["base_content"]))
+            or current["base_hash"] != _sha256(body)
+        ):
+            conn.rollback()
+            return False
+        expected = generation_identity()
+        if not expected or any(
+            not isinstance(block["metadata"], dict)
+            or block["metadata"].get("generation_identity") != expected
+            for block in old["blocks"]
+        ):
+            conn.rollback()
+            return False
+        conn.execute(
+            "insert into live_draft_blocks "
+            "(suggestion_id, stable_key, section_ref, paragraph_ordinal, kind, heading, content, "
+            "status, target_words, summary, context_json, metadata_json, revision, user_revision) "
+            "select ?, stable_key, section_ref, paragraph_ordinal, kind, heading, content, "
+            "status, target_words, summary, context_json, metadata_json, revision, user_revision "
+            "from live_draft_blocks where suggestion_id = ? order by paragraph_ordinal, id",
+            (suggestion_id, old["id"]),
+        )
+        checkpoint = {**checkpoint, "resumed_from_run_id": previous["id"]}
+        conn.execute(
+            "update writer_runs set checkpoint_json = ?, updated_at = datetime('now') where id = ?",
+            (_json(checkpoint), run["id"]),
+        )
+        conn.execute(
+            "update live_draft_suggestions set stage = ?, status = 'running', "
+            "detail = 'Resuming saved paragraphs from the previous attempt', "
+            "version = version + 1, "
+            "updated_at = datetime('now') where id = ?",
+            (checkpoint["stage"], suggestion_id),
+        )
+        settled = sum(
+            bool(str(block["content"]).strip())
+            and (
+                block["status"] in {"complete", "drafted", "revised"}
+                or bool(block["user_revision"])
+            )
+            for block in old["blocks"]
+        )
+        conn.execute(
+            "update artifacts set problems_total = ?, problems_done = ? where id = ?",
+            (len(old["blocks"]), settled, current["artifact_id"]),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def get_live_suggestion(conn: sqlite3.Connection, suggestion_id: int) -> dict[str, object]:
