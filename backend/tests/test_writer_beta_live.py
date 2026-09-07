@@ -270,13 +270,33 @@ def test_schema_calls_reserve_output_for_the_requested_artifact(monkeypatch):
     seen = []
 
     async def complete(*args, **kwargs):
-        seen.append(kwargs["enable_thinking"])
+        seen.append((kwargs["max_tokens"], kwargs["enable_thinking"]))
         return '{"summary":"Evidence checked","issues":[]}'
 
     monkeypatch.setattr(writer_pipeline.client, "complete", complete)
     writer_pipeline._complete(
-        TutorConfig("http://127.0.0.1:9/v1", None, "fixture", 8192),
+        TutorConfig("http://127.0.0.1:9/v1", None, "fixture", 262144),
         [{"role": "user", "content": "Return the requested structured assessment."}],
         schema=writer_pipeline.prompts.OVERALL_ASSESSMENT_SCHEMA,
     )
-    assert seen == [False]
+    assert seen == [(4096, False)]
+
+
+def test_research_schema_uses_the_same_id_type_as_saved_evidence(db, class_id):
+    from backend.core import source_ledger
+
+    source = source_ledger.upsert_source(
+        db,
+        class_id,
+        source_type="web",
+        title="Synthetic evidence",
+        url="https://synthetic.invalid/id-contract",
+        snapshot="Measured trips, not attendance.",
+    )
+    assert isinstance(source["id"], int)
+    assert (
+        writer_pipeline.prompts.RESEARCH_NOTES_SCHEMA.schema["properties"]["source_ids"]["items"][
+            "type"
+        ]
+        == "integer"
+    )

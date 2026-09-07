@@ -1739,7 +1739,7 @@ RESEARCH_NOTES_SCHEMA = JsonSchema(
         "type": "object",
         "properties": {
             "notes": {"type": "array", "items": {"type": "string"}},
-            "source_ids": {"type": "array", "items": {"type": "string"}},
+            "source_ids": {"type": "array", "items": {"type": "integer"}},
             "gaps": {"type": "array", "items": {"type": "string"}},
             "relied_on": {
                 "type": "array",

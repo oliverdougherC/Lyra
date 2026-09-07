@@ -891,6 +891,25 @@ async def _post_constrained(
         try:
             response = await client.post(url, json=body)
             if (
+                response.status_code == _REFUSED
+                and "chat_template_kwargs" in body
+                and any(
+                    field in response.text.lower()
+                    for field in ("chat_template_kwargs", "enable_thinking")
+                )
+            ):
+                # Some compatible servers reject this optional local-model field.
+                # Retry this same request once without it before classifying a JSON
+                # format refusal: an error may call the unknown field a schema error.
+                body.pop("chat_template_kwargs")
+                enable_thinking = None
+                response = await client.post(url, json=body)
+                if response.status_code == _REFUSED and any(
+                    field in response.text.lower()
+                    for field in ("chat_template_kwargs", "enable_thinking")
+                ):
+                    response.raise_for_status()
+            if (
                 response.status_code in _REFUSAL_STATUSES
                 and level != JSON_UNCONSTRAINED
                 and (response.status_code != _REFUSED or _names_a_format(response.text))

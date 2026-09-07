@@ -168,3 +168,10 @@ explicit immutable revision when supplied. Pages are bounded and disclose omitte
 missing historical snapshot never falls forward to newer evidence. Selected excerpts are not a
 complete source, so an uninspected passage must not be treated as absent. Courses containing only
 saved ledger evidence no longer start an embedding runtime to search an empty indexed scope.
+
+Structured writer outputs are capped at 4,096 tokens (or the smaller existing reserve); wide
+input windows do not imply unbounded planning output. The research schema uses integer source
+IDs to match the saved ledger. Structured calls request direct output through the existing
+optional thinking control. If a compatible endpoint explicitly rejects that field with HTTP 400,
+the same captured request retries once without it; other failures retain their prior semantics.
+The schema and source-validation contract are not downgraded by that field negotiation.

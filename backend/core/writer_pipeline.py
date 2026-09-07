@@ -457,6 +457,10 @@ def _complete(
     """
     reserve = budget.generation_reserve(config.context_window)
     max_tokens = min(budget.tokens_for_words(target_words), reserve) if target_words else reserve
+    if schema is not None:
+        # A wide input window does not call for a book-sized planning/assessment
+        # object. Keep structured stages finite without relaxing cutoff validation.
+        max_tokens = min(max_tokens, 4096)
     timeout = _deadline_timeout()
     _preflight_request(config, messages, max_tokens, schema)
     return asyncio.run(
@@ -472,8 +476,6 @@ def _complete(
                 fail_on_truncation=truncated is None,
                 schema=schema,
                 temperature=client.DETERMINISTIC_TEMPERATURE if schema else None,
-                # Schema stages need their bounded output for the requested artifact.
-                # Do not let endpoint-default reasoning exhaust it before emitting JSON.
                 enable_thinking=False
                 if schema is not None and enable_thinking is None
                 else enable_thinking,
