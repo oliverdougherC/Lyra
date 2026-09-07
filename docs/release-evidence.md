@@ -1,5 +1,14 @@
 # Beta release evidence ledger
 
+## September 7 serial integration preparation
+
+The [serial rehearsal packet](integration-preparation-2026-09-07.md) reconciles the four anchored
+reviews and the latest Linear project update. Repository merges remain unauthorized. The
+reviewed PLA-486 quota fix is included in the rehearsal; an actual combined quiz-continuation
+cache defect was reproduced and repaired separately. Local combined checks are distinct from
+the anchors' CI and from a future post-merge immutable candidate. Historical receipts below
+remain unchanged.
+
 ## Current reconciliation — September 6, 2026
 
 **Decision: NO-GO for public promotion.** Current fetched main is
