@@ -36,7 +36,7 @@
     "contract version moves, the corpus needs a re-read: a case written against the",
     "Socratic contract grades the teaching contract with the wrong ruler."
   ],
-  "corpus_version": "1.1.0",
+  "corpus_version": "1.2.0",
   "prompt_contract_version": "2",
   "dimensions": [
     "directness",
@@ -159,7 +159,7 @@
       ],
       "context": [],
       "must": [
-        "Reads the attempt and names the actual error: h(t-tau) = e^{-(t-tau)} u(t-tau) depends on tau, so e^{-t} cannot be treated as a constant and pulled out of the integral; the integrand is e^{-(t-tau)}",
+        "Names the actual error: h(t-tau) = e^{-(t-tau)} u(t-tau), so the integrand retains the factor e^{tau}. It is valid to pull e^{-t} outside an integral over tau, but invalid to drop e^{tau}.",
         "Acknowledges what the attempt gets right - setting up the integral and the limits for 0 <= t <= 1 - before or alongside the correction"
       ],
       "must_not": [

@@ -1,0 +1,63 @@
+{
+  "version": "solver-beta-2026-09-06-v2",
+  "rubric_version": "solver-critical-v1",
+  "critical_criteria": [
+    "Every requested part answered correctly",
+    "Units and assumptions explicit where required",
+    "No unsupported numeric certainty",
+    "Verification claims supported by relevant successful tools; prose is not mechanically verified",
+    "Segmentation preserves every question and dependency"
+  ],
+  "cases": [
+    {
+      "id": "rate-units",
+      "split": "development",
+      "statement": "A cyclist travels 7.5 km in 25 minutes at constant speed. Find the speed in metres per second.",
+      "expected": "5 m/s; convert km to m and minutes to seconds"
+    },
+    {
+      "id": "stats-multipart",
+      "split": "development",
+      "statement": "A survey records daily reading times of 2, 4, 4, and 10 minutes.",
+      "parts": [
+        [
+          "(a)",
+          "Calculate the mean time, with units."
+        ],
+        [
+          "(b)",
+          "Calculate the median, with units."
+        ],
+        [
+          "(c)",
+          "Which measure better describes a typical observation here and why?"
+        ]
+      ],
+      "expected": "(a) 5 minutes; (b) 4 minutes; (c) median because 10 raises mean"
+    },
+    {
+      "id": "biology-prose",
+      "split": "development",
+      "statement": "In a controlled plant experiment, only light exposure changes; soil, water, species and age are held constant. Explain why controlling those variables helps test whether light affects growth. Does a taller plant in the light group alone prove that light caused growth? Explain.",
+      "expected": "Controls reduce confounding; single observation alone not proof, variability/replication needed; no invented measurements"
+    },
+    {
+      "id": "rate-heldout",
+      "split": "held_out",
+      "statement": "A pump fills 1.8 litres in 45 seconds at a steady rate. Express its flow in millilitres per second and litres per minute.",
+      "expected": "40 mL/s and 2.4 L/min"
+    },
+    {
+      "id": "assumption-heldout",
+      "split": "held_out",
+      "statement": "A box has mass 12 kg. What is its weight? State any assumption needed; distinguish mass from weight.",
+      "expected": "Weight depends on gravity; assuming Earth g=9.8 or 9.81 m/s^2, 117.6 or 117.72 N (about 118 N); mass remains 12 kg"
+    },
+    {
+      "id": "history-heldout",
+      "split": "held_out",
+      "statement": "A historian finds a single letter by a factory owner praising working conditions. Explain why this letter alone cannot establish what conditions were like for all workers. Name two kinds of evidence that could strengthen or challenge its account.",
+      "expected": "Authorship/purpose/perspective and single-source limits; corroborate with worker accounts and independent records/inspections; no invented historical facts or numeric measurements"
+    }
+  ]
+}

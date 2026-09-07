@@ -1792,3 +1792,28 @@ def test_source_change_after_proposal_cannot_publish_stale_card_evidence(
     assert len(llm.calls) == 2
     assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.FAILED
     assert artifacts.list_parts(db, artifact_id) == []
+
+
+@pytest.mark.parametrize("bad_value", [True, 42, ["answer"], {"answer": "text"}])
+@pytest.mark.parametrize("field", ["front", "back"])
+def test_deck_rejects_nonstring_card_faces_before_ready(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM, bad_value: object, field: str
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    bad_card: dict[str, object] = {
+        "front": "A useful question?",
+        "back": "A useful answer",
+        "topic": "Topic",
+    }
+    bad_card[field] = bad_value
+    llm.replies = [
+        {"topics": ["Topic"]},
+        {"cards": [bad_card]},
+        {"cards": [{"front": "What is tested?", "back": "Valid string content", "topic": "Topic"}]},
+    ]
+    study.run_generation(_deck_job(artifact_id, document_id, cards_per_topic=1))
+    assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.READY
+    part = artifacts.list_parts(db, artifact_id)[0]
+    assert json.loads(str(part["content"]))["front"] == "What is tested?"
+    assert len(llm.calls) == 3

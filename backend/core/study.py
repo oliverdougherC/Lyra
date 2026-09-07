@@ -643,10 +643,10 @@ def _propose_topic_cards(
     for card in _json_list(reply, "cards"):
         if not isinstance(card, dict):
             continue
-        front = str(card.get("front") or "").strip()
-        back = str(card.get("back") or "").strip()
-        if front and back:
-            proposed.append({"front": front, "back": back})
+        front = card.get("front")
+        back = card.get("back")
+        if isinstance(front, str) and isinstance(back, str) and front.strip() and back.strip():
+            proposed.append({"front": front.strip(), "back": back.strip()})
     return proposed, kept_chunks
 
 
