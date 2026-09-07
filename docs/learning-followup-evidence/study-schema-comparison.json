@@ -1,0 +1,78 @@
+{
+  "comparison": "same retained messages and generation configuration; flashcards schema only changed",
+  "messages_sha256": "1d44204746ed7637212a32f371674d87948cc476903c7ea9f2844d3bb7745053",
+  "old_schema": {
+    "type": "object",
+    "properties": {
+      "cards": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "front": {
+              "type": "string"
+            },
+            "back": {
+              "type": "string"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "front",
+            "back",
+            "topic"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "cards"
+    ],
+    "additionalProperties": false
+  },
+  "new_schema": {
+    "type": "object",
+    "properties": {
+      "cards": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "front": {
+              "type": "string"
+            },
+            "back": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "front",
+            "back"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "cards"
+    ],
+    "additionalProperties": false
+  },
+  "old": {
+    "state": "failed",
+    "latency_seconds": 43.868,
+    "stop_reason": "length",
+    "completion_tokens": 8192
+  },
+  "schema_only": {
+    "state": "returned",
+    "latency_seconds": 26.257,
+    "stop_reason": "stop",
+    "completion_tokens": 4400
+  },
+  "human_review": "not run",
+  "note": "Explicit JSON shape prompt added after controlled comparison, for upcoming full-deck runs."
+}
