@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 /**
  * Global Vite/bootstrap error fallback. This component is intentionally independent of
@@ -106,6 +106,10 @@ body {
   font-weight: 500;
   cursor: pointer;
 }
+.gb-button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
 .gb-button:hover {
   background: var(--gb-accent-hover);
 }
@@ -120,10 +124,25 @@ export default function GlobalError({
   retry,
 }: {
   error: Error & { digest?: string }
-  retry: () => void
+  retry: () => void | boolean | Promise<void | boolean>
 }) {
   // `error` is deliberately unused: reading it is how a fallback would leak.
   void error
+  const retrying = useRef(false)
+  const [retryState, setRetryState] = useState<'idle' | 'pending' | 'failed' | 'recovered'>('idle')
+  async function tryAgain() {
+    if (retrying.current) return
+    retrying.current = true
+    setRetryState('pending')
+    try {
+      const result = await retry()
+      setRetryState(result === false ? 'failed' : 'recovered')
+    } catch {
+      setRetryState('failed')
+    } finally {
+      retrying.current = false
+    }
+  }
   const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null)
   const native = window.__TAURI__?.core?.invoke ?? window.__TAURI_INTERNALS__?.invoke
   async function showRecovery() {
@@ -155,10 +174,21 @@ export default function GlobalError({
       <style>{GLOBAL_ERROR_STYLES}</style>
       <div role="alert" className="gb-card">
         <h1>Something went wrong</h1>
-        <p>An unexpected error stopped Lyra from loading. Try again to reload.</p>
-        <button type="button" className="gb-button" onClick={retry}>
-          Try again
+        <p>An unexpected error stopped Lyra from loading. Try again to reopen the app.</p>
+        <button
+          type="button"
+          className="gb-button"
+          disabled={retryState === 'pending' || retryState === 'recovered'}
+          onClick={() => void tryAgain()}
+        >
+          {retryState === 'pending' ? 'Trying again…' : 'Try again'}
         </button>
+        <p role="status" aria-live="polite">
+          {retryState === 'pending' && 'Trying to start Lyra…'}
+          {retryState === 'failed' &&
+            'Lyra still could not start. Try again, or quit and reopen the app.'}
+          {retryState === 'recovered' && 'Recovered. Opening Lyra…'}
+        </p>
         {native && (
           <button type="button" className="gb-button" onClick={() => void showRecovery()}>
             Show previous Lyra app

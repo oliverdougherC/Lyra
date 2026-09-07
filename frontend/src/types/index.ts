@@ -738,6 +738,9 @@ export interface StudyArtifactRead {
   /** Null until generation has counted, so "not counted" differs from "none found". */
   problems_total: number | null
   problems_done: number
+  /** Active attempt for the current quiz snapshot; omitted by older backends. */
+  active_attempt_id?: number | null
+  answered_count?: number
   error_message: string | null
   created_at: string
   updated_at: string

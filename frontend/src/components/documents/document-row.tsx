@@ -30,7 +30,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { formatCount, formatFileSize, truncateMiddle } from '@/lib/format'
+import { formatCount, formatFileSize } from '@/lib/format'
 import { chatHandoffUrl } from '@/lib/handoff'
 import { isTerminal, useDocumentOutline, useDocumentStatus } from '@/lib/hooks/use-documents'
 import { useSettings } from '@/lib/hooks/use-settings'
@@ -187,18 +187,20 @@ export function DocumentRow({
             </span>
           ) : null}
           <FileIcon filename={document.filename} />
-          <span className="min-w-0 flex-1 truncate text-sm" title={document.filename}>
-            {truncateMiddle(document.filename)}
-          </span>
-          {!busy && state !== 'failed' ? (
-            <span className="text-text-tertiary shrink-0 text-xs tabular-nums">
-              {formatFileSize(document.byte_size)}
+          <span className="min-w-0 flex-1 text-sm">
+            <span className="block break-words [overflow-wrap:anywhere]">{document.filename}</span>
+            <span className="mt-1 flex flex-wrap items-center gap-2">
+              {!busy && state !== 'failed' ? (
+                <span className="text-text-tertiary shrink-0 text-xs tabular-nums">
+                  {formatFileSize(document.byte_size)}
+                </span>
+              ) : null}
+              <StateIndicator state={state} />
             </span>
-          ) : null}
-          <StateIndicator state={state} />
+          </span>
         </button>
 
-        <DropdownMenu>
+        <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
@@ -400,7 +402,7 @@ function ScannedPopover({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="text-info-text rounded-sm text-xs underline underline-offset-2 focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none"
+          className="text-info-text rounded-sm text-sm underline underline-offset-2 focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none"
         >
           {trigger}
         </button>
@@ -434,7 +436,7 @@ function ScannedPopover({
  */
 function PageFailureNotice({ count, onRetry }: { count: number; onRetry: () => void }) {
   return (
-    <p className="text-text-tertiary flex flex-wrap items-center gap-2 text-xs">
+    <p className="text-text-tertiary flex flex-wrap items-center gap-2 text-sm">
       <span>{count === 1 ? '1 page' : `${count} pages`} could not be read</span>
       <button
         type="button"
@@ -462,7 +464,7 @@ function DocumentOutline({ documentId }: { documentId: number }) {
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className="text-text-tertiary hover:text-text-secondary focus-visible:ring-ring/50 flex items-center gap-1 rounded-sm text-xs transition-colors focus-visible:ring-[3px] focus-visible:outline-none">
+      <CollapsibleTrigger className="text-text-tertiary hover:text-text-secondary focus-visible:ring-ring/50 flex items-center gap-1 rounded-sm text-sm transition-colors focus-visible:ring-[3px] focus-visible:outline-none">
         <ChevronRight
           className={cn('size-3 transition-transform', open && 'rotate-90')}
           aria-hidden
@@ -500,7 +502,7 @@ function DocumentOutline({ documentId }: { documentId: number }) {
                   // Indented by depth, so the shape of the book is visible at a glance
                   // rather than having to be read out of the paths.
                   style={{ paddingLeft: `${(section.depth - 1) * 0.75}rem` }}
-                  className="flex items-baseline gap-1.5 text-xs"
+                  className="flex items-baseline gap-1.5 text-sm"
                 >
                   {section.number ? (
                     <span className="text-text-tertiary shrink-0 tabular-nums">
@@ -509,7 +511,7 @@ function DocumentOutline({ documentId }: { documentId: number }) {
                   ) : null}
                   <span
                     className={cn(
-                      'min-w-0 truncate',
+                      'min-w-0 break-words [overflow-wrap:anywhere]',
                       section.depth === 1
                         ? 'text-text-secondary font-medium'
                         : 'text-text-tertiary',

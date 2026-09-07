@@ -72,8 +72,8 @@ export function SolutionRow({ classId, solution, onRename, onDelete }: SolutionR
         )}
       >
         <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="text-text-primary truncate font-medium">{solution.title}</span>
-          <span className="text-text-tertiary truncate text-xs">
+          <span className="text-text-primary break-words font-medium">{solution.title}</span>
+          <span className="text-text-tertiary break-words text-xs">
             {describeSolution(solution)} · {formatRelativeTime(solution.updated_at)}
           </span>
         </span>

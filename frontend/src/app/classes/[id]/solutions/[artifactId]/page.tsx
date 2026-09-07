@@ -134,18 +134,26 @@ export default function SolutionWorkspacePage() {
     )
   }
 
-  if (solution.isError) {
+  if (solution.isError && !solution.data) {
     return (
       <Alert variant="destructive">
         <AlertTitle>Could not load this solution set</AlertTitle>
         <AlertDescription>
           {solution.error instanceof ApiError ? solution.error.message : 'Something went wrong.'}
         </AlertDescription>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={solution.isFetching}
+          onClick={() => void solution.refetch()}
+        >
+          {solution.isFetching ? 'Retrying…' : 'Retry'}
+        </Button>
       </Alert>
     )
   }
 
-  const artifact = solution.data
+  const artifact = solution.data!
   // The poll is fresher than the detail query, so state comes from it when it has landed.
   const state = polledState ?? artifact.state
   const problemsTotal = status.data?.problems_total ?? artifact.problems_total
@@ -217,12 +225,32 @@ export default function SolutionWorkspacePage() {
         </>
       ) : (
         <header className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="font-heading text-text-primary min-w-0 truncate text-2xl tracking-tight">
+          <h1 className="font-heading text-text-primary min-w-0 flex-1 text-2xl tracking-tight break-words">
             {artifact.title}
           </h1>
           {deleteAction}
         </header>
       )}
+
+      {solution.isError ? (
+        <Alert variant="destructive" className={cn(workspace && 'shrink-0')}>
+          <AlertTitle>Could not refresh this solution set</AlertTitle>
+          <AlertDescription>
+            Showing the last loaded version.{' '}
+            {solution.error instanceof ApiError
+              ? solution.error.message
+              : 'Check your connection and try again.'}
+          </AlertDescription>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={solution.isFetching}
+            onClick={() => void solution.refetch()}
+          >
+            {solution.isFetching ? 'Retrying…' : 'Retry'}
+          </Button>
+        </Alert>
+      ) : null}
 
       {state === 'pending' || state === 'segmenting' ? (
         <SolveProgress
@@ -274,7 +302,7 @@ export default function SolutionWorkspacePage() {
               {errorMessage ?? 'Something went wrong while working on it.'}
             </AlertDescription>
           </Alert>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button onClick={handleStart} disabled={start.isPending}>
               {start.isPending ? 'Trying again' : 'Try again'}
             </Button>

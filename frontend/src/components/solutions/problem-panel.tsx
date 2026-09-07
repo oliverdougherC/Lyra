@@ -182,12 +182,12 @@ export function ProblemPanel({
             sub-part lines the model extracted. `statementLeadIn` cuts them off where the
             labels say the list began; `addsToStatement` covers what it could not cut.
             Between them, no sub-part is printed twice. */}
-        <MathText className="text-text-secondary text-sm">{leadIn}</MathText>
+        <MathText className="text-text-primary text-lg leading-relaxed">{leadIn}</MathText>
         {/* Only where the parts are read as one question. Where each is a question of its
             own, printing them here as a list and then again as headings below says the
             same five things twice, and the second time is the one carrying the answers. */}
         {!separate && (leadIn !== problem.content || addsToStatement(subParts, problem.content)) ? (
-          <ul className="text-text-secondary flex flex-col gap-1 text-sm">
+          <ul className="text-text-primary flex flex-col gap-2 text-lg leading-relaxed">
             {subParts.map(({ problem: part }) => (
               <li key={part.id} className="flex gap-2">
                 <span className="text-text-tertiary shrink-0">{part.label}</span>
@@ -278,7 +278,9 @@ function SolvedPart({
           <span className="text-text-primary shrink-0 text-sm font-medium tabular-nums">
             {problem.label ?? 'Part'}
           </span>
-          <MathText className="text-text-secondary min-w-0 text-sm">{problem.content}</MathText>
+          <MathText className="text-text-primary min-w-0 text-lg leading-relaxed">
+            {problem.content}
+          </MathText>
           {solving ? (
             <span className="text-text-tertiary inline-flex items-center gap-1.5 text-xs">
               <Spinner className="size-3" />

@@ -453,6 +453,7 @@ function expectNavigationFits(measurement: Measurement, width: number) {
 }
 
 const MATRIX = [
+  { width: 540, height: 600 },
   { width: 540, height: 720 },
   { width: 640, height: 760 },
   { width: 768, height: 700 },
@@ -473,7 +474,7 @@ for (const { width, height } of MATRIX) {
     await page.goto(`/#/classes/${CLASS_ID}`)
     await page.waitForLoadState('networkidle')
     await expect(page.getByRole('textbox', { name: /Ask about/ })).toBeVisible()
-    await expect(page.getByRole('button', { name: 'Practice now' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'New quiz' })).toBeVisible()
     const hub = await measure(page)
     expect(
       hub.scrollWidth - hub.innerWidth,
@@ -542,6 +543,7 @@ for (const { width, height } of MATRIX) {
  * must be usable when operated, not merely unclipped when measured.
  */
 const INTERACTION_MATRIX = [
+  { width: 540, height: 600 },
   { width: 540, height: 720 },
   { width: 768, height: 700 },
   { width: 1024, height: 768 },
@@ -644,7 +646,10 @@ test('temporary sidebar reveals the chosen destination immediately', async ({ pa
 })
 
 for (const { width, height } of INTERACTION_MATRIX) {
-  test(`${width}x${height}: the narrow window stays usable when operated`, async ({ page }) => {
+  test(`${width}x${height}: the narrow window stays usable when operated`, async ({
+    page,
+    browserName,
+  }) => {
     const pageErrors: string[] = []
     page.on('pageerror', (error) => pageErrors.push(error.message))
     await installClassMocks(page)
@@ -742,7 +747,8 @@ for (const { width, height } of INTERACTION_MATRIX) {
     await expect(page.getByRole('button', { name: 'Send message' })).toBeEnabled()
 
     // Keyboard operation stays intact: Tab from the composer reaches the send control.
-    await page.keyboard.press('Tab')
+    // macOS WebKit uses Option-Tab to include buttons when full keyboard access is off.
+    await page.keyboard.press(browserName === 'webkit' ? 'Alt+Tab' : 'Tab')
     await expect(page.getByRole('button', { name: 'Send message' })).toBeFocused()
 
     // The contextual agent work lives in the same conversation: the workspace chip, the

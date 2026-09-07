@@ -98,6 +98,7 @@ function mockAttemptLifecycle(quiz: QuizDetail, answers: AttemptAnswer[] = []) {
 }
 
 beforeEach(() => {
+  sessionStorage.clear()
   vi.restoreAllMocks()
 })
 
@@ -150,20 +151,22 @@ describe('QuizRunner', () => {
     // The link opens a fresh conversation with the question prefilled, not sent: the
     // words are generated, so the student sees them in the composer before they go.
     const link = screen.getByRole('link', {
-      name: 'Go over this with Lyra in a new tab. Your quiz stays open here.',
+      name: 'Go over this with Lyra',
     })
     const href = link.getAttribute('href') ?? ''
-    expect(href).toContain('/classes/1/chat?session=new&ask=')
+    expect(href).toContain('/#/classes/1/chat?session=new&ask=')
+    expect(link).not.toHaveAttribute('target', '_blank')
     expect(href).not.toContain('send=1')
     const ask = new URLSearchParams(href.split('?')[1]).get('ask') ?? ''
     expect(ask).toContain('What is the determinant of the identity matrix?')
     expect(ask).toContain('"Two"')
     expect(ask).toContain('"One"')
 
-    // Regression: an attempt in progress cannot be resumed once this tab navigates away,
-    // so the handoff must open elsewhere and leave the quiz exactly where it is.
-    expect(link).toHaveAttribute('target', '_blank')
-    expect(link).toHaveAttribute('rel', 'noopener')
+    await userEvent.click(link)
+    expect(JSON.parse(sessionStorage.getItem('lyra:quiz:9:help-return') ?? 'null')).toEqual({
+      attemptId: 10,
+      partId: 21,
+    })
 
     // The attempt itself was not restarted or abandoned by rendering the link.
     expect(api.startAttempt).toHaveBeenCalledTimes(1)
@@ -316,4 +319,80 @@ describe('QuizRunner remediation', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Next' }))
     expect(screen.getByRole('heading', { name: 'The capital of France is ...' })).toHaveFocus()
   })
+})
+
+it('restores the recorded reveal through repeated Ask history returns without submitting again', async () => {
+  mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]))
+  const { wrapper } = createWrapper()
+  const view = render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+  await userEvent.click(await screen.findByRole('button', { name: 'Two' }))
+  await screen.findByText('Not quite.')
+  await userEvent.click(screen.getByRole('link', { name: 'Go over this with Lyra' }))
+  view.unmount()
+  vi.mocked(api.startAttempt).mockResolvedValue({
+    attempt_id: 10,
+    question_part_ids: [21, 22],
+    question_count: 2,
+    answers: [{ part_id: 21, selected_index: 2, correct: false }],
+    finished: false,
+  })
+  const returned = render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+  expect(await screen.findByText('Not quite.')).toBeVisible()
+  expect(screen.getByText('Question 1 of 2')).toBeVisible()
+  expect(api.submitAnswer).toHaveBeenCalledTimes(1)
+  returned.unmount()
+  render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+  expect(await screen.findByText('Not quite.')).toBeVisible()
+  expect(screen.getByText('Question 1 of 2')).toBeVisible()
+  expect(api.submitAnswer).toHaveBeenCalledTimes(1)
+  await userEvent.click(screen.getByRole('button', { name: 'Next' }))
+  expect(screen.getByText('The capital of France is ...')).toBeVisible()
+  expect(api.submitAnswer).toHaveBeenCalledTimes(1)
+  expect(sessionStorage.getItem('lyra:quiz:9:help-return')).toBeNull()
+})
+
+it('ignores help return state from a different attempt', async () => {
+  sessionStorage.setItem('lyra:quiz:9:help-return', JSON.stringify({ attemptId: 8, partId: 21 }))
+  mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]), [
+    { part_id: 21, selected_index: 2, correct: false },
+  ])
+  render(<QuizRunner classId={1} quizId={9} />, { wrapper: createWrapper().wrapper })
+  expect(await screen.findByText('The capital of France is ...')).toBeVisible()
+  expect(screen.queryByText('Not quite.')).not.toBeInTheDocument()
+  expect(sessionStorage.getItem('lyra:quiz:9:help-return')).toBeNull()
+  expect(api.submitAnswer).not.toHaveBeenCalled()
+})
+
+it('clears help return state when starting over', async () => {
+  sessionStorage.setItem('lyra:quiz:9:help-return', JSON.stringify({ attemptId: 10, partId: 21 }))
+  mockAttemptLifecycle(quizWith([MCQ, FILL_BLANK]), [
+    { part_id: 21, selected_index: 2, correct: false },
+  ])
+  render(<QuizRunner classId={1} quizId={9} />, { wrapper: createWrapper().wrapper })
+  await screen.findByText('Not quite.')
+  await userEvent.click(screen.getByRole('button', { name: 'Start over' }))
+  expect(sessionStorage.getItem('lyra:quiz:9:help-return')).toBeNull()
+  expect(api.startAttempt).toHaveBeenLastCalledWith(9, true)
+})
+
+it('keeps the typed fill-blank answer when returning from Ask', async () => {
+  mockAttemptLifecycle(quizWith([FILL_BLANK]))
+  const { wrapper } = createWrapper()
+  const view = render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+  await userEvent.type(await screen.findByRole('textbox', { name: 'Your answer' }), 'Lyon')
+  await userEvent.click(screen.getByRole('button', { name: 'Check' }))
+  await screen.findByText('Not quite.')
+  await userEvent.click(screen.getByRole('link', { name: 'Go over this with Lyra' }))
+  view.unmount()
+  vi.mocked(api.startAttempt).mockResolvedValue({
+    attempt_id: 10,
+    question_part_ids: [22],
+    question_count: 1,
+    answers: [{ part_id: 22, selected_index: -1, correct: false }],
+    finished: false,
+  })
+  render(<QuizRunner classId={1} quizId={9} />, { wrapper })
+  await screen.findByText('Not quite.')
+  expect(screen.getByRole('textbox', { name: 'Your answer' })).toHaveValue('Lyon')
+  expect(api.submitAnswer).toHaveBeenCalledTimes(1)
 })
