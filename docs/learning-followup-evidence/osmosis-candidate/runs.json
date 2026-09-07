@@ -1,0 +1,57 @@
+{
+  "cases": {
+    "simpler-osmosis": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Osmosis is water moving through a membrane that only water can pass through.\n\nThe membrane lets water through but blocks the dissolved stuff (like salt or sugar). If one side has more dissolved stuff, water tends to move from the side with less dissolved stuff to the side with more. It keeps going until the two sides balance out.\n\nA concrete example: put a saltwater solution on one side of such a membrane and plain water on the other. Water will slowly cross into the saltwater side, diluting it, until the concentrations even out.\n\nThe one condition to keep in mind: this only happens when the membrane is selectively permeable \u2014 it has to let water through while blocking the solute. If the membrane lets everything through, you just get ordinary mixing, not osmosis.",
+      "generated_at": "2026-09-07T07:14:55+00:00",
+      "duration_seconds": 1.87,
+      "system_prompt_tokens": 1347,
+      "assembled_prompt_sha256": "2bbba18368ea72641e2a9f332a0f533bbcab3cbcdf15842d46a16aa691679341",
+      "assembled_system_prompt_sha256": "c914ba13ba9c2b9533770b8890c42ec1afefd950b5089eecb6bfe7d142d0cb3e",
+      "tool_schema_tokens": 1383,
+      "user": "That is too abstract. Explain it in plain words.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "2ee865c0da52c94c1f5aa056ea64a2e2de513e4e",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "f2b8dbb1e3bbf8ca2cbe21c640a767f7c040fb8644e7102b8a39d28f98c79a8d",
+          "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

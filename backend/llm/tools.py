@@ -423,11 +423,12 @@ def _clean(schema: object) -> object:
 _NUMBER_EXPRESSION = {
     "type": "string",
     "description": (
-        "A mathematical expression in plain notation, such as 3*x**2 + 1. Write every "
-        "multiplication: `2*x`, not `2x`. `u(t)` is the unit step and `delta(t)` the "
-        "impulse. Use `I` or `j` for the imaginary unit, never `i`. `oo` or `inf` is "
-        "infinity. `integrate(f, t, a, b)`, `diff(f, t)` and `limit(f, t, a)` may be used "
-        "inside an expression, which is how to compare an integral against a closed form."
+        "Plain math, e.g. 3*x**2 + 1. Write multiplication: `2*x`, not `2x`. "
+        "Use `exp(x)` or `E**x`: uppercase `E` is Euler's number; lowercase `e` is "
+        "an ordinary symbol. `I` or `j` is imaginary, never `i`; `oo` or `inf` is "
+        "infinity; `u(t)` is the unit step; `delta(t)` is the impulse. "
+        "`integrate(f, t, a, b)`, `diff(f, t)` and `limit(f, t, a)` work inside "
+        "expressions for comparison with closed forms."
     ),
 }
 
@@ -436,10 +437,9 @@ REGISTRY: dict[str, ToolDefinition] = {
     for definition in (
         _tool(
             "cas_evaluate",
-            "Simplify an expression, or check whether two expressions are equal. Use this "
-            "to check an identity or an algebraic step. When comparing, read `certain`: "
-            "if it is false the two could not be settled either way, which is not a "
-            "disagreement.",
+            "Simplify an expression or compare expressions to check identities/algebraic steps. "
+            "`ok` only means computation ran, not equality. Read `comparison_status` and "
+            "`interpretation`; `certain=false` means unsettled, not disagreement.",
             cas.evaluate,
             expression=_NUMBER_EXPRESSION,
             compare_to={

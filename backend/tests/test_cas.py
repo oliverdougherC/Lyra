@@ -402,3 +402,36 @@ def test_the_imaginary_unit_is_the_imaginary_unit_however_it_is_written() -> Non
     assert result.value["equal"] is True
     assert result.value["certain"] is True
     assert cas.evaluate("(2 + j)*(1 - 3*j)", "5 - 5*j").value["equal"] is True
+
+
+@pytest.mark.parametrize(
+    ("expression", "comparison", "status", "equal", "certain"),
+    [
+        ("x + 1", "x + 2", "mismatched", False, True),
+        ("(x + 1)**2", "x**2 + 2*x + 1", "matched", True, True),
+        ("sqrt(x**2)", "x", "unresolved", False, False),
+    ],
+)
+def test_computation_success_is_distinct_from_comparison_outcome(
+    expression: str, comparison: str, status: str, equal: bool, certain: bool
+) -> None:
+    result = cas.evaluate(expression, comparison)
+
+    assert result.ok is True
+    assert result.value["comparison_status"] == status
+    assert result.value["equal"] is equal
+    assert result.value["certain"] is certain
+    assert "submitted expressions" in result.value["interpretation"]
+
+
+def test_lowercase_e_is_not_silently_reinterpreted_as_eulers_number() -> None:
+    symbolic = cas.evaluate("diff(e**(-x), x)", "-e**(-x)")
+    exponential = cas.evaluate("diff(exp(-x), x)", "-exp(-x)")
+    uppercase = cas.evaluate("diff(E**(-x), x)", "-E**(-x)")
+
+    assert symbolic.value["comparison_status"] == "mismatched"
+    assert symbolic.value["equal"] is False
+    assert "log(e)" in symbolic.value["difference"]
+    assert exponential.value["comparison_status"] == "matched"
+    assert uppercase.value["comparison_status"] == "matched"
+    assert cas.evaluate("e + 1", "e + 2").value["difference"] == "-1"

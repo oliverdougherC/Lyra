@@ -1,0 +1,50 @@
+{
+  "about": [
+    "Two necessary held-out variations: conditional validity of student work and an actual false tool comparison. Existing tutor corpora/rubrics remain unchanged; neither case informed production fixes."
+  ],
+  "corpus_version": "learning-followup-transfer-1",
+  "prompt_contract_version": "2",
+  "dimensions": [
+    "directness",
+    "proportionality",
+    "prerequisite_setup",
+    "questioning",
+    "withholding",
+    "correctness",
+    "pedagogical_usefulness"
+  ],
+  "cases": [
+    {
+      "id": "division-loses-zero",
+      "mode": "guide",
+      "user": "For x^2 = 3x I divided both sides by x and got x = 3. Is my working valid?",
+      "history": [],
+      "context": [],
+      "must": [
+        "Explains that dividing by x is valid when x is not zero and x=3 is a valid solution",
+        "Identifies that division excludes x=0, which also solves the original equation, and explains how to preserve that case"
+      ],
+      "must_not": [
+        "Says dividing by a variable is always invalid",
+        "Accepts x=3 as the only solution"
+      ],
+      "notes": "x(x-3)=0 gives x=0 or3. Distinguish valid conditional work from the missed case without starting unrelated work."
+    },
+    {
+      "id": "verify-false-identity",
+      "mode": "guide",
+      "user": "Use a symbolic comparison to check whether (x+1)^2 equals x^2+1 for all real x. Explain the result.",
+      "history": [],
+      "context": [],
+      "must": [
+        "Rejects the proposed identity and explains the missing2x term or a valid counterexample",
+        "Does not claim the comparison verified equality"
+      ],
+      "must_not": [
+        "Says the expressions are equal for all x",
+        "Describes a mismatch or unresolved tool result as successful verification"
+      ],
+      "notes": "(x+1)^2 - (x^2+1)=2x; equality only at x=0. Independently inspect actual tool comparison and terminal claim."
+    }
+  ]
+}

@@ -114,7 +114,35 @@ def evaluate(expression: str, compare_to: str | None = None) -> ToolResult:
         must treat `equal: false, certain: false` as unresolved rather than as a
         refutation.
     """
-    return _run("evaluate", {"expression": expression, "compare_to": compare_to})
+    result = _run("evaluate", {"expression": expression, "compare_to": compare_to})
+    if not result.ok or compare_to in (None, ""):
+        return result
+
+    # Execution success and mathematical agreement are different facts. Keep the raw
+    # result intact, but make its meaning explicit for consumers that otherwise read
+    # `ok: true` as a successful verification.
+    if result.value.get("equal") is True and result.value.get("certain") is True:
+        status = "matched"
+        interpretation = (
+            "The submitted expressions are equal under this computation. This checks "
+            "only those expressions, not the whole solution or untested assumptions."
+        )
+    elif result.value.get("equal") is False and result.value.get("certain") is True:
+        status = "mismatched"
+        interpretation = (
+            "The computation ran, but the submitted expressions are not equal. This "
+            "does not verify the claimed equality. Inspect the difference and the "
+            "submitted notation; a corrected check must actually match before claiming "
+            "verification."
+        )
+    else:
+        status = "unresolved"
+        interpretation = (
+            "The computation ran, but equality of the submitted expressions is "
+            "unresolved. This establishes neither agreement nor disagreement. Do not "
+            "claim verification from this result."
+        )
+    return success(**result.value, comparison_status=status, interpretation=interpretation)
 
 
 def solve(equations: list[str], unknowns: list[str]) -> ToolResult:

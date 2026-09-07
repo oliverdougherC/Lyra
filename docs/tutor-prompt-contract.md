@@ -172,3 +172,13 @@ Inventory of the surfaces this pass examined, and the findings:
 candidate repeats, held-out transfer cases and separate independent-agent review. Corpus
 1.2.0 corrects an inaccurate factoring criterion; it is used for both baseline and candidate
 grading. Model self-judging is supporting evidence and cannot waive a critical semantic failure.
+
+## Contract follow-up — September 7
+
+The [bounded learning follow-up](learning-followup-evidence/README.md) distinguishes
+calculator execution from mathematical agreement, preserves conditional validity in attempt
+feedback, and records real before/after failures. Solver verification stays uncheckable when
+a transcript retains a false or unresolved comparison, even if the model says it agrees;
+a fresh coherent check is needed rather than inferring that a later unrelated success resolved it.
+This conservative rule also downgrades some valid floating-point-to-rational retries, recorded
+for human review. Guide language still requires semantic evaluation and is not mechanically certified.

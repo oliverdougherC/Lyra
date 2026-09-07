@@ -1286,3 +1286,41 @@ def test_joint_problem_verification_includes_every_requested_part(
     assert _STEM in asked[0]
     assert all(question in asked[0] for question in questions)
     assert "(a)" in asked[0] and "(b)" in asked[0]
+
+
+@pytest.mark.parametrize("certain", [True, False])
+@pytest.mark.parametrize("later_success", [False, True])
+def test_model_agreement_cannot_override_a_failed_equality_check(
+    certain: bool, later_success: bool
+) -> None:
+    comparison = tools.RecordedCall(
+        name="cas_evaluate",
+        arguments={"expression": "x+1", "compare_to": "x+2"},
+        raw_arguments='{"expression":"x+1","compare_to":"x+2"}',
+        ok=True,
+        result={"ok": True, "equal": False, "certain": certain, "difference": "-1"},
+    )
+    unrelated_match = tools.RecordedCall(
+        name="cas_evaluate",
+        arguments={"expression": "2+2", "compare_to": "4"},
+        raw_arguments='{"expression":"2+2","compare_to":"4"}',
+        ok=True,
+        result={"ok": True, "equal": True, "certain": True, "difference": "0"},
+    )
+    calls = (comparison, unrelated_match) if later_success else (comparison,)
+    outcome = verification.judge(_loop('{"verdict":"agrees","detail":"All good."}', calls))
+
+    assert outcome.verdict == artifacts.UNCHECKABLE
+    assert "comparison" in outcome.detail
+    assert ("unequal expressions" in outcome.detail) is certain
+    assert "All good." in outcome.detail
+    assert len(outcome.checks) == len(calls)
+    assert json.loads(outcome.checks[0].result)["equal"] is False
+
+
+def test_a_tool_error_then_success_is_not_an_unresolved_comparison() -> None:
+    outcome = verification.judge(
+        _loop('{"verdict":"agrees","detail":"Retry matched."}', (_call(False), _call()))
+    )
+    assert outcome.verdict == artifacts.VERIFIED
+    assert len(outcome.checks) == 2

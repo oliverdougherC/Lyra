@@ -189,3 +189,12 @@ exact-fit source, on first and retry calls. Evidence is now retrieved and admitt
 optional whole-question memory uses only remaining context room (still capped at 4096
 characters). All 269 study checks pass. Large-window memory behavior remains covered; this
 software repair does not change the recorded failed ecology semantic acceptance.
+
+## Subsequent schema repair
+
+The [follow-up study comparison](learning-followup-evidence/study-quality-followup.md)
+removes the unused required generated `topic` field and tells the model the actual front/back
+payload. The application continues to persist the requested topic. The controlled same-request
+schema comparison and two completed ecology decks are new evidence; earlier failed and
+cancelled runs above remain historical facts. Internal token-limit recovery and qualification
+notes remain explicit, and human/integrated-candidate acceptance is still separate.

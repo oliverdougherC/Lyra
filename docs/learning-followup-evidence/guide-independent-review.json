@@ -1,0 +1,460 @@
+{
+  "review_type": "independent_agent",
+  "quality_gate": "NOT_PASSED",
+  "human_review": "not_run",
+  "provider_calls_by_reviewer": 0,
+  "runs": [
+    {
+      "run": "guide-baseline",
+      "app": {
+        "sha": "2ee865c0da52c94c1f5aa056ea64a2e2de513e4e",
+        "dirty": false
+      },
+      "input_sha256": "969cb45f09af28b277304ab50437a26c708ed742445662d4c02f3b0b3dd85dec",
+      "cases": [
+        {
+          "case": "attempt-where-did-i-go-wrong",
+          "verdict": "concern",
+          "critical_failure": false,
+          "reason": "Correct main diagnosis/results; valid-bound acknowledgement indirect in baseline; intermediate antiderivative wording up to sign is imprecise.",
+          "duration_seconds": 17.09,
+          "stopped": "completed",
+          "tool_calls": 2,
+          "answer_sha256": "b491ff640844211d4328584b86a7f102796984ec5723f10d202060ea27f0d373"
+        },
+        {
+          "case": "just-tell-me-the-answer",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "Claims exact derivative verification despite sole equal:false CAS comparison with symbolic lowercase e.",
+          "duration_seconds": 6.99,
+          "stopped": "completed",
+          "tool_calls": 1,
+          "answer_sha256": "69ea04b7f3b24c1bdaad3d45f16cc91f4b287b6c35107b0dfde45c12b26d494d"
+        },
+        {
+          "case": "dont-ask-me-questions-teach-it",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "Characteristic polynomial constant12 should be18; other correct checks do not verify printed expansion.",
+          "duration_seconds": 15.03,
+          "stopped": "completed",
+          "tool_calls": 7,
+          "answer_sha256": "d2986642ca7f42d8382a22f92f3217e3f2d679bc1da7abdb823d13161fbfe0b2"
+        },
+        {
+          "case": "show-convolution-worked",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 25.12,
+          "stopped": "completed",
+          "tool_calls": 4,
+          "answer_sha256": "74825ba65ddb0d7eac20769ab76a46d9926a90df4dcfd6263990c0a59adab8db"
+        }
+      ],
+      "mean_seconds": 16.06,
+      "median_seconds": 16.06
+    },
+    {
+      "run": "guide-baseline-2",
+      "app": {
+        "sha": "2ee865c0da52c94c1f5aa056ea64a2e2de513e4e",
+        "dirty": false
+      },
+      "input_sha256": "ecd144e9171f27e0309bb0e4305669ab5622f20ce1b58cbddd84246f879bbd52",
+      "cases": [
+        {
+          "case": "attempt-where-did-i-go-wrong",
+          "verdict": "concern",
+          "critical_failure": false,
+          "reason": "Correct main diagnosis/results; valid-bound acknowledgement indirect in baseline; intermediate antiderivative wording up to sign is imprecise.",
+          "duration_seconds": 17.07,
+          "stopped": "completed",
+          "tool_calls": 2,
+          "answer_sha256": "b491ff640844211d4328584b86a7f102796984ec5723f10d202060ea27f0d373"
+        },
+        {
+          "case": "just-tell-me-the-answer",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "Claims exact derivative verification despite sole equal:false CAS comparison with symbolic lowercase e.",
+          "duration_seconds": 7.01,
+          "stopped": "completed",
+          "tool_calls": 1,
+          "answer_sha256": "69ea04b7f3b24c1bdaad3d45f16cc91f4b287b6c35107b0dfde45c12b26d494d"
+        },
+        {
+          "case": "dont-ask-me-questions-teach-it",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "Characteristic polynomial constant12 should be18; other correct checks do not verify printed expansion.",
+          "duration_seconds": 15.13,
+          "stopped": "completed",
+          "tool_calls": 7,
+          "answer_sha256": "6ac8f61add9a366b0cde0d847b6bdc077f973b7b97d76945aa587352d6a9b17c"
+        },
+        {
+          "case": "show-convolution-worked",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 25.08,
+          "stopped": "completed",
+          "tool_calls": 4,
+          "answer_sha256": "74825ba65ddb0d7eac20769ab76a46d9926a90df4dcfd6263990c0a59adab8db"
+        }
+      ],
+      "mean_seconds": 16.07,
+      "median_seconds": 16.1
+    },
+    {
+      "run": "guide-tool-contract",
+      "app": {
+        "sha": "2ee865c0da52c94c1f5aa056ea64a2e2de513e4e",
+        "dirty": true
+      },
+      "input_sha256": "7b3336b35ffe11cc15d523e804426af9c83fbb3329da898cd5c6a2e33e346900",
+      "cases": [
+        {
+          "case": "attempt-where-did-i-go-wrong",
+          "verdict": "concern",
+          "critical_failure": false,
+          "reason": "Correct main diagnosis/results; valid-bound acknowledgement indirect in baseline; intermediate antiderivative wording up to sign is imprecise.",
+          "duration_seconds": 14.27,
+          "stopped": "completed",
+          "tool_calls": 4,
+          "answer_sha256": "f15017f935e000c1142fdcfb2c54c07daf53a5cf89a04db32c0b3780b80b893c"
+        },
+        {
+          "case": "just-tell-me-the-answer",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 5.64,
+          "stopped": "completed",
+          "tool_calls": 1,
+          "answer_sha256": "669ddae30d4945d15509a1a12d437aa7de4e7c75193bf69656c4326c62f2fc77"
+        },
+        {
+          "case": "dont-ask-me-questions-teach-it",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 11.52,
+          "stopped": "completed",
+          "tool_calls": 1,
+          "answer_sha256": "eaf9aff1724383d9e549525c195b86f07d9d4081adfc3a7552ab315ebad88648"
+        },
+        {
+          "case": "show-convolution-worked",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 23.43,
+          "stopped": "completed",
+          "tool_calls": 4,
+          "answer_sha256": "cca4fb34fb013286e75efc3ce1cb11dabe024fa9d49f0255a64a99f1d40783b6"
+        }
+      ],
+      "mean_seconds": 13.71,
+      "median_seconds": 12.89
+    },
+    {
+      "run": "guide-final-1",
+      "app": {
+        "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+        "dirty": true
+      },
+      "input_sha256": "07944027191587abb80fc6fef546e68e4ae1e53843f3398090f7ce3fa4258177",
+      "cases": [
+        {
+          "case": "attempt-where-did-i-go-wrong",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "False rule: extracting constant factor exp(-t) does not require entire integrand to be constant in tau.",
+          "duration_seconds": 16.48,
+          "stopped": "completed",
+          "tool_calls": 2,
+          "answer_sha256": "2d0c2247e393067bbe6fac9b21ecf2905f16f847634ead7886564293912eb1ba"
+        },
+        {
+          "case": "just-tell-me-the-answer",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 5.98,
+          "stopped": "completed",
+          "tool_calls": 1,
+          "answer_sha256": "310a772578f088d784eba4138a9935694157f23edbb3b1283e5c91c5c765d607"
+        },
+        {
+          "case": "dont-ask-me-questions-teach-it",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 23.88,
+          "stopped": "completed",
+          "tool_calls": 5,
+          "answer_sha256": "4ac6a23a902fc80f35e820a66b9d28aa774844a76c30bf735f373de17ea82ef2"
+        },
+        {
+          "case": "show-convolution-worked",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 21.21,
+          "stopped": "completed",
+          "tool_calls": 4,
+          "answer_sha256": "b65e639ebb5ae688d6b10a16b77a26ed3f6175b88892c683564dff343cffdaf5"
+        }
+      ],
+      "mean_seconds": 16.89,
+      "median_seconds": 18.84
+    },
+    {
+      "run": "guide-final-2",
+      "app": {
+        "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+        "dirty": true
+      },
+      "input_sha256": "efe419ea42f2597ec09abacd986892d3c808bbd53b5030098b787dda8384cfdc",
+      "cases": [
+        {
+          "case": "attempt-where-did-i-go-wrong",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "False rule: extracting constant factor exp(-t) does not require entire integrand to be constant in tau.",
+          "duration_seconds": 16.42,
+          "stopped": "completed",
+          "tool_calls": 2,
+          "answer_sha256": "2d0c2247e393067bbe6fac9b21ecf2905f16f847634ead7886564293912eb1ba"
+        },
+        {
+          "case": "just-tell-me-the-answer",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 5.94,
+          "stopped": "completed",
+          "tool_calls": 1,
+          "answer_sha256": "310a772578f088d784eba4138a9935694157f23edbb3b1283e5c91c5c765d607"
+        },
+        {
+          "case": "dont-ask-me-questions-teach-it",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 23.65,
+          "stopped": "completed",
+          "tool_calls": 5,
+          "answer_sha256": "4ac6a23a902fc80f35e820a66b9d28aa774844a76c30bf735f373de17ea82ef2"
+        },
+        {
+          "case": "show-convolution-worked",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 21.23,
+          "stopped": "completed",
+          "tool_calls": 4,
+          "answer_sha256": "b65e639ebb5ae688d6b10a16b77a26ed3f6175b88892c683564dff343cffdaf5"
+        }
+      ],
+      "mean_seconds": 16.81,
+      "median_seconds": 18.83
+    },
+    {
+      "run": "osmosis-baseline",
+      "app": {
+        "sha": "2ee865c0da52c94c1f5aa056ea64a2e2de513e4e",
+        "dirty": false
+      },
+      "input_sha256": "7a88f53764aab9eda14a45dd75a1e9bb0b374da8f2459712ce7b3e7ad5921079",
+      "cases": [
+        {
+          "case": "simpler-osmosis",
+          "verdict": "concern",
+          "critical_failure": false,
+          "reason": "No explicit false concentration-equality claim; pressure qualification implicit; no causal repair established.",
+          "duration_seconds": 1.46,
+          "stopped": "completed",
+          "tool_calls": 0,
+          "answer_sha256": "357220c6593393d7b685aec460c204fc391ec21ef12ea35103f11624f2b64c20"
+        }
+      ],
+      "mean_seconds": 1.46,
+      "median_seconds": 1.46
+    },
+    {
+      "run": "osmosis-baseline-2",
+      "app": {
+        "sha": "2ee865c0da52c94c1f5aa056ea64a2e2de513e4e",
+        "dirty": false
+      },
+      "input_sha256": "7e3d53bb7cd545bc33c5ecfe13fcc8dab44364ac302822c34e44af798694de6c",
+      "cases": [
+        {
+          "case": "simpler-osmosis",
+          "verdict": "concern",
+          "critical_failure": false,
+          "reason": "No explicit false concentration-equality claim; pressure qualification implicit; no causal repair established.",
+          "duration_seconds": 1.44,
+          "stopped": "completed",
+          "tool_calls": 0,
+          "answer_sha256": "357220c6593393d7b685aec460c204fc391ec21ef12ea35103f11624f2b64c20"
+        }
+      ],
+      "mean_seconds": 1.44,
+      "median_seconds": 1.44
+    },
+    {
+      "run": "osmosis-candidate",
+      "app": {
+        "sha": "2ee865c0da52c94c1f5aa056ea64a2e2de513e4e",
+        "dirty": true
+      },
+      "input_sha256": "96972d27e9aef634d3a6507229ef7ba750aa437c78a5f4b6041b27953a9621b1",
+      "cases": [
+        {
+          "case": "simpler-osmosis",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "Explicitly promises concentrations even out, ignoring pressure-balanced osmotic equilibrium.",
+          "duration_seconds": 1.87,
+          "stopped": "completed",
+          "tool_calls": 0,
+          "answer_sha256": "e98103353e475ba28ea740572d926549424d8534483f52985e636bcd9f7bd287"
+        }
+      ],
+      "mean_seconds": 1.87,
+      "median_seconds": 1.87
+    },
+    {
+      "run": "osmosis-final-1",
+      "app": {
+        "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+        "dirty": true
+      },
+      "input_sha256": "c33805e5291f432630a36c3f89fa1e489f3f3e4cf4e43876bbbfa34647f8401e",
+      "cases": [
+        {
+          "case": "simpler-osmosis",
+          "verdict": "concern",
+          "critical_failure": false,
+          "reason": "No explicit false concentration-equality claim; pressure qualification implicit; no causal repair established.",
+          "duration_seconds": 1.63,
+          "stopped": "completed",
+          "tool_calls": 0,
+          "answer_sha256": "c58fa64bae4eb334467468fd4e64d2c9f3540790d8a3a53b6366fc13013dcfb5"
+        }
+      ],
+      "mean_seconds": 1.63,
+      "median_seconds": 1.63
+    },
+    {
+      "run": "osmosis-final-2",
+      "app": {
+        "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+        "dirty": true
+      },
+      "input_sha256": "7ef282d70ae8bbb71512914e6bf43a1ef283d2e16d99ce6b1748a5f6ec158c24",
+      "cases": [
+        {
+          "case": "simpler-osmosis",
+          "verdict": "concern",
+          "critical_failure": false,
+          "reason": "No explicit false concentration-equality claim; pressure qualification implicit; no causal repair established.",
+          "duration_seconds": 1.64,
+          "stopped": "completed",
+          "tool_calls": 0,
+          "answer_sha256": "c58fa64bae4eb334467468fd4e64d2c9f3540790d8a3a53b6366fc13013dcfb5"
+        }
+      ],
+      "mean_seconds": 1.64,
+      "median_seconds": 1.64
+    },
+    {
+      "run": "heldout-final-1",
+      "app": {
+        "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+        "dirty": true
+      },
+      "input_sha256": "d5a268bb6087c47999cd1c0928d3273d37a0d341ec79d92c18823af80fa7c4b4",
+      "cases": [
+        {
+          "case": "division-loses-zero",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 4.65,
+          "stopped": "completed",
+          "tool_calls": 1,
+          "answer_sha256": "9d58548f3de17b6a4a5d85d745984efeb2b8a51d805cd2e6dcede77c6ae30203"
+        },
+        {
+          "case": "verify-false-identity",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 3.38,
+          "stopped": "completed",
+          "tool_calls": 1,
+          "answer_sha256": "6d288d7b21cdc7eaf01d19bf8cdd1e0b568d049b6c780e0db9bf77412180a858"
+        }
+      ],
+      "mean_seconds": 4.02,
+      "median_seconds": 4.02
+    },
+    {
+      "run": "heldout-final-2",
+      "app": {
+        "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+        "dirty": true
+      },
+      "input_sha256": "40556064b944bb82d50462f3f5ef3c5519668c454839932322173588454ff97d",
+      "cases": [
+        {
+          "case": "division-loses-zero",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 4.65,
+          "stopped": "completed",
+          "tool_calls": 1,
+          "answer_sha256": "9d58548f3de17b6a4a5d85d745984efeb2b8a51d805cd2e6dcede77c6ae30203"
+        },
+        {
+          "case": "verify-false-identity",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct retained answer with appropriately scoped tool evidence.",
+          "duration_seconds": 3.38,
+          "stopped": "completed",
+          "tool_calls": 1,
+          "answer_sha256": "6d288d7b21cdc7eaf01d19bf8cdd1e0b568d049b6c780e0db9bf77412180a858"
+        }
+      ],
+      "mean_seconds": 4.02,
+      "median_seconds": 4.02
+    }
+  ],
+  "human_review_items": [
+    {
+      "item": "baseline_false_verification",
+      "status": "not_run"
+    },
+    {
+      "item": "final_partial_attempt",
+      "status": "not_run"
+    },
+    {
+      "item": "final_osmosis",
+      "status": "not_run"
+    },
+    {
+      "item": "final_worked_derivation",
+      "status": "not_run"
+    }
+  ]
+}
