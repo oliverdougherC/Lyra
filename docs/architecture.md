@@ -44,6 +44,9 @@ The frontend is now a Vite/React application with client-side routing.
   Citation jumps therefore preserve the class/chat/draft/solution/study route, query parameters,
   reload state, and browser/WebKit history instead of replacing the route fragment.
 - The UI talks only to the FastAPI API surface; it does not call tutor providers or Exa directly.
+- Scroll positions are tracked per history entry in memory and checkpointed to session storage,
+  never to History on scroll. Navigation reserves History quota; refused updates fall back to
+  same-document hash navigation. See [the scroll-quota correction](pla-486-scroll-quota.md).
 
 The production browser suites exercise two different boundaries:
 

@@ -1,6 +1,7 @@
 'use client'
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createScrollPositions } from '@/router/scroll-positions'
 
 type RouteParams = Record<string, string>
 
@@ -130,13 +131,22 @@ function readLocation(
   return { pathname, search, params: matchRoute(pathname).params }
 }
 
-function canonicalizeLocation(next: Pick<RouteState, 'pathname' | 'search'>) {
-  if (typeof window === 'undefined') return
-  const canonical = createHashHref(next.pathname, next.search)
-  if (`${window.location.pathname}${window.location.search}${window.location.hash}` === canonical) {
-    return
+function changeLocation(method: 'pushState' | 'replaceState', data: unknown, href: string) {
+  try {
+    window.history[method](data, '', href)
+  } catch {
+    // If the browser refuses even a real navigation, use same-document hash navigation.
+    // This does not reload the app or leave its URL out of sync with the selected route.
+    const hash = href.slice(href.indexOf('#'))
+    if (method === 'replaceState') window.location.replace(hash)
+    else window.location.hash = hash
   }
-  window.history.replaceState(window.history.state, '', canonical)
+}
+
+const ENTRY_KEY = 'lyraEntry'
+function entryId(): string | undefined {
+  const value = window.history.state?.[ENTRY_KEY]
+  return typeof value === 'string' ? value : undefined
 }
 
 const SCROLL_KEY = 'lyraScroll'
@@ -198,31 +208,45 @@ function classReturnPositions(
   }
 }
 
-function saveScrollPositions() {
-  window.history.replaceState({ ...window.history.state, [SCROLL_KEY]: readScrollPositions() }, '')
-}
-
 export function RouterProvider({ children }: { children: React.ReactNode }) {
+  const [positions] = useState(createScrollPositions)
+  const currentEntry = useRef(entryId() ?? crypto.randomUUID())
   const [state, setState] = useState<RouteState>(() => ({
     ...readLocation(),
     navigationVersion: 0,
-    scrollPositions: window.history.state?.[SCROLL_KEY],
+    scrollPositions: positions.read(currentEntry.current) ?? window.history.state?.[SCROLL_KEY],
   }))
+  const currentHref = useRef(createHashHref(state.pathname, state.search))
   const stateRef = useRef(state)
   stateRef.current = state
 
   useEffect(() => {
     const previous = window.history.scrollRestoration
     window.history.scrollRestoration = 'manual'
-    const save = () => saveScrollPositions()
-    document.addEventListener('scroll', save, true)
-    window.addEventListener('pagehide', save)
+    const capture = (event: Event) => {
+      // Ignore unrelated nested scrollers, including programmatic ones.
+      if (
+        !(event.target instanceof Element) ||
+        !Object.values(SCROLL_TARGETS).some(
+          (selector) => event.target === document.querySelector(selector),
+        )
+      )
+        return
+      positions.record(currentEntry.current, readScrollPositions())
+    }
+    const checkpoint = () => {
+      positions.record(currentEntry.current, readScrollPositions())
+      positions.flush()
+    }
+    document.addEventListener('scroll', capture, true)
+    window.addEventListener('pagehide', checkpoint)
     return () => {
-      document.removeEventListener('scroll', save, true)
-      window.removeEventListener('pagehide', save)
+      document.removeEventListener('scroll', capture, true)
+      window.removeEventListener('pagehide', checkpoint)
+      positions.flush()
       window.history.scrollRestoration = previous
     }
-  }, [])
+  }, [positions])
 
   useEffect(() => {
     const positions = state.scrollPositions
@@ -265,12 +289,28 @@ export function RouterProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const sync = () => {
+      positions.flush()
       const next = readLocation(stateRef.current)
-      canonicalizeLocation(next)
+      const href = createHashHref(next.pathname, next.search)
+      const id =
+        entryId() ?? (href === currentHref.current ? currentEntry.current : crypto.randomUUID())
+      currentEntry.current = id
+      currentHref.current = href
+      // One identity stamp on a fresh/legacy entry, never on scroll. Refusal is optional.
+      if (
+        entryId() !== id ||
+        `${window.location.pathname}${window.location.search}${window.location.hash}` !== href
+      ) {
+        try {
+          window.history.replaceState({ ...window.history.state, [ENTRY_KEY]: id }, '', href)
+        } catch {
+          /* Keep the hash route usable. */
+        }
+      }
       setState((current) => ({
         ...next,
         navigationVersion: current.navigationVersion + 1,
-        scrollPositions: window.history.state?.[SCROLL_KEY],
+        scrollPositions: positions.read(id) ?? window.history.state?.[SCROLL_KEY],
       }))
     }
     sync()
@@ -280,7 +320,7 @@ export function RouterProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener('hashchange', sync)
       window.removeEventListener('popstate', sync)
     }
-  }, [])
+  }, [positions])
 
   const value = useMemo<RouterContextValue>(
     () => ({
@@ -293,17 +333,23 @@ export function RouterProvider({ children }: { children: React.ReactNode }) {
         const { pathname, search, anchor } = splitHref(href)
         const nextSearch = anchor ? withRouteAnchor(search, anchor) : withRouteAnchor(search, null)
         const method = mode === 'replace' ? 'replaceState' : 'pushState'
-        saveScrollPositions()
+        positions.record(currentEntry.current, readScrollPositions())
+        positions.flush()
         rememberClassReturn(state.pathname, state.search)
         const scrollPositions =
           options?.scroll === false || anchor !== null
             ? readScrollPositions()
             : (classReturnPositions(pathname, nextSearch) ?? { main: 0 })
-        window.history[method](
-          { ...window.history.state, [SCROLL_KEY]: scrollPositions },
-          '',
-          createHashHref(pathname, nextSearch),
+        const id = mode === 'push' ? crypto.randomUUID() : currentEntry.current
+        const nextHref = createHashHref(pathname, nextSearch)
+        changeLocation(
+          method,
+          { ...window.history.state, [ENTRY_KEY]: id, [SCROLL_KEY]: scrollPositions },
+          nextHref,
         )
+        currentEntry.current = id
+        currentHref.current = nextHref
+        positions.record(id, scrollPositions)
         setState((current) => ({
           pathname,
           search: nextSearch,
@@ -319,7 +365,18 @@ export function RouterProvider({ children }: { children: React.ReactNode }) {
         )
         const next = createHashHref(state.pathname, nextSearch)
         const method = mode === 'replace' ? 'replaceState' : 'pushState'
-        window.history[method](window.history.state, '', next)
+        const scrollPositions = readScrollPositions()
+        positions.record(currentEntry.current, scrollPositions)
+        positions.flush()
+        const id = mode === 'push' ? crypto.randomUUID() : currentEntry.current
+        changeLocation(
+          method,
+          { ...window.history.state, [ENTRY_KEY]: id, [SCROLL_KEY]: scrollPositions },
+          next,
+        )
+        currentEntry.current = id
+        currentHref.current = next
+        positions.record(id, scrollPositions)
         setState((current) => ({
           pathname: current.pathname,
           search: nextSearch,
@@ -328,7 +385,7 @@ export function RouterProvider({ children }: { children: React.ReactNode }) {
         }))
       },
     }),
-    [state],
+    [state, positions],
   )
 
   return <RouterContext.Provider value={value}>{children}</RouterContext.Provider>
