@@ -185,7 +185,13 @@ def test_restart_between_review_chunks_keeps_settled_revision(live_run, db, monk
                 }
             )
         revisions.append(rendered)
-        return revised
+        return json.dumps(
+            {
+                "edits": [
+                    {"before": "Distinct passage 1.", "after": "Precisely corrected passage 1."}
+                ]
+            }
+        )
 
     monkeypatch.setattr(writer_pipeline, "_complete", complete)
     with pytest.raises(KeyboardInterrupt):

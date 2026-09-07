@@ -1,0 +1,155 @@
+{
+  "scope": "Guarded test-native variant, not identical production-native or Keychain acceptance. No helper binary, nonce, profile or raw selector values retained.",
+  "guard_cases": [
+    {
+      "case": "no_inherited_selectors",
+      "status": "passed"
+    },
+    {
+      "case": "hostile_inherited_selectors",
+      "status": "passed"
+    },
+    {
+      "case": "restart",
+      "status": "passed"
+    },
+    {
+      "case": "reopen",
+      "status": "passed"
+    },
+    {
+      "case": "missing_marker",
+      "status": "refused"
+    },
+    {
+      "case": "wrong_marker",
+      "status": "refused"
+    },
+    {
+      "case": "moved_profile",
+      "status": "refused"
+    },
+    {
+      "case": "replacement_profile_same_marker",
+      "status": "refused"
+    },
+    {
+      "case": "missing_target",
+      "status": "refused"
+    },
+    {
+      "case": "linked_target",
+      "status": "refused"
+    },
+    {
+      "case": "tampered_target",
+      "status": "refused"
+    },
+    {
+      "case": "linked_selector_directory",
+      "status": "refused"
+    }
+  ],
+  "guard_case_count": 12,
+  "stub_scope": {
+    "ui_launched": false,
+    "production_app_operations": false,
+    "credential_mutations": false
+  },
+  "unique_compiled_identifier_verified": true,
+  "nonpersistent_webview": {
+    "amendment": ".incognito(true) after WebviewWindowBuilder::from_config",
+    "requested_store": "WKWebsiteDataStore.nonPersistentDataStore",
+    "dependency_trace": {
+      "tauri": "2.11.5 WebviewWindowBuilder::incognito delegates to WebviewBuilder::incognito",
+      "tauri_runtime_wry": "2.11.4 forwards webview_attributes.incognito via with_incognito",
+      "wry": "0.55.1 (true, _, _) selects WKWebsiteDataStore::nonPersistentDataStore; false default selects defaultDataStore"
+    },
+    "production_source_modified": false,
+    "production_file_hash_unchanged": "995a82d6d5610f9a1b4b8063562dc568ace44398c83dc02a2dbd0de9bea02b34"
+  },
+  "production_candidate_fingerprints": {
+    "Contents/Info.plist": "c00eb80173c5556aca2817aa8c6d7f8e406a3d8fa37bb32ebcbc85184dc72fd2",
+    "Contents/MacOS/lyra-desktop": "cc99991d77c5f5367c8788250b10116cb165b5264287f844ff0d8a89293daa75",
+    "Contents/Resources/resources/lyra-backend/lyra-backend": "a5420ba82e53d27ef8969836ac223fd5c8376a42ab9a506ed8a139b6eac42a4c"
+  },
+  "production_candidate_fingerprints_unchanged": true,
+  "production_backend_bytes_unchanged": true,
+  "launches": [
+    {
+      "source_sha": "e2857f61cbe04b9bde533419b0f393bcaa1dfa11",
+      "launch": "LaunchServices with no inherited test selectors",
+      "selectors": {
+        "native": {
+          "LYRA_DATA_DIR": true,
+          "LYRA_DB_PATH": true,
+          "LYRA_CACHE_DIR": true,
+          "LYRA_LOGS_DIR": true,
+          "LYRA_MODELS_DIR": true,
+          "PYTHON_KEYRING_BACKEND": true
+        },
+        "backend": {
+          "LYRA_DATA_DIR": true,
+          "LYRA_DB_PATH": true,
+          "LYRA_CACHE_DIR": true,
+          "LYRA_LOGS_DIR": true,
+          "LYRA_MODELS_DIR": true,
+          "PYTHON_KEYRING_BACKEND": true
+        }
+      },
+      "all_selectors_verified": true,
+      "unique_socket_present": true,
+      "exit_verified": {
+        "native_pid": true,
+        "backend_pid": true
+      },
+      "quit": "Graceful AppleEvent to isolated active application identity"
+    },
+    {
+      "source_sha": "e2857f61cbe04b9bde533419b0f393bcaa1dfa11",
+      "launch": "LaunchServices by exact guarded path with hostile inherited selectors",
+      "selectors": {
+        "native": {
+          "LYRA_DATA_DIR": true,
+          "LYRA_DB_PATH": true,
+          "LYRA_CACHE_DIR": true,
+          "LYRA_LOGS_DIR": true,
+          "LYRA_MODELS_DIR": true,
+          "PYTHON_KEYRING_BACKEND": true
+        },
+        "backend": {
+          "LYRA_DATA_DIR": true,
+          "LYRA_DB_PATH": true,
+          "LYRA_CACHE_DIR": true,
+          "LYRA_LOGS_DIR": true,
+          "LYRA_MODELS_DIR": true,
+          "PYTHON_KEYRING_BACKEND": true
+        }
+      },
+      "all_selectors_verified": true,
+      "unique_socket_present": true,
+      "exit_verified": {
+        "native_pid": true,
+        "backend_pid": true
+      },
+      "bundle_id_lookup": "failed closed after quit; no fallback",
+      "rendered_ui": "not_run: CUA selectors timed out; no normal fallback",
+      "exit_note": "Verified after graceful backend shutdown delay",
+      "quit": "Graceful AppleEvent to isolated active application identity"
+    }
+  ],
+  "not_run": [
+    "Production-native identity/store behavior",
+    "Normal profile and native Keychain approvals",
+    "Rendered native UI interaction: CUA timed out"
+  ],
+  "prior_backend_selector_evidence": "Backend-only selector proofs do not become whole-native proof and are not changed by this follow-up.",
+  "input_hashes": {
+    "stub-evidence.json": "af7a9e9e7c82827b9bb9104d512f056b6e79a6b959ffd90e05bcf7995cb98924",
+    "incognito-proof.json": "3132dcd6f2dae468275333447ac8d9cec6dc6eea251d83a7387d3ac093fbc9f1",
+    "prepared-test-bundle.json": "d615ee829763c5aaeab909f46f51793311189a0915c482dbda23490609458a23",
+    "native-launch-proof.json": "55dfed6761fe3e0edc4b46c8ec551339b0ab4af71ecfee56314c72cad0c232cc",
+    "native-reopen-proof.json": "b254b0f1a10be06b6e6a9621014f756c578f0e400091feaf6ef0e5251dccfc06"
+  },
+  "prior_incident": "Earlier CUA app selection auto-launched the normal profile. It supplied no corpus data, but startup effects, including possible default WebKit storage effects, remain uncertain. No normal profile was inspected in this follow-up; no impact-free claim is made."
+}

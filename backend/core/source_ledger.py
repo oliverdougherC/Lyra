@@ -45,9 +45,13 @@ def normalize_model_citations(text: str, allowed_source_ids: Sequence[int]) -> s
 
 
 def saved_source_context(
-    conn: sqlite3.Connection, class_id: int, source_ids: Sequence[int]
+    conn: sqlite3.Connection,
+    class_id: int,
+    source_ids: Sequence[int],
+    *,
+    supporting_revision_ids: Mapping[int, Sequence[int]] | None = None,
 ) -> list[dict[str, object]]:
-    """Bounded current snapshot candidates; relied-on historical excerpts stay separate."""
+    """Current context first, then requested revision-row IDs for selected sources."""
     context: list[dict[str, object]] = []
     for source_id in dict.fromkeys(source_ids):
         source = get_source(conn, source_id, class_id=class_id)
@@ -80,6 +84,38 @@ def saved_source_context(
                 "note": "Current saved context only. Omitted content is not evidence of absence.",
             }
         )
+    for source_id, current in zip(dict.fromkeys(source_ids), list(context), strict=True):
+        for revision_id in dict.fromkeys((supporting_revision_ids or {}).get(source_id, ())):
+            if revision_id == current["source_revision_id"]:
+                continue
+            row = conn.execute(
+                "select id, revision, snapshot, accessed_at, truncated "
+                "from writer_source_revisions where source_id = ? and id = ?",
+                (source_id, revision_id),
+            ).fetchone()
+            content = str(row["snapshot"] or "") if row is not None else ""
+            context.append(
+                {
+                    "source_id": source_id,
+                    "title": current["title"],
+                    "source_revision_id": revision_id,
+                    "revision": row["revision"] if row is not None else None,
+                    "accessed_at": row["accessed_at"] if row is not None else None,
+                    "provenance": (
+                        "immutable_revision"
+                        if row is not None
+                        else "historical_revision_unavailable"
+                    ),
+                    "content": content[:4000],
+                    "omitted": len(content) > 4000,
+                    "snapshot_truncated": bool(row["truncated"]) if row is not None else None,
+                    "evidence_unavailable": not content.strip(),
+                    "note": (
+                        "Historical saved context explicitly requested; not current evidence. "
+                        "Omitted content is not evidence of absence."
+                    ),
+                }
+            )
     return context
 
 

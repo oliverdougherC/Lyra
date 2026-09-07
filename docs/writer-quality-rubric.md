@@ -220,3 +220,15 @@ Live document assessment receives bounded current saved context for the sources 
 its evidence set, alongside separately labeled historical excerpts. This prevents an omitted
 selected excerpt from being the reviewer’s only view of an available source; current text
 does not replace the historical revision that supported earlier writing.
+
+Semantic follow-up corrections use a separate revision instruction, with current and explicitly
+relied-on historical source context retained together. Reviewer feedback is checked against
+those sources; student notes provide voice and personal experience, not a whitelist of facts.
+Targeted corrections do not expand to approximate plan allocations unless the student requests
+a length; upper limits are not minimums. Stream, context and explicit completion checks remain.
+
+Corrections now return exact quoted before/after spans. Ambiguous, overlapping, stale or
+unknown-source edits fail without applying them. Empty whole-passage replacements remain
+failures; unchanged text outside the accepted spans stays byte-for-byte intact. The review
+feedback is checked rather than automatically executed, and explicit requested lengths remain
+completion requirements. Targeted span corrections run serially against current text.

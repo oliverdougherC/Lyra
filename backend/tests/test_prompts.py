@@ -109,7 +109,7 @@ def test_the_structured_skeptic_reads_the_section_job_and_ledger() -> None:
     )
     rendered = "\n".join(message["content"] for message in messages)
 
-    assert "performs its planned job" in rendered
+    assert "A claim [@lyra:3]." in rendered
     assert "do the evidence job" in rendered
     assert "Source ledger: id 3" in rendered
 

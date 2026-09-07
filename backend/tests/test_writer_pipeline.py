@@ -847,7 +847,7 @@ def test_empty_overall_revision_never_erases_completed_prose(
                     ],
                 }
             ),
-            "",
+            json.dumps({"edits": [{"before": "Original paragraph remains.", "after": ""}]}),
         ]
     )
     calls: list[dict[str, object]] = []
@@ -1642,7 +1642,18 @@ def test_addressed_comment_waits_for_an_occupied_section_proposal_to_be_accepted
         severity="major",
         quote="The period grew with length.",
     )
-    model.script = [_section_reply("Results", "A better supported result.")]
+    model.script = [
+        json.dumps(
+            {
+                "edits": [
+                    {
+                        "before": "The period grew with length.",
+                        "after": "A better supported result.",
+                    }
+                ]
+            }
+        )
+    ]
 
     writer_pipeline.run_pass(
         writer_pipeline.PassJob(

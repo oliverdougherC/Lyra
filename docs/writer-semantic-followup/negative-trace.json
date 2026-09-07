@@ -1,0 +1,323 @@
+{
+  "scope": "Small negative trace only; no new acceptance evaluation, no code/doc edits.",
+  "review_source": "../writer-beta-evidence/independent-24575e9-review.json",
+  "traces": [
+    {
+      "kind": "supported_18_deleted",
+      "receipt": "../writer-beta-evidence/24575e9-packaged-model/full_live_draft_from_student_notes--restart_inference.json",
+      "receipt_sha256": "1ad978081f0dd219cb2f8f3105d1ebcb4b6487c59a91d45fa70c585f33b6a7cf",
+      "scenario": "restart_inference",
+      "mode": "packaged-model",
+      "suggestion_id": 1,
+      "block_key": "1:p3",
+      "terminal": "completed",
+      "source_evidence": {
+        "source_id": 2,
+        "source_revision_row_id": 2,
+        "revision_number": 1,
+        "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+        "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a"
+      },
+      "student_original_excerpt": "I care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey.",
+      "research_notes_matching_fact": [
+        "Source 2 confirms 'Non-riders were not surveyed' and that the 18 voluntary responses 'cannot establish demand across all students.'"
+      ],
+      "research_selected_excerpts": [
+        {
+          "source_id": 1,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "source_id": 1,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "source_id": 2,
+          "excerpt": "Non-riders were not surveyed."
+        }
+      ],
+      "exact_pre_review_block": null,
+      "pre_review_provenance": "No nonempty pre-review snapshot for this block; generated prior wording is known only through model assessment quotes, not independently retained whole draft.",
+      "overall_assessment_issues": [
+        {
+          "block_key": "1:p3",
+          "problem": "The claim 'The 18 voluntary responses' is unsupported by the provided source excerpts. The source ledger and saved context do not specify the number 18; they only state that 'Non-riders were not surveyed' and that responses came from riders. Inventing a specific sample size violates the preservation constraint against inventing facts.",
+          "revision_instruction": "Remove the specific number '18' and replace it with a general reference to the voluntary rider responses, e.g., 'The voluntary responses came only from people already riding the shuttle.' Do not invent sample sizes not present in the source evidence."
+        }
+      ],
+      "final_block": "The survey compounds these gaps. The voluntary responses came only from people already riding the shuttle, while non-riders were not surveyed [@lyra:2]. This sample cannot establish demand across all students. I do not yet know how many students want the service or if the current ridership represents a broader preference.",
+      "generation_identity": {
+        "version": 1,
+        "sha256": "6f016d47500796136ebc17b069a9d8052e24ece8345d59e35022757c3a1c12d6"
+      },
+      "user_revision": 0,
+      "stage_attribution": {
+        "observed": "Persisted overall_assessment names supported statistic as a problem, requests removal; final block lacks that statistic.",
+        "inference": "Most direct explanation is subsequent overall-assessment-driven revision removed it; no raw provider request/response or complete intermediate paragraph receipt to prove exact delivered prompt."
+      },
+      "delivered_context_limits": {
+        "observed_available": "Full immutable revision contains 18 and14. Section metadata research notes explicitly mention18 in the two 18-deletion cases. Selected relied_on excerpts often include only Non-riders were not surveyed.",
+        "not_proven": "Storage/metadata availability is not proof that full snapshot or research_notes was actually delivered to the failing assessment call. Parent is inspecting prompt construction.",
+        "distinction": "Assessment statement that ledger lacks18 conflicts with retained ledger. Could be input omission or model ignoring available context; receipt alone cannot decide."
+      }
+    },
+    {
+      "kind": "supported_18_deleted",
+      "receipt": "../writer-beta-evidence/24575e9-packaged-model/full_live_draft_from_student_notes--edit_restart.json",
+      "receipt_sha256": "80e32ef55db66a7aa99f3fe22ff95a16735bb5914951878a007accc843173b70",
+      "scenario": "edit_restart",
+      "mode": "packaged-model",
+      "suggestion_id": 1,
+      "block_key": "1:p3",
+      "terminal": "completed",
+      "source_evidence": {
+        "source_id": 2,
+        "source_revision_row_id": 2,
+        "revision_number": 1,
+        "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+        "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a"
+      },
+      "student_original_excerpt": "I care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey.",
+      "research_notes_matching_fact": [
+        "Source 2 states that 18 voluntary survey responses were collected from shuttle riders, but non-riders were not surveyed. This supports the claim that the current data cannot establish demand across all students and that non-riders must be heard before generalizing."
+      ],
+      "research_selected_excerpts": [
+        {
+          "source_id": 1,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "source_id": 1,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "source_id": 2,
+          "excerpt": "Non-riders were not surveyed."
+        }
+      ],
+      "exact_pre_review_block": null,
+      "pre_review_provenance": "No nonempty pre-review snapshot for this block; generated prior wording is known only through model assessment quotes, not independently retained whole draft.",
+      "overall_assessment_issues": [
+        {
+          "block_key": "1:p3",
+          "problem": "The specific count of '18 voluntary responses' is not supported by the provided source ledger or saved context. The source only states that responses were voluntary and from riders, without specifying the number.",
+          "revision_instruction": "Delete the specific number '18'. Refer to the survey responses generally as 'voluntary responses from riders' to avoid inventing data."
+        }
+      ],
+      "final_block": "The survey presents a similar gap. Voluntary responses came only from riders; non-riders were not surveyed [@lyra:2]. Consequently, the data describe the preferences of those already using the service, not the broader student population. Because we have not asked the people who stay behind, I cannot infer whether demand is unmet or satisfied. This representativeness failure limits what the pilot can tell us. The evidence supports asking better questions before concluding that the service meets campus needs.",
+      "generation_identity": {
+        "version": 1,
+        "sha256": "b86a74ff00553c15033023741470aff220026b2684a97660ca291cfaea60c520"
+      },
+      "user_revision": 0,
+      "stage_attribution": {
+        "observed": "Persisted overall_assessment names supported statistic as a problem, requests removal; final block lacks that statistic.",
+        "inference": "Most direct explanation is subsequent overall-assessment-driven revision removed it; no raw provider request/response or complete intermediate paragraph receipt to prove exact delivered prompt."
+      },
+      "delivered_context_limits": {
+        "observed_available": "Full immutable revision contains 18 and14. Section metadata research notes explicitly mention18 in the two 18-deletion cases. Selected relied_on excerpts often include only Non-riders were not surveyed.",
+        "not_proven": "Storage/metadata availability is not proof that full snapshot or research_notes was actually delivered to the failing assessment call. Parent is inspecting prompt construction.",
+        "distinction": "Assessment statement that ledger lacks18 conflicts with retained ledger. Could be input omission or model ignoring available context; receipt alone cannot decide."
+      }
+    },
+    {
+      "kind": "supported_14_deleted",
+      "receipt": "../writer-beta-evidence/24575e9-packaged-model/full_live_draft_from_student_notes--cancel_retry.json",
+      "receipt_sha256": "64ba4b641a26ffabd8e6355627408b795d204890b1765d3b0f4f16e968a70e34",
+      "scenario": "cancel_retry",
+      "mode": "packaged-model",
+      "suggestion_id": 2,
+      "block_key": "1:p3",
+      "terminal": "completed",
+      "source_evidence": {
+        "source_id": 2,
+        "source_revision_row_id": 2,
+        "revision_number": 1,
+        "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+        "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a"
+      },
+      "student_original_excerpt": "I care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey.",
+      "research_notes_matching_fact": [
+        "Source 2 reports that 18 voluntary survey responses were collected from shuttle riders, with 14 valuing later service, but explicitly states that non-riders were not surveyed and that the responses cannot establish demand across all students [@lyra:2]."
+      ],
+      "research_selected_excerpts": [
+        {
+          "source_id": 1,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "source_id": 1,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "source_id": 2,
+          "excerpt": "Non-riders were not surveyed."
+        }
+      ],
+      "exact_pre_review_block": null,
+      "pre_review_provenance": "No nonempty pre-review snapshot for this block; generated prior wording is known only through model assessment quotes, not independently retained whole draft.",
+      "overall_assessment_issues": [
+        {
+          "block_key": "1:p3",
+          "problem": "The block states that '14 reported valuing the later service.' The provided student notes do not contain this specific statistic; they only mention that the survey came from voluntary riders and that non-riders were not surveyed. While the source ledger supports this fact, the assignment requires drafting from the student notes and preserving their specific stance and data points. Introducing a specific count not in the notes risks violating the 'do not invent facts' constraint if the student did not provide this number in their original draft.",
+          "revision_instruction": "Remove the specific statistic '14 reported valuing the later service' and replace it with a general reference to the survey responses from voluntary riders, consistent with the student notes which do not specify the breakdown of responses."
+        }
+      ],
+      "final_block": "The survey faces the same representational problem. The 18 responses came solely from voluntary shuttle riders [@lyra:2]. Because non-riders were not surveyed [@lyra:2], these answers describe existing users, not the wider student population. This qualitative gap leaves unmeasured demand unaddressed. Taken with the quantitative limitations, these combined omissions justify a conditional extension to gather better data, rather than supporting a final policy decision based on the current evidence.",
+      "generation_identity": {
+        "version": 1,
+        "sha256": "9fbb65d118bf770574c06842a013953af73af56ff6763ea7ab244b4b2ee3412b"
+      },
+      "user_revision": 0,
+      "stage_attribution": {
+        "observed": "Persisted overall_assessment names supported statistic as a problem, requests removal; final block lacks that statistic.",
+        "inference": "Most direct explanation is subsequent overall-assessment-driven revision removed it; no raw provider request/response or complete intermediate paragraph receipt to prove exact delivered prompt."
+      },
+      "delivered_context_limits": {
+        "observed_available": "Full immutable revision contains 18 and14. Section metadata research notes explicitly mention18 in the two 18-deletion cases. Selected relied_on excerpts often include only Non-riders were not surveyed.",
+        "not_proven": "Storage/metadata availability is not proof that full snapshot or research_notes was actually delivered to the failing assessment call. Parent is inspecting prompt construction.",
+        "distinction": "14 case reviewer explicitly concedes ledger supports14 but rejects it for absence in notes, so this is an instruction interpretation error even if source text was delivered."
+      }
+    },
+    {
+      "kind": "invented_pilot_week_label",
+      "receipt": "../writer-beta-evidence/24575e9-packaged-model/full_live_draft_from_student_notes--restart_review.json",
+      "receipt_sha256": "515e351f5aa922c48dd4565f742f964d8888e04d62ddaa055e0d179a8bfc8cac",
+      "scenario": "restart_review",
+      "mode": "packaged-model",
+      "suggestion_id": 1,
+      "block_key": "1:p1",
+      "terminal": "completed",
+      "source_evidence": {
+        "source_id": 1,
+        "source_revision_row_id": 1,
+        "revision_number": 1,
+        "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+        "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1"
+      },
+      "student_original_excerpt": "I care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey.",
+      "research_notes_matching_fact": [
+        "Source 1 states: 'There were 160 boardings in week A and 240 boardings in week B.'",
+        "Source 1 states: 'The weeks differed in academic schedule, and the pilot was not randomized.'"
+      ],
+      "research_selected_excerpts": [
+        {
+          "source_id": 1,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "source_id": 1,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "source_id": 1,
+          "excerpt": "Boardings count trips, not unique people."
+        },
+        {
+          "source_id": 1,
+          "excerpt": "The weeks differed in academic schedule, and the pilot was not randomized."
+        },
+        {
+          "source_id": 2,
+          "excerpt": "Eighteen voluntary survey responses were collected from shuttle riders."
+        },
+        {
+          "source_id": 2,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "source_id": 2,
+          "excerpt": "The responses describe these respondents and cannot establish demand across all students."
+        }
+      ],
+      "exact_pre_review_block": "I care about this shuttle because I have stood at the east gate wondering whether to wait. The pilot week saw 240 boardings compared to 160 in the previous week [@lyra:1]. These numbers show more people used the service, but they do not show why. Boardings count individual trips, not unique people [@lyra:1]. I cannot assume that these trips mean more students came to class.",
+      "pre_review_provenance": "at_interruption persisted complete block, immediately before transition review",
+      "overall_assessment_issues": [
+        {
+          "block_key": "1:p1",
+          "problem": "The text states the pilot week saw 240 boardings compared to 160 in the previous week, implying the pilot week is the higher number. However, the source ledger and student notes indicate the pilot week (Week A) had 160 boardings and the comparison week (Week B) had 240. The draft reverses the temporal order of the pilot vs. non-pilot weeks, misrepresenting the evidence.",
+          "revision_instruction": "Correct the boarding comparison to reflect that the pilot week had 160 boardings and the subsequent comparison week had 240, or clarify that the 240 figure is from the non-pilot week if the pilot was the lower number, ensuring the temporal sequence matches the source data."
+        }
+      ],
+      "final_block": "I care about this shuttle because I have stood at the east gate wondering whether to wait. The pilot week recorded 160 boardings, rising to 240 in the subsequent week [@lyra:1]. These numbers show more trips occurred, but they do not show why. Boardings count individual trips, not unique people [@lyra:1]. I cannot assume these increased trips mean more students attended class.",
+      "generation_identity": {
+        "version": 1,
+        "sha256": "9fbeb6d5cefc4cf5fdf0acc973397948b1417658a9013e48a408a496fc4ecc14"
+      },
+      "user_revision": 0,
+      "stage_attribution": {
+        "observed": "Pre-interruption block says pilot week240/previous160. Overall assessment asserts source/student notes say pilot WeekA160 and orders reversal. Final block says pilot160/subsequent240.",
+        "inference": "Specific changed label follows assessment instruction; same source A160/B240 numbers remain unchanged. Review also corrects pre-block more people to more trips, a legitimate distinct correction."
+      },
+      "delivered_context_limits": {
+        "observed_available": "Full snapshot and research notes give only A160/B240; neither labels a pilot/nonpilot week. Student original notes do not assign A/B to pilot.",
+        "not_proven": "No raw assessment prompt retained. The label is unsupported regardless of which saved source view was delivered.",
+        "expected_supported_repair": "Use neutral week A/week B labels, not an invented opposite pilot assignment."
+      }
+    },
+    {
+      "kind": "personal_voice_missing",
+      "receipt": "../writer-beta-evidence/24575e9-planning/full_live_draft_from_student_notes--uninterrupted.json",
+      "receipt_sha256": "b0c040e111b8a3667bfeefe2233c582cdb539103dc36f101c93637e5da1e0ca0",
+      "scenario": "uninterrupted",
+      "mode": "planning",
+      "suggestion_id": 1,
+      "block_key": "1.1:p1",
+      "terminal": "completed",
+      "source_evidence": {
+        "basis": "Student accepted body, not external source",
+        "before_body_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "after_body_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "byte_equal": true
+      },
+      "student_original_excerpt": "I care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey.",
+      "research_notes_matching_fact": [
+        "The survey limitation is that non-riders were not surveyed. Source: [@lyra:2]."
+      ],
+      "research_selected_excerpts": [
+        {
+          "source_id": 1,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "source_id": 1,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "source_id": 2,
+          "excerpt": "Non-riders were not surveyed."
+        }
+      ],
+      "exact_pre_review_block": null,
+      "pre_review_provenance": "No nonempty pre-review snapshot for this block; generated prior wording is known only through model assessment quotes, not independently retained whole draft.",
+      "overall_assessment_issues": [],
+      "final_block": "Before drawing conclusions about the pilot's impact, we must first establish what the data can and cannot show. No attendance data were collected during the pilot period [@lyra:1]. Because this specific metric was never recorded, the pilot results do not support a claim that the shuttle service increased student attendance. Any inference linking the service to classroom presence would rely on evidence that does not exist. This absence of attendance records is a hard boundary for the current findings, not a gap to be filled by assumption.",
+      "generation_identity": {
+        "version": 1,
+        "sha256": "d0abcfb80c9781c668faade515c50beda96cd97c646d49c7987ee115cbd3aa77"
+      },
+      "user_revision": 0,
+      "stage_attribution": {
+        "observed": "Generated plan Evidence job is data-limits-only; final Evidence opening generic, no east-gate stake anywhere. Final recommendation contains I recommend/I propose but no personal origin. Overall assessment says stance preserved and records no issue for opening.",
+        "not_inferable": "No pre-review opening receipt; cannot claim review deleted voice. Loss may originate during plan decomposition/drafting and then survive review."
+      },
+      "delivered_context_limits": {
+        "observed_available": "Original accepted notes contain personal stake and remain byte-exact; original task requests first-person perspective. Metadata section job omits personal stake.",
+        "not_proven": "Exact original-notes/context bytes delivered to planning, drafting and assessment calls not retained in this receipt. Parent prompt-construction inspection required."
+      },
+      "plan_section": {
+        "title": "Evidence",
+        "job": "Establish the limits of the pilot data and the supported boarding increase.",
+        "claim": "The pilot data cannot support an attendance claim because no attendance data were collected, but the boarding count increased from 160 to 240.",
+        "word_budget": 160
+      },
+      "final_personal_stake_present": false,
+      "final_first_person_fragments": [
+        "I recommend extending the pilot for one term to gather broader evidence.",
+        "I propose adding a simple question to the next term’s data collection that asks non-riders why they choose not to use the shuttle."
+      ]
+    }
+  ],
+  "cross_case_observation": "All selected accepted bodies remain original; failures concern separate generated/revised proposal and assessment semantics. Canonical markers name source IDs, revision/excerpt IDs are separately recorded.",
+  "human_review": "not-run"
+}

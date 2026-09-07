@@ -1,0 +1,38 @@
+{
+  "version": "writer-evaluation.v1",
+  "tested_sha": "e2857f61cbe04b9bde533419b0f393bcaa1dfa11",
+  "corpus_sha256": "3f7c629d775412f84fedbf31c4b960222721030f72327c59a1f6ddb0496fd34b",
+  "prompt_sha256": "fce7dfa70f4a422d7109378cf7105221ee39004f5dc288898f830382620733b1",
+  "runtime_sha256": "a5420ba82e53d27ef8969836ac223fd5c8376a42ab9a506ed8a139b6eac42a4c",
+  "harness_sha256": "7515c86631dcab77b5324a84edee8b3861dc036d4cab773e7137bfeb29f2a103",
+  "backend_source_sha256": "b9cc1e055ab6bf88274bdc1208f59fb182c536344a1721a44a4460052bdee185",
+  "generate_plan": false,
+  "retry_failures": false,
+  "model": "Qwen3.8-27B",
+  "locality": "loopback",
+  "context_window": 262144,
+  "runtime": "frozen_sidecar",
+  "comparison_kind": "same_model_interruption",
+  "model_comparison": null,
+  "subjective_acceptance": "not_reviewed",
+  "cases": [
+    {
+      "case_id": "holdout_museum_label_revision",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "holdout_museum_label_revision--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "holdout_seed_notebook_historical_method",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "holdout_seed_notebook_historical_method--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    }
+  ]
+}
