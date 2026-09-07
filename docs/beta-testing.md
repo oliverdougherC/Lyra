@@ -18,6 +18,19 @@ Open the approved DMG, drag Lyra to Applications, and launch from Applications. 
 frontend, Python backend, and helper runtime. No developer tools are needed. Do not disable
 Gatekeeper to turn an unnotarized candidate into an approved release.
 
+Approved beta downloads use hardened ad-hoc signatures; they are not Developer ID signed or
+notarized by Apple. If macOS says the developer cannot be verified or Apple cannot check the app,
+first confirm you downloaded the approved release from the page above. After attempting to open
+Lyra, go to **System Settings → Privacy & Security**, find Lyra's **Open Anyway** button, and
+confirm **Open**. This grants an exception for that app while leaving global security protections
+enabled. Follow [Apple's first-launch instructions](https://support.apple.com/en-us/102445).
+If macOS reports damage or malware, do not bypass that warning; report it with the release version.
+
+An update can cause macOS to ask again for access to stored Keychain credentials because the
+ad-hoc code identity changes between builds. Prior **Always Allow** approvals may not carry over.
+The final candidate's first-launch and credential behavior must still pass the release acceptance
+checks; these instructions are not evidence of that pass.
+
 ## Set up your first class
 
 1. Create a class and add a small reading or assignment. PDF, plain text, Markdown, PNG, and JPEG

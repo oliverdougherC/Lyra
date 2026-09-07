@@ -360,6 +360,26 @@ def _read_server_record(service: str) -> dict | None:
     return record if isinstance(record, dict) else None
 
 
+def _mark_server_stopping(service: str) -> None:
+    """Persist stop intent before signaling so a restarted backend cannot adopt it."""
+    with _ownership_lock:
+        data = _load_ownership()
+        record = data.get(service)
+        if not isinstance(record, dict) or record.get("stopping") is True:
+            return
+        pid = record.get("pid")
+        token = record.get("start_token")
+        if not (isinstance(pid, int) and isinstance(token, str) and _token_matches_pid(pid, token)):
+            return
+        record["stopping"] = True
+        try:
+            _save_ownership(data)
+        except OSError as exc:
+            raise ConfigurationError(
+                "The local model helper shutdown could not be recorded. Retry to reclaim it."
+            ) from exc
+
+
 def _remove_server_record(service: str) -> None:
     """Remove the ownership record for a service."""
     with _ownership_lock:
@@ -492,6 +512,9 @@ class LlamaServer:
         self._process: subprocess.Popen[bytes] | None = None
         self._binary: Path | None = None
         self._lock = threading.RLock()
+        self._quitting = threading.Event()
+        self._admission_lock = threading.Lock()
+        self._stop_pending = False
         self._stderr_tail: deque[str] = deque(maxlen=_STDERR_TAIL_LINES)
         self._stderr_thread: threading.Thread | None = None
         self._failure_message: str | None = None
@@ -582,11 +605,13 @@ class LlamaServer:
         while any lease remains active.
         """
         with self._lock:
+            self._check_admission_locked()
             self._lease_count += 1
             self._idle_since = None
             self._cancel_idle_timer_locked()
             try:
                 self.ensure_running()
+                self._check_admission_locked()
             except Exception:
                 self._lease_count -= 1
                 raise
@@ -615,12 +640,35 @@ class LlamaServer:
                 return False
             if not self._owns_live_helper_locked():
                 return False
-        self._stop_internal(reason=_STOP_REASON_IDLE_EVICTED, include_durable_record=False)
-        return True
+            self._stop_internal(reason=_STOP_REASON_IDLE_EVICTED, include_durable_record=False)
+            return not self._owns_live_helper_locked()
 
     def stop_for_app_quit(self) -> None:
         """Explicit shutdown hook for application quit/restart integration."""
+        # Close admission before waiting for an in-flight start/stop to release the
+        # lifecycle lock. Queued work must not win that lock and spawn after quit.
+        self.close_admission_for_app_quit()
         self.stop()
+
+    def close_admission_for_app_quit(self) -> None:
+        """Prevent new work without waiting for this helper's lifecycle lock."""
+        with self._admission_lock:
+            self._quitting.set()
+
+    def _check_admission_locked(self) -> None:
+        if self._quitting.is_set():
+            raise ConfigurationError("Lyra is shutting down; local model work cannot start.")
+
+    def _finish_pending_stop_locked(self) -> None:
+        # A responsive process can still have a pending termination signal. It must
+        # never be leased again until death is proved and replacement is possible.
+        if self._stop_pending:
+            self._stop_internal(reason=_STOP_REASON_STOPPED, include_durable_record=True)
+            if self._stop_pending:
+                raise ConfigurationError(
+                    f"The {self._display_name} server could not be terminated. "
+                    "Retry after its shutdown completes."
+                )
 
     def status(self) -> HelperStatus:
         """Current helper state without mutating lifecycle ownership."""
@@ -638,6 +686,7 @@ class LlamaServer:
                 detail=download_detail,
             )
         with self._lock:
+            stop_pending = self._stop_pending
             starting = self._starting
             lease_count = self._lease_count
             process = self._process
@@ -648,6 +697,14 @@ class LlamaServer:
             idle_since = self._idle_since
             last_stop_reason = self._last_stop_reason
 
+        if stop_pending:
+            return HelperStatus(
+                state="failed",
+                lease_count=lease_count,
+                owned=True,
+                idle_timeout_seconds=self.idle_timeout_seconds,
+                detail="The local model helper is still shutting down. Retry to reclaim it.",
+            )
         if starting:
             return HelperStatus(
                 state="loading",
@@ -735,6 +792,8 @@ class LlamaServer:
                 the port is held by a server running a different model.
         """
         with self._lock:
+            self._check_admission_locked()
+            self._finish_pending_stop_locked()
             self._cancel_idle_timer_locked()
             self._idle_since = None
             # 0. Reconcile config drift before evaluating the current state.
@@ -756,6 +815,8 @@ class LlamaServer:
                         self._display_name,
                         self._process.pid,
                     )
+                    self._stop_pending = True
+                    _mark_server_stopping(self._display_name)
                     _terminate(self._process)
                     if self._process.poll() is None:
                         raise ConfigurationError(
@@ -764,6 +825,7 @@ class LlamaServer:
                             f"could not be terminated. Stop it manually "
                             f"(kill {self._process.pid}) and retry."
                         )
+                    self._stop_pending = False
                     self._process = None
                     self._unhealthy_restarts += 1
                     if self._unhealthy_restarts >= _MAX_UNHEALTHY_RESTARTS:
@@ -792,6 +854,8 @@ class LlamaServer:
                             adopted_model,
                             self._model_path().name,
                         )
+                        self._stop_pending = True
+                        _mark_server_stopping(self._display_name)
                         _terminate_pid(
                             self._adopted_pid,
                             self._adopted_pgid,
@@ -806,6 +870,7 @@ class LlamaServer:
                                 f"manually (kill {self._adopted_pid}) and "
                                 f"retry."
                             )
+                        self._stop_pending = False
                         self._adopted_pid = None
                         self._adopted_pgid = None
                         self._adopted_start_token = None
@@ -823,6 +888,8 @@ class LlamaServer:
                             self._display_name,
                             self._adopted_pid,
                         )
+                        self._stop_pending = True
+                        _mark_server_stopping(self._display_name)
                         _terminate_pid(
                             self._adopted_pid,
                             self._adopted_pgid,
@@ -836,6 +903,7 @@ class LlamaServer:
                                 f"could not be terminated. Stop it manually "
                                 f"(kill {self._adopted_pid}) and retry."
                             )
+                        self._stop_pending = False
                         self._adopted_pid = None
                         self._adopted_pgid = None
                         self._adopted_start_token = None
@@ -866,6 +934,8 @@ class LlamaServer:
     def start(self) -> None:
         """Spawn the server and block until it reports healthy."""
         with self._lock:
+            self._check_admission_locked()
+            self._finish_pending_stop_locked()
             self._start_locked()
 
     def stop(self) -> None:
@@ -902,7 +972,7 @@ class LlamaServer:
 
     def _schedule_idle_timer_locked(self, *, delay: float | None = None) -> None:
         self._cancel_idle_timer_locked()
-        if self._lease_count > 0 or not self._owns_live_helper_locked():
+        if self._quitting.is_set() or self._lease_count > 0 or not self._owns_live_helper_locked():
             return
         timeout = self.idle_timeout_seconds if delay is None else delay
         timer = self._timer_factory(timeout, self.evict_if_idle)
@@ -910,73 +980,90 @@ class LlamaServer:
         timer.start()
 
     def _stop_internal(self, *, reason: str, include_durable_record: bool) -> None:
+        # This lock covers selection, termination, death proof, and record cleanup.
+        # Never expose a detached live helper to lease/start/adoption during stop.
         with self._lock:
+            self._stop_pending = True
             self._cancel_idle_timer_locked()
             process = self._process
-            self._process = None
             adopted_pid = self._adopted_pid
             adopted_pgid = self._adopted_pgid
             adopted_token = self._adopted_start_token
-            self._adopted_pid = None
-            self._adopted_pgid = None
-            self._adopted_start_token = None
             self._idle_since = None
             self._last_stop_reason = reason
-        if process is not None:
-            _terminate(process)
-        if adopted_pid is not None:
-            _terminate_pid(adopted_pid, adopted_pgid, adopted_token, self._display_name)
+            # No cached health result can authorize a process selected for stop.
+            self._last_health_ok = float("-inf")
+            _mark_server_stopping(self._display_name)
+            if process is not None:
+                _terminate(process)
+                if process.poll() is not None:
+                    self._process = None
+            if adopted_pid is not None:
+                _terminate_pid(adopted_pid, adopted_pgid, adopted_token, self._display_name)
+                if not _token_matches_pid(adopted_pid, adopted_token):
+                    self._adopted_pid = None
+                    self._adopted_pgid = None
+                    self._adopted_start_token = None
 
-        if include_durable_record and process is None and adopted_pid is None:
+            if self._owns_live_helper_locked() and reason == _STOP_REASON_IDLE_EVICTED:
+                self._last_stop_reason = None
+                self._idle_since = self._monotonic()
+                self._schedule_idle_timer_locked()
+
+            if include_durable_record and process is None and adopted_pid is None:
+                try:
+                    record = _read_server_record(self._display_name)
+                except ConfigurationError:
+                    logger.warning(
+                        "Cannot read ownership file during %s shutdown; "
+                        "skipping durable-record reclamation",
+                        self._display_name,
+                    )
+                    record = None
+                if record is not None:
+                    rec_pid = record.get("pid")
+                    rec_token = record.get("start_token")
+                    rec_pgid = record.get("pgid")
+                    if (
+                        isinstance(rec_pid, int)
+                        and isinstance(rec_token, str)
+                        and _token_matches_pid(rec_pid, rec_token)
+                    ):
+                        _terminate_pid(
+                            rec_pid,
+                            rec_pgid if isinstance(rec_pgid, int) else None,
+                            rec_token,
+                            self._display_name,
+                        )
+
             try:
                 record = _read_server_record(self._display_name)
             except ConfigurationError:
                 logger.warning(
-                    "Cannot read ownership file during %s shutdown; "
-                    "skipping durable-record reclamation",
+                    "Cannot read ownership file during %s shutdown cleanup; "
+                    "skipping record removal",
                     self._display_name,
                 )
-                record = None
+                return
             if record is not None:
                 rec_pid = record.get("pid")
                 rec_token = record.get("start_token")
-                rec_pgid = record.get("pgid")
                 if (
                     isinstance(rec_pid, int)
                     and isinstance(rec_token, str)
                     and _token_matches_pid(rec_pid, rec_token)
                 ):
-                    _terminate_pid(
-                        rec_pid,
-                        rec_pgid if isinstance(rec_pgid, int) else None,
-                        rec_token,
+                    logger.warning(
+                        "The %s server (PID %d) survived termination; preserving "
+                        "ownership record for next recovery attempt",
                         self._display_name,
+                        rec_pid,
                     )
-
-        try:
-            record = _read_server_record(self._display_name)
-        except ConfigurationError:
-            logger.warning(
-                "Cannot read ownership file during %s shutdown cleanup; skipping record removal",
-                self._display_name,
-            )
-            return
-        if record is not None:
-            rec_pid = record.get("pid")
-            rec_token = record.get("start_token")
-            if (
-                isinstance(rec_pid, int)
-                and isinstance(rec_token, str)
-                and _token_matches_pid(rec_pid, rec_token)
-            ):
-                logger.warning(
-                    "The %s server (PID %d) survived termination; preserving "
-                    "ownership record for next recovery attempt",
-                    self._display_name,
-                    rec_pid,
-                )
-            else:
-                _remove_server_record(self._display_name)
+                else:
+                    _remove_server_record(self._display_name)
+                    record = None
+            if record is None and not self._owns_live_helper_locked():
+                self._stop_pending = False
 
     def _served_model(self) -> str | None:
         try:
@@ -1005,6 +1092,11 @@ class LlamaServer:
         if served is not None and Path(served).name == expected:
             record = _read_server_record(self._display_name)
             if record is not None:
+                if record.get("stopping") is True:
+                    self._stop_pending = True
+                    raise ConfigurationError(
+                        "The previous local model helper is shutting down. Retry to reclaim it."
+                    )
                 pid = record.get("pid")
                 token = record.get("start_token")
                 if (
@@ -1057,6 +1149,10 @@ class LlamaServer:
         record = _read_server_record(self._display_name)
         if record is None:
             return
+        if record.get("stopping") is True:
+            self._stop_pending = True
+            self._finish_pending_stop_locked()
+            return
         rec_pid = record.get("pid")
         rec_token = record.get("start_token")
         rec_port = record.get("port")
@@ -1079,6 +1175,8 @@ class LlamaServer:
             rec_pid,
         )
         rec_pgid = record.get("pgid")
+        self._stop_pending = True
+        _mark_server_stopping(self._display_name)
         _terminate_pid(
             rec_pid,
             rec_pgid if isinstance(rec_pgid, int) else None,
@@ -1087,6 +1185,7 @@ class LlamaServer:
         )
         if not _token_matches_pid(rec_pid, rec_token):
             _remove_server_record(self._display_name)
+            self._stop_pending = False
         else:
             logger.warning(
                 "Old %s server (PID %d) survived termination after config "
@@ -1153,12 +1252,16 @@ class LlamaServer:
         argv = self._argv(binary)
         self._stderr_tail = deque(maxlen=_STDERR_TAIL_LINES)
         try:
-            process = subprocess.Popen(  # noqa: S603
-                argv,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                start_new_session=True,
-            )
+            # Closing admission and the final spawn decision are one transition.
+            # This short lock never covers downloads or waiting for model health.
+            with self._admission_lock:
+                self._check_admission_locked()
+                process = subprocess.Popen(  # noqa: S603
+                    argv,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    start_new_session=True,
+                )
         except OSError as exc:
             raise ConfigurationError(self._start_failed_message) from exc
         stderr = getattr(process, "stderr", None)
@@ -1187,8 +1290,11 @@ class LlamaServer:
                 process.pid,
                 exc,
             )
+            self._stop_pending = True
             _terminate(process)
-            self._process = None
+            if process.poll() is not None:
+                self._process = None
+                self._stop_pending = False
             raise ConfigurationError(
                 f"The {self._display_name} server started but its ownership "
                 f"could not be recorded. Fix the underlying error and retry."
@@ -1248,8 +1354,12 @@ class LlamaServer:
                 if ready:
                     return
                 time.sleep(_HEALTH_POLL_SECONDS)
+        self._stop_pending = True
+        _mark_server_stopping(self._display_name)
         _terminate(process)
-        self._process = None
+        if process.poll() is not None:
+            self._process = None
+            self._stop_pending = False
         raise self._start_failure()
 
     def _start_failure(self) -> ConfigurationError:

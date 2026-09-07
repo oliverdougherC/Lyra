@@ -13,9 +13,14 @@ from backend.llm import helper_reclaim
 class _FakeHelper:
     def __init__(self, *, error: Exception | None = None) -> None:
         self.calls = 0
+        self.closed = False
         self._error = error
 
+    def close_admission_for_app_quit(self) -> None:
+        self.closed = True
+
     def stop_for_app_quit(self) -> None:
+        assert self.closed
         self.calls += 1
         if self._error is not None:
             raise self._error
@@ -159,3 +164,18 @@ def test_main_reports_live_helper_as_failed_json_and_nonzero(
             }
         ],
     }
+
+
+def test_reclamation_closes_all_admission_before_first_stop(monkeypatch):
+    helpers = {name: _FakeHelper() for name in ("embedding", "reranking")}
+    monkeypatch.setattr(helper_reclaim, "_HELPERS", helpers)
+    monkeypatch.setattr(helper_reclaim, "_record_state", lambda service: "absent")
+
+    def first_stop():
+        assert all(helper.closed for helper in helpers.values())
+        raise RuntimeError("first helper cleanup failed")
+
+    monkeypatch.setattr(helpers["embedding"], "stop_for_app_quit", first_stop)
+    result = helper_reclaim.reclaim_owned_helpers()
+    assert result["status"] == "error"
+    assert helpers["reranking"].calls == 1

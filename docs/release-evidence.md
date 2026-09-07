@@ -1,5 +1,44 @@
 # Beta release evidence ledger
 
+## Current reconciliation — September 6, 2026
+
+**Decision: NO-GO for public promotion.** Current fetched main is
+`e96bf4886977c648f9e7905c7807c806b1ae7a80`. PRs #73, #74, #75, #77 and #78 are merged.
+The records below describe their earlier preparation and are retained as historical receipts;
+their “in review” labels and old external preflight are not current release configuration.
+
+Runtime follow-up is on `fix/pla328-runtime-release-20260906`. The existing canonical installer
+PR #76 is being rebased and verified, not recreated. Release-version PR #79 remains a separate
+review decision. No merge, publication, production-key rotation or public promotion is authorized
+by this ledger.
+
+PR #77 selects **hardened ad-hoc beta distribution**, with minimal helper entitlements, final
+mounted-DMG/hash verification and separately signed updater archives. Apple Developer ID and
+notarization are not prerequisites for that policy. Local certificate-signed review builds remain
+useful for stable Keychain identity; they do not establish the selected distribution gate.
+
+The available test host is Apple Silicon `Mac16,8`, 24 GiB RAM, macOS 27.0 build `26A5416b`.
+It cannot supply PLA-329's actual 8 GB measurements. The owner subsequently waived that
+unavailable hardware check for this handoff; record it as **blocked / owner-waived**, never as a
+pass or an 8 GB performance claim. No isolated OS account has been established for real Keychain
+mutation. Final integration-sensitive acceptance must follow approved integration
+and use one immutable candidate; independent worktree checks do not substitute for it.
+
+The owner subsequently confirmed distribution clearance in this task. This is an owner
+attestation, not independent verification of a PyMuPDF commercial license or of open-source
+compliance; retain the dependency inventory and obligations. The statement did not confirm
+that an encrypted off-device updater backup exists.
+
+Current gate receipts and the final candidate identity will be appended in the runtime/release
+handoff. Keep production updater-key backup confirmation, dependency distribution clearance,
+anonymous matching download/feed, installed update/rollback, physical input/accessibility and
+8 GB sustained/sleep-wake acceptance open until direct evidence exists.
+
+## Historical preparation receipt — September 5, 2026
+
+Everything in this section records the earlier preparation state. In particular, its request for
+Developer ID credentials was superseded by #77; it is preserved here only as history.
+
 Status: implementation and private review candidate preparation; **not approved or published**.
 Fetched main: `3e109a7ef1cdce7362d9f0e8a286881ebf6fa5a5` (2026-09-05).
 Working branch: `release/beta-readiness-20260905`, isolated from the existing dirty checkout.

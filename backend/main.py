@@ -154,9 +154,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # this line ever reclaims them: a forgotten one outlives the app indefinitely,
         # holding hundreds of megabytes of weights. Each stop is a no-op when that
         # server never ran.
-        embedding_server.stop_for_app_quit()
-        ocr_server.stop_for_app_quit()
-        rerank_server.stop_for_app_quit()
+        helpers = (embedding_server, ocr_server, rerank_server)
+        for helper in helpers:
+            helper.close_admission_for_app_quit()
+        for helper in helpers:
+            try:
+                helper.stop_for_app_quit()
+            except Exception:
+                logger.exception("Failed to reclaim a local model helper during shutdown")
 
 
 def create_app(*, session_secret: str | None = None) -> FastAPI:

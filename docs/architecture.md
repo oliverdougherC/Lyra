@@ -121,7 +121,13 @@ The source checkout keeps explicit relative overrides for tests. The packaged ap
 `~/Library/Application Support/Lyra` for durable data/models, `~/Library/Caches/Lyra` for rendered
 page caches, `~/Library/Logs/Lyra` for bounded logs, and Keychain for tutor/Exa credentials. Mutable
 state is never written into `Lyra.app`. Local helpers hold active leases and are evicted after five
-minutes idle. Release evidence helpers include:
+minutes idle. Eviction keeps lifecycle admission locked through termination and ownership cleanup,
+so a new request cannot reuse a helper already selected for shutdown. Failed termination retains
+ownership and blocks reuse until process death is proved, even if its health endpoint responds.
+The ownership record persists shutdown intent before signals, so backend restart also reclaims
+that process before allowing a replacement; it cannot adopt a helper still shutting down. Application quit closes admission for
+all three helpers before reclaiming them; queued background work cannot restart them afterward.
+Release evidence helpers include:
 
 - `scripts/desktop_resource_report.py` for deterministic resource inventories
 - `scripts/desktop_runtime_report.py` for the retained Lyra/Tauri/WebKit process inventory, per-process resource sample, and explicit still-open physical gates
