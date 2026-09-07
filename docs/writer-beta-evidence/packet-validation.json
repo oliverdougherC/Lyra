@@ -1,0 +1,25 @@
+{
+  "version": "writer-packet-validation.v1",
+  "source_sha": "24575e9f859a220440186c106a8936b303a6510e",
+  "retained_manifest_hashes_verified": 348,
+  "corpus_hashes_verified": 45,
+  "final_package_receipts": 33,
+  "final_package_counts": {
+    "packaged-controlled": 12,
+    "packaged-review": 6,
+    "packaged-section": 2,
+    "packaged-sources": 3,
+    "packaged-model": 7,
+    "packaged-planning": 1,
+    "packaged-model-review": 2
+  },
+  "same_frozen_runtime_hash_verified": "c351bd1d9c43f94bd17c4c327eac2baa6075832c132f2768d471c45d6826e1ac",
+  "source_fingerprints_match_batch_and_case": true,
+  "independent_quality_receipt_hashes_verified": 12,
+  "ci_checks_success": 11,
+  "ci_head_sha_verified": true,
+  "privacy_scan": "No absolute user/temp filesystem paths, non-approved URL hosts, or scanned credential patterns. Corpus bytes unchanged; originals remain hash-bound.",
+  "json_syntax": "all parsed",
+  "pending_final_receipts": [],
+  "acceptance": "not_determined; semantic/human/integrated/held-out/8GiB/long-session gates not waived"
+}

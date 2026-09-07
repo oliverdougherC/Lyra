@@ -1,0 +1,941 @@
+{
+  "evaluator": {
+    "type": "independent-agent",
+    "identity": "Codex GPT-6 /root/independent_output_review",
+    "version": "5-final-candidate",
+    "blinding": "Unblinded followup; not corpus/code author",
+    "human_review": false
+  },
+  "provenance": [
+    {
+      "path": "receipt:a37daae-model",
+      "version": "writer-evaluation.v1",
+      "tested_sha": "a37daaee497b7e3b4e26fa040edbfd3c2dd3108b",
+      "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+      "prompt_sha256": "97df6437a8d90208819e834e71d0f16353cce7d198d437b183f45e33b19663c4",
+      "runtime_sha256": null,
+      "harness_sha256": "7515c86631dcab77b5324a84edee8b3861dc036d4cab773e7137bfeb29f2a103",
+      "backend_source_sha256": "1aa93d33988660a45b5796684feb840bf147ad671a999bd0993f7512d438dfd6",
+      "generate_plan": false,
+      "retry_failures": false,
+      "model": "Qwen3.8-27B",
+      "locality": "non_loopback",
+      "context_window": 262144,
+      "runtime": "source_desktop_bootstrap",
+      "comparison_kind": "same_model_interruption",
+      "model_comparison": null,
+      "subjective_acceptance": "not_reviewed"
+    },
+    {
+      "path": "receipt:a37daae-planning",
+      "version": "writer-evaluation.v1",
+      "tested_sha": "39e7352193fd25efd9ac1b5864765d618308c5ff",
+      "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+      "prompt_sha256": "97df6437a8d90208819e834e71d0f16353cce7d198d437b183f45e33b19663c4",
+      "runtime_sha256": null,
+      "harness_sha256": "7515c86631dcab77b5324a84edee8b3861dc036d4cab773e7137bfeb29f2a103",
+      "backend_source_sha256": "309cfebc4fc1e24063ca05409862d0b9e1d4f549300a774687c9cb3c181893a4",
+      "generate_plan": true,
+      "retry_failures": false,
+      "model": "Qwen3.8-27B",
+      "locality": "non_loopback",
+      "context_window": 262144,
+      "runtime": "source_desktop_bootstrap",
+      "comparison_kind": "same_model_interruption",
+      "model_comparison": null,
+      "subjective_acceptance": "not_reviewed"
+    }
+  ],
+  "results": [
+    {
+      "case_id": "pass_targeted_causal_precision",
+      "receipt": "receipt:a37daae-model/pass_targeted_causal_precision--uninterrupted.json",
+      "receipt_sha256": "037b8bba7ca46db085f600a9a7467c24897c72ed083074f903c1439e19f4f8a4",
+      "source_sha": "a37daaee497b7e3b4e26fa040edbfd3c2dd3108b",
+      "plan_mode": "corpus_seeded",
+      "code_changed_during_case": false,
+      "controlled_comparison_eligible": true,
+      "terminal_status": "failed",
+      "error": "The automatic section review still has unresolved findings. The existing writing and partial proposal were kept for review.",
+      "warnings": [
+        {
+          "code": "section_review_unresolved",
+          "message": "Automatic review of 1.2 still asks for: Trim the section to under 150 words. Remove the final paragraph entirely, as it overlaps with the Recommendation section. Tighten the first two paragraphs to directly state that boardings measure trips, not unique people, and that the survey excludes non-riders, thereby refuting the causal attendance claim without adding meta-commentary or new recommendations."
+        }
+      ],
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d",
+      "candidate_headings": [
+        "# A timetable is a promise",
+        "## Introduction",
+        "## Evidence",
+        "## Recommendation"
+      ],
+      "unrelated_edits": {
+        "accepted_body_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "note": "Whole live proposal authorized; generated writing is separate from accepted notes."
+      },
+      "source_support": {
+        "marker_ids": [
+          1,
+          1,
+          1,
+          2,
+          2
+        ],
+        "unknown_source_ids": [],
+        "excerpts": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 7,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 8,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          }
+        ]
+      },
+      "duplicates": {
+        "exact_paragraphs": [],
+        "duplicate_headings": [],
+        "comment_extras": "not-applicable: no standalone review in these cases"
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "repaired_in_partial_proposal",
+          "reason": "Exact positive causal assertion removed; explicit causal limit remains. Accepted original unchanged pending review."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A conditional recommendation, not a causal evaluation.",
+          "rationale": "Corpus-seeded plan, not model planning evidence.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 4,
+          "output_excerpt": "no attendance data were collected [@lyra:1]",
+          "rationale": "Correct source IDs 1/2 and substantive boarding, attendance, rider-only limitations; no material new factual invention identified. Metaphorical movement-versus-population phrasing read in context as metric distinction.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 3,
+          "output_excerpt": "## Evidence",
+          "rationale": "Protected Introduction/Recommendation exact; causal target repaired in useful partial, with some repetitive expansion.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 2,
+          "output_excerpt": "strictly adhere to the 150-word budget",
+          "rationale": "Concision/scope advice can help, but internal reviewer continues to treat soft section allocation as strict blocking criterion. Failed status is honest; full workflow incomplete.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 2,
+          "output_excerpt": "The automatic section review still has unresolved findings.",
+          "rationale": "Core requested repair in partial but automatic review unresolved. Do not equate partial quality with completed run; section budget is soft, whole brief 450 words.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 3,
+          "output_excerpt": "I interpret the evidence as capturing trip frequency and self-reported rider opinions, not causal links to class attendance.",
+          "rationale": "First-person caution survives and recognizable badge metaphor remains in some outputs; no fabricated personal history.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "material_findings": [],
+      "length_note": "150-word section allocation soft; 450-word essay target separate. Live brief approximately 320; not an exact-word hard gate.",
+      "comparison_d181": "Correct source IDs and absence of duplicate Recommendation improve affected targeted partials; all four targeted runs still fail internal review. No causal improvement attribution from one sample. Generated planning has no valid d181 seeded-plan comparison."
+    },
+    {
+      "case_id": "source_history_replace",
+      "receipt": "receipt:a37daae-model/source_history_replace--uninterrupted.json",
+      "receipt_sha256": "099c74250ecc0e93551dd08b9d84865a1dfad2bff1346b38e1901ffd7e7898bd",
+      "source_sha": "a37daaee497b7e3b4e26fa040edbfd3c2dd3108b",
+      "plan_mode": "corpus_seeded",
+      "code_changed_during_case": false,
+      "controlled_comparison_eligible": true,
+      "terminal_status": "failed",
+      "error": "The automatic section review still has unresolved findings. The existing writing and partial proposal were kept for review.",
+      "warnings": [
+        {
+          "code": "section_review_unresolved",
+          "message": "Automatic review of 1.2 still asks for: Rewrite the Evidence section to strictly adhere to the 150-word budget. Remove all references to the specific boarding numbers (160 and 240) as they are withdrawn and unreliable per Source 1. Instead, focus exclusively on the limitations of the available data: cite Source 1 to establish that no usable attendance data exists because the counts were withdrawn, and cite Source 2 to explain that the survey only covers existing riders and cannot measure demand among non-riders. Maintain the first-person voice and the tentative tone, ensuring the argument clearly distinguishes between descriptive observations of current users and causal claims about overall attendance."
+        }
+      ],
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d",
+      "candidate_headings": [
+        "# A timetable is a promise",
+        "## Introduction",
+        "## Evidence",
+        "## Recommendation"
+      ],
+      "unrelated_edits": {
+        "accepted_body_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "note": "Whole live proposal authorized; generated writing is separate from accepted notes."
+      },
+      "source_support": {
+        "marker_ids": [
+          1,
+          1,
+          1,
+          2,
+          2,
+          2
+        ],
+        "unknown_source_ids": [],
+        "excerpts": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": 3,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 1,
+            "revision_id": 3,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 7,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 8,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          }
+        ]
+      },
+      "duplicates": {
+        "exact_paragraphs": [],
+        "duplicate_headings": [],
+        "comment_extras": "not-applicable: no standalone review in these cases"
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "repaired_in_partial_proposal",
+          "reason": "Exact positive causal assertion removed; explicit causal limit remains. Accepted original unchanged pending review."
+        },
+        {
+          "id": "historical_support",
+          "result": "met",
+          "reason": "Retained original revision 1 and new withdrawal revision 2 distinct."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A conditional recommendation, not a causal evaluation.",
+          "rationale": "Corpus-seeded plan, not model planning evidence.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 3,
+          "output_excerpt": "Since the underlying data were removed as unreliable, I cannot use them to make a causal claim.",
+          "rationale": "Historical withdrawal correctly acknowledged and source IDs resolve; residual statement that withdrawn numbers describe trip volume can blur unreliability. No original causal assertion retained.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 3,
+          "output_excerpt": "## Evidence",
+          "rationale": "Protected Introduction/Recommendation exact; causal target repaired in useful partial, with some repetitive expansion.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 2,
+          "output_excerpt": "strictly adhere to the 150-word budget",
+          "rationale": "Concision/scope advice can help, but internal reviewer continues to treat soft section allocation as strict blocking criterion. Failed status is honest; full workflow incomplete.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 2,
+          "output_excerpt": "The automatic section review still has unresolved findings.",
+          "rationale": "Core requested repair in partial but automatic review unresolved. Do not equate partial quality with completed run; section budget is soft, whole brief 450 words.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 4,
+          "output_excerpt": "I want the numbers to earn their place",
+          "rationale": "First-person caution survives and recognizable badge metaphor remains in some outputs; no fabricated personal history.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "material_findings": [
+        {
+          "kind": "residual_evidence_ambiguity",
+          "quote": "The numbers describe trip volume during specific weeks",
+          "reason": "Counts are withdrawn due to maintenance trips; should keep their historical unreliability explicit rather than treating them as valid usage description."
+        }
+      ],
+      "length_note": "150-word section allocation soft; 450-word essay target separate. Live brief approximately 320; not an exact-word hard gate.",
+      "comparison_d181": "Correct source IDs and absence of duplicate Recommendation improve affected targeted partials; all four targeted runs still fail internal review. No causal improvement attribution from one sample. Generated planning has no valid d181 seeded-plan comparison."
+    },
+    {
+      "case_id": "source_history_delete",
+      "receipt": "receipt:a37daae-model/source_history_delete--uninterrupted.json",
+      "receipt_sha256": "7c2e9c8544a2254fca6da474ccd42ed2e87985c0922051201602130e6c9ff524",
+      "source_sha": "a37daaee497b7e3b4e26fa040edbfd3c2dd3108b",
+      "plan_mode": "corpus_seeded",
+      "code_changed_during_case": false,
+      "controlled_comparison_eligible": true,
+      "terminal_status": "failed",
+      "error": "The automatic section review still has unresolved findings. The existing writing and partial proposal were kept for review.",
+      "warnings": [
+        {
+          "code": "section_review_unresolved",
+          "message": "Automatic review of 1.2 still asks for: Rewrite the 'Evidence' section to strictly adhere to the 150-word budget. Remove all meta-commentary and self-acknowledgments. Directly link the lack of attendance data and the definition of boardings as trips to the conclusion that the data supports further inquiry rather than an attendance effect. Ensure the first-person voice remains tentative but focused on the logical gap in the evidence, citing [@lyra:1] and [@lyra:2] precisely where the specific limitations are mentioned."
+        }
+      ],
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d",
+      "candidate_headings": [
+        "# A timetable is a promise",
+        "## Introduction",
+        "## Evidence",
+        "## Recommendation"
+      ],
+      "unrelated_edits": {
+        "accepted_body_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "note": "Whole live proposal authorized; generated writing is separate from accepted notes."
+      },
+      "source_support": {
+        "marker_ids": [
+          1,
+          1,
+          1,
+          2,
+          2
+        ],
+        "unknown_source_ids": [],
+        "excerpts": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": null,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": null,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": null,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 1,
+            "revision_id": null,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 2,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 7,
+            "source_id": 2,
+            "revision_id": 1,
+            "exact_support": true
+          }
+        ]
+      },
+      "duplicates": {
+        "exact_paragraphs": [],
+        "duplicate_headings": [],
+        "comment_extras": "not-applicable: no standalone review in these cases"
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "repaired_in_partial_proposal",
+          "reason": "Exact positive causal assertion removed; explicit causal limit remains. Accepted original unchanged pending review."
+        },
+        {
+          "id": "historical_support",
+          "result": "met",
+          "reason": "Course source remains unversioned snapshot with null revision/document identifiers."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A conditional recommendation, not a causal evaluation.",
+          "rationale": "Corpus-seeded plan, not model planning evidence.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 4,
+          "output_excerpt": "no attendance data were collected [@lyra:1]",
+          "rationale": "Correct source IDs 1/2 and substantive boarding, attendance, rider-only limitations; no material new factual invention identified. Metaphorical movement-versus-population phrasing read in context as metric distinction.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 3,
+          "output_excerpt": "## Evidence",
+          "rationale": "Protected Introduction/Recommendation exact; causal target repaired in useful partial, with some repetitive expansion.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 2,
+          "output_excerpt": "strictly adhere to the 150-word budget",
+          "rationale": "Concision/scope advice can help, but internal reviewer continues to treat soft section allocation as strict blocking criterion. Failed status is honest; full workflow incomplete.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 2,
+          "output_excerpt": "The automatic section review still has unresolved findings.",
+          "rationale": "Core requested repair in partial but automatic review unresolved. Do not equate partial quality with completed run; section budget is soft, whole brief 450 words.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 3,
+          "output_excerpt": "I acknowledge that this distinction is subtle, but it is necessary to ensure my assessment remains grounded in what the data actually shows rather than what we might hope it proves.",
+          "rationale": "First-person caution survives and recognizable badge metaphor remains in some outputs; no fabricated personal history.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "material_findings": [],
+      "length_note": "150-word section allocation soft; 450-word essay target separate. Live brief approximately 320; not an exact-word hard gate.",
+      "comparison_d181": "Correct source IDs and absence of duplicate Recommendation improve affected targeted partials; all four targeted runs still fail internal review. No causal improvement attribution from one sample. Generated planning has no valid d181 seeded-plan comparison."
+    },
+    {
+      "case_id": "pass_multisection_same_model_recovery",
+      "receipt": "receipt:a37daae-model/pass_multisection_same_model_recovery--uninterrupted.json",
+      "receipt_sha256": "3c431d0c0067415001728f3fd33e31bccc61b57a4755a03a34dc21ae2e94f41e",
+      "source_sha": "a37daaee497b7e3b4e26fa040edbfd3c2dd3108b",
+      "plan_mode": "corpus_seeded",
+      "code_changed_during_case": false,
+      "controlled_comparison_eligible": true,
+      "terminal_status": "failed",
+      "error": "The automatic section review still has unresolved findings. The existing writing and partial proposal were kept for review.",
+      "warnings": [
+        {
+          "code": "section_review_unresolved",
+          "message": "Automatic review of 1.2 still asks for: Condense the section to under 150 words. Remove the redundant 'badge' sentence. Explicitly link the limitations of the data (trips vs. attendance, riders vs. non-riders) to the thesis that the pilot should be extended for one term to collect better evidence, rather than concluding with a generic call for 'further investigation.' Ensure both sources are cited and the first-person voice is maintained."
+        }
+      ],
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d",
+      "candidate_headings": [
+        "# A timetable is a promise",
+        "## Introduction",
+        "## Evidence",
+        "## Recommendation"
+      ],
+      "unrelated_edits": {
+        "accepted_body_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "note": "Whole live proposal authorized; generated writing is separate from accepted notes."
+      },
+      "source_support": {
+        "marker_ids": [
+          1,
+          2
+        ],
+        "unknown_source_ids": [],
+        "excerpts": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          }
+        ]
+      },
+      "duplicates": {
+        "exact_paragraphs": [],
+        "duplicate_headings": [],
+        "comment_extras": "not-applicable: no standalone review in these cases"
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "repaired_in_partial_proposal",
+          "reason": "Exact positive causal assertion removed; explicit causal limit remains. Accepted original unchanged pending review."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A conditional recommendation, not a causal evaluation.",
+          "rationale": "Corpus-seeded plan, not model planning evidence.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 4,
+          "output_excerpt": "no attendance data were collected [@lyra:1]",
+          "rationale": "Correct source IDs 1/2 and substantive boarding, attendance, rider-only limitations; no material new factual invention identified. Metaphorical movement-versus-population phrasing read in context as metric distinction.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 3,
+          "output_excerpt": "## Evidence",
+          "rationale": "Protected sections preserved; no duplicate Recommendation. Useful target repair retained as partial. Multisection Recommendation not processed because first target failed.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 2,
+          "output_excerpt": "strictly adhere to the 150-word budget",
+          "rationale": "Concision/scope advice can help, but internal reviewer continues to treat soft section allocation as strict blocking criterion. Failed status is honest; full workflow incomplete.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 2,
+          "output_excerpt": "The automatic section review still has unresolved findings.",
+          "rationale": "Core requested repair in partial but automatic review unresolved. Do not equate partial quality with completed run; section budget is soft, whole brief 450 words.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 4,
+          "output_excerpt": "I initially read this shift as a fifty percent rise in student attendance, but that interpretation fails.",
+          "rationale": "First-person caution survives and recognizable badge metaphor remains in some outputs; no fabricated personal history.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "material_findings": [],
+      "length_note": "150-word section allocation soft; 450-word essay target separate. Live brief approximately 320; not an exact-word hard gate.",
+      "comparison_d181": "Correct source IDs and absence of duplicate Recommendation improve affected targeted partials; all four targeted runs still fail internal review. No causal improvement attribution from one sample. Generated planning has no valid d181 seeded-plan comparison."
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "receipt": "receipt:a37daae-model/full_live_draft_from_student_notes--uninterrupted.json",
+      "receipt_sha256": "a58fffbc9d3019965944320290cb3d3f4310ac2555f3a61989cf31c8cf95007a",
+      "source_sha": "a37daaee497b7e3b4e26fa040edbfd3c2dd3108b",
+      "plan_mode": "corpus_seeded",
+      "code_changed_during_case": true,
+      "controlled_comparison_eligible": false,
+      "terminal_status": "completed",
+      "error": null,
+      "warnings": [],
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+      "candidate_headings": [
+        "## Evidence",
+        "## Recommendation"
+      ],
+      "unrelated_edits": {
+        "accepted_body_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "note": "Whole live proposal authorized; generated writing is separate from accepted notes."
+      },
+      "source_support": {
+        "marker_ids": [
+          1,
+          1,
+          2,
+          2,
+          2
+        ],
+        "unknown_source_ids": [],
+        "excerpts": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 7,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 8,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          }
+        ]
+      },
+      "duplicates": {
+        "exact_paragraphs": [],
+        "duplicate_headings": [],
+        "comment_extras": "not-applicable: no standalone review in these cases"
+      },
+      "seed_adjudication": [
+        {
+          "id": "notes_preservation",
+          "result": "met",
+          "reason": "Accepted notes byte-exact; separate proposal."
+        },
+        {
+          "id": "attendance_noninference",
+          "result": "met",
+          "reason": "No claim of demonstrated attendance effect; separate unique-people errors listed where present."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+          "rationale": "Corpus-seeded plan, not model planning evidence.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 2,
+          "output_excerpt": "since we lack the measurements to claim either [@lyra:2]",
+          "rationale": "Combined lack-of-attendance and lack-of-cost claim cites only survey source 2, although attendance absence belongs to source 1. Core trip limitation correct; overclaim that non-riders are the very population whose behavior might change is too categorical.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": "not-applicable",
+          "output_excerpt": "## Evidence",
+          "rationale": "Whole separate proposal; notes preserved.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 2,
+          "output_excerpt": "Because the sample excludes the very population whose behavior might change",
+          "rationale": "Final output retains categorical framing and combined misattribution; source evidence/limits otherwise useful.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 3,
+          "output_excerpt": "I propose we extend the pilot for one term",
+          "rationale": "Two sections, preserved notes, caution and future non-rider survey. Some evidence overreach; comparison excluded for code-change flag.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 4,
+          "output_excerpt": "a personal stake that frames this proposal rather than proving it",
+          "rationale": "Concrete east-gate origin and clear distinction between personal reason and evidence retain student stance without invented history.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "material_findings": [
+        {
+          "kind": "combined_source_misattribution",
+          "quote": "should not assume the service solved attendance or generated specific costs, since we lack the measurements to claim either [@lyra:2]",
+          "reason": "Source 2 supplies costs absence, source 1 attendance absence."
+        }
+      ],
+      "length_note": "150-word section allocation soft; 450-word essay target separate. Live brief approximately 320; not an exact-word hard gate.",
+      "comparison_d181": "Seeded full live code-change flagged, descriptive only. Generated-plan run on 39-head is separate evidence class; do not compare it as seeded-plan parity."
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "receipt": "receipt:a37daae-planning/full_live_draft_from_student_notes--uninterrupted.json",
+      "receipt_sha256": "db7efd7eea5cd0af45bc1da3c6e5cbb040121a0f0ed98f389e4443a81c89100f",
+      "source_sha": "39e7352193fd25efd9ac1b5864765d618308c5ff",
+      "plan_mode": "generated",
+      "code_changed_during_case": false,
+      "controlled_comparison_eligible": true,
+      "terminal_status": "completed",
+      "error": null,
+      "warnings": [],
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+      "candidate_headings": [
+        "## My shuttle memo notes"
+      ],
+      "unrelated_edits": {
+        "accepted_body_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "note": "Whole live proposal authorized; generated writing is separate from accepted notes."
+      },
+      "source_support": {
+        "marker_ids": [
+          1,
+          1,
+          2
+        ],
+        "unknown_source_ids": [],
+        "excerpts": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          }
+        ]
+      },
+      "duplicates": {
+        "exact_paragraphs": [],
+        "duplicate_headings": [],
+        "comment_extras": "not-applicable: no standalone review in these cases"
+      },
+      "seed_adjudication": [
+        {
+          "id": "notes_preservation",
+          "result": "met",
+          "reason": "Accepted notes byte-exact; separate proposal."
+        },
+        {
+          "id": "attendance_noninference",
+          "result": "met",
+          "reason": "No claim of demonstrated attendance effect; separate unique-people errors listed where present."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": 1,
+          "output_excerpt": "Contains exactly two sections titled Evidence and Recommendation",
+          "rationale": "Analysis states correct two-section criterion but persisted plan has one My shuttle memo notes section. It also conflates survey limitation with absence of attendance measurements from transport memo.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 1,
+          "output_excerpt": "This rise suggests that more students used the service",
+          "rationale": "Trip counts do not identify unique students; source 1 incorrectly called survey methodology; primary campus-events goal and positive-response selection direction not established.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": "not-applicable",
+          "output_excerpt": "## My shuttle memo notes",
+          "rationale": "Generated full proposal, not targeted repair.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 1,
+          "output_excerpt": "The survey methodology note states that no attendance data were collected",
+          "rationale": "Completed output retains material source-role error, unsupported unique-student inference and forbidden section structure; internal review fails to catch these.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 1,
+          "output_excerpt": "## My shuttle memo notes",
+          "rationale": "Exactly-two required section names absent; one section only. Notes preserved but core structure and evidence constraints violated despite completion.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 3,
+          "output_excerpt": "that uncertainty anchors my view of the pilot",
+          "rationale": "Personal east-gate stake and first person preserved, though latter paragraph generic.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "material_findings": [
+        {
+          "kind": "required_structure_failure",
+          "expected": [
+            "Evidence",
+            "Recommendation"
+          ],
+          "actual": [
+            "My shuttle memo notes"
+          ]
+        },
+        {
+          "kind": "unsupported_unique_people_inference",
+          "quote": "This rise suggests that more students used the service",
+          "reason": "Source counts trips, not unique people."
+        },
+        {
+          "kind": "source_role_misattribution",
+          "quote": "The survey methodology note states that no attendance data were collected [@lyra:1]",
+          "reason": "Source 1 is transport memo; source 2 is survey."
+        },
+        {
+          "kind": "invented_service_goal",
+          "quote": "the service’s primary goal is to support access to campus events",
+          "reason": "Neither supplied source nor notes establishes that specific primary goal."
+        },
+        {
+          "kind": "unsupported_bias_direction",
+          "quote": "skews feedback toward those with positive experiences",
+          "reason": "Voluntary rider sample may be unrepresentative but direction of selection bias is not established."
+        }
+      ],
+      "length_note": "150-word section allocation soft; 450-word essay target separate. Live brief approximately 320; not an exact-word hard gate.",
+      "comparison_d181": "Seeded full live code-change flagged, descriptive only. Generated-plan run on 39-head is separate evidence class; do not compare it as seeded-plan parity.",
+      "actual_request_structure_evidence": {
+        "brief_summary": "Draft a separate proposal from the student notes with exactly two sections: Evidence and Recommendation. Explain the supported boarding comparison and the survey limitation, then recommend a one-term extension with better measurement. Retain the tentative first-person stance. Do not claim an attendance effect, invent costs, or replace the original notes.",
+        "pass_payload_instruction": "Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.",
+        "note": "Two-section requirement exists in actual brief and request, independent of seeded plan removed by --generate-plan."
+      }
+    }
+  ],
+  "conclusion": "Final guard/prompt source fixes observed wrong-source-ID and duplicated-section regressions in targeted partials, but all four targeted runs remain failed with unresolved automatic review. Generated planning completes while violating core two-section structure and introducing substantive unsupported claims. No final acceptance established.",
+  "pending_packaged_paths": [
+    "receipt:39e7352-packaged-model",
+    "receipt:39e7352-packaged-model-review"
+  ],
+  "limitations": [
+    "Unblinded independent-agent followup, never human review.",
+    "Seeded full-live code_changed_during_case true: not controlled evidence even if described as formatting-only change.",
+    "d181 corpus late/mixed-source or concurrent-provider observations are descriptive only; do not treat final late entries as controlled parity.",
+    "No additional tuning, code edits, provider calls or package execution by reviewer.",
+    "All four targeted failed outputs assessed as retained partials; no clean-completion inflation.",
+    "Historical failures retained in previous reports."
+  ]
+}

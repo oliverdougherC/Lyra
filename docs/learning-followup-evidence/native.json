@@ -1,0 +1,44 @@
+{
+  "source_sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+  "app_pid": 5532,
+  "rendered_ui": "not_run",
+  "human_review": "not_run",
+  "backend_pids": [
+    5539
+  ],
+  "selectors": {
+    "5532": {
+      "LYRA_DATA_DIR": true,
+      "LYRA_CACHE_DIR": true,
+      "LYRA_LOGS_DIR": true,
+      "LYRA_MODELS_DIR": true,
+      "PYTHON_KEYRING_BACKEND": true
+    },
+    "5539": {
+      "LYRA_DATA_DIR": true,
+      "LYRA_CACHE_DIR": true,
+      "LYRA_LOGS_DIR": true,
+      "LYRA_MODELS_DIR": true,
+      "PYTHON_KEYRING_BACKEND": true
+    }
+  },
+  "db_integrity": "ok",
+  "classes": 0,
+  "startup": "passed",
+  "termination": "SIGTERM process termination, not Cmd-Q/UI acceptance",
+  "remaining_owned_pids": [],
+  "bundle_tree_sha256": "91fdc123def09827c7ed0dea0192aa3d052401824bdd2a3011e83ae6cfe35e52",
+  "bundle_file_count": 204,
+  "app_version": "0.2.0-beta.0",
+  "build": "3.0.1",
+  "signing": "stable Apple Development identity;78 code objects verified",
+  "frozen_smoke": {
+    "authenticated": true,
+    "ephemeral_loopback": true,
+    "status": "passed"
+  },
+  "whole_native_isolation": "not established; runtime owner found default WebKit store and application-ID IPC shared across profiles",
+  "native_no_impact_claim": "not established",
+  "further_native_launches": "blocked on isolated account/device and no incumbent IPC",
+  "startup_scope": "backend selector/integrity/process evidence only; not whole-native or rendered acceptance"
+}

@@ -44,6 +44,9 @@ The frontend is now a Vite/React application with client-side routing.
   Citation jumps therefore preserve the class/chat/draft/solution/study route, query parameters,
   reload state, and browser/WebKit history instead of replacing the route fragment.
 - The UI talks only to the FastAPI API surface; it does not call tutor providers or Exa directly.
+- Scroll positions are tracked per history entry in memory and checkpointed to session storage,
+  never to History on scroll. Navigation reserves History quota; refused updates fall back to
+  same-document hash navigation. See [the scroll-quota correction](pla-486-scroll-quota.md).
 
 The production browser suites exercise two different boundaries:
 
@@ -139,6 +142,14 @@ Release evidence helpers include:
 - `scripts/packaged_soak_harness.py` for release-candidate soak preparation and manual evidence
 
 Those helpers provide bounded evidence; they do not establish release approval.
+
+SQLite privacy preparation must not open and close a raw descriptor on a database or WAL
+sidecar while SQLite connections may be active. On POSIX, that close discards the process's
+advisory locks held through other descriptors. Preparation uses no-follow metadata checks and
+publishes already-closed private empty files when needed. See SQLite's
+[locking hazard documentation](https://www.sqlite.org/howtocorrupt.html#posix_advisory_locks_canceled_by_a_separate_thread_doing_close).
+The cross-process lock regression is part of the backend suite; private modes and symlink
+refusal remain required alongside correct database locking.
 
 ## Backup and updates
 

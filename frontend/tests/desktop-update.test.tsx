@@ -1,3 +1,4 @@
+import { RouterProvider } from '@/router/hooks'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -22,7 +23,9 @@ afterEach(() => {
 function mount(unsavedSettings = false) {
   return render(
     <QueryClientProvider client={new QueryClient()}>
-      <DesktopUpdateSection unsavedSettings={unsavedSettings} />
+      <RouterProvider>
+        <DesktopUpdateSection unsavedSettings={unsavedSettings} />
+      </RouterProvider>
     </QueryClientProvider>,
   )
 }
@@ -33,6 +36,7 @@ describe('explicit desktop updates', () => {
     mount()
     await screen.findByText(/Not checked/)
     expect(invoke.mock.calls).toEqual([['desktop_update_status']])
+    fireEvent.click(screen.getByRole('button', { name: /Application updates/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Check for updates' }))
     await waitFor(() => expect(invoke).toHaveBeenCalledWith('check_desktop_update'))
     expect(invoke).not.toHaveBeenCalledWith('download_desktop_update')
@@ -77,4 +81,53 @@ describe('explicit desktop updates', () => {
     reportUpdateSaveState(owner, true)
     expect(() => assertUpdateSafe()).not.toThrow()
   })
+})
+
+it('uses an unknown-total download status and reports rejected cancellation', async () => {
+  const invoke = vi.fn(async (command: string) => {
+    if (command === 'cancel_desktop_update') throw new Error('private native details')
+    return { ...initial, phase: 'downloading', downloaded: 5 * 1024 * 1024 }
+  })
+  window.__TAURI_INTERNALS__ = { invoke }
+  mount()
+  expect(await screen.findByText(/5 MB \(total size unknown\)/)).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel download' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not confirm cancellation')
+  expect(screen.queryByText('private native details')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Cancel download' })).toBeEnabled()
+})
+it('offers manual relaunch after restart rejection', async () => {
+  const invoke = vi.fn(async (command: string) => {
+    if (command === 'restart_desktop_update') throw new Error('Restart failed')
+    return { ...initial, phase: 'restart' }
+  })
+  window.__TAURI_INTERNALS__ = { invoke }
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: 'Restart Lyra' }))
+  expect(await screen.findByText(/Quit Lyra and reopen it manually/)).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Restart Lyra' })).toBeEnabled()
+})
+it('reports cancellation as requested until the native download state confirms it', async () => {
+  const invoke = vi.fn(async () => ({ ...initial, phase: 'downloading', downloaded: 1024 }))
+  window.__TAURI_INTERNALS__ = { invoke }
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: 'Cancel download' }))
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    'Cancellation requested. Waiting for the download to stop.',
+  )
+})
+
+it('clears a rejected cancellation warning after a successful retry', async () => {
+  let attempts = 0
+  const invoke = vi.fn(async (command: string) => {
+    if (command === 'cancel_desktop_update' && attempts++ === 0) throw new Error('cancel failed')
+    return { ...initial, phase: 'downloading', downloaded: 1024 }
+  })
+  window.__TAURI_INTERNALS__ = { invoke }
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: 'Cancel download' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not confirm cancellation')
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel download' }))
+  await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+  expect(screen.getByRole('status')).toHaveTextContent('Cancellation requested.')
 })

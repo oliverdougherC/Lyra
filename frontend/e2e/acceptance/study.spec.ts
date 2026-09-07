@@ -194,9 +194,11 @@ test.describe('Study tools', () => {
           }
         }
         await waitForSessionSummary(page)
+        await page.getByText('Review details', { exact: true }).click()
         await expect(page.getByText(/0 again.*1 easy/)).toBeVisible()
         await page.reload()
         await waitForSessionSummary(page)
+        await page.getByText('Review details', { exact: true }).click()
         await expect(page.getByText(/0 again.*1 easy/)).toBeVisible()
         const final = await (await apiGet(`/api/decks/${deck.id}/session`)).json()
         const finalState = final.cards.find(

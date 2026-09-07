@@ -1,0 +1,80 @@
+[
+  {
+    "index": 1,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 2,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 3,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 4,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 5,
+    "schema": "writer_section_skeptic",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 6,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 7,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 8,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 9,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 10,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 11,
+    "schema": "writer_section_skeptic",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 12,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 13,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  }
+]

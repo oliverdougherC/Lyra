@@ -1,0 +1,255 @@
+{
+  "review_type": "independent-agent semantic review",
+  "human_review": "not run",
+  "model_self_judging": "not run",
+  "reviewed_sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+  "corpus_version": "study-beta-1",
+  "rubric_version": "study-critical-1",
+  "evidence_file": "study-ecology-decks.json",
+  "evidence_sha256": "6ad748b8cc06b89366160d77fe714770b3ada5b58a2587c0766265e52f9a99a9",
+  "reviewer_provider_calls": 0,
+  "results": [
+    {
+      "case": "ecology",
+      "repeat": 1,
+      "verdict": "pass_with_noncritical_notes",
+      "critical_failures": [],
+      "published_count": 14,
+      "latency_seconds": 139.185,
+      "provider_stop_reasons": [
+        "stop",
+        "stop",
+        "stop",
+        "stop",
+        "stop",
+        "stop",
+        "length",
+        "stop",
+        "stop"
+      ],
+      "recovered_length_calls": [
+        7
+      ],
+      "cards": [
+        {
+          "card": 1,
+          "verdict": "pass",
+          "reason": "Density calculation uses the sampled area: 20 daisies / 10 m² = 2 daisies/m²; units correct.",
+          "front": "In the synthetic meadow example, five $2\\ \\text{m}^2$ quadrats contain 3, 5, 4, 6, and 2 daisies. What is the estimated daisy density?"
+        },
+        {
+          "card": 2,
+          "verdict": "pass",
+          "reason": "Self-contained density supplied; 2 × 150 = 300 daisies, with representative/comparable-meadow assumption.",
+          "front": "Using the synthetic meadow density of $2$ daisies per $\\text{m}^2$, what total number of daisies is estimated for a comparable $150\\ \\text{m}^2$ meadow?"
+        },
+        {
+          "card": 3,
+          "verdict": "pass",
+          "reason": "Random placement reduces preferential site selection; source-supported mechanism.",
+          "front": "In quadrat sampling of sessile organisms, what does random placement of fixed-area quadrats reduce, and why does that matter for density estimation?"
+        },
+        {
+          "card": 4,
+          "verdict": "pass",
+          "reason": "Larger sample reduces random variation without automatically removing selection bias; can wording is appropriate.",
+          "front": "In quadrat sampling, what is the limitation of increasing the number of quadrats if the placement is not random?"
+        },
+        {
+          "card": 5,
+          "verdict": "pass",
+          "reason": "M, C and R are defined and numeric estimate 40 × 50 / 10 = 200 animals is correct.",
+          "front": "In simple mark-recapture, if $M=40$ animals are initially marked, $C=50$ animals are caught later, and $R=10$ of that later catch are marked, what is the estimated population size $N$?"
+        },
+        {
+          "card": 6,
+          "verdict": "pass",
+          "reason": "R=0 makes simple estimate undefined; infinite population inference explicitly rejected.",
+          "front": "In simple mark-recapture, if no marked animals are recaptured, so $R=0$, what happens to the estimate $N = M C / R$, and what conclusion is not justified?"
+        },
+        {
+          "card": 7,
+          "verdict": "pass_with_noncritical_note",
+          "reason": "Correct closed-population assumption and intended risk, but is biased overstates can be biased; migration effects depend on population composition and target time.",
+          "front": "In simple mark-recapture, where $M$ animals are initially marked, $C$ are caught later, and $R$ of that later catch are marked, why does migration between the two catches bias the estimate $N = M C / R$?"
+        },
+        {
+          "card": 8,
+          "verdict": "pass",
+          "reason": "Different marked/unmarked catchability distorts the marked fraction in the catch; mechanism grounded.",
+          "front": "In simple mark-recapture, where $M$ animals are initially marked, $C$ are caught later, and $R$ of that later catch are marked, why does unequal catchability between marked and unmarked animals bias the estimate $N = M C / R$?"
+        },
+        {
+          "card": 9,
+          "verdict": "pass_with_noncritical_note",
+          "reason": "Mixing supports representative recapture; will not reflect overstates can fail to reflect under unspecified sampling geometry.",
+          "front": "In simple mark-recapture, where $M$ animals are marked, $C$ are caught later, and $R$ of that later catch are marked, why must the marked animals mix back into the population before the second catch?"
+        },
+        {
+          "card": 10,
+          "verdict": "pass",
+          "reason": "Lost/unrecognised marks undercount R and increase MC/R for positive observed R; zero-R limit separately tested by card6.",
+          "front": "In simple mark-recapture, where $M$ animals are marked, $C$ are caught later, and $R$ of that later catch are marked, what assumption is violated if some marked animals lose their marks or their marks are not recognised, and how does that affect the estimate $N=MC/R$?"
+        },
+        {
+          "card": 11,
+          "verdict": "pass_with_noncritical_note",
+          "reason": "Correct interpretation and algebra N=M/(R/C)=MC/R. Explicitly mention other standard assumptions as well as mixing/equal capture for maximum standalone precision.",
+          "front": "In simple mark-recapture, why is the ratio $R/C$ used as an estimate of the marked fraction of the population, and what does that imply for estimating $N$?"
+        },
+        {
+          "card": 12,
+          "verdict": "pass_with_noncritical_note",
+          "reason": "Correct closed-population definition and risk mechanism; marked fraction changes should be can change. Adds births/deaths to migration-specific card7.",
+          "front": "In simple mark-recapture, what does the closed population assumption require between the first and second catch, and why is it needed for $N=MC/R$?"
+        },
+        {
+          "card": 13,
+          "verdict": "pass",
+          "reason": "Correct limitation: association alone does not establish causal effect.",
+          "front": "What does a correlation between rainfall and abundance alone fail to establish?"
+        },
+        {
+          "card": 14,
+          "verdict": "pass",
+          "reason": "Possible common cause explains noncausal association, distinct from merely naming its evidential limitation.",
+          "front": "What may produce a correlation between rainfall and abundance without rainfall causing abundance?"
+        }
+      ]
+    },
+    {
+      "case": "ecology",
+      "repeat": 2,
+      "verdict": "pass_with_noncritical_notes",
+      "critical_failures": [],
+      "published_count": 14,
+      "latency_seconds": 138.228,
+      "provider_stop_reasons": [
+        "stop",
+        "stop",
+        "stop",
+        "stop",
+        "stop",
+        "stop",
+        "length",
+        "stop",
+        "stop"
+      ],
+      "recovered_length_calls": [
+        7
+      ],
+      "cards": [
+        {
+          "card": 1,
+          "verdict": "pass",
+          "reason": "Density calculation uses the sampled area: 20 daisies / 10 m² = 2 daisies/m²; units correct.",
+          "front": "In the synthetic meadow example, five $2\\ \\text{m}^2$ quadrats contain 3, 5, 4, 6, and 2 daisies. What is the estimated daisy density?"
+        },
+        {
+          "card": 2,
+          "verdict": "pass",
+          "reason": "Self-contained density supplied; 2 × 150 = 300 daisies, with representative/comparable-meadow assumption.",
+          "front": "Using the synthetic meadow density of $2$ daisies per $\\text{m}^2$, what total number of daisies is estimated for a comparable $150\\ \\text{m}^2$ meadow?"
+        },
+        {
+          "card": 3,
+          "verdict": "pass",
+          "reason": "Random placement reduces preferential site selection; source-supported mechanism.",
+          "front": "In quadrat sampling of sessile organisms, what does random placement of fixed-area quadrats reduce, and why does that matter for density estimation?"
+        },
+        {
+          "card": 4,
+          "verdict": "pass",
+          "reason": "Larger sample reduces random variation without automatically removing selection bias; can wording is appropriate.",
+          "front": "In quadrat sampling, what is the limitation of increasing the number of quadrats if the placement is not random?"
+        },
+        {
+          "card": 5,
+          "verdict": "pass",
+          "reason": "M, C and R are defined and numeric estimate 40 × 50 / 10 = 200 animals is correct.",
+          "front": "In simple mark-recapture, if $M=40$ animals are initially marked, $C=50$ animals are caught later, and $R=10$ of that later catch are marked, what is the estimated population size $N$?"
+        },
+        {
+          "card": 6,
+          "verdict": "pass",
+          "reason": "R=0 makes simple estimate undefined; infinite population inference explicitly rejected.",
+          "front": "In simple mark-recapture, if no marked animals are recaptured, so $R=0$, what happens to the estimate $N = M C / R$, and what conclusion is not justified?"
+        },
+        {
+          "card": 7,
+          "verdict": "pass_with_noncritical_note",
+          "reason": "Correct closed-population assumption and intended risk, but is biased overstates can be biased; migration effects depend on population composition and target time.",
+          "front": "In simple mark-recapture, where $M$ animals are initially marked, $C$ are caught later, and $R$ of that later catch are marked, why does migration between the two catches bias the estimate $N = M C / R$?"
+        },
+        {
+          "card": 8,
+          "verdict": "pass",
+          "reason": "Different marked/unmarked catchability distorts the marked fraction in the catch; mechanism grounded.",
+          "front": "In simple mark-recapture, where $M$ animals are initially marked, $C$ are caught later, and $R$ of that later catch are marked, why does unequal catchability between marked and unmarked animals bias the estimate $N = M C / R$?"
+        },
+        {
+          "card": 9,
+          "verdict": "pass_with_noncritical_note",
+          "reason": "Mixing supports representative recapture; will not reflect overstates can fail to reflect under unspecified sampling geometry.",
+          "front": "In simple mark-recapture, where $M$ animals are marked, $C$ are caught later, and $R$ of that later catch are marked, why must the marked animals mix back into the population before the second catch?"
+        },
+        {
+          "card": 10,
+          "verdict": "pass",
+          "reason": "Lost/unrecognised marks undercount R and increase MC/R for positive observed R; zero-R limit separately tested by card6.",
+          "front": "In simple mark-recapture, where $M$ animals are marked, $C$ are caught later, and $R$ of that later catch are marked, what assumption is violated if some marked animals lose their marks or their marks are not recognised, and how does that affect the estimate $N=MC/R$?"
+        },
+        {
+          "card": 11,
+          "verdict": "pass_with_noncritical_note",
+          "reason": "Correct interpretation and algebra N=M/(R/C)=MC/R. Explicitly mention other standard assumptions as well as mixing/equal capture for maximum standalone precision.",
+          "front": "In simple mark-recapture, why is the ratio $R/C$ used as an estimate of the marked fraction of the population, and what does that imply for estimating $N$?"
+        },
+        {
+          "card": 12,
+          "verdict": "pass_with_noncritical_note",
+          "reason": "Correct closed-population definition and risk mechanism; marked fraction changes should be can change. Adds births/deaths to migration-specific card7.",
+          "front": "In simple mark-recapture, what does the closed population assumption require between the first and second catch, and why is it needed for $N=MC/R$?"
+        },
+        {
+          "card": 13,
+          "verdict": "pass",
+          "reason": "Correct limitation: association alone does not establish causal effect.",
+          "front": "What does a correlation between rainfall and abundance alone fail to establish?"
+        },
+        {
+          "card": 14,
+          "verdict": "pass",
+          "reason": "Possible common cause explains noncausal association, distinct from merely naming its evidential limitation.",
+          "front": "What may produce a correlation between rainfall and abundance without rainfall causing abundance?"
+        }
+      ]
+    }
+  ],
+  "scope_limitations": [
+    "Two repeated runs of a known repaired case, not an untouched blind holdout",
+    "Identical published semantic content across repeats; 28 inspected instances represent 14 distinct cards",
+    "One recovered 8192-token length failure in each run",
+    "No actual human or integrated packaged-candidate acceptance",
+    "Selected-source provenance valid but broad, not exact per-claim attribution"
+  ],
+  "historical_results_preserved": [
+    {
+      "file": "docs/evidence/study-beta-final-deck.json",
+      "case": "ecology",
+      "repeat": 1,
+      "verdict": "failed delivery",
+      "latency_seconds": 483.488,
+      "published_count": 0,
+      "generated_unpublished_error": "MC/(R/C) instead of M/(R/C)"
+    },
+    {
+      "file": "docs/evidence/study-beta-final-deck.json",
+      "case": "ecology",
+      "repeat": 2,
+      "verdict": "cancelled not evaluable",
+      "latency_seconds": 164.0,
+      "published_count": 0
+    }
+  ]
+}

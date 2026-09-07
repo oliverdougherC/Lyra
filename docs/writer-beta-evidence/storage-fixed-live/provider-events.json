@@ -1,0 +1,446 @@
+[
+  {
+    "index": 1,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 2,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 3,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 4,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 5,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 6,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 7,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 8,
+    "schema": "writer_transition_review",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 9,
+    "schema": "writer_overall_assessment",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 10,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 11,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": "slow"
+  },
+  {
+    "index": 12,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 13,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 14,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 15,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 16,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 17,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 18,
+    "schema": "writer_transition_review",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 19,
+    "schema": "writer_overall_assessment",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 20,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 21,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": "slow"
+  },
+  {
+    "index": 22,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 23,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 24,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 25,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 26,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 27,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 28,
+    "schema": "writer_transition_review",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 29,
+    "schema": "writer_overall_assessment",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 30,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 31,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 32,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 33,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 34,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 35,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 36,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 37,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 38,
+    "schema": "writer_transition_review",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 39,
+    "schema": "writer_overall_assessment",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 40,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 41,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 42,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 43,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 44,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 45,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 46,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 47,
+    "schema": "writer_transition_review",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 48,
+    "schema": "writer_transition_review",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 49,
+    "schema": "writer_overall_assessment",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 50,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 51,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 52,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 53,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 54,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 55,
+    "schema": null,
+    "stream": true,
+    "fault": "partial_stream"
+  },
+  {
+    "index": 56,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 57,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 58,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 59,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 60,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 61,
+    "schema": null,
+    "stream": true,
+    "fault": "malformed_stream"
+  },
+  {
+    "index": 62,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 63,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": "rate_limit"
+  },
+  {
+    "index": 64,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 65,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": "transient"
+  },
+  {
+    "index": 66,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 67,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": "empty"
+  },
+  {
+    "index": 68,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 69,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 70,
+    "schema": "writer_paragraph_outline",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 71,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 72,
+    "schema": null,
+    "stream": true,
+    "fault": null
+  },
+  {
+    "index": 73,
+    "schema": "writer_transition_review",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 74,
+    "schema": "writer_overall_assessment",
+    "stream": false,
+    "fault": null
+  }
+]

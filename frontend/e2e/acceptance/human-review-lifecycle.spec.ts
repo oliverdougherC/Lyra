@@ -127,7 +127,7 @@ test.describe('PLA-303 full human-review lifecycle', () => {
     await expect(card).toBeHidden({ timeout: 10_000 })
     await page
       .locator('[aria-label="Agent work"]')
-      .getByRole('button', { name: /Details/i })
+      .getByRole('button', { name: /Activity history/i })
       .click()
     await expect(page.locator('[data-slot="badge"]', { hasText: 'Rejected' })).toBeVisible({
       timeout: 10_000,
@@ -175,7 +175,7 @@ test.describe('PLA-303 full human-review lifecycle', () => {
     await expect(cardC).toBeHidden({ timeout: 15_000 })
     await page
       .locator('[aria-label="Agent work"]')
-      .getByRole('button', { name: /Details/i })
+      .getByRole('button', { name: /Activity history/i })
       .click()
     await expect(page.getByText('Applied', { exact: true })).toBeVisible()
 

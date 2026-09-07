@@ -82,6 +82,7 @@ const QUIZ = {
 
 beforeEach(() => {
   vi.restoreAllMocks()
+  sessionStorage.clear()
   vi.spyOn(api, 'listSessions').mockResolvedValue([SESSION])
   vi.spyOn(api, 'listSolutions').mockResolvedValue([SOLUTION])
   vi.spyOn(api, 'listDrafts').mockResolvedValue([DRAFT])
@@ -171,11 +172,11 @@ describe('Work recovery and readable states', () => {
     const { wrapper } = createWrapper()
     render(<ClassWorkPanel classId={1} />, { wrapper })
     expect(await screen.findByRole('link', { name: /Fourier week/ })).toBeInTheDocument()
-    expect(await screen.findByText('Could not load solutions')).toBeInTheDocument()
+    expect(await screen.findByText('Some work could not be refreshed')).toBeInTheDocument()
     expect(screen.queryByText('Nothing here yet')).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'Retry solutions' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Retry all' }))
     expect(await screen.findByRole('link', { name: /Homework 2/ })).toBeInTheDocument()
-    expect(screen.queryByText('Could not load solutions')).not.toBeInTheDocument()
+    expect(screen.queryByText('Some work could not be refreshed')).not.toBeInTheDocument()
   })
 
   it('shows a recovery state when every successful category is empty', async () => {
@@ -186,7 +187,7 @@ describe('Work recovery and readable states', () => {
     vi.mocked(api.listSolutions).mockRejectedValue(new Error('offline'))
     const { wrapper } = createWrapper()
     render(<ClassWorkPanel classId={1} />, { wrapper })
-    await screen.findByText('Could not load solutions')
+    await screen.findByText('Some work could not be refreshed')
     expect(screen.queryByText('Nothing here yet')).not.toBeInTheDocument()
   })
 
@@ -206,4 +207,99 @@ describe('Work recovery and readable states', () => {
     expect(screen.getByRole('link', { name: /Signal notes draft.*Queued/ })).toBeInTheDocument()
     expect(screen.queryByText('awaiting_review')).not.toBeInTheDocument()
   })
+})
+
+it('finds old work by title without expanding the whole inventory and restores its query', async () => {
+  resetLocation('/#/classes/1?tab=work')
+  vi.mocked(api.listSessions).mockResolvedValue(
+    Array.from({ length: 105 }, (_, index) => ({
+      ...SESSION,
+      id: index + 100,
+      title: `Near-identical lecture conversation ${index}`,
+    })),
+  )
+  const first = render(<ClassWorkPanel classId={1} />, { wrapper: createWrapper().wrapper })
+  const search = await screen.findByRole('searchbox', { name: 'Search work by title' })
+  expect(screen.getAllByRole('link')).toHaveLength(20)
+  await userEvent.type(search, '104')
+  expect(screen.getAllByRole('link')).toHaveLength(1)
+  expect(screen.getByRole('link', { name: /conversation 104/ })).toBeVisible()
+  first.unmount()
+  render(<ClassWorkPanel classId={1} />, { wrapper: createWrapper().wrapper })
+  expect(await screen.findByRole('searchbox')).toHaveValue('104')
+  await userEvent.type(screen.getByRole('searchbox'), 'missing')
+  expect(screen.getByRole('status')).toHaveTextContent('No work matches this search.')
+  expect(screen.queryByText('Nothing here yet')).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Clear search' }))
+  expect(screen.getAllByRole('link')).toHaveLength(20)
+  await userEvent.click(screen.getByRole('button', { name: /Show more work/ }))
+  expect(screen.getAllByRole('link')).toHaveLength(40)
+})
+
+it('does not label generated quiz questions as student answers', async () => {
+  resetLocation('/#/classes/1?tab=work')
+  render(<ClassWorkPanel classId={1} />, { wrapper: createWrapper().wrapper })
+  const quiz = await screen.findByRole('link', { name: /Week 5 quiz/ })
+  expect(quiz).not.toHaveTextContent('answered')
+})
+
+it.each(['Chats', 'Solutions', 'Drafts'])(
+  'keeps search, bounded history and management available in %s',
+  async (filter) => {
+    resetLocation('/#/classes/1?tab=work')
+    vi.mocked(api.listSessions).mockResolvedValue(
+      Array.from({ length: 105 }, (_, i) => ({
+        ...SESSION,
+        id: i + 100,
+        title: `Similar old work title ${i}`,
+      })),
+    )
+    vi.mocked(api.listSolutions).mockResolvedValue(
+      Array.from({ length: 105 }, (_, i) => ({
+        ...SOLUTION,
+        id: i + 300,
+        title: `Similar old work title ${i}`,
+      })),
+    )
+    vi.mocked(api.listDrafts).mockResolvedValue(
+      Array.from({ length: 105 }, (_, i) => ({
+        ...DRAFT,
+        id: i + 500,
+        title: `Similar old work title ${i}`,
+      })),
+    )
+    render(<ClassWorkPanel classId={1} />, { wrapper: createWrapper().wrapper })
+    await screen.findByRole('searchbox')
+    await userEvent.click(screen.getByRole('button', { name: filter }))
+    expect(screen.getAllByRole('listitem')).toHaveLength(20)
+    await userEvent.type(screen.getByRole('searchbox'), '104')
+    expect(screen.getAllByRole('listitem')).toHaveLength(1)
+    expect(screen.getByRole('link', { name: /Similar old work title 104/ })).toBeVisible()
+    await userEvent.click(
+      screen.getByRole('button', { name: /Actions for Similar old work title 104/ }),
+    )
+    expect(screen.getByRole('menuitem', { name: 'Rename' })).toBeVisible()
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeVisible()
+    await userEvent.keyboard('{Escape}')
+    await userEvent.type(screen.getByRole('searchbox'), 'missing')
+    expect(screen.getByRole('status')).toHaveTextContent('No work matches this search.')
+    await userEvent.click(screen.getByRole('button', { name: 'Clear search' }))
+    expect(screen.getAllByRole('listitem')).toHaveLength(20)
+    await userEvent.click(screen.getByRole('button', { name: /Show more work/ }))
+    expect(screen.getAllByRole('listitem')).toHaveLength(40)
+  },
+)
+
+it('combines unavailable categories into one recovery notice and retries all visibly', async () => {
+  resetLocation('/#/classes/1?tab=work')
+  vi.mocked(api.listSolutions).mockRejectedValue(new Error('offline'))
+  vi.mocked(api.listDrafts).mockRejectedValue(new Error('offline'))
+  render(<ClassWorkPanel classId={1} />, { wrapper: createWrapper().wrapper })
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load solutions, drafts.')
+  expect(screen.getAllByRole('alert')).toHaveLength(1)
+  vi.mocked(api.listSolutions).mockReturnValue(new Promise(() => {}))
+  vi.mocked(api.listDrafts).mockReturnValue(new Promise(() => {}))
+  await userEvent.click(screen.getByRole('button', { name: 'Retry all' }))
+  expect(await screen.findByRole('button', { name: 'Retrying…' })).toBeDisabled()
+  expect(screen.getByRole('link', { name: /Fourier week/ })).toBeVisible()
 })

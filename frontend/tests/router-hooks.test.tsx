@@ -39,6 +39,10 @@ function RouterProbe() {
       <button type="button" onClick={() => router.replaceAnchor('source-2')}>
         Jump to source 2 again
       </button>
+      <button type="button" onClick={() => router.push('/settings')}>
+        Settings
+      </button>
+      <main id="main-content" tabIndex={-1} />
     </div>
   )
 }
@@ -180,4 +184,154 @@ describe('router hooks', () => {
       removeEventListener.mock.calls.filter((call) => isEventType(call, 'popstate')),
     ).toHaveLength(3)
   })
+
+  it('resets the actual pane on push and restores it on Back and Forward', async () => {
+    const user = userEvent.setup()
+    render(
+      <RouterProvider>
+        <RouterProbe />
+      </RouterProvider>,
+    )
+    const pane = screen.getByRole('main')
+    Object.defineProperty(pane, 'scrollHeight', { configurable: true, value: 4000 })
+    pane.scrollTop = 640
+    pane.dispatchEvent(new Event('scroll', { bubbles: true }))
+    await user.click(screen.getByRole('button', { name: 'Settings' }))
+    await waitFor(() => expect(pane.scrollTop).toBe(0))
+    pane.scrollTop = 920
+    pane.dispatchEvent(new Event('scroll', { bubbles: true }))
+    await act(async () => window.history.back())
+    await waitFor(() => expect(pane.scrollTop).toBe(640))
+    await act(async () => window.history.forward())
+    await waitFor(() => expect(pane.scrollTop).toBe(920))
+  })
+})
+
+it('restores a saved inner pane when slow content arrives after three seconds', async () => {
+  window.history.replaceState({ lyraScroll: { files: 320 } }, '', '/#/classes/7?tab=files')
+  render(
+    <RouterProvider>
+      <RouterProbe />
+    </RouterProvider>,
+  )
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 3100))
+  })
+  const container = document.createElement('div')
+  container.id = 'documents-pane-body'
+  const pane = document.createElement('div')
+  pane.setAttribute('data-slot', 'scroll-area-viewport')
+  container.append(pane)
+  document.body.append(container)
+  try {
+    await waitFor(() => expect(pane.scrollTop).toBe(320))
+  } finally {
+    container.remove()
+  }
+})
+
+it('spends no History API calls on burst nested/programmatic or unchanged scroll positions', async () => {
+  resetLocation('/#/')
+  render(
+    <RouterProvider>
+      <RouterProbe />
+    </RouterProvider>,
+  )
+  const replace = vi.spyOn(window.history, 'replaceState')
+  const push = vi.spyOn(window.history, 'pushState')
+  const pane = screen.getByRole('main')
+  const nested = document.createElement('div')
+  pane.append(nested)
+  for (let i = 0; i < 400; i++) {
+    nested.scrollTop = i
+    nested.dispatchEvent(new Event('scroll', { bubbles: true }))
+    pane.scrollTop = i % 100
+    pane.dispatchEvent(new Event('scroll', { bubbles: true }))
+    pane.dispatchEvent(new Event('scroll', { bubbles: true }))
+  }
+  expect(replace).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+  expect(push).toHaveBeenCalledOnce()
+  expect(replace).not.toHaveBeenCalled()
+  expect(screen.getByTestId('pathname')).toHaveTextContent('/settings')
+})
+
+it('leaves shared quota for immediate navigation after sustained scroll under a quota adapter', async () => {
+  resetLocation('/#/')
+  render(
+    <RouterProvider>
+      <RouterProbe />
+    </RouterProvider>,
+  )
+  const originalReplace = window.history.replaceState.bind(window.history)
+  const originalPush = window.history.pushState.bind(window.history)
+  let calls = 0
+  const check = () => {
+    if (++calls > 100) throw new DOMException('History quota', 'SecurityError')
+  }
+  vi.spyOn(window.history, 'replaceState').mockImplementation((...args) => {
+    check()
+    originalReplace(...args)
+  })
+  vi.spyOn(window.history, 'pushState').mockImplementation((...args) => {
+    check()
+    originalPush(...args)
+  })
+  const pane = screen.getByRole('main')
+  for (let i = 0; i < 1500; i++) {
+    pane.scrollTop = i
+    pane.dispatchEvent(new Event('scroll'))
+  }
+  await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+  expect(calls).toBe(1)
+  expect(window.location.hash).toBe('#/settings')
+  expect(screen.getByTestId('pathname')).toHaveTextContent('/settings')
+})
+
+it('uses same-document navigation if actual push and optional entry stamping are refused', async () => {
+  resetLocation('/#/')
+  render(
+    <RouterProvider>
+      <RouterProbe />
+    </RouterProvider>,
+  )
+  vi.spyOn(window.history, 'pushState').mockImplementation(() => {
+    throw new DOMException('History quota', 'SecurityError')
+  })
+  vi.spyOn(window.history, 'replaceState').mockImplementation(() => {
+    throw new DOMException('History quota', 'SecurityError')
+  })
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new DOMException('Storage quota', 'QuotaExceededError')
+  })
+  await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+  await waitFor(() => expect(window.location.hash).toBe('#/settings'))
+  expect(screen.getByTestId('pathname')).toHaveTextContent('/settings')
+  await userEvent.click(screen.getByRole('button', { name: 'Jump to source 2 again' }))
+  await waitFor(() => expect(window.location.hash).toBe('#/settings?lyra-anchor=source-2'))
+  expect(screen.getByTestId('anchor')).toHaveTextContent('source-2')
+})
+
+it('keeps Back/Forward positions in memory when storage cannot checkpoint them', async () => {
+  resetLocation('/#/')
+  render(
+    <RouterProvider>
+      <RouterProbe />
+    </RouterProvider>,
+  )
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new DOMException('Storage quota', 'QuotaExceededError')
+  })
+  const pane = screen.getByRole('main')
+  Object.defineProperty(pane, 'scrollHeight', { configurable: true, value: 4000 })
+  pane.scrollTop = 500
+  pane.dispatchEvent(new Event('scroll'))
+  await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+  await waitFor(() => expect(pane.scrollTop).toBe(0))
+  pane.scrollTop = 900
+  pane.dispatchEvent(new Event('scroll'))
+  await act(async () => window.history.back())
+  await waitFor(() => expect(pane.scrollTop).toBe(500))
+  await act(async () => window.history.forward())
+  await waitFor(() => expect(pane.scrollTop).toBe(900))
 })

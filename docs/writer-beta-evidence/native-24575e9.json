@@ -1,0 +1,29 @@
+{
+  "source_sha": "24575e9f859a220440186c106a8936b303a6510e",
+  "native_pid": 40019,
+  "profile_isolation": {
+    "native": {
+      "PYTHON_KEYRING_BACKEND": true,
+      "LYRA_DATA_DIR": true,
+      "LYRA_DB_PATH": true,
+      "LYRA_CACHE_DIR": true,
+      "LYRA_LOGS_DIR": true,
+      "LYRA_MODELS_DIR": true
+    },
+    "backend": {
+      "PYTHON_KEYRING_BACKEND": true,
+      "LYRA_DATA_DIR": true,
+      "LYRA_DB_PATH": true,
+      "LYRA_CACHE_DIR": true,
+      "LYRA_LOGS_DIR": true,
+      "LYRA_MODELS_DIR": true
+    }
+  },
+  "status": "passed",
+  "backend_pid": 40029,
+  "ui_observation": "Classes screen; No classes yet",
+  "exit_verified": {
+    "native_pid": true,
+    "backend_pid": true
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "version": "writer-source-attribution-audit.v1",
+  "note": "Audit is receipt-based, not an additional run. Frozen runtime hashes remain a separate provenance dimension.",
+  "issues": [
+    {
+      "receipt": "d18118b-model-corpus/review_literary_invented_quote--uninterrupted.json",
+      "batch_tested_sha": "d18118b25046fb700c31c949d1cb47e561332e82",
+      "batch_source_hash": "49b05cf44e4f326a7fc41f63500635debb41662f6b0d7773fec2de20da67c0e9",
+      "case_start_hash": "49b05cf44e4f326a7fc41f63500635debb41662f6b0d7773fec2de20da67c0e9",
+      "case_end_hash": "1aa93d33988660a45b5796684feb840bf147ad671a999bd0993f7512d438dfd6",
+      "code_changed_during_case": true,
+      "runtime": "source_desktop_bootstrap",
+      "interpretation": "Missing or inconsistent source provenance; do not infer controlled source equivalence from batch SHA or a false drift flag."
+    },
+    {
+      "receipt": "d18118b-model-corpus/full_live_draft_from_student_notes--uninterrupted.json",
+      "batch_tested_sha": "d18118b25046fb700c31c949d1cb47e561332e82",
+      "batch_source_hash": "49b05cf44e4f326a7fc41f63500635debb41662f6b0d7773fec2de20da67c0e9",
+      "case_start_hash": "1aa93d33988660a45b5796684feb840bf147ad671a999bd0993f7512d438dfd6",
+      "case_end_hash": "1aa93d33988660a45b5796684feb840bf147ad671a999bd0993f7512d438dfd6",
+      "code_changed_during_case": false,
+      "runtime": "source_desktop_bootstrap",
+      "interpretation": "Missing or inconsistent source provenance; do not infer controlled source equivalence from batch SHA or a false drift flag."
+    },
+    {
+      "receipt": "baseline/review_literary_invented_quote--uninterrupted.json",
+      "batch_tested_sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+      "batch_source_hash": null,
+      "case_start_hash": null,
+      "case_end_hash": null,
+      "code_changed_during_case": null,
+      "runtime": "source_desktop_bootstrap",
+      "interpretation": "Missing or inconsistent source provenance; do not infer controlled source equivalence from batch SHA or a false drift flag."
+    },
+    {
+      "receipt": "a37daae-model/full_live_draft_from_student_notes--uninterrupted.json",
+      "batch_tested_sha": "a37daaee497b7e3b4e26fa040edbfd3c2dd3108b",
+      "batch_source_hash": "1aa93d33988660a45b5796684feb840bf147ad671a999bd0993f7512d438dfd6",
+      "case_start_hash": "1aa93d33988660a45b5796684feb840bf147ad671a999bd0993f7512d438dfd6",
+      "case_end_hash": "309cfebc4fc1e24063ca05409862d0b9e1d4f549300a774687c9cb3c181893a4",
+      "code_changed_during_case": true,
+      "runtime": "source_desktop_bootstrap",
+      "interpretation": "Missing or inconsistent source provenance; do not infer controlled source equivalence from batch SHA or a false drift flag."
+    },
+    {
+      "receipt": "improved-live/full_live_draft_from_student_notes--uninterrupted.json",
+      "batch_tested_sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+      "batch_source_hash": "f96aa376bcac6731a44b13839ecc8c10bc2e521950dd01c6b46f8b49c3910496",
+      "case_start_hash": "f96aa376bcac6731a44b13839ecc8c10bc2e521950dd01c6b46f8b49c3910496",
+      "case_end_hash": "4d5de2f399b9de86580f6dc7edb434d4d27e24c962e6d27d7cb2805f9857ed83",
+      "code_changed_during_case": true,
+      "runtime": "source_desktop_bootstrap",
+      "interpretation": "Missing or inconsistent source provenance; do not infer controlled source equivalence from batch SHA or a false drift flag."
+    }
+  ]
+}

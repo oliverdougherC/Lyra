@@ -1,0 +1,36 @@
+{
+  "version": "writer-beta-validation.v4",
+  "source_sha": "1d046a2cb63d68da51664b9574572e92acb15999",
+  "source_status": "intermediate; internal reviewer omitted saved-source context and removed a supported sample-size fact. Final source/package pending.",
+  "full_tests": "3361 passed, 1 skipped, 6 warnings in 165.59s (0:02:45)",
+  "test_command": "uv run --extra dev pytest -q",
+  "package": {
+    "signed_code_objects": 78,
+    "signing_identity_class": "reused Apple Development identity; personal identity omitted",
+    "verification_status": "passed",
+    "verified_objects": 77,
+    "architecture": "arm64",
+    "authenticated_smoke": {
+      "authenticated": true,
+      "ephemeral_loopback": true,
+      "status": "passed"
+    },
+    "evaluation_status": "Built/signed/smoke checked only; no1d packaged evaluation series started."
+  },
+  "planning_observation": "Real generated-plan source run made Evidence and Recommendation sections but failed final paragraph-length check; partial was preserved. Structural handoff repair is distinct from completed planning quality.",
+  "evidence_head_policy": "Later documentation-only HEAD is not a new tested application source or frozen-runtime SHA.",
+  "pending_receipts": [
+    "next-final-SHA-tests-package-CI-native",
+    "next-final-source-and-packaged-real-controls-interruptions-planning"
+  ],
+  "human_review": "not-run",
+  "model_family_comparison": "not-run",
+  "held_out_acceptance": "not-run",
+  "long_session_soak": "not-run",
+  "original_log_hashes": {
+    "tests": "e34afada610c60b755925bb26adfce8412547b858b625ec2c8789c47fd3e2370",
+    "bundleverify": "079586fb22923ff27dc2736d93bc186006dbe6195ef4273aa8b41b4fa74cefcc",
+    "smoke": "39be932c2b18ff3e0b2ff5ff34db9121144d9ef0d21bcad92fe4c1b51c1a2f37",
+    "sign": "0a4c8ee4996f9b3b7e4d15c29f1a4752697740e81128645cb53fbb49b7b4a927"
+  }
+}

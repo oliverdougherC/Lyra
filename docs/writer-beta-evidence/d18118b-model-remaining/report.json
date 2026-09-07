@@ -1,0 +1,29 @@
+{
+  "version": "writer-evaluation.v1",
+  "tested_sha": "d18118b25046fb700c31c949d1cb47e561332e82",
+  "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+  "prompt_sha256": "3d6a24b7635c873e67b712fbb8073742fae9150ca7d3920557e82d455dde715b",
+  "runtime_sha256": null,
+  "harness_sha256": "7515c86631dcab77b5324a84edee8b3861dc036d4cab773e7137bfeb29f2a103",
+  "backend_source_sha256": "49b05cf44e4f326a7fc41f63500635debb41662f6b0d7773fec2de20da67c0e9",
+  "generate_plan": false,
+  "retry_failures": false,
+  "model": "Qwen3.8-27B",
+  "locality": "non_loopback",
+  "context_window": 262144,
+  "runtime": "source_desktop_bootstrap",
+  "comparison_kind": "same_model_interruption",
+  "model_comparison": null,
+  "subjective_acceptance": "not_reviewed",
+  "cases": [
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "full_live_draft_from_student_notes--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    }
+  ]
+}

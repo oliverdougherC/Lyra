@@ -1,0 +1,79 @@
+{
+  "version": "writer-beta-validation.v5",
+  "production_source_sha": "24575e9f859a220440186c106a8936b303a6510e",
+  "source_status": "FINALFROZEN per execution owner; no subsequent tuning included",
+  "full_tests": "3362 passed, 1 skipped, 6 warnings in 167.77s (0:02:47)",
+  "test_command": "uv run --extra dev pytest -q",
+  "package_receipt": "24575e9-package.json",
+  "frozen_runtime_sha256": "c351bd1d9c43f94bd17c4c327eac2baa6075832c132f2768d471c45d6826e1ac",
+  "tree_sha256": "ed0c92159068c10c292349e16f0df748b2af2f92e2c404418d2701b7e34059c5",
+  "package_verifier": {
+    "status": "passed",
+    "objects": 77
+  },
+  "authenticated_smoke": {
+    "authenticated": true,
+    "ephemeral_loopback": true,
+    "status": "passed"
+  },
+  "native": "native-24575e9.json",
+  "ci_snapshot": {
+    "checks": 11,
+    "all_success": true,
+    "run_receipt": "ci-run-24575e9.json",
+    "verified_head_sha": "24575e9f859a220440186c106a8936b303a6510e",
+    "url": "https://github.com/oliverdougherC/Lyra/actions/runs/34082749319"
+  },
+  "receipt_counts": {
+    "24575e9-planning": 1,
+    "24575e9-model": 1,
+    "24575e9-controlled-corpus": 9,
+    "24575e9-packaged-model": 7,
+    "24575e9-packaged-controlled": 12,
+    "24575e9-packaged-review": 6,
+    "24575e9-packaged-section": 2,
+    "24575e9-packaged-sources": 3,
+    "24575e9-packaged-planning": 1,
+    "24575e9-packaged-model-review": 2
+  },
+  "pending_receipts": [],
+  "evidence_head_policy": "A later evidence-only PR83 commit is not a new tested application source or rebuilt runtime; all application claims remain bound to245 and its binary hashes.",
+  "actual_human_review": "not-run",
+  "model_family_comparison": "not-run",
+  "held_out_acceptance": "not-run",
+  "eight_gib_gate": "not-run",
+  "long_session_soak": "not-run",
+  "original_log_hashes": {
+    "tests": "1c840b32cdd529223a3f5866bb0c88653ed30506f425c2f3acbd09e3b2a2d1f7",
+    "freeze": "b93435977244f5aeffcd4ea648cc9aa4ccef76362613514895150469a53cbf3d",
+    "presmoke": "39be932c2b18ff3e0b2ff5ff34db9121144d9ef0d21bcad92fe4c1b51c1a2f37",
+    "tauri": "8cd387b4c9038223ef1a6f880dbb6ff5e58419ad650b3fe293c77c35c68174d2",
+    "sign": "0a4c8ee4996f9b3b7e4d15c29f1a4752697740e81128645cb53fbb49b7b4a927",
+    "bundleverify": "079586fb22923ff27dc2736d93bc186006dbe6195ef4273aa8b41b4fa74cefcc",
+    "smoke": "39be932c2b18ff3e0b2ff5ff34db9121144d9ef0d21bcad92fe4c1b51c1a2f37"
+  },
+  "final_package_receipts": 33,
+  "package_receipt_breakdown": {
+    "controlled": 23,
+    "real_seeded_full_live": 7,
+    "real_generated_planning": 1,
+    "real_reviewer": 2
+  },
+  "real_full_live_statuses": {
+    "completed": 6,
+    "failed_with_preserved_partial": 1
+  },
+  "integrated_release_candidate_acceptance": "not-run",
+  "final_package_summary": {
+    "receipts": 33,
+    "completed_current_runs": 31,
+    "honest_failures": 2,
+    "controls": 9,
+    "observed_interventions": 24,
+    "requested_not_run_in_selected_matrix": 0
+  },
+  "quality_review_receipts": 12,
+  "independent_quality_review": "independent-24575e9-review.json",
+  "independent_recovery_audit": "24575e9-recovery-adjudication.json",
+  "changed_files": "changed-files-24575e9.json"
+}

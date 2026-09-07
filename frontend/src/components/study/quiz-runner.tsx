@@ -42,6 +42,7 @@ const DIFFICULTY_LABELS: Record<QuizDifficulty, string> = {
  */
 export function QuizRunner({ classId, quizId }: { classId: number; quizId: number }) {
   const quiz = useQuiz(quizId)
+  const returnKey = `lyra:quiz:${quizId}:help-return`
   const { mutate: start, isPending: starting } = useStartAttempt(quizId)
   const [attempt, setAttempt] = useState<AttemptRead | null>(null)
   const [startError, setStartError] = useState<string | null>(null)
@@ -87,6 +88,13 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
       setSelected(null)
       setFillText('')
       setResult(null)
+      if (restart) {
+        try {
+          sessionStorage.removeItem(returnKey)
+        } catch {
+          /* Starting over still works without session storage. */
+        }
+      }
       start(restart, {
         onSuccess: (started) => {
           if (run !== generation.current) return
@@ -96,16 +104,35 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
           // or the last question when every one has already been answered (PLA-277).
           const answered = new Set(started.answers.map((entry) => entry.part_id))
           const firstUnanswered = started.question_part_ids.findIndex((id) => !answered.has(id))
+          let helpPartId: number | null = null
+          try {
+            const saved = JSON.parse(sessionStorage.getItem(returnKey) ?? 'null')
+            if (saved?.attemptId === started.attempt_id && answered.has(saved.partId)) {
+              // History may revisit this reveal more than once. Only advancing or
+              // restarting ends the return context, never simply rendering it.
+              helpPartId = saved.partId
+              setFillText(typeof saved.fillText === 'string' ? saved.fillText : '')
+            } else {
+              sessionStorage.removeItem(returnKey)
+            }
+          } catch {
+            /* The durable attempt still resumes when session storage is unavailable. */
+          }
+          const helpIndex = started.question_part_ids.findIndex(
+            (id) => id === helpPartId && answered.has(id),
+          )
           const resumeIndex =
-            firstUnanswered === -1
-              ? Math.max(0, started.question_part_ids.length - 1)
-              : firstUnanswered
+            helpIndex >= 0
+              ? helpIndex
+              : firstUnanswered === -1
+                ? Math.max(0, started.question_part_ids.length - 1)
+                : firstUnanswered
           setIndex(resumeIndex)
 
           // A lost finish response can leave every answer durably recorded while the
           // attempt is still active. Restore the final reveal so the student can retry
           // finish directly instead of submitting the last answer a second time.
-          if (firstUnanswered === -1) {
+          if (firstUnanswered === -1 || helpIndex >= 0) {
             const partId = started.question_part_ids[resumeIndex]
             const recorded = started.answers.find((entry) => entry.part_id === partId)
             const resumed = quiz.data?.questions.find((entry) => entry.part_id === partId)
@@ -126,7 +153,7 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
         },
       })
     },
-    [quiz.data, start],
+    [quiz.data, start, returnKey],
   )
 
   // The attempt starts (or resumes) on entry rather than on the first answer, so a quiz
@@ -250,6 +277,11 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
   }
 
   function advance() {
+    try {
+      sessionStorage.removeItem(returnKey)
+    } catch {
+      /* The durable answer remains recorded. */
+    }
     setIndex((current) => current + 1)
     setAnswer(null)
     setSelected(null)
@@ -386,18 +418,10 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
               {finishing ? <Spinner /> : null}
               {isLast ? 'See results' : 'Next'}
             </Button>
-            {/* A miss is the moment the tutor is worth a click: the question, the wrong
-                answer, and the right one travel along, so the conversation opens already
-                knowing what went wrong. The explanation above stays; this is for when it
-                was not enough.
-
-                Opens in a new tab. The attempt is now durable and resumable (PLA-277), so
-                leaving and returning would continue it - but the recorded answers resume,
-                not this in-progress reveal, so a new tab still keeps the student's exact
-                place. The quiz stays where it is; the label says so. */}
+            {/* The recorded answer stays durable; return to this reveal after asking. */}
             {!answer.correct ? (
               <Button variant="ghost" asChild>
-                <a
+                <Link
                   href={chatHandoffUrl(classId, {
                     ask: quizMissQuestion({
                       topic: payload.topic,
@@ -411,17 +435,25 @@ export function QuizRunner({ classId, quizId }: { classId: number; quizId: numbe
                       correct: payload.options[answer.correct_index] ?? '',
                     }),
                   })}
-                  target="_blank"
-                  rel="noopener"
-                  aria-label="Go over this with Lyra in a new tab. Your quiz stays open here."
-                  title="Opens in a new tab; your quiz stays open here"
+                  onClick={() => {
+                    if (!attempt) return
+                    try {
+                      sessionStorage.setItem(
+                        returnKey,
+                        JSON.stringify({
+                          attemptId: attempt.attempt_id,
+                          partId: current.part_id,
+                          ...(payload.type === 'fill_blank' ? { fillText } : {}),
+                        }),
+                      )
+                    } catch {
+                      /* Saved answers remain on the server. */
+                    }
+                  }}
                 >
                   <MessageSquare aria-hidden className="size-4" />
                   Go over this with Lyra
-                  <span aria-hidden className="text-text-tertiary text-xs">
-                    new tab
-                  </span>
-                </a>
+                </Link>
               </Button>
             ) : null}
           </div>

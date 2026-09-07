@@ -411,3 +411,21 @@ it('shows an outline failure with retry instead of invented empty structure', as
   expect(await screen.findByText(/12 passages/)).toBeInTheDocument()
   expect(outline).toHaveBeenCalledTimes(2)
 })
+
+it('renders the complete filename so similar long files can be distinguished without hover', () => {
+  const filename =
+    'Introduction-to-biology-lecture-notes-term-two-final-revision-unique-appendix-B.pdf'
+  render(
+    <DocumentRow
+      document={{ ...documentAt('ready'), filename }}
+      selected={false}
+      onSelect={noop}
+      onRetry={noop}
+      onRecognize={noop}
+      onDelete={noop}
+      onStatus={noop}
+    />,
+    { wrapper: createWrapper().wrapper },
+  )
+  expect(screen.getByText(filename)).toBeInTheDocument()
+})

@@ -71,7 +71,7 @@ export default function ClassHubPage() {
     )
   }
 
-  if (classQuery.isError) {
+  if (classQuery.isError && !classQuery.data) {
     return (
       <Alert variant="destructive" className="max-w-xl">
         <AlertTitle>Could not load this class</AlertTitle>
@@ -92,5 +92,25 @@ export default function ClassHubPage() {
     )
   }
 
-  return <ClassHub classId={classId} tab={readHubTab(tab)} />
+  return (
+    <>
+      {classQuery.isError ? (
+        <Alert variant="destructive" className="mb-4">
+          <AlertTitle>Could not refresh this class</AlertTitle>
+          <AlertDescription>
+            <p>Your previously loaded class remains available.</p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={classQuery.isFetching}
+              onClick={() => void classQuery.refetch()}
+            >
+              {classQuery.isFetching ? 'Retrying…' : 'Retry'}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      <ClassHub key={classId} classId={classId} tab={readHubTab(tab)} />
+    </>
+  )
 }

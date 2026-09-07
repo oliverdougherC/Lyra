@@ -49,7 +49,17 @@ function stateLabel(state: ArtifactState): string {
 type DraftTarget = { id: number; title: string }
 
 /** Every draft in a class, with the actions the study panel taught. */
-export function ClassDraftsPanel({ classId }: { classId: number }) {
+export function ClassDraftsPanel({
+  classId,
+  query = '',
+  limit,
+  managedRecovery = false,
+}: {
+  classId: number
+  query?: string
+  limit?: number
+  managedRecovery?: boolean
+}) {
   const router = useRouter()
   const drafts = useDrafts(classId)
   const createDraft = useCreateDraft(classId)
@@ -105,14 +115,17 @@ export function ClassDraftsPanel({ classId }: { classId: number }) {
       </AlertDescription>
     </Alert>
   )
-  if (drafts.isError && !drafts.data) return errorNotice
+  if (drafts.isError && !drafts.data) return managedRecovery ? null : errorNotice
 
   const list = drafts.data ?? []
+  const matches = list.filter((draft) =>
+    draft.title.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+  )
   const empty = list.length === 0
 
   return (
     <div className="flex flex-col gap-6">
-      {drafts.isError ? errorNotice : null}
+      {drafts.isError && !managedRecovery ? errorNotice : null}
       <div className="flex items-center justify-between gap-3">
         <p className="text-text-secondary text-sm">
           Documents you write, with Lyra drafting passages and suggesting revisions.
@@ -148,9 +161,11 @@ export function ClassDraftsPanel({ classId }: { classId: number }) {
             </Button>
           </div>
         </Empty>
+      ) : matches.length === 0 ? (
+        <p role="status">No work matches this search.</p>
       ) : (
         <ul className="flex flex-col gap-2">
-          {list.map((draft) => (
+          {matches.slice(0, limit).map((draft) => (
             <li key={draft.id}>
               <DraftRow
                 classId={classId}
@@ -231,8 +246,8 @@ function DraftRow({
         className="focus-visible:ring-ring flex min-w-0 flex-1 items-center gap-4 rounded-md py-3 pr-1 pl-4 focus-visible:ring-2 focus-visible:outline-none"
       >
         <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className="text-text-primary truncate font-medium">{draft.title}</span>
-          <span className="text-text-tertiary truncate text-xs">
+          <span className="text-text-primary break-words font-medium">{draft.title}</span>
+          <span className="text-text-tertiary break-words text-xs">
             {working
               ? (draft.stage_detail ?? stateLabel(draft.state))
               : `Edited ${formatRelativeTime(draft.updated_at)}`}

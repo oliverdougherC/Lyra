@@ -170,11 +170,12 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     private.assert_safe_external_writer_parent(path.parent)
     # SQLite cannot be the first process to create or touch any of these predictable names:
     # its open flags follow symlinks and its creation mode is affected by the process umask.
-    # Pre-create absent files exclusively at 0o600, or harden an existing real current-user
-    # file through a no-follow descriptor. Existing databases are never truncated.
-    private.ensure_private_file(path)
+    # Publish absent files exclusively at 0o600, or harden existing current-user files
+    # without opening a descriptor that would discard this process's SQLite locks.
+    # Existing databases are never truncated.
+    private.secure_sqlite_file(path)
     for suffix in _DB_SIDECAR_SUFFIXES:
-        private.ensure_private_file(path.with_name(path.name + suffix))
+        private.secure_sqlite_file(path.with_name(path.name + suffix))
     # check_same_thread=False: FastAPI submits a sync dependency generator and its sync
     # handler as two separate threadpool jobs, which are not guaranteed to land on the
     # same worker. A connection is never shared between concurrent requests, so the
@@ -191,9 +192,9 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     # tree. The parent directory is `0o700`, which is what actually keeps other users out;
     # tightening the files as well is defence in depth for a database placed, by an explicit
     # `LYRA_DB_PATH`, somewhere the directory contract does not otherwise reach.
-    private.harden_file(path)
+    private.secure_sqlite_file(path, create=False)
     for suffix in _DB_SIDECAR_SUFFIXES:
-        private.harden_file_if_present(path.with_name(path.name + suffix))
+        private.secure_sqlite_file(path.with_name(path.name + suffix), create=False)
     return conn
 
 

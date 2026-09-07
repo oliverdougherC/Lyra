@@ -348,7 +348,9 @@ def test_a_run_of_only_failed_cases_still_leaves_a_gradeable_record(
     runs = json.loads((tmp_path / "runs.json").read_text(encoding="utf-8"))
     record = runs["cases"]["what-is-a-derivative"]
     assert record["status"] == "error"
-    assert "endpoint down" in record["error"]
+    assert record["error"] == "ConnectionError"
+    assert record["stopped"] == "exception"
+    assert record["provenance"]["hashes"]["corpus"] == eval_tutor._sha256(CORPUS.read_bytes())
 
     meta_text = (tmp_path / "meta.json").read_text(encoding="utf-8")
     meta = json.loads(meta_text)
@@ -418,6 +420,8 @@ def test_grade_records_the_judge_it_uses(tmp_path: Path, monkeypatch: pytest.Mon
     assert meta["tutor"] == {"model": "tutor-model", "locality": "local"}
     assert meta["judge"]["model"] == "tutor-model"
     assert meta["judge"]["same_as_tutor"] is True
+    assert meta["corpus_sha256"] == eval_tutor._sha256(CORPUS.read_bytes())
+    assert meta["rubric_sha256"] == eval_tutor._sha256(eval_tutor._GRADER_PROMPT.encode())
     assert seen_models == ["tutor-model"]
 
     # A re-grade with an explicit judge updates the entry and records the switch.
@@ -820,7 +824,18 @@ def test_a_case_that_calls_a_tool_grades_the_terminal_answer(
         # Graded on the terminal answer, with the verification as metadata.
         assert record["status"] == "ok"
         assert "slides one signal past the other" in str(record["response"])
-        assert record["tool_calls"] == [{"name": "cas_evaluate", "ok": True}]
+        assert len(record["tool_calls"]) == 1
+        call = record["tool_calls"][0]
+        assert call["name"] == "cas_evaluate" and call["ok"] is True
+        assert call["arguments"] == {"expression": "sin(x) + cos(x)"}
+        assert json.loads(call["raw_arguments"]) == call["arguments"]
+        assert call["result"]
+        assert record["stopped"] == llm_tools.COMPLETED
+        assert record["observed_tools_supported"] is True
+        assert (
+            record["generation_parameters"]["max_tokens"]
+            == assembly.context_budget.generation_reserve
+        )
         assert record["rounds"] == 2
         assert record["toolless"] is False
         # The production loop's audit row landed in the disposable environment.
@@ -1001,3 +1016,33 @@ def test_grade_fails_an_incomplete_turn_truthfully(
     assert "no terminal answer" in note
     assert str(llm_tools.UPSTREAM_FAILED) in note
     assert "cas_evaluate" in note
+
+
+def test_evidence_redacts_locations_and_credentials_without_losing_math() -> None:
+    raw = {
+        "response": "Use x/2 = 3; https://secret.example/v1 is private.",
+        "tool_calls": [
+            {
+                "arguments": {"expression": "x/2"},
+                "result": {"path": "/Users/person/private.txt", "api_key": "hidden"},
+            }
+        ],
+        "detail": "opaque-credential",
+    }
+    safe = eval_tutor._safe_evidence(raw, "opaque-credential")
+    encoded = json.dumps(safe)
+    for private in ("secret.example", "/Users/person", "hidden", "opaque-credential"):
+        assert private not in encoded
+    assert "x/2 = 3" in encoded
+    assert safe["tool_calls"][0]["arguments"]["expression"] == "x/2"
+
+
+def test_provenance_distinguishes_configured_capabilities_from_observation() -> None:
+    config = TutorConfig("https://private.example/v1", "private-key", "example-model", 16384)
+    provenance = eval_tutor._provenance(CORPUS, config)
+    assert provenance["capabilities"] == {"stored_tools_supported": None}
+    assert provenance["context_window"] == 16384
+    assert provenance["review"]["human"] == "not_run"
+    assert len(provenance["hashes"]["agent_prompt_source"]) == 64
+    assert "private.example" not in json.dumps(provenance)
+    assert "private-key" not in json.dumps(provenance)

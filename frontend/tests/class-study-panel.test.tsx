@@ -10,11 +10,12 @@ import { quickStudyTitle } from '@/lib/handoff'
 import type { DeckSummary, StudyArtifactRead, StudyListRead } from '@/types'
 
 const push = vi.fn()
+let setupQuery = ''
 
 vi.mock('@/router/hooks', () => ({
   useRouter: () => ({ replace: vi.fn(), push, prefetch: vi.fn() }),
   useParams: () => ({ id: '1' }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(setupQuery),
   usePathname: () => '/classes/1',
 }))
 
@@ -68,6 +69,8 @@ function quiz(overrides: Partial<StudyArtifactRead>): StudyArtifactRead {
 beforeEach(() => {
   vi.restoreAllMocks()
   push.mockClear()
+  setupQuery = ''
+  sessionStorage.clear()
   // The create dialog and the quick-practice guard both read the documents.
   vi.spyOn(api, 'listDocuments').mockResolvedValue([])
 })
@@ -102,12 +105,11 @@ describe('ClassStudyPanel', () => {
 
     expect(await screen.findByText('No decks or quizzes yet')).toBeInTheDocument()
     expect(screen.queryByText(/Nothing to study from/)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Practice now' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'New quiz' })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'New deck' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'New quiz' })).toBeInTheDocument()
   })
 
-  it('holds Practice now until the document list has answered', async () => {
+  it('holds New quiz until the document list has answered', async () => {
     vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
     // Never resolves: the ready count is unknown, which is not the same as zero.
     vi.spyOn(api, 'listDocuments').mockReturnValue(new Promise(() => {}))
@@ -116,12 +118,13 @@ describe('ClassStudyPanel', () => {
 
     render(<ClassStudyPanel classId={1} />, { wrapper })
 
-    const practice = await screen.findByRole('button', { name: 'Practice now' })
-    expect(practice).toBeDisabled()
+    const practice = await screen.findByRole('button', { name: 'New quiz' })
+    await userEvent.click(practice)
+    expect(screen.getByRole('button', { name: 'Create quiz' })).toBeDisabled()
     expect(createQuiz).not.toHaveBeenCalled()
   })
 
-  it('starts a practice quiz in one click, at the defaults, named after the day', async () => {
+  it('opens source setup before creating a quiz with explicit defaults', async () => {
     vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
     vi.spyOn(api, 'listDocuments').mockResolvedValue([
       { id: 3, class_id: 1, filename: 'notes.pdf', state: 'ready' },
@@ -134,12 +137,19 @@ describe('ClassStudyPanel', () => {
     render(<ClassStudyPanel classId={1} />, { wrapper })
 
     const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: 'Practice now' }))
+    await user.click(await screen.findByRole('button', { name: 'New quiz' }))
 
-    // No name asked for, no sources picked, no counts chosen: the backend's own defaults
-    // carry the run, and the artifact page it lands on shows the progress.
+    expect(createQuiz).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Create quiz' }))
     await waitFor(() =>
-      expect(createQuiz).toHaveBeenCalledWith(1, { title: expect.stringMatching(/^Practice · /) }),
+      expect(createQuiz).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          title: expect.stringMatching(/^Practice · /),
+          document_ids: [3],
+          count: 10,
+        }),
+      ),
     )
     await waitFor(() => expect(push).toHaveBeenCalledWith('/classes/1/study/12'))
   })
@@ -153,7 +163,7 @@ describe('ClassStudyPanel', () => {
     render(<ClassStudyPanel classId={1} />, { wrapper })
 
     const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: 'Practice now' }))
+    await user.click(await screen.findByRole('button', { name: 'New quiz' }))
 
     expect(createQuiz).not.toHaveBeenCalled()
   })
@@ -168,16 +178,17 @@ describe('ClassStudyPanel', () => {
     render(<ClassStudyPanel classId={1} />, { wrapper })
 
     expect(await screen.findByRole('link', { name: /Signals flashcards/ })).toBeInTheDocument()
-    expect(await screen.findByText(/The document list did not load/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Practice now' })).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: 'New quiz' }))
+    expect(await screen.findByText(/Could not load the documents/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create quiz' })).toBeDisabled()
 
     // Retry asks again; recovery re-enables Practice and retires the notice.
     listDocuments.mockResolvedValue([
       { id: 3, class_id: 1, filename: 'notes.pdf', state: 'ready' },
     ] as never)
     const user = userEvent.setup()
-    await user.click(screen.getByRole('button', { name: 'Retry' }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Practice now' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: 'Retry documents' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create quiz' })).toBeEnabled())
     expect(screen.queryByText(/The document list did not load/)).not.toBeInTheDocument()
   })
 
@@ -198,9 +209,15 @@ describe('ClassStudyPanel', () => {
     render(<ClassStudyPanel classId={1} />, { wrapper })
 
     const user = userEvent.setup()
-    await user.click(await screen.findByRole('button', { name: 'Practice now' }))
+    await user.click(await screen.findByRole('button', { name: 'New quiz' }))
 
-    await waitFor(() => expect(createQuiz).toHaveBeenCalledWith(1, { title: `${taken} · 2` }))
+    await user.click(screen.getByRole('button', { name: 'Create quiz' }))
+    await waitFor(() =>
+      expect(createQuiz).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ title: `${taken} · 2` }),
+      ),
+    )
   })
 
   it('collapses Options again when the create dialog is reopened', async () => {
@@ -236,9 +253,10 @@ describe('ClassStudyPanel', () => {
     render(<ClassStudyPanel classId={1} />, { wrapper })
 
     const deckLink = await screen.findByRole('link', { name: /Signals flashcards/ })
-    expect(deckLink).toHaveAttribute('href', '/#/classes/1/study/8')
-    expect(deckLink).toHaveTextContent('new 3 · learning 2 · mastered 1')
-    expect(screen.getByText('4 due')).toBeInTheDocument()
+    expect(deckLink).toHaveAttribute('href', '/#/classes/1/study/8?review=due')
+    expect(deckLink).toHaveTextContent('12 cards')
+    expect(deckLink).not.toHaveTextContent('mastered')
+    expect(screen.getByText('Review due · 4')).toBeInTheDocument()
 
     const quizLink = screen.getByRole('link', { name: /Week 4 quiz/ })
     expect(quizLink).toHaveAttribute('href', '/#/classes/1/study/9')
@@ -309,4 +327,102 @@ it('retries source loading in the open creation dialog without losing options', 
   await waitFor(() => expect(screen.getByRole('button', { name: 'Create quiz' })).toBeEnabled())
   expect(screen.getByLabelText('Questions')).toHaveValue(14)
   expect(screen.getByLabelText('Name')).toHaveValue('Retained quiz')
+})
+
+it('finds old practice by title with bounded history and retains the search on return', async () => {
+  vi.spyOn(api, 'listStudy').mockResolvedValue({
+    decks: [],
+    quizzes: Array.from({ length: 105 }, (_, index) =>
+      quiz({ id: index + 100, title: `Similar long semester practice title ${index}` }),
+    ),
+  })
+  const first = render(<ClassStudyPanel classId={1} />, { wrapper: createWrapper().wrapper })
+  const search = await screen.findByRole('searchbox', { name: 'Search practice by title' })
+  expect(screen.getAllByRole('link')).toHaveLength(20)
+  await userEvent.type(search, '104')
+  expect(screen.getAllByRole('link')).toHaveLength(1)
+  expect(screen.getByRole('link', { name: /title 104/ })).toBeVisible()
+  first.unmount()
+  render(<ClassStudyPanel classId={1} />, { wrapper: createWrapper().wrapper })
+  expect(await screen.findByRole('searchbox')).toHaveValue('104')
+  await userEvent.clear(screen.getByRole('searchbox'))
+  await userEvent.type(screen.getByRole('searchbox'), 'unmatched')
+  expect(screen.getByRole('status')).toHaveTextContent('No practice matches this search.')
+  expect(screen.queryByText('No decks or quizzes yet')).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'Clear search' }))
+  expect(screen.getAllByRole('link')).toHaveLength(20)
+  await userEvent.click(screen.getByRole('button', { name: /Show more practice/ }))
+  expect(screen.getAllByRole('link')).toHaveLength(40)
+})
+
+it('gates a new quiz before a missing-material attempt while preserving custom source selection', async () => {
+  vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
+  render(<ClassStudyPanel classId={1} />, { wrapper: createWrapper().wrapper })
+  await userEvent.click(await screen.findByRole('button', { name: 'New quiz' }))
+  expect(screen.getByRole('button', { name: 'Create quiz' })).toBeDisabled()
+  expect(await screen.findByText('No documents in this class yet.')).toBeVisible()
+})
+
+it('continues only a real active attempt and never treats generation as answered work', async () => {
+  vi.spyOn(api, 'listStudy').mockResolvedValue({
+    decks: [],
+    quizzes: [quiz({ active_attempt_id: 31, answered_count: 3 })],
+  })
+  render(<ClassStudyPanel classId={1} />, { wrapper: createWrapper().wrapper })
+  const continued = await screen.findByRole('button', { name: 'Continue quiz' })
+  expect(screen.getByRole('link', { name: /Week 4 quiz/ })).toHaveTextContent('3 answered')
+  await userEvent.click(continued)
+  expect(push).toHaveBeenCalledWith('/classes/1/study/9')
+})
+
+it('keeps cached practice visible during failed refresh and pending Retry', async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  client.setQueryData(['study', 1], { decks: [deck({})], quizzes: [] })
+  const request = vi.spyOn(api, 'listStudy').mockRejectedValue(new Error('offline'))
+  render(
+    <QueryClientProvider client={client}>
+      <ClassStudyPanel classId={1} />
+    </QueryClientProvider>,
+  )
+  await screen.findByText('Could not refresh your study tools')
+  expect(screen.getByRole('link', { name: /Signals flashcards/ })).toBeVisible()
+  request.mockReturnValue(new Promise(() => {}))
+  await userEvent.click(screen.getByRole('button', { name: 'Retry study tools' }))
+  expect(await screen.findByRole('button', { name: 'Retrying…' })).toBeDisabled()
+  expect(screen.getByRole('link', { name: /Signals flashcards/ })).toBeVisible()
+})
+
+it('opens the same named source setup from the overview handoff', async () => {
+  setupQuery = 'tab=practice&create=quiz'
+  vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
+  const create = vi.spyOn(api, 'createQuiz')
+  render(<ClassStudyPanel classId={1} />, { wrapper: createWrapper().wrapper })
+  expect(await screen.findByRole('dialog')).toBeVisible()
+  expect((screen.getByLabelText('Name') as HTMLInputElement).value).toMatch(/^Practice/)
+  expect(create).not.toHaveBeenCalled()
+})
+
+it('creates only the chosen source and three MCQ questions from the main New quiz entry', async () => {
+  vi.spyOn(api, 'listStudy').mockResolvedValue({ decks: [], quizzes: [] })
+  vi.spyOn(api, 'listDocuments').mockResolvedValue([
+    { id: 3, class_id: 1, filename: 'chosen.pdf', state: 'ready' },
+    { id: 4, class_id: 1, filename: 'other.pdf', state: 'ready' },
+  ] as never)
+  const create = vi.spyOn(api, 'createQuiz').mockResolvedValue(quiz({}))
+  render(<ClassStudyPanel classId={1} />, { wrapper: createWrapper().wrapper })
+  await userEvent.click(await screen.findByRole('button', { name: 'New quiz' }))
+  expect(create).not.toHaveBeenCalled()
+  await userEvent.click(await screen.findByRole('checkbox', { name: /other.pdf/ }))
+  await userEvent.click(screen.getByRole('button', { name: /Options/ }))
+  await userEvent.clear(screen.getByLabelText('Questions'))
+  await userEvent.type(screen.getByLabelText('Questions'), '3')
+  await userEvent.click(screen.getByRole('checkbox', { name: 'True or false' }))
+  await userEvent.click(screen.getByRole('checkbox', { name: 'Fill in the blank' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Create quiz' }))
+  await waitFor(() =>
+    expect(create).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ document_ids: [3], count: 3, types: ['mcq'] }),
+    ),
+  )
 })

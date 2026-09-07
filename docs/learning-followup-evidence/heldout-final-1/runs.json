@@ -1,0 +1,153 @@
+{
+  "cases": {
+    "division-loses-zero": {
+      "tool_calls": [
+        {
+          "name": "cas_solve",
+          "arguments": {
+            "equations": [
+              "x^2 = 3*x"
+            ],
+            "unknowns": [
+              "x"
+            ]
+          },
+          "raw_arguments": "{\"equations\": [\"x^2 = 3*x\"], \"unknowns\": [\"x\"]}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "solutions": [
+              {
+                "x": "0"
+              },
+              {
+                "x": "3"
+              }
+            ]
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Not quite \u2014 dividing by $x$ is only allowed when $x \\neq 0$, and here $x = 0$ is actually a solution. So that step quietly threw away a valid answer.\n\nThe safe move is to factor instead:\n\n$$x^2 = 3x \\implies x^2 - 3x = 0 \\implies x(x - 3) = 0$$\n\nA product is zero when at least one factor is zero, so:\n\n$$x = 0 \\quad \\text{or} \\quad x = 3$$\n\nI checked this by solving the equation directly, and both values work: $0^2 = 3 \\cdot 0$ and $3^2 = 3 \\cdot 3$.\n\n**Rule to remember:** you can divide both sides by an expression only if you know it can't be zero. If you're not sure, move everything to one side and factor.",
+      "generated_at": "2026-09-07T07:35:41+00:00",
+      "duration_seconds": 4.65,
+      "system_prompt_tokens": 1382,
+      "assembled_prompt_sha256": "b747e81044724b46ad222cda7f95e5a3de7c22b6fe82da86d9b613962f6f93a6",
+      "assembled_system_prompt_sha256": "7c0e709dc935b82a1c11a6a65b302e6c42e9a3c6db3edb38e2f1ff0139d5ec28",
+      "tool_schema_tokens": 1266,
+      "user": "For x^2 = 3x I divided both sides by x and got x = 3. Is my working valid?",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "52538067e5c0cd9849e4ea9845e3f9cef33dd371f44ba7906aeb7f592deefbe3",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "fdf1c0078c9875049943aaf443e285183295ab9a44591542ad5e38468e3c661f",
+          "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "verify-false-identity": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(x+1)**2",
+            "compare_to": "x**2 + 1"
+          },
+          "raw_arguments": "{\"expression\": \"(x+1)**2\", \"compare_to\": \"x**2 + 1\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": false,
+            "difference": "2*x",
+            "certain": true,
+            "comparison_status": "mismatched",
+            "interpretation": "The computation ran, but the submitted expressions are not equal. This does not verify the claimed equality. Inspect the difference and the submitted notation; a corrected check must actually match before claiming verification."
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "They are **not** equal for all real $x$.\n\n**The check:** Expanding the left side gives\n\n$$(x+1)^2 = x^2 + 2x + 1$$\n\nso the difference between the two expressions is\n\n$$(x^2 + 2x + 1) - (x^2 + 1) = 2x$$\n\nThe symbolic comparison confirms this: the difference is $2x$, which is not identically zero.\n\n**What this means:** The two expressions agree only where $2x = 0$, i.e. at the single point $x = 0$. For any other real $x$ (say $x = 1$: $4$ vs. $2$), they differ. The mistake in assuming they're equal is dropping the cross term $2x$ when expanding \u2014 $(x+1)^2$ is not $x^2 + 1^2$; the middle term $2 \\cdot x \\cdot 1$ is what makes the difference.",
+      "generated_at": "2026-09-07T07:35:44+00:00",
+      "duration_seconds": 3.38,
+      "system_prompt_tokens": 1382,
+      "assembled_prompt_sha256": "fb4c3fd3b0ab009781f934a547a1557e8a1959956e0f08cb8a679b67ddfb9560",
+      "assembled_system_prompt_sha256": "7c0e709dc935b82a1c11a6a65b302e6c42e9a3c6db3edb38e2f1ff0139d5ec28",
+      "tool_schema_tokens": 1266,
+      "user": "Use a symbolic comparison to check whether (x+1)^2 equals x^2+1 for all real x. Explain the result.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "52538067e5c0cd9849e4ea9845e3f9cef33dd371f44ba7906aeb7f592deefbe3",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "fdf1c0078c9875049943aaf443e285183295ab9a44591542ad5e38468e3c661f",
+          "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

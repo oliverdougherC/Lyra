@@ -1,0 +1,57 @@
+{
+  "cases": {
+    "simpler-osmosis": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Osmosis is water moving through a membrane that only water can pass through.\n\nThe membrane lets water through but blocks the dissolved stuff (salt, sugar, etc.). Water moves from the side where it's more \"free\" \u2014 the dilute side \u2014 to the side where it's more crowded with dissolved stuff \u2014 the concentrated side. It keeps going until the pull balances out.\n\nA concrete picture: put a bag of salt water in a bowl of fresh water, where the bag's skin only lets water through. Fresh water seeps into the bag, the bag swells, and the salt water inside gets a little more diluted. That seeping-in is osmosis.",
+      "generated_at": "2026-09-07T07:35:36+00:00",
+      "duration_seconds": 1.63,
+      "system_prompt_tokens": 1382,
+      "assembled_prompt_sha256": "0f29534ec71ada44311ab2a938c3f457d21ac8b4a46819ea68062b8dc7b15583",
+      "assembled_system_prompt_sha256": "7c0e709dc935b82a1c11a6a65b302e6c42e9a3c6db3edb38e2f1ff0139d5ec28",
+      "tool_schema_tokens": 1266,
+      "user": "That is too abstract. Explain it in plain words.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "fdf1c0078c9875049943aaf443e285183295ab9a44591542ad5e38468e3c661f",
+          "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

@@ -1,0 +1,422 @@
+{
+  "cases": {
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t-tau))",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "1"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t-tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Your setup is right \u2014 the convolution integral with lower limit 0 (from $u(\\tau)$) is correct. The first invalid step is the integrand: you wrote $h(t-\\tau)$ as $e^{-t}$, but\n\n$$h(t-\\tau) = e^{-(t-\\tau)}u(t-\\tau)$$\n\nso the $\\tau$ dependence was lost. Pulling $e^{-t}$ out of the integral is only legal if the integrand is constant in $\\tau$; it isn't.\n\nThere's a second issue in your limits: $x(\\tau) = u(\\tau) - u(\\tau-1)$ is nonzero only on $0 \\le \\tau \\le 1$, so the upper limit is $\\min(t, 1)$, not $t$. Your answer $t e^{-t}$ would also be wrong for $t > 1$ even with the correct integrand.\n\nCorrected, piece by piece:\n\n- **$0 < t < 1$:** limits $0$ to $t$,\n$$y(t) = \\int_0^t e^{-(t-\\tau)}\\,d\\tau = 1 - e^{-t}$$\n\n- **$t > 1$:** limits $0$ to $1$,\n$$y(t) = \\int_0^1 e^{-(t-\\tau)}\\,d\\tau = e^{1-t} - e^{-t}$$\n\n- **$t < 0$:** $y(t) = 0$ (the pulse hasn't started).\n\nI checked both integrals symbolically: $\\int_0^t e^{-(t-\\tau)}d\\tau = 1 - e^{-t}$ and $\\int_0^1 e^{-(t-\\tau)}d\\tau = e^{1-t} - e^{-t}$.\n\nSo the fix in your own method is: keep the $\\tau$ in the exponent, and cap the upper limit at 1.",
+      "generated_at": "2026-09-07T07:34:43+00:00",
+      "duration_seconds": 16.48,
+      "system_prompt_tokens": 1382,
+      "assembled_prompt_sha256": "dd659a2be434fff2ce59f5345aad51b4857a9e90e7d2f5ca5b195096ae53c73c",
+      "assembled_system_prompt_sha256": "7c0e709dc935b82a1c11a6a65b302e6c42e9a3c6db3edb38e2f1ff0139d5ec28",
+      "tool_schema_tokens": 1266,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "fdf1c0078c9875049943aaf443e285183295ab9a44591542ad5e38468e3c661f",
+          "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "just-tell-me-the-answer": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "diff(10 + 10*exp(-0.03*t), t)",
+            "compare_to": "0.3 - 3*(10 + 10*exp(-0.03*t))/100"
+          },
+          "raw_arguments": "{\"expression\": \"diff(10 + 10*exp(-0.03*t), t)\", \"compare_to\": \"0.3 - 3*(10 + 10*exp(-0.03*t))/100\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true,
+            "comparison_status": "matched",
+            "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "$$S(t) = 10 + 10e^{-0.03t} \\text{ kg}$$\n\nQuick reason: salt comes in at $0.1 \\times 3 = 0.3$ kg/min and leaves at $3 \\cdot \\frac{S}{100}$ kg/min, so $\\frac{dS}{dt} = 0.3 - 0.03S$ with $S(0)=20$. The equilibrium is $S=10$, and solving gives $S(t) = 10 + 10e^{-0.03t}$ \u2014 I checked that this satisfies the differential equation exactly. So the salt approaches 10 kg as $t \\to \\infty$.",
+      "generated_at": "2026-09-07T07:34:49+00:00",
+      "duration_seconds": 5.98,
+      "system_prompt_tokens": 1382,
+      "assembled_prompt_sha256": "2c19ba5981894ddadd0e2da6d24556f64b597baaa65c6a86f9fb6cb6ad2275f6",
+      "assembled_system_prompt_sha256": "7c0e709dc935b82a1c11a6a65b302e6c42e9a3c6db3edb38e2f1ff0139d5ec28",
+      "tool_schema_tokens": 1266,
+      "user": "Just tell me the answer.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "fdf1c0078c9875049943aaf443e285183295ab9a44591542ad5e38468e3c661f",
+          "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "dont-ask-me-questions-teach-it": {
+      "tool_calls": [
+        {
+          "name": "cas_linalg",
+          "arguments": {
+            "operation": "eigenvalues",
+            "matrix": [
+              [
+                1,
+                2
+              ],
+              [
+                1,
+                2
+              ]
+            ]
+          },
+          "raw_arguments": "{\"operation\": \"eigenvalues\", \"matrix\": [[1, 2], [1, 2]]}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": {
+              "3": 1,
+              "0": 1
+            }
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(1-lambda)*(2-lambda) - 2",
+            "compare_to": "lambda**2 - 3*lambda"
+          },
+          "raw_arguments": "{\"expression\": \"(1-lambda)*(2-lambda) - 2\", \"compare_to\": \"lambda**2 - 3*lambda\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Could not read the expression: SyntaxError: invalid syntax"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "1*1 + 2*1",
+            "compare_to": "3*1"
+          },
+          "raw_arguments": "{\"expression\": \"1*1 + 2*1\", \"compare_to\": \"3*1\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true,
+            "comparison_status": "matched",
+            "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "1*2 + 2*(-1)",
+            "compare_to": "0"
+          },
+          "raw_arguments": "{\"expression\": \"1*2 + 2*(-1)\", \"compare_to\": \"0\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true,
+            "comparison_status": "matched",
+            "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(1-l)*(2-l) - 2",
+            "compare_to": "l**2 - 3*l"
+          },
+          "raw_arguments": "{\"expression\": \"(1-l)*(2-l) - 2\", \"compare_to\": \"l**2 - 3*l\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true,
+            "comparison_status": "matched",
+            "interpretation": "The submitted expressions are equal under this computation. This checks only those expressions, not the whole solution or untested assumptions."
+          }
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "An eigenvalue is a stretch factor. Here's the whole idea in three steps.\n\n**The mental model.** A matrix is a machine that takes a vector in and spits a vector out. For most input vectors, the output points in a *different* direction \u2014 the vector got stretched *and* rotated. An eigenvector is a special input that survives without rotating: the output points along the same line as the input. The eigenvalue is the factor by which it was stretched.\n\n**The formal statement.** A number $\\lambda$ is an eigenvalue of a matrix $A$ if there exists a nonzero vector $x$ with\n\n$$A x = \\lambda x$$\n\nThat $x$ is the corresponding eigenvector. The nonzero condition matters: $A \\cdot 0 = 0 = \\lambda \\cdot 0$ for every $\\lambda$, so the zero vector would make every number an eigenvalue and the concept would be useless.\n\n**How you find them.** Rearrange: $A x = \\lambda x \\iff (A - \\lambda I)x = 0$. A nonzero $x$ exists exactly when $A - \\lambda I$ is singular, so you solve\n\n$$\\det(A - \\lambda I) = 0$$\n\nfor $\\lambda$. That's the characteristic equation.\n\n**A concrete example.** Take $A = \\begin{pmatrix} 1 & 2 \\\\ 1 & 2 \\end{pmatrix}$. Then\n\n$$\\det(A - \\lambda I) = (1-\\lambda)(2-\\lambda) - 2 = \\lambda^2 - 3\\lambda = \\lambda(\\lambda - 3)$$\n\nso the eigenvalues are $\\lambda = 0$ and $\\lambda = 3$.\n\n- $\\lambda = 3$: try $x = \\begin{pmatrix} 1 \\\\ 1 \\end{pmatrix}$. Then $Ax = \\begin{pmatrix} 1+2 \\\\ 1+2 \\end{pmatrix} = \\begin{pmatrix} 3 \\\\ 3 \\end{pmatrix} = 3x$. The vector was stretched by 3, no rotation.\n- $\\lambda = 0$: try $x = \\begin{pmatrix} 2 \\\\ -1 \\end{pmatrix}$. Then $Ax = \\begin{pmatrix} 2-2 \\\\ 2-2 \\end{pmatrix} = \\begin{pmatrix} 0 \\\\ 0 \\end{pmatrix} = 0 \\cdot x$. Stretch factor 0 means the transformation crushes this vector to nothing.\n\nBoth checks are exact: $1\\cdot 1 + 2\\cdot 1 = 3 = 3\\cdot 1$, and $1\\cdot 2 + 2\\cdot(-1) = 0$.\n\nTwo quick sanity checks worth remembering: the eigenvalues' sum equals the trace ($3 + 0 = 3 = 1 + 2$), and their product equals the determinant ($3 \\cdot 0 = 0 = 1\\cdot 2 - 2\\cdot 1$). If your computed eigenvalues don't satisfy these, you made an arithmetic slip.",
+      "generated_at": "2026-09-07T07:35:13+00:00",
+      "duration_seconds": 23.88,
+      "system_prompt_tokens": 1382,
+      "assembled_prompt_sha256": "6c56321bcb754915a70e0542e4986c25b4085494d6e555a62c93425c78ee8a35",
+      "assembled_system_prompt_sha256": "7c0e709dc935b82a1c11a6a65b302e6c42e9a3c6db3edb38e2f1ff0139d5ec28",
+      "tool_schema_tokens": 1266,
+      "user": "Don't ask me questions; teach it.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "fdf1c0078c9875049943aaf443e285183295ab9a44591542ad5e38468e3c661f",
+          "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "show-convolution-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t - tau))",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t - tau))",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "1"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(2 - tau))",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "1"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(2 - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "-exp(-2) + exp(-1)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(0.5 - tau))",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "0.5"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(0.5 - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"0.5\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "0.393469340287367",
+            "definite": true
+          }
+        }
+      ],
+      "rounds": 2,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "# Convolution of the unit pulse with $e^{-t}u(t)$\n\n**The answer first:**\n\n$$(x * h)(t) = \\begin{cases} 0, & t < 0 \\\\ 1 - e^{-t}, & 0 \\le t \\le 1 \\\\ e^{1-t} - e^{-t}, & t > 1 \\end{cases}$$\n\nwhere $x(t) = u(t) - u(t-1)$ is the unit pulse on $[0,1]$ and $h(t) = e^{-t}u(t)$.\n\n## Step 1 \u2014 Write the convolution integral\n\nBy definition,\n\n$$(x * h)(t) = \\int_{-\\infty}^{\\infty} x(\\tau)\\, h(t - \\tau)\\, d\\tau$$\n\nSubstitute the two signals:\n\n$$= \\int_{-\\infty}^{\\infty} \\big[u(\\tau) - u(\\tau-1)\\big]\\, e^{-(t-\\tau)}\\, u(t-\\tau)\\, d\\tau$$\n\n## Step 2 \u2014 Find where the integrand is nonzero\n\nThe integrand is a product of three factors, each of which kills the integral in a different region:\n\n- $u(\\tau) - u(\\tau-1)$ is $1$ only for $0 \\le \\tau \\le 1$ (the pulse),\n- $u(t - \\tau)$ requires $\\tau \\le t$,\n- $e^{-(t-\\tau)}$ is just the exponential, never zero.\n\nSo the integral survives only where $0 \\le \\tau \\le 1$ **and** $\\tau \\le t$, i.e. over $0 \\le \\tau \\le \\min(1, t)$. That condition splits into three cases:\n\n- **$t < 0$:** no $\\tau$ satisfies both conditions \u2192 integral is $0$.\n- **$0 \\le t \\le 1$:** the upper limit is $t$ (since $t < 1$).\n- **$t > 1$:** the upper limit is $1$ (since $1 < t$).\n\n## Step 3 \u2014 Evaluate each case\n\n**Case $t < 0$:**\n\n$$(x*h)(t) = 0$$\n\n**Case $0 \\le t \\le 1$:**\n\n$$(x*h)(t) = \\int_0^{t} e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^t e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^t = e^{-t}(e^t - 1) = 1 - e^{-t}$$\n\n**Case $t > 1$:**\n\n$$(x*h)(t) = \\int_0^{1} e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^1 e^{\\tau}\\, d\\tau = e^{-t}\\left[e^{\\tau}\\right]_0^1 = e^{-t}(e - 1) = e^{1-t} - e^{-t}$$\n\n## Step 4 \u2014 Sanity checks\n\n- **Continuity at $t = 1$:** from the left, $1 - e^{-1}$; from the right, $e^{1-1} - e^{-1} = 1 - e^{-1}$. \u2713 They match.\n- **Continuity at $t = 0$:** both sides give $0$. \u2713\n- **Numerical spot check at $t = 0.5$:** $1 - e^{-0.5} \\approx 0.3935$, which agrees with directly integrating $e^{-(0.5-\\tau)}$ from $0$ to $0.5$. \u2713\n- **At $t = 2$:** $e^{-1} - e^{-2} \\approx 0.2325$. \u2713\n\n## The idea to carry forward\n\nThe whole computation is really about **the limits of integration**: the pulse restricts $\\tau$ to $[0,1]$, the step $u(t-\\tau)$ restricts $\\tau$ to $(-\\infty, t]$, and the overlap of those two windows is $[0, \\min(1,t)]$. The \"knee\" at $t = 1$ is exactly where the limiting factor switches from $t$ to $1$. This same window-overlap picture works for any convolution of a finite-duration signal with a causal one \u2014 you just redraw the overlap as $t$ slides.",
+      "generated_at": "2026-09-07T07:35:34+00:00",
+      "duration_seconds": 21.21,
+      "system_prompt_tokens": 1046,
+      "assembled_prompt_sha256": "1b284f8a92736627130440d6697de9b92c1a447ce024ef8657b2a58f0f48632e",
+      "assembled_system_prompt_sha256": "5d8f37194d5487b7e81f664777087a12f7fd10fba6de237bf4a2e250d0e32258",
+      "tool_schema_tokens": 1266,
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "fdf1c0078c9875049943aaf443e285183295ab9a44591542ad5e38468e3c661f",
+          "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

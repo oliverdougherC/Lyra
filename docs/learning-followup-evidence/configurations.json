@@ -1,0 +1,34 @@
+{
+  "configured_model": "Qwen3.8-27B",
+  "advertised_models": [
+    "Qwen3.8-27B"
+  ],
+  "http_status": 200,
+  "endpoint_locality": "remote/non-loopback",
+  "other_authorized_configuration": "not known",
+  "normal_endpoint_modified": false,
+  "app_source_sha": "19b94fbfeac16fda05ba8fa5459a6ef205b4ea75",
+  "context_window": "262144 configured; maximum not independently measured",
+  "provider_revision": "weights/template revision not exposed; identity is advertised model name",
+  "support_policy": "Oliver owns beta support; unchanged",
+  "matrix": [
+    {
+      "configuration": "same authorized Qwen3.8-27B / reviewed80",
+      "runtime": "supported protocol observed",
+      "quality": "failing: false verification and derivation; historical deck failure",
+      "tested": "fresh critical baseline2repeats, same-request oldschema replay; historical full-deck evidence retained"
+    },
+    {
+      "configuration": "same authorized Qwen3.8-27B / followup19b94fb",
+      "runtime": "supported protocol observed",
+      "quality": "mixed: verified ODE claims, rejected false identity, eigen/Show and ecologydecks pass2repeats; partial-attempt algebra fails2repeats",
+      "remaining": "independent judgment only; no universal scientific-reliability repair or human acceptance"
+    },
+    {
+      "configuration": "any other model/endpoint",
+      "runtime": "not tested",
+      "quality": "not tested",
+      "reason": "No other already-authorized configuration available; no new paid service requested"
+    }
+  ]
+}

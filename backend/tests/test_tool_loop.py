@@ -11,6 +11,7 @@ import json
 import httpx
 import pytest
 
+from backend.core import artifacts, verification
 from backend.core.errors import ToolsUnsupportedError
 from backend.llm import client, tools
 from backend.rag.tokens import estimate_tokens
@@ -1110,3 +1111,27 @@ def test_code_and_json_heavy_content_is_charged_in_full() -> None:
     assert tools.message_tokens(message) == estimate_tokens(
         json.dumps(message, separators=(",", ":"))
     )
+
+
+async def test_a_successfully_executed_false_comparison_reaches_the_model_as_a_mismatch() -> None:
+    transport, sent = _scripted(
+        _reply(tool_calls=[_tool_call("cas_evaluate", {"expression": "x+1", "compare_to": "x+2"})]),
+        _reply(content='{"verdict":"agrees","detail":"The equality was verified."}'),
+    )
+
+    result = await _run(transport)
+    recorded = result.calls[0]
+    payload = json.loads(sent[1]["messages"][-1]["content"])
+
+    assert recorded.ok is True  # Execution success is not mathematical agreement.
+    assert payload == recorded.result
+    assert payload["equal"] is False
+    assert payload["certain"] is True
+    assert payload["difference"] == "-1"
+    assert payload["comparison_status"] == "mismatched"
+    assert "does not verify" in payload["interpretation"]
+    # Even a model that ignores the evidence cannot turn the actual CAS mismatch into
+    # a verified solver verdict. This tests the complete result path, not a fake tool.
+    outcome = verification.judge(result)
+    assert outcome.verdict == artifacts.UNCHECKABLE
+    assert json.loads(outcome.checks[0].result) == payload
