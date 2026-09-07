@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lyra"
-version = "0.2.0b0"
+version = "0.2.0b1"
 description = "Local-first study tutor with retrieval-grounded chat"
 requires-python = ">=3.12"
 dependencies = [
