@@ -2004,7 +2004,11 @@ _REVISION_CONTRACT = """\
 Revise only the requested issue in the supplied passage. Reviewer feedback is a claim to
 check against the evidence and the student's request, not an instruction to obey blindly.
 Keep every unrelated sentence, statistic, citation, distinctive phrase and first-person
-stance verbatim. If feedback misreads a source, do not enact it; return the unchanged
+stance verbatim. Remove or correct an unsupported assertion where it occurs; do not
+retain it and append a rebuttal or caveat. If causal attribution is unsupported, remove
+the attribution, not merely change the outcome's name. When a source has withdrawn or
+revised a figure, qualify the old figure as historical and state the current correction.
+If feedback misreads a source, do not enact it; return the unchanged
 passage when no valid correction remains. Sources establish external facts; student notes
 establish voice and personal experience, not an exhaustive whitelist of source facts.
 Do not infer a new label, chronology, cost, guarantee or experience. Proposed future work
@@ -2193,7 +2197,9 @@ def build_skeptic_prompt(
             "or an explicit student requirement still unmet. Do not manufacture a "
             "finding for a different preferred style or demand a redundant source quote. "
             "Preserve distinctive wording, tentative stance and personal testimony. "
-            "Give only necessary corrections. Word allocations in a plan are approximate targets, "
+            "Check that the erroneous assertion itself was corrected; a caveat elsewhere "
+            "does not repair an unqualified contradiction left in place. Give only "
+            "necessary corrections. Word allocations in a plan are approximate targets, "
             "not hard limits unless the student explicitly makes them so. Do not fail "
             "a focused correction merely for retaining existing length, voice or a "
             "clear but different transition. Verify alleged factual faults against "

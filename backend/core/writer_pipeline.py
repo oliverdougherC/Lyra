@@ -983,7 +983,10 @@ def _live_document_map(
             "uncertainty and distinctive phrases; source-supported facts may extend beyond "
             "the notes. Do not invent "
             "personal observations, actions, costs or methods. Distinguish proposed future "
-            "work from events that actually happened; unsupported claims must be removed "
+            "work from events that actually happened. Preserve source units and denominators: "
+            "repeated events do not establish unique people, and a voluntary sample does "
+            "not establish how much of the whole population was excluded. Unsupported claims "
+            "must be removed "
             "or qualified, not replaced with new facts."
         ),
         "thesis": plan.get("thesis", ""),
