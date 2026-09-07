@@ -112,7 +112,9 @@ test.describe('Durable study recovery', () => {
     })
     await page
       .getByRole('main')
-      .locator(`a[href^="/#/classes/${classId}/study/${deck.id}"]`)
+      .locator(
+        `a[href="/#/classes/${classId}/study/${deck.id}"], a[href^="/#/classes/${classId}/study/${deck.id}?"]`,
+      )
       .first()
       .click()
     await expect(
@@ -293,7 +295,9 @@ test.describe('Durable study recovery', () => {
       await expect(page).toHaveURL(new RegExp(`/classes/${classId}\\?tab=practice$`))
       await page
         .getByRole('main')
-        .locator(`a[href^="/#/classes/${classId}/study/${deck.id}"]`)
+        .locator(
+          `a[href="/#/classes/${classId}/study/${deck.id}"], a[href^="/#/classes/${classId}/study/${deck.id}?"]`,
+        )
         .first()
         .click()
       await expect(page.getByText(/Easy review could not be confirmed/)).toBeVisible()
@@ -381,7 +385,9 @@ test.describe('Durable study recovery', () => {
     ).toBeTruthy()
     await page
       .getByRole('main')
-      .locator(`a[href^="/#/classes/${classId}/study/${deck.id}"]`)
+      .locator(
+        `a[href="/#/classes/${classId}/study/${deck.id}"], a[href^="/#/classes/${classId}/study/${deck.id}?"]`,
+      )
       .first()
       .click()
     await expect(page.getByText('CORRECTED: energy is conserved', { exact: true })).toBeVisible()
