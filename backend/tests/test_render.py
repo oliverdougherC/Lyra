@@ -26,6 +26,19 @@ from backend.storage import private
 OwnedDocument = Callable[[int], str]
 
 
+@pytest.fixture(autouse=True, params=["source", "separate-cache"])
+def cache_layout(
+    request: pytest.FixtureRequest,
+    data_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise both source layout and packaged cache outside the durable data tree."""
+    cache_root = tmp_path / "cache" if request.param == "separate-cache" else None
+    monkeypatch.setattr(render.settings, "cache_dir", cache_root)
+    render.settings.ensure_directories()
+
+
 @pytest.fixture
 def owned(db: sqlite3.Connection) -> OwnedDocument:
     """A real document row behind each rendered id.
@@ -203,7 +216,7 @@ def test_two_threads_rendering_the_same_page_do_not_collide(
 
 
 def _plant_link(path: Path, external: Path) -> None:
-    private.secure_mkdir(path.parent, root=render.settings.data_dir)
+    private.secure_mkdir(path.parent, root=render.settings.pages_dir.parent)
     path.symlink_to(external)
 
 
