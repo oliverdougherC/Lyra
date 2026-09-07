@@ -93,7 +93,10 @@ def test_followup_revision_keeps_original_instruction_and_run_ownership(
         return False, False
 
     monkeypatch.setattr(writer_pipeline, "_run_section", revise)
-    converge(db, job, part_id)
+    from backend.core.errors import LyraError
+
+    with pytest.raises(LyraError, match="review"):
+        converge(db, job, part_id)
     assert seen
     assert seen[0].run_id == job.run_id
     assert seen[0]._deadline == job._deadline
@@ -114,3 +117,53 @@ def test_skeptic_knows_the_students_requirements_before_giving_style_advice(
     monkeypatch.setattr(writer_pipeline, "_complete", complete)
     converge(db, job, part_id)
     assert job.instruction in seen[0]
+
+
+def test_uncleared_automatic_review_cannot_claim_a_completed_pass(db, proposal_job, monkeypatch):
+    from backend.core.errors import LyraError
+
+    job, part_id, corrected = proposal_job
+    monkeypatch.setattr(
+        writer_pipeline,
+        "_complete",
+        lambda *args, **kwargs: json.dumps(
+            {
+                "passes": False,
+                "faults": ["The causal assertion remains unsupported."],
+                "rewrite_instruction": "Remove the unsupported inference.",
+            }
+        ),
+    )
+    monkeypatch.setattr(writer_pipeline, "_run_section", lambda *args, **kwargs: (False, False))
+    with pytest.raises(LyraError, match="review"):
+        converge(db, job, part_id)
+    assert suggestions.pending_for_part(db, part_id)["proposed_content"] == corrected
+
+
+def test_http_targeted_cutoff_keeps_proposal_but_never_completes(db, proposal_job, monkeypatch):
+    from backend.core import writer_runs
+    from backend.core.app_settings import TutorAccess
+    from backend.rag.retrieve import RetrievalResult
+
+    job, part_id, _ = proposal_job
+    original = artifacts.get_part(db, part_id)["content"]
+    monkeypatch.setattr(
+        writer_pipeline,
+        "resolve_tutor_access",
+        lambda conn: TutorAccess(
+            TutorConfig("http://127.0.0.1:9/v1", None, "fixture", 8192), None, True
+        ),
+    )
+    monkeypatch.setattr(writer_pipeline, "retrieve", lambda *args: RetrievalResult([], False, 0))
+
+    def incomplete(config, messages, target_words=None, truncated=None, **kwargs):
+        if truncated is not None:
+            truncated.append(True)
+            return "## Evidence\n\nUseful but incomplete prose."
+        return "[]"
+
+    monkeypatch.setattr(writer_pipeline, "_complete", incomplete)
+    writer_pipeline.run_pass(job)
+    assert writer_runs.get_run(db, job.run_id)["status"] == "failed"
+    assert artifacts.get_part(db, part_id)["content"] == original
+    assert suggestions.pending_for_part(db, part_id)

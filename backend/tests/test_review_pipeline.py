@@ -733,6 +733,7 @@ def test_parallel_review_checkpoints_only_validated_replayed_outcomes(
             "filed_comment_ids": [],
             "confirmed_comment_ids": [],
             "completed_lenses": 2,
+            "body_snapshot": review_pipeline._body_snapshot(artifacts.get_part(db, part_id)),
         },
     )
 
@@ -872,14 +873,14 @@ def test_a_deleted_draft_is_the_cancel_and_a_blocked_gate_reports(
     assert "No tutor endpoint" in str(artifact["error_message"])
 
 
-def test_a_section_emptied_mid_review_loses_its_turn_not_the_review(
+def test_a_section_emptied_mid_review_requires_a_new_review(
     db: sqlite3.Connection, class_id: int, reviewer: _StubReviewer
 ) -> None:
     artifact_id, part_id = _draft(db, class_id)
 
     def empties_results(registry: dict[str, ToolDefinition]) -> None:
         # The student deletes the Results prose while the structure lens runs. The
-        # per-section lenses re-read, so Results must not get prose or claims runs.
+        # review must stop rather than claim that its mixed revisions were reviewed.
         artifacts.set_part_content(
             db,
             part_id,
@@ -892,12 +893,14 @@ def test_a_section_emptied_mid_review_loses_its_turn_not_the_review(
 
     review_pipeline.run_review(review_pipeline.ReviewJob(artifact_id))
 
-    # Structure ran on the old shape; after the edit only Introduction has prose, and
-    # with one section left the argument lens has no seams: 1 + 1 + 1 runs.
-    assert len(reviewer.runs) == 3
+    assert len(reviewer.runs) == 1
     artifact = artifacts.get_artifact(db, artifact_id)
-    assert artifact["state"] == artifacts.READY
-    assert artifact["problems_done"] == review_pipeline.LENS_COUNT
+    assert artifact["state"] == artifacts.FAILED
+    assert "writing changed" in artifact["error_message"].lower()
+    assert artifact["problems_done"] == 0
+    assert artifacts.get_part(db, part_id)["content"] == BODY.replace(
+        "The period grew with length.\n", ""
+    )
 
 
 def test_every_review_stage_detail_keeps_the_reviewing_prefix(
@@ -1004,6 +1007,7 @@ def test_recovered_review_from_done_closes_from_persisted_findings_without_model
             "filed_comment_ids": [int(root["id"])],
             "confirmed_comment_ids": [],
             "completed_lenses": review_pipeline.LENS_COUNT,
+            "body_snapshot": review_pipeline._body_snapshot(artifacts.get_part(db, part_id)),
         },
     )
     db.execute(
@@ -1074,6 +1078,7 @@ def test_recovered_review_resumes_at_the_next_completed_section_and_keeps_prior_
             "filed_comment_ids": [int(first["id"])],
             "confirmed_comment_ids": [],
             "completed_lenses": 2,
+            "body_snapshot": review_pipeline._body_snapshot(artifacts.get_part(db, part_id)),
         },
     )
     db.execute(

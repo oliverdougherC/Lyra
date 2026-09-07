@@ -1503,6 +1503,15 @@ Write as much of the complete section as fits cleanly in this reply. The writing
 controller may ask for a continuation when the endpoint stops at its output limit; if
 it does, that later call will append to this one rather than replace it."""
 
+_SECTION_EDIT_BODY = """\
+You are editing an existing section, not drafting a replacement in your own style.
+Make the smallest changes that satisfy the student's request. Leave unaffected wording,
+order, perspective, and distinctive phrasing intact. Remove or correct an unsupported
+assertion where it occurs; do not retain it and append a rebuttal or a report of your edits.
+Return the complete edited section beginning with its existing heading, and nothing
+outside it. Keep [@lyra:ID] citations intact because the application renders them.
+Do not rewrite other sections or invent personal experiences, facts, or sources."""
+
 _SECTION_CONTINUATION_BODY = """\
 You are continuing one section that was too long for a single model reply. Return only
 new markdown prose to append after the supplied tail. Do not repeat the heading, the
@@ -2200,6 +2209,7 @@ def build_section_prompt(
     target_words: int | None = None,
     plan_block: str = "",
     ledger_block: str = "",
+    preserve_existing: bool = False,
 ) -> list[dict[str, str]]:
     """Build the messages for one section of the pipeline's drafting stage.
 
@@ -2243,7 +2253,14 @@ def build_section_prompt(
     if facts_block:
         sections.append(facts_block)
     return [
-        {"role": "system", "content": _SECTION_PROMPT},
+        {
+            "role": "system",
+            "content": (
+                _SECTION_EDIT_BODY + "\n\n" + _WRITING_CRAFT
+                if preserve_existing
+                else _SECTION_PROMPT
+            ),
+        },
         {"role": "user", "content": "\n\n".join(sections)},
     ]
 

@@ -192,3 +192,16 @@ instead of mixing incompatible work. Prior rows are retained; no terminal run is
 rate-limit, transient-error and incomplete-stream recovery can be compared without replacing the
 profile. Resumed paragraph calls retain saved text and remove demonstrable echoed prefixes before
 publication; a second incomplete stream still fails. Exact original receipts remain available.
+
+Existing sections use an editing contract: preserve unaffected wording and integrate corrections
+instead of appending rebuttals to an unchanged claim. Automatic critique must respect the original
+student request and the application's citation protocol. An uncleared or unreadable section review,
+or a section that remains incomplete, keeps the proposal but does not claim a completed pass.
+This is the automatic review's outcome, not a substitute for independent or human judgment.
+
+Reviewer checkpoints bind to the body version and hash. Changed or unverifiable writing restarts
+review with earlier comments retained separately; an edit during a lens or final publication keeps
+comments but stops the stale review. A closing message distinguishes no new findings from earlier
+comments that remain open. Length targets in a brief apply to the complete assignment unless a
+section plan explicitly allocates a share; interpretation and personal testimony are not treated
+as invented merely because they are not quoted by a source.

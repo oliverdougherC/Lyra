@@ -2174,6 +2174,12 @@ def _section_stage(
             replace=True,
         )
 
+    if cut_off:
+        raise LyraError(
+            "The pass still contains incomplete sections. Saved writing and the partial "
+            "proposal were kept; review or retry the unfinished sections."
+        )
+
     artifacts.set_artifact_state(
         conn,
         job.artifact_id,
@@ -2199,7 +2205,7 @@ def _parallel_initial_sections(
     processed_sections: list[dict[str, object]],
 ) -> tuple[bool, int, int]:
     """Fan out research/draft model calls; prepare and land deterministically."""
-    body = str(artifacts.get_part(conn, part_id)["content"])
+    body = _review_body(conn, part_id)
     research_work = _prepare_research_batch(conn, job, artifact, config, class_id, targets, plan)
     degraded_web_research = sum(1 for work in research_work if work.research_warning)
 
@@ -2247,6 +2253,7 @@ def _parallel_initial_sections(
                     ledger_block=prompts.format_ledger_block(
                         _ledger_entries(conn, class_id, entry, number)
                     ),
+                    preserve_existing=not target.is_empty,
                 ),
             )
         )
@@ -2656,6 +2663,8 @@ def _review_job(job: PassJob, correction: str) -> PassJob:
             + "\n\nThe original student requirements remain authoritative:\n"
             + (job.instruction or "Preserve the student's voice and the assignment constraints.")
             + "\nDisregard conflicting editorial preferences; do not change perspective or scope."
+            " Keep application citation markers [@lyra:ID] intact; display and export render "
+            "them. Never replace them with bare numbers or invented bibliography keys."
         ),
     )
 
@@ -2713,6 +2722,8 @@ def _converge_section(
                     + (accepted.text if accepted else "")
                     + "\nJudge the proposed passage against these requirements. Do not ask for "
                     "removing the student's perspective or changing the requested scope."
+                    " Application citations [@lyra:ID] are intentional internal markup; "
+                    "do not treat their appearance as a formatting defect or replace them."
                 ),
             }
         )
@@ -2722,9 +2733,9 @@ def _converge_section(
             schema=prompts.SKEPTIC_SCHEMA,
         )
         verdict = replies.loads_object(reply)
-        # An endpoint that cannot honor the schema costs this quality check, not the
-        # section that already landed.
-        if verdict is None or verdict.get("passes") is True:
+        if verdict is None or not isinstance(verdict.get("passes"), bool):
+            raise LyraError("The section review was unreadable. The saved proposal was kept.")
+        if verdict["passes"] is True:
             return changed
         instruction = str(verdict.get("rewrite_instruction") or "").strip()
         if not instruction:
@@ -2733,7 +2744,21 @@ def _converge_section(
                 "; ".join(str(fault) for fault in faults) if isinstance(faults, list) else ""
             )
         if not instruction or round_number == rounds:
-            return changed
+            if job.run_id is not None:
+                writer_runs.add_warning(
+                    conn,
+                    job.run_id,
+                    code="section_review_unresolved",
+                    message=(
+                        f"Automatic review of {number} still asks for: "
+                        + (instruction or "a usable assessment")
+                    ),
+                    replace=True,
+                )
+            raise LyraError(
+                "The automatic section review still has unresolved findings. "
+                "The existing writing and partial proposal were kept for review."
+            )
         artifacts.set_artifact_state(
             conn,
             job.artifact_id,
@@ -3106,6 +3131,7 @@ def _run_section(
         target_words=target_words,
         plan_block=prompts.format_plan_block(plan, number),
         ledger_block=prompts.format_ledger_block(ledger),
+        preserve_existing=not target.is_empty,
     )
     truncated: list[bool] = []
     reply = (

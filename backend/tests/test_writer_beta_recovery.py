@@ -309,3 +309,29 @@ def test_http_cancel_stops_silent_reviewer_inference(review_case, monkeypatch):
     assert time.monotonic() - started < 0.8
     assert cleaned == [True]
     assert client.get(f"/api/drafts/{artifact_id}/status").json()["run_status"] == "cancelled"
+
+
+def test_review_with_no_new_comments_does_not_call_standing_findings_clean(
+    db, review_case, monkeypatch
+):
+    client, queued, artifact_id, part_id = review_case
+    comments.add_comment(
+        db,
+        part_id,
+        comments.REVIEWER,
+        "A prior finding remains open.",
+        severity="major",
+        quote="The survey measured twenty journeys, not the whole city.",
+    )
+    monkeypatch.setattr(
+        review_pipeline,
+        "_review_run",
+        lambda *args, **kwargs: ToolLoopResult(
+            content="No new comments", calls=(), stopped=COMPLETED
+        ),
+    )
+    review_pipeline.run_review(queued[0])
+    status = client.get(f"/api/drafts/{artifact_id}/status").json()
+    assert status["run_status"] == "completed"
+    assert "earlier comment" in status["stage_detail"]
+    assert "no findings" not in status["stage_detail"]
