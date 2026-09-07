@@ -1,0 +1,985 @@
+{
+  "evaluator": {
+    "type": "independent-agent",
+    "identity": "Codex GPT-6 agent /root/independent_output_review",
+    "review_version": "1",
+    "independence": "Read-only evaluator; not corpus author or implementation author; no prior fix context supplied.",
+    "human_review": false
+  },
+  "reviewed_case": "full_live_draft_from_student_notes",
+  "model_label": "Qwen3.8-27B, verified in both retained report.json files",
+  "rubric": "<local-path>",
+  "corpus": "<local-path>",
+  "conclusion": "Recovery produced reviewable proposals in four intervention runs and the repeat control, but substantive evidence, voice and review defects prevent broad writing-quality acceptance. The initial failed control remains a failure. No human acceptance is claimed.",
+  "limitations": [
+    "One synthetic case and one requested model; no cross-disciplinary or student-population generalization.",
+    "No remote calls or reruns performed; assessment uses retained receipts only.",
+    "Top-level planning is seeded, not independently generated.",
+    "Named restart_inference and cancel_retry snapshots show Queued with no settled blocks; no proof of in-flight token interruption or stale-callback fencing from these snapshots.",
+    "restart_between_sections snapshot is Drafting paragraph 2 of 5 within Evidence, with only 1:p1 complete; section-boundary coverage is not established.",
+    "restart_review snapshot is transition review with five complete blocks; 1:p2 and 2:p1 later change in the same suggestion.",
+    "All observed user_revision values are zero. Recovery of actual user edits is untested.",
+    "No transient-failure, rate-limit, partial/malformed stream, exact after-persist-before-terminal or source-history scenario in these six receipts.",
+    "Completed status is operational output evidence only; scores are independent agent judgment, not human review or an acceptance average."
+  ],
+  "results": [
+    {
+      "receipt": "receipt:00371f3-control-repeat/full_live_draft_from_student_notes--uninterrupted.json",
+      "receipt_sha256": "ecc5e458b32a10a9245e869376662d120df2f783085b6aa9e3b2cf459d6dbdd0",
+      "run": "control-repeat/uninterrupted",
+      "terminal_status": "completed",
+      "error": null,
+      "pending_proposal": true,
+      "proposal_whitespace_words_including_headings_citations": 353,
+      "partial_nonempty_block_count": 5,
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+          "rationale": "Top-level plan was corpus_seeded, not model-generated. Internal paragraph contexts exist but this review does not treat a seeded plan as evidence of model planning quality.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 1,
+          "output_excerpt": "These logs will establish the total eligible population denominator, allowing me to calculate the actual adoption rate",
+          "rationale": "Counts of trips plus attendance logs do not establish unique users or an eligible-population denominator. Correct boarding citations coexist with unsupported methodology.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 1,
+          "output_excerpt": "Instead, state that attendance logs will establish the total eligible population denominator",
+          "rationale": "Internal revision fixes one overclaim by introducing another. The requested paragraph merger was not achieved; repeated trips-versus-people explanation remains.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 1,
+          "output_excerpt": "boarding counts are a subset of attendance",
+          "rationale": "Internal review diagnoses a real measurement problem using a false premise, then prescribes an invalid adoption-rate calculation.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 2,
+          "output_excerpt": "I propose extending the pilot for one term",
+          "rationale": "Two headings, preserved accepted notes, conditional extension and non-rider survey are present. Methodological overclaim and failure to retain the original personal stake prevent full compliance; 353 whitespace words versus target 320.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 2,
+          "output_excerpt": "The pilot matters to me, so I want to know if it actually works.",
+          "rationale": "First person and caution remain, but the east-gate lived experience and distinctive refusal to make a number answer the wrong question become generic policy prose.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        }
+      },
+      "seed_adjudication": {
+        "notes_preservation": {
+          "result": "met",
+          "rationale": "Accepted notes match byte-for-byte. Separate pending proposal exists."
+        },
+        "attendance_noninference": {
+          "result": "met_on_observed_output",
+          "excerpt": "Because the pilot collected no attendance data [@lyra:1], I cannot determine if the 80-boarding increase reflects repeat riders or new users joining. These figures count trips, not distinct individuals. Without identifying people, the data tracks usage volume rather than actual student growth. This limitation prevents me from concluding that the service successfully expanded access beyond its initial user base.",
+          "rationale": "No observed output asserts that shuttle caused attendance improvement; do not confuse this narrow seed result with overall evidence quality."
+        },
+        "required_review_findings_count": 0,
+        "note": "This fixture has no required_findings list entries; seed adjudication is preservation and prohibited attendance assertion, not a claim of finding all semantic defects."
+      },
+      "preservation": {
+        "accepted_body_byte_equal": true,
+        "before_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "after_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "accepted_body_changed_characters": 0,
+        "unrelated_proposal_edits": "not-applicable: whole separate two-section proposal requested; generated prose is not accepted student body",
+        "user_edit_recovery": "not-run: all observed block user_revision values are zero; no user-edit intervention receipt"
+      },
+      "citation_revision_checks": [
+        {
+          "excerpt_id": 1,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 2,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 3,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 4,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 5,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 6,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 7,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 8,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 9,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        }
+      ],
+      "citation_limit": "Exact excerpts are present in retained immutable revision 1 snapshots. No source replacement/deletion tested in this case; semantic claim support assessed separately above.",
+      "duplicates": {
+        "exact_duplicate_nonempty_paragraphs": [],
+        "duplicate_same_suggestion_stable_keys": 0,
+        "semantic_repetition": "Evidence paragraphs repeatedly restate missing attendance/count limitations in completed outputs; cancel_retry repeats recommendation closing argument. This is ordinary generated redundancy, not proven retry-created duplication."
+      },
+      "recovery": {
+        "named_scenario": "uninterrupted",
+        "actual_boundary": null,
+        "boundary_evidence": null,
+        "interruption_complete_block_count": 0,
+        "same_suggestion_settled_comparison": [],
+        "exact_preservation": "not-exercised",
+        "limit": "Complete block status does not prove final overall review settled. Changed restart_review blocks were later edited by transition/overall assessment; this is not proof of retry re-generation, but it does fail a blanket exact-content preservation claim for interruption-complete blocks."
+      },
+      "internal_review_scope": "Scores judge persisted internal live-draft assessment metadata, not a standalone /review operation. No persisted user-facing comments in these cases.",
+      "proposal_consistency": {
+        "headings": [
+          "## Evidence",
+          "## Recommendation"
+        ],
+        "all_nonempty_persisted_block_contents_in_proposal": true
+      }
+    },
+    {
+      "receipt": "receipt:00371f3-model/full_live_draft_from_student_notes--cancel_retry.json",
+      "receipt_sha256": "f29f642b6381685e61fe517913a5593b483994336a03d2796dac37f8e16efc13",
+      "run": "model/cancel_retry",
+      "terminal_status": "completed",
+      "error": null,
+      "pending_proposal": true,
+      "proposal_whitespace_words_including_headings_citations": 407,
+      "partial_nonempty_block_count": 5,
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+          "rationale": "Top-level plan was corpus_seeded, not model-generated. Internal paragraph contexts exist but this review does not treat a seeded plan as evidence of model planning quality.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 1,
+          "output_excerpt": "a digital link sent to the general student body offers the most inclusive and low-cost channel",
+          "rationale": "No comparative evidence establishes most inclusive or low cost. No additional staff is also invented. Counts and source limitations are otherwise cited correctly.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 1,
+          "output_excerpt": "ensuring the evaluation reflects actual usage constraints rather than just voluntary rider experiences",
+          "rationale": "Internal revision retains the near-verbatim closing repetition it was explicitly instructed to remove; the replacement survey method adds unsupported cost/staff claims.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 2,
+          "output_excerpt": "Remove the final sentence of 2:p2 to eliminate the repetition",
+          "rationale": "Review correctly identifies redundant closure and proposes broader survey distribution, but misses cost assertions and does not secure the requested redundancy repair.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 1,
+          "output_excerpt": "without inventing new operational costs or requiring additional staff",
+          "rationale": "Explicit no-invented-costs instruction is violated by an unsupported claim of avoiding such costs; two sections, one-term extension and original notes are retained. 407 whitespace words versus 320.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 2,
+          "output_excerpt": "That jump feels like success until I look for context.",
+          "rationale": "Some accessible first-person caution survives, though the distinctive personal origin and wording are flattened; watched boardings rise ambiguously implies experience absent from notes.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        }
+      },
+      "seed_adjudication": {
+        "notes_preservation": {
+          "result": "met",
+          "rationale": "Accepted notes match byte-for-byte. Separate pending proposal exists."
+        },
+        "attendance_noninference": {
+          "result": "met_on_observed_output",
+          "excerpt": "The missing attendance figures prevent me from distinguishing a rise in ridership from a simple increase in campus population or class participation. No attendance data were collected during the pilot [@lyra:1]. Consequently, I cannot tell whether more students chose the shuttle or whether more students were present to use it. This quantitative gap limits the interpretation of the boarding counts before I even address the survey’s representativeness issues.",
+          "rationale": "No observed output asserts that shuttle caused attendance improvement; do not confuse this narrow seed result with overall evidence quality."
+        },
+        "required_review_findings_count": 0,
+        "note": "This fixture has no required_findings list entries; seed adjudication is preservation and prohibited attendance assertion, not a claim of finding all semantic defects."
+      },
+      "preservation": {
+        "accepted_body_byte_equal": true,
+        "before_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "after_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "accepted_body_changed_characters": 0,
+        "unrelated_proposal_edits": "not-applicable: whole separate two-section proposal requested; generated prose is not accepted student body",
+        "user_edit_recovery": "not-run: all observed block user_revision values are zero; no user-edit intervention receipt"
+      },
+      "citation_revision_checks": [
+        {
+          "excerpt_id": 1,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 2,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 3,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 4,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 5,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 6,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 7,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 8,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 9,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        }
+      ],
+      "citation_limit": "Exact excerpts are present in retained immutable revision 1 snapshots. No source replacement/deletion tested in this case; semantic claim support assessed separately above.",
+      "duplicates": {
+        "exact_duplicate_nonempty_paragraphs": [],
+        "duplicate_same_suggestion_stable_keys": 0,
+        "semantic_repetition": "Evidence paragraphs repeatedly restate missing attendance/count limitations in completed outputs; cancel_retry repeats recommendation closing argument. This is ordinary generated redundancy, not proven retry-created duplication."
+      },
+      "recovery": {
+        "named_scenario": "cancel_retry",
+        "actual_boundary": "Queued",
+        "boundary_evidence": "active_status_elapsed_proxy",
+        "interruption_complete_block_count": 0,
+        "same_suggestion_settled_comparison": [],
+        "exact_preservation": "not-exercised",
+        "limit": "Complete block status does not prove final overall review settled. Changed restart_review blocks were later edited by transition/overall assessment; this is not proof of retry re-generation, but it does fail a blanket exact-content preservation claim for interruption-complete blocks."
+      },
+      "internal_review_scope": "Scores judge persisted internal live-draft assessment metadata, not a standalone /review operation. No persisted user-facing comments in these cases.",
+      "proposal_consistency": {
+        "headings": [
+          "## Evidence",
+          "## Recommendation"
+        ],
+        "all_nonempty_persisted_block_contents_in_proposal": true
+      }
+    },
+    {
+      "receipt": "receipt:00371f3-model/full_live_draft_from_student_notes--restart_between_sections.json",
+      "receipt_sha256": "973d166c98c53921908184cb943b35ae06fc79dc3c3e3f9c7137b6ecb804ed6b",
+      "run": "model/restart_between_sections",
+      "terminal_status": "completed",
+      "error": null,
+      "pending_proposal": true,
+      "proposal_whitespace_words_including_headings_citations": 419,
+      "partial_nonempty_block_count": 5,
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+          "rationale": "Top-level plan was corpus_seeded, not model-generated. Internal paragraph contexts exist but this review does not treat a seeded plan as evidence of model planning quality.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 2,
+          "output_excerpt": "A low-cost, targeted data collection method can identify why people stay off the bus",
+          "rationale": "No source establishes costs; measured counts and exclusions are supported. The invented personal claim about relying on the pilot to gauge daily travel is not in the notes, and a survey is overstated as judging true effect.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 1,
+          "output_excerpt": "we need a simple survey or observation method",
+          "rationale": "Review strips a concrete proposed method based on mistaking a proposed next step for an invented historical fact; the result is less actionable.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 1,
+          "output_excerpt": "observations justify further investigation rather than a final causal judgment",
+          "rationale": "Internal review incorrectly calls this a contradiction with the plan’s equivalent claim that observations justify another question, not a causal conclusion.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 2,
+          "output_excerpt": "I propose extending the pilot for one term, contingent on filling the non-rider data gap.",
+          "rationale": "Core structure and cautious extension are present, notes intact; unsupported low-cost claim violates explicit constraint, 419 whitespace words exceeds 320, and measurement is vague.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 1,
+          "output_excerpt": "I relied on this pilot to gauge daily travel",
+          "rationale": "First-person grammar survives but invents a new personal relationship to the pilot and replaces the original east-gate stake with generic research language.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        }
+      },
+      "seed_adjudication": {
+        "notes_preservation": {
+          "result": "met",
+          "rationale": "Accepted notes match byte-for-byte. Separate pending proposal exists."
+        },
+        "attendance_noninference": {
+          "result": "met_on_observed_output",
+          "excerpt": "The missing attendance data leaves the boarding increase without context. I cannot determine if the rise from 160 to 240 reflects a change in rider behavior or just more people on campus. Since no attendance figures were collected [@lyra:1], the counts remain ambiguous. The numbers describe trips taken, not the proportion of the population using them. This gap prevents me from linking the volume directly to a specific causal effect.",
+          "rationale": "No observed output asserts that shuttle caused attendance improvement; do not confuse this narrow seed result with overall evidence quality."
+        },
+        "required_review_findings_count": 0,
+        "note": "This fixture has no required_findings list entries; seed adjudication is preservation and prohibited attendance assertion, not a claim of finding all semantic defects."
+      },
+      "preservation": {
+        "accepted_body_byte_equal": true,
+        "before_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "after_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "accepted_body_changed_characters": 0,
+        "unrelated_proposal_edits": "not-applicable: whole separate two-section proposal requested; generated prose is not accepted student body",
+        "user_edit_recovery": "not-run: all observed block user_revision values are zero; no user-edit intervention receipt"
+      },
+      "citation_revision_checks": [
+        {
+          "excerpt_id": 1,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 2,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 3,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 4,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 5,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 6,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 7,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 8,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 9,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        }
+      ],
+      "citation_limit": "Exact excerpts are present in retained immutable revision 1 snapshots. No source replacement/deletion tested in this case; semantic claim support assessed separately above.",
+      "duplicates": {
+        "exact_duplicate_nonempty_paragraphs": [],
+        "duplicate_same_suggestion_stable_keys": 0,
+        "semantic_repetition": "Evidence paragraphs repeatedly restate missing attendance/count limitations in completed outputs; cancel_retry repeats recommendation closing argument. This is ordinary generated redundancy, not proven retry-created duplication."
+      },
+      "recovery": {
+        "named_scenario": "restart_between_sections",
+        "actual_boundary": "Drafting paragraph 2 of 5",
+        "boundary_evidence": "active_status_elapsed_proxy",
+        "interruption_complete_block_count": 1,
+        "same_suggestion_settled_comparison": [
+          {
+            "suggestion_id": 1,
+            "stable_key": "1:p1",
+            "before_content": "I watched the numbers climb from 160 to 240 boardings between weeks A and B [@lyra:1]. That jump feels significant to me because I relied on this pilot to gauge daily travel. Yet the raw count is the only signal I have so far. Without knowing how many people were actually present or willing to ride, I cannot say whether the service attracted new users or simply caught a larger crowd. This uncertainty shapes every next step I take.",
+            "after_content": "I watched the numbers climb from 160 to 240 boardings between weeks A and B [@lyra:1]. That jump feels significant to me because I relied on this pilot to gauge daily travel. Yet the raw count is the only signal I have so far. Without knowing how many people were actually present or willing to ride, I cannot say whether the service attracted new users or simply caught a larger crowd. This uncertainty shapes every next step I take.",
+            "same_id": true,
+            "content_exact": true,
+            "user_revision_before": 0,
+            "user_revision_after": 0
+          }
+        ],
+        "exact_preservation": true,
+        "limit": "Complete block status does not prove final overall review settled. Changed restart_review blocks were later edited by transition/overall assessment; this is not proof of retry re-generation, but it does fail a blanket exact-content preservation claim for interruption-complete blocks."
+      },
+      "internal_review_scope": "Scores judge persisted internal live-draft assessment metadata, not a standalone /review operation. No persisted user-facing comments in these cases.",
+      "proposal_consistency": {
+        "headings": [
+          "## Evidence",
+          "## Recommendation"
+        ],
+        "all_nonempty_persisted_block_contents_in_proposal": true
+      }
+    },
+    {
+      "receipt": "receipt:00371f3-model/full_live_draft_from_student_notes--restart_inference.json",
+      "receipt_sha256": "3c4f564d61dd7d44ec1c939d128552ffb5ea7021704d0c312f85770b2974b7c6",
+      "run": "model/restart_inference",
+      "terminal_status": "completed",
+      "error": null,
+      "pending_proposal": true,
+      "proposal_whitespace_words_including_headings_citations": 425,
+      "partial_nonempty_block_count": 5,
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+          "rationale": "Top-level plan was corpus_seeded, not model-generated. Internal paragraph contexts exist but this review does not treat a seeded plan as evidence of model planning quality.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 3,
+          "output_excerpt": "No attendance data were collected [@lyra:1], so I cannot link trips to participation.",
+          "rationale": "Sources support counts and survey exclusion. Hypothesis of better reliability is marked as might, not presented as fact. Recommendations overpromise what a simple non-rider survey can establish, but no invented cost or attendance effect is asserted.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 2,
+          "output_excerpt": "I cannot distinguish between improved academic access and general mobility.",
+          "rationale": "Internal edits preserve paragraph topics, but substitute bureaucratic phrasing for the student cadence and over-elaborate the recommendation.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 2,
+          "output_excerpt": "The current phrasing is acceptable but could be tightened for professional tone.",
+          "rationale": "Review offers anchored edits, but professional-tone polishing conflicts with retaining student voice; some alleged contradictions are merely clarifications.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 2,
+          "output_excerpt": "The extension functions as a vehicle for a specific measurement plan, not a standalone solution.",
+          "rationale": "Meets two-section, first-person, non-rider and conditional-extension requirements. 425 whitespace words substantially overshoots 320 and loses concrete personal stake; practical survey method remains thin.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 2,
+          "output_excerpt": "I am invested in getting this right, so I will not rush to a conclusion.",
+          "rationale": "Retains caution and stance, but characteristic east-gate experience is replaced by generic assurance and abstract administrative phrasing.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        }
+      },
+      "seed_adjudication": {
+        "notes_preservation": {
+          "result": "met",
+          "rationale": "Accepted notes match byte-for-byte. Separate pending proposal exists."
+        },
+        "attendance_noninference": {
+          "result": "met_on_observed_output",
+          "excerpt": "The boarding counts alone do not establish whether more students actually attended classes or events. No attendance data were collected [@lyra:1], so I cannot link trips to participation. A rise in boardings might reflect better reliability rather than higher engagement. Without that baseline, I cannot distinguish between improved academic access and general mobility. This gap keeps the evidence from proving what I need it to.",
+          "rationale": "No observed output asserts that shuttle caused attendance improvement; do not confuse this narrow seed result with overall evidence quality."
+        },
+        "required_review_findings_count": 0,
+        "note": "This fixture has no required_findings list entries; seed adjudication is preservation and prohibited attendance assertion, not a claim of finding all semantic defects."
+      },
+      "preservation": {
+        "accepted_body_byte_equal": true,
+        "before_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "after_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "accepted_body_changed_characters": 0,
+        "unrelated_proposal_edits": "not-applicable: whole separate two-section proposal requested; generated prose is not accepted student body",
+        "user_edit_recovery": "not-run: all observed block user_revision values are zero; no user-edit intervention receipt"
+      },
+      "citation_revision_checks": [
+        {
+          "excerpt_id": 1,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 2,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 3,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 4,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 5,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 6,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 7,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 8,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 9,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        }
+      ],
+      "citation_limit": "Exact excerpts are present in retained immutable revision 1 snapshots. No source replacement/deletion tested in this case; semantic claim support assessed separately above.",
+      "duplicates": {
+        "exact_duplicate_nonempty_paragraphs": [],
+        "duplicate_same_suggestion_stable_keys": 0,
+        "semantic_repetition": "Evidence paragraphs repeatedly restate missing attendance/count limitations in completed outputs; cancel_retry repeats recommendation closing argument. This is ordinary generated redundancy, not proven retry-created duplication."
+      },
+      "recovery": {
+        "named_scenario": "restart_inference",
+        "actual_boundary": "Queued",
+        "boundary_evidence": "active_status_elapsed_proxy",
+        "interruption_complete_block_count": 0,
+        "same_suggestion_settled_comparison": [],
+        "exact_preservation": "not-exercised",
+        "limit": "Complete block status does not prove final overall review settled. Changed restart_review blocks were later edited by transition/overall assessment; this is not proof of retry re-generation, but it does fail a blanket exact-content preservation claim for interruption-complete blocks."
+      },
+      "internal_review_scope": "Scores judge persisted internal live-draft assessment metadata, not a standalone /review operation. No persisted user-facing comments in these cases.",
+      "proposal_consistency": {
+        "headings": [
+          "## Evidence",
+          "## Recommendation"
+        ],
+        "all_nonempty_persisted_block_contents_in_proposal": true
+      }
+    },
+    {
+      "receipt": "receipt:00371f3-model/full_live_draft_from_student_notes--restart_review.json",
+      "receipt_sha256": "2259af297dc702fcd57861ca10a58a525cb1bb7c157be15ebaf98387f67cb92d",
+      "run": "model/restart_review",
+      "terminal_status": "completed",
+      "error": null,
+      "pending_proposal": true,
+      "proposal_whitespace_words_including_headings_citations": 424,
+      "partial_nonempty_block_count": 5,
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+          "rationale": "Top-level plan was corpus_seeded, not model-generated. Internal paragraph contexts exist but this review does not treat a seeded plan as evidence of model planning quality.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 1,
+          "output_excerpt": "I watched the pilot unfold and counted the rides myself.",
+          "rationale": "Invents student authorship of the boarding observations. Sources support the numbers, not that claim. Final text also asserts low-cost methods without cost evidence; a non-rider limitation in 2:p1 cites transport source 1 rather than survey source 2.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 2,
+          "output_excerpt": "without committing to indefinite operation",
+          "rationale": "Internal revision removes the explicit invented costs-little comparison, but retains another low-cost assertion, fails the requested deletion/merger of 1:p2 and rewrites more prose than necessary.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 2,
+          "output_excerpt": "Claiming it 'costs little' is an invented fact not supported by the notes",
+          "rationale": "Review catches a real unsupported cost claim and repetition, but misses invented first-person counting and low-cost methods. Separate paragraph deletion instruction was not realized.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 1,
+          "output_excerpt": "During the extension, I will implement two low-cost data collection methods",
+          "rationale": "Notes and two-section proposal preserved; invented first-person history and costs violate core requirements. 424 whitespace words also exceeds 320; unsupported methodological confidence persists.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 1,
+          "output_excerpt": "I watched the pilot unfold and counted the rides myself.",
+          "rationale": "Student uncertainty remains elsewhere, but the opening replaces the personal stake with fabricated first-person research activity; this is a material voice and authorship failure.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        }
+      },
+      "seed_adjudication": {
+        "notes_preservation": {
+          "result": "met",
+          "rationale": "Accepted notes match byte-for-byte. Separate pending proposal exists."
+        },
+        "attendance_noninference": {
+          "result": "met_on_observed_output",
+          "excerpt": "I watched the pilot unfold and counted the rides myself. Week A saw 160 boardings, rising to 240 in week B [@lyra:1]. These numbers reflect trip volume, not daily attendance. Without tracking whether the same students rode each day, the counts alone cannot confirm if demand actually grew or if existing riders simply increased their frequency.",
+          "rationale": "No observed output asserts that shuttle caused attendance improvement; do not confuse this narrow seed result with overall evidence quality."
+        },
+        "required_review_findings_count": 0,
+        "note": "This fixture has no required_findings list entries; seed adjudication is preservation and prohibited attendance assertion, not a claim of finding all semantic defects."
+      },
+      "preservation": {
+        "accepted_body_byte_equal": true,
+        "before_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "after_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "accepted_body_changed_characters": 0,
+        "unrelated_proposal_edits": "not-applicable: whole separate two-section proposal requested; generated prose is not accepted student body",
+        "user_edit_recovery": "not-run: all observed block user_revision values are zero; no user-edit intervention receipt"
+      },
+      "citation_revision_checks": [
+        {
+          "excerpt_id": 1,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 2,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 3,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 4,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 5,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 6,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 7,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 8,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 9,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        }
+      ],
+      "citation_limit": "Exact excerpts are present in retained immutable revision 1 snapshots. No source replacement/deletion tested in this case; semantic claim support assessed separately above.",
+      "duplicates": {
+        "exact_duplicate_nonempty_paragraphs": [],
+        "duplicate_same_suggestion_stable_keys": 0,
+        "semantic_repetition": "Evidence paragraphs repeatedly restate missing attendance/count limitations in completed outputs; cancel_retry repeats recommendation closing argument. This is ordinary generated redundancy, not proven retry-created duplication."
+      },
+      "recovery": {
+        "named_scenario": "restart_review",
+        "actual_boundary": "Reviewing transition 1 of 4",
+        "boundary_evidence": "active_status_elapsed_proxy",
+        "interruption_complete_block_count": 5,
+        "same_suggestion_settled_comparison": [
+          {
+            "suggestion_id": 1,
+            "stable_key": "1:p1",
+            "before_content": "I watched the pilot unfold and counted the rides myself. Week A saw 160 boardings, rising to 240 in week B [@lyra:1]. These numbers reflect trip volume, not daily attendance. Without tracking whether the same students rode each day, the counts alone cannot confirm if demand actually grew or if existing riders simply increased their frequency.",
+            "after_content": "I watched the pilot unfold and counted the rides myself. Week A saw 160 boardings, rising to 240 in week B [@lyra:1]. These numbers reflect trip volume, not daily attendance. Without tracking whether the same students rode each day, the counts alone cannot confirm if demand actually grew or if existing riders simply increased their frequency.",
+            "same_id": true,
+            "content_exact": true,
+            "user_revision_before": 0,
+            "user_revision_after": 0
+          },
+          {
+            "suggestion_id": 1,
+            "stable_key": "1:p2",
+            "before_content": "Because no attendance data were collected [@lyra:1], the boarding numbers cannot be interpreted as a measure of overall participation. I lack the denominator needed to calculate actual usage rates. The trip counts show movement, but they do not reveal how many students the service reached. This gap means I cannot yet determine whether the pilot attracted new users or just deepened habits for the same small group of regulars.",
+            "after_content": "Since no attendance data were collected [@lyra:1], these boarding counts remain trip volume rather than a measure of overall participation. I lack the denominator needed to calculate usage rates, so the figures cannot indicate how many students the service actually reached. Without that baseline, I cannot determine whether the pilot attracted new users or merely deepened habits for the same small group of regulars.",
+            "same_id": true,
+            "content_exact": false,
+            "user_revision_before": 0,
+            "user_revision_after": 0
+          },
+          {
+            "suggestion_id": 1,
+            "stable_key": "1:p3",
+            "before_content": "The survey also omits the people who did not ride. Only 18 voluntary riders responded, leaving the perspectives of non-riders unexamined [@lyra:2]. Because I cannot hear from those who opted out, the current data reflect only the views of existing users. This silence prevents me from generalizing demand across the student body and forces me to treat the pilot’s results as provisional rather than conclusive.",
+            "after_content": "The survey also omits the people who did not ride. Only 18 voluntary riders responded, leaving the perspectives of non-riders unexamined [@lyra:2]. Because I cannot hear from those who opted out, the current data reflect only the views of existing users. This silence prevents me from generalizing demand across the student body and forces me to treat the pilot’s results as provisional rather than conclusive.",
+            "same_id": true,
+            "content_exact": true,
+            "user_revision_before": 0,
+            "user_revision_after": 0
+          },
+          {
+            "suggestion_id": 1,
+            "stable_key": "2:p1",
+            "before_content": "Given these limits, I propose extending the pilot for one term rather than ending or permanently expanding it. A single-term commitment avoids locking in long-term funding before I understand who actually uses the service and why. The 160 and 240 weekly boardings suggest interest, but without non-rider input, I cannot determine whether demand is broad or niche [@lyra:1]. Keeping the pilot running buys time to gather the missing data while maintaining the status quo. This conditional approach allows me to test access barriers directly, ensuring that any future expansion rests on verified demand rather than assumption. The extension itself costs little compared to the expense of guessing wrong later.",
+            "after_content": "Because the current data remain provisional, I propose extending the pilot for one term rather than ending or permanently expanding it. This conditional step directly addresses the representativeness gap by allowing time to collect the missing non-rider data without committing to indefinite operation. A single-term commitment avoids locking in long-term resources before I understand who actually uses the service and why. While the 160 and 240 weekly boardings suggest interest, the absence of non-rider input prevents me from determining whether demand is broad or niche [@lyra:1]. Keeping the pilot running buys the necessary time to gather this evidence while maintaining the status quo. This approach allows me to test access barriers directly, ensuring that any future expansion rests on verified demand rather than assumption.",
+            "same_id": true,
+            "content_exact": false,
+            "user_revision_before": 0,
+            "user_revision_after": 0
+          },
+          {
+            "suggestion_id": 1,
+            "stable_key": "2:p2",
+            "before_content": "During the extension, I will implement two low-cost data collection methods to address the current gaps. First, I will survey non-riders to identify barriers to entry and gauge potential interest, since the initial pilot only captured responses from current users [@lyra:2]. Second, I will log basic attendance figures alongside boarding counts to correlate service usage with overall student presence, a metric absent from the original records [@lyra:1]. These steps will clarify whether demand is limited to a small group or broad enough to support long-term service. The goal is to verify if the 160 to 240 weekly boardings reflect a growing pattern or a transient spike before committing to further expansion.",
+            "after_content": "During the extension, I will implement two low-cost data collection methods to address the current gaps. First, I will survey non-riders to identify barriers to entry and gauge potential interest, since the initial pilot only captured responses from current users [@lyra:2]. Second, I will log basic attendance figures alongside boarding counts to correlate service usage with overall student presence, a metric absent from the original records [@lyra:1]. These steps will clarify whether demand is limited to a small group or broad enough to support long-term service. The goal is to verify if the 160 to 240 weekly boardings reflect a growing pattern or a transient spike before committing to further expansion.",
+            "same_id": true,
+            "content_exact": true,
+            "user_revision_before": 0,
+            "user_revision_after": 0
+          }
+        ],
+        "exact_preservation": false,
+        "limit": "Complete block status does not prove final overall review settled. Changed restart_review blocks were later edited by transition/overall assessment; this is not proof of retry re-generation, but it does fail a blanket exact-content preservation claim for interruption-complete blocks."
+      },
+      "internal_review_scope": "Scores judge persisted internal live-draft assessment metadata, not a standalone /review operation. No persisted user-facing comments in these cases.",
+      "proposal_consistency": {
+        "headings": [
+          "## Evidence",
+          "## Recommendation"
+        ],
+        "all_nonempty_persisted_block_contents_in_proposal": true
+      }
+    },
+    {
+      "receipt": "receipt:00371f3-model/full_live_draft_from_student_notes--uninterrupted.json",
+      "receipt_sha256": "96398260f248e60da175d2e75937332ef9ad8d68156d50ee2dd94410a4b1d1c7",
+      "run": "model/uninterrupted",
+      "terminal_status": "failed",
+      "error": "The paragraph stopped below its requested length. The partial suggestion was kept; retry or revise it before accepting.",
+      "pending_proposal": false,
+      "proposal_whitespace_words_including_headings_citations": null,
+      "partial_nonempty_block_count": 1,
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+          "rationale": "Top-level plan was corpus_seeded, not model-generated. Internal paragraph contexts exist but this review does not treat a seeded plan as evidence of model planning quality.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 3,
+          "output_excerpt": "These raw trip numbers show a change in usage, but they do not prove a causal link to attendance [@lyra:1].",
+          "rationale": "The useful partial correctly qualifies boardings and cites the right source. It adds a vague first-person observation not established in the notes. Survey and recommendation never arrive.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": "not-applicable",
+          "output_excerpt": "The paragraph stopped below its requested length.",
+          "rationale": "No completed editorial revision is available to judge.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "output_excerpt": "The partial suggestion was kept; retry or revise it before accepting.",
+          "rationale": "No completed internal assessment or review findings are present.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 1,
+          "output_excerpt": "During the pilot, I watched the ridership counts rise from 160 boardings in week A to 240 in week B",
+          "rationale": "Only one short paragraph exists; four queued empty blocks remain and no pending proposal was published. The failure is honestly reported and accepted notes are intact.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 2,
+          "output_excerpt": "These raw trip numbers show a change in usage",
+          "rationale": "Partial retains first person and uncertainty but omits the original concrete personal stake. Score applies only to the available partial, not a completed memo.",
+          "evaluator": "Codex GPT-6 agent /root/independent_output_review"
+        }
+      },
+      "seed_adjudication": {
+        "notes_preservation": {
+          "result": "partial",
+          "rationale": "Accepted notes match byte-for-byte. Only separate failed live partial exists; no completed proposal."
+        },
+        "attendance_noninference": {
+          "result": "met_on_observed_output",
+          "excerpt": "During the pilot, I watched the ridership counts rise from 160 boardings in week A to 240 in week B [@lyra:1]. These raw trip numbers show a change in usage, but they do not prove a causal link to attendance [@lyra:1].",
+          "rationale": "No observed output asserts that shuttle caused attendance improvement; do not confuse this narrow seed result with overall evidence quality."
+        },
+        "required_review_findings_count": 0,
+        "note": "This fixture has no required_findings list entries; seed adjudication is preservation and prohibited attendance assertion, not a claim of finding all semantic defects."
+      },
+      "preservation": {
+        "accepted_body_byte_equal": true,
+        "before_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "after_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+        "accepted_body_changed_characters": 0,
+        "unrelated_proposal_edits": "not-applicable: whole separate two-section proposal requested; generated prose is not accepted student body",
+        "user_edit_recovery": "not-run: all observed block user_revision values are zero; no user-edit intervention receipt"
+      },
+      "citation_revision_checks": [
+        {
+          "excerpt_id": 1,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 2,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 3,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 4,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 5,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 6,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        },
+        {
+          "excerpt_id": 7,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "No attendance data were collected."
+        },
+        {
+          "excerpt_id": 8,
+          "revision_id": 1,
+          "exactly_supported": true,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+        },
+        {
+          "excerpt_id": 9,
+          "revision_id": 2,
+          "exactly_supported": true,
+          "excerpt": "Non-riders were not surveyed."
+        }
+      ],
+      "citation_limit": "Exact excerpts are present in retained immutable revision 1 snapshots. No source replacement/deletion tested in this case; semantic claim support assessed separately above.",
+      "duplicates": {
+        "exact_duplicate_nonempty_paragraphs": [],
+        "duplicate_same_suggestion_stable_keys": 0,
+        "semantic_repetition": "Evidence paragraphs repeatedly restate missing attendance/count limitations in completed outputs; cancel_retry repeats recommendation closing argument. This is ordinary generated redundancy, not proven retry-created duplication."
+      },
+      "recovery": {
+        "named_scenario": "uninterrupted",
+        "actual_boundary": null,
+        "boundary_evidence": null,
+        "interruption_complete_block_count": 0,
+        "same_suggestion_settled_comparison": [],
+        "exact_preservation": "not-exercised",
+        "limit": "Complete block status does not prove final overall review settled. Changed restart_review blocks were later edited by transition/overall assessment; this is not proof of retry re-generation, but it does fail a blanket exact-content preservation claim for interruption-complete blocks."
+      },
+      "internal_review_scope": "Scores judge persisted internal live-draft assessment metadata, not a standalone /review operation. No persisted user-facing comments in these cases.",
+      "proposal_consistency": {
+        "headings": [],
+        "all_nonempty_persisted_block_contents_in_proposal": "not-applicable"
+      }
+    }
+  ],
+  "provenance": {
+    "tested_sha": "00371f329a188dfafc6ce8a063b735032e1f6334",
+    "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+    "prompt_sha256": "678ccc3301e11d73b1d86a77a4cd326da35f7eb8f28a40ab902186741f155376",
+    "harness_sha256": "ae6b0a5375b69c5623f2ab1f9b339ce1709024dab77c73fae3ef9f3e31c64131",
+    "backend_source_sha256": "b6dea0c51c279e1ad05e695b66fc5968c2ea7042a7502ee5b02d5319260033eb",
+    "generate_plan": false,
+    "locality": "non_loopback",
+    "context_window": 262144,
+    "runtime": "source_desktop_bootstrap"
+  }
+}

@@ -22,13 +22,14 @@ lenses (`problems_total`/`problems_done`); `stage_detail` always starts with
 "Reviewing", which is how the workspace tells a review (editor stays live - nothing
 will write the document) from a draft pass (editor follows the pen).
 
-A run that hits its depth or time ceiling costs the rest of that run, never what it
-filed. The close is a chat message in the draft's writer conversation: counts by
-severity and the findings that matter most - the comments are the review, the message
-is not a restatement.
+A run that hits its depth or time ceiling remains failed and retains its last complete
+checkpoint, never losing what it filed. The close is a chat message in the draft's
+writer conversation: counts by severity and the findings that matter most. The comments
+are the review; the message is not a restatement.
 """
 
 import asyncio
+import hashlib
 import logging
 import sqlite3
 import threading
@@ -56,15 +57,20 @@ from backend.core.app_settings import (
 )
 from backend.core.errors import LyraError, NotFoundError
 from backend.core.profiles import select_active_facts
-from backend.core.writer_pipeline import BLOCKED_MESSAGES
-from backend.llm import prompts
+from backend.core.writer_pipeline import BLOCKED_MESSAGES, _bounded_inference
+from backend.llm import budget, prompts
 from backend.llm.tools import (
     NO_TOOL_SUPPORT,
     UPSTREAM_FAILED,
+    ContextBudget,
     ToolDefinition,
     ToolLoopResult,
+    conversation_tokens,
     run_tool_loop,
+    schema_tokens,
+    tool_schemas,
 )
+from backend.llm.turn_budget import CONTEXT_SAFETY_MARGIN
 from backend.rag.retrieve import retrieve
 from backend.storage.database import connect
 from backend.tools.result import failure, success
@@ -169,6 +175,7 @@ def enqueue(job: ReviewJob) -> None:
 def run_review(job: ReviewJob) -> None:
     """Run one review. The worker calls this; tests call it directly."""
     conn = connect()
+    _review_local.run = (conn, job)
     try:
         if job.run_id is not None:
             run = writer_runs.mark_running(conn, job.run_id)
@@ -194,6 +201,8 @@ def run_review(job: ReviewJob) -> None:
         conn.rollback()
         _settle_failed(conn, job, exc)
     finally:
+        if hasattr(_review_local, "run"):
+            del _review_local.run
         if hasattr(_review_local, "deadline"):
             del _review_local.deadline
         conn.close()
@@ -222,6 +231,23 @@ def _cancel_requested(conn: sqlite3.Connection, job: ReviewJob) -> bool:
     return writer_runs.settle_cancellation(conn, job.run_id, _REVIEW_CANCELLED_DETAIL)
 
 
+def _body_snapshot(part: dict[str, object]) -> dict[str, object]:
+    return {
+        "part_id": int(part["id"]),
+        "content_version": int(part["content_version"]),
+        "sha256": hashlib.sha256(str(part["content"]).encode()).hexdigest(),
+    }
+
+
+def _require_body_snapshot(
+    conn: sqlite3.Connection, part_id: int, expected: dict[str, object]
+) -> None:
+    if _body_snapshot(artifacts.get_part(conn, part_id)) != expected:
+        raise LyraError(
+            "The writing changed during review. Comments were kept; review the new writing again."
+        )
+
+
 def _checkpoint_data(
     filed: list[int], confirmed: list[int], completed_lenses: int
 ) -> dict[str, object]:
@@ -248,9 +274,10 @@ def _settle_failed(conn: sqlite3.Connection, job: ReviewJob, exc: Exception) -> 
         return
     message = exc.message if isinstance(exc, LyraError) else str(exc)
     if job.run_id is not None:
-        writer_runs.mark_failed(conn, job.run_id, message)
-        if _cancel_requested(conn, job):
-            return
+        writer_runs.settle_failure(conn, job.run_id, _FAILED_DETAIL, message)
+        # If cancellation won the writer lock, retain its terminal semantics.
+        _cancel_requested(conn, job)
+        return
     artifacts.mark_artifact_failed(conn, job.artifact_id, _FAILED_DETAIL, message)
     conn.execute(
         "update artifacts set writer_job_completed_at = datetime('now') where id = ?",
@@ -270,15 +297,56 @@ def _review_run(
     timeout = LENS_TIMEOUT_SECONDS
     if isinstance(deadline, float):
         timeout = max(0.001, min(timeout, deadline - time.monotonic()))
+    messages = [
+        *messages,
+        {
+            "role": "user",
+            "content": (
+                "Selected ledger excerpts are partial context, not the full source. Before "
+                "calling a claim unsupported or unverifiable, use read_source with the source "
+                "ID and supporting source_revision_id when available. Follow next_offset for "
+                "omitted content needed to check the claim. Distinguish unavailable or partial "
+                "evidence from a demonstrated contradiction; an uninspected passage is not absent."
+                " A length target in the brief applies to the whole document, not every "
+                "section; use a section budget only when the plan explicitly provides it. "
+                "Application markers [@lyra:ID] are rendered on display/export, so do not "
+                "criticize or replace that internal syntax. Distinguish the student's "
+                "tentative interpretation and clearly attributed personal testimony from "
+                "claims allegedly stated in a source. For textual analysis, complete inspected "
+                "passages can support observations about what is not narrated; missing real-world "
+                "measurements do not establish that an effect is absent. Prioritize consequential "
+                "findings, read existing comments before filing overlapping advice, and group "
+                "group the underlying problem instead of repeating it for each sentence. "
+                "If an existing finding still applies, confirm its exact quote and severity "
+                "through add_comment instead of paraphrasing it at a new anchor."
+            ),
+        },
+    ]
+    context_budget = ContextBudget(
+        context_window=config.context_window,
+        generation_reserve=budget.generation_reserve(config.context_window),
+        tool_tokens=schema_tokens(tool_schemas(registry)),
+        safety_margin=CONTEXT_SAFETY_MARGIN,
+    )
+    if conversation_tokens(messages) > context_budget.message_ceiling:
+        raise LyraError(
+            "The review's mandatory assignment, writing and source context exceed the "
+            "configured context window. Saved writing and comments were kept."
+        )
     return asyncio.run(
-        run_tool_loop(
-            config.endpoint_url,
-            config.api_key,
-            config.model,
-            list(messages),
-            max_depth=max_depth,
-            timeout_seconds=timeout,
-            registry=registry,
+        _bounded_inference(
+            run_tool_loop(
+                config.endpoint_url,
+                config.api_key,
+                config.model,
+                list(messages),
+                max_depth=max_depth,
+                timeout_seconds=timeout,
+                registry=registry,
+                context_budget=context_budget,
+            ),
+            deadline=deadline,
+            run=getattr(_review_local, "run", None),
         )
     )
 
@@ -458,11 +526,13 @@ def _parallel_review_run(
     deadline: float | None = None,
     coordinator: _CaptureCoordinator | None = None,
     worker_index: int = 0,
+    run_id: int | None = None,
 ) -> _CapturedLens:
     """Run one section lens on a private read-only connection."""
     worker_conn = connect()
     try:
         _review_local.deadline = deadline
+        _review_local.run = (worker_conn, ReviewJob(artifact_id, run_id=run_id))
         registry, findings, confirmed_ids = _capture_registry(
             worker_conn,
             artifact_id,
@@ -477,6 +547,8 @@ def _parallel_review_run(
             result = ToolLoopResult(content="", stopped=UPSTREAM_FAILED, detail=str(exc))
         return _CapturedLens(stage, result, tuple(findings), tuple(confirmed_ids))
     finally:
+        if hasattr(_review_local, "run"):
+            del _review_local.run
         if coordinator is not None:
             coordinator.finish(worker_index)
         if hasattr(_review_local, "deadline"):
@@ -521,20 +593,61 @@ def _run(conn: sqlite3.Connection, job: ReviewJob) -> None:
     conn.execute("update artifacts set error_message = null where id = ?", (job.artifact_id,))
     conn.commit()
 
-    body = str(artifacts.get_part(conn, int(part["id"]))["content"])
-    targets = _targets(body)
-    if not targets:
-        artifacts.set_artifact_state(
-            conn, job.artifact_id, artifacts.READY, NOTHING_TO_REVIEW_DETAIL
-        )
-        return
-
-    total_lenses = LENS_COUNT + (1 if job.depth == "deep" else 0)
+    part = artifacts.get_part(conn, int(part["id"]))
+    body = str(part["content"])
+    body_snapshot = _body_snapshot(part)
     checkpoint_data = (
         dict(checkpoint_payload.get("data"))
         if isinstance(checkpoint_payload, dict) and isinstance(checkpoint_payload.get("data"), dict)
         else {}
     )
+    nonfresh = isinstance(checkpoint_payload, dict) and (
+        checkpoint_payload.get("stage") not in (None, "", "start")
+        or checkpoint_payload.get("index", 0)
+        or checkpoint_data.get("completed_lenses", 0)
+    )
+    if nonfresh and checkpoint_data.get("body_snapshot") != body_snapshot:
+        checkpoint_data["previous_snapshot_comment_ids"] = sorted(
+            set(
+                checkpoint_data.get("previous_snapshot_comment_ids", [])
+                + checkpoint_data.get("filed_comment_ids", [])
+                + checkpoint_data.get("confirmed_comment_ids", [])
+            )
+        )
+        checkpoint_data["filed_comment_ids"] = []
+        checkpoint_data["confirmed_comment_ids"] = []
+        checkpoint_data["completed_lenses"] = 0
+        checkpoint_payload = {"stage": "start", "index": 0, "targets": []}
+        if job.run_id is not None:
+            writer_runs.add_warning(
+                conn,
+                job.run_id,
+                code=writer_runs.CHECKPOINT_MISMATCH_WARNING,
+                message=(
+                    "The writing changed or its saved review revision could not be verified. "
+                    "Review restarted from structure; earlier comments were kept."
+                ),
+                replace=True,
+            )
+    checkpoint_data["body_snapshot"] = body_snapshot
+    if not nonfresh or checkpoint_payload.get("stage") == "start":
+        _checkpoint(conn, job, "start", data=checkpoint_data)
+    targets = _targets(body)
+    if not targets:
+        _close(
+            conn,
+            job.artifact_id,
+            int(part["id"]),
+            int(artifact["class_id"]),
+            [],
+            [],
+            NOTHING_TO_REVIEW_DETAIL,
+            run_id=job.run_id,
+            expected_body=body_snapshot,
+        )
+        return
+
+    total_lenses = LENS_COUNT + (1 if job.depth == "deep" else 0)
     completed_lenses = int(checkpoint_data.get("completed_lenses", 0) or 0)
     artifacts.set_problems_total(conn, job.artifact_id, total_lenses)
     artifacts.set_problems_done(conn, job.artifact_id, min(completed_lenses, total_lenses))
@@ -550,17 +663,21 @@ def _run(conn: sqlite3.Connection, job: ReviewJob) -> None:
     ledger_block = prompts.format_ledger_block(ledger)
     filed = [int(value) for value in checkpoint_data.get("filed_comment_ids", [])]
     confirmed = [int(value) for value in checkpoint_data.get("confirmed_comment_ids", [])]
-    tolerance = drafting.UpstreamTolerance()
     budget_exhausted = False
 
     def save_checkpoint(stage: str, *, index: int = 0, targets: tuple[str, ...] = ()) -> None:
+        _require_body_snapshot(conn, part_id, body_snapshot)
         _checkpoint(
             conn,
             job,
             stage,
             index=index,
             targets=targets,
-            data=_checkpoint_data(filed, confirmed, completed_lenses),
+            data={
+                **checkpoint_data,
+                **_checkpoint_data(filed, confirmed, completed_lenses),
+                "body_snapshot": body_snapshot,
+            },
         )
 
     def observe_result(stage: str, result: ToolLoopResult) -> None:
@@ -573,14 +690,13 @@ def _run(conn: sqlite3.Connection, job: ReviewJob) -> None:
             )
         if result.stopped == NO_TOOL_SUPPORT:
             raise LyraError(result.detail or "The tutor endpoint does not support tools.")
-        if result.stopped == UPSTREAM_FAILED:
-            if tolerance.failed():
-                raise LyraError(result.detail or "The tutor endpoint could not be reached.")
-            logger.warning("Review lens %r failed upstream; continuing: %s", stage, result.detail)
-            return
-        tolerance.succeeded()
         if not result.complete:
-            logger.info("Review lens %r stopped early: %s", stage, result.stopped)
+            # Checkpoints certify completed work; skipped lenses cannot become an
+            # all-clear after restart. Already filed comments remain available.
+            raise LyraError(
+                result.detail
+                or f"{stage} did not finish ({result.stopped}). Filed comments were kept."
+            )
 
     def lens(display_stage: str, messages: list[dict[str, str]], max_depth: int) -> bool:
         """One reviewer run under one stage banner, findings accumulated as filed."""
@@ -590,14 +706,18 @@ def _run(conn: sqlite3.Connection, job: ReviewJob) -> None:
             return False
         if _cancel_requested(conn, job):
             return False
+        _require_body_snapshot(conn, part_id, body_snapshot)
         artifacts.set_artifact_state(conn, job.artifact_id, artifacts.GENERATING, display_stage)
         registry, effects = writer_tools.build_registry(
-            conn, job.artifact_id, writer_tools.REVIEWER
+            conn, job.artifact_id, writer_tools.REVIEWER, run_id=job.run_id
         )
         _model_visible_reviewer_registry(registry)
         result = _review_run(config, messages, registry, max_depth)
         filed.extend(effects.filed_comment_ids or [])
         confirmed.extend(effects.confirmed_comment_ids or [])
+        if _cancel_requested(conn, job):
+            return False
+        _require_body_snapshot(conn, part_id, body_snapshot)
         observe_result(display_stage, result)
         return True
 
@@ -671,6 +791,7 @@ def _run(conn: sqlite3.Connection, job: ReviewJob) -> None:
                 job._deadline,
                 coordinator,
                 worker_index,
+                job.run_id,
             )
 
         with ThreadPoolExecutor(
@@ -680,7 +801,12 @@ def _run(conn: sqlite3.Connection, job: ReviewJob) -> None:
 
         # `map` retains section order. All model work has finished; the owner connection
         # is now the only writer and replays findings lens-by-lens, call-by-call.
+        first_error: LyraError | None = None
+        completed_index = 0
         for outcome in outcomes:
+            if _cancel_requested(conn, job):
+                return False
+            _require_body_snapshot(conn, part_id, body_snapshot)
             artifacts.set_artifact_state(
                 conn,
                 job.artifact_id,
@@ -688,15 +814,23 @@ def _run(conn: sqlite3.Connection, job: ReviewJob) -> None:
                 f"Landing findings: {outcome.stage}",
             )
             registry, effects = writer_tools.build_registry(
-                conn, job.artifact_id, writer_tools.REVIEWER
+                conn, job.artifact_id, writer_tools.REVIEWER, run_id=job.run_id
             )
             confirmed.extend(outcome.confirmed_ids)
             for finding in outcome.findings:
                 registry["add_comment"].handler(**finding)
             filed.extend(effects.filed_comment_ids or [])
             confirmed.extend(effects.confirmed_comment_ids or [])
-            observe_result(outcome.stage, outcome.result)
-            save_checkpoint(stage_key, index=targets.index(outcome.stage) + 1, targets=targets)
+            try:
+                observe_result(outcome.stage, outcome.result)
+            except LyraError as exc:
+                if first_error is None:
+                    first_error = exc
+            if first_error is None:
+                completed_index += 1
+            save_checkpoint(stage_key, index=completed_index, targets=targets)
+        if first_error is not None:
+            raise first_error
         return True
 
     stage_order = ["structure", "argument", "prose", "claims"]
@@ -707,7 +841,16 @@ def _run(conn: sqlite3.Connection, job: ReviewJob) -> None:
     )
     if stage_key == "done":
         artifacts.set_problems_done(conn, job.artifact_id, total_lenses)
-        _close(conn, job.artifact_id, part_id, class_id, filed, confirmed)
+        _close(
+            conn,
+            job.artifact_id,
+            part_id,
+            class_id,
+            filed,
+            confirmed,
+            run_id=job.run_id,
+            expected_body=body_snapshot,
+        )
         return
     stage_index = stage_order.index(stage_key) if stage_key in stage_order else 0
 
@@ -828,7 +971,18 @@ def _run(conn: sqlite3.Connection, job: ReviewJob) -> None:
     interrupted = (
         f"Review stopped: the {job.depth} time budget was exhausted." if budget_exhausted else None
     )
-    _close(conn, job.artifact_id, part_id, class_id, filed, confirmed, interrupted)
+    if interrupted is not None:
+        raise LyraError(interrupted + " Filed comments were kept.")
+    _close(
+        conn,
+        job.artifact_id,
+        part_id,
+        class_id,
+        filed,
+        confirmed,
+        run_id=job.run_id,
+        expected_body=body_snapshot,
+    )
 
 
 def _close(
@@ -839,15 +993,11 @@ def _close(
     filed: list[int],
     confirmed: list[int],
     interrupted_detail: str | None = None,
+    *,
+    run_id: int | None = None,
+    expected_body: dict[str, object] | None = None,
 ) -> None:
     """Settle ready and say what the review found, in the writer conversation."""
-    detail = interrupted_detail or _severity_line(conn, filed, confirmed)
-    artifacts.set_artifact_state(conn, artifact_id, artifacts.READY, detail)
-    message = (
-        interrupted_detail
-        if interrupted_detail is not None
-        else _summary_message(conn, filed, confirmed)
-    )
     open_sessions = sessions.writer_sessions_for_part(conn, part_id)
     if open_sessions:
         session_id = int(open_sessions[0]["id"])
@@ -857,7 +1007,56 @@ def _close(
                 "id"
             ]
         )
-    sessions.add_message(conn, session_id, "assistant", message)
+    try:
+        conn.execute("begin immediate")
+        if run_id is not None:
+            current = writer_runs.latest_run(conn, artifact_id)
+            if (
+                current is None
+                or int(current["id"]) != run_id
+                or current["status"] not in (writer_runs.QUEUED, writer_runs.RUNNING)
+            ):
+                conn.rollback()
+                return
+            if expected_body is not None:
+                _require_body_snapshot(conn, part_id, expected_body)
+            # Commit summary, terminal run and artifact mirror together. A restart
+            # cannot replay a summary whose completion marker was never persisted.
+            conn.execute(
+                "update writer_runs set status = ?, finished_at = datetime('now'), "
+                "updated_at = datetime('now'), error_message = null where id = ?",
+                (writer_runs.COMPLETED, run_id),
+            )
+        if expected_body is not None:
+            _require_body_snapshot(conn, part_id, expected_body)
+        detail = interrupted_detail or _severity_line(conn, filed, confirmed)
+        message = interrupted_detail or _summary_message(conn, filed, confirmed)
+        standing = [
+            thread
+            for thread in comments.unresolved_threads(
+                conn, part_id, str(artifacts.get_part(conn, part_id)["content"])
+            )
+            if int(thread["id"]) not in {*filed, *confirmed}
+        ]
+        if standing and interrupted_detail is None:
+            count = len(standing)
+            suffix = f"{count} earlier comment{'s remain' if count != 1 else ' remains'} open."
+            if not filed and not confirmed:
+                detail = "Review complete: no new comments. " + suffix
+                message = "No new margin comments were filed. " + suffix
+            else:
+                detail += " " + suffix
+                message += "\n\n" + suffix
+        sessions.insert_message(conn, session_id, "assistant", message)
+        conn.execute(
+            "update artifacts set state = ?, stage_detail = ?, updated_at = datetime('now'), "
+            "writer_job_completed_at = datetime('now') where id = ?",
+            (artifacts.READY, detail, artifact_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _severity_line(conn: sqlite3.Connection, filed: list[int], confirmed: list[int]) -> str:

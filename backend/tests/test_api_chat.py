@@ -339,8 +339,27 @@ def test_a_normal_turn_streams_start_then_tokens_then_done(
     assert "[DONE]" not in response.text
 
 
+def _seed_material_requiring_embedding(db: sqlite3.Connection, class_id: int) -> None:
+    """Provisioning is needed only when the selected class has indexed material."""
+    doc = db.execute(
+        "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
+        "values (?, 'synthetic.txt', 'synthetic.txt', 'text/plain', 1, 'ready')",
+        (class_id,),
+    ).lastrowid
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "doc_type, embedding_model, embedding_dim) values (?, ?, ?, 5, 1, 'generic', ?, ?)",
+        (doc, class_id, "Synthetic course material.", EMBEDDING_WEIGHTS.filename, EMBEDDING_DIM),
+    )
+    db.commit()
+
+
 def test_a_first_message_on_a_fresh_install_provisions_the_embedding_model(
-    client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    db: sqlite3.Connection,
+    class_id: int,
 ) -> None:
     """PLA-402 regression: a clean install has no embedding weights on disk.
 
@@ -350,7 +369,8 @@ def test_a_first_message_on_a_fresh_install_provisions_the_embedding_model(
     """
     assert not settings.embedding_model_path.exists()
 
-    # The real retrieval path, which is the one that embeds the query.
+    _seed_material_requiring_embedding(db, class_id)
+    # The real retrieval path provisions on demand for the indexed course material.
     monkeypatch.setattr(routes_chat, "retrieve", retrieve_module.retrieve)
 
     downloads: list[tuple[str, str]] = []
@@ -398,7 +418,12 @@ def test_a_first_message_on_a_fresh_install_provisions_the_embedding_model(
 
 
 def test_a_first_message_on_a_true_clean_packaged_install_provisions_everything(
-    client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    client: TestClient,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    db: sqlite3.Connection,
+    class_id: int,
 ) -> None:
     """PLA-402 end-to-end: a genuine clean packaged install, not a mocked one.
 
@@ -423,7 +448,8 @@ def test_a_first_message_on_a_true_clean_packaged_install_provisions_everything(
     monkeypatch.setattr(settings, "packaged_mode", True)
     monkeypatch.setattr(settings, "resource_root", internal_dir)
 
-    # The real retrieval path, which is the one that embeds the query.
+    _seed_material_requiring_embedding(db, class_id)
+    # The real retrieval path provisions on demand for the indexed course material.
     monkeypatch.setattr(routes_chat, "retrieve", retrieve_module.retrieve)
 
     downloads: list[tuple[str, str]] = []

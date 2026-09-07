@@ -1,0 +1,1785 @@
+{
+  "evaluator": {
+    "type": "independent-agent",
+    "identity": "Codex GPT-6 /root/independent_output_review",
+    "version": "4-d181",
+    "human_review": false,
+    "blinding": "Unblinded followup reviewer; did not author code/corpus; earlier outputs already seen."
+  },
+  "provenance": [
+    {
+      "root": "receipt:d18118b-model-corpus",
+      "report_sha256": "fd712fad7de05e7e20f688f651e1ccbcd65935b19bb41120cd6ae71979ab6468",
+      "version": "writer-evaluation.v1",
+      "tested_sha": "d18118b25046fb700c31c949d1cb47e561332e82",
+      "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+      "prompt_sha256": "3d6a24b7635c873e67b712fbb8073742fae9150ca7d3920557e82d455dde715b",
+      "runtime_sha256": null,
+      "harness_sha256": "7515c86631dcab77b5324a84edee8b3861dc036d4cab773e7137bfeb29f2a103",
+      "backend_source_sha256": "49b05cf44e4f326a7fc41f63500635debb41662f6b0d7773fec2de20da67c0e9",
+      "generate_plan": false,
+      "retry_failures": false,
+      "model": "Qwen3.8-27B",
+      "locality": "non_loopback",
+      "context_window": 262144,
+      "runtime": "source_desktop_bootstrap",
+      "comparison_kind": "same_model_interruption",
+      "model_comparison": null,
+      "subjective_acceptance": "not_reviewed"
+    },
+    {
+      "root": "receipt:d18118b-model-remaining",
+      "report_sha256": "de08a47fa45bc18ed2d5561f3c771f814a830b81b20828b9438b9dbad6575acf",
+      "version": "writer-evaluation.v1",
+      "tested_sha": "d18118b25046fb700c31c949d1cb47e561332e82",
+      "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+      "prompt_sha256": "3d6a24b7635c873e67b712fbb8073742fae9150ca7d3920557e82d455dde715b",
+      "runtime_sha256": null,
+      "harness_sha256": "7515c86631dcab77b5324a84edee8b3861dc036d4cab773e7137bfeb29f2a103",
+      "backend_source_sha256": "49b05cf44e4f326a7fc41f63500635debb41662f6b0d7773fec2de20da67c0e9",
+      "generate_plan": false,
+      "retry_failures": false,
+      "model": "Qwen3.8-27B",
+      "locality": "non_loopback",
+      "context_window": 262144,
+      "runtime": "source_desktop_bootstrap",
+      "comparison_kind": "same_model_interruption",
+      "model_comparison": null,
+      "subjective_acceptance": "not_reviewed"
+    },
+    {
+      "root": "receipt:d18118b-model-extra",
+      "report_sha256": "51e71d6c37cbd58058234bbf7a0873fcb1ba49863ecb0f275d44398eafaa2fe9",
+      "version": "writer-evaluation.v1",
+      "tested_sha": "d18118b25046fb700c31c949d1cb47e561332e82",
+      "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+      "prompt_sha256": "3d6a24b7635c873e67b712fbb8073742fae9150ca7d3920557e82d455dde715b",
+      "runtime_sha256": null,
+      "harness_sha256": "7515c86631dcab77b5324a84edee8b3861dc036d4cab773e7137bfeb29f2a103",
+      "backend_source_sha256": "49b05cf44e4f326a7fc41f63500635debb41662f6b0d7773fec2de20da67c0e9",
+      "generate_plan": false,
+      "retry_failures": false,
+      "model": "Qwen3.8-27B",
+      "locality": "non_loopback",
+      "context_window": 262144,
+      "runtime": "source_desktop_bootstrap",
+      "comparison_kind": "same_model_interruption",
+      "model_comparison": null,
+      "subjective_acceptance": "not_reviewed"
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "pass_targeted_causal_precision",
+      "receipt": "receipt:d18118b-model-corpus/pass_targeted_causal_precision--uninterrupted.json",
+      "receipt_sha256": "003541dd34f8bb79dcc449c5a5d961d763384c852234ae8b1cf4ce0074580879",
+      "terminal_status": "failed",
+      "error": "The automatic section review still has unresolved findings. The existing writing and partial proposal were kept for review.",
+      "warnings": [
+        {
+          "code": "section_review_unresolved",
+          "message": "Automatic review of 1.2 still asks for: Revise the 'Evidence' section to strictly adhere to the 150-word budget. Retain the first-person voice and all existing citations. Tighten the prose by removing transitional filler (e.g., 'Additionally,' 'Taken together') and condensing the explanation of limitations. Explicitly link the identified data gaps (lack of unique rider counts and non-rider survey data) to the thesis requirement of 'measuring access more carefully' in the concluding sentence, replacing the generic 'further inquiry' with this specific framing."
+        }
+      ],
+      "pending_proposal_present": true,
+      "assessment_scope": "Failed run proposals are useful partials, not clean completions.",
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d",
+      "unrelated_edits": {
+        "accepted_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "scope_note": "Complete live proposal is authorized; generated prose not accepted student body."
+      },
+      "words": {
+        "whole_proposal": 364,
+        "assignment_target": "450 words",
+        "section_budget_note": "150-word section allocations soft; reviewer turns them into strict failure criteria in several cases. Do not equate them with 450-word whole-assignment target."
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "repaired_in_partial_proposal",
+          "reason": "Unsupported exact causal assertion absent; final output explicitly declines attendance inference."
+        }
+      ],
+      "citation_support": {
+        "valid_source_ids": [
+          1,
+          2
+        ],
+        "used_marker_ids": [
+          5,
+          4,
+          8,
+          6,
+          7,
+          9,
+          10,
+          11
+        ],
+        "unresolved_source_ids": [
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+        ],
+        "excerpt_exact_support": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 7,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 8,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 9,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 10,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 11,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          }
+        ],
+        "semantic_support": "See evidence_citation score and material findings; syntactically canonical markers may still reference wrong identities."
+      },
+      "duplicates": {
+        "exact_duplicate_comments": 0,
+        "semantic_duplicate_comment_extras": "not-applicable",
+        "comments_before": 0,
+        "comments_after": 0,
+        "exact_duplicate_paragraphs": [],
+        "semantic_duplicate_sections": 0
+      },
+      "material_findings": [
+        {
+          "kind": "nonexistent_source_citations",
+          "ids": [
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "reason": "Markers use source-ID namespace; these match excerpt IDs, but no corresponding sources exist."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A conditional recommendation, not a causal evaluation.",
+          "rationale": "Seeded plan; no model-generated planning quality score.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 1,
+          "output_excerpt": "no attendance data were collected [@lyra:4]",
+          "rationale": "Source IDs 4–11 do not exist; they match excerpt IDs. Correct substantive causal repair is undermined by unusable source linkage.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 3,
+          "output_excerpt": "I do not want the raw count to act like a badge",
+          "rationale": "Target repaired with protected sections exact and distinctive reflection retained; partial remains verbose.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 1,
+          "output_excerpt": "strictly adhere to the 150-word budget",
+          "rationale": "Automatic review treats soft section allocation as a strict requirement, prolonging failure despite a meaningful repair. Product honestly reports unresolved review.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 2,
+          "output_excerpt": "I cannot say the shuttle caused a 50 percent increase",
+          "rationale": "Core causal repair and perspective met in partial; source linkage broken and no clean completion.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 4,
+          "output_excerpt": "I do not want the raw count to act like a badge",
+          "rationale": "Preserves tentative singular stance and recognizable metaphor; no invented personal history.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "comparison_f2": {
+        "receipt": "receipt:f2f8f94-model-corpus/pass_targeted_causal_precision--uninterrupted.json",
+        "previous_terminal": "completed",
+        "note": "Previously correct source-ID citations now replaced by excerpt-ID markers; run failed."
+      },
+      "recovery": "All controls uninterrupted; no new restart/user-edit preservation evidence.",
+      "receipt_group": "corpus"
+    },
+    {
+      "case_id": "review_seeded_claim_and_duplicates",
+      "receipt": "receipt:d18118b-model-corpus/review_seeded_claim_and_duplicates--uninterrupted.json",
+      "receipt_sha256": "0535bb991332475b7c35733368c61135d251aeadb6d870aecd5239c81e079360",
+      "terminal_status": "completed",
+      "error": null,
+      "warnings": [],
+      "pending_proposal_present": false,
+      "assessment_scope": "Completed persisted output.",
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d",
+      "unrelated_edits": {
+        "accepted_changed_characters": 0,
+        "protected_candidate_changes": null,
+        "scope_note": "Complete live proposal is authorized; generated prose not accepted student body."
+      },
+      "words": {
+        "whole_proposal": null,
+        "assignment_target": "450 words",
+        "section_budget_note": "150-word section allocations soft; reviewer turns them into strict failure criteria in several cases. Do not equate them with 450-word whole-assignment target."
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "covered_by_retained_standing_finding",
+          "comment_id": 1,
+          "reason": "Existing accurate open finding retained and terminal summary acknowledges it; not counted as a fresh independent rediscovery."
+        },
+        {
+          "id": "standing_comment",
+          "result": "met",
+          "reason": "No new equivalent comment on causal claim; one earlier comment remains open."
+        }
+      ],
+      "citation_support": {
+        "valid_source_ids": [
+          1,
+          2
+        ],
+        "used_marker_ids": [],
+        "unresolved_source_ids": [],
+        "excerpt_exact_support": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          }
+        ],
+        "semantic_support": "See evidence_citation score and material findings; syntactically canonical markers may still reference wrong identities."
+      },
+      "duplicates": {
+        "exact_duplicate_comments": 0,
+        "semantic_duplicate_comment_extras": 0,
+        "comments_before": 1,
+        "comments_after": 9,
+        "exact_duplicate_paragraphs": [],
+        "semantic_duplicate_sections": 0
+      },
+      "material_findings": [
+        {
+          "kind": "incorrect_revision_label",
+          "comment_id": 7,
+          "quote": "source 2, rev 2",
+          "reason": "Survey record is revision 1; do not confuse source/revision-row ID with revision number."
+        },
+        {
+          "kind": "voice_advice_limitation",
+          "comment_id": 3,
+          "reason": "Badge metaphor removal is optional editorial preference, not a factual failure; severity minor, so report proportionately."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A conditional recommendation, not a causal evaluation.",
+          "rationale": "Seeded plan; no model-generated planning quality score.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 3,
+          "output_excerpt": "Non-riders were not surveyed",
+          "rationale": "Substantive source facts correct; comment 7 labels survey rev 2 although retained survey is revision 1 (database revision-row ID may be 2), a provenance-label error.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": "not-applicable",
+          "output_excerpt": "# A timetable is a promise\n\n## Introduction\n\nOn the first morning of the bus pilot, I got to the lib",
+          "rationale": "Review-only; body wholly preserved.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 3,
+          "output_excerpt": "1 earlier comment remains open.",
+          "rationale": "Standing finding preserved without equivalent new comment. Eight new findings are mostly distinct, but some minor style/soft-budget advice distracts from substantive limitations.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 3,
+          "output_excerpt": "1 earlier comment remains open.",
+          "rationale": "No repeated causal finding, body intact; optional minor edits are overemphasized but no prior critical anecdote-removal demands.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 2,
+          "output_excerpt": "This meta-comment ... does not advance the argument",
+          "rationale": "Advice still targets distinctive badge metaphor and suggests dropping consenting, but no physical rewrite or fabricated voice.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "comparison_f2": {
+        "receipt": "receipt:f2f8f94-model-corpus/review_seeded_claim_and_duplicates--uninterrupted.json",
+        "previous_terminal": "completed",
+        "note": "20 total comments to 9; five conservative redundant extras to zero. Existing causal finding respected."
+      },
+      "recovery": "All controls uninterrupted; no new restart/user-edit preservation evidence.",
+      "receipt_group": "corpus"
+    },
+    {
+      "case_id": "pass_reject_empty_and_unrelated_rewrite",
+      "receipt": "receipt:d18118b-model-corpus/pass_reject_empty_and_unrelated_rewrite--uninterrupted.json",
+      "receipt_sha256": "5864972555479f639f05ae3701e093d97d3ff56f4c1453e8237c3a3147bf9ea1",
+      "terminal_status": "failed",
+      "error": "The automatic section review still has unresolved findings. The existing writing and partial proposal were kept for review.",
+      "warnings": [
+        {
+          "code": "section_review_unresolved",
+          "message": "Automatic review of 1.2 still asks for: Tighten the prose to meet the 150-word budget by removing redundant restatements of the trip/attendance distinction. Explicitly connect the evidence from Source 1 (trips vs. people) and Source 2 (voluntary riders only) to show how they collectively prevent a causal claim about attendance, rather than listing them as separate points. Maintain the first-person voice and the specific citation markup."
+        }
+      ],
+      "pending_proposal_present": true,
+      "assessment_scope": "Failed run proposals are useful partials, not clean completions.",
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d",
+      "unrelated_edits": {
+        "accepted_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "scope_note": "Complete live proposal is authorized; generated prose not accepted student body."
+      },
+      "words": {
+        "whole_proposal": 344,
+        "assignment_target": "450 words",
+        "section_budget_note": "150-word section allocations soft; reviewer turns them into strict failure criteria in several cases. Do not equate them with 450-word whole-assignment target."
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "repaired_in_partial_proposal",
+          "reason": "Unsupported exact causal assertion absent; final output explicitly declines attendance inference."
+        },
+        {
+          "id": "empty_replacement",
+          "result": "not-exercised",
+          "reason": "Nonempty real output; adversarial empty fixture not injected."
+        },
+        {
+          "id": "off_target",
+          "result": "met",
+          "reason": "Protected Introduction and Recommendation exact in candidate."
+        }
+      ],
+      "citation_support": {
+        "valid_source_ids": [
+          1,
+          2
+        ],
+        "used_marker_ids": [
+          1,
+          1,
+          1,
+          2,
+          2
+        ],
+        "unresolved_source_ids": [],
+        "excerpt_exact_support": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 7,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 8,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 9,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 10,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          }
+        ],
+        "semantic_support": "See evidence_citation score and material findings; syntactically canonical markers may still reference wrong identities."
+      },
+      "duplicates": {
+        "exact_duplicate_comments": 0,
+        "semantic_duplicate_comment_extras": "not-applicable",
+        "comments_before": 0,
+        "comments_after": 0,
+        "exact_duplicate_paragraphs": [],
+        "semantic_duplicate_sections": 0
+      },
+      "material_findings": [],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A conditional recommendation, not a causal evaluation.",
+          "rationale": "Seeded plan; no model-generated planning quality score.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 4,
+          "output_excerpt": "no attendance data were collected [@lyra:1]",
+          "rationale": "Core figures and limitations grounded with correct source IDs; no material unsupported factual rewrite identified.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 3,
+          "output_excerpt": "I am comfortable saying that usage increased",
+          "rationale": "Target repair and both protected sections preserved, fairly focused partial.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 2,
+          "output_excerpt": "Tighten the prose to meet the 150-word budget",
+          "rationale": "Useful concision advice, but reviewer converts a soft allocation into a terminal blocker; synthesis already exists in final partial.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 3,
+          "output_excerpt": "I cannot treat a jump in trip volume as proof",
+          "rationale": "Correct scope and evidence/citation constraints in partial; terminal failed means incomplete workflow, not successful acceptance.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 3,
+          "output_excerpt": "I am comfortable saying ... I am not comfortable claiming",
+          "rationale": "First-person caution retained but characteristic original metaphor dropped.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "comparison_f2": {
+        "receipt": "receipt:f2f8f94-model-corpus/pass_reject_empty_and_unrelated_rewrite--uninterrupted.json",
+        "previous_terminal": "completed",
+        "note": "Bare numeric citations repaired to correct canonical source IDs, but run now honestly fails review completion."
+      },
+      "recovery": "All controls uninterrupted; no new restart/user-edit preservation evidence.",
+      "receipt_group": "corpus"
+    },
+    {
+      "case_id": "source_history_replace",
+      "receipt": "receipt:d18118b-model-corpus/source_history_replace--uninterrupted.json",
+      "receipt_sha256": "52dc1d089acd69eefe03cb7a76c262544de39b8df8200af4b020cdea36247edf",
+      "terminal_status": "failed",
+      "error": "The automatic section review still has unresolved findings. The existing writing and partial proposal were kept for review.",
+      "warnings": [
+        {
+          "code": "section_review_unresolved",
+          "message": "Automatic review of 1.2 still asks for: Revise the Evidence section to strictly align with the source ledger: (1) Cite Source 1 (revision 1) for the statement 'No attendance data were collected' to support the claim that attendance effects cannot be confirmed. (2) Cite Source 1 (revision 2) for the withdrawal of counts due to maintenance trips and the absence of old totals, but do not assert they are 'invalid for evaluating impact' beyond what the sources state; instead, frame them as unavailable for current analysis. (3) Cite Source 2 for the 18 voluntary responses from riders, the exclusion of non-riders, and the explicit limitation that responses cannot establish demand across all students. (4) Maintain the first-person tentative voice and the distinction between descriptive trip volume and causal attendance impact, ensuring all claims are directly supported by the named excerpts."
+        }
+      ],
+      "pending_proposal_present": true,
+      "assessment_scope": "Failed run proposals are useful partials, not clean completions.",
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d",
+      "unrelated_edits": {
+        "accepted_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "scope_note": "Complete live proposal is authorized; generated prose not accepted student body."
+      },
+      "words": {
+        "whole_proposal": 404,
+        "assignment_target": "450 words",
+        "section_budget_note": "150-word section allocations soft; reviewer turns them into strict failure criteria in several cases. Do not equate them with 450-word whole-assignment target."
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "repaired_in_partial_proposal",
+          "reason": "Unsupported exact causal assertion absent; final output explicitly declines attendance inference."
+        },
+        {
+          "id": "historical_support",
+          "result": "met_in_ledger",
+          "reason": "Revision 1 old snapshot and revision 2 withdrawal retained separately."
+        }
+      ],
+      "citation_support": {
+        "valid_source_ids": [
+          1,
+          2
+        ],
+        "used_marker_ids": [
+          1,
+          1,
+          1,
+          2,
+          2
+        ],
+        "unresolved_source_ids": [],
+        "excerpt_exact_support": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": 3,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 1,
+            "revision_id": 3,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 7,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 8,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          }
+        ],
+        "semantic_support": "See evidence_citation score and material findings; syntactically canonical markers may still reference wrong identities."
+      },
+      "duplicates": {
+        "exact_duplicate_comments": 0,
+        "semantic_duplicate_comment_extras": "not-applicable",
+        "comments_before": 0,
+        "comments_after": 0,
+        "exact_duplicate_paragraphs": [],
+        "semantic_duplicate_sections": 0
+      },
+      "material_findings": [
+        {
+          "kind": "unsupported_residual_inference",
+          "quote": "the withdrawn trip counts together suggest that we know who uses the bus",
+          "reason": "Invalidated maintenance-trip totals cannot identify rider population."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A conditional recommendation, not a causal evaluation.",
+          "rationale": "Seeded plan; no model-generated planning quality score.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 2,
+          "output_excerpt": "the remaining figures describe trip volume",
+          "rationale": "Withdrawn counts explicitly acknowledged and original unsupported causal sentence removed. But no corrected figures exist, and later prose treats withdrawn counts as useful vehicle/rider activity; evidence remains muddled.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 3,
+          "output_excerpt": "these counts are no longer valid",
+          "rationale": "Replaces original error rather than appending contradictory intact prose; no prior duplicated closing sentence. Still failed partial.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 2,
+          "output_excerpt": "The automatic section review still has unresolved findings.",
+          "rationale": "Failure is honest; no full independent critique transcript for stronger judgment. Residual evidence ambiguity remains.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 2,
+          "output_excerpt": "the withdrawn trip counts together suggest that we know who uses the bus",
+          "rationale": "Better causal repair, but invalidated counts cannot establish who uses bus; meaningful incomplete partial with residual overclaim.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 3,
+          "output_excerpt": "I hesitate to treat these figures as definitive proof",
+          "rationale": "Tentative first person remains; more generic than original prose.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "comparison_f2": {
+        "receipt": "receipt:f2f8f94-model-corpus/source_history_replace--uninterrupted.json",
+        "previous_terminal": "completed",
+        "note": "Prior retained causal sentence and duplicated ending removed. Residual invalidated-data inference remains; run failed rather than completed."
+      },
+      "recovery": "All controls uninterrupted; no new restart/user-edit preservation evidence.",
+      "receipt_group": "corpus"
+    },
+    {
+      "case_id": "source_history_delete",
+      "receipt": "receipt:d18118b-model-corpus/source_history_delete--uninterrupted.json",
+      "receipt_sha256": "db7e00750c389620e23316d1ecc619d065e1bf8e9ffc7075d74b8688a1e92d91",
+      "terminal_status": "failed",
+      "error": "The automatic section review still has unresolved findings. The existing writing and partial proposal were kept for review.",
+      "warnings": [
+        {
+          "code": "section_review_unresolved",
+          "message": "Automatic review of 1.2 still asks for: Condense the section to under 150 words. Retain the first-person voice and the specific citations [@lyra:2], [@lyra:4], [@lyra:1], [@lyra:3], and [@lyra:2]. Explicitly state that the data shows usage, not attendance, and conclude by linking this evidentiary gap to the need for the proposed one-term extension to measure access more carefully."
+        }
+      ],
+      "pending_proposal_present": true,
+      "assessment_scope": "Failed run proposals are useful partials, not clean completions.",
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d",
+      "unrelated_edits": {
+        "accepted_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "scope_note": "Complete live proposal is authorized; generated prose not accepted student body."
+      },
+      "words": {
+        "whole_proposal": 415,
+        "assignment_target": "450 words",
+        "section_budget_note": "150-word section allocations soft; reviewer turns them into strict failure criteria in several cases. Do not equate them with 450-word whole-assignment target."
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "repaired_in_partial_proposal",
+          "reason": "Unsupported exact causal assertion absent; final output explicitly declines attendance inference."
+        },
+        {
+          "id": "historical_support",
+          "result": "met_in_ledger",
+          "reason": "Deleted course snapshot remains unversioned, source_revision_id null; candidate source markers separately fail."
+        }
+      ],
+      "citation_support": {
+        "valid_source_ids": [
+          1,
+          2
+        ],
+        "used_marker_ids": [
+          2,
+          4,
+          1,
+          1,
+          3,
+          2
+        ],
+        "unresolved_source_ids": [
+          3,
+          4
+        ],
+        "excerpt_exact_support": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": null,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": null,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": null,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 1,
+            "revision_id": null,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 2,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 7,
+            "source_id": 2,
+            "revision_id": 1,
+            "exact_support": true
+          }
+        ],
+        "semantic_support": "See evidence_citation score and material findings; syntactically canonical markers may still reference wrong identities."
+      },
+      "duplicates": {
+        "exact_duplicate_comments": 0,
+        "semantic_duplicate_comment_extras": "not-applicable",
+        "comments_before": 0,
+        "comments_after": 0,
+        "exact_duplicate_paragraphs": [],
+        "semantic_duplicate_sections": 0
+      },
+      "material_findings": [
+        {
+          "kind": "nonexistent_source_citations",
+          "ids": [
+            3,
+            4
+          ],
+          "reason": "Markers use source-ID namespace; these match excerpt IDs, but no corresponding sources exist."
+        },
+        {
+          "kind": "wrong_existing_source",
+          "quote": "160 boardings in week A and 240 in week B [@lyra:2]",
+          "reason": "Existing source 2 is survey; boarding comparison belongs to source 1."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A conditional recommendation, not a causal evaluation.",
+          "rationale": "Seeded plan; no model-generated planning quality score.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 1,
+          "output_excerpt": "160 boardings in week A and 240 in week B [@lyra:2]",
+          "rationale": "Source 2 is survey, not transport. No-attendance cites nonexistent source 4 and non-rider claim nonexistent source 3. Ledger preservation does not rescue mislinked proposal.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 3,
+          "output_excerpt": "I cannot claim that the shuttle improved academic outcomes",
+          "rationale": "Target causal repair and protected sections intact, but overly repetitive partial.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 1,
+          "output_excerpt": "Retain ... citations [@lyra:2], [@lyra:4]",
+          "rationale": "Internal review repeats and preserves wrong/nonexistent source IDs while treating soft 150 words as strict cutoff.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 2,
+          "output_excerpt": "no attendance data were collected [@lyra:4]",
+          "rationale": "Correct conceptual scope and caution, but material source attribution failure and failed workflow.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 3,
+          "output_excerpt": "This gap matters because my recommendation relies on understanding who benefits",
+          "rationale": "Reflective first-person remains, though generic repetition outweighs original cadence.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "comparison_f2": {
+        "receipt": "receipt:f2f8f94-model-corpus/source_history_delete--uninterrupted.json",
+        "previous_terminal": "completed",
+        "note": "Previously source-correct output now includes wrong/nonexistent source citations; run failed."
+      },
+      "recovery": "All controls uninterrupted; no new restart/user-edit preservation evidence.",
+      "receipt_group": "corpus"
+    },
+    {
+      "case_id": "pass_multisection_same_model_recovery",
+      "receipt": "receipt:d18118b-model-corpus/pass_multisection_same_model_recovery--uninterrupted.json",
+      "receipt_sha256": "f4d816cd6b15c05f4db37c90497baccb2e6aecf1051e62bb16b8d71d2fe788e6",
+      "terminal_status": "failed",
+      "error": "The automatic section review still has unresolved findings. The existing writing and partial proposal were kept for review.",
+      "warnings": [
+        {
+          "code": "section_review_unresolved",
+          "message": "Automatic review of 1.2 still asks for: Condense the section to under 150 words by removing redundant phrasing (e.g., 'I initially framed this as a causal shift, but that framing overstates what the data support') and tightening the explanation of the survey limitations. Ensure the final sentence explicitly bridges to the next section by stating that because these metrics do not measure attendance or unique access, the next step is to extend the pilot with more careful measurement of who can actually use the service."
+        }
+      ],
+      "pending_proposal_present": true,
+      "assessment_scope": "Failed run proposals are useful partials, not clean completions.",
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d",
+      "unrelated_edits": {
+        "accepted_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "scope_note": "Complete live proposal is authorized; generated prose not accepted student body."
+      },
+      "words": {
+        "whole_proposal": 453,
+        "assignment_target": "450 words",
+        "section_budget_note": "150-word section allocations soft; reviewer turns them into strict failure criteria in several cases. Do not equate them with 450-word whole-assignment target."
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "repaired_in_partial_proposal",
+          "reason": "Unsupported exact causal assertion absent; final output explicitly declines attendance inference."
+        }
+      ],
+      "citation_support": {
+        "valid_source_ids": [
+          1,
+          2
+        ],
+        "used_marker_ids": [
+          5,
+          4,
+          8,
+          6,
+          7,
+          9,
+          10,
+          11
+        ],
+        "unresolved_source_ids": [
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+        ],
+        "excerpt_exact_support": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 7,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 8,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 9,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 10,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 11,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 12,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 13,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 14,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          }
+        ],
+        "semantic_support": "See evidence_citation score and material findings; syntactically canonical markers may still reference wrong identities."
+      },
+      "duplicates": {
+        "exact_duplicate_comments": 0,
+        "semantic_duplicate_comment_extras": "not-applicable",
+        "comments_before": 0,
+        "comments_after": 0,
+        "exact_duplicate_paragraphs": [],
+        "semantic_duplicate_sections": 1
+      },
+      "material_findings": [
+        {
+          "kind": "nonexistent_source_citations",
+          "ids": [
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11
+          ],
+          "reason": "Markers use source-ID namespace; these match excerpt IDs, but no corresponding sources exist."
+        },
+        {
+          "kind": "duplicate_section",
+          "heading": "Recommendation",
+          "count": 2,
+          "reason": "Two near-identical Recommendation paragraphs differ only in quote punctuation; both in pending proposal."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A conditional recommendation, not a causal evaluation.",
+          "rationale": "Seeded plan; no model-generated planning quality score.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 1,
+          "output_excerpt": "160 boardings ... [@lyra:5]",
+          "rationale": "Numerous markers 4–11 use nonexistent source IDs matching excerpt IDs. Core causal reasoning is qualified but inaccessible through correct citations.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 1,
+          "output_excerpt": "## Recommendation",
+          "rationale": "Generated replacement for Evidence embeds Recommendation and existing Recommendation remains, duplicating heading and near-identical paragraph. Partial structural failure, not body data loss.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 1,
+          "output_excerpt": "Condense the section to under 150 words",
+          "rationale": "Review warning centers on soft word budget/transition while retained partial has duplicate section and wrong source IDs.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 1,
+          "output_excerpt": "## Recommendation",
+          "rationale": "Fails output structure and canonical source identity; only first target processed before honest failure.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 3,
+          "output_excerpt": "I prefer a modest claim I can explain",
+          "rationale": "Original voice preserved in duplicated Recommendation; duplication harms coherence, not fabricated personal history.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "comparison_f2": {
+        "receipt": "receipt:f2f8f94-model-corpus/pass_multisection_same_model_recovery--uninterrupted.json",
+        "previous_terminal": "completed",
+        "note": "New partial duplicates Recommendation and misuses excerpt IDs; prior full completed proposal lacked these defects."
+      },
+      "recovery": "All controls uninterrupted; no new restart/user-edit preservation evidence.",
+      "receipt_group": "corpus"
+    },
+    {
+      "case_id": "long_draft_mandatory_budget",
+      "receipt": "receipt:d18118b-model-corpus/long_draft_mandatory_budget--uninterrupted.json",
+      "receipt_sha256": "adb2d831c48d33e1ce14366676f6e71bf9791ecb44949312aa5125aeacf1df53",
+      "terminal_status": "failed",
+      "error": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+      "warnings": [],
+      "pending_proposal_present": false,
+      "assessment_scope": "Failed run proposals are useful partials, not clean completions.",
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "d8b44535883bdcfa67aeeb94a3fc8905ef854cd5bef708860156a14e9e00672c",
+      "unrelated_edits": {
+        "accepted_changed_characters": 0,
+        "protected_candidate_changes": null,
+        "scope_note": "Complete live proposal is authorized; generated prose not accepted student body."
+      },
+      "words": {
+        "whole_proposal": null,
+        "assignment_target": "450 words",
+        "section_budget_note": "150-word section allocations soft; reviewer turns them into strict failure criteria in several cases. Do not equate them with 450-word whole-assignment target."
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "not-scored",
+          "reason": "No rewrite expected after preflight refusal."
+        },
+        {
+          "id": "long_mandatory_body",
+          "result": "met_in_receipt",
+          "reason": "Full body intact; immediate failed start checkpoint. No provider request counter to independently establish zero calls; configuration tool probe did occur."
+        }
+      ],
+      "citation_support": {
+        "valid_source_ids": [
+          1,
+          2
+        ],
+        "used_marker_ids": [],
+        "unresolved_source_ids": [],
+        "excerpt_exact_support": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          }
+        ],
+        "semantic_support": "See evidence_citation score and material findings; syntactically canonical markers may still reference wrong identities."
+      },
+      "duplicates": {
+        "exact_duplicate_comments": 0,
+        "semantic_duplicate_comment_extras": "not-applicable",
+        "comments_before": 0,
+        "comments_after": 0,
+        "exact_duplicate_paragraphs": [],
+        "semantic_duplicate_sections": 0
+      },
+      "material_findings": [],
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "output_excerpt": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+          "rationale": "Expected mandatory-context refusal, no writing/review produced.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": "not-applicable",
+          "output_excerpt": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+          "rationale": "Expected mandatory-context refusal, no writing/review produced.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": "not-applicable",
+          "output_excerpt": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+          "rationale": "Expected mandatory-context refusal, no writing/review produced.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "output_excerpt": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+          "rationale": "Expected mandatory-context refusal, no writing/review produced.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": "not-applicable",
+          "output_excerpt": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+          "rationale": "Expected mandatory-context refusal, no writing/review produced.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": "not-applicable",
+          "output_excerpt": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+          "rationale": "Expected mandatory-context refusal, no writing/review produced.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "comparison_f2": {
+        "receipt": "receipt:f2f8f94-model-corpus/long_draft_mandatory_budget--uninterrupted.json",
+        "previous_terminal": "failed",
+        "note": "Expected refusal and body preservation unchanged."
+      },
+      "recovery": "All controls uninterrupted; no new restart/user-edit preservation evidence.",
+      "receipt_group": "corpus"
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "receipt": "receipt:d18118b-model-remaining/full_live_draft_from_student_notes--uninterrupted.json",
+      "receipt_sha256": "266f55b57ef1890ba272f5b261473327792b2e72af570d4dc5a492e976613e4a",
+      "terminal_status": "completed",
+      "error": null,
+      "warnings": [],
+      "pending_proposal_present": true,
+      "assessment_scope": "Completed persisted output.",
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+      "unrelated_edits": {
+        "accepted_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "scope_note": "Complete live proposal is authorized; generated prose not accepted student body."
+      },
+      "words": {
+        "whole_proposal": 380,
+        "assignment_target": "320 words",
+        "section_budget_note": "150-word section allocations soft; reviewer turns them into strict failure criteria in several cases. Do not equate them with 450-word whole-assignment target."
+      },
+      "seed_adjudication": [
+        {
+          "id": "notes_preservation",
+          "result": "met",
+          "reason": "Accepted original notes byte-exact; separate pending proposal."
+        },
+        {
+          "id": "attendance_noninference",
+          "result": "met",
+          "reason": "Observed output explicitly denies inferring attendance effect."
+        }
+      ],
+      "citation_support": {
+        "valid_source_ids": [
+          1,
+          2
+        ],
+        "used_marker_ids": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          2,
+          2,
+          1,
+          2,
+          2,
+          2
+        ],
+        "unresolved_source_ids": [],
+        "excerpt_exact_support": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 7,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 8,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 9,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 10,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 11,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 12,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 13,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 14,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 15,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          }
+        ],
+        "semantic_support": "See evidence_citation score and material findings; syntactically canonical markers may still reference wrong identities."
+      },
+      "duplicates": {
+        "exact_duplicate_comments": 0,
+        "semantic_duplicate_comment_extras": "not-applicable",
+        "comments_before": 0,
+        "comments_after": 0,
+        "exact_duplicate_paragraphs": [],
+        "semantic_duplicate_sections": 0
+      },
+      "material_findings": [
+        {
+          "kind": "unsupported_categorical_sample_claim",
+          "quote": "excludes anyone using alternative modes of transport",
+          "reason": "Source excludes non-riders, not every multimodal rider."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+          "rationale": "Seeded plan; no model-generated planning quality score.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 2,
+          "output_excerpt": "Since the sample excludes anyone using alternative modes of transport",
+          "rationale": "Rider-only sample does not exclude all multimodal users; riders may also walk/drive. Generalizing to anyone using other modes is unsupported. Other principal facts/citations correctly grounded.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 2,
+          "output_excerpt": "alternative modes of transport",
+          "rationale": "Review replaces walk or drive with broader wording but leaves categorical exclusion overclaim. Body notes remain exact.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 2,
+          "output_excerpt": "Replace the specific mention ... with ... alternative modes of transport",
+          "rationale": "Internal review catches apparent over-specificity yet prescribes a broader unsupported generalization; tone edit is useful but minor.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 3,
+          "output_excerpt": "I stood at the east gate weighing whether to wait or walk",
+          "rationale": "Two sections, notes intact, personal stake and one-term extension; method remains vague about how to contact non-riders and subgroup exclusion claim persists.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 3,
+          "output_excerpt": "that uncertainty remains my starting point",
+          "rationale": "Concrete personal origin restored relative to f2, caution remains; some Recommendation reads institutional rather than personal.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "comparison_f2": {
+        "receipt": "receipt:f2f8f94-model-corpus/full_live_draft_from_student_notes--uninterrupted.json",
+        "previous_terminal": "completed",
+        "note": "East-gate personal stake restored; new overbroad sample exclusion remains."
+      },
+      "recovery": "All controls uninterrupted; no new restart/user-edit preservation evidence.",
+      "receipt_group": "remaining"
+    },
+    {
+      "case_id": "pass_multisection_same_model_recovery",
+      "receipt": "receipt:d18118b-model-extra/pass_multisection_same_model_recovery--uninterrupted.json",
+      "receipt_sha256": "34951cd922665aac727acf91316f52ed3c1ecfc476446723e2f3c0916e15caee",
+      "terminal_status": "failed",
+      "error": "The automatic section review still has unresolved findings. The existing writing and partial proposal were kept for review.",
+      "warnings": [
+        {
+          "code": "section_review_unresolved",
+          "message": "Automatic review of 1.2 still asks for: Rewrite the Evidence section to strictly stay under 150 words. Remove the final two sentences that propose next steps or methodological changes, as these belong in the Recommendation section. Focus exclusively on using the provided sources to explain why the boarding counts and survey responses do not constitute evidence of an attendance effect. Ensure the prose remains in the first-person voice and acknowledges the limitations of the data without proposing solutions."
+        }
+      ],
+      "pending_proposal_present": true,
+      "assessment_scope": "Failed run proposals are useful partials, not clean completions.",
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d",
+      "unrelated_edits": {
+        "accepted_changed_characters": 0,
+        "protected_candidate_changes": 0,
+        "scope_note": "Complete live proposal is authorized; generated prose not accepted student body."
+      },
+      "words": {
+        "whole_proposal": 442,
+        "assignment_target": "450 words",
+        "section_budget_note": "150-word section allocations soft; reviewer turns them into strict failure criteria in several cases. Do not equate them with 450-word whole-assignment target."
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "repaired_in_partial_proposal",
+          "reason": "Unsupported exact causal assertion absent; final output explicitly declines attendance inference."
+        }
+      ],
+      "citation_support": {
+        "valid_source_ids": [
+          1,
+          2
+        ],
+        "used_marker_ids": [
+          1,
+          1,
+          1,
+          2
+        ],
+        "unresolved_source_ids": [],
+        "excerpt_exact_support": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 4,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 5,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 6,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 7,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 8,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 9,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 10,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 11,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          },
+          {
+            "id": 12,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 13,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          }
+        ],
+        "semantic_support": "See evidence_citation score and material findings; syntactically canonical markers may still reference wrong identities."
+      },
+      "duplicates": {
+        "exact_duplicate_comments": 0,
+        "semantic_duplicate_comment_extras": "not-applicable",
+        "comments_before": 0,
+        "comments_after": 0,
+        "exact_duplicate_paragraphs": [
+          "I would keep the route running while checking who can actually use it. The driver I spoke with called the last stop 'the long way home,' and that phrase stayed with me. It catches something the total number of rides misses: access has a shape as well as a size. Next term, the campus could count unique consenting riders, record missed connections, and invite comments from students who never board. This is a modest recommendation. I prefer a modest claim I can explain to a big claim that disappears when someone asks how we counted."
+        ],
+        "semantic_duplicate_sections": 1
+      },
+      "material_findings": [
+        {
+          "kind": "duplicate_section",
+          "heading": "Recommendation",
+          "count": 2,
+          "reason": "Two near-identical Recommendation paragraphs differ only in quote punctuation; both in pending proposal."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A conditional recommendation, not a causal evaluation.",
+          "rationale": "Seeded plan; no model-generated planning quality score.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 4,
+          "output_excerpt": "no attendance data were collected [@lyra:1]",
+          "rationale": "This separate repeat uses correct source IDs 1 and 2 with supported causal limitations. Do not transfer corpus receipt’s excerpt-ID failure here.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 1,
+          "output_excerpt": "## Recommendation",
+          "rationale": "Generated replacement for Evidence embeds Recommendation and existing Recommendation remains, duplicating heading and near-identical paragraph. Partial structural failure, not body data loss.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 1,
+          "output_excerpt": "Keep the word count under 150 words.",
+          "rationale": "Review prioritizes soft word budget and next-step placement while retained partial duplicates an entire Recommendation section.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 1,
+          "output_excerpt": "## Recommendation",
+          "rationale": "Duplicate Recommendation violates coherent two-section revision; proper citations in this repeat. Honest failed status preserves partial.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 3,
+          "output_excerpt": "I prefer a modest claim I can explain",
+          "rationale": "Original voice preserved in duplicated Recommendation; duplication harms coherence, not fabricated personal history.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "comparison_f2": {
+        "receipt": "receipt:f2f8f94-model-corpus/pass_multisection_same_model_recovery--uninterrupted.json",
+        "previous_terminal": "completed",
+        "note": "This extra repeat has correct source IDs but an exact repeated Recommendation paragraph. Distinct from corpus run with bad source IDs and quote-variant duplicate."
+      },
+      "recovery": "All controls uninterrupted; no new restart/user-edit preservation evidence.",
+      "receipt_group": "extra"
+    },
+    {
+      "case_id": "long_draft_mandatory_budget",
+      "receipt": "receipt:d18118b-model-extra/long_draft_mandatory_budget--uninterrupted.json",
+      "receipt_sha256": "26be5e4fdd8832b6b8da115916f3dc95a201fc7e8a65974a50d1ea18bf52e8ac",
+      "terminal_status": "failed",
+      "error": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+      "warnings": [],
+      "pending_proposal_present": false,
+      "assessment_scope": "Failed run proposals are useful partials, not clean completions.",
+      "accepted_body_byte_equal": true,
+      "accepted_body_sha256": "d8b44535883bdcfa67aeeb94a3fc8905ef854cd5bef708860156a14e9e00672c",
+      "unrelated_edits": {
+        "accepted_changed_characters": 0,
+        "protected_candidate_changes": null,
+        "scope_note": "Complete live proposal is authorized; generated prose not accepted student body."
+      },
+      "words": {
+        "whole_proposal": null,
+        "assignment_target": "450 words",
+        "section_budget_note": "150-word section allocations soft; reviewer turns them into strict failure criteria in several cases. Do not equate them with 450-word whole-assignment target."
+      },
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "result": "not-scored",
+          "reason": "No rewrite expected after preflight refusal."
+        },
+        {
+          "id": "long_mandatory_body",
+          "result": "met_in_receipt",
+          "reason": "Full body intact; immediate failed start checkpoint. No provider request counter to independently establish zero calls; configuration tool probe did occur."
+        }
+      ],
+      "citation_support": {
+        "valid_source_ids": [
+          1,
+          2
+        ],
+        "used_marker_ids": [],
+        "unresolved_source_ids": [],
+        "excerpt_exact_support": [
+          {
+            "id": 1,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 2,
+            "source_id": 1,
+            "revision_id": 1,
+            "exact_support": true
+          },
+          {
+            "id": 3,
+            "source_id": 2,
+            "revision_id": 2,
+            "exact_support": true
+          }
+        ],
+        "semantic_support": "See evidence_citation score and material findings; syntactically canonical markers may still reference wrong identities."
+      },
+      "duplicates": {
+        "exact_duplicate_comments": 0,
+        "semantic_duplicate_comment_extras": "not-applicable",
+        "comments_before": 0,
+        "comments_after": 0,
+        "exact_duplicate_paragraphs": [],
+        "semantic_duplicate_sections": 0
+      },
+      "material_findings": [],
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "output_excerpt": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+          "rationale": "Expected mandatory-context refusal, no writing/review produced.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": "not-applicable",
+          "output_excerpt": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+          "rationale": "Expected mandatory-context refusal, no writing/review produced.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": "not-applicable",
+          "output_excerpt": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+          "rationale": "Expected mandatory-context refusal, no writing/review produced.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "output_excerpt": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+          "rationale": "Expected mandatory-context refusal, no writing/review produced.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": "not-applicable",
+          "output_excerpt": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+          "rationale": "Expected mandatory-context refusal, no writing/review produced.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": "not-applicable",
+          "output_excerpt": "This writing request exceeds the configured tutor context window. Your writing and saved suggestion are intact. Use a larger context window or select a smaller section before retrying.",
+          "rationale": "Expected mandatory-context refusal, no writing/review produced.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "comparison_f2": {
+        "receipt": "receipt:f2f8f94-model-corpus/long_draft_mandatory_budget--uninterrupted.json",
+        "previous_terminal": "failed",
+        "note": "Expected refusal and body preservation unchanged."
+      },
+      "recovery": "All controls uninterrupted; no new restart/user-edit preservation evidence.",
+      "receipt_group": "extra"
+    }
+  ],
+  "reviewed_count": 10,
+  "not_available_paths": [
+    "receipt:d18118b-model-planning"
+  ],
+  "conclusion": "Ten receipts covering eight distinct cases reviewed (corpus 7, remaining 1, extra 2 repeats). Seeded reviewer improves duplicate burden; useful targeted partials remain honestly failed. Material failures: excerpt IDs as source IDs in corpus targeted/multisection; wrong/nonexistent citations in deleted-source proposal; duplicated Recommendation in both multisection receipts. Extra repeat has correct citations and exact duplicated paragraph, assessed separately. Full live completed with restored personal stake but overbroad categorical sample exclusion. Literary and generated-plan not yet available.",
+  "comparison_limits": [
+    "Same synthetic corpus/model permits descriptive comparison with f2, not causal or statistically reliable improvement attribution; prompts changed and one sample per case.",
+    "Baseline full-live observations retained in prior independent report; do not overwrite initial short failed control or earlier unsupported cost/personal counting negatives.",
+    "Independent agent unblinded followup, not human review.",
+    "Source bootstrap, not independently verified signed-package acceptance.",
+    "No new provider calls/code edits; absent extra/planning receipts not awaited indefinitely.",
+    "Prior raw drafting-complete block edits are not proven data loss; no new user-edited recovery test here."
+  ],
+  "citation_contract_verification": {
+    "source_commit": "d18118b25046fb700c31c949d1cb47e561332e82",
+    "file": "backend/core/exporting.py",
+    "function": "render_citations",
+    "quote": "The editor stores a source identity, not a display number",
+    "implementation": "by_id = {int(source[\"id\"]): source for source in sources ...}; marker IDs looked up in this map; unknown IDs stay visible.",
+    "conclusion": "[@lyra:N] references source IDs, not excerpt IDs. Verified frozen source via git show; no code edit."
+  }
+}
