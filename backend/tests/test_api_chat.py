@@ -1502,8 +1502,8 @@ def test_the_largest_question_that_fits_beside_mandatory_history_is_answered(
 def test_a_pinned_anchor_shrinks_the_question_capacity(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A pinned solution step is charged like the system prompt: non-trimmable, and here large
-    # enough to push the system material past its nominal share. The question's room shrinks
+    # A pinned solution step is charged like the system prompt: non-trimmable, and the pair
+    # exceeds the system material's nominal share. The question's room shrinks
     # by exactly the anchor's cost, and the just-inside/just-outside boundaries move with it.
     window = 4096
     budget = routes_chat.plan_budget(window)
@@ -1517,9 +1517,9 @@ def test_a_pinned_anchor_shrinks_the_question_capacity(
     )
     _set_context_window(db, window)
     anchor_tokens = estimate_tokens(sessions.anchored_context(db, session_id) or "")
-    # The system prompt alone fits its 15% share; the pinned step is what carries the pair
-    # over it, so the overrun is real and is charged against the turn.
-    assert system_tokens <= budget.system < system_tokens + anchor_tokens
+    # The prompt may already exceed its nominal share as teaching instructions evolve.
+    # The anchor still adds a real overrun that must be charged against the turn.
+    assert budget.system < system_tokens + anchor_tokens
 
     # Charged on the joined system-plus-anchor string, the way the prompt is actually built.
     joined_system = estimate_tokens(
@@ -1528,6 +1528,7 @@ def test_a_pinned_anchor_shrinks_the_question_capacity(
         + (sessions.anchored_context(db, session_id) or "")
     )
     max_question_tokens = window - budget.generation - joined_system
+    assert 0 < max_question_tokens < window - budget.generation - system_tokens
     at_boundary = "q" * (max_question_tokens * 4)
     assert estimate_tokens(at_boundary) == max_question_tokens
 
@@ -1727,7 +1728,7 @@ def test_retrieval_labels_cannot_push_an_accepted_prompt_past_the_window(
         (8192, True, False, 40),  # history, short question
         (8192, False, True, 40),  # anchored, short question
         (8192, True, True, 4000),  # history and anchor and a long question together
-        (2048, True, False, 3000),  # a tight window with history and a long question
+        (2048, True, False, None),  # fill the tight window beside the current system/history
     ],
 )
 def test_an_accepted_turns_prompt_never_exceeds_the_context_window(
@@ -1738,7 +1739,7 @@ def test_an_accepted_turns_prompt_never_exceeds_the_context_window(
     window: int,
     with_history: bool,
     anchored: bool,
-    question_chars: int,
+    question_chars: int | None,
 ) -> None:
     # The invariant, exercised across the combinations that stress it: with and without
     # history, with and without a pinned anchor, and with questions from trivial to long. Every
@@ -1757,6 +1758,22 @@ def test_an_accepted_turns_prompt_never_exceeds_the_context_window(
         sessions.add_message(db, session_id, "user", "an earlier question " * 20)
         sessions.add_message(db, session_id, "assistant", "an earlier answer " * 20)
     _set_context_window(db, window)
+    if question_chars is None:
+        # Derive this accepted boundary from the current prompt instead of assuming a
+        # fixed-length question fits after teaching instructions change. The over-boundary
+        # refusal is covered separately; no context or generation limit is relaxed here.
+        history_tokens = sum(
+            estimate_tokens(message["content"])
+            for message in sessions.list_messages(db, session_id)
+        )
+        capacity = (
+            window
+            - routes_chat.plan_budget(window).generation
+            - _guide_system_tokens()
+            - history_tokens
+        )
+        assert capacity > 0
+        question_chars = capacity * 4
 
     captured: list[list[dict[str, str]]] = []
     monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Sure."))

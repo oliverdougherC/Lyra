@@ -1817,3 +1817,43 @@ def test_deck_rejects_nonstring_card_faces_before_ready(
     part = artifacts.list_parts(db, artifact_id)[0]
     assert json.loads(str(part["content"]))["front"] == "What is tested?"
     assert len(llm.calls) == 3
+
+
+def test_deck_tells_later_topics_and_retries_which_questions_are_already_covered(
+    db: sqlite3.Connection, class_id: int, llm: _StubLLM
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    llm.replies = [
+        {"topics": ["First", "Second"]},
+        _cards("Explain the first relationship?", "Compute its value?"),
+        _cards("Compare two assumptions?"),
+        _cards("Identify the limiting case?"),
+    ]
+    study.run_generation(_deck_job(artifact_id, document_id, cards_per_topic=2))
+    assert artifacts.get_artifact(db, artifact_id)["state"] == artifacts.READY
+    first_topic = str(llm.calls[1]["args"][3])
+    second_topic = str(llm.calls[2]["args"][3])
+    retry = str(llm.calls[3]["args"][3])
+    assert "Already covered questions" not in first_topic
+    assert "explain the first relationship" in second_topic
+    assert "compute its value" in second_topic
+    assert "compare two assumptions" in retry
+    assert len(llm.calls) == 4
+
+
+def test_covered_questions_are_bounded_and_count_toward_chunk_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    covered = study._covered_questions({"Explain " + str(i) + "?" for i in range(1_000)})
+    assert 0 < len(covered) <= 4_096
+    assert study._covered_questions({"x" * 5_000}) == ""
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 8192)
+    large = _flashcard_chunk("source " * 1_000)
+    small = _flashcard_chunk("a usable source")
+    ceiling = study._prompt_tokens(study._flashcard_messages("topic", 2, [large]))
+    monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
+    assert study._trim_chunks(config, "topic", 2, [large]) == [large]
+    assert study._trim_chunks(config, "topic", 2, [large, small], covered=covered) == [small]
+    messages = study._flashcard_messages("topic", 2, [small], covered=covered)
+    assert study._prompt_tokens(messages) <= ceiling
