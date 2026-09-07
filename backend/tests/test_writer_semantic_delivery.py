@@ -48,7 +48,7 @@ def test_revision_receives_full_source_and_a_correction_contract(
                 }
             )
         captured.extend(messages)
-        return "Distinct passage 1. " + "The survey measured ridership. " * 15
+        return '{"edits": []}'
 
     monkeypatch.setattr(writer_pipeline, "_complete", complete)
     writer_pipeline._review_live_chunks(
@@ -85,7 +85,19 @@ def test_targeted_correction_does_not_expand_to_an_allocated_plan_budget(
 
     def complete(*args, **kwargs):
         calls.append(args)
-        return "## Evidence\n\nI want the counts to answer only what was measured."
+        original = args[1][-1]["content"].split(
+            "Existing passage; preserve unrelated wording exactly:\n"
+        )[-1]
+        return json.dumps(
+            {
+                "edits": [
+                    {
+                        "before": original,
+                        "after": "## Evidence\n\nI want counts to answer only what was measured.",
+                    }
+                ]
+            }
+        )
 
     monkeypatch.setattr(writer_pipeline, "_complete", complete)
     writer_pipeline._run_section(
@@ -130,10 +142,11 @@ def test_targeted_explicit_length_still_requires_completion(db, targeted, monkey
 
     def complete(*args, **kwargs):
         calls.append(args)
-        return (
-            "## Evidence\n\nA very short correction."
-            if len(calls) == 1
-            else " More support is needed."
+        original = args[1][-1]["content"].split(
+            "Existing passage; preserve unrelated wording exactly:\n"
+        )[-1]
+        return json.dumps(
+            {"edits": [{"before": original, "after": "## Evidence\n\nA very short correction."}]}
         )
 
     monkeypatch.setattr(writer_pipeline, "_complete", complete)
@@ -148,5 +161,5 @@ def test_targeted_explicit_length_still_requires_completion(db, targeted, monkey
         "Evidence",
         target_words=150,
     )
-    assert len(calls) > 1
+    assert len(calls) == 1
     assert incomplete

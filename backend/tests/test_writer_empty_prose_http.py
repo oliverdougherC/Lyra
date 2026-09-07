@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from scripts.eval_writer import ROOT, DesktopBackend, capture, seed
+from scripts.eval_writer import ROOT, DesktopBackend, capture, seed, source_digest
 from scripts.writer_eval_provider import FaultProvider
 
 
@@ -24,6 +24,8 @@ class _EmptyRevisionProvider(FaultProvider):
         self.revision_snapshots: list[dict[str, Any]] = []
         self.revision_prompts: list[str] = []
         self.assessments = 0
+        self.revision_protocol: str | None = None
+        self.revision_response: object = None
         owner = self
         ordinary_handler = self.server.RequestHandlerClass
 
@@ -70,12 +72,29 @@ class _EmptyRevisionProvider(FaultProvider):
                         }
                     )
                     event = "actionable_overall_assessment"
-                elif owner.assessments and not spec and "revise only" in prompt.lower():
+                elif owner.assessments and (
+                    name == "writer_scoped_revision"
+                    or (not spec and "revise only" in prompt.lower())
+                ):
                     if owner.before_revision is None:
                         raise RuntimeError("Revision snapshot callback was not configured")
                     owner.revision_snapshots.append(owner.before_revision())
                     owner.revision_prompts.append(prompt)
-                    content = ""
+                    if name == "writer_scoped_revision":
+                        paragraph = next(
+                            b
+                            for b in owner.revision_snapshots[-1]["blocks"]
+                            if b["stable_key"] == "1:p1"
+                        )
+                        owner.revision_protocol = "scoped_exact_span_empty_replacement"
+                        owner.revision_response = {
+                            "edits": [{"before": paragraph["content"], "after": ""}]
+                        }
+                        content = json.dumps(owner.revision_response)
+                    else:
+                        owner.revision_protocol = "plain_empty_prose"
+                        owner.revision_response = ""
+                        content = ""
                     event = "empty_paragraph_revision"
                 else:
                     # The ordinary provider still handles probes, research, paragraph
@@ -130,6 +149,7 @@ def test_empty_requested_paragraph_revision_fails_without_erasing_saved_prose(tm
     corpus = json.loads((ROOT / "scripts/eval_corpora/writer_quality.v1.json").read_text())
     case = dict(next(c for c in corpus["cases"] if c["id"] == "full_live_draft_from_student_notes"))
     case.pop("plan")  # Exercise the actual model-facing planning stages as well.
+    source_hash_before = source_digest(ROOT)
     provider = _EmptyRevisionProvider()
     backend = DesktopBackend(tmp_path, ROOT, embedding_port=provider.server.server_port)
     try:
@@ -164,6 +184,11 @@ def test_empty_requested_paragraph_revision_fails_without_erasing_saved_prose(tm
         (tmp_path / "empty-revision-http-evidence.json").write_text(
             json.dumps(
                 {
+                    "source_root": str(ROOT),
+                    "source_sha256_at_start": source_hash_before,
+                    "source_sha256_at_end": source_digest(ROOT),
+                    "empty_revision_protocol": provider.revision_protocol,
+                    "empty_revision_response": provider.revision_response,
                     "start_response": started,
                     "provider_events": provider.requests,
                     "before_empty_revision": provider.revision_snapshots,
@@ -184,7 +209,22 @@ def test_empty_requested_paragraph_revision_fails_without_erasing_saved_prose(tm
         revision_request = next(
             r for r in provider.requests if r.get("event") == "empty_paragraph_revision"
         )
-        assert revision_request["response_format"] is None  # Prose, never a JSON schema.
+        if provider.revision_protocol == "plain_empty_prose":
+            assert revision_request["response_format"] is None
+            assert provider.revision_response == ""
+        else:
+            assert provider.revision_protocol == "scoped_exact_span_empty_replacement"
+            assert (
+                revision_request["response_format"]["json_schema"]["name"]
+                == "writer_scoped_revision"
+            )
+            original_paragraph = next(
+                b for b in provider.revision_snapshots[0]["blocks"] if b["stable_key"] == "1:p1"
+            )
+            assert provider.revision_response == {
+                "edits": [{"before": original_paragraph["content"], "after": ""}]
+            }
+        assert source_digest(ROOT) == source_hash_before, "Backend source changed during the test"
         assessment_index = events.index("actionable_overall_assessment")
         assert (
             sum(r["stream"] and r["schema"] is None for r in provider.requests[:assessment_index])

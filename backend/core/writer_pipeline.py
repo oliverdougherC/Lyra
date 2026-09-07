@@ -1123,6 +1123,46 @@ def _live_block_by_key(
     )
 
 
+def _apply_scoped_revision(original: str, response: str, source_ids: list[int]) -> str:
+    """Apply only uniquely quoted, nonoverlapping model corrections to the original."""
+    payload = replies.loads_object(response)
+    edits = payload.get("edits") if payload else None
+    if not isinstance(edits, list):
+        raise LyraError("The correction was unreadable. Saved writing was kept.")
+    spans = []
+    for edit in edits:
+        if (
+            not isinstance(edit, dict)
+            or not isinstance(edit.get("before"), str)
+            or not isinstance(edit.get("after"), str)
+        ):
+            raise LyraError("The correction contained an invalid edit. Saved writing was kept.")
+        before = edit["before"]
+        if (
+            not before
+            or original.find(before) < 0
+            or original.find(before) != original.rfind(before)
+        ):
+            raise LyraError(
+                "The correction did not identify one exact passage. Saved writing was kept."
+            )
+        try:
+            after = source_ledger.normalize_model_citations(
+                mathnorm.normalize(edit["after"]), source_ids
+            )
+        except ValueError as exc:
+            raise LyraError(str(exc)) from exc
+        start = original.index(before)
+        spans.append((start, start + len(before), after))
+    spans.sort()
+    if any(left[1] > right[0] for left, right in zip(spans, spans[1:], strict=False)):
+        raise LyraError("The correction contained overlapping edits. Saved writing was kept.")
+    result = original
+    for start, end, after in reversed(spans):
+        result = result[:start] + after + result[end:]
+    return result
+
+
 def _writer_evidence_context(
     conn: sqlite3.Connection, class_id: int, entries: list[dict[str, object]]
 ) -> str:
@@ -1560,7 +1600,7 @@ def _review_live_chunks(
             ).strip()
             section_ref = str(current["section_ref"] or "")
             section_plan = _section_plan(plan, section_ref, str(current["heading"] or "")) or {}
-            revised = _complete(
+            correction = _complete(
                 config,
                 prompts.build_paragraph_revision_prompt(
                     str(artifact["title"]),
@@ -1575,9 +1615,18 @@ def _review_live_chunks(
                 target_words=max(
                     int(current["target_words"] or 180), len(str(current["content"]).split())
                 ),
+                schema=prompts.SCOPED_REVISION_SCHEMA,
                 enable_thinking=False,
             )
-            normalized_revision = mathnorm.normalize(revised.strip())
+            revised = _apply_scoped_revision(
+                str(current["content"]),
+                correction,
+                [
+                    int(source["id"])
+                    for source in _ledger_entries(conn, class_id, section_plan, section_ref)
+                ],
+            )
+            normalized_revision = revised.strip()
             if not normalized_revision:
                 metadata["overall_assessment"]["completed"] = False
                 metadata["overall_assessment"]["revision_skipped"] = (
@@ -1929,6 +1978,7 @@ def _section_stage(
     capabilities = writer_budgets.get_writer_capabilities(conn, class_id)
     if (
         plan is not None
+        and not job.section_refs  # exact correction spans must be read and applied serially
         and capabilities.parallel_requests
         and capabilities.parallel_concurrency > 1
         and len(targets) > 1
@@ -3163,45 +3213,64 @@ def _run_section(
         ledger_block=_writer_evidence_context(conn, class_id, ledger),
         preserve_existing=not target.is_empty,
     )
+    scoped = bool(job.section_refs and not target.is_empty and reply_override is None)
     truncated: list[bool] = []
-    reply = (
-        reply_override
-        if reply_override is not None
-        else _complete(config, messages, target_words, truncated)
-    )
-    completion_target = target_words
-    if job.section_refs and not target.is_empty:
-        # A focused edit is not a request to fill an allocated drafting quota.
+    if scoped:
+        response = _complete(
+            config,
+            prompts.build_paragraph_revision_prompt(
+                str(artifact["title"]),
+                document_map="\n\n".join(message["content"] for message in messages[1:]),
+                section_plan=prompts.format_plan_block(plan, number),
+                passage=target.text,
+                feedback=job.instruction or "Apply the requested correction.",
+                evidence=_writer_evidence_context(conn, class_id, ledger),
+            ),
+            schema=prompts.SCOPED_REVISION_SCHEMA,
+        )
+        reply = _apply_scoped_revision(
+            target.text, response, [int(source["id"]) for source in ledger]
+        )
+        if not reply.strip():
+            raise LyraError("The correction returned no replacement prose. Saved writing was kept.")
         original_request = (job.instruction or "").split(
             "The original student requirements remain authoritative:\n"
         )[-1]
         completion_target = (
             None
             if re.search(
-                r"\b(?:at most|no more than|under|up to|maximum)\b", original_request, re.I
+                r"\b(?:at most|no more than|under|up to|maximum)\s+[0-9,]+\s+words?\b",
+                original_request,
+                re.I,
             )
             else briefs.length_target_words(original_request, require_unit=True)
         )
-    reply, incomplete = _finish_section_generation(
-        conn,
-        job,
-        config,
-        messages,
-        reply,
-        bool(truncated),
-        completion_target,
-        number,
-        title,
-    )
-    # Normalized where it lands, so the stored body converges on the `$` delimiters the
-    # editor, Pandoc, and the chat renderer all read. A model writing `\(x\)` otherwise
-    # ships a section that renders as literal backslashes in the editor and in the PDF.
-    reply = mathnorm.normalize(reply)
-    if not reply or reply == target.text.strip():
+        incomplete = bool(
+            completion_target and _word_count(reply) < completion_target * SECTION_COMPLETION_RATIO
+        )
+    else:
+        reply = (
+            reply_override
+            if reply_override is not None
+            else _complete(config, messages, target_words, truncated)
+        )
+        reply, incomplete = _finish_section_generation(
+            conn,
+            job,
+            config,
+            messages,
+            reply,
+            bool(truncated),
+            target_words,
+            number,
+            title,
+        )
+        reply = mathnorm.normalize(reply)
+        reply = source_ledger.normalize_model_citations(
+            reply, [int(source["id"]) for source in source_ledger.list_sources(conn, class_id)]
+        )
+    if not reply or reply.strip() == target.text.strip():
         return False, incomplete
-    reply = source_ledger.normalize_model_citations(
-        reply, [int(source["id"]) for source in source_ledger.list_sources(conn, class_id)]
-    )
 
     # A section replacement must not smuggle neighboring sections into its span.
     # Use the editor's heading parser so fenced code is not mistaken for structure.
@@ -3224,6 +3293,10 @@ def _run_section(
                 "The existing writing and saved proposal were kept."
             )
         allowed_headings.remove(heading)
+    if scoped:
+        fresh = sections.extract(_review_body(conn, part_id), number)
+        if fresh is None or fresh.text != target.text:
+            raise LyraError("The passage changed during correction. The newer writing was kept.")
     # Sections carry their trailing separation; a stripped model reply must not glue
     # the next heading onto its last paragraph.
     replacement = reply + ("\n" if not reply.endswith("\n") else "")

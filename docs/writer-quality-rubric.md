@@ -226,3 +226,9 @@ relied-on historical source context retained together. Reviewer feedback is chec
 those sources; student notes provide voice and personal experience, not a whitelist of facts.
 Targeted corrections do not expand to approximate plan allocations unless the student requests
 a length; upper limits are not minimums. Stream, context and explicit completion checks remain.
+
+Corrections now return exact quoted before/after spans. Ambiguous, overlapping, stale or
+unknown-source edits fail without applying them. Empty whole-passage replacements remain
+failures; unchanged text outside the accepted spans stays byte-for-byte intact. The review
+feedback is checked rather than automatically executed, and explicit requested lengths remain
+completion requirements. Targeted span corrections run serially against current text.

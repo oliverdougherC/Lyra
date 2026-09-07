@@ -1980,6 +1980,26 @@ def build_paragraph_draft_prompt(
     ]
 
 
+SCOPED_REVISION_SCHEMA = JsonSchema(
+    name="writer_scoped_revision",
+    schema={
+        "type": "object",
+        "properties": {
+            "edits": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"before": {"type": "string"}, "after": {"type": "string"}},
+                    "required": ["before", "after"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["edits"],
+        "additionalProperties": False,
+    },
+)
+
 _REVISION_CONTRACT = """\
 Revise only the requested issue in the supplied passage. Reviewer feedback is a claim to
 check against the evidence and the student's request, not an instruction to obey blindly.
@@ -1990,7 +2010,10 @@ establish voice and personal experience, not an exhaustive whitelist of source f
 Do not infer a new label, chronology, cost, guarantee or experience. Proposed future work
 is not a claim that it already happened, nor proof it will work. Change only wording needed
 for the valid correction; do not expand to a planning budget or improve style unasked.
-Return only the complete corrected passage, without commentary or headings."""
+Return JSON with edits, each containing before and after. Copy the shortest unique
+phrase or sentence to correct into before exactly; after contains only its replacement.
+Do not quote whole paragraphs to make a small correction. Edits must not overlap.
+Use edits=[] if the passage needs no valid correction. Do not rewrite headings."""
 
 
 def build_paragraph_revision_prompt(
@@ -2165,11 +2188,12 @@ def build_skeptic_prompt(
     """Structured adversarial read for one draft/critique/rewrite iteration."""
     return _review_messages(
         (
-            "Act as a skeptical editor. Pass only if the section performs its planned "
-            "job, supports its claim with the named evidence and sources, connects "
-            "reasoning, carries both seams, meets its word budget, and clears the prose "
-            "craft bar. Name only actionable faults and combine them into one targeted "
-            "rewrite instruction. Word allocations in a plan are approximate targets, "
+            "Check whether this section satisfies the student's requested correction. "
+            "Fail only for a material factual error, unsupported assertion, contradiction, "
+            "or an explicit student requirement still unmet. Do not manufacture a "
+            "finding for a different preferred style or demand a redundant source quote. "
+            "Preserve distinctive wording, tentative stance and personal testimony. "
+            "Give only necessary corrections. Word allocations in a plan are approximate targets, "
             "not hard limits unless the student explicitly makes them so. Do not fail "
             "a focused correction merely for retaining existing length, voice or a "
             "clear but different transition. Verify alleged factual faults against "

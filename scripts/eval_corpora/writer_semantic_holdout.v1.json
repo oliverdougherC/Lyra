@@ -1,5 +1,5 @@
 {
-  "version": "writer-semantic-holdout.v1",
+  "version": "writer-quality.v1",
   "synthetic_only": true,
   "description": "Two independently authored synthetic holdout fixtures. No model output or execution evidence is included. Uses the existing writer-quality runner schema. Exact protected strings are explicit student requests; semantic seed adjudication remains separate from literal checks. Authored without inspecting follow-up implementation changes or model outputs.",
   "dimensions": [
@@ -292,5 +292,7 @@
         "uninterrupted"
       ]
     }
-  ]
+  ],
+  "dataset_id": "writer-semantic-holdout",
+  "dataset_version": "writer-semantic-holdout.v1"
 }
