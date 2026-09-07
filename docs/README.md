@@ -23,6 +23,7 @@ history retains research/provenance and is excluded from current setup instructi
 
 | Document | Status |
 | --- | --- |
+| [Candidate native acceptance worksheet](release-acceptance-worksheet.md) | Candidate protocol; observations required |
 | [Agentic long-form drafting](agentic-drafting.md) | Maintained |
 | [System Architecture](architecture.md) | Maintained |
 | [Beta testing and first use](beta-testing.md) | Maintained |

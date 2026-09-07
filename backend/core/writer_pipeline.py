@@ -462,25 +462,85 @@ def _complete(
         # A wide input window does not call for a book-sized planning/assessment
         # object. Keep structured stages finite without relaxing cutoff validation.
         max_tokens = min(max_tokens, 4096)
-    timeout = _deadline_timeout()
-    _preflight_request(config, messages, max_tokens, schema)
-    return asyncio.run(
-        _bounded_inference(
-            client.complete(
-                config.endpoint_url,
-                config.api_key,
-                config.model,
-                messages,
-                request_timeout=timeout,
-                max_tokens=max_tokens,
-                truncated=truncated,
-                fail_on_truncation=truncated is None,
-                schema=schema,
-                temperature=client.DETERMINISTIC_TEMPERATURE if schema else None,
-                enable_thinking=False if enable_thinking is None else enable_thinking,
+    assessment = schema is prompts.SKEPTIC_SCHEMA or schema is prompts.OVERALL_ASSESSMENT_SCHEMA
+    call_messages = messages
+    for attempt in range(2 if assessment else 1):
+        cutoff: list[bool] = []
+        _preflight_request(config, call_messages, max_tokens, schema)
+        reply = asyncio.run(
+            _bounded_inference(
+                client.complete(
+                    config.endpoint_url,
+                    config.api_key,
+                    config.model,
+                    call_messages,
+                    request_timeout=_deadline_timeout(),
+                    max_tokens=max_tokens,
+                    truncated=cutoff if assessment else truncated,
+                    fail_on_truncation=not assessment and truncated is None,
+                    schema=schema,
+                    temperature=client.DETERMINISTIC_TEMPERATURE if schema else None,
+                    enable_thinking=False if enable_thinking is None else enable_thinking,
+                )
             )
-        )
-    ).strip()
+        ).strip()
+        overlong = False
+        if assessment and not cutoff:
+            payload = replies.loads_object(reply)
+            if payload is not None:
+                if schema is prompts.SKEPTIC_SCHEMA:
+                    values = [payload.get("rewrite_instruction")]
+                    faults = payload.get("faults")
+                    if isinstance(faults, list):
+                        values.extend(faults)
+                else:
+                    values = [payload.get("summary")]
+                    issues = payload.get("issues")
+                    if isinstance(issues, list):
+                        for issue in issues:
+                            if isinstance(issue, dict):
+                                values.extend(
+                                    issue.get(key)
+                                    for key in ("block_key", "problem", "revision_instruction")
+                                )
+                overlong = any(
+                    isinstance(value, str) and len(value) > prompts.ASSESSMENT_FIELD_MAX_CHARS
+                    for value in values
+                )
+        if not cutoff and not overlong:
+            return reply
+        failure = "was cut off at the output limit" if cutoff else "exceeded its text field limit"
+        if attempt == 1:
+            raise LyraError(
+                f"The automatic assessment {failure} "
+                "after one retry. Saved writing and the partial proposal were kept; "
+                "the review is incomplete."
+            )
+        run = getattr(_writer_local, "run", None)
+        if run is not None and run[1].run_id is not None:
+            writer_runs.add_warning(
+                run[0],
+                run[1].run_id,
+                code="assessment_retry_cutoff" if cutoff else "assessment_retry_field_limit",
+                message=f"Automatic assessment {schema.name} {failure}; retried once "
+                "with the same output budget. The first assessment was not accepted.",
+            )
+        # Retry the same evidence under the same cap and absolute run deadline. Never
+        # feed a partial assessment back as evidence or accept it as a verdict.
+        call_messages = [
+            *messages,
+            {
+                "role": "user",
+                "content": (
+                    f"The previous assessment {failure}. "
+                    "Return a fresh complete JSON assessment with concise final findings only. "
+                    "Keep every text field within 2000 characters. Include only the shortest "
+                    "source quote needed for each factual finding, without deliberation. "
+                    "Use empty findings when no material correction is justified."
+                ),
+            },
+        ]
+    raise AssertionError("Assessment retry did not return or fail")
 
 
 def _deadline_timeout(profile: httpx.Timeout = client.BACKGROUND_TIMEOUT) -> httpx.Timeout:
@@ -1629,8 +1689,8 @@ def _review_live_chunks(
                     for source in _ledger_entries(conn, class_id, section_plan, section_ref)
                 ],
             )
-            normalized_revision = revised.strip()
-            if not normalized_revision:
+            normalized_revision = revised
+            if not normalized_revision.strip():
                 metadata["overall_assessment"]["completed"] = False
                 metadata["overall_assessment"]["revision_skipped"] = (
                     "The model returned no replacement prose, so the completed paragraph "
