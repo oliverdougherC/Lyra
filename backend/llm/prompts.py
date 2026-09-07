@@ -1373,8 +1373,9 @@ None of this is an instruction to write less. Concision is density, not brevity:
 means every sentence you write earns its place, not that you write fewer of them. When
 you are given a length to write to, reach it by developing the material - evidence,
 mechanism, worked reasoning, the objection and the answer to it - and never by padding
-and never by stopping early. A section that stops short of what it was asked for is not
-concise; it is unfinished."""
+and never by stopping early. Plan word allocations are approximate unless the student
+sets a hard constraint. A focused correction does not authorize expanding unrelated
+prose or changing a personal voice merely to reach an allocated count."""
 
 _WRITE_BODY = """\
 You are drafting one passage to insert at the cursor of a document the student is
@@ -1979,6 +1980,42 @@ def build_paragraph_draft_prompt(
     ]
 
 
+_REVISION_CONTRACT = """\
+Revise only the requested issue in the supplied passage. Reviewer feedback is a claim to
+check against the evidence and the student's request, not an instruction to obey blindly.
+Keep every unrelated sentence, statistic, citation, distinctive phrase and first-person
+stance verbatim. If feedback misreads a source, do not enact it; return the unchanged
+passage when no valid correction remains. Sources establish external facts; student notes
+establish voice and personal experience, not an exhaustive whitelist of source facts.
+Do not infer a new label, chronology, cost, guarantee or experience. Proposed future work
+is not a claim that it already happened, nor proof it will work. Change only wording needed
+for the valid correction; do not expand to a planning budget or improve style unasked.
+Return only the complete corrected passage, without commentary or headings."""
+
+
+def build_paragraph_revision_prompt(
+    title: str,
+    *,
+    document_map: str,
+    section_plan: str,
+    passage: str,
+    feedback: str,
+    evidence: str,
+) -> list[dict[str, str]]:
+    """Keep correction separate from a new paragraph's drafting/expansion instructions."""
+    return _review_messages(
+        _REVISION_CONTRACT,
+        [
+            f"Document: {title}",
+            f"Student requirements and voice:\n{document_map}",
+            f"Section context:\n{section_plan}",
+            evidence,
+            f"Reviewer feedback to verify:\n{feedback}",
+            f"Existing passage; preserve unrelated wording exactly:\n{passage}",
+        ],
+    )
+
+
 def build_transition_review_prompt(
     title: str,
     *,
@@ -1996,7 +2033,10 @@ def build_transition_review_prompt(
             "new information. If the relationship is already clear, set needs_change "
             "false and return the next paragraph unchanged. Otherwise revise the next "
             "paragraph only, preserving its facts, citations, purpose, and approximate "
-            "length. Do not rewrite the preceding paragraph. "
+            "length. Do not rewrite the preceding paragraph. Keep all sentences except "
+            "the minimal transition wording verbatim, including the student's stance "
+            "and uncertainty. This lens has no source evidence: it must not adjudicate "
+            "or relabel facts, remove statistics, or invent causal links. "
         )
         + _JSON_ONLY,
         [
@@ -2026,6 +2066,13 @@ def build_overall_assessment_prompt(
             "and terminology against the global document map. Report only material, "
             "actionable issues. Point every issue at one stable block key and give a "
             "bounded revision instruction; never return a rewritten document. "
+            "Verify every alleged factual error against the supplied source revision "
+            "and quote the relevant source wording in the problem. A fact need not "
+            "also appear in student notes to be supported. Distinguish a proposed "
+            "future method from an assertion that it happened or is guaranteed to work. "
+            "Do not change first-person stance, personal testimony or distinctive "
+            "phrasing merely for formality. Do not file a finding you conclude is "
+            "accurate; return issues=[] when no material correction is needed. "
         )
         + _JSON_ONLY,
         [
@@ -2122,7 +2169,12 @@ def build_skeptic_prompt(
             "job, supports its claim with the named evidence and sources, connects "
             "reasoning, carries both seams, meets its word budget, and clears the prose "
             "craft bar. Name only actionable faults and combine them into one targeted "
-            "rewrite instruction. "
+            "rewrite instruction. Word allocations in a plan are approximate targets, "
+            "not hard limits unless the student explicitly makes them so. Do not fail "
+            "a focused correction merely for retaining existing length, voice or a "
+            "clear but different transition. Verify alleged factual faults against "
+            "the exact source revision; quote the support for a correction. When "
+            "evidence does not identify a label or chronology, do not invent one. "
         )
         + _JSON_ONLY,
         [
@@ -2286,7 +2338,14 @@ def build_section_prompt(
             "the exact marker [@lyra:<ID>] immediately after the supported claim; never "
             "invent, renumber, or cite an ID that is not listed."
         )
-    if target_words:
+    if target_words and preserve_existing:
+        sections.append(
+            f"The plan allocates about {target_words:,} words. This is a planning target, "
+            "not permission to expand or rewrite unaffected student prose. Follow any "
+            "explicit length request from the student; otherwise make only the requested "
+            "correction."
+        )
+    elif target_words:
         sections.append(
             f"Write about {target_words:,} words for this section. That is this "
             "section's share of the document's length, so treat it as the size the "
@@ -2307,11 +2366,7 @@ def build_section_prompt(
     return [
         {
             "role": "system",
-            "content": (
-                _SECTION_EDIT_BODY + "\n\n" + _WRITING_CRAFT
-                if preserve_existing
-                else _SECTION_PROMPT
-            ),
+            "content": (_SECTION_EDIT_BODY if preserve_existing else _SECTION_PROMPT),
         },
         {"role": "user", "content": "\n\n".join(sections)},
     ]

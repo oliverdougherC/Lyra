@@ -38,6 +38,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import sqlite3
 import threading
 import time
@@ -871,16 +872,8 @@ def _build_live_plan(
     result = retrieve(conn, class_id, query, STRUCTURE_RETRIEVAL_BUDGET)
     context_block = prompts.format_context_block([vars(chunk) for chunk in result.chunks])
     ledger = source_ledger.list_sources(conn, class_id)
-    saved_context = source_ledger.saved_source_context(
-        conn, class_id, [int(source["id"]) for source in ledger]
-    )
     if ledger:
-        context_block += (
-            "\n\n"
-            + prompts.format_ledger_block(ledger)
-            + "\nSaved source context (omitted content is not evidence of absence):\n"
-            + json.dumps(saved_context, ensure_ascii=False, sort_keys=True)
-        )
+        context_block += "\n\n" + _writer_evidence_context(conn, class_id, ledger)
     thesis_reply = _complete(
         config,
         prompts.build_plan_thesis_prompt(str(artifact["title"]), analysis, context_block),
@@ -985,7 +978,10 @@ def _live_document_map(
         "student_prose": existing_body,
         "preservation": (
             "Respect every assignment constraint even when a saved plan omits it. "
-            "Use the student's actual words and stance as the voice reference. Do not invent "
+            "Carry the student's stated personal stake into the proposal using their actual "
+            "wording, not just generic first-person recommendation language. Keep stance, "
+            "uncertainty and distinctive phrases; source-supported facts may extend beyond "
+            "the notes. Do not invent "
             "personal observations, actions, costs or methods. Distinguish proposed future "
             "work from events that actually happened; unsupported claims must be removed "
             "or qualified, not replaced with new facts."
@@ -1127,6 +1123,34 @@ def _live_block_by_key(
     )
 
 
+def _writer_evidence_context(
+    conn: sqlite3.Connection, class_id: int, entries: list[dict[str, object]]
+) -> str:
+    """Deliver cited revisions with the ledger, including facts beyond selected excerpts."""
+    supporting = {
+        int(source["id"]): [
+            int(e["source_revision_id"])
+            for e in source["excerpts"]
+            if e.get("source_revision_id") is not None
+        ]
+        for source in entries
+    }
+    return (
+        prompts.format_ledger_block(entries) + "\nSaved source passages (current and "
+        "historical revisions are distinct; omitted content is not absent evidence):\n"
+        + json.dumps(
+            source_ledger.saved_source_context(
+                conn,
+                class_id,
+                [int(source["id"]) for source in entries],
+                supporting_revision_ids=supporting,
+            ),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+
+
 def _live_paragraph_prompt(config: TutorConfig, title: str, **context) -> list[dict[str, str]]:
     """Fit optional prose in a stable order; never remove assignment, plan, or evidence.
 
@@ -1203,8 +1227,8 @@ def _draft_live_blocks(
             section_plan=json.dumps(section_plan, ensure_ascii=False, sort_keys=True),
             paragraph_plan=json.dumps(block["context"], ensure_ascii=False, sort_keys=True),
             research_block=str(section_plan.get("research_notes") or ""),
-            ledger_block=prompts.format_ledger_block(
-                _ledger_entries(conn, class_id, section_plan, section_ref)
+            ledger_block=_writer_evidence_context(
+                conn, class_id, _ledger_entries(conn, class_id, section_plan, section_ref)
             ),
             previous_paragraph=previous,
             next_paragraph_summary=next_summary,
@@ -1465,15 +1489,7 @@ def _review_live_chunks(
             {
                 "role": "user",
                 "content": (
-                    prompts.format_ledger_block(list(evidence.values()))
-                    + "\nBounded current saved source context (separate from historical "
-                    "relied-on evidence; never relabel historical support "
-                    "with current revisions):\n"
-                    + json.dumps(
-                        source_ledger.saved_source_context(conn, class_id, list(evidence)),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    )
+                    _writer_evidence_context(conn, class_id, list(evidence.values()))
                     + "\nCheck new factual claims against this evidence, the original assignment "
                     "and student prose. Identify unsupported causal conclusions, invented costs, "
                     "methods or personal experiences. Selected excerpts are partial evidence, so "
@@ -1546,29 +1562,19 @@ def _review_live_chunks(
             section_plan = _section_plan(plan, section_ref, str(current["heading"] or "")) or {}
             revised = _complete(
                 config,
-                _live_paragraph_prompt(
-                    config,
+                prompts.build_paragraph_revision_prompt(
                     str(artifact["title"]),
                     document_map=document_map,
                     section_plan=json.dumps(section_plan, ensure_ascii=False, sort_keys=True),
-                    paragraph_plan=(
-                        json.dumps(current["context"], ensure_ascii=False, sort_keys=True)
-                        + "\nRevision instruction: "
-                        + instruction
-                        + "\n\nRevise only the passage below. Preserve its voice, evidence, "
-                        "and all wording unrelated to the requested correction. Return only "
-                        "the revised passage, not a new paragraph on the same topic.\n\n"
-                        + str(current["content"])
+                    passage=str(current["content"]),
+                    feedback=instruction,
+                    evidence=_writer_evidence_context(
+                        conn, class_id, _ledger_entries(conn, class_id, section_plan, section_ref)
                     ),
-                    research_block=str(section_plan.get("research_notes") or ""),
-                    ledger_block=prompts.format_ledger_block(
-                        _ledger_entries(conn, class_id, section_plan, section_ref)
-                    ),
-                    previous_paragraph=None,
-                    next_paragraph_summary=None,
-                    target_words=int(current["target_words"] or 180),
                 ),
-                target_words=int(current["target_words"] or 180),
+                target_words=max(
+                    int(current["target_words"] or 180), len(str(current["content"]).split())
+                ),
                 enable_thinking=False,
             )
             normalized_revision = mathnorm.normalize(revised.strip())
@@ -2279,8 +2285,8 @@ def _parallel_initial_sections(
                     prompts.format_facts_block(select_active_facts(conn, class_id)),
                     target_words=target_words,
                     plan_block=prompts.format_plan_block(plan, number),
-                    ledger_block=prompts.format_ledger_block(
-                        _ledger_entries(conn, class_id, entry, number)
+                    ledger_block=_writer_evidence_context(
+                        conn, class_id, _ledger_entries(conn, class_id, entry, number)
                     ),
                     preserve_existing=not target.is_empty,
                 ),
@@ -2513,16 +2519,9 @@ def _prepare_research_section(
 
     ledger = source_ledger.list_sources(conn, class_id)
     context_block = course_context_block
-    saved_context = source_ledger.saved_source_context(
-        conn,
-        class_id,
-        [int(source["id"]) for source in _ledger_entries(conn, class_id, plan_entry, number)],
-    )
-    if saved_context:
-        context_block += (
-            "\n\nSaved source context (omitted content is not evidence of absence):\n"
-            + json.dumps(saved_context, ensure_ascii=False, sort_keys=True)
-        )
+    selected_evidence = _ledger_entries(conn, class_id, plan_entry, number)
+    if selected_evidence:
+        context_block += "\n\n" + _writer_evidence_context(conn, class_id, selected_evidence)
     if web_context:
         context_block = "\n\n".join(
             block
@@ -2733,7 +2732,9 @@ def _converge_section(
             str(artifact["title"]),
             target.text,
             prompts.format_plan_block(plan, number),
-            prompts.format_ledger_block(_ledger_entries(conn, class_id, plan_entry, number)),
+            _writer_evidence_context(
+                conn, class_id, _ledger_entries(conn, class_id, plan_entry, number)
+            ),
             _previous_tail(body, target),
             _next_heading(body, target),
         )
@@ -3051,7 +3052,7 @@ def _evaluate(
             prompts.format_brief_block(briefs.get_brief(conn, job.artifact_id)),
             prompts.format_length_block(_target_words(conn, job)),
             plan_block=prompts.format_plan_block(plan),
-            ledger_block=prompts.format_ledger_block(_ledger_entries(conn, class_id)),
+            ledger_block=_writer_evidence_context(conn, class_id, _ledger_entries(conn, class_id)),
         ),
         schema=prompts.REVISE_SCHEMA,
     )
@@ -3159,7 +3160,7 @@ def _run_section(
         prompts.format_facts_block(select_active_facts(conn, class_id)),
         target_words=target_words,
         plan_block=prompts.format_plan_block(plan, number),
-        ledger_block=prompts.format_ledger_block(ledger),
+        ledger_block=_writer_evidence_context(conn, class_id, ledger),
         preserve_existing=not target.is_empty,
     )
     truncated: list[bool] = []
@@ -3168,6 +3169,19 @@ def _run_section(
         if reply_override is not None
         else _complete(config, messages, target_words, truncated)
     )
+    completion_target = target_words
+    if job.section_refs and not target.is_empty:
+        # A focused edit is not a request to fill an allocated drafting quota.
+        original_request = (job.instruction or "").split(
+            "The original student requirements remain authoritative:\n"
+        )[-1]
+        completion_target = (
+            None
+            if re.search(
+                r"\b(?:at most|no more than|under|up to|maximum)\b", original_request, re.I
+            )
+            else briefs.length_target_words(original_request, require_unit=True)
+        )
     reply, incomplete = _finish_section_generation(
         conn,
         job,
@@ -3175,7 +3189,7 @@ def _run_section(
         messages,
         reply,
         bool(truncated),
-        target_words,
+        completion_target,
         number,
         title,
     )

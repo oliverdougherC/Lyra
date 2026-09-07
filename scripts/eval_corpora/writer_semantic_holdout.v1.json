@@ -1,0 +1,296 @@
+{
+  "version": "writer-semantic-holdout.v1",
+  "synthetic_only": true,
+  "description": "Two independently authored synthetic holdout fixtures. No model output or execution evidence is included. Uses the existing writer-quality runner schema. Exact protected strings are explicit student requests; semantic seed adjudication remains separate from literal checks. Authored without inspecting follow-up implementation changes or model outputs.",
+  "dimensions": [
+    "planning",
+    "evidence_citation",
+    "revision_precision",
+    "review_usefulness",
+    "instruction_following",
+    "student_voice"
+  ],
+  "cases": [
+    {
+      "id": "holdout_museum_label_revision",
+      "operation": "pass",
+      "brief": {
+        "assignment_type": "museum studies evaluation memo",
+        "summary": "Evaluate a fictional label-layout exercise for a collections committee. Distinguish locating an identifier from interpreting an object. Use only the supplied evaluation record and task sheet. Give a proportionate recommendation without treating the student perspective as an error.",
+        "audience": "museum collections committee",
+        "length_target": "360 words"
+      },
+      "instruction": "Revise only Evidence. Correct the unsupported claim about improved understanding, retain the supported 27-of-36 result and 30-second task accurately, and make clear what was and was not measured. Keep the sentence 'I want a label that opens a door, not one that hustles people through it.' exactly. Preserve Position and Recommendation exactly.",
+      "body": "# Leave room for the repaired bowl\n\n## Position\n\nI like the cracked blue bowl more than the polished pieces beside it. Its label says the maker repaired it twice, which is a better invitation to look closely than another date in bold type. That preference is why I am wary of treating a museum label as a machine for delivering facts. Visitors should be able to find the basics, but I do not want clarity to become an excuse for sanding the objects smooth. This memo asks whether a small layout change deserves a longer trial, not whether stories should give way to checklists.\n\n## Evidence\n\nIn the classroom session, 27 of 36 participants located the accession number within 30 seconds. The redesigned label therefore improved visitors' understanding of the collection by 75 percent. I have written that second sentence more confidently than the exercise warrants. Locating a number is useful, but it is not the same task as explaining why a repaired bowl matters. I also do not know how these participants would have done with the old layout. I want a label that opens a door, not one that hustles people through it. The evaluation should help me ask a narrower question without making the number disappear just because it is inconvenient to explain.\n\n## Recommendation\n\nMy recommendation is to keep both label versions for a short comparison before replacing the gallery labels. I would ask visitors what they noticed as well as whether they found the accession number. A fast answer can be useful without being the only answer worth collecting. The bowl's repairs should still have room in the story. That is the part of the proposal I am least willing to trade away, even if a cleaner spreadsheet would be easier to present at the committee meeting.\n",
+      "sources": [
+        {
+          "key": "label_session",
+          "title": "Synthetic classroom label exercise record",
+          "content": "This fictional session took place in the museum classroom. Thirty-six adult volunteers saw the redesigned label only. Participants were asked to point to the accession number. Twenty-seven of the 36 participants located the accession number within 30 seconds. There was no old-layout comparison group. The exercise did not measure understanding of the collection or retention of object histories. It did not establish how all gallery visitors would perform.",
+          "excerpts": [
+            {
+              "text": "This fictional session took place in the museum classroom."
+            }
+          ]
+        },
+        {
+          "key": "label_task",
+          "title": "Synthetic museum task sheet",
+          "content": "The task was: point to the accession number on the label. Record whether this happens within 30 seconds. No question about the maker, repairs, collection history, or interpretation was asked. Suggestions for a later comparison of label versions have not been tested.",
+          "excerpts": [
+            {
+              "text": "The task was: point to the accession number on the label."
+            }
+          ]
+        }
+      ],
+      "plan": {
+        "brief_analysis": "Keep the student concern about interpretation while accurately describing the narrow locating task.",
+        "thesis": "Try the layout further without equating speed with understanding.",
+        "argument_map": [
+          {
+            "claim": "Identifier location is a limited outcome, not proof of interpretation."
+          }
+        ],
+        "sections": [
+          {
+            "section_ref": "1.1",
+            "ordinal": 0,
+            "title": "Position",
+            "job": "Preserve the student stance.",
+            "claim": "Clarity should leave room for stories.",
+            "evidence": [],
+            "source_keys": [],
+            "word_budget": 120,
+            "research_notes": ""
+          },
+          {
+            "section_ref": "1.2",
+            "ordinal": 1,
+            "title": "Evidence",
+            "job": "Separate the observed locating result from the unsupported understanding claim.",
+            "claim": "The exercise reports performance on one task without an old-label comparison.",
+            "evidence": [],
+            "source_keys": [
+              "label_session",
+              "label_task"
+            ],
+            "word_budget": 120,
+            "research_notes": ""
+          },
+          {
+            "section_ref": "1.3",
+            "ordinal": 2,
+            "title": "Recommendation",
+            "job": "Preserve the proposed comparison and interpretive priorities.",
+            "claim": "Compare before replacing.",
+            "evidence": [],
+            "source_keys": [
+              "label_task"
+            ],
+            "word_budget": 120,
+            "research_notes": ""
+          }
+        ]
+      },
+      "pass_payload": {
+        "depth": "quick",
+        "sections": [
+          "1.2"
+        ],
+        "instruction": "Revise only Evidence. Correct the unsupported claim about improved understanding, retain the supported 27-of-36 result and 30-second task accurately, and make clear what was and was not measured. Keep the sentence 'I want a label that opens a door, not one that hustles people through it.' exactly. Preserve Position and Recommendation exactly."
+      },
+      "seeds": [
+        {
+          "id": "museum_understanding_effect",
+          "kind": "unsupported_claim",
+          "quote": "The redesigned label therefore improved visitors' understanding of the collection by 75 percent.",
+          "expected": "Remove the improvement/understanding inference. Preserve the result as 27 of 36 volunteers locating the accession number within 30 seconds; there was no old-layout comparison and no understanding measure."
+        },
+        {
+          "id": "museum_valid_statistic",
+          "kind": "supported_fact_beyond_selected_excerpt",
+          "quote": "27 of 36 participants located the accession number within 30 seconds",
+          "expected": "Keep this supported statistic, denominator and task. It appears in full saved source content beyond the initially selected excerpt; do not label it invented or replace it with an unknown participant count."
+        },
+        {
+          "id": "museum_student_stance",
+          "kind": "student_prose_preservation",
+          "quote": "I want a label that opens a door, not one that hustles people through it.",
+          "expected": "Retain this exact sentence and the skeptical first-person stance. Do not turn the passage into an endorsement of speed as the only outcome."
+        }
+      ],
+      "expected": {
+        "body_unchanged": true,
+        "protected_passages": [
+          "I like the cracked blue bowl more than the polished pieces beside it. Its label says the maker repaired it twice, which is a better invitation to look closely than another date in bold type. That preference is why I am wary of treating a museum label as a machine for delivering facts. Visitors should be able to find the basics, but I do not want clarity to become an excuse for sanding the objects smooth. This memo asks whether a small layout change deserves a longer trial, not whether stories should give way to checklists.",
+          "My recommendation is to keep both label versions for a short comparison before replacing the gallery labels. I would ask visitors what they noticed as well as whether they found the accession number. A fast answer can be useful without being the only answer worth collecting. The bowl's repairs should still have room in the story. That is the part of the proposal I am least willing to trade away, even if a cleaner spreadsheet would be easier to present at the committee meeting.",
+          "I want a label that opens a door, not one that hustles people through it."
+        ],
+        "required_findings": [],
+        "forbidden_output": [
+          "The redesigned label therefore improved visitors' understanding of the collection by 75 percent."
+        ],
+        "source_revision_invariants": []
+      },
+      "recovery_scenarios": [
+        "uninterrupted"
+      ]
+    },
+    {
+      "id": "holdout_seed_notebook_historical_method",
+      "operation": "pass",
+      "brief": {
+        "assignment_type": "community science methods reflection",
+        "summary": "Use the fictional seed-bank records to distinguish a historical observation from an unperformed future comparison. Preserve lot, count, observation period and supporting source revision. State the evidence limits without discarding the student plan or converting it into past methods.",
+        "audience": "community garden volunteer group",
+        "length_target": "360 words"
+      },
+      "instruction": "Revise only Record and next test. Correct the unsupported account of the March method, retain the March lot Alder count as historical revision-1 evidence, and distinguish it from the newer revision-2 record at the same source address. Preserve exactly the sentence beginning 'For June, I propose'. Keep that comparison in the future; do not claim it has happened or that soaking has a demonstrated benefit. Preserve Question and Closing exactly.",
+      "body": "# Keep the notebook's tenses straight\n\n## Question\n\nThe seed envelopes have more handwriting than seeds in some years. I want the garden group to keep that uneven record rather than pretend every tray was part of a designed experiment. The March result from lot Alder is worth reporting because someone counted it, not because it settles the best way to germinate every stored seed. My question is what we can responsibly say from that record and what a better next test could ask. Those are related questions, but they belong in different tenses.\n\n## Record and next test\n\nThe March record reported 8 germinations among 40 seeds from lot Alder after 14 days. The March test randomly assigned seeds to soaking and no-soaking groups, proving soaking improved germination. I want to keep the count because it is the observation we actually have, but my explanation of the method needs checking. The record at this address has since changed, and I do not want the newer page to make the old notebook entry vanish. For June, I propose randomly assigning seeds from one lot to soaking and no-soaking groups, then using the same observation period for both. That last sentence is a proposal. It should not quietly become a description of what the volunteers already did.\n\n## Closing\n\nI would put the old result and the new protocol on separate pages in the shared notebook. That is not bureaucratic tidiness to me. It gives the next volunteer a fair chance of knowing which statement is an observation and which is an invitation to try something. If the June comparison never happens, the March count should still be readable, and the proposed method should still be marked as a plan. A careful record can admit unfinished work without apologizing for it.\n",
+      "sources": [
+        {
+          "key": "seed_notebook",
+          "title": "Synthetic seed notebook, rolling entry",
+          "content": "Revision 1, March entry. The March record reported 8 germinations among 40 seeds from lot Alder after 14 days. All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used. This single-tray observation cannot estimate a benefit from soaking. The entry contains no result from a later comparative experiment.",
+          "excerpts": [
+            {
+              "text": "The March record reported 8 germinations among 40 seeds from lot Alder after 14 days."
+            },
+            {
+              "text": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used."
+            }
+          ]
+        },
+        {
+          "key": "june_proposal",
+          "title": "Synthetic June comparison proposal",
+          "content": "This is a proposed June protocol, not a completed experiment. If enough seeds from one lot are available, randomly assign them to soaking and no-soaking groups. Use the same observation period for both groups. No germination results exist for this comparison, and no benefit of soaking has been established by it.",
+          "excerpts": [
+            {
+              "text": "This is a proposed June protocol, not a completed experiment."
+            }
+          ]
+        }
+      ],
+      "source_mutations": [
+        {
+          "source_key": "seed_notebook",
+          "operation": "replace",
+          "timing": "after_excerpt_capture_before_run",
+          "content": "Revision 2, April entry. A separate tray from lot Birch produced 21 germinations among 30 untreated seeds after 10 days. This entry describes lot Birch in April, not lot Alder in March. It is not a correction of the earlier count and does not report any soaking comparison. No randomized comparison has been completed."
+        }
+      ],
+      "plan": {
+        "brief_analysis": "Keep March source evidence tied to its saved revision and distinguish observation, later record and future proposal.",
+        "thesis": "An honest notebook preserves the difference between what happened and what should be tested.",
+        "argument_map": [
+          {
+            "claim": "The March count is a historical single-tray observation."
+          },
+          {
+            "claim": "The June design can be proposed without being described as completed."
+          }
+        ],
+        "sections": [
+          {
+            "section_ref": "1.1",
+            "ordinal": 0,
+            "title": "Question",
+            "job": "Preserve the first-person case for careful records.",
+            "claim": "Observation and future design belong in different tenses.",
+            "evidence": [],
+            "source_keys": [],
+            "word_budget": 120,
+            "research_notes": ""
+          },
+          {
+            "section_ref": "1.2",
+            "ordinal": 1,
+            "title": "Record and next test",
+            "job": "Correct March methods, attribute historical evidence and preserve the future comparison.",
+            "claim": "The old count does not establish soaking effects.",
+            "evidence": [],
+            "source_keys": [
+              "seed_notebook",
+              "june_proposal"
+            ],
+            "word_budget": 120,
+            "research_notes": ""
+          },
+          {
+            "section_ref": "1.3",
+            "ordinal": 2,
+            "title": "Closing",
+            "job": "Preserve the student recommendation for the notebook.",
+            "claim": "Separate observations from invitations to test.",
+            "evidence": [],
+            "source_keys": [
+              "june_proposal"
+            ],
+            "word_budget": 120,
+            "research_notes": ""
+          }
+        ]
+      },
+      "pass_payload": {
+        "depth": "quick",
+        "sections": [
+          "1.2"
+        ],
+        "instruction": "Revise only Record and next test. Correct the unsupported account of the March method, retain the March lot Alder count as historical revision-1 evidence, and distinguish it from the newer revision-2 record at the same source address. Preserve exactly the sentence beginning 'For June, I propose'. Keep that comparison in the future; do not claim it has happened or that soaking has a demonstrated benefit. Preserve Question and Closing exactly."
+      },
+      "seeds": [
+        {
+          "id": "seed_invented_historical_method",
+          "kind": "unsupported_claim",
+          "quote": "The March test randomly assigned seeds to soaking and no-soaking groups, proving soaking improved germination.",
+          "expected": "Replace the invented March randomization/comparison with the revision-1 single untreated tray method. Do not claim a soaking benefit."
+        },
+        {
+          "id": "seed_revision_identity",
+          "kind": "source_changed",
+          "quote": "The March record reported 8 germinations among 40 seeds from lot Alder after 14 days.",
+          "expected": "Keep 8 of 40, lot Alder, March and 14 days attributed to saved revision 1. Do not replace these with the April lot Birch 21-of-30 result or attach the March claim to revision 2. Acknowledge that the current page describes a different later observation."
+        },
+        {
+          "id": "seed_future_method",
+          "kind": "future_proposal_preservation",
+          "quote": "For June, I propose randomly assigning seeds from one lot to soaking and no-soaking groups, then using the same observation period for both.",
+          "expected": "Retain the exact June proposal sentence, including propose and the future context. Do not delete it as fabricated historical method and do not rewrite it as something already conducted."
+        }
+      ],
+      "expected": {
+        "body_unchanged": true,
+        "protected_passages": [
+          "The seed envelopes have more handwriting than seeds in some years. I want the garden group to keep that uneven record rather than pretend every tray was part of a designed experiment. The March result from lot Alder is worth reporting because someone counted it, not because it settles the best way to germinate every stored seed. My question is what we can responsibly say from that record and what a better next test could ask. Those are related questions, but they belong in different tenses.",
+          "I would put the old result and the new protocol on separate pages in the shared notebook. That is not bureaucratic tidiness to me. It gives the next volunteer a fair chance of knowing which statement is an observation and which is an invitation to try something. If the June comparison never happens, the March count should still be readable, and the proposed method should still be marked as a plan. A careful record can admit unfinished work without apologizing for it.",
+          "For June, I propose randomly assigning seeds from one lot to soaking and no-soaking groups, then using the same observation period for both."
+        ],
+        "required_findings": [],
+        "forbidden_output": [
+          "The March test randomly assigned seeds to soaking and no-soaking groups, proving soaking improved germination."
+        ],
+        "source_revision_invariants": [
+          {
+            "source_key": "seed_notebook",
+            "excerpt_text": "The March record reported 8 germinations among 40 seeds from lot Alder after 14 days.",
+            "supporting_revision": 1,
+            "must_resolve_saved_content": true,
+            "must_not_relabel_latest": true
+          },
+          {
+            "source_key": "seed_notebook",
+            "excerpt_text": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used.",
+            "supporting_revision": 1,
+            "must_resolve_saved_content": true,
+            "must_not_relabel_latest": true
+          }
+        ]
+      },
+      "recovery_scenarios": [
+        "uninterrupted"
+      ]
+    }
+  ]
+}
