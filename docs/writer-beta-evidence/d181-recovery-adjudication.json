@@ -1,0 +1,732 @@
+{
+  "version": "writer-recovery-adjudication.v1",
+  "tested_sha": "d18118b25046fb700c31c949d1cb47e561332e82",
+  "reviewer": "independent Codex recovery audit",
+  "review_type": "read-only evidence and deterministic invariant audit",
+  "human_review": false,
+  "semantic_acceptance": null,
+  "model_quality_acceptance": null,
+  "evidence_kind": "synthetic-writer-v1 controlled HTTP provider; actual source/frozen backend subprocesses",
+  "scope_note": "Only the named d181 receipts. Not acceptance of later guard changes. No source or harness edits and no new model calls.",
+  "cases": [
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "uninterrupted",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--uninterrupted.json",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "classification": "control",
+      "intervention_observed": false,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "restart_inference",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--restart_inference.json",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "settled_work": {
+        "eligible_keys": [],
+        "current_successor_exact_preserved": [],
+        "changed_keys": [],
+        "missing_keys": []
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "restart_between_sections",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--restart_between_sections.json",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "classification": "not_run",
+      "intervention_observed": false,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "adjudication": "not_run; completed control-like result cannot substitute for the missed boundary"
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "restart_review",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--restart_review.json",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "settled_work": {
+        "eligible_keys": [
+          "1:p1",
+          "2:p1"
+        ],
+        "current_successor_exact_preserved": [
+          "1:p1",
+          "2:p1"
+        ],
+        "changed_keys": [],
+        "missing_keys": []
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "edit_restart",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--edit_restart.json",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": "completed_live_block_before_user_edit",
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": false,
+      "proposal_equals_packaged_uninterrupted": false,
+      "errors": [],
+      "settled_work": {
+        "eligible_keys": [
+          "1:p1"
+        ],
+        "current_successor_exact_preserved": [
+          "1:p1"
+        ],
+        "changed_keys": [],
+        "missing_keys": []
+      },
+      "user_edit": {
+        "current_suggestion_run_id": 1,
+        "belongs_to_latest_run": true,
+        "edited_content_sha256": "aeb5407d72f516ece54e3408cab17c71fab69eb5d21ee43f7ee1f62e1874019c",
+        "expected_user_revision": 5,
+        "current_exact_matching_block_ids": [
+          1
+        ],
+        "historical_original_block_preserved": true,
+        "pending_contains_edited_content": true,
+        "difference_from_control": "Authorized synthetic student edit, not a recovery duplication or model review rewrite."
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "edit_cancel_retry",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--edit_cancel_retry.json",
+      "run_id": 2,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": "completed_live_block_before_user_edit",
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": false,
+      "proposal_equals_packaged_uninterrupted": false,
+      "errors": [],
+      "predecessor": {
+        "run_id": 1,
+        "status": "cancelled",
+        "distinct_successor": true,
+        "terminal_row_unchanged_through_successor": true,
+        "error_message": null
+      },
+      "settled_work": {
+        "eligible_keys": [
+          "1:p1"
+        ],
+        "current_successor_exact_preserved": [
+          "1:p1"
+        ],
+        "changed_keys": [],
+        "missing_keys": []
+      },
+      "user_edit": {
+        "current_suggestion_run_id": 2,
+        "belongs_to_latest_run": true,
+        "edited_content_sha256": "aeb5407d72f516ece54e3408cab17c71fab69eb5d21ee43f7ee1f62e1874019c",
+        "expected_user_revision": 5,
+        "current_exact_matching_block_ids": [
+          3
+        ],
+        "historical_original_block_preserved": true,
+        "pending_contains_edited_content": true,
+        "difference_from_control": "Authorized synthetic student edit, not a recovery duplication or model review rewrite."
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "cancel_retry",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--cancel_retry.json",
+      "run_id": 2,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "predecessor": {
+        "run_id": 1,
+        "status": "cancelled",
+        "distinct_successor": true,
+        "terminal_row_unchanged_through_successor": true,
+        "error_message": null
+      },
+      "settled_work": {
+        "eligible_keys": [],
+        "current_successor_exact_preserved": [],
+        "changed_keys": [],
+        "missing_keys": []
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "rate_limit",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--rate_limit.json",
+      "run_id": 2,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "predecessor": {
+        "run_id": 1,
+        "status": "failed",
+        "distinct_successor": true,
+        "terminal_row_unchanged_through_successor": true,
+        "error_message": "The tutor endpoint returned an error."
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "transient",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--transient.json",
+      "run_id": 2,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "predecessor": {
+        "run_id": 1,
+        "status": "failed",
+        "distinct_successor": true,
+        "terminal_row_unchanged_through_successor": true,
+        "error_message": "The tutor endpoint returned an error."
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "partial_stream",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--partial_stream.json",
+      "run_id": 2,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "predecessor": {
+        "run_id": 1,
+        "status": "failed",
+        "distinct_successor": true,
+        "terminal_row_unchanged_through_successor": true,
+        "error_message": "The tutor stream ended without confirmed completion; the partial text was kept."
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "malformed_stream",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--malformed_stream.json",
+      "run_id": 2,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "predecessor": {
+        "run_id": 1,
+        "status": "failed",
+        "distinct_successor": true,
+        "terminal_row_unchanged_through_successor": true,
+        "error_message": "The tutor stream ended without confirmed completion; the partial text was kept."
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "empty",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--empty.json",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "review_seeded_claim_and_duplicates",
+      "scenario": "uninterrupted",
+      "receipt": "receipt:d18118b-packaged-review/review_seeded_claim_and_duplicates--uninterrupted.json",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "classification": "control",
+      "intervention_observed": false,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "review_seeded_claim_and_duplicates",
+      "scenario": "restart_inference",
+      "receipt": "receipt:d18118b-packaged-review/review_seeded_claim_and_duplicates--restart_inference.json",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "settled_work": {
+        "eligible_keys": [],
+        "current_successor_exact_preserved": [],
+        "changed_keys": [],
+        "missing_keys": []
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "review_seeded_claim_and_duplicates",
+      "scenario": "restart_persistence",
+      "receipt": "receipt:d18118b-packaged-review/review_seeded_claim_and_duplicates--restart_persistence.json",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": "new_comment_observed_via_http",
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "settled_work": {
+        "eligible_keys": [],
+        "current_successor_exact_preserved": [],
+        "changed_keys": [],
+        "missing_keys": []
+      },
+      "persisted_comment_boundary": {
+        "new_ids": [
+          2
+        ],
+        "all_ids_retained": true,
+        "initial_comment_ids": [
+          1
+        ]
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "review_seeded_claim_and_duplicates",
+      "scenario": "cancel_retry",
+      "receipt": "receipt:d18118b-packaged-review/review_seeded_claim_and_duplicates--cancel_retry.json",
+      "run_id": 2,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "predecessor": {
+        "run_id": 1,
+        "status": "cancelled",
+        "distinct_successor": true,
+        "terminal_row_unchanged_through_successor": true,
+        "error_message": null
+      },
+      "settled_work": {
+        "eligible_keys": [],
+        "current_successor_exact_preserved": [],
+        "changed_keys": [],
+        "missing_keys": []
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "review_seeded_claim_and_duplicates",
+      "scenario": "rate_limit",
+      "receipt": "receipt:d18118b-packaged-review/review_seeded_claim_and_duplicates--rate_limit.json",
+      "run_id": 2,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "predecessor": {
+        "run_id": 1,
+        "status": "failed",
+        "distinct_successor": true,
+        "terminal_row_unchanged_through_successor": true,
+        "error_message": "The tutor endpoint returned an error."
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "review_seeded_claim_and_duplicates",
+      "scenario": "transient",
+      "receipt": "receipt:d18118b-packaged-review/review_seeded_claim_and_duplicates--transient.json",
+      "run_id": 2,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "predecessor": {
+        "run_id": 1,
+        "status": "failed",
+        "distinct_successor": true,
+        "terminal_row_unchanged_through_successor": true,
+        "error_message": "The tutor endpoint returned an error."
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "pass_multisection_same_model_recovery",
+      "scenario": "uninterrupted",
+      "receipt": "receipt:d18118b-packaged-section/pass_multisection_same_model_recovery--uninterrupted.json",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "classification": "control",
+      "intervention_observed": false,
+      "boundary_kind": null,
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "duplicate_paragraphs": 1,
+      "duplicate_adjudication": "One identical synthetic paragraph emitted for two requested sections is already present in source and packaged uninterrupted controls. No restart-added duplicate; this is not acceptable model-quality evidence.",
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    },
+    {
+      "case_id": "pass_multisection_same_model_recovery",
+      "scenario": "restart_between_sections",
+      "receipt": "receipt:d18118b-packaged-section/pass_multisection_same_model_recovery--restart_between_sections.json",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "classification": "observed",
+      "intervention_observed": true,
+      "boundary_kind": "selected_section_counter",
+      "body_byte_preserved": true,
+      "code_changed_during_case": false,
+      "historical_source_integrity_violations": [],
+      "duplicate_comment_signatures": 0,
+      "preexisting_or_persisted_comments_preserved": true,
+      "proposal_equals_source_uninterrupted": true,
+      "proposal_equals_packaged_uninterrupted": true,
+      "errors": [],
+      "settled_work": {
+        "eligible_keys": [],
+        "current_successor_exact_preserved": [],
+        "changed_keys": [],
+        "missing_keys": []
+      },
+      "duplicate_paragraphs": 1,
+      "duplicate_adjudication": "One identical synthetic paragraph emitted for two requested sections is already present in source and packaged uninterrupted controls. No restart-added duplicate; this is not acceptable model-quality evidence.",
+      "targeted_section_boundary": {
+        "selected_sections": [
+          "1.2",
+          "1.3"
+        ],
+        "completed_before_restart": [
+          {
+            "ref": "1.2",
+            "owned_hash": "",
+            "direct_landed": false
+          }
+        ],
+        "completed_after": [
+          {
+            "ref": "1.2",
+            "owned_hash": "",
+            "direct_landed": false
+          },
+          {
+            "ref": "1.3",
+            "owned_hash": "",
+            "direct_landed": false
+          }
+        ],
+        "same_pending_edit_id": true,
+        "settled_paragraph_occurs_in_final": true
+      },
+      "adjudication": "Observed deterministic recovery invariants hold within the captured interval; no semantic acceptance."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "coverage",
+      "finding": "Full-live restart_between_sections was not observed in the d181 frozen run. Targeted selected-section restart is observed but is a different workflow and does not close this gap."
+    },
+    {
+      "severity": "limitation",
+      "finding": "Empty fault targets first nonstream writer_section_research_notes response. Later prose and review calls complete. This does not test empty generated prose; completed outcome is not evidence that empty rewrites were accepted."
+    },
+    {
+      "severity": "resolved_audit_question",
+      "finding": "Partial/malformed failure stays failed on historical run1. Successor clean streaming calls are visible at provider events95/96 and105/106 before reviews, so sparse status polling did not prove skipped continuation. No false promotion identified."
+    },
+    {
+      "severity": "existing_targeted_guard_scope",
+      "finding": "Targeted synthetic provider emits headingless identical text for both selected sections. d181 preserves accepted original prose and no extra restart duplicates, but proposal scope/quality is not accepted; pending targeted guard changes require fresh source/package evidence."
+    },
+    {
+      "severity": "comparison_scope",
+      "finding": "Supplied comparison pairs mix source-control vs frozen-intervention axes. This audit also compares each frozen variant to its own frozen uninterrupted control, separating runtime parity from interruption effects."
+    }
+  ],
+  "not_run": [
+    {
+      "scope": "requested packaged scenario",
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "restart_between_sections",
+      "reason": "The requested durable boundary was not observed while the run was active.",
+      "receipt": "receipt:d18118b-packaged-controlled/full_live_draft_from_student_notes--restart_between_sections.json"
+    },
+    {
+      "scope": "not present in supplied packaged set",
+      "case_id": "source_history_replace",
+      "scenario": "uninterrupted",
+      "reason": "Only source-runtime receipt was supplied; source evidence cannot substitute for a frozen-sidecar run."
+    },
+    {
+      "scope": "not present in supplied packaged set",
+      "case_id": "source_history_delete",
+      "scenario": "uninterrupted",
+      "reason": "Only source-runtime receipt was supplied; source evidence cannot substitute for a frozen-sidecar run."
+    },
+    {
+      "scope": "not present in supplied packaged set",
+      "case_id": "long_draft_mandatory_budget",
+      "scenario": "uninterrupted",
+      "reason": "Only source-runtime receipt was supplied; source evidence cannot substitute for a frozen-sidecar run."
+    }
+  ],
+  "commands": [
+    {
+      "precondition": "Run from <local-path> only after final SHA and signed bundle are frozen. Do not overwrite d181 receipts. Synthetic-provider evidence only.",
+      "source": "uv run python scripts/eval_writer.py --fault-provider --retry-failures --output receipt:final-source-controlled --case full_live_draft_from_student_notes --scenario uninterrupted --scenario restart_inference --scenario restart_between_sections --scenario restart_review --scenario edit_restart --scenario edit_cancel_retry --scenario cancel_retry --scenario rate_limit --scenario transient --scenario partial_stream --scenario malformed_stream --scenario empty --timeout 60",
+      "package": "uv run python scripts/eval_writer.py --fault-provider --retry-failures --output receipt:final-packaged-controlled --case full_live_draft_from_student_notes --scenario uninterrupted --scenario restart_inference --scenario restart_between_sections --scenario restart_review --scenario edit_restart --scenario edit_cancel_retry --scenario cancel_retry --scenario rate_limit --scenario transient --scenario partial_stream --scenario malformed_stream --scenario empty --timeout 60 --backend-executable <local-path>",
+      "comparison": "uv run python scripts/compare_writer_evals.py --baseline receipt:final-source-controlled --candidate receipt:final-packaged-controlled --output receipt:final-source-package-comparison.json"
+    },
+    {
+      "precondition": "Close source-history/tight-context frozen coverage separately.",
+      "package": "uv run python scripts/eval_writer.py --fault-provider --output receipt:final-packaged-history --case source_history_replace --case source_history_delete --case long_draft_mandatory_budget --timeout 60 --backend-executable <local-path>"
+    }
+  ],
+  "provenance": {
+    "controlled": {
+      "report": "receipt:d18118b-packaged-controlled/report.json",
+      "comparison": "receipt:d18118b-controlled-package-comparison.json",
+      "checks": {
+        "tested_sha_matches": true,
+        "source_tree_matches": true,
+        "prompt_matches": true,
+        "corpus_matches": true,
+        "same_model": true,
+        "frozen_runtime_recorded": true
+      },
+      "runtime_sha256": "a9a1a14125b25f2351747db7ad72535a6cf25171f3a02e400205842c665afb36"
+    },
+    "review": {
+      "report": "receipt:d18118b-packaged-review/report.json",
+      "comparison": "receipt:d18118b-review-package-comparison.json",
+      "checks": {
+        "tested_sha_matches": true,
+        "source_tree_matches": true,
+        "prompt_matches": true,
+        "corpus_matches": true,
+        "same_model": true,
+        "frozen_runtime_recorded": true
+      },
+      "runtime_sha256": "a9a1a14125b25f2351747db7ad72535a6cf25171f3a02e400205842c665afb36"
+    },
+    "section": {
+      "report": "receipt:d18118b-packaged-section/report.json",
+      "comparison": "receipt:d18118b-section-package-comparison.json",
+      "checks": {
+        "tested_sha_matches": true,
+        "source_tree_matches": true,
+        "prompt_matches": true,
+        "corpus_matches": true,
+        "same_model": true,
+        "frozen_runtime_recorded": true
+      },
+      "runtime_sha256": "a9a1a14125b25f2351747db7ad72535a6cf25171f3a02e400205842c665afb36"
+    }
+  },
+  "source_only_history_checks": [
+    {
+      "case_id": "source_history_replace",
+      "receipt": "receipt:d18118b-controlled-corpus/source_history_replace--uninterrupted.json",
+      "runtime": "source_desktop_bootstrap",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "body_byte_preserved": true,
+      "source_integrity_violations": [],
+      "history": "Transport current revision row3 is revision2, while both original excerpts still point to row1/revision1 whose snapshot actually supports them."
+    },
+    {
+      "case_id": "source_history_delete",
+      "receipt": "receipt:d18118b-controlled-corpus/source_history_delete--uninterrupted.json",
+      "runtime": "source_desktop_bootstrap",
+      "run_id": 1,
+      "terminal_status": "completed",
+      "body_byte_preserved": true,
+      "source_integrity_violations": [],
+      "history": "Actual HTTP document deletion leaves course source document_id=null, source_revision_id=null, and saved course snapshot plus exact relied-on excerpts intact; this is not versioned web evidence."
+    },
+    {
+      "case_id": "long_draft_mandatory_budget",
+      "receipt": "receipt:d18118b-controlled-corpus/long_draft_mandatory_budget--uninterrupted.json",
+      "runtime": "source_desktop_bootstrap",
+      "run_id": 1,
+      "terminal_status": "failed",
+      "body_byte_preserved": true,
+      "source_integrity_violations": [],
+      "history": "2048-token mandatory context gate failed honestly with intact student prose; no candidate or false success."
+    }
+  ],
+  "summary": {
+    "packaged_receipts": 20,
+    "observed_interventions": 16,
+    "controls": 3,
+    "requested_not_run": 1,
+    "all_accepted_bodies_unchanged": true,
+    "duplicate_comment_signatures": 0,
+    "deterministic_errors": 0,
+    "human_or_semantic_acceptance": false
+  }
+}

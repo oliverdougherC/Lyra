@@ -1,0 +1,53 @@
+{
+  "version": "writer-beta-validation.v2",
+  "source_sha": "d18118b25046fb700c31c949d1cb47e561332e82",
+  "evidence_head_policy": "Any later evidence-only commit is a documentation head, not a claim that source/package was rebuilt at that later SHA.",
+  "full_tests": "3345 passed, 1 skipped, 6 warnings in 162.41s (0:02:42)",
+  "command": "uv run --extra dev pytest -q",
+  "ci": {
+    "url": "https://github.com/oliverdougherC/Lyra/actions/runs/34080748660",
+    "checks": 11,
+    "all_success": true,
+    "desktop_hdiutil_note": "Earlier artifact failure is historical; final source run Desktop macOS artifact succeeded."
+  },
+  "package": {
+    "signed_code_objects": 78,
+    "signing_identity_class": "reused Apple Development identity; personal identity omitted",
+    "verification_status": "passed",
+    "verified_objects": 77,
+    "architecture": "arm64",
+    "minimumSystemVersion": "14.0",
+    "authenticated_smoke": {
+      "authenticated": true,
+      "ephemeral_loopback": true,
+      "status": "passed"
+    }
+  },
+  "native_receipt": "native-d18118b.json",
+  "excluded_native_history": {
+    "86a34f7": "CUA app selection auto-launched normal profile. No corpus use or intentional data modification; startup side effects cannot be excluded. Excluded from isolated acceptance evidence.",
+    "00371f3": "Later isolated native observation is separate historical evidence, not the excluded 86 launch and not final-source validation.",
+    "d18118b": "Final separately isolated native and backend environment checks, empty Classes screen, and both processes exiting on Cmd+Q are in native-receipt.json. This is a smoke check, not human writing-quality acceptance."
+  },
+  "provider_load_control": {
+    "d18118b-model-corpus": "First five original cases preceded accidental overlapping runs. Subsequent original cases are not provider-load-controlled; stable source alone does not remove this confound.",
+    "d18118b-model-remaining": "Exploratory repeat overlapped the still-running original model-corpus process; excluded from controlled improvement comparisons.",
+    "d18118b-model-extra": "Accidental overlapping repeat stopped; only listed complete receipts retained. Unlisted interrupted review excluded.",
+    "final_packaged_model": "Await serial no-overlap run receipts before claiming a controlled model comparison."
+  },
+  "log_hashes": {
+    "tests": "2d5a5f2edde9e8e96e37c42e30de062b49074efc8bab639718bf5c66c136f89a",
+    "bundleverify": "079586fb22923ff27dc2736d93bc186006dbe6195ef4273aa8b41b4fa74cefcc",
+    "smoke": "39be932c2b18ff3e0b2ff5ff34db9121144d9ef0d21bcad92fe4c1b51c1a2f37",
+    "sign": "0a4c8ee4996f9b3b7e4d15c29f1a4752697740e81128645cb53fbb49b7b4a927"
+  },
+  "pending_receipts": [
+    "d18118b-planning",
+    "d18118b-packaged-model"
+  ],
+  "human_review": "not-run",
+  "different_model_comparison": "not-run",
+  "long_session_soak": "not-run",
+  "candidate_status": "intermediate; final-candidate designation withdrawn after independent citation/section-boundary findings",
+  "additional_source_work": "Narrow citation source-ID and sibling-section boundary validation is being implemented after d181; no result from this receipt covers that later source."
+}

@@ -1,0 +1,892 @@
+{
+  "version": "writer-comparison.v1",
+  "comparison_kind": "same_model",
+  "acceptance": "not_determined",
+  "note": "Recorded runs and deterministic metrics do not establish quality acceptance.",
+  "configuration": {
+    "corpus_sha256": {
+      "baseline": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+      "candidate": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3"
+    },
+    "generate_plan": {
+      "baseline": false,
+      "candidate": false
+    },
+    "locality": {
+      "baseline": "non_loopback",
+      "candidate": "non_loopback"
+    },
+    "context_window": {
+      "baseline": 262144,
+      "candidate": 262144
+    },
+    "model": {
+      "baseline": "Qwen3.8-27B",
+      "candidate": "Qwen3.8-27B"
+    }
+  },
+  "evidence_directories": {
+    "baseline": "receipt:39e7352-model",
+    "candidate": "receipt:39e7352-packaged-model"
+  },
+  "provenance": {
+    "tested_sha": {
+      "baseline": "39e7352193fd25efd9ac1b5864765d618308c5ff",
+      "candidate": "39e7352193fd25efd9ac1b5864765d618308c5ff"
+    },
+    "backend_source_sha256": {
+      "baseline": "309cfebc4fc1e24063ca05409862d0b9e1d4f549300a774687c9cb3c181893a4",
+      "candidate": "309cfebc4fc1e24063ca05409862d0b9e1d4f549300a774687c9cb3c181893a4"
+    },
+    "runtime": {
+      "baseline": "source_desktop_bootstrap",
+      "candidate": "frozen_sidecar"
+    },
+    "runtime_sha256": {
+      "baseline": null,
+      "candidate": "f6498c6d3accac802dcf32f0914b904af520ed1bc8602735eb346e2499e8fc3d"
+    },
+    "prompt_sha256": {
+      "baseline": "97df6437a8d90208819e834e71d0f16353cce7d198d437b183f45e33b19663c4",
+      "candidate": "97df6437a8d90208819e834e71d0f16353cce7d198d437b183f45e33b19663c4"
+    }
+  },
+  "pairs": [
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "baseline_scenario": "uninterrupted",
+      "candidate_scenario": "cancel_retry",
+      "baseline": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": false,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": null,
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "candidate": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": true,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": {
+          "eligible": 0,
+          "preserved": [],
+          "changed": [],
+          "missing": [],
+          "note": "Exact text comparison within the original suggestion; changes need review."
+        },
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "duplicate_paragraph_delta": 0,
+      "dimensions": {
+        "evidence_citation": {
+          "baseline": null,
+          "candidate": null
+        },
+        "instruction_following": {
+          "baseline": null,
+          "candidate": null
+        },
+        "planning": {
+          "baseline": null,
+          "candidate": null
+        },
+        "review_usefulness": {
+          "baseline": null,
+          "candidate": null
+        },
+        "revision_precision": {
+          "baseline": null,
+          "candidate": null
+        },
+        "student_voice": {
+          "baseline": null,
+          "candidate": null
+        }
+      }
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "baseline_scenario": "uninterrupted",
+      "candidate_scenario": "edit_cancel_retry",
+      "baseline": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": false,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": null,
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "candidate": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": true,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": {
+          "eligible": 1,
+          "preserved": [
+            "1:p1"
+          ],
+          "changed": [],
+          "missing": [],
+          "note": "Exact text comparison within the original suggestion; changes need review."
+        },
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review.",
+          "current_live_user_edit_preserved": true,
+          "historical_user_edit_preserved": true,
+          "historical_matching_block_ids": [
+            1,
+            5
+          ]
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "duplicate_paragraph_delta": 0,
+      "dimensions": {
+        "evidence_citation": {
+          "baseline": null,
+          "candidate": null
+        },
+        "instruction_following": {
+          "baseline": null,
+          "candidate": null
+        },
+        "planning": {
+          "baseline": null,
+          "candidate": null
+        },
+        "review_usefulness": {
+          "baseline": null,
+          "candidate": null
+        },
+        "revision_precision": {
+          "baseline": null,
+          "candidate": null
+        },
+        "student_voice": {
+          "baseline": null,
+          "candidate": null
+        }
+      }
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "baseline_scenario": "uninterrupted",
+      "candidate_scenario": "edit_restart",
+      "baseline": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": false,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": null,
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "candidate": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": true,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": {
+          "eligible": 1,
+          "preserved": [
+            "1:p1"
+          ],
+          "changed": [],
+          "missing": [],
+          "note": "Exact text comparison within the original suggestion; changes need review."
+        },
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review.",
+          "current_live_user_edit_preserved": true,
+          "historical_user_edit_preserved": true,
+          "historical_matching_block_ids": [
+            1
+          ]
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "duplicate_paragraph_delta": 0,
+      "dimensions": {
+        "evidence_citation": {
+          "baseline": null,
+          "candidate": null
+        },
+        "instruction_following": {
+          "baseline": null,
+          "candidate": null
+        },
+        "planning": {
+          "baseline": null,
+          "candidate": null
+        },
+        "review_usefulness": {
+          "baseline": null,
+          "candidate": null
+        },
+        "revision_precision": {
+          "baseline": null,
+          "candidate": null
+        },
+        "student_voice": {
+          "baseline": null,
+          "candidate": null
+        }
+      }
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "baseline_scenario": "uninterrupted",
+      "candidate_scenario": "restart_between_sections",
+      "baseline": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": false,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": null,
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "candidate": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": true,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": {
+          "eligible": 3,
+          "preserved": [
+            "1:p1",
+            "1:p2",
+            "1:p3"
+          ],
+          "changed": [],
+          "missing": [],
+          "note": "Exact text comparison within the original suggestion; changes need review."
+        },
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "duplicate_paragraph_delta": 0,
+      "dimensions": {
+        "evidence_citation": {
+          "baseline": null,
+          "candidate": null
+        },
+        "instruction_following": {
+          "baseline": null,
+          "candidate": null
+        },
+        "planning": {
+          "baseline": null,
+          "candidate": null
+        },
+        "review_usefulness": {
+          "baseline": null,
+          "candidate": null
+        },
+        "revision_precision": {
+          "baseline": null,
+          "candidate": null
+        },
+        "student_voice": {
+          "baseline": null,
+          "candidate": null
+        }
+      }
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "baseline_scenario": "uninterrupted",
+      "candidate_scenario": "restart_inference",
+      "baseline": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": false,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": null,
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "candidate": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": true,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": {
+          "eligible": 0,
+          "preserved": [],
+          "changed": [],
+          "missing": [],
+          "note": "Exact text comparison within the original suggestion; changes need review."
+        },
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "duplicate_paragraph_delta": 0,
+      "dimensions": {
+        "evidence_citation": {
+          "baseline": null,
+          "candidate": null
+        },
+        "instruction_following": {
+          "baseline": null,
+          "candidate": null
+        },
+        "planning": {
+          "baseline": null,
+          "candidate": null
+        },
+        "review_usefulness": {
+          "baseline": null,
+          "candidate": null
+        },
+        "revision_precision": {
+          "baseline": null,
+          "candidate": null
+        },
+        "student_voice": {
+          "baseline": null,
+          "candidate": null
+        }
+      }
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "baseline_scenario": "uninterrupted",
+      "candidate_scenario": "restart_review",
+      "baseline": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": false,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": null,
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "candidate": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": true,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": {
+          "eligible": 4,
+          "preserved": [
+            "1:p2",
+            "2:p2"
+          ],
+          "changed": [
+            "1:p1",
+            "2:p1"
+          ],
+          "missing": [],
+          "note": "Exact text comparison within the original suggestion; changes need review."
+        },
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "duplicate_paragraph_delta": 0,
+      "dimensions": {
+        "evidence_citation": {
+          "baseline": null,
+          "candidate": null
+        },
+        "instruction_following": {
+          "baseline": null,
+          "candidate": null
+        },
+        "planning": {
+          "baseline": null,
+          "candidate": null
+        },
+        "review_usefulness": {
+          "baseline": null,
+          "candidate": null
+        },
+        "revision_precision": {
+          "baseline": null,
+          "candidate": null
+        },
+        "student_voice": {
+          "baseline": null,
+          "candidate": null
+        }
+      }
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "baseline_scenario": "uninterrupted",
+      "candidate_scenario": "uninterrupted",
+      "baseline": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": false,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": null,
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "candidate": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": false,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "pending_proposal",
+          "count": 0
+        },
+        "settled_block_preservation": null,
+        "deterministic": {
+          "candidate_present": true,
+          "candidate_protected_passages_preserved": 0,
+          "candidate_forbidden_literal_hits": [],
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 0,
+          "protected_passages_preserved": 0,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "duplicate_paragraph_delta": 0,
+      "dimensions": {
+        "evidence_citation": {
+          "baseline": null,
+          "candidate": null
+        },
+        "instruction_following": {
+          "baseline": null,
+          "candidate": null
+        },
+        "planning": {
+          "baseline": null,
+          "candidate": null
+        },
+        "review_usefulness": {
+          "baseline": null,
+          "candidate": null
+        },
+        "revision_precision": {
+          "baseline": null,
+          "candidate": null
+        },
+        "student_voice": {
+          "baseline": null,
+          "candidate": null
+        }
+      }
+    }
+  ],
+  "missing_baseline": [],
+  "missing_candidate": [
+    [
+      "pass_multisection_same_model_recovery",
+      "uninterrupted"
+    ],
+    [
+      "pass_targeted_causal_precision",
+      "uninterrupted"
+    ],
+    [
+      "source_history_delete",
+      "uninterrupted"
+    ],
+    [
+      "source_history_replace",
+      "uninterrupted"
+    ]
+  ]
+}

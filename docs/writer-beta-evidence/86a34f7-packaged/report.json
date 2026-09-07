@@ -1,0 +1,75 @@
+{
+  "version": "writer-evaluation.v1",
+  "tested_sha": "86a34f760bfcc324d465afacb392d15babf0f79d",
+  "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+  "prompt_sha256": "99383ff71f3d187ff79a3870522fcc52de7cd5db43df4d103c71cf9c1965bdd3",
+  "runtime_sha256": "158ae43392e7bb1648bfbc23f95badb5fb2e03d45786d4c46c4fa1566f1def1a",
+  "harness_sha256": "ae6b0a5375b69c5623f2ab1f9b339ce1709024dab77c73fae3ef9f3e31c64131",
+  "backend_source_sha256": "af15ff9db64964dad19165b5bf420aa43e7451373759623bf6a77dc2af76c519",
+  "generate_plan": false,
+  "model": "synthetic-writer-v1",
+  "locality": "loopback",
+  "context_window": 32768,
+  "runtime": "frozen_sidecar",
+  "comparison_kind": "same_model_interruption",
+  "model_comparison": null,
+  "subjective_acceptance": "not_reviewed",
+  "cases": [
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "full_live_draft_from_student_notes--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "restart_inference",
+      "status": "recorded",
+      "file": "full_live_draft_from_student_notes--restart_inference.json",
+      "run_id": 1,
+      "intervention_observed": true
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "restart_between_sections",
+      "status": "recorded",
+      "file": "full_live_draft_from_student_notes--restart_between_sections.json",
+      "run_id": 1,
+      "intervention_observed": true
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "restart_review",
+      "status": "recorded",
+      "file": "full_live_draft_from_student_notes--restart_review.json",
+      "run_id": 1,
+      "intervention_observed": true
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "cancel_retry",
+      "status": "recorded",
+      "file": "full_live_draft_from_student_notes--cancel_retry.json",
+      "run_id": 2,
+      "intervention_observed": true
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "partial_stream",
+      "status": "recorded",
+      "file": "full_live_draft_from_student_notes--partial_stream.json",
+      "run_id": 1,
+      "intervention_observed": true
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "malformed_stream",
+      "status": "recorded",
+      "file": "full_live_draft_from_student_notes--malformed_stream.json",
+      "run_id": 1,
+      "intervention_observed": true
+    }
+  ]
+}

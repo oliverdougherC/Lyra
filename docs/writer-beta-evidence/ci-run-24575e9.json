@@ -1,0 +1,8 @@
+{
+  "conclusion": "success",
+  "event": "pull_request",
+  "headSha": "24575e9f859a220440186c106a8936b303a6510e",
+  "name": "CI",
+  "url": "https://github.com/oliverdougherC/Lyra/actions/runs/34082749319",
+  "verified_command": "gh run view 34082749319 --repo oliverdougherC/Lyra --json headSha,conclusion,url,event,name"
+}

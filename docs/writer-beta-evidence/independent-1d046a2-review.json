@@ -1,0 +1,383 @@
+{
+  "evaluator": {
+    "type": "independent-agent",
+    "identity": "Codex GPT-6 /root/independent_output_review",
+    "version": "6-1d046a2",
+    "human_review": false,
+    "blinding": "Unblinded followup; not implementation/corpus author."
+  },
+  "source_commit": "1d046a2cb63d68da51664b9574572e92acb15999",
+  "results": [
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "mode": "planning",
+      "receipt": "receipt:1d046a2-planning/full_live_draft_from_student_notes--uninterrupted.json",
+      "receipt_sha256": "fcaccdaa3628b5bd7bf2d6b29e8ec3052e4780816d206ecb6922bb96ce7558b6",
+      "provenance": {
+        "version": "writer-evaluation.v1",
+        "tested_sha": "1d046a2cb63d68da51664b9574572e92acb15999",
+        "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+        "prompt_sha256": "97df6437a8d90208819e834e71d0f16353cce7d198d437b183f45e33b19663c4",
+        "runtime_sha256": null,
+        "harness_sha256": "7515c86631dcab77b5324a84edee8b3861dc036d4cab773e7137bfeb29f2a103",
+        "backend_source_sha256": "fde1d25af61afc4f4ff6089e978bcd96cc4b21959377f625781a67eb7860b98a",
+        "generate_plan": true,
+        "retry_failures": false,
+        "model": "Qwen3.8-27B",
+        "locality": "non_loopback",
+        "context_window": 262144,
+        "runtime": "source_desktop_bootstrap",
+        "comparison_kind": "same_model_interruption",
+        "model_comparison": null,
+        "subjective_acceptance": "not_reviewed"
+      },
+      "code_changed_during_case": false,
+      "terminal_status": "failed",
+      "error": "The live draft has paragraphs below their requested length: 1.1:p1. The partial suggestion was kept for revision.",
+      "pending_proposal": false,
+      "original_body_exact": true,
+      "original_body_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+      "after_body_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+      "plan_sections": [
+        {
+          "title": "Evidence",
+          "job": "Summarize the boarding increase and identify the specific data gaps regarding attendance and non-rider input.",
+          "budget": 160
+        },
+        {
+          "title": "Recommendation",
+          "job": "Propose a one-term extension with improved measurement protocols to address the identified evidence gaps.",
+          "budget": 160
+        }
+      ],
+      "block_sections": [
+        "Evidence",
+        "Recommendation"
+      ],
+      "final_block_count": 5,
+      "final_prose": "Week B recorded 240 shuttle boardings, up from 160 in Week A [@lyra:1]. This count reflects total trips rather than unique riders, meaning the figures indicate higher usage but do not yet prove the service met broader demand [@lyra:1].\n\nThe pilot also lacked attendance data, meaning we cannot link shuttle use to actual class participation [@lyra:1]. While boarding numbers show trips, they do not confirm whether riders attended class more often as a result of using the service. Without attendance metrics, the specific impact of the shuttle on student attendance remains unknown [@lyra:1].\n\nBeyond attendance, the pilot’s feedback rests on a narrow sample. Voluntary responses came from riders who already used the service, and non-riders were not surveyed [@lyra:2]. Consequently, the survey describes the experiences of these specific participants rather than reflecting broader student demand. The lack of input from those who did not ride limits how far we can generalize the current findings [@lyra:2]. These combined gaps mean the data cannot fully assess the shuttle’s impact on the wider student population.\n\nThe observed usage increase and identified data gaps support a one-term extension rather than an immediate policy decision. This continued trial serves as a bridge to better measurement, allowing us to refine the framework before finalizing the service's future. Keeping the pilot running for another term provides the necessary time to implement improved protocols that address the current evidence limitations. This approach ensures that any eventual recommendation rests on comprehensive data rather than the partial metrics collected during the initial phase.\n\nTo close these measurement gaps, the extension must pair boarding counts with attendance tracking, so that shuttle use can be evaluated against actual class presence [@lyra:1]. This pairing replaces the current reliance on ridership totals alone with a metric that distinguishes between increased service demand and improved academic engagement. Simultaneously, the survey protocol needs to extend beyond existing riders to include non-riders, whose exclusion currently limits the feedback’s generalizability [@lyra:2]. Gathering input from this broader group allows the committee to assess whether the shuttle influences students who have not yet chosen to board, rather than simply measuring satisfaction among those already using the service. These additions transform the data from a record of past activity into a tool for evaluating the policy’s broader impact on student behavior. Implementing these protocols during the extension term ensures that the final decision rests on evidence capable of addressing the specific causal and generalizability questions the pilot left unanswered [@lyra:1][@lyra:2].",
+      "scores": {
+        "planning": {
+          "score": 3,
+          "output_excerpt": "Summarize the boarding increase and identify the specific data gaps regarding attendance and non-rider input.",
+          "rationale": "Persisted plan now has two correct sections and proportional 160/160 budgets, accurately separates boarding and non-rider limitations in argument map. Recommendation evidence overpromises attendance measurement as establishing causal links without a design; brief_analysis still calls attendance absence a survey limitation.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 2,
+          "output_excerpt": "evidence capable of addressing the specific causal and generalizability questions",
+          "rationale": "Most final facts and citation IDs correct. Pairing boarding and attendance counts alone is overstated as distinguishing demand from academic engagement and answering causal questions; no strategy to isolate causality specified. Prior 39 unique-person inference/invented campus-event goal absent.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 1,
+          "output_excerpt": "Remove the claims about academic schedule differences and randomization.",
+          "rationale": "Internal revisions delete source-supported methodology and sample size as invented. The shortened block 1.1:p1 then fails length guard. No accepted body edits.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 0,
+          "output_excerpt": "The number eighteen is not found in the source ledger or student notes.",
+          "rationale": "Categorically false: survey snapshot states Eighteen voluntary survey responses. Transport snapshot explicitly states schedule differences/nonrandomization. Review erases valid support and yields short partial; not merely stylistic disagreement.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 1,
+          "output_excerpt": "The live draft has paragraphs below their requested length: 1.1:p1.",
+          "rationale": "Two-section plan now matches actual request, but run failed and no pending proposal; final blocks omit requested singular first-person personal stake. Honest failure is deterministic success, not fulfilled writing task.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 1,
+          "output_excerpt": "The observed usage increase and identified data gaps support a one-term extension",
+          "rationale": "No singular first person or east-gate origin in retained final blocks. Generic institutional register replaces student stance despite intact accepted notes.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "seed_adjudication": [
+        {
+          "id": "notes_preservation",
+          "result": "met_for_original_body",
+          "reason": "Accepted notes byte-exact; no pending complete proposal, retained separate live partial only."
+        },
+        {
+          "id": "attendance_noninference",
+          "result": "met_on_observed_output",
+          "reason": "No claim that pilot actually caused attendance improvement; methodological future-overclaims adjudicated separately."
+        }
+      ],
+      "required_issue_seeds_found": "not-applicable: no required review-finding seeds in this case",
+      "material_findings": [
+        {
+          "kind": "review_false_positive",
+          "quote": "Eighteen voluntary survey responses were collected from shuttle riders.",
+          "support": "Retained source 2 full snapshot; generated research notes also record 18/14. Internal review incorrectly calls sample count invented and removes it."
+        },
+        {
+          "kind": "review_false_positive",
+          "quote": "The weeks differed in academic schedule, and the pilot was not randomized.",
+          "support": "Retained source 1 full snapshot and section research notes. Internal review incorrectly says not in evidence."
+        },
+        {
+          "kind": "partial_length_failure",
+          "block": "1.1:p1",
+          "words_whitespace": 39,
+          "reason": "Final terminal explicitly fails short paragraph, preserves blocks and publishes no pending proposal."
+        },
+        {
+          "kind": "methodological_overclaim",
+          "quote": "This pairing ... distinguishes between increased service demand and improved academic engagement",
+          "reason": "Paired counts alone do not separate causal effects; plan lacks design to control confounding."
+        }
+      ],
+      "deterministic_invariants": {
+        "accepted_body_unchanged": true,
+        "all_canonical_source_ids_resolve": true,
+        "excerpt_support": [
+          {
+            "id": 1,
+            "revision_id": 1,
+            "exact": true
+          },
+          {
+            "id": 2,
+            "revision_id": 1,
+            "exact": true
+          },
+          {
+            "id": 3,
+            "revision_id": 2,
+            "exact": true
+          },
+          {
+            "id": 4,
+            "revision_id": 1,
+            "exact": true
+          },
+          {
+            "id": 5,
+            "revision_id": 1,
+            "exact": true
+          },
+          {
+            "id": 6,
+            "revision_id": 2,
+            "exact": true
+          },
+          {
+            "id": 7,
+            "revision_id": 1,
+            "exact": true
+          },
+          {
+            "id": 8,
+            "revision_id": 1,
+            "exact": true
+          },
+          {
+            "id": 9,
+            "revision_id": 2,
+            "exact": true
+          }
+        ],
+        "exact_duplicate_block_paragraphs": [],
+        "duplicate_comments": 0,
+        "unrelated_accepted_body_edits": 0,
+        "review_partial_semantics": "complete block status does not equal completed run; scheduled revisions may change model-owned block prose."
+      },
+      "comparison_39_generated_plan": {
+        "valid_scope": "Compare generated planning modes only, same corpus/model with different code; descriptive single-run comparison, not causal experiment.",
+        "improved": "One incorrect notes-heading section replaced with correct two-section plan and output blocks; source roles largely corrected; prior invented primary campus-events goal and positive-bias-direction claim absent.",
+        "remaining_or_worse": "Final generated run fails short paragraph; no pending proposal, loses personal voice, review deletes valid source facts. Previous 39 run completed wrongly; neither establishes quality acceptance."
+      }
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "mode": "model",
+      "receipt": "receipt:1d046a2-model/full_live_draft_from_student_notes--uninterrupted.json",
+      "receipt_sha256": "757e9b81f8cbc13506001278dd871fe1c6c5620796409b1202745b0196bce1ce",
+      "provenance": {
+        "version": "writer-evaluation.v1",
+        "tested_sha": "1d046a2cb63d68da51664b9574572e92acb15999",
+        "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+        "prompt_sha256": "97df6437a8d90208819e834e71d0f16353cce7d198d437b183f45e33b19663c4",
+        "runtime_sha256": null,
+        "harness_sha256": "7515c86631dcab77b5324a84edee8b3861dc036d4cab773e7137bfeb29f2a103",
+        "backend_source_sha256": "fde1d25af61afc4f4ff6089e978bcd96cc4b21959377f625781a67eb7860b98a",
+        "generate_plan": false,
+        "retry_failures": false,
+        "model": "Qwen3.8-27B",
+        "locality": "non_loopback",
+        "context_window": 262144,
+        "runtime": "source_desktop_bootstrap",
+        "comparison_kind": "same_model_interruption",
+        "model_comparison": null,
+        "subjective_acceptance": "not_reviewed"
+      },
+      "code_changed_during_case": false,
+      "terminal_status": "completed",
+      "error": null,
+      "pending_proposal": true,
+      "original_body_exact": true,
+      "original_body_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+      "after_body_sha256": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+      "plan_sections": [
+        {
+          "title": "Evidence",
+          "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+          "budget": 160
+        },
+        {
+          "title": "Recommendation",
+          "job": "Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.",
+          "budget": 160
+        }
+      ],
+      "block_sections": [
+        "Evidence",
+        "Recommendation"
+      ],
+      "final_block_count": 4,
+      "final_prose": "I have stood at the east gate wondering whether to wait or walk, which is why this pilot’s results matter to me personally. The data records 160 boardings in week A and 240 in week B [@lyra:1]. These counts indicate that more trips occurred during the pilot period, but they do not prove that more students attended class. Boardings measure individual trips rather than unique people, and no attendance data were collected [@lyra:1]. Therefore, while the service was used more frequently, I cannot claim that the shuttle caused higher class attendance. The evidence supports further investigation into how the service functions, not a conclusion about its impact on academic participation.\n\nThe survey compounds these limits. The survey data consists solely of rider responses, and non-riders were not surveyed [@lyra:2]. Because the sample consists solely of people who already chose to board, the data cannot reveal whether students who avoid the shuttle would use it if conditions changed. I cannot infer campus-wide demand from the preferences of current users alone. This gap means the pilot’s results do not yet answer who can realistically access the service. The evidence justifies one more term of operation to gather broader input, not a final policy decision based on a narrow, self-selected group.\n\nGiven the limits of the boarding data, I propose extending the pilot for one term to test whether later service changes student behavior beyond current usage patterns. This extension is not a vote of confidence; it is a measurement window. Without linking ridership to general campus presence, the data remains descriptive rather than causal. I recommend using this time to collect evidence that distinguishes increased access from mere preference among existing users, ensuring the next decision rests on a broader understanding of who the service reaches.\n\nThe current survey data only reflects the experiences of voluntary shuttle riders, leaving non-riders' preferences and potential barriers to use completely unknown [@lyra:2]. To clarify whether the service meets broader demand or merely accommodates existing habits, I propose a brief follow-up survey targeting non-riders to identify whether distance, schedule, or awareness prevents use. Without this input, the boarding increase observed between week A and week B [@lyra:1] may only reflect preference among current users rather than actual access issues. This step keeps the decision tentative, ensuring we hear from those excluded from the initial sample before generalizing results or claiming the pilot solved a specific problem.",
+      "scores": {
+        "planning": {
+          "score": "not-scored",
+          "output_excerpt": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+          "rationale": "Corpus-seeded plan, not generated planning evidence.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "evidence_citation": {
+          "score": 3,
+          "output_excerpt": "Boardings measure individual trips rather than unique people",
+          "rationale": "Correct principal facts and canonical source links. No demonstrated attendance effect, invented costs or unique-person count claim. Some recommendation phrasing overstates linking ridership/presence as sufficient causal distinction, but proposed non-rider questions are clearly future work.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "revision_precision": {
+          "score": 2,
+          "output_excerpt": "Remove the specific number 18",
+          "rationale": "Internal review unnecessarily deletes valid sample detail, while other edits reduce repetition. Personal stance/body preserved.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "review_usefulness": {
+          "score": 1,
+          "output_excerpt": "The claim that Only 18 voluntary rider responses were collected is an unsupported factual detail.",
+          "rationale": "False against full retained source 2 snapshot and supplied research note. Some useful repetition advice, but evidence pruning is wrong.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "instruction_following": {
+          "score": 3,
+          "output_excerpt": "I propose extending the pilot for one term",
+          "rationale": "Two sections, notes exact, first-person stake/caution, non-rider next step and correct citations. Completed output useful, with unnecessary removal of factual survey detail and substantial repetition/length expansion.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        },
+        "student_voice": {
+          "score": 4,
+          "output_excerpt": "I have stood at the east gate wondering whether to wait or walk",
+          "rationale": "Concrete original personal stake and distinction between experience and evidence retained; tentative first-person recommendation remains. No invented autobiographical claim.",
+          "evaluator": "Codex GPT-6 /root/independent_output_review"
+        }
+      },
+      "seed_adjudication": [
+        {
+          "id": "notes_preservation",
+          "result": "met_for_original_body",
+          "reason": "Accepted notes byte-exact; separate pending proposal exists."
+        },
+        {
+          "id": "attendance_noninference",
+          "result": "met_on_observed_output",
+          "reason": "No claim that pilot actually caused attendance improvement; methodological future-overclaims adjudicated separately."
+        }
+      ],
+      "required_issue_seeds_found": "not-applicable: no required review-finding seeds in this case",
+      "material_findings": [
+        {
+          "kind": "review_false_positive",
+          "quote": "Eighteen voluntary survey responses were collected from shuttle riders.",
+          "support": "Retained source 2 full snapshot; generated research notes also record 18/14. Internal review incorrectly calls sample count invented and removes it."
+        },
+        {
+          "kind": "methodological_caution",
+          "quote": "Without linking ridership to general campus presence, the data remains descriptive rather than causal.",
+          "reason": "Linkage is not sufficient for causal inference; wording should not suggest it alone converts descriptive observations into causal evidence."
+        }
+      ],
+      "deterministic_invariants": {
+        "accepted_body_unchanged": true,
+        "all_canonical_source_ids_resolve": true,
+        "excerpt_support": [
+          {
+            "id": 1,
+            "revision_id": 1,
+            "exact": true
+          },
+          {
+            "id": 2,
+            "revision_id": 1,
+            "exact": true
+          },
+          {
+            "id": 3,
+            "revision_id": 2,
+            "exact": true
+          },
+          {
+            "id": 4,
+            "revision_id": 1,
+            "exact": true
+          },
+          {
+            "id": 5,
+            "revision_id": 1,
+            "exact": true
+          },
+          {
+            "id": 6,
+            "revision_id": 2,
+            "exact": true
+          },
+          {
+            "id": 7,
+            "revision_id": 2,
+            "exact": true
+          },
+          {
+            "id": 8,
+            "revision_id": 2,
+            "exact": true
+          },
+          {
+            "id": 9,
+            "revision_id": 1,
+            "exact": true
+          },
+          {
+            "id": 10,
+            "revision_id": 1,
+            "exact": true
+          }
+        ],
+        "exact_duplicate_block_paragraphs": [],
+        "duplicate_comments": 0,
+        "unrelated_accepted_body_edits": 0,
+        "review_partial_semantics": "complete block status does not equal completed run; scheduled revisions may change model-owned block prose."
+      },
+      "comparison_39_generated_plan": {
+        "valid_scope": "Not directly comparable to generated-plan run; corpus seeded plan retained."
+      }
+    }
+  ],
+  "conclusion": "Planning handoff now yields the required two-section plan, but generated draft fails short-paragraph validation after false-positive internal evidence deletion and loses student voice. Seeded-plan control completes with original notes intact and personal stance retained, yet the same review wrongly removes supported sample-size detail. Deterministic preservation/citation identity does not establish semantic review correctness.",
+  "retained_targeted_negatives": {
+    "report": "receipt:independent-39e7352-review.json",
+    "status": "Four prior targeted automatic-review failures retained unchanged as evidence for unchanged targeted path; no new targeted run or claim of repair in this review."
+  },
+  "pending": "Final signed packaged corpus/review receipts not reviewed yet.",
+  "limits": [
+    "Unblinded independent agent, not human acceptance.",
+    "No code edits/provider calls by evaluator.",
+    "Original note-body byte exact in both runs; generated proposal/partials assessed separately.",
+    "Two synthetic controls do not establish general quality or cross-discipline acceptance.",
+    "Both current code_changed flags false; historical mixed-source/provider-overlap runs remain uncontrolled."
+  ]
+}

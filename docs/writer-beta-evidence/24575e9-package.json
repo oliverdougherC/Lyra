@@ -1,0 +1,44 @@
+{
+  "tested_sha": "24575e9f859a220440186c106a8936b303a6510e",
+  "file_hashes": {
+    "Contents/MacOS/lyra-desktop": "86a10399f3cdece39e1ee16062a627717c2b80b818475fa7d903ffd139b09d12",
+    "Contents/Resources/resources/lyra-backend/lyra-backend": "c351bd1d9c43f94bd17c4c327eac2baa6075832c132f2768d471c45d6826e1ac",
+    "Contents/Info.plist": "c00eb80173c5556aca2817aa8c6d7f8e406a3d8fa37bb32ebcbc85184dc72fd2"
+  },
+  "tree_sha256": "ed0c92159068c10c292349e16f0df748b2af2f92e2c404418d2701b7e34059c5",
+  "os": "27.0",
+  "architecture": "arm64",
+  "memory_bytes": 25769803776,
+  "signing": "reused_certificate_backed_Apple_Development_identity",
+  "native_smoke": {
+    "source_sha": "24575e9f859a220440186c106a8936b303a6510e",
+    "native_pid": 40019,
+    "profile_isolation": {
+      "native": {
+        "PYTHON_KEYRING_BACKEND": true,
+        "LYRA_DATA_DIR": true,
+        "LYRA_DB_PATH": true,
+        "LYRA_CACHE_DIR": true,
+        "LYRA_LOGS_DIR": true,
+        "LYRA_MODELS_DIR": true
+      },
+      "backend": {
+        "PYTHON_KEYRING_BACKEND": true,
+        "LYRA_DATA_DIR": true,
+        "LYRA_DB_PATH": true,
+        "LYRA_CACHE_DIR": true,
+        "LYRA_LOGS_DIR": true,
+        "LYRA_MODELS_DIR": true
+      }
+    },
+    "status": "passed",
+    "backend_pid": 40029,
+    "ui_observation": "Classes screen; No classes yet",
+    "exit_verified": {
+      "native_pid": true,
+      "backend_pid": true
+    }
+  },
+  "human_acceptance": "not_run",
+  "eight_gib_gate": "not_run"
+}
