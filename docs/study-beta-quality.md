@@ -112,8 +112,9 @@ cancellation handler and the owned evaluation process was interrupted under the 
 budget. It is not a semantic pass. These failures remain in the evidence.
 
 The general generation reserve scales with the configured context window; at 262,144 tokens it
-allowed this small study task 65,536 output tokens. A further study-only fix caps standard
-`max_tokens` at `min(8192, generation_reserve(context_window))`. The existing more conservative
+allowed this small study task 65,536 output tokens. A further flashcard-only fix caps standard
+`max_tokens` at `min(8192, generation_reserve(context_window))`; topic and quiz calls retain
+the existing generation reserve. The existing more conservative
 input ceiling, bounded retry and fatal truncation behavior stay intact. No nonstandard thinking
 flag is injected into providers. A single captured-prompt replay evaluates this bound; it does not
 constitute a successful full ecology-deck evaluation or replace the final-candidate/human gates.
@@ -131,3 +132,54 @@ PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring uv run python scripts/eval_
 `--kinds quiz` avoids starting local embeddings for this captured flashcard-prompt replay; the
 replay still invokes the actual study JSON call with the flashcard schema. Inspect its retained
 stop reason and output rather than interpreting a zero runner exit status as semantic success.
+
+## Recorded outcome and release handoff
+
+The flashcard cap replay on `3f9c84f93de6902aa1e0e60cebafeb3c18a3787b` still returned malformed,
+whitespace-padded JSON and `finish_reason: length`. It raised `UpstreamError` after 44.221 seconds
+at 8,192 output tokens, versus 337.3 seconds and 65,536 output tokens for the original captured
+call. This verifies the narrower cost/runtime bound and continued refusal of truncated content.
+It does **not** repair or pass the full ecology-deck quality gate. No further provider run was made.
+
+| Surface | Baseline | Improved measured outcome | Acceptance scope |
+| --- | --- | --- | --- |
+| Circuit quizzes, two repeats | Correct keys, repetitive example coverage; one repeat had a dependent stem | Both independently reviewed passing; distinct topics, explicit conditions, valid answers | Recorded provider and corpus only |
+| Ecology quizzes, two repeats | Direct worked-answer recall at exam level; one dependent density stem | Both independently reviewed passing keys, standalone questions and transfer; one imprecise possible-confounder example remains noncritical | Recorded provider and corpus only |
+| Administrative-only quiz/deck | Padded Ready artifacts, duplicates and an ambiguous/unsupported quiz key | Both kinds failed honestly with empty output in both repeats | Insufficiency handling, not a useful rich-source deck |
+| Circuit decks | Semantic repeats across topics | First prompt-only candidate still failed; bounded prior-front follow-up passed both independent reviews, 24 cards | Full deck at `700d02f`; later output cap not a full-deck rerun |
+| Ecology decks | Not run at original baseline | Prompt-only candidate repeated facts; memory follow-up produced no deck after output truncation; second repeat cancelled under budget | **Failed / incomplete. Do not approve this configuration for this corpus** |
+| Scheduling and quiz weakness | Existing deterministic contracts retained | Actual route handlers: 100 genuine Easy reviews keep 2.8-day stability/deadline, 100 logs, same-key replay, changed-rating conflict; quizzes score 3/5 then 5/5 and resume/finish replay | Persistence contracts, not HTTP/UI or human validation |
+
+Raw records are `docs/evidence/study-beta-baseline-quiz.json`,
+`study-beta-baseline-deck.json`, `study-beta-improved.json`, `study-beta-final-deck.json`, and
+`study-beta-cap-replay.json`. Independent findings are in
+[the study agent review](learning-beta-evidence/study-agent-review.md). The prompt-only intermediate
+and the failed/cancelled full-deck outcomes remain visible; none is averaged into a passing score.
+
+The focused study suite passed **265 tests** after limiting the cap to flashcard calls:
+
+```bash
+uv run python -m pytest backend/tests/test_study.py backend/tests/test_study_beta_eval.py \
+  backend/tests/test_study_scope_contracts.py backend/tests/test_study_durability.py \
+  backend/tests/test_study_concurrency.py backend/tests/test_study_cancellation.py \
+  backend/tests/test_api_study.py -q
+```
+
+Ruff, documentation link checking and the active-reference scan passed. The three harness
+mechanical-check tests were also rerun after per-call checkpoint recording was added. Tests used synthetic
+profiles and isolated credentials. Full backend, frontend, signed-bundle, frozen smoke and native
+launch verification are the integrating owner's separate evidence. Human review, full generation
+on the final integrated packaged candidate, the largest 30-question requests and other provider
+configurations are not run here. PLA-151 remains open for those gates and the demonstrated ecology
+failure. The next owner decision is the beta's supported configuration/corpus scope and whether to
+resolve this provider's structured-output failure before admitting ecology-style deck generation.
+
+A token-usage audit found that the successful pre-cap ecology quizzes consumed 16,948 and 10,697
+completion tokens, including reasoning, despite short final JSON answers. The provisional blanket
+8,192 study cap at `3f9c84f` therefore could not carry their semantic acceptance forward. Before
+handoff, the cap was restricted to `FLASHCARDS_SCHEMA`, preserving the original quiz and topic
+reserves. New regressions assert 65,536 for quiz/topic calls at a 262,144-token window, 8,192 for
+flashcards, and unchanged behavior for smaller windows. The recorded one-call flashcard replay
+remains applicable because its dispatch parameters are unchanged; it is not relabelled as a
+new provider run. Successful final deck calls used at most 7,128 completion tokens. No provider
+thinking extension or shared transport change was made.

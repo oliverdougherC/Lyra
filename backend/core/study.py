@@ -79,9 +79,9 @@ _RETRY_HINT_RESERVE = 256
 # count is fixed so a bad endpoint cannot multiply model calls without bound.
 _MAX_ATTEMPTS = 2
 
-# A study call writes at most six cards or thirty quiz questions. A very large
-# context window must not authorize tens of thousands of output tokens for that task.
-_STUDY_OUTPUT_TOKEN_CAP = 8_192
+# A flashcard call writes at most six cards. Bound pathological structured output
+# independently of the window; quizzes retain their reserve for longer reasoning.
+_FLASHCARD_OUTPUT_TOKEN_CAP = 8_192
 
 INTERRUPTED_MESSAGE = "Interrupted, please retry"
 
@@ -1118,7 +1118,8 @@ def _call_json(
 
     Every study call funnels through here, which is where the context-window invariant is
     enforced rather than merely calculated (PLA-298): the output reserve, capped at
-    8,192 tokens for this bounded task, is sent as `max_tokens`. The prompt is refused
+    8,192 tokens for flashcard calls, is sent as `max_tokens`. Topic and quiz calls
+    retain the window reserve. The prompt is refused
     locally if it exceeds the input ceiling. The
     callers trim toward this ceiling first, so the refusal is a backstop against a prompt
     that slipped past the budget, never the normal path. A reply the endpoint truncates at
@@ -1129,6 +1130,9 @@ def _call_json(
     """
     if _prompt_tokens(messages) > _input_ceiling(config):
         raise LyraError(CONTEXT_TOO_SMALL_MESSAGE)
+    output_tokens = generation_reserve(config.context_window)
+    if schema == prompts.FLASHCARDS_SCHEMA:
+        output_tokens = min(_FLASHCARD_OUTPUT_TOKEN_CAP, output_tokens)
     reply = asyncio.run(
         client.complete(
             config.endpoint_url,
@@ -1137,7 +1141,7 @@ def _call_json(
             messages,
             temperature=client.DETERMINISTIC_TEMPERATURE,
             schema=schema,
-            max_tokens=min(_STUDY_OUTPUT_TOKEN_CAP, generation_reserve(config.context_window)),
+            max_tokens=output_tokens,
             request_timeout=client.BACKGROUND_TIMEOUT,
             fail_on_truncation=True,
         )

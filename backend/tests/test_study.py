@@ -1859,7 +1859,7 @@ def test_covered_questions_are_bounded_and_count_toward_chunk_admission(
     assert study._prompt_tokens(messages) <= ceiling
 
 
-def test_large_context_does_not_authorize_a_book_length_study_reply(
+def test_large_context_does_not_authorize_a_book_length_flashcard_reply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 262144)
@@ -1874,5 +1874,23 @@ def test_large_context_does_not_authorize_a_book_length_study_reply(
         config, [{"role": "user", "content": "two cards"}], study.prompts.FLASHCARDS_SCHEMA
     )
     assert captured["max_tokens"] == 8192
+    assert captured["fail_on_truncation"] is True
+    assert "enable_thinking" not in captured
+
+
+@pytest.mark.parametrize("schema", [study.prompts.QUIZ_SCHEMA, study.prompts.TOPICS_SCHEMA])
+def test_deck_output_cap_preserves_other_study_call_reserves(
+    monkeypatch: pytest.MonkeyPatch, schema: study.client.JsonSchema
+) -> None:
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 262144)
+    captured: dict[str, object] = {}
+
+    async def complete(*args: object, **kwargs: object) -> str:
+        captured.update(kwargs)
+        return "{}"
+
+    monkeypatch.setattr(study.client, "complete", complete)
+    study._call_json(config, [{"role": "user", "content": "grounded study"}], schema)
+    assert captured["max_tokens"] == study.generation_reserve(262144) == 65536
     assert captured["fail_on_truncation"] is True
     assert "enable_thinking" not in captured

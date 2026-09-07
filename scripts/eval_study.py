@@ -186,9 +186,13 @@ def main() -> None:
             "locality": "loopback" if is_local_endpoint(config.endpoint_url) else "remote",
             "tools_supported_stored": config.tools_supported,
             "context_window": config.context_window,
-            "max_tokens": min(
-                study._STUDY_OUTPUT_TOKEN_CAP, generation_reserve(config.context_window)
-            ),
+            "max_tokens": {
+                "flashcards": min(
+                    study._FLASHCARD_OUTPUT_TOKEN_CAP, generation_reserve(config.context_window)
+                ),
+                "quiz_questions": generation_reserve(config.context_window),
+                "study_topics": generation_reserve(config.context_window),
+            },
             "temperature": client.DETERMINISTIC_TEMPERATURE,
             "concurrency": 1,
             "request_timeout_seconds": {
