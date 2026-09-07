@@ -39,4 +39,4 @@ APP="$REPO_ROOT/src-tauri/target/release/bundle/macos/Lyra.app"
 uv run --no-sync python scripts/release_metadata.py --bundle "$APP" \
   --source "$(git rev-parse HEAD)"
 uv run --no-sync python scripts/sign_local_app.py "$APP"
-uv run --no-sync python scripts/install_local_app.py "$APP" --open "$@"
+uv run --no-sync python scripts/install_local_app.py "$APP" "$@"

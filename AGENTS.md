@@ -12,19 +12,20 @@ tests, or a frontend-only build is not sufficient delivery.
   identity across rebuilds, as documented in `docs/local-deployment.md`. Ad-hoc signing resets
   the backend identity and can repeatedly invalidate Keychain “Always Allow” approvals.
 - Run the frozen-backend smoke check against the completed, signed app bundle.
-- If Lyra is running, quit it gracefully before replacing its bundle and reopen the
-  rebuilt app afterward. Preserve the user's application data and settings.
-- Verify the rebuilt app and its backend start successfully. If rebuilding or launch
-  verification fails, resolve the failure or explicitly report the blocker; do not
-  present a source-only fix as complete.
+- Verify the rebuilt backend with disposable profiles. Native acceptance requires a genuinely
+  isolated account/device with no incumbent sharing the compiled-ID single-instance endpoint.
+  Backend `LYRA_*` selectors and null/fail Keyring do not isolate WebKit's default store or IPC.
+  Do not launch/select/reopen the production identity on the normal account as a test.
+- Report unavailable native acceptance separately; continue safe builds and frozen-backend checks.
 
-The canonical local app is `/Applications/Lyra.app`. For local product delivery, quit Lyra and
-run `./scripts/build_local_app.sh`, then verify the installed app opens. This command builds,
-signs, verifies, and replaces the canonical install, removing the temporary build-output app.
-Do not leave runnable Lyra.app copies in worktrees or launch a stale review bundle. The
-`src-tauri/target/release/bundle/macos/Lyra.app` path is an intermediate build artifact only.
-Do not replace a newer build with an older branch merely because its version string matches;
-check the embedded source revision and the intended checkout before installing.
+The canonical normal installation is `/Applications/Lyra.app`. Only use
+`./scripts/build_local_app.sh` for explicitly authorized installation; it replaces that app and
+consumes the intermediate build bundle. It does not open the app unless `--open` is explicit.
+Quit an authorized installation gracefully before replacement and preserve application data.
+For integration review, retain `src-tauri/target/release/bundle/macos/Lyra.app` and use the
+lower-level build steps in `docs/local-deployment.md`. Validate the installer against a copy at
+an explicit private destination without `--open`; do not replace the normal installed app.
+Check embedded source revisions before installation, even when version strings match.
 
 ## Documentation impact
 

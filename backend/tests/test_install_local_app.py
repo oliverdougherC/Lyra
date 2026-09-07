@@ -182,3 +182,43 @@ def test_open_happens_only_after_success(installation, monkeypatch):
     monkeypatch.setattr(installer, "run", open_installed)
     assert installer.main() == 0
     assert calls == [("/usr/bin/open", str(destination))]
+
+
+@pytest.mark.parametrize("open_requested", [False, True])
+def test_build_wrapper_opens_only_when_explicit(tmp_path, open_requested):
+    """Execute the real wrapper with inert build tools and inspect installer arguments."""
+    import os
+    import subprocess
+
+    root = tmp_path / "checkout"
+    scripts = root / "scripts"
+    scripts.mkdir(parents=True)
+    (root / "frontend").mkdir()
+    shutil.copy2(Path(__file__).resolve().parents[2] / "scripts/build_local_app.sh", scripts)
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    log = tmp_path / "commands"
+    for name in ("python3", "uv", "pnpm", "git", "uname"):
+        tool = tools / name
+        tool.write_text(
+            "#!/bin/bash\n"
+            'printf "%s\\n" "$*" >> "$COMMAND_LOG"\n'
+            'if [[ "${0##*/}" == uname ]]; then echo Darwin; fi\n'
+        )
+        tool.chmod(0o755)
+    destination = tmp_path / "private/Lyra.app"
+    args = ["/bin/bash", str(scripts / "build_local_app.sh"), "--destination", str(destination)]
+    if open_requested:
+        args.append("--open")
+    subprocess.run(  # noqa: S603 — real checked-in wrapper with inert temporary build tools
+        args,
+        check=True,
+        env={**os.environ, "PATH": f"{tools}:/usr/bin:/bin", "COMMAND_LOG": str(log)},
+        capture_output=True,
+        text=True,
+    )
+    call = next(
+        line for line in log.read_text().splitlines() if "scripts/install_local_app.py" in line
+    )
+    assert f"--destination {destination}" in call
+    assert ("--open" in call.split()) is open_requested
