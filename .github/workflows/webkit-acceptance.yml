@@ -16,14 +16,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - uses: astral-sh/setup-uv@v6
 
-      - name: Install backend dependencies
-        run: uv sync --extra dev
+      - name: Install SQLite-capable backend dependencies
+        run: |
+          uv python install 3.12
+          managed_python="$(uv python find --no-project --managed-python --resolve-links 3.12)"
+          uv sync --locked --python "${managed_python}" --extra dev
+
+      - name: Verify Python resources and SQLite extension loading
+        run: uv run --no-sync python scripts/packaged_python_smoke.py
 
       - uses: pnpm/action-setup@v4
         with:

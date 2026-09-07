@@ -36,6 +36,9 @@ and the Linear Lyra project overview. Binary receipts stay beside the retained a
 recording their hashes does not change their source. Final verification must cover #85 and #86
 together; the historical #84 totals cannot substitute. A successful gate job whose check-run
 stayed pending was retried as infrastructure recovery; its original receipt was retained.
+The scheduled macOS WebKit lane previously failed before browser execution because its Python
+lacked SQLite extension loading. It now selects the same managed Python as desktop CI and runs
+the existing resource/extension smoke before acceptance; no browser test or required gate was removed.
 
 ### Remaining acceptance boundaries
 
