@@ -31,26 +31,20 @@ test.describe('Accessibility: keyboard and focus', () => {
     await clearTutorState()
   })
 
-  test('home page: class links are reachable by Tab', async ({ page }) => {
+  test('home page: class links are reachable by keyboard', async ({ page, browserName }) => {
     await page.goto('/')
-    await page.waitForLoadState('networkidle')
+    const classLink = page.locator(`#main-content a[href$="/classes/${classId}"]`)
+    await expect(classLink).toBeVisible()
 
-    // Tab until we reach a link or button inside the class list region.
-    // The exact tab count depends on the number of skip-links and header
-    // controls, so we loop up to a reasonable ceiling.
-    let reachedClassLink = false
-    for (let i = 0; i < 20; i++) {
-      await page.keyboard.press('Tab')
-      const tag = await page.evaluate(() => document.activeElement?.tagName?.toLowerCase())
-      const href = await page.evaluate(
-        () => (document.activeElement as HTMLAnchorElement)?.href ?? '',
-      )
-      if ((tag === 'a' && href.includes('/classes/')) || tag === 'button') {
-        reachedClassLink = true
-        break
-      }
+    // macOS WebKit includes links/buttons with Option-Tab when full keyboard access is off.
+    const tab = browserName === 'webkit' ? 'Alt+Tab' : 'Tab'
+    for (let i = 0; i < 40; i++) {
+      await page.keyboard.press(tab)
+      if (await classLink.evaluate((element) => document.activeElement === element)) break
     }
-    expect(reachedClassLink, 'Tab should reach a class link or action button').toBe(true)
+    await expect(classLink).toBeFocused()
+    await page.keyboard.press('Enter')
+    await expect(page).toHaveURL(new RegExp(`/classes/${classId}(?:[?]|$)`))
   })
 
   test('chat composer: Enter sends a message and focus returns to the composer', async ({
@@ -130,13 +124,30 @@ test.describe('Accessibility: keyboard and focus', () => {
   })
 
   test('loading skeleton markup includes aria-busy', async ({ page }) => {
-    // Navigate and check for aria-busy on the loading skeleton.  The window
-    // between commit and networkidle is narrow, so we use a 3s timeout.  If
-    // the page loads instantly the assertion still passes provided the
-    // skeleton rendered (even briefly) with aria-busy.
-    await page.goto('/', { waitUntil: 'commit' })
-    await expect(page.locator('[aria-busy="true"]').first()).toBeAttached({
-      timeout: 3_000,
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
     })
+    let fetched = false
+    await page.route('**/api/classes', async (route) => {
+      const response = await route.fetch()
+      expect(response.ok()).toBeTruthy()
+      fetched = true
+      await held
+      await route.fulfill({ response })
+    })
+    try {
+      await page.goto('/', { waitUntil: 'commit' })
+      await expect.poll(() => fetched).toBe(true)
+      const loading = page.getByLabel('Loading classes', { exact: true })
+      await expect(loading).toBeVisible()
+      await expect(loading).toHaveAttribute('aria-busy', 'true')
+      release()
+      await expect(loading).not.toBeVisible()
+      await expect(page.locator(`#main-content a[href$="/classes/${classId}"]`)).toBeVisible()
+    } finally {
+      release()
+      await page.unrouteAll({ behavior: 'wait' })
+    }
   })
 })

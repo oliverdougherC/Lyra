@@ -1,5 +1,8 @@
 # Learning quality follow-up — September 7, 2026
 
+> Dated workstream evidence. The implementation is integrated; these source hashes, results and
+> earlier handoff statements remain historical. See the [current integration ledger](../release-evidence.md).
+
 Follow-up to reviewed PR #80 at `2ee865c0da52c94c1f5aa056ea64a2e2de513e4e` and
 [review 5128345583](https://github.com/oliverdougherC/Lyra/pull/80#pullrequestreview-5128345583).
 The reviewed head is unchanged. This branch is stacked on it for a focused code diff.

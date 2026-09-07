@@ -1,5 +1,8 @@
 # Writer/reviewer beta evidence: PLA-152 and PLA-153
 
+> Dated workstream evidence. The implementation is integrated; these source hashes, results and
+> earlier handoff statements remain historical. See the [current integration ledger](release-evidence.md).
+
 This packet retains the baseline, intermediate repairs, negative model findings, and tested packages for PLA-152/153. Production source is frozen at **24575e9f859a220440186c106a8936b303a6510e**. All final runs and their receipts are complete; earlier 1d/39/d181 results remain intermediate and retain their own source identities. Earlier candidate designations were withdrawn when independent review found incorrect source IDs, duplicated sibling sections, and a generated-plan handoff that contradicted the requested structure. **No blanket quality or release acceptance is claimed.**
 
 A later documentation-only commit is an evidence head, not a new tested application SHA. Match source, runtime, corpus, and individual receipt fingerprints; do not treat folder names or evaluator labels such as “final” as release status. Earlier 86a34f7 evidence below remains intermediate historical evidence.

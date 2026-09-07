@@ -11,8 +11,55 @@ Python, or local server platform. The shell selects an ephemeral loopback listen
 socket and per-launch credential over inherited descriptors/stdin, and reclaims the owned sidecar
 on quit.
 
-Quit the running app gracefully before replacing its bundle. Build a development-signed local
-review artifact with the same identity across rebuilds:
+### One local installation
+
+`/Applications/Lyra.app` is the canonical local installation. For an explicitly authorized
+normal installation, quit Lyra gracefully, then run:
+
+```bash
+./scripts/build_local_app.sh
+```
+
+The command builds the current checkout, signs with the same development identity, verifies the
+installed frozen backend, and leaves the app closed. Pass `--open` only when native launch is
+explicitly intended and safe. It consumes the temporary build-output
+app after successful installation, so Spotlight has one app to launch. Installation stages and
+rollback copies stay in a hidden `.noindex` directory and are removed after success. If verification
+fails, the previous installed app is restored. A running app is never overwritten.
+
+Application data, models, logs, and Keychain settings remain outside the bundle and are preserved.
+This builds the current checkout; it does not fetch or switch branches. Use current `main` for your
+normal installation, and check the source revision before intentionally installing another branch.
+Eject mounted installer DMGs when finished; their app copies can otherwise appear in macOS searches.
+
+### Integration review and native isolation
+
+Keep the review bundle when validating an implementation pass. Use the lower-level build steps
+below, then copy the signed bundle before testing the installer at a private destination:
+
+```bash
+review_dir="$(mktemp -d /tmp/lyra-installer-review.XXXXXX)"
+ditto src-tauri/target/release/bundle/macos/Lyra.app "$review_dir/source/Lyra.app"
+uv run python scripts/install_local_app.py "$review_dir/source/Lyra.app" \
+  --destination "$review_dir/destination/Lyra.app"
+```
+
+Omit `--open`. The installer consumes only this source copy after verification and refuses any
+running Lyra; do not kill unrelated processes to bypass that refusal. Preserve retained evidence
+artifacts and the normal installation. Installation and isolated backend smoke do not prove native
+acceptance.
+
+Production-identity native testing requires a genuinely isolated account/device with no incumbent
+sharing the compiled-ID single-instance endpoint. `LYRA_*` paths and null/fail Keyring isolate
+backend fixtures, not WebKit's default store or native IPC. Do not launch, select or reopen the
+production identity on the normal account as a test. A unique-ID/nonpersistent-store variant is
+limited evidence, not candidate-equivalent or real Keychain certification. The prior normal-profile
+startup incident remains uncertain; do not infer absence of impact from backend selectors.
+
+### Packaging steps for release and troubleshooting
+
+These lower-level steps retain a review artifact; install a copy for private installer checks. Build with
+the same identity across rebuilds:
 
 ```bash
 python3 scripts/release_metadata.py --check
@@ -44,7 +91,8 @@ checks stable certificate-backed requirements for `com.lyra.desktop` and
 Moving from old ad-hoc signatures or development to distribution identity may need one new
 Keychain approval; the helper does not read credentials or change Keychain access policies.
 
-Reopen the completed app and verify native launch after signing and the frozen smoke check.
+Verify native launch only within the isolated acceptance boundary above. If unavailable, record
+that blocker separately and complete signed frozen-backend verification.
 Development signing is local review evidence, **not** Developer ID distribution/notarization.
 The protected [release pipeline](releasing.md) owns public artifacts and update delivery.
 

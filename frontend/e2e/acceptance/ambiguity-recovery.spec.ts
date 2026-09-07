@@ -55,14 +55,16 @@ async function drainStream(res: Response): Promise<void> {
   }
 }
 
-/** Wait for actual send admission, then bypass only toast pointer interception. */
-async function sendForced(page: Page, message: string): Promise<void> {
-  await page.locator('#message-composer').fill(message)
+/** Wait for send admission, then use the accessible keyboard path through recovery toasts. */
+async function sendWhenReady(page: Page, message: string): Promise<void> {
+  const composer = page.locator('#message-composer')
+  await composer.fill(message)
   const send = page.getByRole('button', { name: 'Send message', exact: true })
   // Stop can be durable before its response/reconciliation reaches the browser. A fixed
   // sleep followed by a conditional DOM click silently dropped this next message.
   await expect(send).toBeEnabled()
-  await send.click({ force: true })
+  // A forced pointer click can land on the recovery toast covering Send in WebKit.
+  await composer.press('Enter')
 }
 
 test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
@@ -96,7 +98,7 @@ test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
     })
 
     await navigateToChat(page, cls.id)
-    await sendForced(page, QUESTION)
+    await sendWhenReady(page, QUESTION)
 
     // The model was called exactly once (the original send). POLL to one: the durable commit
     // arrives, so a one-shot count can race it.
@@ -171,7 +173,7 @@ test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
     })
 
     await navigateToChat(page, cls.id)
-    await sendForced(page, 'Explain the convolution theorem.')
+    await sendWhenReady(page, 'Explain the convolution theorem.')
 
     // The durable commit lands server-side: one question, one reply, one model call.
     await expect
@@ -198,7 +200,7 @@ test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
       .toBe('')
 
     // A different question goes out with a FRESH operation ID (the stale key is spent).
-    await sendForced(page, 'Now the second theorem.')
+    await sendWhenReady(page, 'Now the second theorem.')
     await expect.poll(async () => operationIds.length, { timeout: 15_000 }).toBe(2)
     expect(operationIds[0]).toEqual(expect.any(String))
     expect(operationIds[1]).toEqual(expect.any(String))
@@ -416,14 +418,14 @@ test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
     })
 
     await navigateToChat(page, cls.id)
-    await sendForced(page, 'First question for the operation ledger.')
+    await sendWhenReady(page, 'First question for the operation ledger.')
     await expect.poll(async () => operationIds.length, { timeout: 15_000 }).toBe(1)
     expect(operationIds[0]).toEqual(expect.any(String))
     expect(typeof operationIds[0]).toBe('string')
     expect((operationIds[0] as string).length).toBeGreaterThan(0)
 
     await page.waitForTimeout(1500)
-    await sendForced(page, 'A different question, a different key.')
+    await sendWhenReady(page, 'A different question, a different key.')
     await expect.poll(async () => operationIds.length, { timeout: 15_000 }).toBe(2)
     expect(operationIds[1]).toEqual(expect.any(String))
     expect(operationIds[1]).not.toBe(operationIds[0])
@@ -462,7 +464,7 @@ test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
     })
 
     await navigateToChat(page, cls.id)
-    await sendForced(page, 'A turn that will be stopped.')
+    await sendWhenReady(page, 'A turn that will be stopped.')
     // The turn's model call is held at the barrier: the session claim is live.
     await waitForBarrier()
 
@@ -495,7 +497,7 @@ test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
     // conversation runs to completion.
     await releaseBarrier('It stopped, but the next one lands.')
     await setTutorMode('normal')
-    await sendForced(page, 'Can you continue now?')
+    await sendWhenReady(page, 'Can you continue now?')
     await expect
       .poll(async () => (await countMessages(session.id)).user.map((m) => m.content))
       .toEqual(['A turn that will be stopped.', 'Can you continue now?'])

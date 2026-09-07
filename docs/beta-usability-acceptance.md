@@ -3,7 +3,9 @@
 This is the PLA-404 implementation and acceptance register for the PR based on
 `e96bf4886977c648f9e7905c7807c806b1ae7a80`. It preserves merged PRs #73/#74/#75/#77/#78.
 The PR and Linear handoff record the exact tested source SHA and local bundle identity.
-An unmerged development candidate is not public release approval.
+Implementation is integrated through #82, including the reviewed quiz repair. The anchored
+measurements below remain historical; use the [current ledger](release-evidence.md) for combined
+verification. Implementation integration is not public release approval.
 
 ## Product behavior
 
@@ -63,10 +65,12 @@ DOM assertions, touch emulation and CSS viewport scaling do not close them. Reco
 run with source SHA, app version/build/hash, macOS and hardware, input device/reader version,
 operator, timestamp, fixture identifier, and screenshot or spoken-output notes. Preserve failures.
 
-Before any launch, the release owner must provide the candidate and prove distinct disposable
-paths for data/database/cache/logs/models plus fail-closed test credential storage through every
-child/relaunch. Do not mutate the operator's normal student profile or shared Keychain. Only the
-release owner coordinates replacing or launching the shared installed app.
+Production-native testing requires a genuinely isolated account/device with no incumbent sharing
+the compiled-ID IPC endpoint. Backend data/database/cache/log/model selectors and null/fail Keyring
+are necessary backend boundaries, but do not isolate WebKit's default store or native IPC. Do not
+launch/select/reopen production-identity Lyra on the normal account as a test. Preserve the prior
+normal-profile startup uncertainty. See [local deployment](local-deployment.md) for safe frozen
+checks and private installation; unavailable native checks remain explicitly open.
 
 | Issue | Exact remaining check and runnable procedure | Acceptance |
 | --- | --- | --- |

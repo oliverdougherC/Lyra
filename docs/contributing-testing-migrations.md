@@ -96,5 +96,6 @@ Before calling a change done:
 - verify the actual required `CI Gate` result before merging;
 - review documentation impact and update maintained guidance in the same PR;
 - run `uv run python scripts/check_docs.py` and the active-reference check;
-- rebuild, sign, smoke-check, and launch the desktop app using [local deployment](local-deployment.md);
+- rebuild, sign and smoke-check the desktop app; native launch follows the isolated acceptance
+  boundary in [local deployment](local-deployment.md), with unavailable checks recorded separately;
 - keep historical docs clearly labelled when they still mention retired surfaces.
