@@ -8,11 +8,10 @@ import {
   ListChecks,
   MoreVertical,
   Pencil,
-  Plus,
   Trash2,
 } from 'lucide-react'
 import Link from '@/router/link'
-import { useRouter } from '@/router/hooks'
+import { usePathname, useRouter, useSearchParams } from '@/router/hooks'
 import { toast } from 'sonner'
 
 import { RenameDialog } from '@/components/classes/rename-dialog'
@@ -140,51 +139,24 @@ function StudyList({ classId }: { classId: number }) {
     }
   }
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
   const study = useStudyList(classId)
-  const documents = useDocuments(classId)
-  const createQuiz = useCreateQuiz(classId)
   const renameDeck = useRenameDeck(classId)
   const renameQuiz = useRenameQuiz(classId)
   const deleteDeck = useDeleteDeck(classId)
   const deleteQuiz = useDeleteQuiz(classId)
-  const [creating, setCreating] = useState<'deck' | 'quiz' | null>(null)
+  const [creating, setCreating] = useState<'deck' | 'quiz' | null>(() =>
+    searchParams.get('create') === 'quiz' ? 'quiz' : null,
+  )
   const [renaming, setRenaming] = useState<StudyTarget | null>(null)
   const [deleting, setDeleting] = useState<StudyTarget | null>(null)
 
-  const documentsLoaded = documents.data !== undefined && !documents.isError
-  const readyCount = (documents.data ?? []).filter((item) => item.state === 'ready').length
   // Every name already taken by a deck or a quiz, so a second quick create inside the
   // same minute gets numbered instead of a twin.
   const existingTitles = [...(study.data?.decks ?? []), ...(study.data?.quizzes ?? [])].map(
     (artifact) => artifact.title,
   )
-
-  /**
-   * The one-click way in: a quiz from everything ready, named to the minute, at the
-   * defaults the dialog would have offered anyway. The dialog remains for anyone who
-   * wants to choose sources, counts, or difficulty; nobody has to visit it to start
-   * studying.
-   *
-   * Disabled until the document list has loaded: while the query is pending the ready
-   * count is not zero, it is unknown, and a fast click must not be told "nothing is
-   * ready" by a screen that has not found out yet.
-   */
-  function startPractice() {
-    if (readyCount === 0) {
-      toast.error('No documents are ready to practice from yet.')
-      return
-    }
-    createQuiz.mutate(
-      { title: quickStudyTitle('quiz', existingTitles) },
-      {
-        onSuccess: (artifact) => router.push(`/classes/${classId}/study/${artifact.id}`),
-        onError: (error) =>
-          toast.error(
-            error instanceof ApiError ? error.message : 'Could not start a practice set.',
-          ),
-      },
-    )
-  }
 
   async function onConfirmDelete() {
     if (!deleting) return
@@ -276,61 +248,19 @@ function StudyList({ classId }: { classId: number }) {
           <span className="min-w-0 flex-1 break-words text-sm">{recommended.title}</span>
         </div>
       ) : null}
-      <div className="flex flex-wrap items-center justify-end gap-3">
-        {!empty ? (
-          <div className="flex shrink-0 gap-2">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline">
-                  <Plus className="size-4" />
-                  New
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => setCreating('deck')}>
-                  <Layers />
-                  Flashcard deck
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setCreating('quiz')}>
-                  <ListChecks />
-                  Quiz
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button
-              size="sm"
-              onClick={startPractice}
-              variant={recommended ? 'outline' : 'default'}
-              disabled={createQuiz.isPending || !documentsLoaded || readyCount === 0}
-            >
-              {createQuiz.isPending ? <Spinner /> : null}
-              New quiz
-            </Button>
-          </div>
-        ) : null}
-      </div>
-
-      {/* The decks and quizzes above load from their own query; only Practice needs to
-          know which documents are ready. So a failed document query dims exactly one
-          thing, and says so rather than leaving the button dead without a word. */}
-      {documents.isError ? (
-        <p className="text-text-secondary flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-          <span>The document list did not load, so New quiz cannot tell what is ready.</span>
-          <Button variant="outline" size="sm" onClick={() => void documents.refetch()}>
-            Retry
-          </Button>
-        </p>
-      ) : null}
-
-      {documentsLoaded && readyCount === 0 ? (
-        <p className="text-text-secondary text-sm">
-          Add a document in Files and wait for it to be ready before creating a quiz.
-        </p>
-      ) : null}
       {!empty ? (
-        <p className="text-text-tertiary text-xs">
-          New quiz uses all ready class documents. Choose New to select sources.
-        </p>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button size="sm" variant="outline" onClick={() => setCreating('deck')}>
+            New deck
+          </Button>
+          <Button
+            size="sm"
+            variant={recommended ? 'outline' : 'default'}
+            onClick={() => setCreating('quiz')}
+          >
+            New quiz
+          </Button>
+        </div>
       ) : null}
       {decks.length + quizzes.length >= 10 || view.query ? (
         <div className="flex items-center gap-2">
@@ -357,27 +287,15 @@ function StudyList({ classId }: { classId: number }) {
             <EmptyMedia variant="icon">
               <Layers className="text-text-tertiary size-8" />
             </EmptyMedia>
-            {/* "No decks or quizzes yet", not "nothing to study from": this state means
-                no saved study artifacts exist, and in a class full of ready documents
-                New quiz works perfectly well from here. */}
             <EmptyTitle>No decks or quizzes yet</EmptyTitle>
             <EmptyDescription>
-              Create a quiz from all ready class documents, or choose your own sources.
+              Choose source documents to create a quiz or flashcard deck.
             </EmptyDescription>
           </EmptyHeader>
           <div className="mt-2 flex flex-wrap justify-center gap-2">
-            <Button
-              onClick={startPractice}
-              disabled={createQuiz.isPending || !documentsLoaded || readyCount === 0}
-            >
-              {createQuiz.isPending ? <Spinner /> : null}
-              New quiz
-            </Button>
+            <Button onClick={() => setCreating('quiz')}>New quiz</Button>
             <Button variant="outline" onClick={() => setCreating('deck')}>
               New deck
-            </Button>
-            <Button variant="outline" onClick={() => setCreating('quiz')}>
-              Choose quiz sources
             </Button>
           </div>
         </Empty>
@@ -428,7 +346,14 @@ function StudyList({ classId }: { classId: number }) {
         kind={creating}
         existingTitles={existingTitles}
         onOpenChange={(open) => {
-          if (!open) setCreating(null)
+          if (!open) {
+            setCreating(null)
+            if (searchParams.has('create')) {
+              const params = new URLSearchParams(searchParams)
+              params.delete('create')
+              router.replace(`${pathname}?${params}`, { scroll: false })
+            }
+          }
         }}
       />
 
@@ -626,7 +551,7 @@ function CreateStudyDialog({
   const createDeck = useCreateDeck(classId)
   const createQuiz = useCreateQuiz(classId)
 
-  const [title, setTitle] = useState('')
+  const [title, setTitle] = useState(() => (kind ? quickStudyTitle(kind, existingTitles) : ''))
   /** Null means the student has not touched the list: every ready document. */
   const [selected, setSelected] = useState<number[] | null>(null)
   const [cardsPerTopic, setCardsPerTopic] = useState('4')

@@ -13,14 +13,14 @@ import { Spinner } from '@/components/ui/spinner'
 import { ApiError } from '@/lib/api'
 import { buildSuggestedPrompts } from '@/components/chat/suggested-prompts'
 import { formatRelativeTime, formatSessionFallbackTitle } from '@/lib/format'
-import { chatHandoffUrl, quickStudyTitle, untitledDraftTitle } from '@/lib/handoff'
+import { chatHandoffUrl, untitledDraftTitle } from '@/lib/handoff'
 import { useSettings } from '@/lib/hooks/use-settings'
 import { useSessions } from '@/lib/hooks/use-chat'
 import { isTerminal, needsAttention, useDocuments } from '@/lib/hooks/use-documents'
 import { useCreateDraft, useDrafts } from '@/lib/hooks/use-drafts'
 import { useClassProfile } from '@/lib/hooks/use-profile'
 import { useSolutions } from '@/lib/hooks/use-solutions'
-import { isGenerating, useCreateQuiz, useStudyList } from '@/lib/hooks/use-study'
+import { isGenerating, useStudyList } from '@/lib/hooks/use-study'
 import type { ArtifactState } from '@/types'
 
 /**
@@ -70,7 +70,6 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
   const documentsQuery = useDocuments(classId)
   const documents = documentsQuery.data
   const { data: profile } = useClassProfile(classId)
-  const createQuiz = useCreateQuiz(classId)
   const createDraft = useCreateDraft(classId)
 
   const [question, setQuestion] = useState('')
@@ -289,25 +288,7 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
   }
 
   function startPractice() {
-    // The button is disabled until the document list has loaded, so by the time this can
-    // run, a zero really means zero rather than "the query has not answered yet".
-    if (readyCount === 0) {
-      toast.error('No documents are ready to practice from yet.')
-      return
-    }
-    const studyTitles = [...(study?.decks ?? []), ...(study?.quizzes ?? [])].map(
-      (artifact) => artifact.title,
-    )
-    createQuiz.mutate(
-      { title: quickStudyTitle('quiz', studyTitles) },
-      {
-        onSuccess: (artifact) => router.push(`/classes/${classId}/study/${artifact.id}`),
-        onError: (error) =>
-          toast.error(
-            error instanceof ApiError ? error.message : 'Could not start a practice set.',
-          ),
-      },
-    )
+    router.push(`/classes/${classId}?tab=practice&create=quiz`)
   }
 
   function startDraft() {
@@ -439,18 +420,16 @@ export function ClassOverview({ classId, className }: { classId: number; classNa
         <div className="border-border/70 flex items-center gap-2 border-b pb-2">
           <h2 className="text-xs font-medium tracking-[0.14em] uppercase">Start something</h2>
         </div>
-        {/* Practice is the default way in: one balanced session from whatever the class has
-            ready, no choosing of decks, quotas, or difficulty first. The rest of the verbs
-            stay one click away, one line below. */}
+        {/* The same quiz setup is used here and in Practice so source choices stay explicit. */}
         <div className="flex flex-col gap-3">
           {tutorReady && readyCount > 0 ? (
             <Button
               size="lg"
               className="h-11 self-start"
               onClick={startPractice}
-              disabled={createQuiz.isPending || !documentsLoaded}
+              disabled={!documentsLoaded}
             >
-              {createQuiz.isPending ? <Spinner /> : <Layers aria-hidden className="size-4" />}
+              <Layers aria-hidden className="size-4" />
               New quiz
             </Button>
           ) : null}
