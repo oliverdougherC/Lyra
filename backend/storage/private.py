@@ -60,6 +60,7 @@ import fnmatch
 import logging
 import os
 import stat
+import tempfile
 import threading
 from collections.abc import Iterable
 from pathlib import Path
@@ -139,8 +140,8 @@ def ensure_private_file(path: Path) -> None:
 
     New files are created exclusively at `0o600`, so they are private from their first
     byte. Existing files are opened with `O_NOFOLLOW`, checked through the returned
-    descriptor, and hardened through that same descriptor. This is the preparation an
-    external writer such as SQLite needs *before* it opens a predictable pathname itself.
+    descriptor, and hardened through that same descriptor. Live SQLite files must
+    instead use secure_sqlite_file to preserve process-associated advisory locks.
 
     A bounded retry tolerates the race where another connection (typically SQLite managing
     its WAL sidecars) removes the file between the exclusive create seeing EEXIST and the
@@ -155,6 +156,71 @@ def ensure_private_file(path: Path) -> None:
         _fchmod_owned(descriptor, FILE_MODE, path)
     finally:
         os.close(descriptor)
+
+
+def secure_sqlite_file(path: Path, *, create: bool = True) -> None:
+    """Secure a SQLite inode without opening/closing a descriptor on it.
+
+    POSIX close releases *all* this process's advisory locks on an inode, even
+    locks acquired by SQLite through another descriptor. Ordinary descriptor-based
+    hardening therefore corrupts SQLite's interprocess locking contract.
+
+    Publish missing files by linking an already-closed private empty inode. Existing
+    entries are checked with lstat and chmod never follows symlinks. The caller must
+    first validate the parent as owned and not writable by other users.
+    """
+    if not _POSIX:
+        if create:
+            ensure_private_file(path)
+        else:
+            harden_file_if_present(path)
+        return
+    for _ in range(_SIDECAR_RACE_RETRIES + 1):
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            if not create:
+                return
+            descriptor, temporary_name = tempfile.mkstemp(prefix=".lyra-sqlite-", dir=path.parent)
+            temporary = Path(temporary_name)
+            try:
+                try:
+                    _fchmod_owned(descriptor, FILE_MODE, temporary)
+                finally:
+                    # This inode is not visible at a SQLite pathname until after
+                    # close, so SQLite cannot yet have acquired a lock on it.
+                    os.close(descriptor)
+                # If another connection created it, validate its entry below.
+                with contextlib.suppress(FileExistsError):
+                    os.link(temporary, path, follow_symlinks=False)
+            finally:
+                temporary.unlink(missing_ok=True)
+            continue
+        _assert_owned_entry(info, path, is_dir=False)
+        try:
+            if stat.S_IMODE(info.st_mode) != FILE_MODE:
+                try:
+                    os.chmod(path, FILE_MODE, follow_symlinks=False)
+                except (NotImplementedError, OSError) as exc:
+                    if isinstance(exc, FileNotFoundError):
+                        continue
+                    if isinstance(exc, OSError) and exc.errno in _MODE_UNSUPPORTED:
+                        logger.warning("Filesystem for %s does not support POSIX modes", path)
+                    else:
+                        raise PrivacyContractError(
+                            f"could not secure SQLite file {path} without following symlinks"
+                        ) from exc
+            after = os.lstat(path)
+        except FileNotFoundError:
+            continue
+        _assert_owned_entry(after, path, is_dir=False)
+        if (after.st_dev, after.st_ino) == (info.st_dev, info.st_ino):
+            return
+    if not create and not path.exists():
+        return
+    raise FileNotFoundError(
+        errno.ENOENT, "SQLite file changed during privacy preparation", str(path)
+    )
 
 
 def _open_or_create_nofollow(path: Path) -> int:
@@ -324,8 +390,8 @@ def harden_dir(path: Path) -> None:
 def harden_file(path: Path) -> None:
     """Set a file to `0o600`, without following a symlink at `path`.
 
-    For a file Lyra owns and expects to be real - a rendered cache entry, the database and
-    its sidecars - a symlink here fails closed rather than chmodding the link's target.
+    For a file Lyra owns and expects to be real, such as a rendered cache entry. A
+    symlink fails closed. Live SQLite files must use secure_sqlite_file instead.
     """
     _harden(path, FILE_MODE, is_dir=False)
 
@@ -333,8 +399,8 @@ def harden_file(path: Path) -> None:
 def harden_file_if_present(path: Path) -> None:
     """Set a file to `0o600` if it exists, tolerating legitimate absence.
 
-    For transient files such as SQLite WAL sidecars that may be removed by another
-    connection at any moment. Opens with `O_NOFOLLOW` and hardens through the descriptor,
+    For transient non-SQLite files that may disappear at any moment. Live SQLite files
+    must use secure_sqlite_file instead. Opens with `O_NOFOLLOW` through the descriptor,
     so a symlink at the path still fails closed. If the file is absent at open time,
     returns silently - a sidecar SQLite has already removed needs no hardening. This
     eliminates the TOCTOU in a separate existence check followed by a harden call.

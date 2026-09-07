@@ -1,0 +1,25 @@
+{
+  "version": "writer-evaluation.v1",
+  "tested_sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+  "corpus_sha256": "b9d6db6e21f2bd3f217d1366fded9ad1774af0f7ceda72ccdb0b267cdabdb941",
+  "prompt_sha256": "99383ff71f3d187ff79a3870522fcc52de7cd5db43df4d103c71cf9c1965bdd3",
+  "runtime_sha256": null,
+  "harness_sha256": "558e768418c9b0e27eac06b0a98d11d32bd247cd4c43247795bdbbcdf6de0fad",
+  "model": "Qwen3.8-27B",
+  "locality": "non_loopback",
+  "context_window": 262144,
+  "runtime": "source_desktop_bootstrap",
+  "comparison_kind": "same_model_interruption",
+  "model_comparison": null,
+  "subjective_acceptance": "not_reviewed",
+  "cases": [
+    {
+      "case_id": "review_literary_invented_quote",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "review_literary_invented_quote--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false
+    }
+  ]
+}
