@@ -268,3 +268,24 @@ def test_reclaim_mode_delegates_to_helper_reclaim(
 
     assert main(stream=io.StringIO()) == 0
     assert called == [([], True)]
+
+
+def test_cas_worker_dispatch_precedes_desktop_bootstrap(monkeypatch) -> None:
+    from backend import desktop_entry
+    from backend.tools import _cas_runner
+
+    monkeypatch.setattr(sys, "argv", ["lyra-backend", "--cas-runner"])
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO('{"operation":"evaluate","arguments":{"expression":"x+1","compare_to":"x+2"}}'),
+    )
+    output = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", output)
+    # Do not impose child-only resource limits on the pytest process.
+    monkeypatch.setattr(_cas_runner, "_limit_resources", lambda: None)
+    assert desktop_entry.main() == 0
+    result = json.loads(output.getvalue())
+    assert result["ok"] is True
+    assert result["value"]["equal"] is False
+    assert result["value"]["certain"] is True

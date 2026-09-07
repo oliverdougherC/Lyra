@@ -31,6 +31,24 @@ contents require fresh independent assessment rather than trusting that stale fi
 No production-identity native application has been launched by this acceptance pass.
 
 
+### Frozen computation delivery
+
+[#87](https://github.com/oliverdougherC/Lyra/pull/87) merged the reviewed assessment repair
+as `3a58a7e`. Its signed frozen writer reruns both complete and pass with minor qualifications;
+they do not erase the same-source full-draft failures. Actual frozen Guide API checks then
+exposed a separate delivery defect: all 18 CAS attempts were policy-allowed but refused at
+runtime. The source worker returned the correct integral, while the app executable invoked
+with Python's `-m` flag parsed the computation as desktop bootstrap and exited. The worker
+module was also absent from the frozen archive. Correct unaided prose in that failed-tool
+condition cannot certify the successful-CAS Guide path.
+
+The follow-up uses an explicit frozen CAS entrypoint before desktop bootstrap, preserving the
+existing bounded subprocess and source-Python path. Its literal runner import makes packaging
+collection explicit. Mandatory frozen smoke now checks a real integral and a false comparison,
+so readiness/authentication alone cannot hide this defect again. The prior signed candidate is
+retained as failed evidence; final rebuilt-byte and model/tool receipts are on the repair PR and
+PLA-160. No native shell, endpoint, tool permission or model support policy was changed.
+
 ### Bounded writer and Guide evidence
 
 Authorized configuration remained Qwen3.8-27B, declared window 262,144, synthetic data,

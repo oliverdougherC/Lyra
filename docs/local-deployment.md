@@ -156,6 +156,10 @@ Tauri webview
 
 No active shipping contract depends on the older bundled scrape stack.
 
+The frozen smoke check exercises authentication plus isolated symbolic integration and a false
+expression comparison through the packaged worker. A successful health response alone does not
+establish that computation tools are included or launch correctly.
+
 ## Health and acceptance
 
 `GET /api/health/live` checks only whether FastAPI can answer a request.
