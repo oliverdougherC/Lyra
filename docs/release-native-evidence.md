@@ -103,3 +103,19 @@ Mac16,8, 24 GiB, macOS 27.0 (26A5416b). It cannot establish the required 8 GiB
 settled-tree, sustained-study/writing, helper-eviction or sleep/wake gates.
 Installed N→N+1/rollback, native Print and final integrated UX/model checks remain
 separate owner-coordinated acceptance work.
+
+## September 6 runtime follow-up: actual packaged cache boundary
+
+The hardened-ad-hoc review binary from source `4822272` passed all eleven tracked frozen
+backup/restore checks, including corrupt/future archive refusal and cross-profile authenticated
+original-document download. Its SHA-256 was
+`1794a222a4e8562d51ee7b276f2f4656b20826bb41ce597d50dcfaff2b108a41`.
+This is pre-integration evidence, not final release approval.
+
+An actual cold-cache download failure followed by `/api/documents/1/reingest` returned HTTP500
+in that binary. Page/figure rendering and cleanup incorrectly supplied the durable data root
+to the no-follow cache operation even though packaged pages live under the separate cache root.
+Three separate-cache regressions failed before repair. The callers now use the configured
+cache root, retaining the same no-follow behavior; the entire render suite exercises both
+source-default and separate-cache layouts. The earlier failure receipt is retained and the
+refrozen model first-use/retry/offline result must be recorded against the new binary.
