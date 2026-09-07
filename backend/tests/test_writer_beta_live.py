@@ -159,7 +159,7 @@ def test_restart_between_review_chunks_keeps_settled_revision(live_run, db, monk
     revisions = []
     interrupted = False
     original = live_drafts.get_live_suggestion(db, suggestion_id)["blocks"][0]["content"]
-    revised = original.replace("Distinct passage 1.", "Precisely corrected passage 1.").strip()
+    revised = original.replace("Distinct passage 1.", "Precisely corrected passage 1.")
 
     def complete(config, messages, schema=None, **kwargs):
         nonlocal interrupted

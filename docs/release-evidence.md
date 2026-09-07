@@ -1,5 +1,87 @@
 # Beta release evidence ledger
 
+## Release acceptance decision — September 7, 2026
+
+Baseline main: `2918598de2aadf47f2456d8605f0bdd07e824ebd`. This bounded pass owns
+repair integration and acceptance, not release PR #79, tags, or public promotion.
+**Decision: NO-GO for public promotion.** The completed implementation/evaluator scopes
+below remain completed. The bounded delivery repair does not close semantic or native gates.
+Use the [compact human worksheet](release-acceptance-worksheet.md) after candidate isolation.
+
+| Requirement | Current evidence/source | Next concrete action | Status | Responsible party |
+| --- | --- | --- | --- | --- |
+| Writer useful completion | Nine repaired-source deliveries complete, including observed review restart; three full drafts still fail independent factual review | Retain scoped delivery repair; resolve full-draft measurement/population claims on unchanged rubric | fail (semantics) | Acceptance owner / configuration owner |
+| Guide factual explanation | Fresh production-route repeats: 14/16 pass, same critical constant-factor misconception 2/2 despite correct CAS input | Compare an already-authorized alternative configuration when available; owner retains supported-scope decision | fail | Configuration owner |
+| Study generation | Two retained 14-card ecology decks; bounded internal retry and independent qualifications | Preserve control and repeat on assembled candidate when affected | pass (qualified) | Acceptance owner |
+| Software integration | 3,506 backend tests/1 skip; 1,073 frontend; 93 rendered/3 engine skips; 134 Chromium; 58 Rust; lint/types/audits pass | Protected current-base CI and final-main rebuild; final receipts on repair PR | pass (local source); final receipt required | Acceptance owner |
+| Artifact integrity | Accessible baseline development/distribution app trees, DMG/archive hashes recomputed and match #76 receipt | Rebuild and fingerprint final clean-main bytes after repairs | pass (baseline) | Acceptance owner |
+| Native isolation | Only normal account available; no disposable account/device established | Supply authorized disposable macOS account/device with GUI access, separate WebKit/IPC and synthetic credentials | blocked | Host owner |
+| Native first launch/model/save/Keychain/Print | Existing protocols; backend path overrides do not isolate WebKit/IPC | Execute protocols only after native isolation proof | blocked | Native tester |
+| Installed N→N+1/rollback | Signature and private no-open installer evidence is not installed update | Private supported builds and test feed in isolated installation | blocked | Native tester |
+| Sustained interruptions/sleep-wake | Existing soak criteria; no sustained native observation | Declare duration/workload and execute on isolated candidate | blocked | Native tester |
+| PLA-404 physical/human checks | Existing 11 issue-specific procedures; software fixes remain merged | Stable-candidate IME/AT/zoom/touch/unfamiliar-user worksheet | not run | Human tester |
+| 8 GB measurements | Recorded owner waiver | Retain waiver without measured-performance claim | owner-waived | Owner |
+| Distribution clearance | Recorded owner attestation | Retain attestation and notices | owner-attested | Owner |
+| Updater key recovery | Persistent key retained; off-device recoverability unconfirmed | Owner confirms recoverable encrypted off-device backup | blocked | Owner |
+| Release/public delivery | #79 open beta.1; manual stage also reaches promotion | Separate owner release authorization; rebuild beta.1, then anonymous smoke after authorized promotion | not run | Owner |
+
+Baseline artifacts remain at the retained #76 locations. Provider artifact manifest validation
+matched 44 entries; `semantic-review.json` differs from its recorded digest, so its current
+contents require fresh independent assessment rather than trusting that stale fingerprint.
+No production-identity native application has been launched by this acceptance pass.
+
+
+### Bounded writer and Guide evidence
+
+Authorized configuration remained Qwen3.8-27B, declared window 262,144, synthetic data,
+serialized provider requests, no web research or normal-profile changes. Assessments retain
+4,096 output tokens and disabled thinking; Guide retains temperature 0, 65,536 output reserve,
+24 tool rounds and 600-second bound. Endpoint/server capacity is not independently certified.
+
+The original museum and full-live receipts remain **failed** at the output ceiling. Their
+saved stage transitions place the failures in section skeptic and overall review respectively;
+raw per-call provider output/usage was not retained there, so the exact original token contents
+cannot be reconstructed as fact. Three fresh unchanged-baseline runs of each request all
+completed: the original cutoff was **not reproduced**. Museum passed independent review 3/3;
+full draft passed with qualifications 1/3 and needed substantive revision 2/3.
+
+A fresh baseline overall assessment returned 2,554 completion tokens, zero reported reasoning
+tokens, `finish_reason=stop`, and a 10,215-character self-debate inside `problem`. It reconsidered
+supported facts, treated separately preserved notes as missing, and sent a document-wide
+instruction to one block. This is directly observed malformed assessment content, not an
+input-context refusal, deadline, transport error or proof of model-only causation for the old
+cutoffs. The repair requests concise final per-block findings, bounds each field to 2,000
+characters, and gives only these two assessment stages one fresh same-cap attempt after cutoff
+or field overflow. No source evidence is dropped, no partial verdict accepted, and recovered
+failures remain durable warnings. Exact edits also preserve unrelated edge whitespace.
+
+After repair: museum, three nearby controls and two independently selected transfer cases pass
+core review (historical-label/voice qualifications retained). Two uninterrupted full drafts and
+one actually restarted review deliver complete separate proposals with original notes unchanged,
+but all three need semantic revision: a non-rider survey is claimed to distinguish prior trip
+growth without rider-level measurements, or non-riders become an invented “missing half” of
+the campus. Length and distinctive-voice concerns remain. Short empty model assessments do not
+establish correctness. There is **no demonstrated full-draft semantic improvement** from this
+small sample; no rubric or support scope was changed. Controlled client/HTTP regressions prove
+one-attempt recovery and truthful exhaustion; fresh live runs did not need that recovery.
+
+Guide repeats the precise false rule that extracting `exp(-t)` requires the entire integrand
+to be constant in the integration variable. Only the extracted factor must be independent;
+the student's omitted `exp(tau)` factor is the actual error. Correct CAS integrals and intact
+history reached both final calls. Conceptual explanation, direct checking, explicit worked
+solution, conditional-division and two independent factor variations pass twice; osmosis avoids
+a concentration-equality guarantee. A failed lambda tool call and its valid follow-up remain
+in the transcript. No demonstrated Guide delivery loss justified another prompt patch. These
+are independent-agent judgments, **not human acceptance**; only one authorized configuration
+was available.
+
+Hash-bound requests, responses, usage, all baseline/repair attempts and independent judgments
+are retained under `/Users/ofhd/Developer/lyra-release-acceptance-evidence-20260907/` on the
+original host. The source-bound compact receipt and final candidate hashes are attached to the
+repair PR/Linear handoff; the unresolved findings above are usable without that directory.
+Initial local check failures (missing audit extra and Rust starting before frontend assets
+existed) were invocation-order/setup failures, corrected without product changes and retained.
+
 ## Implementation integration — September 7, 2026
 
 The reviewed implementation stack **#81 → #83 → #80 → #82 (including quiz repair) → #85 → #86**

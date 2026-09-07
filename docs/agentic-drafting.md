@@ -87,3 +87,12 @@ well below the endpoint's output ceiling. Planning and review use constrained JS
 small schemas. Long documents scale by increasing the number of jobs, not the size of a
 single completion. Retries are bounded per job, and already persisted blocks survive a
 later failure or cancellation.
+
+Section and document assessments request concise final findings, retaining the source quote
+needed to justify each factual correction. Each assessment text field is limited to 2,000
+characters. A cut-off or overlong assessment receives one fresh attempt with the same output
+budget, original evidence, cancellation ownership and absolute run deadline. The first failure
+is retained as a run warning. A second invalid assessment leaves the review incomplete and
+preserves accepted writing and partial proposals. Other structured stages retain their existing
+retry policy. Document review targets individual proposal blocks; the separately preserved
+student document is not missing merely because it is absent from the proposal chunk.

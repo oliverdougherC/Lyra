@@ -1740,20 +1740,25 @@ TRANSITION_REVIEW_SCHEMA = JsonSchema(
     },
 )
 
+ASSESSMENT_FIELD_MAX_CHARS = 2000
+
 OVERALL_ASSESSMENT_SCHEMA = JsonSchema(
     name="writer_overall_assessment",
     schema={
         "type": "object",
         "properties": {
-            "summary": {"type": "string"},
+            "summary": {"type": "string", "maxLength": ASSESSMENT_FIELD_MAX_CHARS},
             "issues": {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "block_key": {"type": "string"},
-                        "problem": {"type": "string"},
-                        "revision_instruction": {"type": "string"},
+                        "block_key": {"type": "string", "maxLength": ASSESSMENT_FIELD_MAX_CHARS},
+                        "problem": {"type": "string", "maxLength": ASSESSMENT_FIELD_MAX_CHARS},
+                        "revision_instruction": {
+                            "type": "string",
+                            "maxLength": ASSESSMENT_FIELD_MAX_CHARS,
+                        },
                     },
                     "required": ["block_key", "problem", "revision_instruction"],
                     "additionalProperties": False,
@@ -1771,8 +1776,11 @@ SKEPTIC_SCHEMA = JsonSchema(
         "type": "object",
         "properties": {
             "passes": {"type": "boolean"},
-            "faults": {"type": "array", "items": {"type": "string"}},
-            "rewrite_instruction": {"type": "string"},
+            "faults": {
+                "type": "array",
+                "items": {"type": "string", "maxLength": ASSESSMENT_FIELD_MAX_CHARS},
+            },
+            "rewrite_instruction": {"type": "string", "maxLength": ASSESSMENT_FIELD_MAX_CHARS},
         },
         "required": ["passes", "faults", "rewrite_instruction"],
         "additionalProperties": False,
@@ -2088,13 +2096,25 @@ def build_overall_assessment_prompt(
     """Assess one context-sized chunk and return only targeted block instructions."""
     return _review_messages(
         (
-            "Act as the document-level editor for this chunk. Check assignment coverage, "
+            "Return JSON with summary (string) and issues (array of objects with "
+            "block_key, problem and revision_instruction strings). "
+            "Act as the document-level editor for this separate proposal chunk. The accepted "
+            "student document and original notes remain separate and preserved; their "
+            "absence here is not deletion and does not require copying them into the proposal. "
+            "Return concise final findings only, never deliberation or abandoned findings. "
+            "Keep each summary, problem and instruction within 2000 characters, including "
+            "the shortest source quote needed to establish a factual fault. "
+            "Each revision instruction must apply only to its named block, never request "
+            "rewriting other blocks or the whole document. Check assignment coverage, "
             "argument progression, contradictions, repetition, support, pacing, tone, "
             "and terminology against the global document map. Report only material, "
             "actionable issues. Point every issue at one stable block key and give a "
             "bounded revision instruction; never return a rewritten document. "
             "Verify every alleged factual error against the supplied source revision "
-            "and quote the relevant source wording in the problem. A fact need not "
+            "and quote the relevant source wording in the problem. Distinguish missing "
+            "measurements from evidence that an effect or population change is absent. "
+            "A proposed method does not guarantee complete or representative coverage. "
+            "A fact need not "
             "also appear in student notes to be supported. Distinguish a proposed "
             "future method from an assertion that it happened or is guaranteed to work. "
             "Do not change first-person stance, personal testimony or distinctive "
@@ -2192,6 +2212,12 @@ def build_skeptic_prompt(
     """Structured adversarial read for one draft/critique/rewrite iteration."""
     return _review_messages(
         (
+            "Return concise final findings only, never deliberation or abandoned findings. "
+            "Keep each fault and rewrite_instruction within 2000 characters, including "
+            "the shortest source quote needed to establish a factual fault. "
+            "Return JSON with passes (boolean), faults (array of strings), and "
+            "rewrite_instruction (string). When no correction is needed return passes=true, "
+            "faults=[] and an empty rewrite_instruction. "
             "Check whether this section satisfies the student's requested correction. "
             "Fail only for a material factual error, unsupported assertion, contradiction, "
             "or an explicit student requirement still unmet. Do not manufacture a "
@@ -2203,7 +2229,9 @@ def build_skeptic_prompt(
             "not hard limits unless the student explicitly makes them so. Do not fail "
             "a focused correction merely for retaining existing length, voice or a "
             "clear but different transition. Verify alleged factual faults against "
-            "the exact source revision; quote the support for a correction. When "
+            "the exact source revision; quote the support for a correction. Missing "
+            "measurements do not establish that an effect or population change is absent, "
+            "and proposed methods do not guarantee complete or representative coverage. When "
             "evidence does not identify a label or chronology, do not invent one. "
         )
         + _JSON_ONLY,
