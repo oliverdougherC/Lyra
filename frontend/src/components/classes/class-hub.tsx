@@ -184,8 +184,8 @@ export function ClassHub({ classId, tab }: { classId: number; tab: HubTab }) {
                 // nudge rides on the class itself and opens the sheet where they are resolved.
                 <button
                   type="button"
-                  onClick={() => {
-                    detailsTriggerRef.current = document.activeElement as HTMLElement | null
+                  onClick={(event) => {
+                    detailsTriggerRef.current = event.currentTarget
                     setDetailsOpen(true)
                   }}
                   title="Open the class details to confirm them"

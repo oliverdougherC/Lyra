@@ -35,7 +35,9 @@ Cached content survives refresh errors, and recovery buttons expose pending and 
 The test receipt in the PR/Linear differentiates full production-frontend browser tests with
 intercepted synthetic APIs from real-backend acceptance with a deterministic tutor fixture. Neither
 is a real-provider quality result or physical-device acceptance. Before/after captures use only
-synthetic classes, filenames, questions, commands and writing.
+synthetic classes, filenames, questions, commands and writing. The macOS WebKit keyboard matrix
+uses Option-Tab to include buttons when full keyboard access is off; this is browser automation,
+not physical keyboard or spoken screen-reader acceptance.
 
 Required reproducible commands from this worktree:
 

@@ -14,6 +14,6 @@ Only synthetic text, filenames, commands and endpoints appear.
 | Practice | [before](practice-before-dark-narrow.png) | [after](practice-after-dark-narrow.png) | Actual components, narrow dark fixture |
 
 Full local screenshot sets and runnable capture scripts are retained in `output/playwright` and
-`frontend/output/playwright/practice` in the implementation worktree. Reproducible full-app
+`output/playwright/practice` in the implementation worktree. Reproducible full-app
 regressions are checked in under `frontend/e2e`. See [acceptance register](../beta-usability-acceptance.md)
 for physical and unfamiliar-user protocols, limitations, and ownership.
