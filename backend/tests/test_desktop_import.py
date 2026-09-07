@@ -1245,3 +1245,16 @@ def test_import_refuses_symlinked_live_credential_before_publication(
     assert _publish_cli(monkeypatch)[0] == 1
     assert outside.read_text() == "synthetic outside sentinel"
     assert not (settings.uploads_dir / "1" / "1-lecture.pdf").exists()
+
+
+def test_stage_preserves_profile_files_without_local_model_directory(tmp_path, monkeypatch):
+    """Packaged model overrides leave no models folder to create the stage implicitly."""
+    data = tmp_path / "destination" / "profile"
+    data.mkdir(parents=True)
+    monkeypatch.setattr(settings, "data_dir", data)
+    marker = data / ".permissions-hardened"
+    marker.write_text("synthetic-private-profile", encoding="utf-8")
+    desktop_import_module._copy_profile_into_stage()
+    staged = desktop_import_module._stage_data_path() / marker.name
+    assert staged.read_text(encoding="utf-8") == marker.read_text(encoding="utf-8")
+    assert staged.parent.stat().st_mode & 0o777 == 0o700

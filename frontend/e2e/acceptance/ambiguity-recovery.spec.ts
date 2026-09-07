@@ -55,15 +55,14 @@ async function drainStream(res: Response): Promise<void> {
   }
 }
 
-/** Fill the composer and send, using an in-page DOM click so a transient failure toast cannot
- *  intercept the Send button (Playwright's actionability check would block a covered element). */
+/** Wait for actual send admission, then bypass only toast pointer interception. */
 async function sendForced(page: Page, message: string): Promise<void> {
   await page.locator('#message-composer').fill(message)
-  await page.waitForTimeout(200)
-  await page.evaluate(() => {
-    const btn = document.querySelector('[aria-label="Send message"]') as HTMLButtonElement | null
-    if (btn && !btn.disabled) btn.click()
-  })
+  const send = page.getByRole('button', { name: 'Send message', exact: true })
+  // Stop can be durable before its response/reconciliation reaches the browser. A fixed
+  // sleep followed by a conditional DOM click silently dropped this next message.
+  await expect(send).toBeEnabled()
+  await send.click({ force: true })
 }
 
 test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
@@ -442,10 +441,24 @@ test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
     await clearTutorState()
     await setTutorMode('barrier')
 
+    // Delay both real terminal responses to exercise backend settlement preceding
+    // browser send admission. The helper must await admission instead of silently
+    // dropping Send while either terminal response can still be in flight.
+    let firstTurn = true
+    await page.route('**/api/classes/*/sessions/*/agent-chat', async (route) => {
+      if (!firstTurn) return route.continue()
+      firstTurn = false
+      const response = await route.fetch()
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      return route.fulfill({ response })
+    })
+
     let stopHits = 0
     await page.route('**/api/classes/*/sessions/*/agent-chat/stop', async (route) => {
       stopHits += 1
-      return route.continue()
+      const response = await route.fetch()
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+      return route.fulfill({ response })
     })
 
     await navigateToChat(page, cls.id)
@@ -483,6 +496,9 @@ test.describe('PLA-313/PLA-295 conversation ambiguity recovery', () => {
     await releaseBarrier('It stopped, but the next one lands.')
     await setTutorMode('normal')
     await sendForced(page, 'Can you continue now?')
+    await expect
+      .poll(async () => (await countMessages(session.id)).user.map((m) => m.content))
+      .toEqual(['A turn that will be stopped.', 'Can you continue now?'])
     await expect
       .poll(
         async () => {

@@ -527,7 +527,8 @@ class TestAdoption:
         instance.stop()
 
         assert len(signals_sent) >= 1
-        assert instance._adopted_pid is None
+        # Signals are mocked: this PID is still alive and must remain tracked.
+        assert instance._adopted_pid == pid
 
     def test_adopted_unhealthy_server_is_terminated_and_restarted(
         self, monkeypatch: pytest.MonkeyPatch
@@ -974,7 +975,9 @@ class TestOwnershipRecording:
         monkeypatch.setattr(llama_server, "_process_start_token", lambda pid: None)
 
         terminated: list[object] = []
-        monkeypatch.setattr(llama_server, "_terminate", lambda p: terminated.append(p))
+        monkeypatch.setattr(
+            llama_server, "_terminate", lambda p: terminated.append(p) or p.terminate()
+        )
         monkeypatch.setattr(llama_server.subprocess, "Popen", lambda argv, **kw: _AliveProcess())
 
         with pytest.raises(ConfigurationError, match="ownership"):

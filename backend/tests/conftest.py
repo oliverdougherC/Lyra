@@ -1,6 +1,7 @@
 """Shared fixtures. Every test runs against a temporary database and data directory."""
 
 import sqlite3
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -71,3 +72,14 @@ def class_id(db: sqlite3.Connection) -> int:
     cursor = db.execute("insert into classes (name, code) values ('Calculus II', 'MATH 201')")
     db.commit()
     return int(cursor.lastrowid or 0)
+
+
+@pytest.fixture(autouse=True)
+def isolated_helper_quit_admission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each test represents a fresh backend lifetime; quit stays permanent within it."""
+    from backend.llm.embed_server import embedding_server
+    from backend.llm.ocr_server import ocr_server
+    from backend.llm.rerank_server import rerank_server
+
+    for helper in (embedding_server, ocr_server, rerank_server):
+        monkeypatch.setattr(helper, "_quitting", threading.Event())
