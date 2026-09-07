@@ -435,3 +435,25 @@ def test_lowercase_e_is_not_silently_reinterpreted_as_eulers_number() -> None:
     assert exponential.value["comparison_status"] == "matched"
     assert uppercase.value["comparison_status"] == "matched"
     assert cas.evaluate("e + 1", "e + 2").value["difference"] == "-1"
+
+
+def test_frozen_cas_uses_worker_dispatch_without_changing_bounds(monkeypatch) -> None:
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command, 0, '{"ok":true,"value":{"result":"8/3","definite":true}}'
+        )
+
+    monkeypatch.setattr(cas.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(cas.subprocess, "run", run)
+    assert cas.integrate("x**2", "x", "0", "2").ok
+    command, options = calls[0]
+    assert command == [cas.sys.executable, "--cas-runner"]
+    assert options["timeout"] == cas.TIMEOUT_SECONDS
+    assert options["cwd"] == cas._IMPORT_ROOT
+    assert json.loads(options["input"]) == {
+        "operation": "integrate",
+        "arguments": {"expression": "x**2", "variable": "x", "lower": "0", "upper": "2"},
+    }

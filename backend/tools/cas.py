@@ -64,10 +64,15 @@ def _run(
     payload = json.dumps({"operation": operation, "arguments": arguments})
     try:
         completed = subprocess.run(  # noqa: S603
-            # `sys.executable` is an absolute interpreter path and the module name is a
+            # In a bundle sys.executable is the backend, which dispatches the worker
+            # flag before desktop bootstrap. Otherwise it is the interpreter. The module is a
             # module constant. No part of this argument vector comes from the model; the
             # model's input travels on stdin, where it cannot become an argument.
-            [sys.executable, "-m", _RUNNER_MODULE],
+            (
+                [sys.executable, "--cas-runner"]
+                if getattr(sys, "frozen", False)
+                else [sys.executable, "-m", _RUNNER_MODULE]
+            ),
             input=payload,
             capture_output=True,
             text=True,

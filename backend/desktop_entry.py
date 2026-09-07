@@ -255,6 +255,12 @@ async def run_packaged_backend(
 
 
 def main(stdin_text: str | None = None, *, stream: TextIO | None = None) -> int:
+    if "--cas-runner" in sys.argv[1:]:
+        # This process handles only the bounded computation protocol, not app startup.
+        # Keep the import literal so PyInstaller includes the worker module.
+        from backend.tools import _cas_runner
+
+        return _cas_runner.main()
     for operation in ("create", "restore"):
         flag = f"--desktop-backup-{operation}"
         if flag in sys.argv[1:]:

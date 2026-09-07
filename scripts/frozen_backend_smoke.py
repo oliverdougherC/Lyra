@@ -27,6 +27,56 @@ def _safe_failure_detail(text: str, *, profile: Path, secret: str) -> str:
     return detail[-_MAX_FAILURE_DETAIL_CHARS:]
 
 
+def run_cas_smoke(
+    executable: Path, *, environment: dict[str, str], profile: Path, secret: str
+) -> None:
+    """Exercise the packaged worker protocol without a model or source interpreter."""
+    cases = (
+        (
+            {
+                "operation": "integrate",
+                "arguments": {
+                    "expression": "x**2",
+                    "variable": "x",
+                    "lower": "0",
+                    "upper": "2",
+                },
+            },
+            {"result": "8/3", "definite": True},
+        ),
+        (
+            {
+                "operation": "evaluate",
+                "arguments": {
+                    "expression": "(x+1)**2",
+                    "compare_to": "x**2+1",
+                },
+            },
+            {"equal": False, "certain": True, "difference": "2*x"},
+        ),
+    )
+    for payload, expected in cases:
+        result = subprocess.run(  # noqa: S603 - explicit artifact and fixed worker flag
+            [str(executable.resolve()), "--cas-runner"],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            env=environment,
+            cwd=profile,
+        )
+        if result.returncode:
+            detail = _safe_failure_detail(result.stderr, profile=profile, secret=secret)
+            raise RuntimeError(f"frozen CAS worker failed: {detail}")
+        try:
+            response = json.loads(result.stdout)
+        except ValueError as exc:
+            raise RuntimeError("frozen CAS worker returned unreadable output") from exc
+        if response != {"ok": True, "value": expected}:
+            raise RuntimeError("frozen CAS worker returned an incorrect computation")
+
+
 def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, object]:
     if not executable.is_file():
         raise FileNotFoundError(executable)
@@ -121,8 +171,10 @@ def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, o
         connection.close()
         if accepted.status != 200 or body != {"status": "ok"}:
             raise RuntimeError("frozen backend authenticated health check failed")
+        run_cas_smoke(executable, environment=environment, profile=profile, secret=secret)
         return {
             "status": "passed",
+            "cas_computations": 2,
             "authenticated": True,
             "ephemeral_loopback": True,
         }
