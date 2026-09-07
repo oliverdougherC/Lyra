@@ -1,0 +1,40 @@
+{
+  "surface": "class_chat",
+  "corpus": "tutor_beta_heldout.json",
+  "evidence_version": 2,
+  "app": {
+    "sha": "700d02f63cdec1fb18f4e30a998d58db745ab7a0",
+    "dirty": true
+  },
+  "hashes": {
+    "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+    "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+    "prompts": "a8da42beaf04389a6bbd8c7d8ff88a6d62673de46606c4559c2cf6d38369b45b",
+    "agent_prompt_source": "f1ac552c43ebc68076b66e967a929566d774f0d726e16607ae69f6a3c1f4d715",
+    "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+  },
+  "model": "Qwen3.8-27B",
+  "model_identity_source": "configured; server identity not independently verified",
+  "context_window": 262144,
+  "context_window_source": "configured; maximum not independently measured",
+  "endpoint_locality": "remote",
+  "capabilities": {
+    "stored_tools_supported": null
+  },
+  "review": {
+    "deterministic": "integrity checks only",
+    "model_judge": "separate grade stage",
+    "independent_agent": "not_run",
+    "human": "not_run"
+  },
+  "synthetic_environment": true,
+  "corpus_version": "beta-heldout-1.0.0",
+  "prompt_contract_version": "2",
+  "expected_contract_version": "2",
+  "class_id": 1,
+  "session_id": 1,
+  "environment": {
+    "deterministic": true,
+    "temp": true
+  }
+}

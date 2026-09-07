@@ -1035,6 +1035,18 @@ def _check(
     statement = solving.SolveInput(
         statement=str(unit.part["content"]), label=label, preamble=unit.preamble
     ).query()
+    if unit.parent is None:
+        # Joint solutions must be checked against every question, not just the stem.
+        # Otherwise a missing part is invisible: the verifier only sees the parts the
+        # solver chose to answer and can incorrectly endorse an incomplete solution.
+        questions = [
+            f"{child['label'] or ''} {child['content']}".strip()
+            for child in artifacts.list_child_parts(conn, part_id)
+            if child["kind"] == artifacts.PROBLEM
+        ]
+        if questions:
+            statement += "\n\nSub-parts, all of which this solution must answer:\n"
+            statement += "\n".join(questions)
     artifacts.set_part_status(conn, part_id, artifacts.PART_VERIFYING)
     outcome = verification.verify(config, statement, label, solved.as_markdown())
 

@@ -6,9 +6,11 @@ with three payoffs: exact anchoring, so a region of a page can be outlined; iden
 rendering in both themes and every browser; and no new frontend dependency. Phase 3 needs
 the same rasterization for figure extraction and text recognition, so this is built once.
 
-Rendering is not free, so every page is cached under `data/pages/{document_id}/` and
-rendered only when the cache misses. The cache is disposable: deleting it costs the next
-viewer a second, and nothing else reads it.
+Rendering is not free, so every page is cached under the configured cache root's
+`pages/{document_id}/` and rendered only when the cache misses. Source runs default to
+the data root; packaged runs keep this cache separate from durable application data.
+The cache is disposable: deleting it costs the next viewer a second, and nothing else
+reads it.
 """
 
 import logging
@@ -184,7 +186,7 @@ def render_page(
             if not _raster_within_bounds(page.rect, dpi):
                 raise LyraError(TOO_LARGE_TO_RENDER)
             pixmap = page.get_pixmap(dpi=dpi)
-            private.secure_mkdir(cached.parent, root=settings.data_dir)
+            private.secure_mkdir(cached.parent, root=settings.cache_dir or settings.data_dir)
             # Staged beside the target and moved into place, because the cache is trusted
             # on the strength of the file existing: a process killed partway through a
             # direct write would leave a truncated PNG that `exists()` then serves for
@@ -285,7 +287,7 @@ def render_figure(
             # the reading column while occupying a fraction of a page: the same pixels
             # stretched over several times the area.
             pixmap = page.get_pixmap(dpi=FIGURE_DPI, clip=clip)
-            private.secure_mkdir(cached.parent, root=settings.data_dir)
+            private.secure_mkdir(cached.parent, root=settings.cache_dir or settings.data_dir)
             if not ownership.publish_current_document(
                 document_id, created_at, cached, pixmap.tobytes("png")
             ):
@@ -307,13 +309,13 @@ def discard_pages(document_id: int) -> bool:
 
     This runs from the delete path and from startup recovery, so it is held to the same
     owned-path/no-follow contract as the rest of private storage: the cache directory is
-    reached by O_NOFOLLOW descent from the data root, a symlink planted where the
+    reached by O_NOFOLLOW descent from the configured cache root, a symlink planted where the
     directory belongs is removed as a link - its target is never entered, globbed, or
     touched - and an entry inside the directory is unlinked only when it is a regular
     file or a link (which `unlink` removes as a link). Staged `*.partial` files go too:
     they are derived from the same file the pages were, and a leftover from a killed
     writer would otherwise pin the directory forever. Nothing here can be steered at
-    files outside the Lyra data tree.
+    files outside the Lyra cache tree.
 
     Returns:
         True when the cache directory is gone afterward - the goal state of a durable
@@ -333,6 +335,6 @@ def discard_pages(document_id: int) -> bool:
     """
     return private.clear_owned_dir(
         pages_dir(document_id),
-        root=settings.data_dir,
+        root=settings.cache_dir or settings.data_dir,
         patterns=("*.png", f"*{private.PARTIAL_SUFFIX}"),
     )

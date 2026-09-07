@@ -180,6 +180,7 @@ def build_plan(app_root: Path, work_root: Path, run_id: str) -> dict[str, object
         # This local execution plan contains private absolute paths. Redact them before
         # publishing evidence. Relative paths depend on the app's launch directory.
         "launch_environment": {
+            "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring",
             "LYRA_DATA_DIR": str(root / "profile"),
             "LYRA_DB_PATH": str(root / "profile" / "lyra.db"),
             "LYRA_CACHE_DIR": str(root / "cache"),
@@ -263,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
     record.add_argument(
         "--status",
         required=True,
-        choices=("pending", "completed", "blocked", "not-run"),
+        choices=("pending", "completed", "failed", "blocked", "not-run"),
         help="new step status",
     )
     record.add_argument("--note", help="replace the step note with a concise observation")

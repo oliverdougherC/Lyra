@@ -36,10 +36,16 @@ def run_smoke(executable: Path, *, timeout_seconds: float = 30.0) -> dict[str, o
     listener.listen(128)
     os.set_inheritable(listener.fileno(), True)
     secret = secrets.token_hex(32)
-    environment = os.environ.copy()
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("LYRA_") and name not in {"PYTHONPATH", "PYTHONHOME"}
+    }
     environment.update(
         {
+            "LYRA_PACKAGED": "1",
             "LYRA_DATA_DIR": str(profile / "data"),
+            "LYRA_DB_PATH": str(profile / "data" / "lyra.db"),
             "LYRA_CACHE_DIR": str(profile / "cache"),
             "LYRA_LOGS_DIR": str(profile / "logs"),
             "LYRA_MODELS_DIR": str(profile / "models"),

@@ -53,3 +53,69 @@ Native Print/PDF is **not certified**: the menu automation did not reliably acti
 The native command and save-before-print regressions exist, but a physical menu/print-preview
 check remains required. This evidence does not establish clean-machine notarization, installed
 N-to-N+1, physical accessibility,8GB memory or sustained-soak acceptance.
+
+## September 6 execution-plan follow-up: reproducible acceptance boundary
+
+The previously ignored backup driver is now tracked as
+`scripts/verify_packaged_backup.py`. Preserve the binary hashes and historical
+passes above; moving the driver into source control does not rerun those binaries.
+The integration owner can run it against the final signed bundle:
+
+```sh
+uv run python scripts/verify_packaged_backup.py \
+  /absolute/path/to/Lyra.app/Contents/Resources/resources/lyra-backend/lyra-backend \
+  --output /private/evidence/frozen-backup.json
+```
+
+Use the actual packaged sidecar path from the candidate inventory. The driver
+creates a new temporary profile outside the checkout and defaults to removing
+only that profile afterward. `--prepare-only` retains a populated synthetic
+native-UI fixture and prints its exact launch environment. That output includes
+private absolute paths; redact it before attaching public evidence.
+
+The driver strips ambient provider credentials and Python/source selectors,
+uses a restricted system PATH and null Keyring, and validates mutable path
+containment and credential isolation before **every** startup, backup, restore,
+and relocated recovery child. It checks committed WAL writing, saved essay/deck
+and original sources, retained newer work, current endpoint/model authority,
+incompatible and corrupt archive refusal, and an authenticated original-file
+download after cross-profile restoration. Readiness has an absolute deadline
+including partial lines. Source regressions launch a real isolated Python child
+to verify effective Settings paths and selected Keyring; frozen execution is
+still a distinct integration receipt.
+
+Replaying both harnesses from the baseline Git tree confirmed that the soak
+plan omitted its credential boundary and the smoke inherited an outside database
+selector; the spawn was intercepted and the synthetic outside database remained
+untouched. A separate regression covers that unsafe inherited `LYRA_DB_PATH` in
+`scripts/frozen_backend_smoke.py`. The smoke now clears inherited Lyra and Python
+path overrides and explicitly sets its disposable database. The manual soak
+plan now selects the fail Keyring backend (private fallback credentials) and
+can record `failed` independently from `blocked` and `not-run`. Real Keychain
+outage, denial and Forget remain unexecuted without a disposable OS account or
+an approved isolated setup; neither null nor fail Keyring certifies macOS behavior.
+
+Focused source verification: 88 tests passed across packaged backup/soak safety,
+backup/import, schema guard, credential isolation and runtime/resource reports;
+Ruff passed on changed Python files. This is working-tree source evidence, not
+an immutable-candidate or installed update pass. The physical host was rechecked:
+Mac16,8, 24 GiB, macOS 27.0 (26A5416b). It cannot establish the required 8 GiB
+settled-tree, sustained-study/writing, helper-eviction or sleep/wake gates.
+Installed N→N+1/rollback, native Print and final integrated UX/model checks remain
+separate owner-coordinated acceptance work.
+
+## September 6 runtime follow-up: actual packaged cache boundary
+
+The hardened-ad-hoc review binary from source `4822272` passed all eleven tracked frozen
+backup/restore checks, including corrupt/future archive refusal and cross-profile authenticated
+original-document download. Its SHA-256 was
+`1794a222a4e8562d51ee7b276f2f4656b20826bb41ce597d50dcfaff2b108a41`.
+This is pre-integration evidence, not final release approval.
+
+An actual cold-cache download failure followed by `/api/documents/1/reingest` returned HTTP500
+in that binary. Page/figure rendering and cleanup incorrectly supplied the durable data root
+to the no-follow cache operation even though packaged pages live under the separate cache root.
+Three separate-cache regressions failed before repair. The callers now use the configured
+cache root, retaining the same no-follow behavior; the entire render suite exercises both
+source-default and separate-cache layouts. The earlier failure receipt is retained and the
+refrozen model first-use/retry/offline result must be recorded against the new binary.

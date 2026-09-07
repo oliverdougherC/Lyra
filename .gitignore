@@ -45,6 +45,7 @@ logs/
 # Tooling and agent state
 .omx/
 .lyra/
+.quality-private/
 .playwright-cli/
 .claude/
 .opencode

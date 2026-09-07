@@ -1,0 +1,38 @@
+{
+  "version": "writer-evaluation.v1",
+  "tested_sha": "39e7352193fd25efd9ac1b5864765d618308c5ff",
+  "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+  "prompt_sha256": "97df6437a8d90208819e834e71d0f16353cce7d198d437b183f45e33b19663c4",
+  "runtime_sha256": "f6498c6d3accac802dcf32f0914b904af520ed1bc8602735eb346e2499e8fc3d",
+  "harness_sha256": "7515c86631dcab77b5324a84edee8b3861dc036d4cab773e7137bfeb29f2a103",
+  "backend_source_sha256": "309cfebc4fc1e24063ca05409862d0b9e1d4f549300a774687c9cb3c181893a4",
+  "generate_plan": false,
+  "retry_failures": false,
+  "model": "synthetic-writer-v1",
+  "locality": "loopback",
+  "context_window": 32768,
+  "runtime": "frozen_sidecar",
+  "comparison_kind": "same_model_interruption",
+  "model_comparison": null,
+  "subjective_acceptance": "not_reviewed",
+  "cases": [
+    {
+      "case_id": "pass_multisection_same_model_recovery",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "pass_multisection_same_model_recovery--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "pass_multisection_same_model_recovery",
+      "scenario": "restart_between_sections",
+      "status": "recorded",
+      "file": "pass_multisection_same_model_recovery--restart_between_sections.json",
+      "run_id": 1,
+      "intervention_observed": true,
+      "scenario_status": "observed"
+    }
+  ]
+}

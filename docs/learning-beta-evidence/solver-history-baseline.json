@@ -1,0 +1,500 @@
+{
+  "corpus": {
+    "version": "solver-beta-2026-09-06-v2",
+    "rubric_version": "solver-critical-v1",
+    "critical_criteria": [
+      "Every requested part answered correctly",
+      "Units and assumptions explicit where required",
+      "No unsupported numeric certainty",
+      "Verification claims supported by relevant successful tools; prose is not mechanically verified",
+      "Segmentation preserves every question and dependency"
+    ],
+    "cases": [
+      {
+        "id": "rate-units",
+        "split": "development",
+        "statement": "A cyclist travels 7.5 km in 25 minutes at constant speed. Find the speed in metres per second.",
+        "expected": "5 m/s; convert km to m and minutes to seconds"
+      },
+      {
+        "id": "stats-multipart",
+        "split": "development",
+        "statement": "A survey records daily reading times of 2, 4, 4, and 10 minutes.",
+        "parts": [
+          [
+            "(a)",
+            "Calculate the mean time, with units."
+          ],
+          [
+            "(b)",
+            "Calculate the median, with units."
+          ],
+          [
+            "(c)",
+            "Which measure better describes a typical observation here and why?"
+          ]
+        ],
+        "expected": "(a) 5 minutes; (b) 4 minutes; (c) median because 10 raises mean"
+      },
+      {
+        "id": "biology-prose",
+        "split": "development",
+        "statement": "In a controlled plant experiment, only light exposure changes; soil, water, species and age are held constant. Explain why controlling those variables helps test whether light affects growth. Does a taller plant in the light group alone prove that light caused growth? Explain.",
+        "expected": "Controls reduce confounding; single observation alone not proof, variability/replication needed; no invented measurements"
+      },
+      {
+        "id": "rate-heldout",
+        "split": "held_out",
+        "statement": "A pump fills 1.8 litres in 45 seconds at a steady rate. Express its flow in millilitres per second and litres per minute.",
+        "expected": "40 mL/s and 2.4 L/min"
+      },
+      {
+        "id": "assumption-heldout",
+        "split": "held_out",
+        "statement": "A box has mass 12 kg. What is its weight? State any assumption needed; distinguish mass from weight.",
+        "expected": "Weight depends on gravity; assuming Earth g=9.8 or 9.81 m/s^2, 117.6 or 117.72 N (about 118 N); mass remains 12 kg"
+      },
+      {
+        "id": "history-heldout",
+        "split": "held_out",
+        "statement": "A historian finds a single letter by a factory owner praising working conditions. Explain why this letter alone cannot establish what conditions were like for all workers. Name two kinds of evidence that could strengthen or challenge its account.",
+        "expected": "Authorship/purpose/perspective and single-source limits; corroborate with worker accounts and independent records/inspections; no invented historical facts or numeric measurements"
+      }
+    ]
+  },
+  "metadata": {
+    "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+    "app_version": "0.2.0-beta.0",
+    "code_hashes": {
+      "backend/core/solver.py": "342ad6353af645d741ce6d19b9defec2d4b643fab2527192b5e3b8c0f4260266",
+      "backend/core/solving.py": "ec1da61f6b1d023315a900acc04c183d41008b46eee441ab03805a93a20a42e2",
+      "backend/core/verification.py": "367161e2e31b2be71b0c5fc7b23efc1e1970706c87dbe88a819e0616c056dea7",
+      "backend/core/segmentation.py": "134714fa816e039447ea196dd72a7d986fc01f4c672d2c077bcea6092d28cc13",
+      "backend/llm/tools.py": "c2f052ef044e45781dfea087d96d00b35cb77cba5f5b24a45eb36ac1ee9a993e",
+      "backend/llm/client.py": "590beb3df62d5aaa03342a692467c924329d415b3175284ecbf7b2b29caf781a",
+      "backend/llm/prompts.py": "6742798bb2607f85b3c2eb53299f5235bdbd7ba576f07458d8f0e556bd31db22",
+      "scripts/eval_solver_beta.py": "4bef2589aed0b54a7c37096a69c017b67328e08fa8552e00b464905cf89cd53d"
+    },
+    "corpus_sha256": "c1308b3d81decc8e68f06da40f28b812fecf802306a045dd7e7e737087c86a4e",
+    "model": "Qwen3.8-27B",
+    "endpoint_locality": "remote",
+    "context_window": 262144,
+    "tools_capability": "not established",
+    "generation_temperature": 0.0,
+    "verification_max_depth": 24,
+    "verification_timeout_seconds": 600.0,
+    "generation_max_tokens": "production default (omitted)",
+    "concurrency": 1,
+    "actual_human_review": "not_run",
+    "model_self_judging": "production verification only; not independent acceptance",
+    "scope": "Synthetic extracted text, empty retrieval class; no ingestion/OCR/embedding acceptance"
+  },
+  "runs": [
+    {
+      "kind": "solve",
+      "case_id": "history-heldout",
+      "repeat": 1,
+      "latency_seconds": 23.905,
+      "artifact": {
+        "id": 1,
+        "class_id": 1,
+        "kind": "solution_set",
+        "title": "history-heldout",
+        "state": "ready",
+        "stage_detail": null,
+        "problems_total": 1,
+        "problems_done": 1,
+        "error_message": null,
+        "created_at": "2026-09-07 00:40:30",
+        "updated_at": "2026-09-07 00:40:54"
+      },
+      "parts": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "parent_part_id": null,
+          "kind": "problem",
+          "ordinal": 0,
+          "label": "history-heldout",
+          "content": "A historian finds a single letter by a factory owner praising working conditions. Explain why this letter alone cannot establish what conditions were like for all workers. Name two kinds of evidence that could strengthen or challenge its account.",
+          "content_type": "markdown",
+          "status": "complete",
+          "origin": "generated",
+          "verdict": "uncheckable",
+          "verdict_detail": "The solution is a conceptual answer about historical source criticism. It contains no equations, no numeric results, and no quantities with units, so there is nothing for a tool to verify.",
+          "solve_parts": "together",
+          "error_message": null,
+          "content_version": 0,
+          "created_at": "2026-09-07 00:40:30",
+          "updated_at": "2026-09-07 00:40:54"
+        },
+        {
+          "id": 2,
+          "artifact_id": 1,
+          "parent_part_id": 1,
+          "kind": "step",
+          "ordinal": 0,
+          "label": "Assess the letter as a source",
+          "content": "No course context is provided, so this step uses general historical method. A letter written by a factory owner is a primary source, but it is also a self-interested account. The owner may have written it to praise the factory, attract customers, defend against criticism, or create a favorable record. It may describe only selected workers, selected conditions, or selected times, and it may omit problems such as low wages, long hours, unsafe machinery, illness, discipline, or worker resistance.",
+          "content_type": "markdown",
+          "status": "complete",
+          "origin": "generated",
+          "verdict": "unchecked",
+          "verdict_detail": null,
+          "solve_parts": "together",
+          "error_message": null,
+          "content_version": 0,
+          "created_at": "2026-09-07 00:40:42",
+          "updated_at": "2026-09-07 00:40:42"
+        },
+        {
+          "id": 3,
+          "artifact_id": 1,
+          "parent_part_id": 1,
+          "kind": "step",
+          "ordinal": 1,
+          "label": "Explain why it cannot establish conditions for all workers",
+          "content": "One document cannot establish what conditions were like for all workers because it is not independent, not representative, and not complete. It reflects the owner's perspective and purpose, not the experiences of every worker. A favorable letter may be accurate in some details, but by itself it cannot prove that all workers had good conditions, because it does not show what workers said, what official records recorded, or what happened in other departments, shifts, or years.",
+          "content_type": "markdown",
+          "status": "complete",
+          "origin": "generated",
+          "verdict": "unchecked",
+          "verdict_detail": null,
+          "solve_parts": "together",
+          "error_message": null,
+          "content_version": 0,
+          "created_at": "2026-09-07 00:40:42",
+          "updated_at": "2026-09-07 00:40:42"
+        },
+        {
+          "id": 4,
+          "artifact_id": 1,
+          "parent_part_id": 1,
+          "kind": "step",
+          "ordinal": 2,
+          "label": "Name two kinds of evidence that could test the letter",
+          "content": "Two kinds of evidence could strengthen or challenge the account: (1) workers' own evidence, such as diaries, letters, union minutes, petitions, strike records, oral histories, or testimony, which can show whether workers experienced the conditions the owner described; and (2) independent administrative or legal records, such as wage ledgers, inspection reports, accident and illness records, court cases, or newspaper reports, which can confirm or contradict the owner's claims with details about pay, hours, safety, and discipline.",
+          "content_type": "markdown",
+          "status": "complete",
+          "origin": "generated",
+          "verdict": "unchecked",
+          "verdict_detail": null,
+          "solve_parts": "together",
+          "error_message": null,
+          "content_version": 0,
+          "created_at": "2026-09-07 00:40:42",
+          "updated_at": "2026-09-07 00:40:42"
+        },
+        {
+          "id": 5,
+          "artifact_id": 1,
+          "parent_part_id": 1,
+          "kind": "answer",
+          "ordinal": 3,
+          "label": "Answer",
+          "content": "The letter alone cannot establish conditions for all workers because it is a single, self-interested, and potentially selective account by the factory owner. Two kinds of evidence that could strengthen or challenge it are workers' own records or testimony and independent official or legal records such as inspection reports, wage ledgers, accident records, or court documents.",
+          "content_type": "markdown",
+          "status": "complete",
+          "origin": "generated",
+          "verdict": "unchecked",
+          "verdict_detail": null,
+          "solve_parts": "together",
+          "error_message": null,
+          "content_version": 0,
+          "created_at": "2026-09-07 00:40:42",
+          "updated_at": "2026-09-07 00:40:42"
+        }
+      ],
+      "checks": {
+        "1": [
+          {
+            "id": 1,
+            "part_id": 1,
+            "ordinal": 0,
+            "tool": "cas_evaluate",
+            "arguments": "{\"expression\":\"1\"}",
+            "ok": 1,
+            "result": "{\"ok\":true,\"simplified\":\"1\"}",
+            "created_at": "2026-09-07 00:40:54"
+          },
+          {
+            "id": 2,
+            "part_id": 1,
+            "ordinal": 1,
+            "tool": "cas_evaluate",
+            "arguments": "{\"expression\":\"1\"}",
+            "ok": 1,
+            "result": "{\"ok\":true,\"simplified\":\"1\"}",
+            "created_at": "2026-09-07 00:40:54"
+          },
+          {
+            "id": 3,
+            "part_id": 1,
+            "ordinal": 2,
+            "tool": "cas_evaluate",
+            "arguments": "{\"expression\":\"1\"}",
+            "ok": 1,
+            "result": "{\"ok\":true,\"simplified\":\"1\"}",
+            "created_at": "2026-09-07 00:40:54"
+          }
+        ]
+      },
+      "transcript": [
+        {
+          "kind": "completion",
+          "schema": "worked_solution",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are solving one homework problem for the student whose course material is quoted\nbelow. Solve it completely and correctly.\n\nFollow the method this course teaches. The retrieved context is what the student's own\nlectures, textbook, and worked examples say; where it shows a technique for this kind of\nproblem, use that technique rather than the one you would reach for by default, and name\nit. Where the context does not cover the problem, solve it with general knowledge and say\nwhich step you did that on.\n\nReturn JSON with two fields:\n- \"steps\": a list, in order. Each step has \"title\", a short phrase naming what the step\n  does; \"content\", the working for that step written in markdown with LaTeX for\n  mathematics; and \"sources\", a list of the bracketed context numbers that step relies\n  on, or an empty list when it relies on none.\n  A title is mostly words, but any mathematics in one is mathematics and takes $...$ the\n  same as the content does: \"Part (a) Convolution of $u(t)$ and $e^{-t}u(t)$\", never\n  \"Part (a) Convolution of u(t) and e^{-t}u(t)\". A title is a heading, so it never takes\n  display math.\n- \"answer\": the final result, stated plainly. Include units where the problem has them.\n\nCitation rules:\n\n1. Cite in \"sources\" every numbered entry a step actually used, and only those. A step you\n   derived yourself cites nothing, and an empty list is the right answer for it.\n2. The numbers go in \"sources\" and nowhere else. Writing \"as shown in [15]\" into a step's\n   text puts a marker on screen pointing at a list the student cannot see. Name the source\n   in words, or say nothing and let the citation carry it.\n3. Reference solutions share one numbering sequence with the retrieved context and are\n   cited exactly the same way.\n\nBoth halves of rule 1 matter: an invented citation tells the student a step is grounded\nwhen it is not, and a missing one tells them their own material went unused when it did.\n\nWrite mathematics in LaTeX. Use $...$ for a quantity inside a line of text and $$...$$ on its own line for a displayed equation. Every LaTeX command belongs inside those delimiters: a bare \\frac outside them reaches the student as the characters you typed rather than as a fraction. This applies to \"answer\" as well as to every step.\n\nReply with JSON only. No prose, no explanation, and no code fence."
+            },
+            {
+              "role": "user",
+              "content": "history-heldout\n\nA historian finds a single letter by a factory owner praising working conditions. Explain why this letter alone cannot establish what conditions were like for all workers. Name two kinds of evidence that could strengthen or challenge its account."
+            }
+          ],
+          "answer": "{\n  \"steps\": [\n    {\n      \"title\": \"Assess the letter as a source\",\n      \"content\": \"No course context is provided, so this step uses general historical method. A letter written by a factory owner is a primary source, but it is also a self-interested account. The owner may have written it to praise the factory, attract customers, defend against criticism, or create a favorable record. It may describe only selected workers, selected conditions, or selected times, and it may omit problems such as low wages, long hours, unsafe machinery, illness, discipline, or worker resistance.\",\n      \"sources\": []\n    },\n    {\n      \"title\": \"Explain why it cannot establish conditions for all workers\",\n      \"content\": \"One document cannot establish what conditions were like for all workers because it is not independent, not representative, and not complete. It reflects the owner's perspective and purpose, not the experiences of every worker. A favorable letter may be accurate in some details, but by itself it cannot prove that all workers had good conditions, because it does not show what workers said, what official records recorded, or what happened in other departments, shifts, or years.\",\n      \"sources\": []\n    },\n    {\n      \"title\": \"Name two kinds of evidence that could test the letter\",\n      \"content\": \"Two kinds of evidence could strengthen or challenge the account: (1) workers' own evidence, such as diaries, letters, union minutes, petitions, strike records, oral histories, or testimony, which can show whether workers experienced the conditions the owner described; and (2) independent administrative or legal records, such as wage ledgers, inspection reports, accident and illness records, court cases, or newspaper reports, which can confirm or contradict the owner's claims with details about pay, hours, safety, and discipline.\",\n      \"sources\": []\n    }\n  ],\n  \"answer\": \"The letter alone cannot establish conditions for all workers because it is a single, self-interested, and potentially selective account by the factory owner. Two kinds of evidence that could strengthen or challenge it are workers' own records or testimony and independent official or legal records such as inspection reports, wage ledgers, accident records, or court documents.\"\n}",
+          "latency_seconds": 11.511,
+          "stop_reason": "not exposed by complete API"
+        },
+        {
+          "kind": "tool_loop",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are checking a solution that has already been written. You are not rewriting it and\nyou are not being asked whether you would have solved it differently.\n\nUse the tools to check the claims the solution makes: evaluate the algebra, redo the\nintegrals and derivatives, solve the equations, and check that quantities carry the units\nthey should. Check the final answer against the problem's own numbers. Run a tool for\nanything a tool can settle rather than judging it by eye.\n\nAsk for every check you can see the need for in the same turn rather than one at a time.\nA problem with several lettered parts is several checks, and requesting them together is\nwhat lets you finish checking all of them.\n\nWhen you have finished checking, reply with JSON and nothing else:\n- \"verdict\": one of \"agrees\", \"disagrees\", or \"nothing_to_check\".\n- \"detail\": one or two sentences. For \"disagrees\", name the step, what the solution says,\n  and what your check returned. Write about the solution, never about the student.\n\nWhich verdict:\n- \"agrees\" only when every check you ran matched the solution.\n- \"disagrees\" when any check contradicted it. One contradicted step is a disagreement even\n  if the final answer happens to come out right.\n- \"nothing_to_check\" only when the solution contains no equation, no numeric result, and\n  no quantity with units - which is the honest outcome for a proof or a conceptual answer,\n  and for nothing else. If the solution contains mathematics, you must run at least one\n  tool before answering. Not having run a check is not a reason to use this verdict; it is\n  the reason not to.\n\nA check you did not run is not agreement. If you could not settle something, say so in\n\"detail\" rather than letting it pass."
+            },
+            {
+              "role": "user",
+              "content": "history-heldout\n\nA historian finds a single letter by a factory owner praising working conditions. Explain why this letter alone cannot establish what conditions were like for all workers. Name two kinds of evidence that could strengthen or challenge its account.\n\nThe solution to check:\n\nStep 1. Assess the letter as a source\n\nNo course context is provided, so this step uses general historical method. A letter written by a factory owner is a primary source, but it is also a self-interested account. The owner may have written it to praise the factory, attract customers, defend against criticism, or create a favorable record. It may describe only selected workers, selected conditions, or selected times, and it may omit problems such as low wages, long hours, unsafe machinery, illness, discipline, or worker resistance.\n\nStep 2. Explain why it cannot establish conditions for all workers\n\nOne document cannot establish what conditions were like for all workers because it is not independent, not representative, and not complete. It reflects the owner's perspective and purpose, not the experiences of every worker. A favorable letter may be accurate in some details, but by itself it cannot prove that all workers had good conditions, because it does not show what workers said, what official records recorded, or what happened in other departments, shifts, or years.\n\nStep 3. Name two kinds of evidence that could test the letter\n\nTwo kinds of evidence could strengthen or challenge the account: (1) workers' own evidence, such as diaries, letters, union minutes, petitions, strike records, oral histories, or testimony, which can show whether workers experienced the conditions the owner described; and (2) independent administrative or legal records, such as wage ledgers, inspection reports, accident and illness records, court cases, or newspaper reports, which can confirm or contradict the owner's claims with details about pay, hours, safety, and discipline.\n\nAnswer: The letter alone cannot establish conditions for all workers because it is a single, self-interested, and potentially selective account by the factory owner. Two kinds of evidence that could strengthen or challenge it are workers' own records or testimony and independent official or legal records such as inspection reports, wage ledgers, accident records, or court documents."
+            }
+          ],
+          "answer": "{\"verdict\": \"nothing_to_check\", \"detail\": \"The solution is a conceptual answer about historical source criticism. It contains no equations, no numeric results, and no quantities with units, so there is nothing for a tool to verify.\"}",
+          "stopped": "completed",
+          "detail": "",
+          "calls": [
+            {
+              "name": "cas_evaluate",
+              "arguments": {
+                "expression": "1"
+              },
+              "raw_arguments": "{\"expression\": \"1\"}",
+              "ok": true,
+              "result": {
+                "ok": true,
+                "simplified": "1"
+              }
+            },
+            {
+              "name": "cas_evaluate",
+              "arguments": {
+                "expression": "1"
+              },
+              "raw_arguments": "{\"expression\": \"1\"}",
+              "ok": true,
+              "result": {
+                "ok": true,
+                "simplified": "1"
+              }
+            },
+            {
+              "name": "cas_evaluate",
+              "arguments": {
+                "expression": "1"
+              },
+              "raw_arguments": "{\"expression\": \"1\"}",
+              "ok": true,
+              "result": {
+                "ok": true,
+                "simplified": "1"
+              }
+            }
+          ],
+          "latency_seconds": 11.539
+        }
+      ],
+      "semantic_review": "pending"
+    },
+    {
+      "kind": "solve",
+      "case_id": "history-heldout",
+      "repeat": 2,
+      "latency_seconds": 20.311,
+      "artifact": {
+        "id": 2,
+        "class_id": 2,
+        "kind": "solution_set",
+        "title": "history-heldout",
+        "state": "ready",
+        "stage_detail": null,
+        "problems_total": 1,
+        "problems_done": 1,
+        "error_message": null,
+        "created_at": "2026-09-07 00:40:54",
+        "updated_at": "2026-09-07 00:41:15"
+      },
+      "parts": [
+        {
+          "id": 6,
+          "artifact_id": 2,
+          "parent_part_id": null,
+          "kind": "problem",
+          "ordinal": 0,
+          "label": "history-heldout",
+          "content": "A historian finds a single letter by a factory owner praising working conditions. Explain why this letter alone cannot establish what conditions were like for all workers. Name two kinds of evidence that could strengthen or challenge its account.",
+          "content_type": "markdown",
+          "status": "complete",
+          "origin": "generated",
+          "verdict": "uncheckable",
+          "verdict_detail": "The solution is a conceptual answer about historical source criticism (source bias, representativeness, and corroborating evidence types). It contains no equations, numeric results, or quantities with units, so there is nothing for the algebraic, calculus, or unit-checking tools to verify.",
+          "solve_parts": "together",
+          "error_message": null,
+          "content_version": 0,
+          "created_at": "2026-09-07 00:40:54",
+          "updated_at": "2026-09-07 00:41:15"
+        },
+        {
+          "id": 7,
+          "artifact_id": 2,
+          "parent_part_id": 6,
+          "kind": "step",
+          "ordinal": 0,
+          "label": "Assess the letter as a source",
+          "content": "No course context is provided, so this step uses general historical method. A letter written by a factory owner is a primary source, but it is also a self-interested account. The owner may have written it to praise the factory, attract customers, defend against criticism, or create a favorable record. It may describe only selected workers, selected conditions, or selected times, and it may omit problems such as low wages, long hours, unsafe machinery, illness, discipline, or worker resistance.",
+          "content_type": "markdown",
+          "status": "complete",
+          "origin": "generated",
+          "verdict": "unchecked",
+          "verdict_detail": null,
+          "solve_parts": "together",
+          "error_message": null,
+          "content_version": 0,
+          "created_at": "2026-09-07 00:41:08",
+          "updated_at": "2026-09-07 00:41:08"
+        },
+        {
+          "id": 8,
+          "artifact_id": 2,
+          "parent_part_id": 6,
+          "kind": "step",
+          "ordinal": 1,
+          "label": "Explain why it cannot establish conditions for all workers",
+          "content": "One document cannot establish what conditions were like for all workers because it is not independent, not representative, and not complete. It reflects the owner's perspective and purpose, not the experiences of every worker. A favorable letter may be accurate in some details, but by itself it cannot prove that all workers had good conditions, because it does not show what workers said, what official records recorded, or what happened in other departments, shifts, or years.",
+          "content_type": "markdown",
+          "status": "complete",
+          "origin": "generated",
+          "verdict": "unchecked",
+          "verdict_detail": null,
+          "solve_parts": "together",
+          "error_message": null,
+          "content_version": 0,
+          "created_at": "2026-09-07 00:41:08",
+          "updated_at": "2026-09-07 00:41:08"
+        },
+        {
+          "id": 9,
+          "artifact_id": 2,
+          "parent_part_id": 6,
+          "kind": "step",
+          "ordinal": 2,
+          "label": "Name two kinds of evidence that could test the letter",
+          "content": "Two kinds of evidence could strengthen or challenge the account: (1) workers' own evidence, such as diaries, letters, union minutes, petitions, strike records, oral histories, or testimony, which can show whether workers experienced the conditions the owner described; and (2) independent administrative or legal records, such as wage ledgers, inspection reports, accident and illness records, court cases, or newspaper reports, which can confirm or contradict the owner's claims with details about pay, hours, safety, and discipline.",
+          "content_type": "markdown",
+          "status": "complete",
+          "origin": "generated",
+          "verdict": "unchecked",
+          "verdict_detail": null,
+          "solve_parts": "together",
+          "error_message": null,
+          "content_version": 0,
+          "created_at": "2026-09-07 00:41:08",
+          "updated_at": "2026-09-07 00:41:08"
+        },
+        {
+          "id": 10,
+          "artifact_id": 2,
+          "parent_part_id": 6,
+          "kind": "answer",
+          "ordinal": 3,
+          "label": "Answer",
+          "content": "The letter alone cannot establish conditions for all workers because it is a single, self-interested, and potentially selective account by the factory owner. Two kinds of evidence that could strengthen or challenge it are workers' own records or testimony and independent official or legal records such as inspection reports, wage ledgers, accident records, or court documents.",
+          "content_type": "markdown",
+          "status": "complete",
+          "origin": "generated",
+          "verdict": "unchecked",
+          "verdict_detail": null,
+          "solve_parts": "together",
+          "error_message": null,
+          "content_version": 0,
+          "created_at": "2026-09-07 00:41:08",
+          "updated_at": "2026-09-07 00:41:08"
+        }
+      ],
+      "checks": {
+        "6": [
+          {
+            "id": 4,
+            "part_id": 6,
+            "ordinal": 0,
+            "tool": "cas_evaluate",
+            "arguments": "{\"expression\":\"1\"}",
+            "ok": 1,
+            "result": "{\"ok\":true,\"simplified\":\"1\"}",
+            "created_at": "2026-09-07 00:41:15"
+          }
+        ]
+      },
+      "transcript": [
+        {
+          "kind": "completion",
+          "schema": "worked_solution",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are solving one homework problem for the student whose course material is quoted\nbelow. Solve it completely and correctly.\n\nFollow the method this course teaches. The retrieved context is what the student's own\nlectures, textbook, and worked examples say; where it shows a technique for this kind of\nproblem, use that technique rather than the one you would reach for by default, and name\nit. Where the context does not cover the problem, solve it with general knowledge and say\nwhich step you did that on.\n\nReturn JSON with two fields:\n- \"steps\": a list, in order. Each step has \"title\", a short phrase naming what the step\n  does; \"content\", the working for that step written in markdown with LaTeX for\n  mathematics; and \"sources\", a list of the bracketed context numbers that step relies\n  on, or an empty list when it relies on none.\n  A title is mostly words, but any mathematics in one is mathematics and takes $...$ the\n  same as the content does: \"Part (a) Convolution of $u(t)$ and $e^{-t}u(t)$\", never\n  \"Part (a) Convolution of u(t) and e^{-t}u(t)\". A title is a heading, so it never takes\n  display math.\n- \"answer\": the final result, stated plainly. Include units where the problem has them.\n\nCitation rules:\n\n1. Cite in \"sources\" every numbered entry a step actually used, and only those. A step you\n   derived yourself cites nothing, and an empty list is the right answer for it.\n2. The numbers go in \"sources\" and nowhere else. Writing \"as shown in [15]\" into a step's\n   text puts a marker on screen pointing at a list the student cannot see. Name the source\n   in words, or say nothing and let the citation carry it.\n3. Reference solutions share one numbering sequence with the retrieved context and are\n   cited exactly the same way.\n\nBoth halves of rule 1 matter: an invented citation tells the student a step is grounded\nwhen it is not, and a missing one tells them their own material went unused when it did.\n\nWrite mathematics in LaTeX. Use $...$ for a quantity inside a line of text and $$...$$ on its own line for a displayed equation. Every LaTeX command belongs inside those delimiters: a bare \\frac outside them reaches the student as the characters you typed rather than as a fraction. This applies to \"answer\" as well as to every step.\n\nReply with JSON only. No prose, no explanation, and no code fence."
+            },
+            {
+              "role": "user",
+              "content": "history-heldout\n\nA historian finds a single letter by a factory owner praising working conditions. Explain why this letter alone cannot establish what conditions were like for all workers. Name two kinds of evidence that could strengthen or challenge its account."
+            }
+          ],
+          "answer": "{\n  \"steps\": [\n    {\n      \"title\": \"Assess the letter as a source\",\n      \"content\": \"No course context is provided, so this step uses general historical method. A letter written by a factory owner is a primary source, but it is also a self-interested account. The owner may have written it to praise the factory, attract customers, defend against criticism, or create a favorable record. It may describe only selected workers, selected conditions, or selected times, and it may omit problems such as low wages, long hours, unsafe machinery, illness, discipline, or worker resistance.\",\n      \"sources\": []\n    },\n    {\n      \"title\": \"Explain why it cannot establish conditions for all workers\",\n      \"content\": \"One document cannot establish what conditions were like for all workers because it is not independent, not representative, and not complete. It reflects the owner's perspective and purpose, not the experiences of every worker. A favorable letter may be accurate in some details, but by itself it cannot prove that all workers had good conditions, because it does not show what workers said, what official records recorded, or what happened in other departments, shifts, or years.\",\n      \"sources\": []\n    },\n    {\n      \"title\": \"Name two kinds of evidence that could test the letter\",\n      \"content\": \"Two kinds of evidence could strengthen or challenge the account: (1) workers' own evidence, such as diaries, letters, union minutes, petitions, strike records, oral histories, or testimony, which can show whether workers experienced the conditions the owner described; and (2) independent administrative or legal records, such as wage ledgers, inspection reports, accident and illness records, court cases, or newspaper reports, which can confirm or contradict the owner's claims with details about pay, hours, safety, and discipline.\",\n      \"sources\": []\n    }\n  ],\n  \"answer\": \"The letter alone cannot establish conditions for all workers because it is a single, self-interested, and potentially selective account by the factory owner. Two kinds of evidence that could strengthen or challenge it are workers' own records or testimony and independent official or legal records such as inspection reports, wage ledgers, accident records, or court documents.\"\n}",
+          "latency_seconds": 14.059,
+          "stop_reason": "not exposed by complete API"
+        },
+        {
+          "kind": "tool_loop",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are checking a solution that has already been written. You are not rewriting it and\nyou are not being asked whether you would have solved it differently.\n\nUse the tools to check the claims the solution makes: evaluate the algebra, redo the\nintegrals and derivatives, solve the equations, and check that quantities carry the units\nthey should. Check the final answer against the problem's own numbers. Run a tool for\nanything a tool can settle rather than judging it by eye.\n\nAsk for every check you can see the need for in the same turn rather than one at a time.\nA problem with several lettered parts is several checks, and requesting them together is\nwhat lets you finish checking all of them.\n\nWhen you have finished checking, reply with JSON and nothing else:\n- \"verdict\": one of \"agrees\", \"disagrees\", or \"nothing_to_check\".\n- \"detail\": one or two sentences. For \"disagrees\", name the step, what the solution says,\n  and what your check returned. Write about the solution, never about the student.\n\nWhich verdict:\n- \"agrees\" only when every check you ran matched the solution.\n- \"disagrees\" when any check contradicted it. One contradicted step is a disagreement even\n  if the final answer happens to come out right.\n- \"nothing_to_check\" only when the solution contains no equation, no numeric result, and\n  no quantity with units - which is the honest outcome for a proof or a conceptual answer,\n  and for nothing else. If the solution contains mathematics, you must run at least one\n  tool before answering. Not having run a check is not a reason to use this verdict; it is\n  the reason not to.\n\nA check you did not run is not agreement. If you could not settle something, say so in\n\"detail\" rather than letting it pass."
+            },
+            {
+              "role": "user",
+              "content": "history-heldout\n\nA historian finds a single letter by a factory owner praising working conditions. Explain why this letter alone cannot establish what conditions were like for all workers. Name two kinds of evidence that could strengthen or challenge its account.\n\nThe solution to check:\n\nStep 1. Assess the letter as a source\n\nNo course context is provided, so this step uses general historical method. A letter written by a factory owner is a primary source, but it is also a self-interested account. The owner may have written it to praise the factory, attract customers, defend against criticism, or create a favorable record. It may describe only selected workers, selected conditions, or selected times, and it may omit problems such as low wages, long hours, unsafe machinery, illness, discipline, or worker resistance.\n\nStep 2. Explain why it cannot establish conditions for all workers\n\nOne document cannot establish what conditions were like for all workers because it is not independent, not representative, and not complete. It reflects the owner's perspective and purpose, not the experiences of every worker. A favorable letter may be accurate in some details, but by itself it cannot prove that all workers had good conditions, because it does not show what workers said, what official records recorded, or what happened in other departments, shifts, or years.\n\nStep 3. Name two kinds of evidence that could test the letter\n\nTwo kinds of evidence could strengthen or challenge the account: (1) workers' own evidence, such as diaries, letters, union minutes, petitions, strike records, oral histories, or testimony, which can show whether workers experienced the conditions the owner described; and (2) independent administrative or legal records, such as wage ledgers, inspection reports, accident and illness records, court cases, or newspaper reports, which can confirm or contradict the owner's claims with details about pay, hours, safety, and discipline.\n\nAnswer: The letter alone cannot establish conditions for all workers because it is a single, self-interested, and potentially selective account by the factory owner. Two kinds of evidence that could strengthen or challenge it are workers' own records or testimony and independent official or legal records such as inspection reports, wage ledgers, accident records, or court documents."
+            }
+          ],
+          "answer": "{\"verdict\": \"nothing_to_check\", \"detail\": \"The solution is a conceptual answer about historical source criticism (source bias, representativeness, and corroborating evidence types). It contains no equations, numeric results, or quantities with units, so there is nothing for the algebraic, calculus, or unit-checking tools to verify.\"}",
+          "stopped": "completed",
+          "detail": "",
+          "calls": [
+            {
+              "name": "cas_evaluate",
+              "arguments": {
+                "expression": "1"
+              },
+              "raw_arguments": "{\"expression\": \"1\"}",
+              "ok": true,
+              "result": {
+                "ok": true,
+                "simplified": "1"
+              }
+            }
+          ],
+          "latency_seconds": 6.237
+        }
+      ],
+      "semantic_review": "pending"
+    }
+  ]
+}

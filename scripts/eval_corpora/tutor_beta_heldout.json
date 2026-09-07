@@ -1,0 +1,140 @@
+{
+  "about": [
+    "Self-authored held-out transfer set. Freeze before prompt tuning; grade only after final candidate choice. Every case is critical; no average may hide a failure."
+  ],
+  "corpus_version": "beta-heldout-1.0.0",
+  "prompt_contract_version": "2",
+  "dimensions": [
+    "directness",
+    "proportionality",
+    "prerequisite_setup",
+    "questioning",
+    "withholding",
+    "correctness",
+    "pedagogical_usefulness"
+  ],
+  "cases": [
+    {
+      "id": "start-quadratic",
+      "mode": "guide",
+      "user": "I only need help starting, please.",
+      "history": [
+        {
+          "role": "user",
+          "content": "Solve 3x^2 - 12x = 15."
+        }
+      ],
+      "context": [],
+      "must": [
+        "Gives an actionable setup such as divide by 3 and move 5 to the left, with a short reason"
+      ],
+      "must_not": [
+        "Gives the roots or completes the solution without being asked"
+      ],
+      "notes": "x^2-4x-5=0 has roots 5 and -1; these final roots are not requested."
+    },
+    {
+      "id": "attempt-distribution",
+      "mode": "guide",
+      "user": "I wrote 2(x+3)=10, then 2x+3=10, then x=3.5. Where did my work go wrong?",
+      "history": [],
+      "context": [],
+      "must": [
+        "Identifies the first invalid step: distributing 2 must give 2x+6, not 2x+3",
+        "Explains why the 3 is also multiplied and shows the corrected step"
+      ],
+      "must_not": [
+        "Praises the incorrect answer as right",
+        "Ignores the attempt and starts an unrelated method"
+      ],
+      "notes": "Correct x=2. Full solution allowed but not necessary."
+    },
+    {
+      "id": "simpler-osmosis",
+      "mode": "guide",
+      "user": "That is too abstract. Explain it in plain words.",
+      "history": [
+        {
+          "role": "user",
+          "content": "What is osmosis?"
+        },
+        {
+          "role": "assistant",
+          "content": "Osmosis is solvent diffusion across a selectively permeable membrane down a water chemical-potential gradient toward higher solute concentration."
+        }
+      ],
+      "context": [],
+      "must": [
+        "Explains water moving through a barrier that lets water pass but holds back dissolved particles",
+        "Explains direction toward the more concentrated solution under ordinary equal-pressure conditions in plain words"
+      ],
+      "must_not": [
+        "Repeats chemical potential or adds equations as the explanation",
+        "Turns the explanation into a quiz"
+      ],
+      "notes": "A simple equal-pressure picture is appropriate; do not claim solute crosses the membrane."
+    },
+    {
+      "id": "direct-pvalue",
+      "mode": "guide",
+      "user": "Explain a p-value with a small example. Please do not ask me questions or offer practice.",
+      "history": [],
+      "context": [],
+      "must": [
+        "Explains probability under the null hypothesis of data at least as extreme as observed with a concrete example"
+      ],
+      "must_not": [
+        "Says p is the probability that the null hypothesis is true",
+        "Asks a question or offers practice"
+      ],
+      "notes": "For example, under a fair coin model the probability of 10 heads in 10 tosses is 1/1024 one-sided; two-sided all same is 2/1024."
+    },
+    {
+      "id": "guide-to-worked",
+      "mode": "guide",
+      "user": "Now give me the full worked solution, including a check.",
+      "history": [
+        {
+          "role": "user",
+          "content": "Solve 5(x-2)=20."
+        },
+        {
+          "role": "assistant",
+          "content": "First divide both sides by 5, leaving x-2=4."
+        }
+      ],
+      "context": [],
+      "must": [
+        "Finishes with x=6 and explains adding 2 to both sides",
+        "Checks 5(6-2)=20"
+      ],
+      "must_not": [
+        "Withholds the answer behind another hint"
+      ],
+      "notes": "Explicit full solution overrides earlier first-step scope."
+    },
+    {
+      "id": "show-to-one-step",
+      "mode": "guide",
+      "user": "For this next one, just help me set it up: a 60 mL solution is 20% salt, then 40 mL water is added. How do I start finding the new concentration?",
+      "history": [
+        {
+          "role": "user",
+          "content": "Show me a complete dilution example."
+        },
+        {
+          "role": "assistant",
+          "content": "A 10 mL sample at 10% contains 1 mL solute. Diluting to 20 mL gives 1/20=5%."
+        }
+      ],
+      "context": [],
+      "must": [
+        "Identifies conserved salt amount 0.2 times 60 =12 mL and/or new total volume100mL with explanation"
+      ],
+      "must_not": [
+        "Gives final 12% despite the current first-step request"
+      ],
+      "notes": "Assume additive volumes and consistent volume percent; final fraction12/100 deliberately not requested."
+    }
+  ]
+}

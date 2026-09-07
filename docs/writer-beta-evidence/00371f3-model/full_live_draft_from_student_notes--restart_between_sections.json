@@ -1,0 +1,2488 @@
+{
+  "case_id": "full_live_draft_from_student_notes",
+  "corpus_recovery_requirements": [
+    "uninterrupted",
+    "inference_disconnect",
+    "between_sections",
+    "before_review",
+    "after_review_before_persist",
+    "after_persist_before_terminal",
+    "process_restart",
+    "transient_provider_failure",
+    "rate_limit",
+    "partial_stream",
+    "malformed_stream",
+    "cancel_then_successor"
+  ],
+  "scenario": "restart_between_sections",
+  "evidence_kind": "real_provider",
+  "subjective_scores": {
+    "planning": null,
+    "evidence_citation": null,
+    "revision_precision": null,
+    "review_usefulness": null,
+    "instruction_following": null,
+    "student_voice": null
+  },
+  "independent_agent_review": null,
+  "human_review": null,
+  "timeline": [
+    {
+      "elapsed_seconds": 1.162,
+      "state": "pending",
+      "stage_detail": "Queued",
+      "error_message": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 1.25,
+      "state": "generating",
+      "stage_detail": "Researching 1",
+      "error_message": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 2.807,
+      "state": "generating",
+      "stage_detail": "Researching 2",
+      "error_message": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 4.634,
+      "state": "generating",
+      "stage_detail": "Outlining every paragraph in 1 Evidence",
+      "error_message": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 7.666,
+      "state": "generating",
+      "stage_detail": "Outlining every paragraph in 2 Recommendation",
+      "error_message": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 9.672,
+      "state": "generating",
+      "stage_detail": "Drafting paragraph 1 of 5",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 10.884,
+      "state": "generating",
+      "stage_detail": "Drafting paragraph 2 of 5",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 1,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 11.309,
+      "state": "generating",
+      "stage_detail": "Drafting paragraph 2 of 5",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 2,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": [
+        {
+          "code": "resumed_after_restart",
+          "message": "This run resumed after a restart from the last completed boundary."
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 12.416,
+      "state": "generating",
+      "stage_detail": "Drafting paragraph 3 of 5",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 3,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": [
+        {
+          "code": "resumed_after_restart",
+          "message": "This run resumed after a restart from the last completed boundary."
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 13.37,
+      "state": "generating",
+      "stage_detail": "Drafting paragraph 4 of 5",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 4,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": [
+        {
+          "code": "resumed_after_restart",
+          "message": "This run resumed after a restart from the last completed boundary."
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 14.76,
+      "state": "generating",
+      "stage_detail": "Drafting paragraph 5 of 5",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 5,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": [
+        {
+          "code": "resumed_after_restart",
+          "message": "This run resumed after a restart from the last completed boundary."
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 16.06,
+      "state": "generating",
+      "stage_detail": "Drafting paragraph 5 of 5",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 6,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": [
+        {
+          "code": "resumed_after_restart",
+          "message": "This run resumed after a restart from the last completed boundary."
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 16.148,
+      "state": "generating",
+      "stage_detail": "Reviewing transition 1 of 4",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 6,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": [
+        {
+          "code": "resumed_after_restart",
+          "message": "This run resumed after a restart from the last completed boundary."
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 17.264,
+      "state": "generating",
+      "stage_detail": "Reviewing transition 2 of 4",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 6,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": [
+        {
+          "code": "resumed_after_restart",
+          "message": "This run resumed after a restart from the last completed boundary."
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 18.305,
+      "state": "generating",
+      "stage_detail": "Reviewing transition 3 of 4",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 6,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": [
+        {
+          "code": "resumed_after_restart",
+          "message": "This run resumed after a restart from the last completed boundary."
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 19.62,
+      "state": "generating",
+      "stage_detail": "Reviewing transition 4 of 4",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 6,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": [
+        {
+          "code": "resumed_after_restart",
+          "message": "This run resumed after a restart from the last completed boundary."
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 21.015,
+      "state": "generating",
+      "stage_detail": "Reviewing document chunk 1 of 1",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 6,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": [
+        {
+          "code": "resumed_after_restart",
+          "message": "This run resumed after a restart from the last completed boundary."
+        }
+      ]
+    },
+    {
+      "elapsed_seconds": 25.602,
+      "state": "ready",
+      "stage_detail": "The live draft suggestion is ready for review.",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 5,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "completed",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": "2026-09-07 01:25:58",
+      "warnings": [
+        {
+          "code": "resumed_after_restart",
+          "message": "This run resumed after a restart from the last completed boundary."
+        }
+      ]
+    }
+  ],
+  "intervention_observed": true,
+  "backend_source_sha256_at_start": "b6dea0c51c279e1ad05e695b66fc5968c2ea7042a7502ee5b02d5319260033eb",
+  "effective_context_window": 262144,
+  "tool_probe": {
+    "ok": true,
+    "message": "This endpoint can run the checks Lyra verifies solutions with."
+  },
+  "plan_mode": "corpus_seeded",
+  "before": {
+    "draft": {
+      "id": 1,
+      "class_id": 1,
+      "kind": "draft",
+      "title": "full_live_draft_from_student_notes",
+      "state": "ready",
+      "stage_detail": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "error_message": null,
+      "created_at": "2026-09-07 01:25:34",
+      "updated_at": "2026-09-07 01:25:34",
+      "part_id": 1,
+      "body": "# My shuttle memo notes\n\nI care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey. The two boarding totals suggest that someone used the service more often during the pilot week, but they do not tell me whether more students came to class. I should not make a number answer a question it was never asked.\n\nMy recommendation is to keep the pilot for one more term and measure it more carefully. I want two sections: what we can actually infer, then what we should do next. Please keep the uncertainty visible. Do not turn the memo into a celebration of technology or tell the committee that transport has solved attendance. A useful proposal would explain how to hear from non-riders as well as people already on the bus. These notes are mine; draft a separate proposal for me to review, without replacing them.\n",
+      "body_version": 1,
+      "pending": false
+    },
+    "status": {
+      "state": "ready",
+      "stage_detail": null,
+      "error_message": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "run_id": null,
+      "job_kind": null,
+      "depth": null,
+      "started_at": null,
+      "run_status": "legacy",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    "comments": [],
+    "pending": null,
+    "live_suggestion": null,
+    "plan": {
+      "id": 1,
+      "artifact_id": 1,
+      "version": 1,
+      "brief_analysis": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+      "thesis": "Keep the pilot for one term while collecting evidence about who can use it.",
+      "argument_map": [
+        {
+          "claim": "Observed boardings support further investigation, not an attendance effect."
+        },
+        {
+          "claim": "Hear from non-riders before generalizing demand."
+        }
+      ],
+      "created_at": "2026-09-07 01:25:34",
+      "updated_at": "2026-09-07 01:25:34",
+      "sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1",
+          "ordinal": 0,
+          "title": "Evidence",
+          "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+          "claim": "The observations justify another question, not a causal conclusion.",
+          "evidence": [
+            "160 then 240 boardings; no attendance data.",
+            "18 voluntary rider responses; no non-riders."
+          ],
+          "word_budget": 160,
+          "research_notes": "",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:34",
+          "sources": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "2",
+          "ordinal": 1,
+          "title": "Recommendation",
+          "job": "Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.",
+          "claim": "Extend conditionally and measure access more carefully.",
+          "evidence": [
+            "The voluntary rider sample excludes non-riders."
+          ],
+          "word_budget": 160,
+          "research_notes": "",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:34",
+          "sources": [
+            2
+          ]
+        }
+      ],
+      "status": "active"
+    },
+    "sources": [
+      {
+        "id": 1,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/transport",
+        "title": "Synthetic campus transport pilot memo, revision 1",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 01:25:34"
+        },
+        "excerpts": [
+          {
+            "id": 1,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "No attendance data were collected."
+          },
+          {
+            "id": 2,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/survey",
+        "title": "Synthetic rider survey methods note",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 01:25:34"
+        },
+        "excerpts": [
+          {
+            "id": 3,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "Non-riders were not surveyed."
+          }
+        ]
+      }
+    ],
+    "durable_rows": {
+      "draft_plans": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "version": 1,
+          "active": 1,
+          "brief_analysis": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+          "thesis": "Keep the pilot for one term while collecting evidence about who can use it.",
+          "argument_map": "[{\"claim\":\"Observed boardings support further investigation, not an attendance effect.\"},{\"claim\":\"Hear from non-riders before generalizing demand.\"}]",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:34"
+        }
+      ],
+      "draft_plan_sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1",
+          "ordinal": 0,
+          "title": "Evidence",
+          "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+          "claim": "The observations justify another question, not a causal conclusion.",
+          "evidence": "[\"160 then 240 boardings; no attendance data.\",\"18 voluntary rider responses; no non-riders.\"]",
+          "source_ids": "[1,2]",
+          "word_budget": 160,
+          "research_notes": "",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:34"
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "2",
+          "ordinal": 1,
+          "title": "Recommendation",
+          "job": "Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.",
+          "claim": "Extend conditionally and measure access more carefully.",
+          "evidence": "[\"The voluntary rider sample excludes non-riders.\"]",
+          "source_ids": "[2]",
+          "word_budget": 160,
+          "research_notes": "",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:34"
+        }
+      ],
+      "writer_sources": [
+        {
+          "id": 1,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/transport",
+          "title": "Synthetic campus transport pilot memo, revision 1",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:34",
+          "current_revision_id": 1
+        },
+        {
+          "id": 2,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/survey",
+          "title": "Synthetic rider survey methods note",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:34",
+          "current_revision_id": 2
+        }
+      ],
+      "writer_source_excerpts": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "No attendance data were collected.",
+          "created_at": "2026-09-07 01:25:34",
+          "source_revision_id": 1
+        },
+        {
+          "id": 2,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B.",
+          "created_at": "2026-09-07 01:25:34",
+          "source_revision_id": 1
+        },
+        {
+          "id": 3,
+          "source_id": 2,
+          "section_ref": null,
+          "excerpt": "Non-riders were not surveyed.",
+          "created_at": "2026-09-07 01:25:34",
+          "source_revision_id": 2
+        }
+      ],
+      "writer_source_revisions": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 01:25:34"
+        },
+        {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 01:25:34"
+        }
+      ],
+      "writer_runs": [],
+      "live_draft_suggestions": [],
+      "live_draft_blocks": []
+    }
+  },
+  "start_response": {
+    "id": 1,
+    "class_id": 1,
+    "kind": "draft",
+    "title": "full_live_draft_from_student_notes",
+    "state": "pending",
+    "stage_detail": "Queued",
+    "problems_total": null,
+    "problems_done": 0,
+    "error_message": null,
+    "created_at": "2026-09-07 01:25:34",
+    "updated_at": "2026-09-07 01:25:34"
+  },
+  "intervention_boundary": {
+    "state": "generating",
+    "stage_detail": "Drafting paragraph 2 of 5",
+    "error_message": null,
+    "problems_total": 5,
+    "problems_done": 1,
+    "run_id": 1,
+    "job_kind": "pass",
+    "depth": "quick",
+    "started_at": "2026-09-07T01:25:34.205820+00:00",
+    "run_status": "running",
+    "cancel_requested": false,
+    "cancel_requested_at": null,
+    "finished_at": null,
+    "warnings": []
+  },
+  "boundary_evidence": "active_status_elapsed_proxy",
+  "at_interruption": {
+    "draft": {
+      "id": 1,
+      "class_id": 1,
+      "kind": "draft",
+      "title": "full_live_draft_from_student_notes",
+      "state": "generating",
+      "stage_detail": "Drafting paragraph 2 of 5",
+      "problems_total": 5,
+      "problems_done": 1,
+      "error_message": null,
+      "created_at": "2026-09-07 01:25:34",
+      "updated_at": "2026-09-07 01:25:43",
+      "part_id": 1,
+      "body": "# My shuttle memo notes\n\nI care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey. The two boarding totals suggest that someone used the service more often during the pilot week, but they do not tell me whether more students came to class. I should not make a number answer a question it was never asked.\n\nMy recommendation is to keep the pilot for one more term and measure it more carefully. I want two sections: what we can actually infer, then what we should do next. Please keep the uncertainty visible. Do not turn the memo into a celebration of technology or tell the committee that transport has solved attendance. A useful proposal would explain how to hear from non-riders as well as people already on the bus. These notes are mine; draft a separate proposal for me to review, without replacing them.\n",
+      "body_version": 1,
+      "pending": false
+    },
+    "status": {
+      "state": "generating",
+      "stage_detail": "Drafting paragraph 2 of 5",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 1,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    "comments": [],
+    "pending": null,
+    "live_suggestion": {
+      "id": 1,
+      "artifact_id": 1,
+      "run_id": 1,
+      "stage": "drafting",
+      "status": "running",
+      "detail": "Drafting paragraph 2 of 5",
+      "stage_detail": "Drafting paragraph 2 of 5",
+      "version": 8,
+      "base_content": "# My shuttle memo notes\n\nI care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey. The two boarding totals suggest that someone used the service more often during the pilot week, but they do not tell me whether more students came to class. I should not make a number answer a question it was never asked.\n\nMy recommendation is to keep the pilot for one more term and measure it more carefully. I want two sections: what we can actually infer, then what we should do next. Please keep the uncertainty visible. Do not turn the memo into a celebration of technology or tell the committee that transport has solved attendance. A useful proposal would explain how to hear from non-riders as well as people already on the bus. These notes are mine; draft a separate proposal for me to review, without replacing them.\n",
+      "base_hash": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+      "created_at": "2026-09-07 01:25:34",
+      "updated_at": "2026-09-07 01:25:43",
+      "blocks": [
+        {
+          "id": 1,
+          "suggestion_id": 1,
+          "stable_key": "1:p1",
+          "block_key": "1:p1",
+          "section_ref": "1",
+          "paragraph_ordinal": 1,
+          "ordinal": 1,
+          "kind": "paragraph",
+          "heading": "Evidence",
+          "content": "I watched the numbers climb from 160 to 240 boardings between weeks A and B [@lyra:1]. That jump feels significant to me because I relied on this pilot to gauge daily travel. Yet the raw count is the only signal I have so far. Without knowing how many people were actually present or willing to ride, I cannot say whether the service attracted new users or simply caught a larger crowd. This uncertainty shapes every next step I take.",
+          "status": "complete",
+          "target_words": 54,
+          "summary": "Establish the first-person stake and present the boarding counts as the primary observed signal.",
+          "context": {
+            "key": "1:p1",
+            "purpose": "Establish the first-person stake and present the boarding counts as the primary observed signal.",
+            "claim": "The increase in boardings from 160 to 240 is a concrete observation that warrants further inquiry.",
+            "evidence": [
+              "Source 1: 160 boardings in week A and 240 in week B"
+            ],
+            "target_words": 54,
+            "transition_in": "Starts the section by grounding the argument in the student's direct observation of the pilot data.",
+            "transition_out": "Moves to the critical limitation that these counts cannot be interpreted without attendance context.",
+            "model_key": "p1"
+          },
+          "metadata": {
+            "section_plan": {
+              "id": 1,
+              "plan_id": 1,
+              "section_ref": "1",
+              "ordinal": 0,
+              "title": "Evidence",
+              "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+              "claim": "The observations justify another question, not a causal conclusion.",
+              "evidence": [
+                "160 then 240 boardings; no attendance data.",
+                "18 voluntary rider responses; no non-riders."
+              ],
+              "source_ids": [
+                1,
+                2
+              ],
+              "word_budget": 160,
+              "research_notes": "{\"notes\": [\"Source 1 states: \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"\", \"Source 1 states: \\\"No attendance data were collected.\\\"\", \"Source 2 states: \\\"Non-riders were not surveyed.\\\"\"], \"source_ids\": [1, 2], \"gaps\": [\"No data on non-rider perspectives or reasons for non-use.\", \"No attendance data to correlate boardings with overall population presence.\"], \"relied_on\": [{\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}, {\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}]}",
+              "created_at": "2026-09-07 01:25:34",
+              "updated_at": "2026-09-07 01:25:35"
+            },
+            "document_map": "{\"argument_map\": [{\"claim\": \"Observed boardings support further investigation, not an attendance effect.\"}, {\"claim\": \"Hear from non-riders before generalizing demand.\"}], \"request\": \"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\", \"sections\": [{\"claim\": \"The observations justify another question, not a causal conclusion.\", \"job\": \"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\", \"section_ref\": \"1\", \"title\": \"Evidence\", \"word_budget\": 160}, {\"claim\": \"Extend conditionally and measure access more carefully.\", \"job\": \"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\", \"section_ref\": \"2\", \"title\": \"Recommendation\", \"word_budget\": 160}], \"thesis\": \"Keep the pilot for one term while collecting evidence about who can use it.\"}"
+          },
+          "revision": 10,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:40",
+          "updated_at": "2026-09-07 01:25:43"
+        },
+        {
+          "id": 2,
+          "suggestion_id": 1,
+          "stable_key": "1:p2",
+          "block_key": "1:p2",
+          "section_ref": "1",
+          "paragraph_ordinal": 2,
+          "ordinal": 2,
+          "kind": "paragraph",
+          "heading": "Evidence",
+          "content": "",
+          "status": "drafting",
+          "target_words": 53,
+          "summary": "Distinguish between trip volume and population attendance to explain why the counts are insufficient for causal claims.",
+          "context": {
+            "key": "1:p2",
+            "purpose": "Distinguish between trip volume and population attendance to explain why the counts are insufficient for causal claims.",
+            "claim": "Without attendance data, the rise in boardings may reflect increased overall presence rather than a specific change in rider behavior.",
+            "evidence": [
+              "Source 1: No attendance data were collected"
+            ],
+            "target_words": 53,
+            "transition_in": "Builds on the previous paragraph's counts by introducing the missing denominator required for valid interpretation.",
+            "transition_out": "Shifts focus from the quantitative gap to the qualitative gap regarding who is not using the service.",
+            "model_key": "p2"
+          },
+          "metadata": {
+            "section_plan": {
+              "id": 1,
+              "plan_id": 1,
+              "section_ref": "1",
+              "ordinal": 0,
+              "title": "Evidence",
+              "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+              "claim": "The observations justify another question, not a causal conclusion.",
+              "evidence": [
+                "160 then 240 boardings; no attendance data.",
+                "18 voluntary rider responses; no non-riders."
+              ],
+              "source_ids": [
+                1,
+                2
+              ],
+              "word_budget": 160,
+              "research_notes": "{\"notes\": [\"Source 1 states: \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"\", \"Source 1 states: \\\"No attendance data were collected.\\\"\", \"Source 2 states: \\\"Non-riders were not surveyed.\\\"\"], \"source_ids\": [1, 2], \"gaps\": [\"No data on non-rider perspectives or reasons for non-use.\", \"No attendance data to correlate boardings with overall population presence.\"], \"relied_on\": [{\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}, {\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}]}",
+              "created_at": "2026-09-07 01:25:34",
+              "updated_at": "2026-09-07 01:25:35"
+            },
+            "document_map": "{\"argument_map\": [{\"claim\": \"Observed boardings support further investigation, not an attendance effect.\"}, {\"claim\": \"Hear from non-riders before generalizing demand.\"}], \"request\": \"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\", \"sections\": [{\"claim\": \"The observations justify another question, not a causal conclusion.\", \"job\": \"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\", \"section_ref\": \"1\", \"title\": \"Evidence\", \"word_budget\": 160}, {\"claim\": \"Extend conditionally and measure access more carefully.\", \"job\": \"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\", \"section_ref\": \"2\", \"title\": \"Recommendation\", \"word_budget\": 160}], \"thesis\": \"Keep the pilot for one term while collecting evidence about who can use it.\"}"
+          },
+          "revision": 2,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:40",
+          "updated_at": "2026-09-07 01:25:43"
+        },
+        {
+          "id": 3,
+          "suggestion_id": 1,
+          "stable_key": "1:p3",
+          "block_key": "1:p3",
+          "section_ref": "1",
+          "paragraph_ordinal": 3,
+          "ordinal": 3,
+          "kind": "paragraph",
+          "heading": "Evidence",
+          "content": "",
+          "status": "queued",
+          "target_words": 53,
+          "summary": "Highlight the representativeness gap by noting the absence of non-rider perspectives in the survey.",
+          "context": {
+            "key": "1:p3",
+            "purpose": "Highlight the representativeness gap by noting the absence of non-rider perspectives in the survey.",
+            "claim": "The survey's exclusion of non-riders prevents a full understanding of demand, leaving the current evidence incomplete.",
+            "evidence": [
+              "Source 2: Non-riders were not surveyed"
+            ],
+            "target_words": 53,
+            "transition_in": "Connects the quantitative limitation to a qualitative one, showing that both data streams are biased toward existing users.",
+            "transition_out": "Concludes the section by framing these gaps as the justification for the next step: further investigation rather than a final conclusion.",
+            "model_key": "p3"
+          },
+          "metadata": {
+            "section_plan": {
+              "id": 1,
+              "plan_id": 1,
+              "section_ref": "1",
+              "ordinal": 0,
+              "title": "Evidence",
+              "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+              "claim": "The observations justify another question, not a causal conclusion.",
+              "evidence": [
+                "160 then 240 boardings; no attendance data.",
+                "18 voluntary rider responses; no non-riders."
+              ],
+              "source_ids": [
+                1,
+                2
+              ],
+              "word_budget": 160,
+              "research_notes": "{\"notes\": [\"Source 1 states: \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"\", \"Source 1 states: \\\"No attendance data were collected.\\\"\", \"Source 2 states: \\\"Non-riders were not surveyed.\\\"\"], \"source_ids\": [1, 2], \"gaps\": [\"No data on non-rider perspectives or reasons for non-use.\", \"No attendance data to correlate boardings with overall population presence.\"], \"relied_on\": [{\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}, {\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}]}",
+              "created_at": "2026-09-07 01:25:34",
+              "updated_at": "2026-09-07 01:25:35"
+            },
+            "document_map": "{\"argument_map\": [{\"claim\": \"Observed boardings support further investigation, not an attendance effect.\"}, {\"claim\": \"Hear from non-riders before generalizing demand.\"}], \"request\": \"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\", \"sections\": [{\"claim\": \"The observations justify another question, not a causal conclusion.\", \"job\": \"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\", \"section_ref\": \"1\", \"title\": \"Evidence\", \"word_budget\": 160}, {\"claim\": \"Extend conditionally and measure access more carefully.\", \"job\": \"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\", \"section_ref\": \"2\", \"title\": \"Recommendation\", \"word_budget\": 160}], \"thesis\": \"Keep the pilot for one term while collecting evidence about who can use it.\"}"
+          },
+          "revision": 1,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:40",
+          "updated_at": "2026-09-07 01:25:40"
+        },
+        {
+          "id": 4,
+          "suggestion_id": 1,
+          "stable_key": "2:p1",
+          "block_key": "2:p1",
+          "section_ref": "2",
+          "paragraph_ordinal": 4,
+          "ordinal": 4,
+          "kind": "paragraph",
+          "heading": "Recommendation",
+          "content": "",
+          "status": "queued",
+          "target_words": 80,
+          "summary": "Propose a one-term extension contingent on resolving the non-rider data gap.",
+          "context": {
+            "key": "2:p1",
+            "purpose": "Propose a one-term extension contingent on resolving the non-rider data gap.",
+            "claim": "The pilot should continue for one term only if we can address the exclusion of non-riders.",
+            "evidence": [
+              "Source 2: 'Non-riders were not surveyed.'",
+              "Source 1: 'There were 160 boardings in week A and 240 boardings in week B.'"
+            ],
+            "target_words": 80,
+            "transition_in": "From Section 1's finding that boardings alone do not prove demand.",
+            "transition_out": "To the specific measurement plan required to validate the extension.",
+            "model_key": "rec-conditional-extension"
+          },
+          "metadata": {
+            "section_plan": {
+              "id": 2,
+              "plan_id": 1,
+              "section_ref": "2",
+              "ordinal": 1,
+              "title": "Recommendation",
+              "job": "Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.",
+              "claim": "Extend conditionally and measure access more carefully.",
+              "evidence": [
+                "The voluntary rider sample excludes non-riders."
+              ],
+              "source_ids": [
+                2,
+                1
+              ],
+              "word_budget": 160,
+              "research_notes": "{\"notes\": [\"The voluntary rider sample excludes non-riders, as stated in source 2: 'Non-riders were not surveyed.'\", \"Observed boardings are 160 in week A and 240 in week B, per source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\", \"No attendance data were collected, per source 1: 'No attendance data were collected.'\", \"Gaps: No data on non-rider demand, costs, or feasibility of measurement beyond the absence of attendance data.\"], \"source_ids\": [1, 2], \"gaps\": [\"No information on non-rider perspectives or demand.\", \"No cost or feasibility data for measurement plans.\", \"No attendance data available to assess access.\"], \"relied_on\": [{\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}, {\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}]}",
+              "created_at": "2026-09-07 01:25:34",
+              "updated_at": "2026-09-07 01:25:37"
+            },
+            "document_map": "{\"argument_map\": [{\"claim\": \"Observed boardings support further investigation, not an attendance effect.\"}, {\"claim\": \"Hear from non-riders before generalizing demand.\"}], \"request\": \"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\", \"sections\": [{\"claim\": \"The observations justify another question, not a causal conclusion.\", \"job\": \"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\", \"section_ref\": \"1\", \"title\": \"Evidence\", \"word_budget\": 160}, {\"claim\": \"Extend conditionally and measure access more carefully.\", \"job\": \"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\", \"section_ref\": \"2\", \"title\": \"Recommendation\", \"word_budget\": 160}], \"thesis\": \"Keep the pilot for one term while collecting evidence about who can use it.\"}"
+          },
+          "revision": 1,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:42",
+          "updated_at": "2026-09-07 01:25:42"
+        },
+        {
+          "id": 5,
+          "suggestion_id": 1,
+          "stable_key": "2:p2",
+          "block_key": "2:p2",
+          "section_ref": "2",
+          "paragraph_ordinal": 5,
+          "ordinal": 5,
+          "kind": "paragraph",
+          "heading": "Recommendation",
+          "content": "",
+          "status": "queued",
+          "target_words": 80,
+          "summary": "Define a feasible, low-cost measurement strategy to capture non-rider perspectives.",
+          "context": {
+            "key": "2:p2",
+            "purpose": "Define a feasible, low-cost measurement strategy to capture non-rider perspectives.",
+            "claim": "We must implement a simple survey or observation method to include non-riders without inventing costs.",
+            "evidence": [
+              "Source 2: 'Non-riders were not surveyed.'",
+              "Source 1: 'No attendance data were collected.'"
+            ],
+            "target_words": 80,
+            "transition_in": "From the conditional extension requirement.",
+            "transition_out": "To the final recommendation that retains uncertainty while proposing action.",
+            "model_key": "rec-measurement-plan"
+          },
+          "metadata": {
+            "section_plan": {
+              "id": 2,
+              "plan_id": 1,
+              "section_ref": "2",
+              "ordinal": 1,
+              "title": "Recommendation",
+              "job": "Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.",
+              "claim": "Extend conditionally and measure access more carefully.",
+              "evidence": [
+                "The voluntary rider sample excludes non-riders."
+              ],
+              "source_ids": [
+                2,
+                1
+              ],
+              "word_budget": 160,
+              "research_notes": "{\"notes\": [\"The voluntary rider sample excludes non-riders, as stated in source 2: 'Non-riders were not surveyed.'\", \"Observed boardings are 160 in week A and 240 in week B, per source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\", \"No attendance data were collected, per source 1: 'No attendance data were collected.'\", \"Gaps: No data on non-rider demand, costs, or feasibility of measurement beyond the absence of attendance data.\"], \"source_ids\": [1, 2], \"gaps\": [\"No information on non-rider perspectives or demand.\", \"No cost or feasibility data for measurement plans.\", \"No attendance data available to assess access.\"], \"relied_on\": [{\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}, {\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}]}",
+              "created_at": "2026-09-07 01:25:34",
+              "updated_at": "2026-09-07 01:25:37"
+            },
+            "document_map": "{\"argument_map\": [{\"claim\": \"Observed boardings support further investigation, not an attendance effect.\"}, {\"claim\": \"Hear from non-riders before generalizing demand.\"}], \"request\": \"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\", \"sections\": [{\"claim\": \"The observations justify another question, not a causal conclusion.\", \"job\": \"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\", \"section_ref\": \"1\", \"title\": \"Evidence\", \"word_budget\": 160}, {\"claim\": \"Extend conditionally and measure access more carefully.\", \"job\": \"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\", \"section_ref\": \"2\", \"title\": \"Recommendation\", \"word_budget\": 160}], \"thesis\": \"Keep the pilot for one term while collecting evidence about who can use it.\"}"
+          },
+          "revision": 1,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:42",
+          "updated_at": "2026-09-07 01:25:42"
+        }
+      ]
+    },
+    "plan": {
+      "id": 1,
+      "artifact_id": 1,
+      "version": 1,
+      "brief_analysis": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+      "thesis": "Keep the pilot for one term while collecting evidence about who can use it.",
+      "argument_map": [
+        {
+          "claim": "Observed boardings support further investigation, not an attendance effect."
+        },
+        {
+          "claim": "Hear from non-riders before generalizing demand."
+        }
+      ],
+      "created_at": "2026-09-07 01:25:34",
+      "updated_at": "2026-09-07 01:25:37",
+      "sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1",
+          "ordinal": 0,
+          "title": "Evidence",
+          "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+          "claim": "The observations justify another question, not a causal conclusion.",
+          "evidence": [
+            "160 then 240 boardings; no attendance data.",
+            "18 voluntary rider responses; no non-riders."
+          ],
+          "word_budget": 160,
+          "research_notes": "{\"notes\": [\"Source 1 states: \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"\", \"Source 1 states: \\\"No attendance data were collected.\\\"\", \"Source 2 states: \\\"Non-riders were not surveyed.\\\"\"], \"source_ids\": [1, 2], \"gaps\": [\"No data on non-rider perspectives or reasons for non-use.\", \"No attendance data to correlate boardings with overall population presence.\"], \"relied_on\": [{\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}, {\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}]}",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:35",
+          "sources": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "2",
+          "ordinal": 1,
+          "title": "Recommendation",
+          "job": "Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.",
+          "claim": "Extend conditionally and measure access more carefully.",
+          "evidence": [
+            "The voluntary rider sample excludes non-riders."
+          ],
+          "word_budget": 160,
+          "research_notes": "{\"notes\": [\"The voluntary rider sample excludes non-riders, as stated in source 2: 'Non-riders were not surveyed.'\", \"Observed boardings are 160 in week A and 240 in week B, per source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\", \"No attendance data were collected, per source 1: 'No attendance data were collected.'\", \"Gaps: No data on non-rider demand, costs, or feasibility of measurement beyond the absence of attendance data.\"], \"source_ids\": [1, 2], \"gaps\": [\"No information on non-rider perspectives or demand.\", \"No cost or feasibility data for measurement plans.\", \"No attendance data available to assess access.\"], \"relied_on\": [{\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}, {\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}]}",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:37",
+          "sources": [
+            2,
+            1
+          ]
+        }
+      ],
+      "status": "active"
+    },
+    "sources": [
+      {
+        "id": 1,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/transport",
+        "title": "Synthetic campus transport pilot memo, revision 1",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 01:25:34"
+        },
+        "excerpts": [
+          {
+            "id": 1,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "No attendance data were collected."
+          },
+          {
+            "id": 2,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+          },
+          {
+            "id": 4,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1",
+            "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+          },
+          {
+            "id": 5,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1",
+            "excerpt": "No attendance data were collected."
+          },
+          {
+            "id": 8,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "2",
+            "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+          },
+          {
+            "id": 9,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "2",
+            "excerpt": "No attendance data were collected."
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/survey",
+        "title": "Synthetic rider survey methods note",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 01:25:34"
+        },
+        "excerpts": [
+          {
+            "id": 3,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "Non-riders were not surveyed."
+          },
+          {
+            "id": 6,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1",
+            "excerpt": "Non-riders were not surveyed."
+          },
+          {
+            "id": 7,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "2",
+            "excerpt": "Non-riders were not surveyed."
+          }
+        ]
+      }
+    ],
+    "durable_rows": {
+      "draft_plans": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "version": 1,
+          "active": 1,
+          "brief_analysis": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+          "thesis": "Keep the pilot for one term while collecting evidence about who can use it.",
+          "argument_map": "[{\"claim\":\"Observed boardings support further investigation, not an attendance effect.\"},{\"claim\":\"Hear from non-riders before generalizing demand.\"}]",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:37"
+        }
+      ],
+      "draft_plan_sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1",
+          "ordinal": 0,
+          "title": "Evidence",
+          "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+          "claim": "The observations justify another question, not a causal conclusion.",
+          "evidence": "[\"160 then 240 boardings; no attendance data.\",\"18 voluntary rider responses; no non-riders.\"]",
+          "source_ids": "[1,2]",
+          "word_budget": 160,
+          "research_notes": "{\"notes\": [\"Source 1 states: \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"\", \"Source 1 states: \\\"No attendance data were collected.\\\"\", \"Source 2 states: \\\"Non-riders were not surveyed.\\\"\"], \"source_ids\": [1, 2], \"gaps\": [\"No data on non-rider perspectives or reasons for non-use.\", \"No attendance data to correlate boardings with overall population presence.\"], \"relied_on\": [{\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}, {\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}]}",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:35"
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "2",
+          "ordinal": 1,
+          "title": "Recommendation",
+          "job": "Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.",
+          "claim": "Extend conditionally and measure access more carefully.",
+          "evidence": "[\"The voluntary rider sample excludes non-riders.\"]",
+          "source_ids": "[2,1]",
+          "word_budget": 160,
+          "research_notes": "{\"notes\": [\"The voluntary rider sample excludes non-riders, as stated in source 2: 'Non-riders were not surveyed.'\", \"Observed boardings are 160 in week A and 240 in week B, per source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\", \"No attendance data were collected, per source 1: 'No attendance data were collected.'\", \"Gaps: No data on non-rider demand, costs, or feasibility of measurement beyond the absence of attendance data.\"], \"source_ids\": [1, 2], \"gaps\": [\"No information on non-rider perspectives or demand.\", \"No cost or feasibility data for measurement plans.\", \"No attendance data available to assess access.\"], \"relied_on\": [{\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}, {\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}]}",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:37"
+        }
+      ],
+      "writer_sources": [
+        {
+          "id": 1,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/transport",
+          "title": "Synthetic campus transport pilot memo, revision 1",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:34",
+          "current_revision_id": 1
+        },
+        {
+          "id": 2,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/survey",
+          "title": "Synthetic rider survey methods note",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:34",
+          "current_revision_id": 2
+        }
+      ],
+      "writer_source_excerpts": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "No attendance data were collected.",
+          "created_at": "2026-09-07 01:25:34",
+          "source_revision_id": 1
+        },
+        {
+          "id": 2,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B.",
+          "created_at": "2026-09-07 01:25:34",
+          "source_revision_id": 1
+        },
+        {
+          "id": 3,
+          "source_id": 2,
+          "section_ref": null,
+          "excerpt": "Non-riders were not surveyed.",
+          "created_at": "2026-09-07 01:25:34",
+          "source_revision_id": 2
+        },
+        {
+          "id": 4,
+          "source_id": 1,
+          "section_ref": "1",
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B.",
+          "created_at": "2026-09-07 01:25:35",
+          "source_revision_id": 1
+        },
+        {
+          "id": 5,
+          "source_id": 1,
+          "section_ref": "1",
+          "excerpt": "No attendance data were collected.",
+          "created_at": "2026-09-07 01:25:35",
+          "source_revision_id": 1
+        },
+        {
+          "id": 6,
+          "source_id": 2,
+          "section_ref": "1",
+          "excerpt": "Non-riders were not surveyed.",
+          "created_at": "2026-09-07 01:25:35",
+          "source_revision_id": 2
+        },
+        {
+          "id": 7,
+          "source_id": 2,
+          "section_ref": "2",
+          "excerpt": "Non-riders were not surveyed.",
+          "created_at": "2026-09-07 01:25:37",
+          "source_revision_id": 2
+        },
+        {
+          "id": 8,
+          "source_id": 1,
+          "section_ref": "2",
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B.",
+          "created_at": "2026-09-07 01:25:37",
+          "source_revision_id": 1
+        },
+        {
+          "id": 9,
+          "source_id": 1,
+          "section_ref": "2",
+          "excerpt": "No attendance data were collected.",
+          "created_at": "2026-09-07 01:25:37",
+          "source_revision_id": 1
+        }
+      ],
+      "writer_source_revisions": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 01:25:34"
+        },
+        {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 01:25:34"
+        }
+      ],
+      "writer_runs": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "job_kind": "pass",
+          "depth": "quick",
+          "status": "running",
+          "request_json": "{\"instruction\": \"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\", \"section_refs\": [], \"pause_at_plan\": false, \"address_comment_id\": null}",
+          "checkpoint_json": "{\"stage\": \"drafting\", \"index\": 1, \"targets\": [\"1:p1\", \"1:p2\", \"1:p3\", \"2:p1\", \"2:p2\"]}",
+          "warnings_json": "[]",
+          "error_message": null,
+          "started_at": "2026-09-07T01:25:34.205820+00:00",
+          "cancel_requested_at": null,
+          "finished_at": null,
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:43"
+        }
+      ],
+      "live_draft_suggestions": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "run_id": 1,
+          "stage": "drafting",
+          "status": "running",
+          "detail": "Drafting paragraph 2 of 5",
+          "version": 8,
+          "base_content": "# My shuttle memo notes\n\nI care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey. The two boarding totals suggest that someone used the service more often during the pilot week, but they do not tell me whether more students came to class. I should not make a number answer a question it was never asked.\n\nMy recommendation is to keep the pilot for one more term and measure it more carefully. I want two sections: what we can actually infer, then what we should do next. Please keep the uncertainty visible. Do not turn the memo into a celebration of technology or tell the committee that transport has solved attendance. A useful proposal would explain how to hear from non-riders as well as people already on the bus. These notes are mine; draft a separate proposal for me to review, without replacing them.\n",
+          "base_hash": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:43"
+        }
+      ],
+      "live_draft_blocks": [
+        {
+          "id": 1,
+          "suggestion_id": 1,
+          "stable_key": "1:p1",
+          "section_ref": "1",
+          "paragraph_ordinal": 1,
+          "kind": "paragraph",
+          "heading": "Evidence",
+          "content": "I watched the numbers climb from 160 to 240 boardings between weeks A and B [@lyra:1]. That jump feels significant to me because I relied on this pilot to gauge daily travel. Yet the raw count is the only signal I have so far. Without knowing how many people were actually present or willing to ride, I cannot say whether the service attracted new users or simply caught a larger crowd. This uncertainty shapes every next step I take.",
+          "status": "complete",
+          "target_words": 54,
+          "summary": "Establish the first-person stake and present the boarding counts as the primary observed signal.",
+          "context_json": "{\"key\":\"1:p1\",\"purpose\":\"Establish the first-person stake and present the boarding counts as the primary observed signal.\",\"claim\":\"The increase in boardings from 160 to 240 is a concrete observation that warrants further inquiry.\",\"evidence\":[\"Source 1: 160 boardings in week A and 240 in week B\"],\"target_words\":54,\"transition_in\":\"Starts the section by grounding the argument in the student's direct observation of the pilot data.\",\"transition_out\":\"Moves to the critical limitation that these counts cannot be interpreted without attendance context.\",\"model_key\":\"p1\"}",
+          "metadata_json": "{\"section_plan\":{\"id\":1,\"plan_id\":1,\"section_ref\":\"1\",\"ordinal\":0,\"title\":\"Evidence\",\"job\":\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\",\"claim\":\"The observations justify another question, not a causal conclusion.\",\"evidence\":[\"160 then 240 boardings; no attendance data.\",\"18 voluntary rider responses; no non-riders.\"],\"source_ids\":[1,2],\"word_budget\":160,\"research_notes\":\"{\\\"notes\\\": [\\\"Source 1 states: \\\\\\\"There were 160 boardings in week A and 240 boardings in week B.\\\\\\\"\\\", \\\"Source 1 states: \\\\\\\"No attendance data were collected.\\\\\\\"\\\", \\\"Source 2 states: \\\\\\\"Non-riders were not surveyed.\\\\\\\"\\\"], \\\"source_ids\\\": [1, 2], \\\"gaps\\\": [\\\"No data on non-rider perspectives or reasons for non-use.\\\", \\\"No attendance data to correlate boardings with overall population presence.\\\"], \\\"relied_on\\\": [{\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"No attendance data were collected.\\\"}, {\\\"source_id\\\": 2, \\\"excerpt\\\": \\\"Non-riders were not surveyed.\\\"}]}\",\"created_at\":\"2026-09-07 01:25:34\",\"updated_at\":\"2026-09-07 01:25:35\"},\"document_map\":\"{\\\"argument_map\\\": [{\\\"claim\\\": \\\"Observed boardings support further investigation, not an attendance effect.\\\"}, {\\\"claim\\\": \\\"Hear from non-riders before generalizing demand.\\\"}], \\\"request\\\": \\\"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\\\", \\\"sections\\\": [{\\\"claim\\\": \\\"The observations justify another question, not a causal conclusion.\\\", \\\"job\\\": \\\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\\\", \\\"section_ref\\\": \\\"1\\\", \\\"title\\\": \\\"Evidence\\\", \\\"word_budget\\\": 160}, {\\\"claim\\\": \\\"Extend conditionally and measure access more carefully.\\\", \\\"job\\\": \\\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\\\", \\\"section_ref\\\": \\\"2\\\", \\\"title\\\": \\\"Recommendation\\\", \\\"word_budget\\\": 160}], \\\"thesis\\\": \\\"Keep the pilot for one term while collecting evidence about who can use it.\\\"}\"}",
+          "revision": 10,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:40",
+          "updated_at": "2026-09-07 01:25:43"
+        },
+        {
+          "id": 2,
+          "suggestion_id": 1,
+          "stable_key": "1:p2",
+          "section_ref": "1",
+          "paragraph_ordinal": 2,
+          "kind": "paragraph",
+          "heading": "Evidence",
+          "content": "",
+          "status": "drafting",
+          "target_words": 53,
+          "summary": "Distinguish between trip volume and population attendance to explain why the counts are insufficient for causal claims.",
+          "context_json": "{\"key\":\"1:p2\",\"purpose\":\"Distinguish between trip volume and population attendance to explain why the counts are insufficient for causal claims.\",\"claim\":\"Without attendance data, the rise in boardings may reflect increased overall presence rather than a specific change in rider behavior.\",\"evidence\":[\"Source 1: No attendance data were collected\"],\"target_words\":53,\"transition_in\":\"Builds on the previous paragraph's counts by introducing the missing denominator required for valid interpretation.\",\"transition_out\":\"Shifts focus from the quantitative gap to the qualitative gap regarding who is not using the service.\",\"model_key\":\"p2\"}",
+          "metadata_json": "{\"section_plan\":{\"id\":1,\"plan_id\":1,\"section_ref\":\"1\",\"ordinal\":0,\"title\":\"Evidence\",\"job\":\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\",\"claim\":\"The observations justify another question, not a causal conclusion.\",\"evidence\":[\"160 then 240 boardings; no attendance data.\",\"18 voluntary rider responses; no non-riders.\"],\"source_ids\":[1,2],\"word_budget\":160,\"research_notes\":\"{\\\"notes\\\": [\\\"Source 1 states: \\\\\\\"There were 160 boardings in week A and 240 boardings in week B.\\\\\\\"\\\", \\\"Source 1 states: \\\\\\\"No attendance data were collected.\\\\\\\"\\\", \\\"Source 2 states: \\\\\\\"Non-riders were not surveyed.\\\\\\\"\\\"], \\\"source_ids\\\": [1, 2], \\\"gaps\\\": [\\\"No data on non-rider perspectives or reasons for non-use.\\\", \\\"No attendance data to correlate boardings with overall population presence.\\\"], \\\"relied_on\\\": [{\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"No attendance data were collected.\\\"}, {\\\"source_id\\\": 2, \\\"excerpt\\\": \\\"Non-riders were not surveyed.\\\"}]}\",\"created_at\":\"2026-09-07 01:25:34\",\"updated_at\":\"2026-09-07 01:25:35\"},\"document_map\":\"{\\\"argument_map\\\": [{\\\"claim\\\": \\\"Observed boardings support further investigation, not an attendance effect.\\\"}, {\\\"claim\\\": \\\"Hear from non-riders before generalizing demand.\\\"}], \\\"request\\\": \\\"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\\\", \\\"sections\\\": [{\\\"claim\\\": \\\"The observations justify another question, not a causal conclusion.\\\", \\\"job\\\": \\\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\\\", \\\"section_ref\\\": \\\"1\\\", \\\"title\\\": \\\"Evidence\\\", \\\"word_budget\\\": 160}, {\\\"claim\\\": \\\"Extend conditionally and measure access more carefully.\\\", \\\"job\\\": \\\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\\\", \\\"section_ref\\\": \\\"2\\\", \\\"title\\\": \\\"Recommendation\\\", \\\"word_budget\\\": 160}], \\\"thesis\\\": \\\"Keep the pilot for one term while collecting evidence about who can use it.\\\"}\"}",
+          "revision": 2,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:40",
+          "updated_at": "2026-09-07 01:25:43"
+        },
+        {
+          "id": 3,
+          "suggestion_id": 1,
+          "stable_key": "1:p3",
+          "section_ref": "1",
+          "paragraph_ordinal": 3,
+          "kind": "paragraph",
+          "heading": "Evidence",
+          "content": "",
+          "status": "queued",
+          "target_words": 53,
+          "summary": "Highlight the representativeness gap by noting the absence of non-rider perspectives in the survey.",
+          "context_json": "{\"key\":\"1:p3\",\"purpose\":\"Highlight the representativeness gap by noting the absence of non-rider perspectives in the survey.\",\"claim\":\"The survey's exclusion of non-riders prevents a full understanding of demand, leaving the current evidence incomplete.\",\"evidence\":[\"Source 2: Non-riders were not surveyed\"],\"target_words\":53,\"transition_in\":\"Connects the quantitative limitation to a qualitative one, showing that both data streams are biased toward existing users.\",\"transition_out\":\"Concludes the section by framing these gaps as the justification for the next step: further investigation rather than a final conclusion.\",\"model_key\":\"p3\"}",
+          "metadata_json": "{\"section_plan\":{\"id\":1,\"plan_id\":1,\"section_ref\":\"1\",\"ordinal\":0,\"title\":\"Evidence\",\"job\":\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\",\"claim\":\"The observations justify another question, not a causal conclusion.\",\"evidence\":[\"160 then 240 boardings; no attendance data.\",\"18 voluntary rider responses; no non-riders.\"],\"source_ids\":[1,2],\"word_budget\":160,\"research_notes\":\"{\\\"notes\\\": [\\\"Source 1 states: \\\\\\\"There were 160 boardings in week A and 240 boardings in week B.\\\\\\\"\\\", \\\"Source 1 states: \\\\\\\"No attendance data were collected.\\\\\\\"\\\", \\\"Source 2 states: \\\\\\\"Non-riders were not surveyed.\\\\\\\"\\\"], \\\"source_ids\\\": [1, 2], \\\"gaps\\\": [\\\"No data on non-rider perspectives or reasons for non-use.\\\", \\\"No attendance data to correlate boardings with overall population presence.\\\"], \\\"relied_on\\\": [{\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"No attendance data were collected.\\\"}, {\\\"source_id\\\": 2, \\\"excerpt\\\": \\\"Non-riders were not surveyed.\\\"}]}\",\"created_at\":\"2026-09-07 01:25:34\",\"updated_at\":\"2026-09-07 01:25:35\"},\"document_map\":\"{\\\"argument_map\\\": [{\\\"claim\\\": \\\"Observed boardings support further investigation, not an attendance effect.\\\"}, {\\\"claim\\\": \\\"Hear from non-riders before generalizing demand.\\\"}], \\\"request\\\": \\\"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\\\", \\\"sections\\\": [{\\\"claim\\\": \\\"The observations justify another question, not a causal conclusion.\\\", \\\"job\\\": \\\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\\\", \\\"section_ref\\\": \\\"1\\\", \\\"title\\\": \\\"Evidence\\\", \\\"word_budget\\\": 160}, {\\\"claim\\\": \\\"Extend conditionally and measure access more carefully.\\\", \\\"job\\\": \\\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\\\", \\\"section_ref\\\": \\\"2\\\", \\\"title\\\": \\\"Recommendation\\\", \\\"word_budget\\\": 160}], \\\"thesis\\\": \\\"Keep the pilot for one term while collecting evidence about who can use it.\\\"}\"}",
+          "revision": 1,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:40",
+          "updated_at": "2026-09-07 01:25:40"
+        },
+        {
+          "id": 4,
+          "suggestion_id": 1,
+          "stable_key": "2:p1",
+          "section_ref": "2",
+          "paragraph_ordinal": 4,
+          "kind": "paragraph",
+          "heading": "Recommendation",
+          "content": "",
+          "status": "queued",
+          "target_words": 80,
+          "summary": "Propose a one-term extension contingent on resolving the non-rider data gap.",
+          "context_json": "{\"key\":\"2:p1\",\"purpose\":\"Propose a one-term extension contingent on resolving the non-rider data gap.\",\"claim\":\"The pilot should continue for one term only if we can address the exclusion of non-riders.\",\"evidence\":[\"Source 2: 'Non-riders were not surveyed.'\",\"Source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\"],\"target_words\":80,\"transition_in\":\"From Section 1's finding that boardings alone do not prove demand.\",\"transition_out\":\"To the specific measurement plan required to validate the extension.\",\"model_key\":\"rec-conditional-extension\"}",
+          "metadata_json": "{\"section_plan\":{\"id\":2,\"plan_id\":1,\"section_ref\":\"2\",\"ordinal\":1,\"title\":\"Recommendation\",\"job\":\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\",\"claim\":\"Extend conditionally and measure access more carefully.\",\"evidence\":[\"The voluntary rider sample excludes non-riders.\"],\"source_ids\":[2,1],\"word_budget\":160,\"research_notes\":\"{\\\"notes\\\": [\\\"The voluntary rider sample excludes non-riders, as stated in source 2: 'Non-riders were not surveyed.'\\\", \\\"Observed boardings are 160 in week A and 240 in week B, per source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\\\", \\\"No attendance data were collected, per source 1: 'No attendance data were collected.'\\\", \\\"Gaps: No data on non-rider demand, costs, or feasibility of measurement beyond the absence of attendance data.\\\"], \\\"source_ids\\\": [1, 2], \\\"gaps\\\": [\\\"No information on non-rider perspectives or demand.\\\", \\\"No cost or feasibility data for measurement plans.\\\", \\\"No attendance data available to assess access.\\\"], \\\"relied_on\\\": [{\\\"source_id\\\": 2, \\\"excerpt\\\": \\\"Non-riders were not surveyed.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"No attendance data were collected.\\\"}]}\",\"created_at\":\"2026-09-07 01:25:34\",\"updated_at\":\"2026-09-07 01:25:37\"},\"document_map\":\"{\\\"argument_map\\\": [{\\\"claim\\\": \\\"Observed boardings support further investigation, not an attendance effect.\\\"}, {\\\"claim\\\": \\\"Hear from non-riders before generalizing demand.\\\"}], \\\"request\\\": \\\"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\\\", \\\"sections\\\": [{\\\"claim\\\": \\\"The observations justify another question, not a causal conclusion.\\\", \\\"job\\\": \\\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\\\", \\\"section_ref\\\": \\\"1\\\", \\\"title\\\": \\\"Evidence\\\", \\\"word_budget\\\": 160}, {\\\"claim\\\": \\\"Extend conditionally and measure access more carefully.\\\", \\\"job\\\": \\\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\\\", \\\"section_ref\\\": \\\"2\\\", \\\"title\\\": \\\"Recommendation\\\", \\\"word_budget\\\": 160}], \\\"thesis\\\": \\\"Keep the pilot for one term while collecting evidence about who can use it.\\\"}\"}",
+          "revision": 1,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:42",
+          "updated_at": "2026-09-07 01:25:42"
+        },
+        {
+          "id": 5,
+          "suggestion_id": 1,
+          "stable_key": "2:p2",
+          "section_ref": "2",
+          "paragraph_ordinal": 5,
+          "kind": "paragraph",
+          "heading": "Recommendation",
+          "content": "",
+          "status": "queued",
+          "target_words": 80,
+          "summary": "Define a feasible, low-cost measurement strategy to capture non-rider perspectives.",
+          "context_json": "{\"key\":\"2:p2\",\"purpose\":\"Define a feasible, low-cost measurement strategy to capture non-rider perspectives.\",\"claim\":\"We must implement a simple survey or observation method to include non-riders without inventing costs.\",\"evidence\":[\"Source 2: 'Non-riders were not surveyed.'\",\"Source 1: 'No attendance data were collected.'\"],\"target_words\":80,\"transition_in\":\"From the conditional extension requirement.\",\"transition_out\":\"To the final recommendation that retains uncertainty while proposing action.\",\"model_key\":\"rec-measurement-plan\"}",
+          "metadata_json": "{\"section_plan\":{\"id\":2,\"plan_id\":1,\"section_ref\":\"2\",\"ordinal\":1,\"title\":\"Recommendation\",\"job\":\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\",\"claim\":\"Extend conditionally and measure access more carefully.\",\"evidence\":[\"The voluntary rider sample excludes non-riders.\"],\"source_ids\":[2,1],\"word_budget\":160,\"research_notes\":\"{\\\"notes\\\": [\\\"The voluntary rider sample excludes non-riders, as stated in source 2: 'Non-riders were not surveyed.'\\\", \\\"Observed boardings are 160 in week A and 240 in week B, per source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\\\", \\\"No attendance data were collected, per source 1: 'No attendance data were collected.'\\\", \\\"Gaps: No data on non-rider demand, costs, or feasibility of measurement beyond the absence of attendance data.\\\"], \\\"source_ids\\\": [1, 2], \\\"gaps\\\": [\\\"No information on non-rider perspectives or demand.\\\", \\\"No cost or feasibility data for measurement plans.\\\", \\\"No attendance data available to assess access.\\\"], \\\"relied_on\\\": [{\\\"source_id\\\": 2, \\\"excerpt\\\": \\\"Non-riders were not surveyed.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"No attendance data were collected.\\\"}]}\",\"created_at\":\"2026-09-07 01:25:34\",\"updated_at\":\"2026-09-07 01:25:37\"},\"document_map\":\"{\\\"argument_map\\\": [{\\\"claim\\\": \\\"Observed boardings support further investigation, not an attendance effect.\\\"}, {\\\"claim\\\": \\\"Hear from non-riders before generalizing demand.\\\"}], \\\"request\\\": \\\"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\\\", \\\"sections\\\": [{\\\"claim\\\": \\\"The observations justify another question, not a causal conclusion.\\\", \\\"job\\\": \\\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\\\", \\\"section_ref\\\": \\\"1\\\", \\\"title\\\": \\\"Evidence\\\", \\\"word_budget\\\": 160}, {\\\"claim\\\": \\\"Extend conditionally and measure access more carefully.\\\", \\\"job\\\": \\\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\\\", \\\"section_ref\\\": \\\"2\\\", \\\"title\\\": \\\"Recommendation\\\", \\\"word_budget\\\": 160}], \\\"thesis\\\": \\\"Keep the pilot for one term while collecting evidence about who can use it.\\\"}\"}",
+          "revision": 1,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:42",
+          "updated_at": "2026-09-07 01:25:42"
+        }
+      ]
+    }
+  },
+  "after": {
+    "draft": {
+      "id": 1,
+      "class_id": 1,
+      "kind": "draft",
+      "title": "full_live_draft_from_student_notes",
+      "state": "ready",
+      "stage_detail": "The live draft suggestion is ready for review.",
+      "problems_total": 5,
+      "problems_done": 5,
+      "error_message": null,
+      "created_at": "2026-09-07 01:25:34",
+      "updated_at": "2026-09-07 01:25:58",
+      "part_id": 1,
+      "body": "# My shuttle memo notes\n\nI care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey. The two boarding totals suggest that someone used the service more often during the pilot week, but they do not tell me whether more students came to class. I should not make a number answer a question it was never asked.\n\nMy recommendation is to keep the pilot for one more term and measure it more carefully. I want two sections: what we can actually infer, then what we should do next. Please keep the uncertainty visible. Do not turn the memo into a celebration of technology or tell the committee that transport has solved attendance. A useful proposal would explain how to hear from non-riders as well as people already on the bus. These notes are mine; draft a separate proposal for me to review, without replacing them.\n",
+      "body_version": 1,
+      "pending": true
+    },
+    "status": {
+      "state": "ready",
+      "stage_detail": "The live draft suggestion is ready for review.",
+      "error_message": null,
+      "problems_total": 5,
+      "problems_done": 5,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T01:25:34.205820+00:00",
+      "run_status": "completed",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": "2026-09-07 01:25:58",
+      "warnings": [
+        {
+          "code": "resumed_after_restart",
+          "message": "This run resumed after a restart from the last completed boundary."
+        }
+      ]
+    },
+    "comments": [],
+    "pending": {
+      "id": 1,
+      "stale": false,
+      "note": "Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.",
+      "hunks": [
+        {
+          "index": 0,
+          "old_start": 0,
+          "old_lines": 5,
+          "new_start": 0,
+          "new_lines": 13,
+          "lines": [
+            "-# My shuttle memo notes",
+            "+## Evidence",
+            " ",
+            "-I care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey. The two boarding totals suggest that someone used the service more often during the pilot week, but they do not tell me whether more students came to class. I should not make a number answer a question it was never asked.",
+            "+I watched the numbers climb from 160 to 240 boardings between weeks A and B [@lyra:1]. That jump feels significant to me because I relied on this pilot to gauge daily travel. Yet the raw count is the only signal I have so far. Without knowing how many people were actually present or willing to ride, I cannot say whether the service attracted new users or simply caught a larger crowd. This uncertainty shapes every next step I take.",
+            " ",
+            "-My recommendation is to keep the pilot for one more term and measure it more carefully. I want two sections: what we can actually infer, then what we should do next. Please keep the uncertainty visible. Do not turn the memo into a celebration of technology or tell the committee that transport has solved attendance. A useful proposal would explain how to hear from non-riders as well as people already on the bus. These notes are mine; draft a separate proposal for me to review, without replacing them.",
+            "+The missing attendance data leaves the boarding increase without context. I cannot determine if the rise from 160 to 240 reflects a change in rider behavior or just more people on campus. Since no attendance figures were collected [@lyra:1], the counts remain ambiguous. The numbers describe trips taken, not the proportion of the population using them. This gap prevents me from linking the volume directly to a specific causal effect.",
+            "+",
+            "+Beyond the missing attendance figures, the survey data also excludes those who do not ride. Because non-riders were not surveyed [@lyra:2], their reasons for avoiding the service remain unknown. This omission means the current evidence captures only the experiences of existing users. Together with the ambiguous boarding counts, these gaps prevent a definitive conclusion about overall demand. The observations justify further investigation rather than a final causal judgment, as resolving these ambiguities requires direct input from the excluded population.",
+            "+",
+            "+## Recommendation",
+            "+",
+            "+I propose extending the pilot for one term, contingent on filling the non-rider data gap. The 160 boardings in week A and 240 in week B [@lyra:1] show usage, but without information from non-riders [@lyra:2], we cannot verify if this reflects broad demand or only existing users' preferences. This extension is conditional, not a permanent commitment. It allows us to gather missing perspectives before deciding whether the service should continue. The goal is to resolve uncertainty by hearing from those currently excluded, ensuring any future expansion rests on complete evidence rather than partial observation.",
+            "+",
+            "+To measure non-rider perspectives during this term, we need a simple survey or observation method that captures access barriers for those who do not board. Since the current data exclude non-riders [@lyra:2] and lack attendance records [@lyra:1], any new collection must specifically target these missing groups. A low-cost, targeted data collection method can identify why people stay off the bus without requiring complex infrastructure. This step tests whether the service's reach is limited by actual availability or simply by current rider habits, providing the baseline data needed to judge the pilot's true effect."
+          ],
+          "hash": "1fa965da9a65a9e8f2d7f0569cbb954f309be105d1c3de6b64858d71a5fab5a2"
+        }
+      ],
+      "proposed_content": "## Evidence\n\nI watched the numbers climb from 160 to 240 boardings between weeks A and B [@lyra:1]. That jump feels significant to me because I relied on this pilot to gauge daily travel. Yet the raw count is the only signal I have so far. Without knowing how many people were actually present or willing to ride, I cannot say whether the service attracted new users or simply caught a larger crowd. This uncertainty shapes every next step I take.\n\nThe missing attendance data leaves the boarding increase without context. I cannot determine if the rise from 160 to 240 reflects a change in rider behavior or just more people on campus. Since no attendance figures were collected [@lyra:1], the counts remain ambiguous. The numbers describe trips taken, not the proportion of the population using them. This gap prevents me from linking the volume directly to a specific causal effect.\n\nBeyond the missing attendance figures, the survey data also excludes those who do not ride. Because non-riders were not surveyed [@lyra:2], their reasons for avoiding the service remain unknown. This omission means the current evidence captures only the experiences of existing users. Together with the ambiguous boarding counts, these gaps prevent a definitive conclusion about overall demand. The observations justify further investigation rather than a final causal judgment, as resolving these ambiguities requires direct input from the excluded population.\n\n## Recommendation\n\nI propose extending the pilot for one term, contingent on filling the non-rider data gap. The 160 boardings in week A and 240 in week B [@lyra:1] show usage, but without information from non-riders [@lyra:2], we cannot verify if this reflects broad demand or only existing users' preferences. This extension is conditional, not a permanent commitment. It allows us to gather missing perspectives before deciding whether the service should continue. The goal is to resolve uncertainty by hearing from those currently excluded, ensuring any future expansion rests on complete evidence rather than partial observation.\n\nTo measure non-rider perspectives during this term, we need a simple survey or observation method that captures access barriers for those who do not board. Since the current data exclude non-riders [@lyra:2] and lack attendance records [@lyra:1], any new collection must specifically target these missing groups. A low-cost, targeted data collection method can identify why people stay off the bus without requiring complex infrastructure. This step tests whether the service's reach is limited by actual availability or simply by current rider habits, providing the baseline data needed to judge the pilot's true effect.\n"
+    },
+    "live_suggestion": {
+      "id": 1,
+      "artifact_id": 1,
+      "run_id": 1,
+      "stage": "completed",
+      "status": "ready",
+      "detail": "The live draft suggestion is ready for review.",
+      "stage_detail": "The live draft suggestion is ready for review.",
+      "version": 19,
+      "base_content": "# My shuttle memo notes\n\nI care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey. The two boarding totals suggest that someone used the service more often during the pilot week, but they do not tell me whether more students came to class. I should not make a number answer a question it was never asked.\n\nMy recommendation is to keep the pilot for one more term and measure it more carefully. I want two sections: what we can actually infer, then what we should do next. Please keep the uncertainty visible. Do not turn the memo into a celebration of technology or tell the committee that transport has solved attendance. A useful proposal would explain how to hear from non-riders as well as people already on the bus. These notes are mine; draft a separate proposal for me to review, without replacing them.\n",
+      "base_hash": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+      "created_at": "2026-09-07 01:25:34",
+      "updated_at": "2026-09-07 01:25:58",
+      "blocks": [
+        {
+          "id": 1,
+          "suggestion_id": 1,
+          "stable_key": "1:p1",
+          "block_key": "1:p1",
+          "section_ref": "1",
+          "paragraph_ordinal": 1,
+          "ordinal": 1,
+          "kind": "paragraph",
+          "heading": "Evidence",
+          "content": "I watched the numbers climb from 160 to 240 boardings between weeks A and B [@lyra:1]. That jump feels significant to me because I relied on this pilot to gauge daily travel. Yet the raw count is the only signal I have so far. Without knowing how many people were actually present or willing to ride, I cannot say whether the service attracted new users or simply caught a larger crowd. This uncertainty shapes every next step I take.",
+          "status": "complete",
+          "target_words": 54,
+          "summary": "Establish the first-person stake and present the boarding counts as the primary observed signal.",
+          "context": {
+            "key": "1:p1",
+            "purpose": "Establish the first-person stake and present the boarding counts as the primary observed signal.",
+            "claim": "The increase in boardings from 160 to 240 is a concrete observation that warrants further inquiry.",
+            "evidence": [
+              "Source 1: 160 boardings in week A and 240 in week B"
+            ],
+            "target_words": 54,
+            "transition_in": "Starts the section by grounding the argument in the student's direct observation of the pilot data.",
+            "transition_out": "Moves to the critical limitation that these counts cannot be interpreted without attendance context.",
+            "model_key": "p1"
+          },
+          "metadata": {
+            "section_plan": {
+              "id": 1,
+              "plan_id": 1,
+              "section_ref": "1",
+              "ordinal": 0,
+              "title": "Evidence",
+              "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+              "claim": "The observations justify another question, not a causal conclusion.",
+              "evidence": [
+                "160 then 240 boardings; no attendance data.",
+                "18 voluntary rider responses; no non-riders."
+              ],
+              "source_ids": [
+                1,
+                2
+              ],
+              "word_budget": 160,
+              "research_notes": "{\"notes\": [\"Source 1 states: \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"\", \"Source 1 states: \\\"No attendance data were collected.\\\"\", \"Source 2 states: \\\"Non-riders were not surveyed.\\\"\"], \"source_ids\": [1, 2], \"gaps\": [\"No data on non-rider perspectives or reasons for non-use.\", \"No attendance data to correlate boardings with overall population presence.\"], \"relied_on\": [{\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}, {\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}]}",
+              "created_at": "2026-09-07 01:25:34",
+              "updated_at": "2026-09-07 01:25:35"
+            },
+            "document_map": "{\"argument_map\": [{\"claim\": \"Observed boardings support further investigation, not an attendance effect.\"}, {\"claim\": \"Hear from non-riders before generalizing demand.\"}], \"request\": \"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\", \"sections\": [{\"claim\": \"The observations justify another question, not a causal conclusion.\", \"job\": \"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\", \"section_ref\": \"1\", \"title\": \"Evidence\", \"word_budget\": 160}, {\"claim\": \"Extend conditionally and measure access more carefully.\", \"job\": \"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\", \"section_ref\": \"2\", \"title\": \"Recommendation\", \"word_budget\": 160}], \"thesis\": \"Keep the pilot for one term while collecting evidence about who can use it.\"}",
+            "overall_assessment": {
+              "summary": "The draft largely aligns with the global map, but Section 1 contains a significant argumentative contradiction where the text claims the data is insufficient for causal claims while simultaneously asserting that the observations justify further investigation. Additionally, Section 2 introduces a specific methodological detail ('brief checks at stops') that risks violating the constraint against inventing facts or over-specifying the measurement plan.",
+              "issues": [],
+              "completed": true
+            }
+          },
+          "revision": 11,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:40",
+          "updated_at": "2026-09-07 01:25:56"
+        },
+        {
+          "id": 2,
+          "suggestion_id": 1,
+          "stable_key": "1:p2",
+          "block_key": "1:p2",
+          "section_ref": "1",
+          "paragraph_ordinal": 2,
+          "ordinal": 2,
+          "kind": "paragraph",
+          "heading": "Evidence",
+          "content": "The missing attendance data leaves the boarding increase without context. I cannot determine if the rise from 160 to 240 reflects a change in rider behavior or just more people on campus. Since no attendance figures were collected [@lyra:1], the counts remain ambiguous. The numbers describe trips taken, not the proportion of the population using them. This gap prevents me from linking the volume directly to a specific causal effect.",
+          "status": "complete",
+          "target_words": 53,
+          "summary": "Distinguish between trip volume and population attendance to explain why the counts are insufficient for causal claims.",
+          "context": {
+            "key": "1:p2",
+            "purpose": "Distinguish between trip volume and population attendance to explain why the counts are insufficient for causal claims.",
+            "claim": "Without attendance data, the rise in boardings may reflect increased overall presence rather than a specific change in rider behavior.",
+            "evidence": [
+              "Source 1: No attendance data were collected"
+            ],
+            "target_words": 53,
+            "transition_in": "Builds on the previous paragraph's counts by introducing the missing denominator required for valid interpretation.",
+            "transition_out": "Shifts focus from the quantitative gap to the qualitative gap regarding who is not using the service.",
+            "model_key": "p2"
+          },
+          "metadata": {
+            "section_plan": {
+              "id": 1,
+              "plan_id": 1,
+              "section_ref": "1",
+              "ordinal": 0,
+              "title": "Evidence",
+              "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+              "claim": "The observations justify another question, not a causal conclusion.",
+              "evidence": [
+                "160 then 240 boardings; no attendance data.",
+                "18 voluntary rider responses; no non-riders."
+              ],
+              "source_ids": [
+                1,
+                2
+              ],
+              "word_budget": 160,
+              "research_notes": "{\"notes\": [\"Source 1 states: \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"\", \"Source 1 states: \\\"No attendance data were collected.\\\"\", \"Source 2 states: \\\"Non-riders were not surveyed.\\\"\"], \"source_ids\": [1, 2], \"gaps\": [\"No data on non-rider perspectives or reasons for non-use.\", \"No attendance data to correlate boardings with overall population presence.\"], \"relied_on\": [{\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}, {\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}]}",
+              "created_at": "2026-09-07 01:25:34",
+              "updated_at": "2026-09-07 01:25:35"
+            },
+            "document_map": "{\"argument_map\": [{\"claim\": \"Observed boardings support further investigation, not an attendance effect.\"}, {\"claim\": \"Hear from non-riders before generalizing demand.\"}], \"request\": \"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\", \"sections\": [{\"claim\": \"The observations justify another question, not a causal conclusion.\", \"job\": \"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\", \"section_ref\": \"1\", \"title\": \"Evidence\", \"word_budget\": 160}, {\"claim\": \"Extend conditionally and measure access more carefully.\", \"job\": \"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\", \"section_ref\": \"2\", \"title\": \"Recommendation\", \"word_budget\": 160}], \"thesis\": \"Keep the pilot for one term while collecting evidence about who can use it.\"}",
+            "transition_review": {
+              "rationale": "The transition is already strong. The next paragraph begins with 'The missing attendance data,' which directly references the limitation ('Without knowing how many people were actually present') introduced at the end of the previous paragraph. It then proceeds to explain the implications of that missing data, fulfilling the requirement to start with old information and introduce new analysis.",
+              "left": "1:p1",
+              "completed": true
+            },
+            "overall_assessment": {
+              "summary": "The draft largely aligns with the global map, but Section 1 contains a significant argumentative contradiction where the text claims the data is insufficient for causal claims while simultaneously asserting that the observations justify further investigation. Additionally, Section 2 introduces a specific methodological detail ('brief checks at stops') that risks violating the constraint against inventing facts or over-specifying the measurement plan.",
+              "issues": [],
+              "completed": true
+            }
+          },
+          "revision": 12,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:40",
+          "updated_at": "2026-09-07 01:25:56"
+        },
+        {
+          "id": 3,
+          "suggestion_id": 1,
+          "stable_key": "1:p3",
+          "block_key": "1:p3",
+          "section_ref": "1",
+          "paragraph_ordinal": 3,
+          "ordinal": 3,
+          "kind": "paragraph",
+          "heading": "Evidence",
+          "content": "Beyond the missing attendance figures, the survey data also excludes those who do not ride. Because non-riders were not surveyed [@lyra:2], their reasons for avoiding the service remain unknown. This omission means the current evidence captures only the experiences of existing users. Together with the ambiguous boarding counts, these gaps prevent a definitive conclusion about overall demand. The observations justify further investigation rather than a final causal judgment, as resolving these ambiguities requires direct input from the excluded population.",
+          "status": "complete",
+          "target_words": 53,
+          "summary": "Highlight the representativeness gap by noting the absence of non-rider perspectives in the survey.",
+          "context": {
+            "key": "1:p3",
+            "purpose": "Highlight the representativeness gap by noting the absence of non-rider perspectives in the survey.",
+            "claim": "The survey's exclusion of non-riders prevents a full understanding of demand, leaving the current evidence incomplete.",
+            "evidence": [
+              "Source 2: Non-riders were not surveyed"
+            ],
+            "target_words": 53,
+            "transition_in": "Connects the quantitative limitation to a qualitative one, showing that both data streams are biased toward existing users.",
+            "transition_out": "Concludes the section by framing these gaps as the justification for the next step: further investigation rather than a final conclusion.",
+            "model_key": "p3"
+          },
+          "metadata": {
+            "section_plan": {
+              "id": 1,
+              "plan_id": 1,
+              "section_ref": "1",
+              "ordinal": 0,
+              "title": "Evidence",
+              "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+              "claim": "The observations justify another question, not a causal conclusion.",
+              "evidence": [
+                "160 then 240 boardings; no attendance data.",
+                "18 voluntary rider responses; no non-riders."
+              ],
+              "source_ids": [
+                1,
+                2
+              ],
+              "word_budget": 160,
+              "research_notes": "{\"notes\": [\"Source 1 states: \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"\", \"Source 1 states: \\\"No attendance data were collected.\\\"\", \"Source 2 states: \\\"Non-riders were not surveyed.\\\"\"], \"source_ids\": [1, 2], \"gaps\": [\"No data on non-rider perspectives or reasons for non-use.\", \"No attendance data to correlate boardings with overall population presence.\"], \"relied_on\": [{\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}, {\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}]}",
+              "created_at": "2026-09-07 01:25:34",
+              "updated_at": "2026-09-07 01:25:35"
+            },
+            "document_map": "{\"argument_map\": [{\"claim\": \"Observed boardings support further investigation, not an attendance effect.\"}, {\"claim\": \"Hear from non-riders before generalizing demand.\"}], \"request\": \"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\", \"sections\": [{\"claim\": \"The observations justify another question, not a causal conclusion.\", \"job\": \"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\", \"section_ref\": \"1\", \"title\": \"Evidence\", \"word_budget\": 160}, {\"claim\": \"Extend conditionally and measure access more carefully.\", \"job\": \"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\", \"section_ref\": \"2\", \"title\": \"Recommendation\", \"word_budget\": 160}], \"thesis\": \"Keep the pilot for one term while collecting evidence about who can use it.\"}",
+            "transition_review": {
+              "rationale": "The transition is already strong. The next paragraph begins with 'Beyond the missing attendance figures,' which explicitly references the old information (the attendance gap discussed in the previous paragraph) before introducing the new information (the survey exclusion of non-riders). This satisfies the requirement for a meaningful transition without needing revision.",
+              "left": "1:p2",
+              "completed": true
+            },
+            "overall_assessment": {
+              "summary": "The draft largely aligns with the global map, but Section 1 contains a significant argumentative contradiction where the text claims the data is insufficient for causal claims while simultaneously asserting that the observations justify further investigation. Additionally, Section 2 introduces a specific methodological detail ('brief checks at stops') that risks violating the constraint against inventing facts or over-specifying the measurement plan.",
+              "issues": [
+                {
+                  "block_key": "1:p3",
+                  "problem": "Contradiction with the section's core claim. The block concludes that 'observations justify further investigation rather than a final causal judgment,' which directly conflicts with the section's assigned claim that 'The observations justify another question, not a causal conclusion' in a way that muddies the distinction. More critically, the preceding sentence states the gaps 'prevent a definitive conclusion,' but the final sentence pivots to a positive justification for investigation, creating a tonal and logical disconnect that weakens the argument's progression.",
+                  "revision_instruction": "Revise the final sentence to explicitly frame the investigation as a necessary step to resolve the ambiguity identified in the previous sentences, ensuring the tone remains cautious and focused on the lack of evidence rather than a positive endorsement of the current data."
+                }
+              ],
+              "completed": true
+            }
+          },
+          "revision": 13,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:40",
+          "updated_at": "2026-09-07 01:25:57"
+        },
+        {
+          "id": 4,
+          "suggestion_id": 1,
+          "stable_key": "2:p1",
+          "block_key": "2:p1",
+          "section_ref": "2",
+          "paragraph_ordinal": 4,
+          "ordinal": 4,
+          "kind": "paragraph",
+          "heading": "Recommendation",
+          "content": "I propose extending the pilot for one term, contingent on filling the non-rider data gap. The 160 boardings in week A and 240 in week B [@lyra:1] show usage, but without information from non-riders [@lyra:2], we cannot verify if this reflects broad demand or only existing users' preferences. This extension is conditional, not a permanent commitment. It allows us to gather missing perspectives before deciding whether the service should continue. The goal is to resolve uncertainty by hearing from those currently excluded, ensuring any future expansion rests on complete evidence rather than partial observation.",
+          "status": "complete",
+          "target_words": 80,
+          "summary": "Propose a one-term extension contingent on resolving the non-rider data gap.",
+          "context": {
+            "key": "2:p1",
+            "purpose": "Propose a one-term extension contingent on resolving the non-rider data gap.",
+            "claim": "The pilot should continue for one term only if we can address the exclusion of non-riders.",
+            "evidence": [
+              "Source 2: 'Non-riders were not surveyed.'",
+              "Source 1: 'There were 160 boardings in week A and 240 boardings in week B.'"
+            ],
+            "target_words": 80,
+            "transition_in": "From Section 1's finding that boardings alone do not prove demand.",
+            "transition_out": "To the specific measurement plan required to validate the extension.",
+            "model_key": "rec-conditional-extension"
+          },
+          "metadata": {
+            "section_plan": {
+              "id": 2,
+              "plan_id": 1,
+              "section_ref": "2",
+              "ordinal": 1,
+              "title": "Recommendation",
+              "job": "Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.",
+              "claim": "Extend conditionally and measure access more carefully.",
+              "evidence": [
+                "The voluntary rider sample excludes non-riders."
+              ],
+              "source_ids": [
+                2,
+                1
+              ],
+              "word_budget": 160,
+              "research_notes": "{\"notes\": [\"The voluntary rider sample excludes non-riders, as stated in source 2: 'Non-riders were not surveyed.'\", \"Observed boardings are 160 in week A and 240 in week B, per source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\", \"No attendance data were collected, per source 1: 'No attendance data were collected.'\", \"Gaps: No data on non-rider demand, costs, or feasibility of measurement beyond the absence of attendance data.\"], \"source_ids\": [1, 2], \"gaps\": [\"No information on non-rider perspectives or demand.\", \"No cost or feasibility data for measurement plans.\", \"No attendance data available to assess access.\"], \"relied_on\": [{\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}, {\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}]}",
+              "created_at": "2026-09-07 01:25:34",
+              "updated_at": "2026-09-07 01:25:37"
+            },
+            "document_map": "{\"argument_map\": [{\"claim\": \"Observed boardings support further investigation, not an attendance effect.\"}, {\"claim\": \"Hear from non-riders before generalizing demand.\"}], \"request\": \"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\", \"sections\": [{\"claim\": \"The observations justify another question, not a causal conclusion.\", \"job\": \"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\", \"section_ref\": \"1\", \"title\": \"Evidence\", \"word_budget\": 160}, {\"claim\": \"Extend conditionally and measure access more carefully.\", \"job\": \"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\", \"section_ref\": \"2\", \"title\": \"Recommendation\", \"word_budget\": 160}], \"thesis\": \"Keep the pilot for one term while collecting evidence about who can use it.\"}",
+            "transition_review": {
+              "rationale": "The transition is already strong. The previous paragraph concludes by stating that observations justify further investigation rather than a final judgment. The next paragraph immediately operationalizes this by proposing a specific, conditional extension to fill the identified gap. The link between the 'justification for investigation' and the 'proposal for extension' is clear and logical without needing revision.",
+              "left": "1:p3",
+              "completed": true
+            },
+            "overall_assessment": {
+              "summary": "The draft largely aligns with the global map, but Section 1 contains a significant argumentative contradiction where the text claims the data is insufficient for causal claims while simultaneously asserting that the observations justify further investigation. Additionally, Section 2 introduces a specific methodological detail ('brief checks at stops') that risks violating the constraint against inventing facts or over-specifying the measurement plan.",
+              "issues": [],
+              "completed": true
+            }
+          },
+          "revision": 14,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:42",
+          "updated_at": "2026-09-07 01:25:57"
+        },
+        {
+          "id": 5,
+          "suggestion_id": 1,
+          "stable_key": "2:p2",
+          "block_key": "2:p2",
+          "section_ref": "2",
+          "paragraph_ordinal": 5,
+          "ordinal": 5,
+          "kind": "paragraph",
+          "heading": "Recommendation",
+          "content": "To measure non-rider perspectives during this term, we need a simple survey or observation method that captures access barriers for those who do not board. Since the current data exclude non-riders [@lyra:2] and lack attendance records [@lyra:1], any new collection must specifically target these missing groups. A low-cost, targeted data collection method can identify why people stay off the bus without requiring complex infrastructure. This step tests whether the service's reach is limited by actual availability or simply by current rider habits, providing the baseline data needed to judge the pilot's true effect.",
+          "status": "complete",
+          "target_words": 80,
+          "summary": "Define a feasible, low-cost measurement strategy to capture non-rider perspectives.",
+          "context": {
+            "key": "2:p2",
+            "purpose": "Define a feasible, low-cost measurement strategy to capture non-rider perspectives.",
+            "claim": "We must implement a simple survey or observation method to include non-riders without inventing costs.",
+            "evidence": [
+              "Source 2: 'Non-riders were not surveyed.'",
+              "Source 1: 'No attendance data were collected.'"
+            ],
+            "target_words": 80,
+            "transition_in": "From the conditional extension requirement.",
+            "transition_out": "To the final recommendation that retains uncertainty while proposing action.",
+            "model_key": "rec-measurement-plan"
+          },
+          "metadata": {
+            "section_plan": {
+              "id": 2,
+              "plan_id": 1,
+              "section_ref": "2",
+              "ordinal": 1,
+              "title": "Recommendation",
+              "job": "Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.",
+              "claim": "Extend conditionally and measure access more carefully.",
+              "evidence": [
+                "The voluntary rider sample excludes non-riders."
+              ],
+              "source_ids": [
+                2,
+                1
+              ],
+              "word_budget": 160,
+              "research_notes": "{\"notes\": [\"The voluntary rider sample excludes non-riders, as stated in source 2: 'Non-riders were not surveyed.'\", \"Observed boardings are 160 in week A and 240 in week B, per source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\", \"No attendance data were collected, per source 1: 'No attendance data were collected.'\", \"Gaps: No data on non-rider demand, costs, or feasibility of measurement beyond the absence of attendance data.\"], \"source_ids\": [1, 2], \"gaps\": [\"No information on non-rider perspectives or demand.\", \"No cost or feasibility data for measurement plans.\", \"No attendance data available to assess access.\"], \"relied_on\": [{\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}, {\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}]}",
+              "created_at": "2026-09-07 01:25:34",
+              "updated_at": "2026-09-07 01:25:37"
+            },
+            "document_map": "{\"argument_map\": [{\"claim\": \"Observed boardings support further investigation, not an attendance effect.\"}, {\"claim\": \"Hear from non-riders before generalizing demand.\"}], \"request\": \"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\", \"sections\": [{\"claim\": \"The observations justify another question, not a causal conclusion.\", \"job\": \"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\", \"section_ref\": \"1\", \"title\": \"Evidence\", \"word_budget\": 160}, {\"claim\": \"Extend conditionally and measure access more carefully.\", \"job\": \"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\", \"section_ref\": \"2\", \"title\": \"Recommendation\", \"word_budget\": 160}], \"thesis\": \"Keep the pilot for one term while collecting evidence about who can use it.\"}",
+            "transition_review": {
+              "rationale": "The transition is already effective. The next paragraph begins with 'To measure non-rider perspectives during this term,' which directly references the 'one term' extension and the 'non-rider data gap' mentioned in the previous paragraph. It then introduces the specific method (survey/observation) as the new information required to fulfill the condition. The flow is logical and clear.",
+              "left": "2:p1",
+              "completed": true
+            },
+            "overall_assessment": {
+              "summary": "The draft largely aligns with the global map, but Section 1 contains a significant argumentative contradiction where the text claims the data is insufficient for causal claims while simultaneously asserting that the observations justify further investigation. Additionally, Section 2 introduces a specific methodological detail ('brief checks at stops') that risks violating the constraint against inventing facts or over-specifying the measurement plan.",
+              "issues": [
+                {
+                  "block_key": "2:p2",
+                  "problem": "Potential violation of the 'no invented facts' constraint. The phrase 'such as brief checks at stops' introduces a specific, unverified methodological detail that was not present in the source notes or global map. This risks over-specifying the solution and may be considered an invented fact or assumption about feasibility.",
+                  "revision_instruction": "Remove the specific example of 'brief checks at stops' and replace it with a more general description of a 'low-cost, targeted data collection method' to maintain the conditional and exploratory nature of the proposal without inventing specific operational details."
+                }
+              ],
+              "completed": true
+            }
+          },
+          "revision": 15,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:42",
+          "updated_at": "2026-09-07 01:25:58"
+        }
+      ]
+    },
+    "plan": {
+      "id": 1,
+      "artifact_id": 1,
+      "version": 1,
+      "brief_analysis": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+      "thesis": "Keep the pilot for one term while collecting evidence about who can use it.",
+      "argument_map": [
+        {
+          "claim": "Observed boardings support further investigation, not an attendance effect."
+        },
+        {
+          "claim": "Hear from non-riders before generalizing demand."
+        }
+      ],
+      "created_at": "2026-09-07 01:25:34",
+      "updated_at": "2026-09-07 01:25:37",
+      "sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1",
+          "ordinal": 0,
+          "title": "Evidence",
+          "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+          "claim": "The observations justify another question, not a causal conclusion.",
+          "evidence": [
+            "160 then 240 boardings; no attendance data.",
+            "18 voluntary rider responses; no non-riders."
+          ],
+          "word_budget": 160,
+          "research_notes": "{\"notes\": [\"Source 1 states: \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"\", \"Source 1 states: \\\"No attendance data were collected.\\\"\", \"Source 2 states: \\\"Non-riders were not surveyed.\\\"\"], \"source_ids\": [1, 2], \"gaps\": [\"No data on non-rider perspectives or reasons for non-use.\", \"No attendance data to correlate boardings with overall population presence.\"], \"relied_on\": [{\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}, {\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}]}",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:35",
+          "sources": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "2",
+          "ordinal": 1,
+          "title": "Recommendation",
+          "job": "Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.",
+          "claim": "Extend conditionally and measure access more carefully.",
+          "evidence": [
+            "The voluntary rider sample excludes non-riders."
+          ],
+          "word_budget": 160,
+          "research_notes": "{\"notes\": [\"The voluntary rider sample excludes non-riders, as stated in source 2: 'Non-riders were not surveyed.'\", \"Observed boardings are 160 in week A and 240 in week B, per source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\", \"No attendance data were collected, per source 1: 'No attendance data were collected.'\", \"Gaps: No data on non-rider demand, costs, or feasibility of measurement beyond the absence of attendance data.\"], \"source_ids\": [1, 2], \"gaps\": [\"No information on non-rider perspectives or demand.\", \"No cost or feasibility data for measurement plans.\", \"No attendance data available to assess access.\"], \"relied_on\": [{\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}, {\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}]}",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:37",
+          "sources": [
+            2,
+            1
+          ]
+        }
+      ],
+      "status": "active"
+    },
+    "sources": [
+      {
+        "id": 1,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/transport",
+        "title": "Synthetic campus transport pilot memo, revision 1",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 01:25:34"
+        },
+        "excerpts": [
+          {
+            "id": 1,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "No attendance data were collected."
+          },
+          {
+            "id": 2,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+          },
+          {
+            "id": 4,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1",
+            "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+          },
+          {
+            "id": 5,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1",
+            "excerpt": "No attendance data were collected."
+          },
+          {
+            "id": 8,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "2",
+            "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+          },
+          {
+            "id": 9,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "2",
+            "excerpt": "No attendance data were collected."
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/survey",
+        "title": "Synthetic rider survey methods note",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 01:25:34"
+        },
+        "excerpts": [
+          {
+            "id": 3,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "Non-riders were not surveyed."
+          },
+          {
+            "id": 6,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1",
+            "excerpt": "Non-riders were not surveyed."
+          },
+          {
+            "id": 7,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "2",
+            "excerpt": "Non-riders were not surveyed."
+          }
+        ]
+      }
+    ],
+    "durable_rows": {
+      "draft_plans": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "version": 1,
+          "active": 1,
+          "brief_analysis": "A new reviewable proposal grounded in personal notes and two limited descriptive sources.",
+          "thesis": "Keep the pilot for one term while collecting evidence about who can use it.",
+          "argument_map": "[{\"claim\":\"Observed boardings support further investigation, not an attendance effect.\"},{\"claim\":\"Hear from non-riders before generalizing demand.\"}]",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:37"
+        }
+      ],
+      "draft_plan_sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1",
+          "ordinal": 0,
+          "title": "Evidence",
+          "job": "Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.",
+          "claim": "The observations justify another question, not a causal conclusion.",
+          "evidence": "[\"160 then 240 boardings; no attendance data.\",\"18 voluntary rider responses; no non-riders.\"]",
+          "source_ids": "[1,2]",
+          "word_budget": 160,
+          "research_notes": "{\"notes\": [\"Source 1 states: \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"\", \"Source 1 states: \\\"No attendance data were collected.\\\"\", \"Source 2 states: \\\"Non-riders were not surveyed.\\\"\"], \"source_ids\": [1, 2], \"gaps\": [\"No data on non-rider perspectives or reasons for non-use.\", \"No attendance data to correlate boardings with overall population presence.\"], \"relied_on\": [{\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}, {\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}]}",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:35"
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "2",
+          "ordinal": 1,
+          "title": "Recommendation",
+          "job": "Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.",
+          "claim": "Extend conditionally and measure access more carefully.",
+          "evidence": "[\"The voluntary rider sample excludes non-riders.\"]",
+          "source_ids": "[2,1]",
+          "word_budget": 160,
+          "research_notes": "{\"notes\": [\"The voluntary rider sample excludes non-riders, as stated in source 2: 'Non-riders were not surveyed.'\", \"Observed boardings are 160 in week A and 240 in week B, per source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\", \"No attendance data were collected, per source 1: 'No attendance data were collected.'\", \"Gaps: No data on non-rider demand, costs, or feasibility of measurement beyond the absence of attendance data.\"], \"source_ids\": [1, 2], \"gaps\": [\"No information on non-rider perspectives or demand.\", \"No cost or feasibility data for measurement plans.\", \"No attendance data available to assess access.\"], \"relied_on\": [{\"source_id\": 2, \"excerpt\": \"Non-riders were not surveyed.\"}, {\"source_id\": 1, \"excerpt\": \"There were 160 boardings in week A and 240 boardings in week B.\"}, {\"source_id\": 1, \"excerpt\": \"No attendance data were collected.\"}]}",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:37"
+        }
+      ],
+      "writer_sources": [
+        {
+          "id": 1,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/transport",
+          "title": "Synthetic campus transport pilot memo, revision 1",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:34",
+          "current_revision_id": 1
+        },
+        {
+          "id": 2,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/survey",
+          "title": "Synthetic rider survey methods note",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:34",
+          "current_revision_id": 2
+        }
+      ],
+      "writer_source_excerpts": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "No attendance data were collected.",
+          "created_at": "2026-09-07 01:25:34",
+          "source_revision_id": 1
+        },
+        {
+          "id": 2,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B.",
+          "created_at": "2026-09-07 01:25:34",
+          "source_revision_id": 1
+        },
+        {
+          "id": 3,
+          "source_id": 2,
+          "section_ref": null,
+          "excerpt": "Non-riders were not surveyed.",
+          "created_at": "2026-09-07 01:25:34",
+          "source_revision_id": 2
+        },
+        {
+          "id": 4,
+          "source_id": 1,
+          "section_ref": "1",
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B.",
+          "created_at": "2026-09-07 01:25:35",
+          "source_revision_id": 1
+        },
+        {
+          "id": 5,
+          "source_id": 1,
+          "section_ref": "1",
+          "excerpt": "No attendance data were collected.",
+          "created_at": "2026-09-07 01:25:35",
+          "source_revision_id": 1
+        },
+        {
+          "id": 6,
+          "source_id": 2,
+          "section_ref": "1",
+          "excerpt": "Non-riders were not surveyed.",
+          "created_at": "2026-09-07 01:25:35",
+          "source_revision_id": 2
+        },
+        {
+          "id": 7,
+          "source_id": 2,
+          "section_ref": "2",
+          "excerpt": "Non-riders were not surveyed.",
+          "created_at": "2026-09-07 01:25:37",
+          "source_revision_id": 2
+        },
+        {
+          "id": 8,
+          "source_id": 1,
+          "section_ref": "2",
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B.",
+          "created_at": "2026-09-07 01:25:37",
+          "source_revision_id": 1
+        },
+        {
+          "id": 9,
+          "source_id": 1,
+          "section_ref": "2",
+          "excerpt": "No attendance data were collected.",
+          "created_at": "2026-09-07 01:25:37",
+          "source_revision_id": 1
+        }
+      ],
+      "writer_source_revisions": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 01:25:34"
+        },
+        {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 01:25:34"
+        }
+      ],
+      "writer_runs": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "job_kind": "pass",
+          "depth": "quick",
+          "status": "completed",
+          "request_json": "{\"instruction\": \"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\", \"section_refs\": [], \"pause_at_plan\": false, \"address_comment_id\": null}",
+          "checkpoint_json": "{\"stage\": \"completed\", \"index\": 5, \"targets\": [\"1:p1\", \"1:p2\", \"1:p3\", \"2:p1\", \"2:p2\"]}",
+          "warnings_json": "[{\"code\": \"resumed_after_restart\", \"message\": \"This run resumed after a restart from the last completed boundary.\"}]",
+          "error_message": null,
+          "started_at": "2026-09-07T01:25:34.205820+00:00",
+          "cancel_requested_at": null,
+          "finished_at": "2026-09-07 01:25:58",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:58"
+        }
+      ],
+      "live_draft_suggestions": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "run_id": 1,
+          "stage": "completed",
+          "status": "ready",
+          "detail": "The live draft suggestion is ready for review.",
+          "version": 19,
+          "base_content": "# My shuttle memo notes\n\nI care about the late shuttle because I have stood at the east gate wondering whether to wait or walk. I want the memo to admit that this is my starting point. It is not a campus-wide survey. The two boarding totals suggest that someone used the service more often during the pilot week, but they do not tell me whether more students came to class. I should not make a number answer a question it was never asked.\n\nMy recommendation is to keep the pilot for one more term and measure it more carefully. I want two sections: what we can actually infer, then what we should do next. Please keep the uncertainty visible. Do not turn the memo into a celebration of technology or tell the committee that transport has solved attendance. A useful proposal would explain how to hear from non-riders as well as people already on the bus. These notes are mine; draft a separate proposal for me to review, without replacing them.\n",
+          "base_hash": "ae9a37732e2245cfea8c0f96873cbf4cd9b7f360b1f4b02fc877b67766ad0a5c",
+          "created_at": "2026-09-07 01:25:34",
+          "updated_at": "2026-09-07 01:25:58"
+        }
+      ],
+      "live_draft_blocks": [
+        {
+          "id": 1,
+          "suggestion_id": 1,
+          "stable_key": "1:p1",
+          "section_ref": "1",
+          "paragraph_ordinal": 1,
+          "kind": "paragraph",
+          "heading": "Evidence",
+          "content": "I watched the numbers climb from 160 to 240 boardings between weeks A and B [@lyra:1]. That jump feels significant to me because I relied on this pilot to gauge daily travel. Yet the raw count is the only signal I have so far. Without knowing how many people were actually present or willing to ride, I cannot say whether the service attracted new users or simply caught a larger crowd. This uncertainty shapes every next step I take.",
+          "status": "complete",
+          "target_words": 54,
+          "summary": "Establish the first-person stake and present the boarding counts as the primary observed signal.",
+          "context_json": "{\"key\":\"1:p1\",\"purpose\":\"Establish the first-person stake and present the boarding counts as the primary observed signal.\",\"claim\":\"The increase in boardings from 160 to 240 is a concrete observation that warrants further inquiry.\",\"evidence\":[\"Source 1: 160 boardings in week A and 240 in week B\"],\"target_words\":54,\"transition_in\":\"Starts the section by grounding the argument in the student's direct observation of the pilot data.\",\"transition_out\":\"Moves to the critical limitation that these counts cannot be interpreted without attendance context.\",\"model_key\":\"p1\"}",
+          "metadata_json": "{\"section_plan\":{\"id\":1,\"plan_id\":1,\"section_ref\":\"1\",\"ordinal\":0,\"title\":\"Evidence\",\"job\":\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\",\"claim\":\"The observations justify another question, not a causal conclusion.\",\"evidence\":[\"160 then 240 boardings; no attendance data.\",\"18 voluntary rider responses; no non-riders.\"],\"source_ids\":[1,2],\"word_budget\":160,\"research_notes\":\"{\\\"notes\\\": [\\\"Source 1 states: \\\\\\\"There were 160 boardings in week A and 240 boardings in week B.\\\\\\\"\\\", \\\"Source 1 states: \\\\\\\"No attendance data were collected.\\\\\\\"\\\", \\\"Source 2 states: \\\\\\\"Non-riders were not surveyed.\\\\\\\"\\\"], \\\"source_ids\\\": [1, 2], \\\"gaps\\\": [\\\"No data on non-rider perspectives or reasons for non-use.\\\", \\\"No attendance data to correlate boardings with overall population presence.\\\"], \\\"relied_on\\\": [{\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"No attendance data were collected.\\\"}, {\\\"source_id\\\": 2, \\\"excerpt\\\": \\\"Non-riders were not surveyed.\\\"}]}\",\"created_at\":\"2026-09-07 01:25:34\",\"updated_at\":\"2026-09-07 01:25:35\"},\"document_map\":\"{\\\"argument_map\\\": [{\\\"claim\\\": \\\"Observed boardings support further investigation, not an attendance effect.\\\"}, {\\\"claim\\\": \\\"Hear from non-riders before generalizing demand.\\\"}], \\\"request\\\": \\\"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\\\", \\\"sections\\\": [{\\\"claim\\\": \\\"The observations justify another question, not a causal conclusion.\\\", \\\"job\\\": \\\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\\\", \\\"section_ref\\\": \\\"1\\\", \\\"title\\\": \\\"Evidence\\\", \\\"word_budget\\\": 160}, {\\\"claim\\\": \\\"Extend conditionally and measure access more carefully.\\\", \\\"job\\\": \\\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\\\", \\\"section_ref\\\": \\\"2\\\", \\\"title\\\": \\\"Recommendation\\\", \\\"word_budget\\\": 160}], \\\"thesis\\\": \\\"Keep the pilot for one term while collecting evidence about who can use it.\\\"}\",\"overall_assessment\":{\"summary\":\"The draft largely aligns with the global map, but Section 1 contains a significant argumentative contradiction where the text claims the data is insufficient for causal claims while simultaneously asserting that the observations justify further investigation. Additionally, Section 2 introduces a specific methodological detail ('brief checks at stops') that risks violating the constraint against inventing facts or over-specifying the measurement plan.\",\"issues\":[],\"completed\":true}}",
+          "revision": 11,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:40",
+          "updated_at": "2026-09-07 01:25:56"
+        },
+        {
+          "id": 2,
+          "suggestion_id": 1,
+          "stable_key": "1:p2",
+          "section_ref": "1",
+          "paragraph_ordinal": 2,
+          "kind": "paragraph",
+          "heading": "Evidence",
+          "content": "The missing attendance data leaves the boarding increase without context. I cannot determine if the rise from 160 to 240 reflects a change in rider behavior or just more people on campus. Since no attendance figures were collected [@lyra:1], the counts remain ambiguous. The numbers describe trips taken, not the proportion of the population using them. This gap prevents me from linking the volume directly to a specific causal effect.",
+          "status": "complete",
+          "target_words": 53,
+          "summary": "Distinguish between trip volume and population attendance to explain why the counts are insufficient for causal claims.",
+          "context_json": "{\"key\":\"1:p2\",\"purpose\":\"Distinguish between trip volume and population attendance to explain why the counts are insufficient for causal claims.\",\"claim\":\"Without attendance data, the rise in boardings may reflect increased overall presence rather than a specific change in rider behavior.\",\"evidence\":[\"Source 1: No attendance data were collected\"],\"target_words\":53,\"transition_in\":\"Builds on the previous paragraph's counts by introducing the missing denominator required for valid interpretation.\",\"transition_out\":\"Shifts focus from the quantitative gap to the qualitative gap regarding who is not using the service.\",\"model_key\":\"p2\"}",
+          "metadata_json": "{\"section_plan\":{\"id\":1,\"plan_id\":1,\"section_ref\":\"1\",\"ordinal\":0,\"title\":\"Evidence\",\"job\":\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\",\"claim\":\"The observations justify another question, not a causal conclusion.\",\"evidence\":[\"160 then 240 boardings; no attendance data.\",\"18 voluntary rider responses; no non-riders.\"],\"source_ids\":[1,2],\"word_budget\":160,\"research_notes\":\"{\\\"notes\\\": [\\\"Source 1 states: \\\\\\\"There were 160 boardings in week A and 240 boardings in week B.\\\\\\\"\\\", \\\"Source 1 states: \\\\\\\"No attendance data were collected.\\\\\\\"\\\", \\\"Source 2 states: \\\\\\\"Non-riders were not surveyed.\\\\\\\"\\\"], \\\"source_ids\\\": [1, 2], \\\"gaps\\\": [\\\"No data on non-rider perspectives or reasons for non-use.\\\", \\\"No attendance data to correlate boardings with overall population presence.\\\"], \\\"relied_on\\\": [{\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"No attendance data were collected.\\\"}, {\\\"source_id\\\": 2, \\\"excerpt\\\": \\\"Non-riders were not surveyed.\\\"}]}\",\"created_at\":\"2026-09-07 01:25:34\",\"updated_at\":\"2026-09-07 01:25:35\"},\"document_map\":\"{\\\"argument_map\\\": [{\\\"claim\\\": \\\"Observed boardings support further investigation, not an attendance effect.\\\"}, {\\\"claim\\\": \\\"Hear from non-riders before generalizing demand.\\\"}], \\\"request\\\": \\\"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\\\", \\\"sections\\\": [{\\\"claim\\\": \\\"The observations justify another question, not a causal conclusion.\\\", \\\"job\\\": \\\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\\\", \\\"section_ref\\\": \\\"1\\\", \\\"title\\\": \\\"Evidence\\\", \\\"word_budget\\\": 160}, {\\\"claim\\\": \\\"Extend conditionally and measure access more carefully.\\\", \\\"job\\\": \\\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\\\", \\\"section_ref\\\": \\\"2\\\", \\\"title\\\": \\\"Recommendation\\\", \\\"word_budget\\\": 160}], \\\"thesis\\\": \\\"Keep the pilot for one term while collecting evidence about who can use it.\\\"}\",\"transition_review\":{\"rationale\":\"The transition is already strong. The next paragraph begins with 'The missing attendance data,' which directly references the limitation ('Without knowing how many people were actually present') introduced at the end of the previous paragraph. It then proceeds to explain the implications of that missing data, fulfilling the requirement to start with old information and introduce new analysis.\",\"left\":\"1:p1\",\"completed\":true},\"overall_assessment\":{\"summary\":\"The draft largely aligns with the global map, but Section 1 contains a significant argumentative contradiction where the text claims the data is insufficient for causal claims while simultaneously asserting that the observations justify further investigation. Additionally, Section 2 introduces a specific methodological detail ('brief checks at stops') that risks violating the constraint against inventing facts or over-specifying the measurement plan.\",\"issues\":[],\"completed\":true}}",
+          "revision": 12,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:40",
+          "updated_at": "2026-09-07 01:25:56"
+        },
+        {
+          "id": 3,
+          "suggestion_id": 1,
+          "stable_key": "1:p3",
+          "section_ref": "1",
+          "paragraph_ordinal": 3,
+          "kind": "paragraph",
+          "heading": "Evidence",
+          "content": "Beyond the missing attendance figures, the survey data also excludes those who do not ride. Because non-riders were not surveyed [@lyra:2], their reasons for avoiding the service remain unknown. This omission means the current evidence captures only the experiences of existing users. Together with the ambiguous boarding counts, these gaps prevent a definitive conclusion about overall demand. The observations justify further investigation rather than a final causal judgment, as resolving these ambiguities requires direct input from the excluded population.",
+          "status": "complete",
+          "target_words": 53,
+          "summary": "Highlight the representativeness gap by noting the absence of non-rider perspectives in the survey.",
+          "context_json": "{\"key\":\"1:p3\",\"purpose\":\"Highlight the representativeness gap by noting the absence of non-rider perspectives in the survey.\",\"claim\":\"The survey's exclusion of non-riders prevents a full understanding of demand, leaving the current evidence incomplete.\",\"evidence\":[\"Source 2: Non-riders were not surveyed\"],\"target_words\":53,\"transition_in\":\"Connects the quantitative limitation to a qualitative one, showing that both data streams are biased toward existing users.\",\"transition_out\":\"Concludes the section by framing these gaps as the justification for the next step: further investigation rather than a final conclusion.\",\"model_key\":\"p3\"}",
+          "metadata_json": "{\"section_plan\":{\"id\":1,\"plan_id\":1,\"section_ref\":\"1\",\"ordinal\":0,\"title\":\"Evidence\",\"job\":\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\",\"claim\":\"The observations justify another question, not a causal conclusion.\",\"evidence\":[\"160 then 240 boardings; no attendance data.\",\"18 voluntary rider responses; no non-riders.\"],\"source_ids\":[1,2],\"word_budget\":160,\"research_notes\":\"{\\\"notes\\\": [\\\"Source 1 states: \\\\\\\"There were 160 boardings in week A and 240 boardings in week B.\\\\\\\"\\\", \\\"Source 1 states: \\\\\\\"No attendance data were collected.\\\\\\\"\\\", \\\"Source 2 states: \\\\\\\"Non-riders were not surveyed.\\\\\\\"\\\"], \\\"source_ids\\\": [1, 2], \\\"gaps\\\": [\\\"No data on non-rider perspectives or reasons for non-use.\\\", \\\"No attendance data to correlate boardings with overall population presence.\\\"], \\\"relied_on\\\": [{\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"No attendance data were collected.\\\"}, {\\\"source_id\\\": 2, \\\"excerpt\\\": \\\"Non-riders were not surveyed.\\\"}]}\",\"created_at\":\"2026-09-07 01:25:34\",\"updated_at\":\"2026-09-07 01:25:35\"},\"document_map\":\"{\\\"argument_map\\\": [{\\\"claim\\\": \\\"Observed boardings support further investigation, not an attendance effect.\\\"}, {\\\"claim\\\": \\\"Hear from non-riders before generalizing demand.\\\"}], \\\"request\\\": \\\"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\\\", \\\"sections\\\": [{\\\"claim\\\": \\\"The observations justify another question, not a causal conclusion.\\\", \\\"job\\\": \\\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\\\", \\\"section_ref\\\": \\\"1\\\", \\\"title\\\": \\\"Evidence\\\", \\\"word_budget\\\": 160}, {\\\"claim\\\": \\\"Extend conditionally and measure access more carefully.\\\", \\\"job\\\": \\\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\\\", \\\"section_ref\\\": \\\"2\\\", \\\"title\\\": \\\"Recommendation\\\", \\\"word_budget\\\": 160}], \\\"thesis\\\": \\\"Keep the pilot for one term while collecting evidence about who can use it.\\\"}\",\"transition_review\":{\"rationale\":\"The transition is already strong. The next paragraph begins with 'Beyond the missing attendance figures,' which explicitly references the old information (the attendance gap discussed in the previous paragraph) before introducing the new information (the survey exclusion of non-riders). This satisfies the requirement for a meaningful transition without needing revision.\",\"left\":\"1:p2\",\"completed\":true},\"overall_assessment\":{\"summary\":\"The draft largely aligns with the global map, but Section 1 contains a significant argumentative contradiction where the text claims the data is insufficient for causal claims while simultaneously asserting that the observations justify further investigation. Additionally, Section 2 introduces a specific methodological detail ('brief checks at stops') that risks violating the constraint against inventing facts or over-specifying the measurement plan.\",\"issues\":[{\"block_key\":\"1:p3\",\"problem\":\"Contradiction with the section's core claim. The block concludes that 'observations justify further investigation rather than a final causal judgment,' which directly conflicts with the section's assigned claim that 'The observations justify another question, not a causal conclusion' in a way that muddies the distinction. More critically, the preceding sentence states the gaps 'prevent a definitive conclusion,' but the final sentence pivots to a positive justification for investigation, creating a tonal and logical disconnect that weakens the argument's progression.\",\"revision_instruction\":\"Revise the final sentence to explicitly frame the investigation as a necessary step to resolve the ambiguity identified in the previous sentences, ensuring the tone remains cautious and focused on the lack of evidence rather than a positive endorsement of the current data.\"}],\"completed\":true}}",
+          "revision": 13,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:40",
+          "updated_at": "2026-09-07 01:25:57"
+        },
+        {
+          "id": 4,
+          "suggestion_id": 1,
+          "stable_key": "2:p1",
+          "section_ref": "2",
+          "paragraph_ordinal": 4,
+          "kind": "paragraph",
+          "heading": "Recommendation",
+          "content": "I propose extending the pilot for one term, contingent on filling the non-rider data gap. The 160 boardings in week A and 240 in week B [@lyra:1] show usage, but without information from non-riders [@lyra:2], we cannot verify if this reflects broad demand or only existing users' preferences. This extension is conditional, not a permanent commitment. It allows us to gather missing perspectives before deciding whether the service should continue. The goal is to resolve uncertainty by hearing from those currently excluded, ensuring any future expansion rests on complete evidence rather than partial observation.",
+          "status": "complete",
+          "target_words": 80,
+          "summary": "Propose a one-term extension contingent on resolving the non-rider data gap.",
+          "context_json": "{\"key\":\"2:p1\",\"purpose\":\"Propose a one-term extension contingent on resolving the non-rider data gap.\",\"claim\":\"The pilot should continue for one term only if we can address the exclusion of non-riders.\",\"evidence\":[\"Source 2: 'Non-riders were not surveyed.'\",\"Source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\"],\"target_words\":80,\"transition_in\":\"From Section 1's finding that boardings alone do not prove demand.\",\"transition_out\":\"To the specific measurement plan required to validate the extension.\",\"model_key\":\"rec-conditional-extension\"}",
+          "metadata_json": "{\"section_plan\":{\"id\":2,\"plan_id\":1,\"section_ref\":\"2\",\"ordinal\":1,\"title\":\"Recommendation\",\"job\":\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\",\"claim\":\"Extend conditionally and measure access more carefully.\",\"evidence\":[\"The voluntary rider sample excludes non-riders.\"],\"source_ids\":[2,1],\"word_budget\":160,\"research_notes\":\"{\\\"notes\\\": [\\\"The voluntary rider sample excludes non-riders, as stated in source 2: 'Non-riders were not surveyed.'\\\", \\\"Observed boardings are 160 in week A and 240 in week B, per source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\\\", \\\"No attendance data were collected, per source 1: 'No attendance data were collected.'\\\", \\\"Gaps: No data on non-rider demand, costs, or feasibility of measurement beyond the absence of attendance data.\\\"], \\\"source_ids\\\": [1, 2], \\\"gaps\\\": [\\\"No information on non-rider perspectives or demand.\\\", \\\"No cost or feasibility data for measurement plans.\\\", \\\"No attendance data available to assess access.\\\"], \\\"relied_on\\\": [{\\\"source_id\\\": 2, \\\"excerpt\\\": \\\"Non-riders were not surveyed.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"No attendance data were collected.\\\"}]}\",\"created_at\":\"2026-09-07 01:25:34\",\"updated_at\":\"2026-09-07 01:25:37\"},\"document_map\":\"{\\\"argument_map\\\": [{\\\"claim\\\": \\\"Observed boardings support further investigation, not an attendance effect.\\\"}, {\\\"claim\\\": \\\"Hear from non-riders before generalizing demand.\\\"}], \\\"request\\\": \\\"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\\\", \\\"sections\\\": [{\\\"claim\\\": \\\"The observations justify another question, not a causal conclusion.\\\", \\\"job\\\": \\\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\\\", \\\"section_ref\\\": \\\"1\\\", \\\"title\\\": \\\"Evidence\\\", \\\"word_budget\\\": 160}, {\\\"claim\\\": \\\"Extend conditionally and measure access more carefully.\\\", \\\"job\\\": \\\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\\\", \\\"section_ref\\\": \\\"2\\\", \\\"title\\\": \\\"Recommendation\\\", \\\"word_budget\\\": 160}], \\\"thesis\\\": \\\"Keep the pilot for one term while collecting evidence about who can use it.\\\"}\",\"transition_review\":{\"rationale\":\"The transition is already strong. The previous paragraph concludes by stating that observations justify further investigation rather than a final judgment. The next paragraph immediately operationalizes this by proposing a specific, conditional extension to fill the identified gap. The link between the 'justification for investigation' and the 'proposal for extension' is clear and logical without needing revision.\",\"left\":\"1:p3\",\"completed\":true},\"overall_assessment\":{\"summary\":\"The draft largely aligns with the global map, but Section 1 contains a significant argumentative contradiction where the text claims the data is insufficient for causal claims while simultaneously asserting that the observations justify further investigation. Additionally, Section 2 introduces a specific methodological detail ('brief checks at stops') that risks violating the constraint against inventing facts or over-specifying the measurement plan.\",\"issues\":[],\"completed\":true}}",
+          "revision": 14,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:42",
+          "updated_at": "2026-09-07 01:25:57"
+        },
+        {
+          "id": 5,
+          "suggestion_id": 1,
+          "stable_key": "2:p2",
+          "section_ref": "2",
+          "paragraph_ordinal": 5,
+          "kind": "paragraph",
+          "heading": "Recommendation",
+          "content": "To measure non-rider perspectives during this term, we need a simple survey or observation method that captures access barriers for those who do not board. Since the current data exclude non-riders [@lyra:2] and lack attendance records [@lyra:1], any new collection must specifically target these missing groups. A low-cost, targeted data collection method can identify why people stay off the bus without requiring complex infrastructure. This step tests whether the service's reach is limited by actual availability or simply by current rider habits, providing the baseline data needed to judge the pilot's true effect.",
+          "status": "complete",
+          "target_words": 80,
+          "summary": "Define a feasible, low-cost measurement strategy to capture non-rider perspectives.",
+          "context_json": "{\"key\":\"2:p2\",\"purpose\":\"Define a feasible, low-cost measurement strategy to capture non-rider perspectives.\",\"claim\":\"We must implement a simple survey or observation method to include non-riders without inventing costs.\",\"evidence\":[\"Source 2: 'Non-riders were not surveyed.'\",\"Source 1: 'No attendance data were collected.'\"],\"target_words\":80,\"transition_in\":\"From the conditional extension requirement.\",\"transition_out\":\"To the final recommendation that retains uncertainty while proposing action.\",\"model_key\":\"rec-measurement-plan\"}",
+          "metadata_json": "{\"section_plan\":{\"id\":2,\"plan_id\":1,\"section_ref\":\"2\",\"ordinal\":1,\"title\":\"Recommendation\",\"job\":\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\",\"claim\":\"Extend conditionally and measure access more carefully.\",\"evidence\":[\"The voluntary rider sample excludes non-riders.\"],\"source_ids\":[2,1],\"word_budget\":160,\"research_notes\":\"{\\\"notes\\\": [\\\"The voluntary rider sample excludes non-riders, as stated in source 2: 'Non-riders were not surveyed.'\\\", \\\"Observed boardings are 160 in week A and 240 in week B, per source 1: 'There were 160 boardings in week A and 240 boardings in week B.'\\\", \\\"No attendance data were collected, per source 1: 'No attendance data were collected.'\\\", \\\"Gaps: No data on non-rider demand, costs, or feasibility of measurement beyond the absence of attendance data.\\\"], \\\"source_ids\\\": [1, 2], \\\"gaps\\\": [\\\"No information on non-rider perspectives or demand.\\\", \\\"No cost or feasibility data for measurement plans.\\\", \\\"No attendance data available to assess access.\\\"], \\\"relied_on\\\": [{\\\"source_id\\\": 2, \\\"excerpt\\\": \\\"Non-riders were not surveyed.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"There were 160 boardings in week A and 240 boardings in week B.\\\"}, {\\\"source_id\\\": 1, \\\"excerpt\\\": \\\"No attendance data were collected.\\\"}]}\",\"created_at\":\"2026-09-07 01:25:34\",\"updated_at\":\"2026-09-07 01:25:37\"},\"document_map\":\"{\\\"argument_map\\\": [{\\\"claim\\\": \\\"Observed boardings support further investigation, not an attendance effect.\\\"}, {\\\"claim\\\": \\\"Hear from non-riders before generalizing demand.\\\"}], \\\"request\\\": \\\"Create a complete separate two-section proposal from my notes and the supplied sources. Preserve my notes exactly in the accepted document. Keep my first-person perspective, explain the evidence limits, and propose a practical next step without inventing facts.\\\", \\\"sections\\\": [{\\\"claim\\\": \\\"The observations justify another question, not a causal conclusion.\\\", \\\"job\\\": \\\"Use the counts and survey while distinguishing trips, attendance, and representativeness. Preserve the first-person stake.\\\", \\\"section_ref\\\": \\\"1\\\", \\\"title\\\": \\\"Evidence\\\", \\\"word_budget\\\": 160}, {\\\"claim\\\": \\\"Extend conditionally and measure access more carefully.\\\", \\\"job\\\": \\\"Offer a conditional one-term extension and feasible measurement plan. Retain uncertainty and avoid invented costs.\\\", \\\"section_ref\\\": \\\"2\\\", \\\"title\\\": \\\"Recommendation\\\", \\\"word_budget\\\": 160}], \\\"thesis\\\": \\\"Keep the pilot for one term while collecting evidence about who can use it.\\\"}\",\"transition_review\":{\"rationale\":\"The transition is already effective. The next paragraph begins with 'To measure non-rider perspectives during this term,' which directly references the 'one term' extension and the 'non-rider data gap' mentioned in the previous paragraph. It then introduces the specific method (survey/observation) as the new information required to fulfill the condition. The flow is logical and clear.\",\"left\":\"2:p1\",\"completed\":true},\"overall_assessment\":{\"summary\":\"The draft largely aligns with the global map, but Section 1 contains a significant argumentative contradiction where the text claims the data is insufficient for causal claims while simultaneously asserting that the observations justify further investigation. Additionally, Section 2 introduces a specific methodological detail ('brief checks at stops') that risks violating the constraint against inventing facts or over-specifying the measurement plan.\",\"issues\":[{\"block_key\":\"2:p2\",\"problem\":\"Potential violation of the 'no invented facts' constraint. The phrase 'such as brief checks at stops' introduces a specific, unverified methodological detail that was not present in the source notes or global map. This risks over-specifying the solution and may be considered an invented fact or assumption about feasibility.\",\"revision_instruction\":\"Remove the specific example of 'brief checks at stops' and replace it with a more general description of a 'low-cost, targeted data collection method' to maintain the conditional and exploratory nature of the proposal without inventing specific operational details.\"}],\"completed\":true}}",
+          "revision": 15,
+          "user_revision": 0,
+          "created_at": "2026-09-07 01:25:42",
+          "updated_at": "2026-09-07 01:25:58"
+        }
+      ]
+    }
+  },
+  "deterministic": {
+    "candidate_present": true,
+    "candidate_protected_passages_preserved": 0,
+    "candidate_forbidden_literal_hits": [],
+    "excerpt_revision_support_violations": [],
+    "body_unchanged": true,
+    "protected_passages_total": 0,
+    "protected_passages_preserved": 0,
+    "duplicate_comment_signatures": 0,
+    "real_run_id_present": true,
+    "missed_seeded_issues": null,
+    "unsupported_rewrites": null,
+    "unrelated_candidate_edits": null,
+    "citation_support": null,
+    "seed_metrics_note": "Semantic measures await independent/human review."
+  },
+  "status": "recorded",
+  "elapsed_seconds": 25.816,
+  "backend_source_sha256_at_end": "b6dea0c51c279e1ad05e695b66fc5968c2ea7042a7502ee5b02d5319260033eb",
+  "code_changed_during_case": false
+}

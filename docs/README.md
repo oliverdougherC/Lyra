@@ -39,6 +39,7 @@ history retains research/provenance and is excluded from current setup instructi
 | [Project direction](feature-roadmap.md) | Maintained |
 | [Integration Handoff: Study Tools, Hybrid Retrieval, and the Draft Workspace](integration-handoff.md) | Historical record |
 | [Local Deployment](local-deployment.md) | Maintained |
+| [Learning beta quality evidence](learning-beta-evidence/README.md) | Candidate evidence; recorded revisions and configurations only |
 | [macOS Apple Silicon Release Checklist](macos-apple-silicon-release-checklist.md) | Maintained |
 | [Phase 2 Handoff](phase-2-handoff.md) | Historical record |
 | [Phase 3 Handoff](phase-3-handoff.md) | Historical record |
@@ -71,6 +72,7 @@ history retains research/provenance and is excluded from current setup instructi
 | [Homework Solver Specification](solver-phase-2.md) | Historical record |
 | [Storage Consistency](storage-consistency.md) | Maintained |
 | [Study reliability contracts](study-reliability.md) | Maintained |
+| [Study beta quality evaluation](study-beta-quality.md) | Maintained evaluation workflow; candidate-specific results |
 | [Unusable text-layer detection (PLA-148)](text-layer-detector-eval.md) | Historical record |
 | [Troubleshooting](troubleshooting.md) | Maintained |
 | [Tutor prompt contract](tutor-prompt-contract.md) | Maintained |

@@ -195,3 +195,15 @@ cleanup/durability failures report that bytes were saved. Combined verification 
 its production-helper fault-point tests, source-pane outcome tests and the real-stack
 original-document/study-recovery regressions. Current exact-head results are recorded in
 PR #71 and PLA-477. This refresh does not claim a new interactive native Save-dialog run.
+
+## Quiz continuation metadata
+
+The class study list includes `active_attempt_id` and `answered_count` for each quiz.
+These describe a ready quiz’s unfinished, non-abandoned attempt against its current question
+snapshot. No valid active attempt returns `null` and `0`. The count reflects saved student
+answers, separately from generated-question progress or a finished score. Queries are batched
+across the class so the interface can offer continuation without fetching every quiz separately.
+
+[Study beta quality evaluation](study-beta-quality.md) describes the bounded synthetic source
+corpus and production generation/review replay commands. Its model evidence is separate from
+these deterministic reliability contracts and from final merged-candidate human acceptance.

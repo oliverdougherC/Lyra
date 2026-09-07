@@ -339,8 +339,27 @@ def test_a_normal_turn_streams_start_then_tokens_then_done(
     assert "[DONE]" not in response.text
 
 
+def _seed_material_requiring_embedding(db: sqlite3.Connection, class_id: int) -> None:
+    """Provisioning is needed only when the selected class has indexed material."""
+    doc = db.execute(
+        "insert into documents (class_id, filename, stored_path, mime, byte_size, state) "
+        "values (?, 'synthetic.txt', 'synthetic.txt', 'text/plain', 1, 'ready')",
+        (class_id,),
+    ).lastrowid
+    db.execute(
+        "insert into chunks (document_id, class_id, content, token_count, page_number, "
+        "doc_type, embedding_model, embedding_dim) values (?, ?, ?, 5, 1, 'generic', ?, ?)",
+        (doc, class_id, "Synthetic course material.", EMBEDDING_WEIGHTS.filename, EMBEDDING_DIM),
+    )
+    db.commit()
+
+
 def test_a_first_message_on_a_fresh_install_provisions_the_embedding_model(
-    client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    db: sqlite3.Connection,
+    class_id: int,
 ) -> None:
     """PLA-402 regression: a clean install has no embedding weights on disk.
 
@@ -350,7 +369,8 @@ def test_a_first_message_on_a_fresh_install_provisions_the_embedding_model(
     """
     assert not settings.embedding_model_path.exists()
 
-    # The real retrieval path, which is the one that embeds the query.
+    _seed_material_requiring_embedding(db, class_id)
+    # The real retrieval path provisions on demand for the indexed course material.
     monkeypatch.setattr(routes_chat, "retrieve", retrieve_module.retrieve)
 
     downloads: list[tuple[str, str]] = []
@@ -398,7 +418,12 @@ def test_a_first_message_on_a_fresh_install_provisions_the_embedding_model(
 
 
 def test_a_first_message_on_a_true_clean_packaged_install_provisions_everything(
-    client: TestClient, session_id: int, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    client: TestClient,
+    session_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    db: sqlite3.Connection,
+    class_id: int,
 ) -> None:
     """PLA-402 end-to-end: a genuine clean packaged install, not a mocked one.
 
@@ -423,7 +448,8 @@ def test_a_first_message_on_a_true_clean_packaged_install_provisions_everything(
     monkeypatch.setattr(settings, "packaged_mode", True)
     monkeypatch.setattr(settings, "resource_root", internal_dir)
 
-    # The real retrieval path, which is the one that embeds the query.
+    _seed_material_requiring_embedding(db, class_id)
+    # The real retrieval path provisions on demand for the indexed course material.
     monkeypatch.setattr(routes_chat, "retrieve", retrieve_module.retrieve)
 
     downloads: list[tuple[str, str]] = []
@@ -1502,8 +1528,8 @@ def test_the_largest_question_that_fits_beside_mandatory_history_is_answered(
 def test_a_pinned_anchor_shrinks_the_question_capacity(
     client: TestClient, db: sqlite3.Connection, class_id: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A pinned solution step is charged like the system prompt: non-trimmable, and here large
-    # enough to push the system material past its nominal share. The question's room shrinks
+    # A pinned solution step is charged like the system prompt: non-trimmable, and the pair
+    # exceeds the system material's nominal share. The question's room shrinks
     # by exactly the anchor's cost, and the just-inside/just-outside boundaries move with it.
     window = 4096
     budget = routes_chat.plan_budget(window)
@@ -1517,9 +1543,9 @@ def test_a_pinned_anchor_shrinks_the_question_capacity(
     )
     _set_context_window(db, window)
     anchor_tokens = estimate_tokens(sessions.anchored_context(db, session_id) or "")
-    # The system prompt alone fits its 15% share; the pinned step is what carries the pair
-    # over it, so the overrun is real and is charged against the turn.
-    assert system_tokens <= budget.system < system_tokens + anchor_tokens
+    # The prompt may already exceed its nominal share as teaching instructions evolve.
+    # The anchor still adds a real overrun that must be charged against the turn.
+    assert budget.system < system_tokens + anchor_tokens
 
     # Charged on the joined system-plus-anchor string, the way the prompt is actually built.
     joined_system = estimate_tokens(
@@ -1528,6 +1554,7 @@ def test_a_pinned_anchor_shrinks_the_question_capacity(
         + (sessions.anchored_context(db, session_id) or "")
     )
     max_question_tokens = window - budget.generation - joined_system
+    assert 0 < max_question_tokens < window - budget.generation - system_tokens
     at_boundary = "q" * (max_question_tokens * 4)
     assert estimate_tokens(at_boundary) == max_question_tokens
 
@@ -1727,7 +1754,7 @@ def test_retrieval_labels_cannot_push_an_accepted_prompt_past_the_window(
         (8192, True, False, 40),  # history, short question
         (8192, False, True, 40),  # anchored, short question
         (8192, True, True, 4000),  # history and anchor and a long question together
-        (2048, True, False, 3000),  # a tight window with history and a long question
+        (2048, True, False, None),  # fill the tight window beside the current system/history
     ],
 )
 def test_an_accepted_turns_prompt_never_exceeds_the_context_window(
@@ -1738,7 +1765,7 @@ def test_an_accepted_turns_prompt_never_exceeds_the_context_window(
     window: int,
     with_history: bool,
     anchored: bool,
-    question_chars: int,
+    question_chars: int | None,
 ) -> None:
     # The invariant, exercised across the combinations that stress it: with and without
     # history, with and without a pinned anchor, and with questions from trivial to long. Every
@@ -1757,6 +1784,22 @@ def test_an_accepted_turns_prompt_never_exceeds_the_context_window(
         sessions.add_message(db, session_id, "user", "an earlier question " * 20)
         sessions.add_message(db, session_id, "assistant", "an earlier answer " * 20)
     _set_context_window(db, window)
+    if question_chars is None:
+        # Derive this accepted boundary from the current prompt instead of assuming a
+        # fixed-length question fits after teaching instructions change. The over-boundary
+        # refusal is covered separately; no context or generation limit is relaxed here.
+        history_tokens = sum(
+            estimate_tokens(message["content"])
+            for message in sessions.list_messages(db, session_id)
+        )
+        capacity = (
+            window
+            - routes_chat.plan_budget(window).generation
+            - _guide_system_tokens()
+            - history_tokens
+        )
+        assert capacity > 0
+        question_chars = capacity * 4
 
     captured: list[list[dict[str, str]]] = []
     monkeypatch.setattr(routes_chat, "stream_chat", _record_prompt(captured, "Sure."))
