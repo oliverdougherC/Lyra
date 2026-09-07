@@ -46,8 +46,9 @@ void bootstrap().catch((error: unknown) => {
   if (!container) return
   const safeError = error instanceof Error ? error : new Error('Desktop startup failed.')
   const retry = async () => {
-    const restarted = await recoverDesktopBackend().catch(() => false)
+    const restarted = await recoverDesktopBackend()
     if (restarted) window.location.reload()
+    return restarted
   }
-  createRoot(container).render(<GlobalErrorFallback error={safeError} retry={() => void retry()} />)
+  createRoot(container).render(<GlobalErrorFallback error={safeError} retry={retry} />)
 })

@@ -606,3 +606,22 @@ refutation, or a provenance line is dropped for tidiness.
    differs from `globals.css` is a design-system defect.
 6. The typography discipline is enforced by test (section 10): no em dashes, no interface
    italics, inscription only at 17px and up.
+
+## Beta task hierarchy and recovery
+
+Primary study questions, equations and titles take precedence over metadata. Use wrapping names
+rather than hover-only truncation when names distinguish saved work. Primary questions use roughly
+18–20px; essential labels and exact commands remain at least 14px. Brief forms respond to their
+panel width, not just the application window. Keep one primary task identity; routine inventory
+counts and settled status details belong with their content or in disclosure.
+
+Keep large inventories searchable and bounded, retaining the selected item and return context.
+Use New quiz for creation, Continue quiz only for a known active attempt, and Review due only for
+real due cards. Do not infer study activity from generation counts or creation timestamps.
+
+Settings groups optional tasks; active operations, unresolved failures and deep-link targets open
+their group. Acknowledged remote use is neutral, while missing consent remains explicit. Settled
+agent history is subordinate; pending approvals, uncertain saves, conflicts, exact commands and
+reviewable diffs remain discoverable. Retain usable cached content on refresh failures and give
+Retry an observable pending/result state. See [candidate acceptance](beta-usability-acceptance.md)
+for the separate rendered, physical and human checks.

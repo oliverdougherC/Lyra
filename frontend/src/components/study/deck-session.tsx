@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Layers, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
+import Link from '@/router/link'
+import { useParams } from '@/router/hooks'
 
 import { CardActions } from '@/components/study/card-actions'
 import { MathText } from '@/components/solutions/math-text'
@@ -50,11 +52,13 @@ const RATING_KEYS: Record<string, Rating> = { '1': 'again', '2': 'hard', '3': 'g
  * recomputed from those answers, so the summary is the scheduler's own math rather than a
  * second count kept in parallel.
  */
-export function DeckSession({ deckId }: { deckId: number }) {
-  return <DeckSessionRecoveryControls key={deckId} deckId={deckId} />
+export function DeckSession({ deckId, dueOnly = false }: { deckId: number; dueOnly?: boolean }) {
+  return (
+    <DeckSessionRecoveryControls key={`${deckId}:${dueOnly}`} deckId={deckId} dueOnly={dueOnly} />
+  )
 }
 
-function DeckSessionRecoveryControls({ deckId }: { deckId: number }) {
+function DeckSessionRecoveryControls({ deckId, dueOnly }: { deckId: number; dueOnly: boolean }) {
   const [attempt, setAttempt] = useState(0)
   const [readOnly, setReadOnly] = useState(false)
   function retryStorage() {
@@ -71,6 +75,7 @@ function DeckSessionRecoveryControls({ deckId }: { deckId: number }) {
       <DeckSessionRun
         key={attempt}
         deckId={deckId}
+        dueOnly={dueOnly}
         readOnly={readOnly}
         studyReadOnly={() => {
           setReadOnly(true)
@@ -84,15 +89,18 @@ function DeckSessionRecoveryControls({ deckId }: { deckId: number }) {
 
 function DeckSessionRun({
   deckId,
+  dueOnly,
   retryStorage,
   readOnly,
   studyReadOnly,
 }: {
   deckId: number
+  dueOnly: boolean
   retryStorage: () => void
   readOnly: boolean
   studyReadOnly: () => void
 }) {
+  const { id: classId } = useParams<{ id: string }>()
   const [authoritativeDeck, setAuthoritativeDeck] = useState<DeckDetail | null>(null)
   const [authorityError, setAuthorityError] = useState(false)
   const session = useDeckSession(deckId)
@@ -174,7 +182,7 @@ function DeckSessionRun({
   // Seeded during render rather than in an effect, so the first card never flashes the
   // end screen for a frame. A finished session leaves the queue empty but not null, so
   // this never re-fires over a completed run.
-  const cards = session.data?.cards
+  const cards = dueOnly ? session.data?.cards.filter((card) => card.due) : session.data?.cards
   if (cards && queue === null) {
     setQueue(cards)
     setTotal(cards.length)
@@ -393,7 +401,7 @@ function DeckSessionRun({
     }
   }
 
-  async function restart() {
+  async function restart(reviewDue: boolean) {
     if (readOnly) {
       setQueue(null)
       setTotal(0)
@@ -407,7 +415,9 @@ function DeckSessionRun({
     }
     if (!owner.current?.current()) return
     const next = fresh.data?.cards.filter(
-      (card) => !unresolved.current.some((item) => item.partId === card.part_id),
+      (card) =>
+        (!reviewDue || card.due) &&
+        !unresolved.current.some((item) => item.partId === card.part_id),
     )
     if (!next) return
     const nextStates = new Map(
@@ -505,7 +515,7 @@ function DeckSessionRun({
             <Layers className="text-text-tertiary size-8" />
           </EmptyMedia>
           <EmptyTitle>No cards in this session</EmptyTitle>
-          <EmptyDescription>Start another session to check for more cards.</EmptyDescription>
+          <EmptyDescription>No cards were reviewed in this session.</EmptyDescription>
         </EmptyHeader>
         {unresolved.current.length > 0 && (
           <p role="status">
@@ -518,10 +528,19 @@ function DeckSessionRun({
             Read-only study: no reviews were recorded. Saved recovery remains untouched.
           </p>
         )}
-        <DeckProgress deckId={deckId} />
-        <Button variant="outline" disabled={session.isFetching} onClick={() => void restart()}>
-          Study again
-        </Button>
+        <DeckProgress
+          deckId={deckId}
+          readOnly={readOnly}
+          excludedPartIds={unresolved.current.map((item) => item.partId)}
+          onReview={() => void restart(true)}
+          onPractice={() => void restart(false)}
+          pending={session.isFetching}
+        />
+        {classId ? (
+          <Button asChild variant="outline">
+            <Link href={`/classes/${classId}?tab=practice`}>Return to Practice</Link>
+          </Button>
+        ) : null}
       </Empty>
     )
   }
@@ -543,13 +562,22 @@ function DeckSessionRun({
           Session complete
         </h2>
         <p className="text-text-secondary text-sm">
-          You reviewed {formatCount(rated, 'card')}:{' '}
-          {RATINGS.map((rating) => `${ratings[rating]} ${rating}`).join(' · ')}
+          {readOnly ? 'Read-only session finished.' : `You reviewed ${formatCount(rated, 'card')}.`}
         </p>
-        <p className="text-text-tertiary text-sm">
-          Cards in this session: new {bucketsAfter.new} · learning {bucketsAfter.learning} ·
-          mastered {bucketsAfter.mastered}
-        </p>
+        {!readOnly ? (
+          <details className="text-text-secondary text-sm">
+            <summary className="cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-ring">
+              Review details
+            </summary>
+            <p className="mt-2">
+              {RATINGS.map((rating) => `${ratings[rating]} ${rating}`).join(' · ')}
+            </p>
+            <p>
+              Cards in this session: new {bucketsAfter.new} · learning {bucketsAfter.learning} ·
+              mastered {bucketsAfter.mastered}
+            </p>
+          </details>
+        ) : null}
         {unresolved.current.length > 0 && (
           <p role="status">
             {unresolved.current.length} unresolved review outcome(s) remain saved and are not
@@ -561,11 +589,19 @@ function DeckSessionRun({
             Read-only study: no reviews were recorded. Saved recovery remains untouched.
           </p>
         )}
-        <DeckProgress deckId={deckId} />
-        <Button variant="outline" onClick={() => void restart()} disabled={session.isFetching}>
-          <RotateCcw className="size-4" />
-          Study again
-        </Button>
+        <DeckProgress
+          deckId={deckId}
+          readOnly={readOnly}
+          excludedPartIds={unresolved.current.map((item) => item.partId)}
+          onReview={() => void restart(true)}
+          onPractice={() => void restart(false)}
+          pending={session.isFetching}
+        />
+        {classId ? (
+          <Button asChild variant="outline">
+            <Link href={`/classes/${classId}?tab=practice`}>Return to Practice</Link>
+          </Button>
+        ) : null}
       </section>
     )
   }
@@ -640,6 +676,12 @@ function DeckSessionRun({
           untouched.
         </p>
       )}
+      {dueOnly && recovery && recovery.queue.length > 0 && (
+        <p role="status">
+          Continuing your saved session before a new due review. Its remaining cards and any
+          unconfirmed review are preserved.
+        </p>
+      )}
       {notice && <p role="status">{notice}</p>}
       {missing && (
         <Alert variant="destructive">
@@ -699,16 +741,26 @@ function DeckSessionRun({
             </Button>
           ))}
         </div>
-      ) : (
-        <p className="text-text-tertiary flex items-center gap-1.5 text-sm">
-          Press <Kbd>Space</Kbd> or choose Show answer.
-        </p>
-      )}
+      ) : null}
     </div>
   )
 }
 /** Loaded after the last mutation, so remaining due counts cover the entire deck. */
-function DeckProgress({ deckId }: { deckId: number }) {
+function DeckProgress({
+  deckId,
+  readOnly,
+  excludedPartIds,
+  onReview,
+  onPractice,
+  pending,
+}: {
+  deckId: number
+  readOnly: boolean
+  excludedPartIds: number[]
+  onReview: () => void
+  onPractice: () => void
+  pending: boolean
+}) {
   const deck = useDeck(deckId)
   if (deck.isPending || deck.isFetching)
     return (
@@ -726,11 +778,28 @@ function DeckProgress({ deckId }: { deckId: number }) {
       </div>
     )
   const due = deck.data.cards.filter(
-    (card) => !card.card_state || cardStateFromRead(card.card_state).dueAt.getTime() <= Date.now(),
+    (card) =>
+      !excludedPartIds.includes(card.part_id) &&
+      (!card.card_state || cardStateFromRead(card.card_state).dueAt.getTime() <= Date.now()),
   ).length
   return (
-    <p className="text-text-secondary text-sm">
-      Deck total: {formatCount(deck.data.cards.length, 'card')} · {due} due now
-    </p>
+    <div className="flex flex-col items-center gap-3">
+      <p className="text-text-secondary text-sm">
+        {due > 0
+          ? `${formatCount(due, 'card')} due now`
+          : 'No cards available for due review right now.'}
+      </p>
+      {due > 0 && !readOnly ? (
+        <Button variant="outline" disabled={pending} onClick={onReview}>
+          <RotateCcw className="size-4" />
+          {pending ? 'Loading due cards…' : 'Review due'}
+        </Button>
+      ) : null}
+      {!readOnly && deck.data.cards.some((card) => !excludedPartIds.includes(card.part_id)) ? (
+        <Button variant="ghost" disabled={pending} onClick={onPractice}>
+          Practice again
+        </Button>
+      ) : null}
+    </div>
   )
 }

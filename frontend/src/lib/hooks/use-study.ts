@@ -185,27 +185,36 @@ export function useDeleteCard(deckId: number) {
   })
 }
 
-/**
- * The attempt lifecycle mutations carry no invalidation: attempts are never queried, only
- * started, answered, and finished, and the quiz itself does not change when one is taken.
- */
+/** Quiz lists include active attempts and answer counts, so successful mutations refresh them. */
 export function useStartAttempt(quizId: number) {
+  const queryClient = useQueryClient()
   return useMutation({
     // A start is idempotent (PLA-277): a falsy argument resumes the active attempt or
     // opens a fresh one; `true` explicitly starts over.
     mutationFn: (restart: boolean) => api.startAttempt(quizId, restart),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['study'] })
+    },
   })
 }
 
 export function useSubmitAnswer(attemptId: number) {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (body: AnswerCreate) => api.submitAnswer(attemptId, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['study'] })
+    },
   })
 }
 
 export function useFinishAttempt(attemptId: number) {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: () => api.finishAttempt(attemptId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['study'] })
+    },
   })
 }
 

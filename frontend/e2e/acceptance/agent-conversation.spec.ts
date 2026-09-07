@@ -277,7 +277,7 @@ test.describe('One ordinary class conversation (PLA-401)', () => {
     await expect(changeCard).toBeHidden({ timeout: 30_000 })
     await page
       .locator('[aria-label="Agent work"]')
-      .getByRole('button', { name: /Details/i })
+      .getByRole('button', { name: /Activity history/i })
       .click()
     await expect(page.getByText('Applied', { exact: true })).toBeVisible()
     expect(await readFile(join(workspaceDir, 'parser.py'), 'utf-8')).toBe(PARSER_SKELETON)

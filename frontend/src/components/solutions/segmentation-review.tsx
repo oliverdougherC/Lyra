@@ -286,13 +286,9 @@ export function SegmentationReview({
     >
       <header className="flex flex-col gap-1">
         <h2 className="font-heading text-text-primary text-xl tracking-tight">
-          Lyra found {formatCount(problems.length, 'problem')}
+          {formatCount(problems.length, 'problem')} found
         </h2>
-        <p className="text-text-secondary text-sm">
-          Lyra is least sure about the boundaries: where one problem ends and another begins, and
-          whether a part is a question of its own. That is what you are confirming here - fix a
-          boundary now and it is cheaper than re-solving later.
-        </p>
+        <p className="text-text-secondary text-sm">Check the questions, then solve.</p>
       </header>
 
       <ul className="flex flex-col gap-3">

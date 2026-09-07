@@ -3,7 +3,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 import Link from '@/router/link'
-import { useParams } from '@/router/hooks'
+import { useParams, useSearchParams } from '@/router/hooks'
 import { useEffect, useMemo } from 'react'
 
 import { LyraMark } from '@/components/chat/lyra-mark'
@@ -29,6 +29,7 @@ function readId(value: string | string[] | undefined): number | null {
 }
 
 export default function StudySessionPage() {
+  const searchParams = useSearchParams()
   const params = useParams<{ id: string; artifactId: string }>()
   const classId = readId(params.id)
   const artifactId = readId(params.artifactId)
@@ -195,7 +196,11 @@ export default function StudySessionPage() {
       ) : null}
 
       {state === 'ready' && kind === 'flashcard_deck' ? (
-        <DeckSession key={artifactId} deckId={artifactId} />
+        <DeckSession
+          key={artifactId}
+          deckId={artifactId}
+          dueOnly={searchParams.get('review') === 'due'}
+        />
       ) : null}
       {state === 'ready' && kind === 'quiz' ? (
         <QuizRunner key={artifactId} classId={classId} quizId={artifactId} />

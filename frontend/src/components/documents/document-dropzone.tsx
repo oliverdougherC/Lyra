@@ -213,8 +213,8 @@ export function DocumentDropzone({
           {/* Says folders, because otherwise nothing does. The recursive walk has been here
               all along, and a well that offers "PDF, TXT, or MD" reads as a file-at-a-time
               control: the answer to "can I just give it my notes folder?" is yes. */}
-          <span className={cn('text-xs', dragOver ? 'font-medium' : 'text-text-secondary')}>
-            {dragOver ? 'Drop to upload' : 'Drop files or a folder here, or click to browse'}
+          <span className={cn('text-sm', dragOver ? 'font-medium' : 'text-text-secondary')}>
+            {dragOver ? 'Drop to upload' : 'Upload files'}
           </span>
         </button>
 
@@ -226,7 +226,7 @@ export function DocumentDropzone({
             type="button"
             onClick={() => folderInputRef?.current?.click()}
             title={`Every ${ACCEPTED_LABEL} inside it, at any depth`}
-            className="text-text-tertiary hover:text-text-secondary focus-visible:ring-ring rounded-sm text-[11px] underline underline-offset-2 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+            className="text-text-tertiary hover:text-text-secondary focus-visible:ring-ring rounded-sm text-sm underline underline-offset-2 transition-colors focus-visible:ring-2 focus-visible:outline-none"
           >
             <FolderOpen aria-hidden className="mr-1 inline size-3 align-[-1px]" />
             choose a folder
@@ -239,7 +239,9 @@ export function DocumentDropzone({
           </p>
         ) : uploading ? (
           <div className="w-full space-y-1.5">
-            <p className="text-text-secondary truncate text-xs">Uploading {uploadingName}</p>
+            <p className="text-text-secondary break-words text-sm [overflow-wrap:anywhere]">
+              Uploading {uploadingName}
+            </p>
             <Progress value={percent} />
           </div>
         ) : rejectedFiles ? (

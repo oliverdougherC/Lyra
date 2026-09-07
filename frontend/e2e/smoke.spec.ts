@@ -164,3 +164,28 @@ test.describe('nonvisual browser smoke', () => {
     expect(pageErrors).toEqual([])
   })
 })
+
+test('restores the inner Settings reading position across Back, Forward and reload', async ({
+  page,
+}) => {
+  await installApiMocks(page)
+  await page.setViewportSize({ width: 1024, height: 600 })
+  await page.goto('/#/settings')
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+  const main = page.locator('#main-content')
+  await main.evaluate((element) => {
+    element.scrollTop = 380
+  })
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(380)
+  await page.locator('a[href="/#/"]').first().click()
+  await expect(page.getByRole('heading', { name: 'Classes' })).toBeVisible()
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(0)
+  await page.goBack()
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(380)
+  await page.reload()
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(380)
+  await page.goForward()
+  await expect(page.getByRole('heading', { name: 'Classes' })).toBeVisible()
+  await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBe(0)
+})

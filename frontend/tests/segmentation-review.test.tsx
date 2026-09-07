@@ -84,13 +84,13 @@ function renderReview(parts: SolutionPart[] = TWO_PROBLEMS) {
 }
 
 describe('SegmentationReview', () => {
-  it('states the count and directs the student to the boundaries Lyra is least sure about', () => {
+  it('states the count with a concise action', () => {
     renderReview()
 
-    expect(screen.getByText('Lyra found 2 problems')).toBeInTheDocument()
+    expect(screen.getByText('2 problems found')).toBeInTheDocument()
     // The screen's job is to confirm the judgment calls (boundaries, part independence),
     // not to make the student audit every normally detected problem.
-    expect(screen.getByText(/Lyra is least sure about the boundaries/)).toBeInTheDocument()
+    expect(screen.getByText('Check the questions, then solve.')).toBeInTheDocument()
   })
 
   it('keeps Save disabled until something actually changes', async () => {
@@ -110,7 +110,7 @@ describe('SegmentationReview', () => {
     await userEvent.click(screen.getByRole('button', { name: /Actions for Problem 1/ }))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Merge with next' }))
 
-    expect(screen.getByText('Lyra found 1 problem')).toBeInTheDocument()
+    expect(screen.getByText('1 problem found')).toBeInTheDocument()
     // Both statements survive the merge. They are two paragraphs rather than one string
     // because the preview is typeset now, and the blank line a merge inserts is what
     // keeps the two problems legible as two problems.
@@ -138,7 +138,7 @@ describe('SegmentationReview', () => {
     await userEvent.click(screen.getByRole('button', { name: /Actions for Problem 2/ }))
     await userEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
 
-    expect(screen.getByText('Lyra found 1 problem')).toBeInTheDocument()
+    expect(screen.getByText('1 problem found')).toBeInTheDocument()
     expect(screen.queryByText('Compute the convolution.')).not.toBeInTheDocument()
   })
 
@@ -147,7 +147,8 @@ describe('SegmentationReview', () => {
 
     // Eight problems from one file must not print eight identical citations, so only the
     // first row carries it.
-    expect(screen.getAllByText(/homework_4\.pdf, page 1/)).toHaveLength(1)
+    expect(screen.getAllByText('homework_4.pdf')).toHaveLength(1)
+    expect(screen.getByText('Page 1')).toBeVisible()
   })
 
   it('offers a way forward when nothing could be segmented', () => {
@@ -184,7 +185,10 @@ describe('SegmentationReview', () => {
       TWO_PROBLEMS[0],
       part({ id: 12, parent_part_id: 10, ordinal: 0, label: '(a)', content: 'Sketch it.' }),
     ])
-    const card = screen.getByText('Sketch it.').closest('li')!
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    const card = screen
+      .getByRole('textbox', { name: 'Part 1 statement of Problem 1' })
+      .closest('li')!
 
     await userEvent.click(
       within(card).getByRole('button', { name: 'Remove part (a) of Problem 1' }),
@@ -207,12 +211,15 @@ describe('SegmentationReview', () => {
         part({ id: 12, parent_part_id: 10, ordinal: 0, label: '(a)', content: 'Sketch it.' }),
       ])
 
+      await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
       await userEvent.click(screen.getByRole('button', { name: 'Remove part (a) of Problem 1' }))
       expect(screen.queryByText('Sketch it.')).not.toBeInTheDocument()
 
       await userEvent.click(screen.getByRole('button', { name: /Undo/ }))
 
-      expect(screen.getByText('Sketch it.')).toBeInTheDocument()
+      expect(screen.getByRole('textbox', { name: 'Part 1 statement of Problem 1' })).toHaveValue(
+        'Sketch it.',
+      )
     })
 
     it('answers to the keyboard', async () => {
@@ -220,11 +227,11 @@ describe('SegmentationReview', () => {
 
       await userEvent.click(screen.getByRole('button', { name: /Actions for Problem 2/ }))
       await userEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
-      expect(screen.getByText('Lyra found 1 problem')).toBeInTheDocument()
+      expect(screen.getByText('1 problem found')).toBeInTheDocument()
 
       await userEvent.keyboard('{Meta>}z{/Meta}')
 
-      expect(screen.getByText('Lyra found 2 problems')).toBeInTheDocument()
+      expect(screen.getByText('2 problems found')).toBeInTheDocument()
       expect(screen.getByText('Compute the convolution.')).toBeInTheDocument()
     })
 
@@ -233,7 +240,7 @@ describe('SegmentationReview', () => {
 
       await userEvent.click(screen.getByRole('button', { name: /Actions for Problem 2/ }))
       await userEvent.click(screen.getByRole('menuitem', { name: 'Remove' }))
-      await userEvent.click(screen.getAllByRole('button', { name: 'Edit the statement' })[0])
+      await userEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0])
 
       const editor = screen.getByRole('textbox', { name: /statement/ })
       editor.focus()
@@ -241,7 +248,7 @@ describe('SegmentationReview', () => {
 
       // The removed problem stays removed: the browser's own undo owns this keystroke,
       // and taking it away would make editing a statement worse than the delete this fixes.
-      expect(screen.getByText('Lyra found 1 problem')).toBeInTheDocument()
+      expect(screen.getByText('1 problem found')).toBeInTheDocument()
     })
 
     it('stays quiet until there is something to take back', () => {
@@ -270,7 +277,7 @@ describe('a list that arrives after the screen has mounted', () => {
 
     rerender(view(TWO_PROBLEMS))
 
-    expect(screen.getByText('Lyra found 2 problems')).toBeInTheDocument()
+    expect(screen.getByText('2 problems found')).toBeInTheDocument()
     expect(screen.getByText('Find the transform.')).toBeInTheDocument()
   })
 
@@ -320,9 +327,7 @@ describe("how a problem's parts are solved", () => {
       name: 'Solve each part of Properties of LTI Systems on its own',
     })
     expect(toggle).toBeChecked()
-    expect(
-      screen.getByText(/2 separate questions, each with its own answer and its own check/),
-    ).toBeInTheDocument()
+    expect(screen.getByText('Split into 2 questions')).toBeInTheDocument()
   })
 
   it('lets the student say the parts are one solution after all', async () => {
@@ -334,9 +339,7 @@ describe("how a problem's parts are solved", () => {
       }),
     )
 
-    expect(
-      screen.getByText(/Leave it this way when a part needs the answer to an earlier one/),
-    ).toBeInTheDocument()
+    expect(screen.getByText('Split into 2 questions')).toBeInTheDocument()
     // A reading is a change like any other on this screen: it goes back with Save.
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled()
   })
@@ -361,7 +364,7 @@ describe('review corrections', () => {
     ]
     const update = vi.spyOn(api, 'updateSegmentation').mockResolvedValue(solution(parts))
     renderReview(parts)
-    await userEvent.click(screen.getByRole('button', { name: 'Edit the statement' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
     const label = screen.getByRole('textbox', { name: 'Part 1 label of Problem 1' })
     await userEvent.clear(label)
     await userEvent.type(label, '(i)')
@@ -403,7 +406,7 @@ describe('review corrections', () => {
 it('adds editable parts and refuses to save a blank child', async () => {
   const update = vi.spyOn(api, 'updateSegmentation').mockResolvedValue(solution([TWO_PROBLEMS[0]]))
   renderReview([TWO_PROBLEMS[0]])
-  await userEvent.click(screen.getByRole('button', { name: 'Edit the statement' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
   await userEvent.click(screen.getByRole('button', { name: 'Add a part' }))
   await userEvent.click(screen.getByRole('button', { name: 'Save changes' }))
   expect(update).not.toHaveBeenCalled()
@@ -422,7 +425,7 @@ it('preserves parent context when a child label is a prefix of an ordinary word'
   const parts = [parent, part({ id: 12, parent_part_id: 10, label: 'a', content: 'First child' })]
   const update = vi.spyOn(api, 'updateSegmentation').mockResolvedValue(solution(parts))
   renderReview(parts)
-  await userEvent.click(screen.getByRole('button', { name: 'Edit the statement' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
   expect(screen.getByRole('textbox', { name: 'Problem 1 statement' })).toHaveValue(parent.content)
   await userEvent.type(
     screen.getByRole('textbox', { name: 'Part 1 statement of Problem 1' }),
@@ -442,7 +445,7 @@ it('preserves additional parent instructions after child-like lines', async () =
   const parts = [parent, part({ id: 12, parent_part_id: 10, label: '(a)', content: 'First child' })]
   const update = vi.spyOn(api, 'updateSegmentation').mockResolvedValue(solution(parts))
   renderReview(parts)
-  await userEvent.click(screen.getByRole('button', { name: 'Edit the statement' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Edit' }))
   expect(screen.getByRole('textbox', { name: 'Problem 1 statement' })).toHaveValue(
     'Given f(x)\nExplain your answer.',
   )
@@ -454,4 +457,12 @@ it('preserves additional parent instructions after child-like lines', async () =
   expect(update).toHaveBeenCalledWith(1, {
     problems: [expect.objectContaining({ statement: 'Given f(x)\nExplain your answer.' })],
   })
+})
+
+it('retains the page for consecutive problems from the same source', () => {
+  renderReview([
+    TWO_PROBLEMS[0],
+    { ...TWO_PROBLEMS[1], provenance: [{ ...TWO_PROBLEMS[0].provenance[0], page_number: 2 }] },
+  ])
+  expect(screen.getByText('Page 2')).toBeVisible()
 })

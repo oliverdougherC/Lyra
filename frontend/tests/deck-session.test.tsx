@@ -85,7 +85,7 @@ beforeEach(() => {
   vi.restoreAllMocks()
   sessionStorage.clear()
   vi.spyOn(api, 'getDeckSession').mockResolvedValue(SESSION)
-  vi.spyOn(api, 'getDeck').mockResolvedValue({ cards: SESSION.cards } as never)
+  vi.spyOn(api, 'getDeck').mockResolvedValue({ class_id: 1, cards: SESSION.cards } as never)
   vi.spyOn(api, 'reviewCard').mockImplementation((_partId, rating) =>
     Promise.resolve(reviewedState(rating)),
   )
@@ -202,7 +202,7 @@ describe('DeckSession', () => {
     await screen.findByText('Session complete')
 
     // Restart the session. This calls operationIds.current.clear() and refetches.
-    await userEvent.click(screen.getByRole('button', { name: /Study again/ }))
+    await userEvent.click(screen.getByRole('button', { name: /Review due/ }))
 
     // Card 1 reappears. Rate it again.
     await screen.findByText('What is the Fourier transform of a delta?')
@@ -273,7 +273,7 @@ describe('DeckSession', () => {
     await screen.findByText('Session complete')
 
     // Restart and rate card 1 again.
-    await userEvent.click(screen.getByRole('button', { name: /Study again/ }))
+    await userEvent.click(screen.getByRole('button', { name: /Review due/ }))
     await screen.findByText('What is the Fourier transform of a delta?')
     await userEvent.keyboard(' ')
     await userEvent.keyboard('3')
@@ -360,7 +360,7 @@ it('reports session counts separately from a larger deck and its remaining due c
   await userEvent.keyboard(' ')
   await userEvent.keyboard('3')
   expect(await screen.findByText(/Cards in this session:/)).toHaveTextContent('learning 2')
-  expect(await screen.findByText(/Deck total: 50 cards/)).toHaveTextContent('50 due now')
+  expect(await screen.findByText('50 cards due now')).toBeVisible()
 })
 
 it('retries the original rating after a lost response instead of relabeling its saved schedule', async () => {
@@ -380,7 +380,9 @@ it('retries the original rating after a lost response instead of relabeling its 
   expect(review.mock.calls[1]).toEqual([11, 'good', review.mock.calls[0][2]])
   await userEvent.keyboard(' ')
   await userEvent.keyboard('3')
-  expect(await screen.findByText(/You reviewed 2 cards/)).toHaveTextContent('2 good · 0 easy')
+  expect(await screen.findByText(/You reviewed 2 cards/)).toBeVisible()
+  await userEvent.click(screen.getByText('Review details'))
+  expect(screen.getByText(/2 good · 0 easy/)).toBeVisible()
 })
 
 it('finishes a confirmed removal when a lost delete response is followed by already-missing', async () => {
@@ -711,4 +713,69 @@ it('does not carry read-only mode into another deck', async () => {
   await userEvent.keyboard(' 3')
   await waitFor(() => expect(api.reviewCard).toHaveBeenCalledTimes(1))
   expect(sessionStorage.getItem('lyra:study-session:v1:8')).toBe('{broken')
+})
+
+it('does not offer an empty repeat loop when no cards are due', async () => {
+  vi.mocked(api.getDeckSession).mockResolvedValue({ cards: [] })
+  vi.mocked(api.getDeck).mockResolvedValue({ class_id: 1, cards: [] } as never)
+  render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+  expect(await screen.findByText('No cards in this session')).toBeVisible()
+  expect(await screen.findByText('No cards available for due review right now.')).toBeVisible()
+  expect(screen.queryByRole('button', { name: /Study again|Review due/ })).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: 'Return to Practice' })).toHaveAttribute(
+    'href',
+    '/#/classes/1?tab=practice',
+  )
+})
+
+it('starts explicit due review with only due cards from a mixed endpoint response', async () => {
+  vi.mocked(api.getDeckSession).mockResolvedValue({
+    cards: [SESSION.cards[0], { ...SESSION.cards[1], due: false }],
+  })
+  render(<DeckSession deckId={8} dueOnly />, { wrapper: createWrapper().wrapper })
+  expect(await screen.findByText('Card 1 of 1')).toBeVisible()
+  await userEvent.click(screen.getByRole('button', { name: 'Show answer' }))
+  await userEvent.click(screen.getByRole('button', { name: /Good/ }))
+  expect(await screen.findByText('Session complete')).toBeVisible()
+  expect(screen.queryByText('What does linearity require?')).not.toBeInTheDocument()
+  expect(api.reviewCard).toHaveBeenCalledTimes(1)
+})
+
+it('offers intentional Practice again when no due cards exist without starting it automatically', async () => {
+  const notDue = {
+    ...SESSION.cards[0],
+    due: false,
+    card_state: { ...SESSION.cards[0].card_state, due_at: '2099-01-01T00:00:00Z' },
+  }
+  vi.mocked(api.getDeckSession).mockResolvedValue({ cards: [notDue] })
+  vi.mocked(api.getDeck).mockResolvedValue({ class_id: 1, cards: [notDue] } as never)
+  render(<DeckSession deckId={8} dueOnly />, { wrapper: createWrapper().wrapper })
+  expect(await screen.findByText('No cards in this session')).toBeVisible()
+  expect(await screen.findByRole('button', { name: 'Practice again' })).toBeVisible()
+  expect(screen.queryByRole('button', { name: 'Review due' })).not.toBeInTheDocument()
+  expect(api.reviewCard).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('button', { name: 'Practice again' }))
+  expect(await screen.findByText('Card 1 of 1')).toBeVisible()
+  expect(screen.getByText(notDue.card.front)).toBeVisible()
+})
+
+it('preserves an unfinished uncertain review when entering a due-only route', async () => {
+  const notDue = { ...SESSION.cards[0], due: false }
+  vi.mocked(api.getDeckSession).mockResolvedValue({ cards: [notDue] })
+  vi.mocked(api.getDeck).mockResolvedValue({ class_id: 1, cards: [notDue] } as never)
+  vi.mocked(api.reviewCard).mockRejectedValue(new Error('response lost'))
+  const first = render(<DeckSession deckId={8} />, { wrapper: createWrapper().wrapper })
+  await userEvent.click(await screen.findByRole('button', { name: 'Show answer' }))
+  await userEvent.click(screen.getByRole('button', { name: /Good/ }))
+  await screen.findByRole('alert')
+  const originalOperation = vi.mocked(api.reviewCard).mock.calls[0][2]
+  first.unmount()
+  render(<DeckSession deckId={8} dueOnly />, { wrapper: createWrapper().wrapper })
+  expect(
+    await screen.findByText(/Continuing your saved session before a new due review/),
+  ).toBeVisible()
+  expect(screen.getByRole('button', { name: /Easy/ })).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: /Good/ }))
+  await waitFor(() => expect(api.reviewCard).toHaveBeenCalledTimes(2))
+  expect(vi.mocked(api.reviewCard).mock.calls[1][2]).toBe(originalOperation)
 })
