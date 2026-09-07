@@ -1,5 +1,8 @@
 # Desktop/runtime release decision — September 6, 2026
 
+> Dated workstream evidence. The implementation is integrated; these source hashes, results and
+> earlier handoff statements remain historical. See the [current integration ledger](release-evidence.md).
+
 **NO-GO for public promotion.** The review build is not the assembled final candidate. No PR
 has been merged or release published by this workstream. The writing owner discovered an
 actual SQLite lock-loss/corruption defect during HTTP recovery and has repaired it in

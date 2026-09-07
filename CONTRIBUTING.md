@@ -48,8 +48,9 @@ for overrides and [troubleshooting](docs/troubleshooting.md) for common failures
 2. Follow existing patterns and keep the diff small. Add a regression test for a behavioral fix.
    Use synthetic course material; never commit documents, databases, model weights, or credentials.
 3. Run the [relevant checks](docs/contributing-testing-migrations.md). UI or backend delivery also
-   requires rebuilding and launching the signed desktop app as described in
-   [local deployment](docs/local-deployment.md). Note any unavailable device verification in the PR.
+   requires rebuilding and smoke-checking the signed desktop app as described in
+   [local deployment](docs/local-deployment.md). Native testing follows its isolated acceptance
+   boundary; note unavailable device verification separately in the PR.
 4. Review **documentation impact**. Changes to behavior, setup, configuration, architecture, public
    interfaces, or contributor processes must update the relevant maintained docs in the same PR.
    If none apply, explain briefly in the PR template; no token documentation edit is required.

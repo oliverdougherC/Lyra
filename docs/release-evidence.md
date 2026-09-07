@@ -1,6 +1,65 @@
 # Beta release evidence ledger
 
-## Current reconciliation — September 6, 2026
+## Implementation integration — September 7, 2026
+
+The reviewed implementation stack **#81 → #83 → #80 → #82 (including quiz repair) → #85 → #86**
+and canonical installer **#76** are integrated by this pass. **Public beta promotion remains
+unapproved.** Release PR #79 (or its successor), tags, public downloads and update feeds remain
+outside this implementation authorization.
+
+| Scope | Landed implementation / retained evidence |
+| --- | --- |
+| Runtime | [#81](https://github.com/oliverdougherC/Lyra/pull/81), `6fb0570`: helper leases, stop/adoption and quit admission, cache root and import staging. |
+| Writer/storage | [#83](https://github.com/oliverdougherC/Lyra/pull/83), `dc3be3a`: real-process SQLite locks, run ownership/cancellation, source revisions and bounded recovery. |
+| Learning | [#80](https://github.com/oliverdougherC/Lyra/pull/80), `ac75e0d`: task-grounded feedback and actual active-quiz metadata. |
+| UX and quiz integration | [#82](https://github.com/oliverdougherC/Lyra/pull/82), `b1908fa`: quota-safe navigation plus study-query invalidation on quiz start/answer/finish and real API/UI continuation/counts/reload/completion/restart tests. |
+| Learning follow-up | [#85](https://github.com/oliverdougherC/Lyra/pull/85), `8aff363`: truthful CAS/verification and corrected flashcard schema. |
+| Writing follow-up | [#86](https://github.com/oliverdougherC/Lyra/pull/86), `5df914a`: current/historical evidence delivery and exact scoped corrections preserving student wording. |
+| Local delivery | [#76](https://github.com/oliverdougherC/Lyra/pull/76): verified canonical installation; opening requires explicit `--open`; private review keeps its original artifact. |
+
+Strict current-base **CI Gate** and the no-bypass ruleset were retained. The first real merge made
+#83 `BEHIND` despite its previous green gate; a normal branch refresh received new green checks.
+The stacked follow-ups were retargeted to main and only their own deltas replayed, with preserved
+originals and explicit force-with-lease. Both range comparisons were patch-identical. PLA-475's
+live advance/refresh evidence is distinct from the earlier rehearsal.
+
+Rehearsal [#84](https://github.com/oliverdougherC/Lyra/pull/84) was **not merged wholesale**.
+Its two unique code/test changes, `a9b80ed` and `0d6478f`, are retained in #82's main commit.
+Its four assembly checkpoints duplicate the separately integrated implementations; no additional
+unique application fix was found. Its documentation-only `587564a`/`094b7f5` evidence and native
+safety correction are preserved in the [dated preparation record](integration-preparation-2026-09-07.md).
+The preparation ledger additions are superseded by this section, not new current-run evidence.
+
+For final-main CI, exact source/version/build, full-suite results, bounded combined-model results,
+and signed app/DMG/archive hashes, use the [integration delivery receipt on #76](https://github.com/oliverdougherC/Lyra/pull/76)
+and the Linear Lyra project overview. Binary receipts stay beside the retained artifacts so
+recording their hashes does not change their source. Final verification must cover #85 and #86
+together; the historical #84 totals cannot substitute. A successful gate job whose check-run
+stayed pending was retried as infrastructure recovery; its original receipt was retained.
+
+### Remaining acceptance boundaries
+
+- PLA-152's delivered evaluator criteria are separate from PLA-153's remaining semantic and
+  long-session recovery quality. Guide explanation failures, conservative solver confidence,
+  ambiguous source attribution and full-draft quality concerns remain visible; completed model
+  runs are not semantic passes. Retain each internal retry and independent-versus-human distinction.
+- Backend selectors and null/fail Keyring do not isolate default WebKit storage or compiled-ID IPC.
+  Production-native acceptance requires an isolated account/device without an incumbent endpoint.
+  This pass does not launch the normal-account native app or replace its installation. Unique-ID/store
+  variants are limited evidence; earlier normal-profile startup impact remains uncertain.
+- Real Keychain, installed update/rollback, Print, physical input/accessibility, unfamiliar-user
+  testing and sustained/sleep-wake checks remain with their existing acceptance owners.
+- The owner 8 GB waiver and distribution-clearance attestation remain decisions, not measured
+  performance or independent licensing certification. Updater off-device backup confirmation and
+  anonymous public delivery remain outstanding. No signing key, support policy or gate was changed.
+- Local review uses the persistent development identity. Distribution review uses separate hardened
+  ad-hoc bytes and the existing authenticated updater; neither requires a new Apple account or
+  permits public publication. See [local deployment](local-deployment.md) and [releasing](releasing.md).
+
+All earlier sections below are dated historical records, including their old unmerged and
+external-configuration statements.
+
+## Historical reconciliation — September 6, 2026
 
 **Decision: NO-GO for public promotion.** Current fetched main is
 `e96bf4886977c648f9e7905c7807c806b1ae7a80`. PRs #73, #74, #75, #77 and #78 are merged.
