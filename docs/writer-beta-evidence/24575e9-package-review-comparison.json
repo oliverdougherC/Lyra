@@ -1,0 +1,280 @@
+{
+  "version": "writer-comparison.v1",
+  "comparison_kind": "same_model",
+  "acceptance": "not_determined",
+  "note": "Recorded runs and deterministic metrics do not establish quality acceptance.",
+  "configuration": {
+    "corpus_sha256": {
+      "baseline": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+      "candidate": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3"
+    },
+    "generate_plan": {
+      "baseline": false,
+      "candidate": false
+    },
+    "locality": {
+      "baseline": "non_loopback",
+      "candidate": "non_loopback"
+    },
+    "context_window": {
+      "baseline": 262144,
+      "candidate": 262144
+    },
+    "model": {
+      "baseline": "Qwen3.8-27B",
+      "candidate": "Qwen3.8-27B"
+    }
+  },
+  "evidence_directories": {
+    "baseline": "receipt:24575e9-packaged-model-review-control",
+    "candidate": "receipt:24575e9-packaged-model-review"
+  },
+  "provenance": {
+    "tested_sha": {
+      "baseline": "24575e9f859a220440186c106a8936b303a6510e",
+      "candidate": "24575e9f859a220440186c106a8936b303a6510e"
+    },
+    "backend_source_sha256": {
+      "baseline": "c9418f8ffc91746b7b9e113221877f9f04205815359d2d3bb77aaf33a3e26cb1",
+      "candidate": "c9418f8ffc91746b7b9e113221877f9f04205815359d2d3bb77aaf33a3e26cb1"
+    },
+    "runtime": {
+      "baseline": "frozen_sidecar",
+      "candidate": "frozen_sidecar"
+    },
+    "runtime_sha256": {
+      "baseline": "c351bd1d9c43f94bd17c4c327eac2baa6075832c132f2768d471c45d6826e1ac",
+      "candidate": "c351bd1d9c43f94bd17c4c327eac2baa6075832c132f2768d471c45d6826e1ac"
+    },
+    "prompt_sha256": {
+      "baseline": "97df6437a8d90208819e834e71d0f16353cce7d198d437b183f45e33b19663c4",
+      "candidate": "97df6437a8d90208819e834e71d0f16353cce7d198d437b183f45e33b19663c4"
+    }
+  },
+  "pairs": [
+    {
+      "case_id": "review_seeded_claim_and_duplicates",
+      "baseline_scenario": "uninterrupted",
+      "candidate_scenario": "restart_persistence",
+      "baseline": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": false,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "accepted_body",
+          "count": 0
+        },
+        "settled_block_preservation": null,
+        "deterministic": {
+          "candidate_present": false,
+          "candidate_protected_passages_preserved": null,
+          "candidate_forbidden_literal_hits": null,
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 1,
+          "protected_passages_preserved": 1,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "candidate": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": true,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "accepted_body",
+          "count": 0
+        },
+        "settled_block_preservation": {
+          "eligible": 0,
+          "preserved": [],
+          "changed": [],
+          "missing": [],
+          "note": "Exact text comparison within the original suggestion; changes need review."
+        },
+        "deterministic": {
+          "candidate_present": false,
+          "candidate_protected_passages_preserved": null,
+          "candidate_forbidden_literal_hits": null,
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 1,
+          "protected_passages_preserved": 1,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "duplicate_paragraph_delta": 0,
+      "dimensions": {
+        "evidence_citation": {
+          "baseline": null,
+          "candidate": null
+        },
+        "instruction_following": {
+          "baseline": null,
+          "candidate": null
+        },
+        "planning": {
+          "baseline": null,
+          "candidate": null
+        },
+        "review_usefulness": {
+          "baseline": null,
+          "candidate": null
+        },
+        "revision_precision": {
+          "baseline": null,
+          "candidate": null
+        },
+        "student_voice": {
+          "baseline": null,
+          "candidate": null
+        }
+      }
+    },
+    {
+      "case_id": "review_seeded_claim_and_duplicates",
+      "baseline_scenario": "uninterrupted",
+      "candidate_scenario": "uninterrupted",
+      "baseline": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": false,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "accepted_body",
+          "count": 0
+        },
+        "settled_block_preservation": null,
+        "deterministic": {
+          "candidate_present": false,
+          "candidate_protected_passages_preserved": null,
+          "candidate_forbidden_literal_hits": null,
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 1,
+          "protected_passages_preserved": 1,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "candidate": {
+        "record_status": "recorded",
+        "terminal_status": "completed",
+        "harness_timeout": false,
+        "intervention_observed": false,
+        "code_changed_during_case": false,
+        "duplicate_paragraphs": {
+          "basis": "accepted_body",
+          "count": 0
+        },
+        "settled_block_preservation": null,
+        "deterministic": {
+          "candidate_present": false,
+          "candidate_protected_passages_preserved": null,
+          "candidate_forbidden_literal_hits": null,
+          "excerpt_revision_support_violations": [],
+          "body_unchanged": true,
+          "protected_passages_total": 1,
+          "protected_passages_preserved": 1,
+          "duplicate_comment_signatures": 0,
+          "real_run_id_present": true,
+          "missed_seeded_issues": null,
+          "unsupported_rewrites": null,
+          "unrelated_candidate_edits": null,
+          "citation_support": null,
+          "seed_metrics_note": "Semantic measures await independent/human review."
+        },
+        "subjective_scores": {
+          "planning": null,
+          "evidence_citation": null,
+          "revision_precision": null,
+          "review_usefulness": null,
+          "instruction_following": null,
+          "student_voice": null
+        },
+        "independent_agent_review": null,
+        "human_review": null
+      },
+      "duplicate_paragraph_delta": 0,
+      "dimensions": {
+        "evidence_citation": {
+          "baseline": null,
+          "candidate": null
+        },
+        "instruction_following": {
+          "baseline": null,
+          "candidate": null
+        },
+        "planning": {
+          "baseline": null,
+          "candidate": null
+        },
+        "review_usefulness": {
+          "baseline": null,
+          "candidate": null
+        },
+        "revision_precision": {
+          "baseline": null,
+          "candidate": null
+        },
+        "student_voice": {
+          "baseline": null,
+          "candidate": null
+        }
+      }
+    }
+  ],
+  "missing_baseline": [],
+  "missing_candidate": []
+}

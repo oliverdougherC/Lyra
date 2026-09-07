@@ -385,19 +385,10 @@ def _settle_failed(conn: sqlite3.Connection, job: PassJob, exc: Exception) -> No
         return
     message = exc.message if isinstance(exc, LyraError) else str(exc)
     if job.run_id is not None:
-        writer_runs.mark_failed(conn, job.run_id, message)
-        if _cancel_requested(conn, job):
-            return
+        writer_runs.settle_failure(conn, job.run_id, _FAILED_DETAIL, message)
+        _cancel_requested(conn, job)
+        return
     artifacts.mark_artifact_failed(conn, job.artifact_id, _FAILED_DETAIL, message)
-    if job.run_id is not None:
-        live = live_drafts.get_live_suggestion_for_run(conn, job.run_id)
-        if live is not None:
-            live_drafts.update_live_suggestion(
-                conn,
-                int(live["id"]),
-                status="failed",
-                detail=message,
-            )
     conn.execute(
         "update artifacts set writer_job_completed_at = datetime('now') where id = ?",
         (job.artifact_id,),
@@ -466,6 +457,10 @@ def _complete(
     """
     reserve = budget.generation_reserve(config.context_window)
     max_tokens = min(budget.tokens_for_words(target_words), reserve) if target_words else reserve
+    if schema is not None:
+        # A wide input window does not call for a book-sized planning/assessment
+        # object. Keep structured stages finite without relaxing cutoff validation.
+        max_tokens = min(max_tokens, 4096)
     timeout = _deadline_timeout()
     _preflight_request(config, messages, max_tokens, schema)
     return asyncio.run(
@@ -481,7 +476,7 @@ def _complete(
                 fail_on_truncation=truncated is None,
                 schema=schema,
                 temperature=client.DETERMINISTIC_TEMPERATURE if schema else None,
-                enable_thinking=enable_thinking,
+                enable_thinking=False if enable_thinking is None else enable_thinking,
             )
         )
     ).strip()
@@ -658,6 +653,33 @@ def _run_live_pipeline(
             detail="Understanding the assignment",
         )
     suggestion_id = int(live["id"])
+    _preflight_request(
+        config,
+        [
+            {
+                "role": "user",
+                "content": (
+                    prompts.format_brief_block(briefs.get_brief(conn, job.artifact_id))
+                    + "\n\n"
+                    + str(live["base_content"])
+                ),
+            }
+        ],
+        budget.generation_reserve(config.context_window),
+    )
+    plan = _active_plan(conn, job.artifact_id)
+    if plan is not None and not live["blocks"]:
+        live_drafts.resume_previous_suggestion(
+            conn,
+            suggestion_id,
+            lambda: _live_generation_identity(
+                conn,
+                job,
+                config,
+                _active_plan(conn, job.artifact_id) or {},
+                str(live_drafts.get_live_suggestion(conn, suggestion_id)["base_content"]),
+            ),
+        )
     run = writer_runs.get_run(conn, job.run_id)
     checkpoint = run.get("checkpoint")
     resume_stage = str(checkpoint.get("stage") or "") if isinstance(checkpoint, dict) else ""
@@ -724,16 +746,26 @@ def _run_live_pipeline(
     if _live_cancelled(conn, job, suggestion_id):
         return
 
-    document_map = _live_document_map(plan, job)
-    _draft_live_blocks(conn, job, artifact, config, class_id, suggestion_id, plan, document_map)
+    document_map = _live_document_map(
+        plan,
+        job,
+        brief=briefs.get_brief(conn, job.artifact_id),
+        existing_body=str(live_drafts.get_live_suggestion(conn, suggestion_id)["base_content"]),
+    )
+    if resume_stage not in {"transitions", "reviewing", "finalizing", "completed"}:
+        _draft_live_blocks(conn, job, artifact, config, class_id, suggestion_id, plan, document_map)
     if _live_cancelled(conn, job, suggestion_id):
         return
 
-    _review_live_transitions(conn, job, artifact, config, suggestion_id, document_map)
+    if resume_stage not in {"reviewing", "finalizing", "completed"}:
+        _review_live_transitions(conn, job, artifact, config, suggestion_id, document_map)
     if _live_cancelled(conn, job, suggestion_id):
         return
 
-    _review_live_chunks(conn, job, artifact, config, class_id, suggestion_id, plan, document_map)
+    if resume_stage not in {"finalizing", "completed"}:
+        _review_live_chunks(
+            conn, job, artifact, config, class_id, suggestion_id, plan, document_map
+        )
     if _live_cancelled(conn, job, suggestion_id):
         return
 
@@ -745,6 +777,27 @@ def _run_live_pipeline(
         "Checking coverage, length, and the assembled suggestion",
     )
     final = live_drafts.get_live_suggestion(conn, suggestion_id)
+    for block in final["blocks"]:
+        if int(block["user_revision"]):
+            continue
+        ref = str(block["section_ref"] or "")
+        entry = _section_plan(plan, ref, str(block["heading"] or ""))
+        allowed = {int(source["id"]) for source in _ledger_entries(conn, class_id, entry, ref)}
+        try:
+            normalized = source_ledger.normalize_model_citations(str(block["content"]), allowed)
+        except ValueError as exc:
+            raise LyraError(
+                "The suggestion contains a citation outside its saved evidence. "
+                "The partial suggestion was kept for correction."
+            ) from exc
+        if normalized != block["content"]:
+            live_drafts.model_update_block(
+                conn,
+                suggestion_id,
+                str(block["stable_key"]),
+                content=normalized,
+                status=str(block["status"]),
+            )
     incomplete = [
         str(block["stable_key"]) for block in final["blocks"] if not str(block["content"]).strip()
     ]
@@ -766,6 +819,7 @@ def _run_live_pipeline(
         conn,
         suggestion_id,
         note=job.instruction or "agentic long-form draft",
+        model_owned=True,
     )
     live_drafts.update_live_suggestion(
         conn,
@@ -816,6 +870,17 @@ def _build_live_plan(
     query = str(analysis.get("task") or artifact["title"])
     result = retrieve(conn, class_id, query, STRUCTURE_RETRIEVAL_BUDGET)
     context_block = prompts.format_context_block([vars(chunk) for chunk in result.chunks])
+    ledger = source_ledger.list_sources(conn, class_id)
+    saved_context = source_ledger.saved_source_context(
+        conn, class_id, [int(source["id"]) for source in ledger]
+    )
+    if ledger:
+        context_block += (
+            "\n\n"
+            + prompts.format_ledger_block(ledger)
+            + "\nSaved source context (omitted content is not evidence of absence):\n"
+            + json.dumps(saved_context, ensure_ascii=False, sort_keys=True)
+        )
     thesis_reply = _complete(
         config,
         prompts.build_plan_thesis_prompt(str(artifact["title"]), analysis, context_block),
@@ -840,8 +905,18 @@ def _build_live_plan(
             thesis,
             argument_map,
             _target_words(conn, job),
-            context_block,
-            sections.outline(body),
+            context_block
+            + "\n\nOriginal assignment brief:\n"
+            + brief_block
+            + "\nStudent request:\n"
+            + (job.instruction or "Create a separate draft proposal.")
+            + "\nAssignment analysis:\n"
+            + json.dumps(analysis, ensure_ascii=False, sort_keys=True)
+            + "\nExisting notes outline (reference only, not required proposal structure):\n"
+            + sections.outline(body)
+            + "\nPlan the separate proposal to satisfy the brief and student request. "
+            "The accepted notes remain unchanged; "
+            "their headings need not become proposal sections.",
         ),
         schema=prompts.PLAN_SECTIONS_SCHEMA,
     )
@@ -896,10 +971,25 @@ def _plan_targets(plan: dict[str, object]) -> list[tuple[str, str]]:
     ]
 
 
-def _live_document_map(plan: dict[str, object], job: PassJob) -> str:
+def _live_document_map(
+    plan: dict[str, object],
+    job: PassJob,
+    *,
+    brief: dict[str, object] | None = None,
+    existing_body: str = "",
+) -> str:
     entries = plan.get("sections") if isinstance(plan.get("sections"), list) else []
     payload = {
         "request": job.instruction or "draft the document from its brief",
+        "assignment": prompts.format_brief_block(brief),
+        "student_prose": existing_body,
+        "preservation": (
+            "Respect every assignment constraint even when a saved plan omits it. "
+            "Use the student's actual words and stance as the voice reference. Do not invent "
+            "personal observations, actions, costs or methods. Distinguish proposed future "
+            "work from events that actually happened; unsupported claims must be removed "
+            "or qualified, not replaced with new facts."
+        ),
         "thesis": plan.get("thesis", ""),
         "argument_map": plan.get("argument_map", []),
         "sections": [
@@ -911,6 +1001,28 @@ def _live_document_map(plan: dict[str, object], job: PassJob) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
+def _live_generation_identity(
+    conn: sqlite3.Connection,
+    job: PassJob,
+    config: TutorConfig,
+    plan: dict[str, object],
+    base_content: str,
+) -> dict[str, object]:
+    """Hash generation inputs without persisting an endpoint or any credential."""
+    artifact = artifacts.get_artifact(conn, job.artifact_id)
+    document_map = _live_document_map(
+        plan, job, brief=briefs.get_brief(conn, job.artifact_id), existing_body=base_content
+    )
+    payload = {
+        "provider": [config.endpoint_url, config.model, config.context_window],
+        "title": artifact["title"],
+        "plan": plan,
+        "document_map": document_map,
+        "sources": source_ledger.list_sources(conn, int(artifact["class_id"])),
+    }
+    return {"version": 1, "sha256": _section_hash(json.dumps(payload, sort_keys=True))}
+
+
 def _build_live_outline(
     conn: sqlite3.Connection,
     job: PassJob,
@@ -919,7 +1031,19 @@ def _build_live_outline(
     suggestion_id: int,
     plan: dict[str, object],
 ) -> None:
-    document_map = _live_document_map(plan, job)
+    document_map = _live_document_map(
+        plan,
+        job,
+        brief=briefs.get_brief(conn, job.artifact_id),
+        existing_body=str(live_drafts.get_live_suggestion(conn, suggestion_id)["base_content"]),
+    )
+    generation_identity = _live_generation_identity(
+        conn,
+        job,
+        config,
+        plan,
+        str(live_drafts.get_live_suggestion(conn, suggestion_id)["base_content"]),
+    )
     entries = plan.get("sections")
     if not isinstance(entries, list):
         raise LyraError("The writing plan has no section outline.")
@@ -985,7 +1109,11 @@ def _build_live_outline(
                 target_words=words,
                 summary=str(item.get("purpose") or item.get("claim") or "").strip(),
                 context=paragraph_plan,
-                metadata={"section_plan": entry, "document_map": document_map},
+                metadata={
+                    "section_plan": entry,
+                    "document_map": document_map,
+                    "generation_identity": generation_identity,
+                },
             )
 
 
@@ -1036,14 +1164,16 @@ def _draft_live_blocks(
     live = live_drafts.get_live_suggestion(conn, suggestion_id)
     targets = tuple(str(block["stable_key"]) for block in live["blocks"])
     artifacts.set_problems_total(conn, job.artifact_id, len(targets))
+    settled_keys = {
+        str(block["stable_key"])
+        for block in live["blocks"]
+        if str(block["content"]).strip()
+        and (block["status"] in {"complete", "drafted", "revised"} or block["user_revision"])
+    }
+    artifacts.set_problems_done(conn, job.artifact_id, len(settled_keys))
     for index, snapshot in enumerate(live["blocks"]):
         block = _live_block_by_key(conn, suggestion_id, str(snapshot["stable_key"])) or snapshot
-        if str(block["content"]).strip() and str(block["status"]) in {
-            "complete",
-            "drafted",
-            "revised",
-        }:
-            artifacts.increment_problems_done(conn, job.artifact_id)
+        if str(block["stable_key"]) in settled_keys:
             continue
         if _live_cancelled(conn, job, suggestion_id):
             return
@@ -1097,6 +1227,19 @@ def _draft_live_blocks(
         artifacts.increment_problems_done(conn, job.artifact_id)
 
 
+def _continuation_delta(existing: str, addition: str) -> str:
+    """Remove only text demonstrably echoed from the saved continuation prefix."""
+    base, new = existing.rstrip(), addition.lstrip()
+    if not new.strip() or base.startswith(new.rstrip()):
+        return ""
+    if new.startswith(base):
+        return new[len(base) :]
+    for overlap in range(min(len(base), len(new), 2000), 15, -1):
+        if base[-overlap:] == new[:overlap]:
+            return new[overlap:]
+    return addition
+
+
 def _stream_live_paragraph(
     conn: sqlite3.Connection,
     job: PassJob,
@@ -1144,7 +1287,7 @@ def _stream_live_paragraph(
                     continue
                 written += len(delta.text)
                 buffer += delta.text
-                if len(buffer) >= LIVE_STREAM_FLUSH_CHARS:
+                if len(buffer) >= LIVE_STREAM_FLUSH_CHARS and not existing.strip():
                     live_drafts.append_block_text(
                         conn, suggestion_id, stable_key, buffer, status="drafting"
                     )
@@ -1153,9 +1296,11 @@ def _stream_live_paragraph(
             # Preserve the last useful batch on EOF/cutoff/timeout, but never publish
             # additional model effects after durable cancellation has been observed.
             if buffer and not writer_runs.cancel_requested(conn, job.run_id):
-                live_drafts.append_block_text(
-                    conn, suggestion_id, stable_key, buffer, status="drafting"
-                )
+                addition = _continuation_delta(existing, buffer) if existing.strip() else buffer
+                if addition:
+                    live_drafts.append_block_text(
+                        conn, suggestion_id, stable_key, addition, status="drafting"
+                    )
         return written
 
     call_messages = messages
@@ -1209,6 +1354,9 @@ def _review_live_transitions(
         right = _live_block_by_key(conn, suggestion_id, str(right_snapshot["stable_key"]))
         if left is None or right is None:
             continue
+        metadata = dict(right["metadata"]) if isinstance(right["metadata"], dict) else {}
+        if metadata.get("transition_review", {}).get("completed"):
+            continue
         _live_stage(
             conn,
             job,
@@ -1231,19 +1379,30 @@ def _review_live_transitions(
             schema=prompts.TRANSITION_REVIEW_SCHEMA,
         )
         payload = replies.loads_object(reply)
-        if payload is None or not payload.get("needs_change"):
-            continue
+        if (
+            payload is None
+            or not isinstance(payload.get("needs_change"), bool)
+            or not isinstance(payload.get("revised_next_paragraph"), str)
+            or not isinstance(payload.get("rationale"), str)
+        ):
+            raise LyraError(
+                "The transition review did not return a usable assessment. Saved prose was kept."
+            )
         revised = str(payload.get("revised_next_paragraph") or "").strip()
-        metadata = dict(right["metadata"]) if isinstance(right["metadata"], dict) else {}
+        if payload["needs_change"] and not revised:
+            raise LyraError(
+                "The transition review returned an empty revision. Saved prose was kept."
+            )
         metadata["transition_review"] = {
             "rationale": str(payload.get("rationale") or ""),
             "left": left["stable_key"],
+            "completed": True,
         }
         live_drafts.model_update_block(
             conn,
             suggestion_id,
             str(right["stable_key"]),
-            content=revised or None,
+            content=revised if payload["needs_change"] else None,
             status="complete",
             metadata=metadata,
         )
@@ -1268,6 +1427,8 @@ def _review_live_chunks(
     for chunk_index, chunk in enumerate(chunks):
         if _live_cancelled(conn, job, suggestion_id):
             return
+        if all(block["metadata"].get("overall_assessment", {}).get("completed") for block in chunk):
+            continue
         _live_stage(
             conn,
             job,
@@ -1281,25 +1442,81 @@ def _review_live_chunks(
             f"{block['stable_key']}: {block['summary'] or block['context']}" for block in chunk
         )
         prose = "\n\n".join(f"[{block['stable_key']}]\n{block['content']}" for block in chunk)
+        messages = prompts.build_overall_assessment_prompt(
+            str(artifact["title"]),
+            document_map=document_map,
+            chunk_label=f"{chunk_index + 1}/{len(chunks)}",
+            block_summaries=summaries,
+            prose_chunk=prose,
+        )
+        evidence = {}
+        for block in chunk:
+            ref = str(block["section_ref"] or "")
+            entry = _section_plan(plan, ref, str(block["heading"] or ""))
+            for source in _ledger_entries(conn, class_id, entry, ref):
+                saved = evidence.setdefault(int(source["id"]), dict(source))
+                saved["excerpts"] = list(
+                    {
+                        excerpt["id"]: excerpt
+                        for excerpt in [*saved["excerpts"], *source["excerpts"]]
+                    }.values()
+                )
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    prompts.format_ledger_block(list(evidence.values()))
+                    + "\nBounded current saved source context (separate from historical "
+                    "relied-on evidence; never relabel historical support "
+                    "with current revisions):\n"
+                    + json.dumps(
+                        source_ledger.saved_source_context(conn, class_id, list(evidence)),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    + "\nCheck new factual claims against this evidence, the original assignment "
+                    "and student prose. Identify unsupported causal conclusions, invented costs, "
+                    "methods or personal experiences. Selected excerpts are partial evidence, so "
+                    "do not treat uninspected content as absent. Request a narrow correction "
+                    "without inventing new facts or deleting unrelated student ideas. Check "
+                    "units and denominators: repeated events do not establish unique people, "
+                    "and unmeasured effects are not evidence that no effect exists."
+                ),
+            }
+        )
         reply = _complete(
             config,
-            prompts.build_overall_assessment_prompt(
-                str(artifact["title"]),
-                document_map=document_map,
-                chunk_label=f"{chunk_index + 1}/{len(chunks)}",
-                block_summaries=summaries,
-                prose_chunk=prose,
-            ),
+            messages,
             schema=prompts.OVERALL_ASSESSMENT_SCHEMA,
         )
         payload = replies.loads_object(reply)
-        if payload is None:
-            continue
-        issues = payload.get("issues")
-        issue_list = issues if isinstance(issues, list) else []
+        if (
+            payload is None
+            or not isinstance(payload.get("issues"), list)
+            or not isinstance(payload.get("summary"), str)
+        ):
+            raise LyraError(
+                "The document review did not return a usable assessment. Saved prose was kept."
+            )
+        issue_list = payload["issues"]
+        chunk_keys = {str(block["stable_key"]) for block in chunk}
+        if any(
+            not isinstance(issue, dict)
+            or not isinstance(issue.get("block_key"), str)
+            or issue["block_key"] not in chunk_keys
+            or not isinstance(issue.get("problem"), str)
+            or not isinstance(issue.get("revision_instruction"), str)
+            or not str(issue.get("revision_instruction") or "").strip()
+            for issue in issue_list
+        ):
+            raise LyraError(
+                "The document review named an invalid passage or revision. Saved prose was kept."
+            )
         for snapshot in chunk:
             current = _live_block_by_key(conn, suggestion_id, str(snapshot["stable_key"]))
             if current is None:
+                continue
+            if current["metadata"].get("overall_assessment", {}).get("completed"):
                 continue
             own_issues = [
                 issue
@@ -1311,6 +1528,7 @@ def _review_live_chunks(
             metadata["overall_assessment"] = {
                 "summary": str(payload.get("summary") or ""),
                 "issues": own_issues,
+                "completed": True,
             }
             if not own_issues or int(current["user_revision"]) > 0:
                 live_drafts.model_update_block(
@@ -1337,6 +1555,10 @@ def _review_live_chunks(
                         json.dumps(current["context"], ensure_ascii=False, sort_keys=True)
                         + "\nRevision instruction: "
                         + instruction
+                        + "\n\nRevise only the passage below. Preserve its voice, evidence, "
+                        "and all wording unrelated to the requested correction. Return only "
+                        "the revised passage, not a new paragraph on the same topic.\n\n"
+                        + str(current["content"])
                     ),
                     research_block=str(section_plan.get("research_notes") or ""),
                     ledger_block=prompts.format_ledger_block(
@@ -1351,6 +1573,7 @@ def _review_live_chunks(
             )
             normalized_revision = mathnorm.normalize(revised.strip())
             if not normalized_revision:
+                metadata["overall_assessment"]["completed"] = False
                 metadata["overall_assessment"]["revision_skipped"] = (
                     "The model returned no replacement prose, so the completed paragraph "
                     "was preserved."
@@ -1362,7 +1585,9 @@ def _review_live_chunks(
                     status="complete",
                     metadata=metadata,
                 )
-                continue
+                raise LyraError(
+                    "The document review returned an empty revision. Saved prose was kept."
+                )
             live_drafts.model_update_block(
                 conn,
                 suggestion_id,
@@ -1978,6 +2203,12 @@ def _section_stage(
             replace=True,
         )
 
+    if cut_off:
+        raise LyraError(
+            "The pass still contains incomplete sections. Saved writing and the partial "
+            "proposal were kept; review or retry the unfinished sections."
+        )
+
     artifacts.set_artifact_state(
         conn,
         job.artifact_id,
@@ -2003,7 +2234,7 @@ def _parallel_initial_sections(
     processed_sections: list[dict[str, object]],
 ) -> tuple[bool, int, int]:
     """Fan out research/draft model calls; prepare and land deterministically."""
-    body = str(artifacts.get_part(conn, part_id)["content"])
+    body = _review_body(conn, part_id)
     research_work = _prepare_research_batch(conn, job, artifact, config, class_id, targets, plan)
     degraded_web_research = sum(1 for work in research_work if work.research_warning)
 
@@ -2051,6 +2282,7 @@ def _parallel_initial_sections(
                     ledger_block=prompts.format_ledger_block(
                         _ledger_entries(conn, class_id, entry, number)
                     ),
+                    preserve_existing=not target.is_empty,
                 ),
             )
         )
@@ -2281,6 +2513,16 @@ def _prepare_research_section(
 
     ledger = source_ledger.list_sources(conn, class_id)
     context_block = course_context_block
+    saved_context = source_ledger.saved_source_context(
+        conn,
+        class_id,
+        [int(source["id"]) for source in _ledger_entries(conn, class_id, plan_entry, number)],
+    )
+    if saved_context:
+        context_block += (
+            "\n\nSaved source context (omitted content is not evidence of absence):\n"
+            + json.dumps(saved_context, ensure_ascii=False, sort_keys=True)
+        )
     if web_context:
         context_block = "\n\n".join(
             block
@@ -2434,6 +2676,28 @@ def _research_section(
     _finish_research_section(conn, job, class_id, plan, work, reply)
 
 
+def _review_body(conn: sqlite3.Connection, part_id: int) -> str:
+    """Quality passes review the working proposal; stale proposals are not authoritative."""
+    body = str(artifacts.get_part(conn, part_id)["content"])
+    pending = suggestions.pending_for_part(conn, part_id)
+    return str(pending["proposed_content"]) if pending and not pending["stale"] else body
+
+
+def _review_job(job: PassJob, correction: str) -> PassJob:
+    return replace(
+        job,
+        instruction=(
+            "Reviewer feedback to consider only where consistent with the student request:\n"
+            + correction
+            + "\n\nThe original student requirements remain authoritative:\n"
+            + (job.instruction or "Preserve the student's voice and the assignment constraints.")
+            + "\nDisregard conflicting editorial preferences; do not change perspective or scope."
+            " Keep application citation markers [@lyra:ID] intact; display and export render "
+            "them. Never replace them with bare numbers or invented bibliography keys."
+        ),
+    )
+
+
 def _converge_section(
     conn: sqlite3.Connection,
     job: PassJob,
@@ -2454,7 +2718,7 @@ def _converge_section(
     for round_number in range(1, rounds + 1):
         if not _time_remaining(job):
             return changed
-        body = str(artifacts.get_part(conn, part_id)["content"])
+        body = _review_body(conn, part_id)
         target = sections.extract(body, number) or sections.extract(body, title)
         if target is None or target.is_empty:
             return changed
@@ -2465,22 +2729,42 @@ def _converge_section(
             f"Attacking the argument in {number} (round {round_number})",
         )
         plan_entry = _section_plan(plan, number, title)
+        messages = prompts.build_skeptic_prompt(
+            str(artifact["title"]),
+            target.text,
+            prompts.format_plan_block(plan, number),
+            prompts.format_ledger_block(_ledger_entries(conn, class_id, plan_entry, number)),
+            _previous_tail(body, target),
+            _next_heading(body, target),
+        )
+        accepted = sections.extract(str(artifacts.get_part(conn, part_id)["content"]), number)
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "The student requirements outrank editorial preferences:\n"
+                    + (job.instruction or "Preserve the student's voice.")
+                    + "\n"
+                    + prompts.format_brief_block(briefs.get_brief(conn, job.artifact_id))
+                    + "\nAccepted student prose is a voice reference, not the proposed passage; "
+                    "do not restore corrected claims from it:\n"
+                    + (accepted.text if accepted else "")
+                    + "\nJudge the proposed passage against these requirements. Do not ask for "
+                    "removing the student's perspective or changing the requested scope."
+                    " Application citations [@lyra:ID] are intentional internal markup; "
+                    "do not treat their appearance as a formatting defect or replace them."
+                ),
+            }
+        )
         reply = _complete(
             config,
-            prompts.build_skeptic_prompt(
-                str(artifact["title"]),
-                target.text,
-                prompts.format_plan_block(plan, number),
-                prompts.format_ledger_block(_ledger_entries(conn, class_id, plan_entry, number)),
-                _previous_tail(body, target),
-                _next_heading(body, target),
-            ),
+            messages,
             schema=prompts.SKEPTIC_SCHEMA,
         )
         verdict = replies.loads_object(reply)
-        # An endpoint that cannot honor the schema costs this quality check, not the
-        # section that already landed.
-        if verdict is None or verdict.get("passes") is True:
+        if verdict is None or not isinstance(verdict.get("passes"), bool):
+            raise LyraError("The section review was unreadable. The saved proposal was kept.")
+        if verdict["passes"] is True:
             return changed
         instruction = str(verdict.get("rewrite_instruction") or "").strip()
         if not instruction:
@@ -2489,7 +2773,21 @@ def _converge_section(
                 "; ".join(str(fault) for fault in faults) if isinstance(faults, list) else ""
             )
         if not instruction or round_number == rounds:
-            return changed
+            if job.run_id is not None:
+                writer_runs.add_warning(
+                    conn,
+                    job.run_id,
+                    code="section_review_unresolved",
+                    message=(
+                        f"Automatic review of {number} still asks for: "
+                        + (instruction or "a usable assessment")
+                    ),
+                    replace=True,
+                )
+            raise LyraError(
+                "The automatic section review still has unresolved findings. "
+                "The existing writing and partial proposal were kept for review."
+            )
         artifacts.set_artifact_state(
             conn,
             job.artifact_id,
@@ -2498,12 +2796,7 @@ def _converge_section(
         )
         landed, _ = _run_section(
             conn,
-            PassJob(
-                job.artifact_id,
-                instruction=instruction,
-                depth=job.depth,
-                address_comment_id=job.address_comment_id,
-            ),
+            _review_job(job, instruction),
             artifact,
             config,
             class_id,
@@ -2534,7 +2827,7 @@ def _weave_stage(
 ) -> bool:
     """Rewrite joins, then perform one continuity read and targeted fixes."""
     changed = False
-    body = str(artifacts.get_part(conn, part_id)["content"])
+    body = _review_body(conn, part_id)
     leaves = [section for section in _leaf_sections(body) if section.level > 0]
     for following in leaves[1:]:
         if not _time_remaining(job):
@@ -2547,14 +2840,13 @@ def _weave_stage(
         )
         landed, _ = _run_section(
             conn,
-            PassJob(
-                job.artifact_id,
-                instruction=(
+            _review_job(
+                job,
+                (
                     "Preserve this section's argument and evidence. Rewrite only as much "
                     "of its opening as needed to make the transition from the preceding "
                     "section explicit, natural, and logically earned."
                 ),
-                depth=job.depth,
             ),
             artifact,
             config,
@@ -2576,7 +2868,7 @@ def _weave_stage(
     artifacts.set_artifact_state(
         conn, job.artifact_id, artifacts.GENERATING, "Reading the whole document for continuity"
     )
-    body = str(artifacts.get_part(conn, part_id)["content"])
+    body = _review_body(conn, part_id)
     if not _time_remaining(job):
         return changed
     leaves = [section for section in _leaf_sections(body) if section.level > 0]
@@ -2584,7 +2876,7 @@ def _weave_stage(
         : writer_budgets.get_budget(job.depth).max_findings
     ]
     for number, problem in fixes:
-        target = sections.extract(str(artifacts.get_part(conn, part_id)["content"]), number)
+        target = sections.extract(_review_body(conn, part_id), number)
         if target is None:
             continue
         artifacts.set_artifact_state(
@@ -2595,7 +2887,7 @@ def _weave_stage(
         )
         landed, _ = _run_section(
             conn,
-            PassJob(job.artifact_id, instruction=problem, depth=job.depth),
+            _review_job(job, problem),
             artifact,
             config,
             class_id,
@@ -2640,7 +2932,7 @@ def _revise_stage(
     for round_number in range(1, rounds + 1):
         if not _time_remaining(job):
             return changed
-        body = str(artifacts.get_part(conn, part_id)["content"])
+        body = _review_body(conn, part_id)
         flagged = _revision_targets(conn, job, artifact, config, class_id, body, per_section)
         if not flagged:
             return changed
@@ -2651,7 +2943,7 @@ def _revise_stage(
             conn, job.artifact_id, int(running["problems_total"] or 0) + len(flagged)
         )
         for number, problem in flagged:
-            section = sections.extract(str(artifacts.get_part(conn, part_id)["content"]), number)
+            section = sections.extract(_review_body(conn, part_id), number)
             if section is None:
                 continue
             artifacts.set_artifact_state(
@@ -2665,7 +2957,7 @@ def _revise_stage(
                     conn,
                     # The deficiency *is* the instruction, so the rewrite is aimed at
                     # what was wrong rather than being a second undirected attempt.
-                    PassJob(job.artifact_id, instruction=problem),
+                    _review_job(job, problem),
                     artifact,
                     config,
                     class_id,
@@ -2841,7 +3133,7 @@ def _run_section(
     vanished since the pass was planned is skipped - the student deleted it, and the
     pass has no business resurrecting it.
     """
-    body = str(artifacts.get_part(conn, part_id)["content"])
+    body = _review_body(conn, part_id)
     target = sections.extract(body, number) or sections.extract(body, title)
     if target is None:
         logger.info("Section %s %r vanished mid-pass; skipped", number, title)
@@ -2868,6 +3160,7 @@ def _run_section(
         target_words=target_words,
         plan_block=prompts.format_plan_block(plan, number),
         ledger_block=prompts.format_ledger_block(ledger),
+        preserve_existing=not target.is_empty,
     )
     truncated: list[bool] = []
     reply = (
@@ -2892,6 +3185,31 @@ def _run_section(
     reply = mathnorm.normalize(reply)
     if not reply or reply == target.text.strip():
         return False, incomplete
+    reply = source_ledger.normalize_model_citations(
+        reply, [int(source["id"]) for source in source_ledger.list_sources(conn, class_id)]
+    )
+
+    # A section replacement must not smuggle neighboring sections into its span.
+    # Use the editor's heading parser so fenced code is not mistaken for structure.
+    def heading_signature(section: sections.Section) -> tuple[int, str]:
+        words = section.title.split(maxsplit=1)
+        if len(words) == 2 and all(part.isdigit() for part in words[0].rstrip(".").split(".")):
+            return section.level, words[1].casefold()
+        return section.level, section.title.casefold()
+
+    allowed_headings = [
+        heading_signature(section) for section in sections.parse(target.text) if section.level > 0
+    ]
+    for section in sections.parse(reply):
+        if section.level == 0:
+            continue
+        heading = heading_signature(section)
+        if heading not in allowed_headings:
+            raise LyraError(
+                "The replacement included an unrelated or repeated section heading. "
+                "The existing writing and saved proposal were kept."
+            )
+        allowed_headings.remove(heading)
     # Sections carry their trailing separation; a stripped model reply must not glue
     # the next heading onto its last paragraph.
     replacement = reply + ("\n" if not reply.endswith("\n") else "")
@@ -3318,10 +3636,7 @@ def _ledger_entries(
             excerpts = entry.get("excerpts")
             if isinstance(excerpts, list):
                 entry["excerpts"] = [
-                    {
-                        "section_ref": excerpt.get("section_ref"),
-                        "excerpt": excerpt.get("excerpt"),
-                    }
+                    dict(excerpt)
                     for excerpt in excerpts
                     if isinstance(excerpt, dict)
                     and excerpt.get("section_ref") in (None, "", section_ref)

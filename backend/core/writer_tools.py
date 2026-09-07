@@ -33,6 +33,7 @@ from backend.core import (
     web_research,
     writer_attempts,
     writer_plans,
+    writer_runs,
 )
 from backend.core.errors import LyraError
 from backend.core.query_guard import PrivateContextLedger
@@ -61,6 +62,7 @@ SEARCH_BUDGET_TOKENS = 1_500
 # enough to decide whether to lean on it; the full chunk arrives when writing does.
 _EXCERPT_CHARS = 700
 _FETCH_PREVIEW_CHARS = source_ledger.MAX_RELIED_EXCERPT_CHARS
+_SOURCE_PAGE_CHARS = 4_000
 
 _NO_SECTION = (
     "No section matches {ref!r}. Address sections by their outline number or title; "
@@ -197,6 +199,7 @@ def build_registry(
     *,
     private_context: tuple[str, ...] = (),
     capabilities: WriterCapabilities | None = None,
+    run_id: int | None = None,
 ) -> tuple[dict[str, ToolDefinition], RunEffects]:
     """The tools one profile may use on one draft, plus the effects record they share.
 
@@ -361,6 +364,73 @@ def build_registry(
                 conn.rollback()
             raise
 
+    def read_source(
+        source_id: int, source_revision_id: int | None = None, offset: int = 0
+    ) -> ToolResult:
+        """Read saved evidence without fetching, repairing, or extending the ledger."""
+        if type(source_id) is not int or source_id < 1:
+            return failure("source_id must be a positive integer.")
+        if source_revision_id is not None and (
+            type(source_revision_id) is not int or source_revision_id < 1
+        ):
+            return failure("source_revision_id must be a positive integer or omitted.")
+        if type(offset) is not int or offset < 0:
+            return failure("offset must be a non-negative character offset.")
+        try:
+            source = source_ledger.get_source(conn, source_id, class_id=class_id)
+        except LyraError as exc:
+            return failure(exc.message)
+        revision_id = (
+            source_revision_id
+            if source_revision_id is not None
+            else source.get("current_revision_id")
+        )
+        revision = None
+        if revision_id is not None:
+            row = conn.execute(
+                "select id, revision, snapshot, accessed_at, truncated "
+                "from writer_source_revisions where id = ? and source_id = ?",
+                (revision_id, source_id),
+            ).fetchone()
+            if row is None:
+                return failure(
+                    "That saved source revision is unavailable; no other revision was used."
+                )
+            revision = dict(row)
+            content = str(revision["snapshot"] or "")
+        elif source["source_type"] == source_ledger.WEB:
+            return failure("This source has no saved immutable revision available to read.")
+        else:
+            content = str(source.get("snapshot") or "")
+        if not content.strip():
+            return failure(
+                "The requested saved source content is unavailable; "
+                "excerpts alone are partial evidence."
+            )
+        if offset > len(content):
+            return failure("offset is beyond the end of this saved source.")
+        end = min(offset + _SOURCE_PAGE_CHARS, len(content))
+        page = content[offset:end]
+        exposed_private.add(page)
+        return success(
+            source_id=source_id,
+            title=source["title"],
+            source_revision_id=revision_id,
+            revision=revision["revision"] if revision else None,
+            accessed_at=revision["accessed_at"] if revision else source["accessed_at"],
+            provenance="immutable_revision" if revision else "unversioned_saved_course_snapshot",
+            content=page,
+            offset=offset,
+            next_offset=end if end < len(content) else None,
+            total_chars=len(content),
+            omitted=offset > 0 or end < len(content),
+            snapshot_truncated=bool(revision["truncated"]) if revision else None,
+            note=(
+                "Read next_offset with this source_revision_id to continue this revision. "
+                "Omitted or unavailable content is not evidence that a claim is absent."
+            ),
+        )
+
     def record_source_excerpt(source_id: int, excerpt: str, section_ref: str = "") -> ToolResult:
         try:
             source_ledger.get_source(conn, source_id, class_id=class_id)
@@ -471,42 +541,63 @@ def build_registry(
         if severity not in comments.SEVERITIES:
             options = ", ".join(comments.SEVERITIES)
             return failure(f"Severity must be one of: {options}.")
-        part = _body_part(conn, artifact_id)
-        content = str(part["content"])
-        cleaned = quote.strip()
-        ref = section_ref.strip()
-        hint: int | None = None
-        canonical_quote: str | None = cleaned or None
-        if cleaned:
-            target = sections.extract(content, ref) if ref else None
-            if ref and target is None:
-                return failure(_NO_SECTION.format(ref=ref))
-            anchor = comments.resolve_quote(
-                content,
-                cleaned,
-                scope_start=target.start if target is not None else 0,
-                scope_end=target.end if target is not None else None,
-            )
-            if anchor is not None:
-                hint = anchor.start
-                # Persist what is actually in the document. Keeping the model's
-                # approximate spelling would make the comment orphan itself on the
-                # first list/read even though the server had just found its passage.
-                canonical_quote = content[anchor.start : anchor.end]
-            # A model that loses its place restates its findings; the live model did
-            # exactly that on its first real review. Same passage at the same severity,
-            # still open, is the same finding, and refusing it here also keeps a
-            # re-review from re-filing everything the student has not yet resolved.
-            duplicate = conn.execute(
-                "select id from draft_comments where part_id = ? and parent_id is null "
-                "and author = ? and quote = ? and severity = ? and resolved = 0 limit 1",
-                (int(part["id"]), comments.REVIEWER, canonical_quote, severity),
-            ).fetchone()
+        try:
+            # Lock before checking ownership and duplicates so cancellation cannot
+            # race between validation and a comment being committed.
+            conn.execute("begin immediate")
+            if run_id is not None:
+                current = writer_runs.latest_run(conn, artifact_id)
+                if (
+                    current is None
+                    or int(current["id"]) != run_id
+                    or current["status"] not in (writer_runs.QUEUED, writer_runs.RUNNING)
+                ):
+                    conn.rollback()
+                    return failure("This review is no longer active. Its finding was not filed.")
+            part = _body_part(conn, artifact_id)
+            content = str(part["content"])
+            cleaned = quote.strip()
+            ref = section_ref.strip()
+            hint: int | None = None
+            canonical_quote: str | None = cleaned or None
+            if cleaned:
+                target = sections.extract(content, ref) if ref else None
+                if ref and target is None:
+                    conn.rollback()
+                    return failure(_NO_SECTION.format(ref=ref))
+                anchor = comments.resolve_quote(
+                    content,
+                    cleaned,
+                    scope_start=target.start if target is not None else 0,
+                    scope_end=target.end if target is not None else None,
+                )
+                if anchor is not None:
+                    hint = anchor.start
+                    # Persist what is actually in the document. Keeping the model's
+                    # approximate spelling would make the comment orphan itself on the
+                    # first list/read even though the server had just found its passage.
+                    canonical_quote = content[anchor.start : anchor.end]
+                # A model that loses its place restates its findings; the live model did
+                # exactly that on its first real review. Same passage at the same severity,
+                # still open, is the same finding, and refusing it here also keeps a
+                # re-review from re-filing everything the student has not yet resolved.
+                duplicate = conn.execute(
+                    "select id from draft_comments where part_id = ? and parent_id is null "
+                    "and author = ? and quote = ? and severity = ? and resolved = 0 limit 1",
+                    (int(part["id"]), comments.REVIEWER, canonical_quote, severity),
+                ).fetchone()
+            else:
+                # Exact unanchored findings must also survive retry without duplicates.
+                duplicate = conn.execute(
+                    "select id from draft_comments where part_id = ? and parent_id is null "
+                    "and author = ? and quote is null and severity = ? and body = ? "
+                    "and coalesce(section_ref, '') = ? and resolved = 0 limit 1",
+                    (int(part["id"]), comments.REVIEWER, severity, body, ref),
+                ).fetchone()
             if duplicate is not None:
+                conn.rollback()
                 effects.note_confirmed(int(duplicate["id"]))
                 return failure(_ALREADY_FILED)
-        try:
-            conn.execute("begin immediate")
             filed = comments.add_comment(
                 conn,
                 int(part["id"]),
@@ -765,6 +856,25 @@ def build_registry(
             fetch_source,
             url={"type": "string", "description": "An http or https result URL."},
         ),
+        "read_source": _tool(
+            "read_source",
+            "Read up to 4000 characters of a saved class source, without network access. "
+            "Use the cited supporting source_revision_id for historical evidence. "
+            "Selected ledger excerpts do not show the full source; check saved content "
+            "before claiming evidence is absent. Follow next_offset for additional pages.",
+            read_source,
+            source_id={"type": "integer", "description": "The ledger source id."},
+            source_revision_id={
+                "type": "integer",
+                "optional": True,
+                "description": "Supporting revision ID; omitted uses current saved revision.",
+            },
+            offset={
+                "type": "integer",
+                "optional": True,
+                "description": "Character offset: initially 0, then returned next_offset.",
+            },
+        ),
         "record_source_excerpt": _tool(
             "record_source_excerpt",
             "Record the exact passage actually relied on, bound to a ledger source and "
@@ -928,6 +1038,7 @@ def build_registry(
             "read_plan",
             "read_outline",
             "read_section",
+            "read_source",
             "search_course_material",
             "list_class_documents",
             "read_comments",
@@ -944,6 +1055,7 @@ def build_registry(
             "read_plan",
             "read_outline",
             "read_section",
+            "read_source",
             "search_course_material",
             "list_class_documents",
             "read_comments",
@@ -957,6 +1069,7 @@ def build_registry(
             "read_plan",
             "read_outline",
             "read_section",
+            "read_source",
             "search_course_material",
             "list_class_documents",
             "read_comments",

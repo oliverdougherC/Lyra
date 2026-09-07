@@ -1,0 +1,551 @@
+{
+  "case_id": "review_literary_invented_quote",
+  "corpus_recovery_requirements": [
+    "uninterrupted",
+    "review_before_comment_persist",
+    "review_after_comment_persist",
+    "process_restart",
+    "repeat_review"
+  ],
+  "scenario": "uninterrupted",
+  "evidence_kind": "deterministic_fault_provider",
+  "subjective_scores": {
+    "planning": null,
+    "evidence_citation": null,
+    "revision_precision": null,
+    "review_usefulness": null,
+    "instruction_following": null,
+    "student_voice": null
+  },
+  "independent_agent_review": null,
+  "human_review": null,
+  "timeline": [
+    {
+      "elapsed_seconds": 1.451,
+      "state": "pending",
+      "stage_detail": "Reviewing (queued)",
+      "error_message": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T00:51:24.130956+00:00",
+      "run_status": "queued",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 1.544,
+      "state": "generating",
+      "stage_detail": "Reviewing structure",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T00:51:24.130956+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 1.91,
+      "state": "generating",
+      "stage_detail": "Reviewing the argument",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 1,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T00:51:24.130956+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 2.092,
+      "state": "generating",
+      "stage_detail": "Reviewing prose: 1.1 Reading the scene",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 2,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T00:51:24.130956+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 2.263,
+      "state": "generating",
+      "stage_detail": "Reviewing prose: 1.2 A competing reading",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 2,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T00:51:24.130956+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 2.448,
+      "state": "generating",
+      "stage_detail": "Reviewing prose: 1.3 What remains open",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 2,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T00:51:24.130956+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 2.628,
+      "state": "generating",
+      "stage_detail": "Reviewing claims: 1.1 Reading the scene",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 3,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T00:51:24.130956+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 2.81,
+      "state": "generating",
+      "stage_detail": "Reviewing claims: 1.2 A competing reading",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 3,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T00:51:24.130956+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 2.984,
+      "state": "generating",
+      "stage_detail": "Reviewing claims: 1.3 What remains open",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 3,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T00:51:24.130956+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 3.245,
+      "state": "ready",
+      "stage_detail": "Review complete: 1 major.",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 4,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T00:51:24.130956+00:00",
+      "run_status": "completed",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": "2026-09-07 00:51:25",
+      "warnings": []
+    }
+  ],
+  "intervention_observed": false,
+  "backend_source_sha256_at_start": "13376526f6b59d1ed00076be7cb646ac23c082ba7bf9550e9688c8b7dfa8b6ec",
+  "effective_context_window": 32768,
+  "tool_probe": {
+    "ok": true,
+    "message": "This endpoint can run the checks Lyra verifies solutions with."
+  },
+  "plan_mode": "corpus_seeded",
+  "before": {
+    "draft": {
+      "id": 1,
+      "class_id": 1,
+      "kind": "draft",
+      "title": "review_literary_invented_quote",
+      "state": "ready",
+      "stage_detail": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "error_message": null,
+      "created_at": "2026-09-07 00:51:23",
+      "updated_at": "2026-09-07 00:51:23",
+      "part_id": 1,
+      "body": "# Who gets to tell the story?\n\n## Reading the scene\n\nI first read Mara leaving the porch as an escape. On my second reading, the cup she leaves behind complicated that answer. A person can leave a house and still keep its habits. The narrator notices the cup but never tells us what Mara thinks. That gap is where my reading starts. I do not want to turn a small detail into a secret code with only one solution. Instead, the cup lets me ask whether departure is something the family recognizes only afterward.\n\n## A competing reading\n\nMara explicitly says that she will never return. This proves she has rejected every relationship in the village. Yet the final image is an unlatched gate, which might leave return possible. I need to decide whether these details conflict or whether my claim asks the story to be tidier than it is. The gate matters to me because the sentence slows down there. It makes the leaving feel unfinished, like a conversation someone has walked out of before either person can answer.\n\n## What remains open\n\nMy claim is that the ending holds departure and attachment together. I would not describe Mara as either liberated or trapped without qualification. Those words name possibilities, but the story makes us sit between them. I still hear the cup touching the table after the paragraph ends. That is the effect I want my argument to explain.\n",
+      "body_version": 1,
+      "pending": false
+    },
+    "status": {
+      "state": "ready",
+      "stage_detail": null,
+      "error_message": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "run_id": null,
+      "job_kind": null,
+      "depth": null,
+      "started_at": null,
+      "run_status": "legacy",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    "comments": [],
+    "pending": null,
+    "live_suggestion": null,
+    "plan": {
+      "id": 1,
+      "artifact_id": 1,
+      "version": 1,
+      "brief_analysis": "Interpret the textual gap without filling it with invented facts.",
+      "thesis": "Departure and attachment remain unresolved.",
+      "argument_map": [],
+      "created_at": "2026-09-07 00:51:23",
+      "updated_at": "2026-09-07 00:51:23",
+      "sections": [],
+      "status": "active"
+    },
+    "sources": [
+      {
+        "id": 1,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/story",
+        "title": "The Unlatched Gate — fictional course excerpt",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/story",
+          "content_type": null,
+          "snapshot_hash": "9ad8dded1c17702e5089f8ba22bc92775d5dedd1d68afe4a02a62532cdffb1d6",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 00:51:23"
+        },
+        "excerpts": [
+          {
+            "id": 1,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "She pulled the porch door shut and crossed the yard without speaking."
+          }
+        ]
+      }
+    ],
+    "durable_rows": {
+      "draft_plans": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "version": 1,
+          "active": 1,
+          "brief_analysis": "Interpret the textual gap without filling it with invented facts.",
+          "thesis": "Departure and attachment remain unresolved.",
+          "argument_map": "[]",
+          "created_at": "2026-09-07 00:51:23",
+          "updated_at": "2026-09-07 00:51:23"
+        }
+      ],
+      "draft_plan_sections": [],
+      "writer_sources": [
+        {
+          "id": 1,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/story",
+          "title": "The Unlatched Gate — fictional course excerpt",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "Mara set the blue cup on the table. She pulled the porch door shut and crossed the yard without speaking. Behind her, the gate remained unlatched. The narrator did not see whether she looked back.",
+          "created_at": "2026-09-07 00:51:23",
+          "updated_at": "2026-09-07 00:51:23",
+          "current_revision_id": 1
+        }
+      ],
+      "writer_source_excerpts": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "She pulled the porch door shut and crossed the yard without speaking.",
+          "created_at": "2026-09-07 00:51:23",
+          "source_revision_id": 1
+        }
+      ],
+      "writer_source_revisions": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/story",
+          "content_type": null,
+          "snapshot": "Mara set the blue cup on the table. She pulled the porch door shut and crossed the yard without speaking. Behind her, the gate remained unlatched. The narrator did not see whether she looked back.",
+          "snapshot_hash": "9ad8dded1c17702e5089f8ba22bc92775d5dedd1d68afe4a02a62532cdffb1d6",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 00:51:23"
+        }
+      ],
+      "writer_runs": [],
+      "live_draft_suggestions": [],
+      "live_draft_blocks": []
+    }
+  },
+  "start_response": {
+    "id": 1,
+    "class_id": 1,
+    "kind": "draft",
+    "title": "review_literary_invented_quote",
+    "state": "pending",
+    "stage_detail": "Reviewing (queued)",
+    "problems_total": null,
+    "problems_done": 0,
+    "error_message": null,
+    "created_at": "2026-09-07 00:51:23",
+    "updated_at": "2026-09-07 00:51:24"
+  },
+  "after": {
+    "draft": {
+      "id": 1,
+      "class_id": 1,
+      "kind": "draft",
+      "title": "review_literary_invented_quote",
+      "state": "ready",
+      "stage_detail": "Review complete: 1 major.",
+      "problems_total": 4,
+      "problems_done": 4,
+      "error_message": null,
+      "created_at": "2026-09-07 00:51:23",
+      "updated_at": "2026-09-07 00:51:25",
+      "part_id": 1,
+      "body": "# Who gets to tell the story?\n\n## Reading the scene\n\nI first read Mara leaving the porch as an escape. On my second reading, the cup she leaves behind complicated that answer. A person can leave a house and still keep its habits. The narrator notices the cup but never tells us what Mara thinks. That gap is where my reading starts. I do not want to turn a small detail into a secret code with only one solution. Instead, the cup lets me ask whether departure is something the family recognizes only afterward.\n\n## A competing reading\n\nMara explicitly says that she will never return. This proves she has rejected every relationship in the village. Yet the final image is an unlatched gate, which might leave return possible. I need to decide whether these details conflict or whether my claim asks the story to be tidier than it is. The gate matters to me because the sentence slows down there. It makes the leaving feel unfinished, like a conversation someone has walked out of before either person can answer.\n\n## What remains open\n\nMy claim is that the ending holds departure and attachment together. I would not describe Mara as either liberated or trapped without qualification. Those words name possibilities, but the story makes us sit between them. I still hear the cup touching the table after the paragraph ends. That is the effect I want my argument to explain.\n",
+      "body_version": 1,
+      "pending": false
+    },
+    "status": {
+      "state": "ready",
+      "stage_detail": "Review complete: 1 major.",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 4,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T00:51:24.130956+00:00",
+      "run_status": "completed",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": "2026-09-07 00:51:25",
+      "warnings": []
+    },
+    "comments": [
+      {
+        "id": 1,
+        "part_id": 1,
+        "parent_id": null,
+        "author": "reviewer",
+        "severity": "major",
+        "quote": null,
+        "hint": null,
+        "body": "Synthetic review: this claim needs supporting evidence.",
+        "resolved": 0,
+        "orphaned": 0,
+        "created_at": "2026-09-07 00:51:24",
+        "section_ref": null,
+        "anchor": null,
+        "replies": []
+      }
+    ],
+    "pending": null,
+    "live_suggestion": null,
+    "plan": {
+      "id": 1,
+      "artifact_id": 1,
+      "version": 1,
+      "brief_analysis": "Interpret the textual gap without filling it with invented facts.",
+      "thesis": "Departure and attachment remain unresolved.",
+      "argument_map": [],
+      "created_at": "2026-09-07 00:51:23",
+      "updated_at": "2026-09-07 00:51:23",
+      "sections": [],
+      "status": "active"
+    },
+    "sources": [
+      {
+        "id": 1,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/story",
+        "title": "The Unlatched Gate — fictional course excerpt",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/story",
+          "content_type": null,
+          "snapshot_hash": "9ad8dded1c17702e5089f8ba22bc92775d5dedd1d68afe4a02a62532cdffb1d6",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 00:51:23"
+        },
+        "excerpts": [
+          {
+            "id": 1,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "She pulled the porch door shut and crossed the yard without speaking."
+          }
+        ]
+      }
+    ],
+    "durable_rows": {
+      "draft_plans": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "version": 1,
+          "active": 1,
+          "brief_analysis": "Interpret the textual gap without filling it with invented facts.",
+          "thesis": "Departure and attachment remain unresolved.",
+          "argument_map": "[]",
+          "created_at": "2026-09-07 00:51:23",
+          "updated_at": "2026-09-07 00:51:23"
+        }
+      ],
+      "draft_plan_sections": [],
+      "writer_sources": [
+        {
+          "id": 1,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/story",
+          "title": "The Unlatched Gate — fictional course excerpt",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "Mara set the blue cup on the table. She pulled the porch door shut and crossed the yard without speaking. Behind her, the gate remained unlatched. The narrator did not see whether she looked back.",
+          "created_at": "2026-09-07 00:51:23",
+          "updated_at": "2026-09-07 00:51:23",
+          "current_revision_id": 1
+        }
+      ],
+      "writer_source_excerpts": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "She pulled the porch door shut and crossed the yard without speaking.",
+          "created_at": "2026-09-07 00:51:23",
+          "source_revision_id": 1
+        }
+      ],
+      "writer_source_revisions": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/story",
+          "content_type": null,
+          "snapshot": "Mara set the blue cup on the table. She pulled the porch door shut and crossed the yard without speaking. Behind her, the gate remained unlatched. The narrator did not see whether she looked back.",
+          "snapshot_hash": "9ad8dded1c17702e5089f8ba22bc92775d5dedd1d68afe4a02a62532cdffb1d6",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 00:51:23"
+        }
+      ],
+      "writer_runs": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "job_kind": "review",
+          "depth": "quick",
+          "status": "completed",
+          "request_json": "{}",
+          "checkpoint_json": "{\"stage\": \"done\", \"index\": 0, \"targets\": [], \"data\": {\"filed_comment_ids\": [1], \"confirmed_comment_ids\": [1], \"completed_lenses\": 4}}",
+          "warnings_json": "[]",
+          "error_message": null,
+          "started_at": "2026-09-07T00:51:24.130956+00:00",
+          "cancel_requested_at": null,
+          "finished_at": "2026-09-07 00:51:25",
+          "created_at": "2026-09-07 00:51:24",
+          "updated_at": "2026-09-07 00:51:25"
+        }
+      ],
+      "live_draft_suggestions": [],
+      "live_draft_blocks": []
+    }
+  },
+  "deterministic": {
+    "candidate_present": false,
+    "candidate_protected_passages_preserved": null,
+    "candidate_forbidden_literal_hits": null,
+    "excerpt_revision_support_violations": [],
+    "body_unchanged": true,
+    "protected_passages_total": 1,
+    "protected_passages_preserved": 1,
+    "duplicate_comment_signatures": 0,
+    "real_run_id_present": true,
+    "missed_seeded_issues": null,
+    "unsupported_rewrites": null,
+    "unrelated_candidate_edits": null,
+    "citation_support": null,
+    "seed_metrics_note": "Semantic measures await independent/human review."
+  },
+  "status": "recorded",
+  "elapsed_seconds": 3.456,
+  "backend_source_sha256_at_end": "13376526f6b59d1ed00076be7cb646ac23c082ba7bf9550e9688c8b7dfa8b6ec",
+  "code_changed_during_case": false
+}

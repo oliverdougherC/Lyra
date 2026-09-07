@@ -1,0 +1,56 @@
+[
+  {
+    "index": 1,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 2,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 3,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 4,
+    "schema": "writer_section_skeptic",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 5,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 6,
+    "schema": "writer_section_research_notes",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 7,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 8,
+    "schema": "writer_section_skeptic",
+    "stream": false,
+    "fault": null
+  },
+  {
+    "index": 9,
+    "schema": null,
+    "stream": false,
+    "fault": null
+  }
+]

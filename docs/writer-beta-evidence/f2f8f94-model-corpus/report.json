@@ -1,0 +1,101 @@
+{
+  "version": "writer-evaluation.v1",
+  "tested_sha": "f2f8f94ad163d60f8ecc584c99dbf4711eceb907",
+  "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+  "prompt_sha256": "678ccc3301e11d73b1d86a77a4cd326da35f7eb8f28a40ab902186741f155376",
+  "runtime_sha256": null,
+  "harness_sha256": "7515c86631dcab77b5324a84edee8b3861dc036d4cab773e7137bfeb29f2a103",
+  "backend_source_sha256": "4b1d4485da4aae9ed84b59cc4f174be1102485da804c9e96d8c26f4009bdbc4a",
+  "generate_plan": false,
+  "retry_failures": false,
+  "model": "Qwen3.8-27B",
+  "locality": "non_loopback",
+  "context_window": 262144,
+  "runtime": "source_desktop_bootstrap",
+  "comparison_kind": "same_model_interruption",
+  "model_comparison": null,
+  "subjective_acceptance": "not_reviewed",
+  "cases": [
+    {
+      "case_id": "pass_targeted_causal_precision",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "pass_targeted_causal_precision--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "review_seeded_claim_and_duplicates",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "review_seeded_claim_and_duplicates--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "pass_reject_empty_and_unrelated_rewrite",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "pass_reject_empty_and_unrelated_rewrite--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "source_history_replace",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "source_history_replace--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "source_history_delete",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "source_history_delete--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "pass_multisection_same_model_recovery",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "pass_multisection_same_model_recovery--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "long_draft_mandatory_budget",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "long_draft_mandatory_budget--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "review_literary_invented_quote",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "review_literary_invented_quote--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "full_live_draft_from_student_notes--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "version": "writer-beta-validation.v3",
+  "source_sha": "39e7352193fd25efd9ac1b5864765d618308c5ff",
+  "candidate_status": "intermediate after concrete generated-plan handoff defect; not final acceptance",
+  "source_relationship": "39 is formatting-only relative to a37daaee497b7e3b4e26fa040edbfd3c2dd3108b; exact receipt SHA still retained separately.",
+  "test_receipts": {
+    "a37daae-tests": {
+      "summary": "3357 passed, 1 skipped, 6 warnings in 169.58s (0:02:49)",
+      "raw_log_sha256": "69112784094fd95067195211b47ae3a6bba8cd0d0fe0db1b1c333992155ee4c1"
+    },
+    "39e7352-tests": {
+      "summary": "3357 passed, 1 skipped, 6 warnings in 166.77s (0:02:46)",
+      "raw_log_sha256": "bb9a561c8cb387fe4d8e026925f06244352f18e5d49ab6d0a86b6c4ad6b8a57c"
+    }
+  },
+  "package": {
+    "signed_code_objects": 78,
+    "signing_identity_class": "reused Apple Development identity; personal identity omitted",
+    "verification_status": "passed",
+    "verified_objects": 77,
+    "architecture": "arm64",
+    "authenticated_smoke": {
+      "authenticated": true,
+      "ephemeral_loopback": true,
+      "status": "passed"
+    }
+  },
+  "adjudication_note": "independent-39e7352-review.json currently grades named a37 targeted receipts and actual39 generated-plan receipt. Do not transfer those grades to new39 targeted samples.",
+  "folder_label_warning": "a37daae-planning/report.json records actual source39, generated_plan=true, stable code.",
+  "pending": [
+    "39e7352-packaged-model-review",
+    "next-source-SHA-and-affected-planning/package-reruns"
+  ],
+  "human_review": "not-run",
+  "model_family_comparison": "not-run",
+  "held_out_acceptance": "not-run",
+  "long_session_soak": "not-run"
+}

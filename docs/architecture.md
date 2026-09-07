@@ -129,6 +129,14 @@ minutes idle. Release evidence helpers include:
 
 Those helpers provide bounded evidence; they do not establish release approval.
 
+SQLite privacy preparation must not open and close a raw descriptor on a database or WAL
+sidecar while SQLite connections may be active. On POSIX, that close discards the process's
+advisory locks held through other descriptors. Preparation uses no-follow metadata checks and
+publishes already-closed private empty files when needed. See SQLite's
+[locking hazard documentation](https://www.sqlite.org/howtocorrupt.html#posix_advisory_locks_canceled_by_a_separate_thread_doing_close).
+The cross-process lock regression is part of the backend suite; private modes and symlink
+refusal remain required alongside correct database locking.
+
 ## Backup and updates
 
 Native Settings commands coordinate profile backup/restore and explicit update checks. The shell

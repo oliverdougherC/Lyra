@@ -659,3 +659,29 @@ def test_successful_rerank_reports_applied_status(
     result = retrieve(db, class_id, "anything", 1000)
 
     assert result.rerank_status == RerankStatus.APPLIED
+
+
+@pytest.mark.parametrize("scope", ["empty_class", "empty_selected_document", "not_ready"])
+def test_no_eligible_chunks_never_starts_embedding(db, class_id, monkeypatch, scope):
+    selected = None
+    if scope == "empty_selected_document":
+        empty = _insert_document(db, class_id, "empty.pdf", _days_ago(0))
+        excluded = _insert_document(db, class_id, "excluded.pdf", _days_ago(0))
+        _insert_chunk(db, class_id, excluded, "Excluded material", 0.0)
+        selected = (empty,)
+    elif scope == "not_ready":
+        document = _insert_document(db, class_id, "pending.pdf", _days_ago(0), state="pending")
+        _insert_chunk(db, class_id, document, "Not ready for retrieval", 0.0)
+    else:
+        other = db.execute("insert into classes (name) values ('Other class')").lastrowid
+        db.commit()
+        document = _insert_document(db, other, "private.pdf", _days_ago(0))
+        _insert_chunk(db, other, document, "Different class material", 0.0)
+
+    def forbidden(query):
+        pytest.fail("No eligible indexed material exists; do not load an embedding model")
+
+    monkeypatch.setattr(retrieve_module, "embed_query", forbidden)
+    result = retrieve(db, class_id, "saved-source writing", 1000, document_ids=selected)
+    assert result.chunks == []
+    assert not result.trimmed

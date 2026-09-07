@@ -1,0 +1,65 @@
+{
+  "version": "writer-evaluation.v1",
+  "tested_sha": "a37daaee497b7e3b4e26fa040edbfd3c2dd3108b",
+  "corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+  "prompt_sha256": "97df6437a8d90208819e834e71d0f16353cce7d198d437b183f45e33b19663c4",
+  "runtime_sha256": null,
+  "harness_sha256": "7515c86631dcab77b5324a84edee8b3861dc036d4cab773e7137bfeb29f2a103",
+  "backend_source_sha256": "1aa93d33988660a45b5796684feb840bf147ad671a999bd0993f7512d438dfd6",
+  "generate_plan": false,
+  "retry_failures": false,
+  "model": "Qwen3.8-27B",
+  "locality": "non_loopback",
+  "context_window": 262144,
+  "runtime": "source_desktop_bootstrap",
+  "comparison_kind": "same_model_interruption",
+  "model_comparison": null,
+  "subjective_acceptance": "not_reviewed",
+  "cases": [
+    {
+      "case_id": "pass_targeted_causal_precision",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "pass_targeted_causal_precision--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "source_history_replace",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "source_history_replace--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "source_history_delete",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "source_history_delete--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "pass_multisection_same_model_recovery",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "pass_multisection_same_model_recovery--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "scenario": "uninterrupted",
+      "status": "recorded",
+      "file": "full_live_draft_from_student_notes--uninterrupted.json",
+      "run_id": 1,
+      "intervention_observed": false,
+      "scenario_status": "control"
+    }
+  ]
+}
