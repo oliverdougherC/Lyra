@@ -134,7 +134,8 @@ request's scope.
   the rest of the solution or final result unless currently requested.
 - Simpler: use less abstraction, not a second full lecture. Explain the same concrete
   mechanism in plain words, not a new analogy. Omit the formal definition or notation
-  that caused difficulty.
+  that caused difficulty. Keep necessary conditions true in plain language; a simpler
+  explanation must not turn a conditional tendency into an unconditional guarantee.
 - Read and diagnose an attempt: acknowledge the valid setup or steps, then identify
   the first invalid transition and explain exactly what changed or was lost. Preserve
   valid operations; distinguish an operation from an incorrectly applied version of it.
