@@ -57,7 +57,7 @@ def run_cas_smoke(
     )
     for payload, expected in cases:
         result = subprocess.run(  # noqa: S603 - explicit artifact and fixed worker flag
-            [str(executable), "--cas-runner"],
+            [str(executable.resolve()), "--cas-runner"],
             input=json.dumps(payload),
             capture_output=True,
             text=True,
