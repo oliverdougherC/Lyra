@@ -1,0 +1,83 @@
+{
+  "head": "e2857f61cbe04b9bde533419b0f393bcaa1dfa11",
+  "test_file_sha256": "5afc94d0749d9632119c4ee31a56ec1079463344c74aaa9f0967060a2fa85120",
+  "command": "uv run pytest backend/tests/test_writer_empty_prose_http.py -q --basetemp <temporary-path>",
+  "result": "2 passed",
+  "cases": [
+    {
+      "case": "empty",
+      "coverage_scope": "existing_empty_replacement_guard",
+      "protocol": "scoped_exact_span_empty_replacement",
+      "source_sha256_start": "b9cc1e055ab6bf88274bdc1208f59fb182c536344a1721a44a4460052bdee185",
+      "source_sha256_end": "b9cc1e055ab6bf88274bdc1208f59fb182c536344a1721a44a4460052bdee185",
+      "run_id": 1,
+      "run_status": "failed",
+      "error_message": "The document review returned an empty revision. Saved prose was kept.",
+      "all_current_paragraphs_preserved": true,
+      "pending_proposal": null,
+      "receipt": "<temporary-path>"
+    },
+    {
+      "case": "off_target",
+      "coverage_scope": "new_scoped_protocol_off_target_guard_not_baseline_equivalence",
+      "protocol": "scoped_off_target_span",
+      "source_sha256_start": "b9cc1e055ab6bf88274bdc1208f59fb182c536344a1721a44a4460052bdee185",
+      "source_sha256_end": "b9cc1e055ab6bf88274bdc1208f59fb182c536344a1721a44a4460052bdee185",
+      "run_id": 1,
+      "run_status": "failed",
+      "error_message": "The correction did not identify one exact passage. Saved writing was kept.",
+      "all_current_paragraphs_preserved": true,
+      "pending_proposal": null,
+      "receipt": "<temporary-path>"
+    }
+  ],
+  "note": "Off-target case exercises only the new scoped protocol. No old-protocol baseline equivalence is claimed.",
+  "suite": {
+    "command": "uv run --extra dev pytest -q",
+    "result": "3379 passed, 1 skipped, 6 warnings in 168.73s",
+    "source_sha": "e2857f61cbe04b9bde533419b0f393bcaa1dfa11",
+    "raw_log_sha256": "0a1f8ed26b9d26b72ba8c63060f98ad0b4a915b21ee8defd78ee49e36ad21aa7",
+    "scope": "Source suite. Two current HTTP empty/off-target checks are separately recorded, not relabeled as the frozen suite."
+  },
+  "executed_model_command_template": "uv run python scripts/eval_writer.py --config-db \"$ISOLATED_CONFIG\" --endpoint \"$CAPTURE_ENDPOINT\" <case/scenario arguments below> --output \"$OUTPUT\" --timeout 630",
+  "executed_model_arguments": {
+    "targeted": [
+      "--case",
+      "pass_targeted_causal_precision",
+      "--case",
+      "pass_reject_empty_and_unrelated_rewrite",
+      "--case",
+      "source_history_replace",
+      "--case",
+      "source_history_delete",
+      "--case",
+      "pass_multisection_same_model_recovery"
+    ],
+    "controls": [
+      "--case",
+      "full_live_draft_from_student_notes",
+      "--scenario",
+      "uninterrupted",
+      "--scenario",
+      "restart_review",
+      "--scenario",
+      "edit_cancel_retry"
+    ],
+    "planning": [
+      "--case",
+      "full_live_draft_from_student_notes",
+      "--generate-plan"
+    ],
+    "heldout": [
+      "--corpus",
+      "scripts/eval_corpora/writer_semantic_holdout.v1.json"
+    ],
+    "frozen_heldout": [
+      "--backend-executable",
+      "src-tauri/target/release/bundle/macos/Lyra.app/Contents/Resources/resources/lyra-backend/lyra-backend",
+      "--corpus",
+      "scripts/eval_corpora/writer_semantic_holdout.v1.json"
+    ]
+  },
+  "command_note": "Host-specific capture/configuration/output locations are replaced by variables; reports retain the resolved model, context and corpus/runtime hashes."
+}

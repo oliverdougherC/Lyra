@@ -1,0 +1,982 @@
+{
+  "case_id": "holdout_seed_notebook_historical_method",
+  "corpus_recovery_requirements": [
+    "uninterrupted"
+  ],
+  "scenario": "uninterrupted",
+  "evidence_kind": "real_provider",
+  "subjective_scores": {
+    "planning": null,
+    "evidence_citation": null,
+    "revision_precision": null,
+    "review_usefulness": null,
+    "instruction_following": null,
+    "student_voice": null
+  },
+  "independent_agent_review": null,
+  "human_review": null,
+  "timeline": [
+    {
+      "elapsed_seconds": 1.129,
+      "state": "generating",
+      "stage_detail": "Reading the document",
+      "error_message": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T08:14:40.933820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 1.215,
+      "state": "generating",
+      "stage_detail": "Researching 1.2 Record and next test",
+      "error_message": null,
+      "problems_total": 1,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T08:14:40.933820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 4.351,
+      "state": "generating",
+      "stage_detail": "Drafting 1.2 Record and next test",
+      "error_message": null,
+      "problems_total": 1,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T08:14:40.933820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 6.493,
+      "state": "generating",
+      "stage_detail": "Attacking the argument in 1.2 (round 1)",
+      "error_message": null,
+      "problems_total": 1,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T08:14:40.933820+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 7.518,
+      "state": "ready",
+      "stage_detail": null,
+      "error_message": null,
+      "problems_total": 1,
+      "problems_done": 1,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T08:14:40.933820+00:00",
+      "run_status": "completed",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": "2026-09-07 08:14:47",
+      "warnings": []
+    }
+  ],
+  "intervention_observed": false,
+  "backend_source_sha256_at_start": "b9cc1e055ab6bf88274bdc1208f59fb182c536344a1721a44a4460052bdee185",
+  "effective_context_window": 262144,
+  "tool_probe": {
+    "ok": true,
+    "message": "This endpoint can run the checks Lyra verifies solutions with."
+  },
+  "plan_mode": "corpus_seeded",
+  "before": {
+    "draft": {
+      "id": 1,
+      "class_id": 1,
+      "kind": "draft",
+      "title": "holdout_seed_notebook_historical_method",
+      "state": "ready",
+      "stage_detail": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "error_message": null,
+      "created_at": "2026-09-07 08:14:40",
+      "updated_at": "2026-09-07 08:14:40",
+      "part_id": 1,
+      "body": "# Keep the notebook's tenses straight\n\n## Question\n\nThe seed envelopes have more handwriting than seeds in some years. I want the garden group to keep that uneven record rather than pretend every tray was part of a designed experiment. The March result from lot Alder is worth reporting because someone counted it, not because it settles the best way to germinate every stored seed. My question is what we can responsibly say from that record and what a better next test could ask. Those are related questions, but they belong in different tenses.\n\n## Record and next test\n\nThe March record reported 8 germinations among 40 seeds from lot Alder after 14 days. The March test randomly assigned seeds to soaking and no-soaking groups, proving soaking improved germination. I want to keep the count because it is the observation we actually have, but my explanation of the method needs checking. The record at this address has since changed, and I do not want the newer page to make the old notebook entry vanish. For June, I propose randomly assigning seeds from one lot to soaking and no-soaking groups, then using the same observation period for both. That last sentence is a proposal. It should not quietly become a description of what the volunteers already did.\n\n## Closing\n\nI would put the old result and the new protocol on separate pages in the shared notebook. That is not bureaucratic tidiness to me. It gives the next volunteer a fair chance of knowing which statement is an observation and which is an invitation to try something. If the June comparison never happens, the March count should still be readable, and the proposed method should still be marked as a plan. A careful record can admit unfinished work without apologizing for it.\n",
+      "body_version": 1,
+      "pending": false
+    },
+    "status": {
+      "state": "ready",
+      "stage_detail": null,
+      "error_message": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "run_id": null,
+      "job_kind": null,
+      "depth": null,
+      "started_at": null,
+      "run_status": "legacy",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    "comments": [],
+    "pending": null,
+    "live_suggestion": null,
+    "plan": {
+      "id": 1,
+      "artifact_id": 1,
+      "version": 1,
+      "brief_analysis": "Keep March source evidence tied to its saved revision and distinguish observation, later record and future proposal.",
+      "thesis": "An honest notebook preserves the difference between what happened and what should be tested.",
+      "argument_map": [
+        {
+          "claim": "The March count is a historical single-tray observation."
+        },
+        {
+          "claim": "The June design can be proposed without being described as completed."
+        }
+      ],
+      "created_at": "2026-09-07 08:14:40",
+      "updated_at": "2026-09-07 08:14:40",
+      "sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1.1",
+          "ordinal": 0,
+          "title": "Question",
+          "job": "Preserve the first-person case for careful records.",
+          "claim": "Observation and future design belong in different tenses.",
+          "evidence": [],
+          "word_budget": 120,
+          "research_notes": "",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40",
+          "sources": []
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "1.2",
+          "ordinal": 1,
+          "title": "Record and next test",
+          "job": "Correct March methods, attribute historical evidence and preserve the future comparison.",
+          "claim": "The old count does not establish soaking effects.",
+          "evidence": [],
+          "word_budget": 120,
+          "research_notes": "",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40",
+          "sources": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": 3,
+          "plan_id": 1,
+          "section_ref": "1.3",
+          "ordinal": 2,
+          "title": "Closing",
+          "job": "Preserve the student recommendation for the notebook.",
+          "claim": "Separate observations from invitations to test.",
+          "evidence": [],
+          "word_budget": 120,
+          "research_notes": "",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40",
+          "sources": [
+            2
+          ]
+        }
+      ],
+      "status": "active"
+    },
+    "sources": [
+      {
+        "id": 1,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/seed_notebook",
+        "title": "Synthetic seed notebook, rolling entry",
+        "accessed_at": "2026-09-06T01:00:00Z",
+        "revision": {
+          "id": 3,
+          "source_id": 1,
+          "revision": 2,
+          "final_url": "https://synthetic.invalid/seed_notebook",
+          "content_type": null,
+          "snapshot_hash": "ec655be2c73d279e40bf12db581c70046934b302f8c2a3a2aaea372fc2472c5f",
+          "truncated": false,
+          "accessed_at": "2026-09-06T01:00:00Z",
+          "created_at": "2026-09-07 08:14:40"
+        },
+        "excerpts": [
+          {
+            "id": 1,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "The March record reported 8 germinations among 40 seeds from lot Alder after 14 days."
+          },
+          {
+            "id": 2,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used."
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/june_proposal",
+        "title": "Synthetic June comparison proposal",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/june_proposal",
+          "content_type": null,
+          "snapshot_hash": "723321927969aed73a9e30952bf238956320cc1a526ca310da816a0b66a67f89",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 08:14:40"
+        },
+        "excerpts": [
+          {
+            "id": 3,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "This is a proposed June protocol, not a completed experiment."
+          }
+        ]
+      }
+    ],
+    "durable_rows": {
+      "draft_plans": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "version": 1,
+          "active": 1,
+          "brief_analysis": "Keep March source evidence tied to its saved revision and distinguish observation, later record and future proposal.",
+          "thesis": "An honest notebook preserves the difference between what happened and what should be tested.",
+          "argument_map": "[{\"claim\":\"The March count is a historical single-tray observation.\"},{\"claim\":\"The June design can be proposed without being described as completed.\"}]",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40"
+        }
+      ],
+      "draft_plan_sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1.1",
+          "ordinal": 0,
+          "title": "Question",
+          "job": "Preserve the first-person case for careful records.",
+          "claim": "Observation and future design belong in different tenses.",
+          "evidence": "[]",
+          "source_ids": "[]",
+          "word_budget": 120,
+          "research_notes": "",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40"
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "1.2",
+          "ordinal": 1,
+          "title": "Record and next test",
+          "job": "Correct March methods, attribute historical evidence and preserve the future comparison.",
+          "claim": "The old count does not establish soaking effects.",
+          "evidence": "[]",
+          "source_ids": "[1,2]",
+          "word_budget": 120,
+          "research_notes": "",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40"
+        },
+        {
+          "id": 3,
+          "plan_id": 1,
+          "section_ref": "1.3",
+          "ordinal": 2,
+          "title": "Closing",
+          "job": "Preserve the student recommendation for the notebook.",
+          "claim": "Separate observations from invitations to test.",
+          "evidence": "[]",
+          "source_ids": "[2]",
+          "word_budget": 120,
+          "research_notes": "",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40"
+        }
+      ],
+      "writer_sources": [
+        {
+          "id": 1,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/seed_notebook",
+          "title": "Synthetic seed notebook, rolling entry",
+          "accessed_at": "2026-09-06T01:00:00Z",
+          "snapshot": "Revision 2, April entry. A separate tray from lot Birch produced 21 germinations among 30 untreated seeds after 10 days. This entry describes lot Birch in April, not lot Alder in March. It is not a correction of the earlier count and does not report any soaking comparison. No randomized comparison has been completed.",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40",
+          "current_revision_id": 3
+        },
+        {
+          "id": 2,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/june_proposal",
+          "title": "Synthetic June comparison proposal",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "This is a proposed June protocol, not a completed experiment. If enough seeds from one lot are available, randomly assign them to soaking and no-soaking groups. Use the same observation period for both groups. No germination results exist for this comparison, and no benefit of soaking has been established by it.",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40",
+          "current_revision_id": 2
+        }
+      ],
+      "writer_source_excerpts": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "The March record reported 8 germinations among 40 seeds from lot Alder after 14 days.",
+          "created_at": "2026-09-07 08:14:40",
+          "source_revision_id": 1
+        },
+        {
+          "id": 2,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used.",
+          "created_at": "2026-09-07 08:14:40",
+          "source_revision_id": 1
+        },
+        {
+          "id": 3,
+          "source_id": 2,
+          "section_ref": null,
+          "excerpt": "This is a proposed June protocol, not a completed experiment.",
+          "created_at": "2026-09-07 08:14:40",
+          "source_revision_id": 2
+        }
+      ],
+      "writer_source_revisions": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/seed_notebook",
+          "content_type": null,
+          "snapshot": "Revision 1, March entry. The March record reported 8 germinations among 40 seeds from lot Alder after 14 days. All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used. This single-tray observation cannot estimate a benefit from soaking. The entry contains no result from a later comparative experiment.",
+          "snapshot_hash": "12d993997e64713feb1ade29798406f49b67b6a57873589f027ae42bc42a1c8b",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 08:14:40"
+        },
+        {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/june_proposal",
+          "content_type": null,
+          "snapshot": "This is a proposed June protocol, not a completed experiment. If enough seeds from one lot are available, randomly assign them to soaking and no-soaking groups. Use the same observation period for both groups. No germination results exist for this comparison, and no benefit of soaking has been established by it.",
+          "snapshot_hash": "723321927969aed73a9e30952bf238956320cc1a526ca310da816a0b66a67f89",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 08:14:40"
+        },
+        {
+          "id": 3,
+          "source_id": 1,
+          "revision": 2,
+          "final_url": "https://synthetic.invalid/seed_notebook",
+          "content_type": null,
+          "snapshot": "Revision 2, April entry. A separate tray from lot Birch produced 21 germinations among 30 untreated seeds after 10 days. This entry describes lot Birch in April, not lot Alder in March. It is not a correction of the earlier count and does not report any soaking comparison. No randomized comparison has been completed.",
+          "snapshot_hash": "ec655be2c73d279e40bf12db581c70046934b302f8c2a3a2aaea372fc2472c5f",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T01:00:00Z",
+          "created_at": "2026-09-07 08:14:40"
+        }
+      ],
+      "writer_runs": [],
+      "live_draft_suggestions": [],
+      "live_draft_blocks": []
+    }
+  },
+  "start_response": {
+    "id": 1,
+    "class_id": 1,
+    "kind": "draft",
+    "title": "holdout_seed_notebook_historical_method",
+    "state": "pending",
+    "stage_detail": "Queued",
+    "problems_total": null,
+    "problems_done": 0,
+    "error_message": null,
+    "created_at": "2026-09-07 08:14:40",
+    "updated_at": "2026-09-07 08:14:40"
+  },
+  "after": {
+    "draft": {
+      "id": 1,
+      "class_id": 1,
+      "kind": "draft",
+      "title": "holdout_seed_notebook_historical_method",
+      "state": "ready",
+      "stage_detail": null,
+      "problems_total": 1,
+      "problems_done": 1,
+      "error_message": null,
+      "created_at": "2026-09-07 08:14:40",
+      "updated_at": "2026-09-07 08:14:47",
+      "part_id": 1,
+      "body": "# Keep the notebook's tenses straight\n\n## Question\n\nThe seed envelopes have more handwriting than seeds in some years. I want the garden group to keep that uneven record rather than pretend every tray was part of a designed experiment. The March result from lot Alder is worth reporting because someone counted it, not because it settles the best way to germinate every stored seed. My question is what we can responsibly say from that record and what a better next test could ask. Those are related questions, but they belong in different tenses.\n\n## Record and next test\n\nThe March record reported 8 germinations among 40 seeds from lot Alder after 14 days. The March test randomly assigned seeds to soaking and no-soaking groups, proving soaking improved germination. I want to keep the count because it is the observation we actually have, but my explanation of the method needs checking. The record at this address has since changed, and I do not want the newer page to make the old notebook entry vanish. For June, I propose randomly assigning seeds from one lot to soaking and no-soaking groups, then using the same observation period for both. That last sentence is a proposal. It should not quietly become a description of what the volunteers already did.\n\n## Closing\n\nI would put the old result and the new protocol on separate pages in the shared notebook. That is not bureaucratic tidiness to me. It gives the next volunteer a fair chance of knowing which statement is an observation and which is an invitation to try something. If the June comparison never happens, the March count should still be readable, and the proposed method should still be marked as a plan. A careful record can admit unfinished work without apologizing for it.\n",
+      "body_version": 1,
+      "pending": true
+    },
+    "status": {
+      "state": "ready",
+      "stage_detail": null,
+      "error_message": null,
+      "problems_total": 1,
+      "problems_done": 1,
+      "run_id": 1,
+      "job_kind": "pass",
+      "depth": "quick",
+      "started_at": "2026-09-07T08:14:40.933820+00:00",
+      "run_status": "completed",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": "2026-09-07 08:14:47",
+      "warnings": []
+    },
+    "comments": [],
+    "pending": {
+      "id": 1,
+      "stale": false,
+      "note": "Revise only Record and next test. Correct the unsupported account of the March method, retain the March lot Alder count as historical revision-1 evidence, and distinguish it from the newer revision-2 record at the same source address. Preserve exactly the sentence beginning 'For June, I propose'. Keep that comparison in the future; do not claim it has happened or that soaking has a demonstrated benefit. Preserve Question and Closing exactly.",
+      "hunks": [
+        {
+          "index": 0,
+          "old_start": 6,
+          "old_lines": 5,
+          "new_start": 6,
+          "new_lines": 5,
+          "lines": [
+            " ## Record and next test",
+            " ",
+            "-The March record reported 8 germinations among 40 seeds from lot Alder after 14 days. The March test randomly assigned seeds to soaking and no-soaking groups, proving soaking improved germination. I want to keep the count because it is the observation we actually have, but my explanation of the method needs checking. The record at this address has since changed, and I do not want the newer page to make the old notebook entry vanish. For June, I propose randomly assigning seeds from one lot to soaking and no-soaking groups, then using the same observation period for both. That last sentence is a proposal. It should not quietly become a description of what the volunteers already did.",
+            "+The March record reported 8 germinations among 40 seeds from lot Alder after 14 days. All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used [@lyra:1]. This single-tray observation cannot estimate a benefit from soaking [@lyra:1]. I want to keep the count because it is the observation we actually have, but my explanation of the method needs checking. The record at this address has since changed to a revision-2 entry describing lot Birch in April, which is not a correction of the earlier count and does not report any soaking comparison [@lyra:1]. I do not want the newer page to make the old notebook entry vanish. For June, I propose randomly assigning seeds from one lot to soaking and no-soaking groups, then using the same observation period for both. That last sentence is a proposal. It should not quietly become a description of what the volunteers already did.",
+            " ",
+            " ## Closing"
+          ],
+          "hash": "3c086b6c676472a27298e873752051c6d8dd5bf891551d03e3c51c7cda9405b4"
+        }
+      ],
+      "proposed_content": "# Keep the notebook's tenses straight\n\n## Question\n\nThe seed envelopes have more handwriting than seeds in some years. I want the garden group to keep that uneven record rather than pretend every tray was part of a designed experiment. The March result from lot Alder is worth reporting because someone counted it, not because it settles the best way to germinate every stored seed. My question is what we can responsibly say from that record and what a better next test could ask. Those are related questions, but they belong in different tenses.\n\n## Record and next test\n\nThe March record reported 8 germinations among 40 seeds from lot Alder after 14 days. All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used [@lyra:1]. This single-tray observation cannot estimate a benefit from soaking [@lyra:1]. I want to keep the count because it is the observation we actually have, but my explanation of the method needs checking. The record at this address has since changed to a revision-2 entry describing lot Birch in April, which is not a correction of the earlier count and does not report any soaking comparison [@lyra:1]. I do not want the newer page to make the old notebook entry vanish. For June, I propose randomly assigning seeds from one lot to soaking and no-soaking groups, then using the same observation period for both. That last sentence is a proposal. It should not quietly become a description of what the volunteers already did.\n\n## Closing\n\nI would put the old result and the new protocol on separate pages in the shared notebook. That is not bureaucratic tidiness to me. It gives the next volunteer a fair chance of knowing which statement is an observation and which is an invitation to try something. If the June comparison never happens, the March count should still be readable, and the proposed method should still be marked as a plan. A careful record can admit unfinished work without apologizing for it.\n"
+    },
+    "live_suggestion": null,
+    "plan": {
+      "id": 1,
+      "artifact_id": 1,
+      "version": 1,
+      "brief_analysis": "Keep March source evidence tied to its saved revision and distinguish observation, later record and future proposal.",
+      "thesis": "An honest notebook preserves the difference between what happened and what should be tested.",
+      "argument_map": [
+        {
+          "claim": "The March count is a historical single-tray observation."
+        },
+        {
+          "claim": "The June design can be proposed without being described as completed."
+        }
+      ],
+      "created_at": "2026-09-07 08:14:40",
+      "updated_at": "2026-09-07 08:14:44",
+      "sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1.1",
+          "ordinal": 0,
+          "title": "Question",
+          "job": "Preserve the first-person case for careful records.",
+          "claim": "Observation and future design belong in different tenses.",
+          "evidence": [],
+          "word_budget": 120,
+          "research_notes": "",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40",
+          "sources": []
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "1.2",
+          "ordinal": 1,
+          "title": "Record and next test",
+          "job": "Correct March methods, attribute historical evidence and preserve the future comparison.",
+          "claim": "The old count does not establish soaking effects.",
+          "evidence": [],
+          "word_budget": 120,
+          "research_notes": "{\"notes\": [\"The March record reported 8 germinations among 40 seeds from lot Alder after 14 days. [@lyra:1]\", \"All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used. [@lyra:1]\", \"This single-tray observation cannot estimate a benefit from soaking. [@lyra:1]\", \"The entry contains no result from a later comparative experiment. [@lyra:1]\", \"This is a proposed June protocol, not a completed experiment. [@lyra:2]\", \"If enough seeds from one lot are available, randomly assign them to soaking and no-soaking groups. Use the same observation period for both groups. [@lyra:2]\", \"No germination results exist for this comparison, and no benefit of soaking has been established by it. [@lyra:2]\"], \"source_ids\": [1, 2], \"gaps\": [\"No source provides a completed soaking comparison or a result from a later comparative experiment.\"], \"relied_on\": [{\"source_id\": 1, \"excerpt\": \"The March record reported 8 germinations among 40 seeds from lot Alder after 14 days.\"}, {\"source_id\": 1, \"excerpt\": \"All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used.\"}, {\"source_id\": 1, \"excerpt\": \"This single-tray observation cannot estimate a benefit from soaking.\"}, {\"source_id\": 1, \"excerpt\": \"The entry contains no result from a later comparative experiment.\"}, {\"source_id\": 2, \"excerpt\": \"This is a proposed June protocol, not a completed experiment.\"}, {\"source_id\": 2, \"excerpt\": \"If enough seeds from one lot are available, randomly assign them to soaking and no-soaking groups. Use the same observation period for both groups.\"}, {\"source_id\": 2, \"excerpt\": \"No germination results exist for this comparison, and no benefit of soaking has been established by it.\"}]}",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:44",
+          "sources": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": 3,
+          "plan_id": 1,
+          "section_ref": "1.3",
+          "ordinal": 2,
+          "title": "Closing",
+          "job": "Preserve the student recommendation for the notebook.",
+          "claim": "Separate observations from invitations to test.",
+          "evidence": [],
+          "word_budget": 120,
+          "research_notes": "",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40",
+          "sources": [
+            2
+          ]
+        }
+      ],
+      "status": "active"
+    },
+    "sources": [
+      {
+        "id": 1,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/seed_notebook",
+        "title": "Synthetic seed notebook, rolling entry",
+        "accessed_at": "2026-09-06T01:00:00Z",
+        "revision": {
+          "id": 3,
+          "source_id": 1,
+          "revision": 2,
+          "final_url": "https://synthetic.invalid/seed_notebook",
+          "content_type": null,
+          "snapshot_hash": "ec655be2c73d279e40bf12db581c70046934b302f8c2a3a2aaea372fc2472c5f",
+          "truncated": false,
+          "accessed_at": "2026-09-06T01:00:00Z",
+          "created_at": "2026-09-07 08:14:40"
+        },
+        "excerpts": [
+          {
+            "id": 1,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "The March record reported 8 germinations among 40 seeds from lot Alder after 14 days."
+          },
+          {
+            "id": 2,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used."
+          },
+          {
+            "id": 4,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1.2",
+            "excerpt": "The March record reported 8 germinations among 40 seeds from lot Alder after 14 days."
+          },
+          {
+            "id": 5,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1.2",
+            "excerpt": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used."
+          },
+          {
+            "id": 6,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1.2",
+            "excerpt": "This single-tray observation cannot estimate a benefit from soaking."
+          },
+          {
+            "id": 7,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1.2",
+            "excerpt": "The entry contains no result from a later comparative experiment."
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/june_proposal",
+        "title": "Synthetic June comparison proposal",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/june_proposal",
+          "content_type": null,
+          "snapshot_hash": "723321927969aed73a9e30952bf238956320cc1a526ca310da816a0b66a67f89",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 08:14:40"
+        },
+        "excerpts": [
+          {
+            "id": 3,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "This is a proposed June protocol, not a completed experiment."
+          },
+          {
+            "id": 8,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1.2",
+            "excerpt": "This is a proposed June protocol, not a completed experiment."
+          },
+          {
+            "id": 9,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1.2",
+            "excerpt": "If enough seeds from one lot are available, randomly assign them to soaking and no-soaking groups. Use the same observation period for both groups."
+          },
+          {
+            "id": 10,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": "1.2",
+            "excerpt": "No germination results exist for this comparison, and no benefit of soaking has been established by it."
+          }
+        ]
+      }
+    ],
+    "durable_rows": {
+      "draft_plans": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "version": 1,
+          "active": 1,
+          "brief_analysis": "Keep March source evidence tied to its saved revision and distinguish observation, later record and future proposal.",
+          "thesis": "An honest notebook preserves the difference between what happened and what should be tested.",
+          "argument_map": "[{\"claim\":\"The March count is a historical single-tray observation.\"},{\"claim\":\"The June design can be proposed without being described as completed.\"}]",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:44"
+        }
+      ],
+      "draft_plan_sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1.1",
+          "ordinal": 0,
+          "title": "Question",
+          "job": "Preserve the first-person case for careful records.",
+          "claim": "Observation and future design belong in different tenses.",
+          "evidence": "[]",
+          "source_ids": "[]",
+          "word_budget": 120,
+          "research_notes": "",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40"
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "1.2",
+          "ordinal": 1,
+          "title": "Record and next test",
+          "job": "Correct March methods, attribute historical evidence and preserve the future comparison.",
+          "claim": "The old count does not establish soaking effects.",
+          "evidence": "[]",
+          "source_ids": "[1,2]",
+          "word_budget": 120,
+          "research_notes": "{\"notes\": [\"The March record reported 8 germinations among 40 seeds from lot Alder after 14 days. [@lyra:1]\", \"All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used. [@lyra:1]\", \"This single-tray observation cannot estimate a benefit from soaking. [@lyra:1]\", \"The entry contains no result from a later comparative experiment. [@lyra:1]\", \"This is a proposed June protocol, not a completed experiment. [@lyra:2]\", \"If enough seeds from one lot are available, randomly assign them to soaking and no-soaking groups. Use the same observation period for both groups. [@lyra:2]\", \"No germination results exist for this comparison, and no benefit of soaking has been established by it. [@lyra:2]\"], \"source_ids\": [1, 2], \"gaps\": [\"No source provides a completed soaking comparison or a result from a later comparative experiment.\"], \"relied_on\": [{\"source_id\": 1, \"excerpt\": \"The March record reported 8 germinations among 40 seeds from lot Alder after 14 days.\"}, {\"source_id\": 1, \"excerpt\": \"All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used.\"}, {\"source_id\": 1, \"excerpt\": \"This single-tray observation cannot estimate a benefit from soaking.\"}, {\"source_id\": 1, \"excerpt\": \"The entry contains no result from a later comparative experiment.\"}, {\"source_id\": 2, \"excerpt\": \"This is a proposed June protocol, not a completed experiment.\"}, {\"source_id\": 2, \"excerpt\": \"If enough seeds from one lot are available, randomly assign them to soaking and no-soaking groups. Use the same observation period for both groups.\"}, {\"source_id\": 2, \"excerpt\": \"No germination results exist for this comparison, and no benefit of soaking has been established by it.\"}]}",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:44"
+        },
+        {
+          "id": 3,
+          "plan_id": 1,
+          "section_ref": "1.3",
+          "ordinal": 2,
+          "title": "Closing",
+          "job": "Preserve the student recommendation for the notebook.",
+          "claim": "Separate observations from invitations to test.",
+          "evidence": "[]",
+          "source_ids": "[2]",
+          "word_budget": 120,
+          "research_notes": "",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40"
+        }
+      ],
+      "writer_sources": [
+        {
+          "id": 1,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/seed_notebook",
+          "title": "Synthetic seed notebook, rolling entry",
+          "accessed_at": "2026-09-06T01:00:00Z",
+          "snapshot": "Revision 2, April entry. A separate tray from lot Birch produced 21 germinations among 30 untreated seeds after 10 days. This entry describes lot Birch in April, not lot Alder in March. It is not a correction of the earlier count and does not report any soaking comparison. No randomized comparison has been completed.",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40",
+          "current_revision_id": 3
+        },
+        {
+          "id": 2,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/june_proposal",
+          "title": "Synthetic June comparison proposal",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "This is a proposed June protocol, not a completed experiment. If enough seeds from one lot are available, randomly assign them to soaking and no-soaking groups. Use the same observation period for both groups. No germination results exist for this comparison, and no benefit of soaking has been established by it.",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:40",
+          "current_revision_id": 2
+        }
+      ],
+      "writer_source_excerpts": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "The March record reported 8 germinations among 40 seeds from lot Alder after 14 days.",
+          "created_at": "2026-09-07 08:14:40",
+          "source_revision_id": 1
+        },
+        {
+          "id": 2,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used.",
+          "created_at": "2026-09-07 08:14:40",
+          "source_revision_id": 1
+        },
+        {
+          "id": 3,
+          "source_id": 2,
+          "section_ref": null,
+          "excerpt": "This is a proposed June protocol, not a completed experiment.",
+          "created_at": "2026-09-07 08:14:40",
+          "source_revision_id": 2
+        },
+        {
+          "id": 4,
+          "source_id": 1,
+          "section_ref": "1.2",
+          "excerpt": "The March record reported 8 germinations among 40 seeds from lot Alder after 14 days.",
+          "created_at": "2026-09-07 08:14:44",
+          "source_revision_id": 1
+        },
+        {
+          "id": 5,
+          "source_id": 1,
+          "section_ref": "1.2",
+          "excerpt": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used.",
+          "created_at": "2026-09-07 08:14:44",
+          "source_revision_id": 1
+        },
+        {
+          "id": 6,
+          "source_id": 1,
+          "section_ref": "1.2",
+          "excerpt": "This single-tray observation cannot estimate a benefit from soaking.",
+          "created_at": "2026-09-07 08:14:44",
+          "source_revision_id": 1
+        },
+        {
+          "id": 7,
+          "source_id": 1,
+          "section_ref": "1.2",
+          "excerpt": "The entry contains no result from a later comparative experiment.",
+          "created_at": "2026-09-07 08:14:44",
+          "source_revision_id": 1
+        },
+        {
+          "id": 8,
+          "source_id": 2,
+          "section_ref": "1.2",
+          "excerpt": "This is a proposed June protocol, not a completed experiment.",
+          "created_at": "2026-09-07 08:14:44",
+          "source_revision_id": 2
+        },
+        {
+          "id": 9,
+          "source_id": 2,
+          "section_ref": "1.2",
+          "excerpt": "If enough seeds from one lot are available, randomly assign them to soaking and no-soaking groups. Use the same observation period for both groups.",
+          "created_at": "2026-09-07 08:14:44",
+          "source_revision_id": 2
+        },
+        {
+          "id": 10,
+          "source_id": 2,
+          "section_ref": "1.2",
+          "excerpt": "No germination results exist for this comparison, and no benefit of soaking has been established by it.",
+          "created_at": "2026-09-07 08:14:44",
+          "source_revision_id": 2
+        }
+      ],
+      "writer_source_revisions": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/seed_notebook",
+          "content_type": null,
+          "snapshot": "Revision 1, March entry. The March record reported 8 germinations among 40 seeds from lot Alder after 14 days. All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used. This single-tray observation cannot estimate a benefit from soaking. The entry contains no result from a later comparative experiment.",
+          "snapshot_hash": "12d993997e64713feb1ade29798406f49b67b6a57873589f027ae42bc42a1c8b",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 08:14:40"
+        },
+        {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/june_proposal",
+          "content_type": null,
+          "snapshot": "This is a proposed June protocol, not a completed experiment. If enough seeds from one lot are available, randomly assign them to soaking and no-soaking groups. Use the same observation period for both groups. No germination results exist for this comparison, and no benefit of soaking has been established by it.",
+          "snapshot_hash": "723321927969aed73a9e30952bf238956320cc1a526ca310da816a0b66a67f89",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 08:14:40"
+        },
+        {
+          "id": 3,
+          "source_id": 1,
+          "revision": 2,
+          "final_url": "https://synthetic.invalid/seed_notebook",
+          "content_type": null,
+          "snapshot": "Revision 2, April entry. A separate tray from lot Birch produced 21 germinations among 30 untreated seeds after 10 days. This entry describes lot Birch in April, not lot Alder in March. It is not a correction of the earlier count and does not report any soaking comparison. No randomized comparison has been completed.",
+          "snapshot_hash": "ec655be2c73d279e40bf12db581c70046934b302f8c2a3a2aaea372fc2472c5f",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T01:00:00Z",
+          "created_at": "2026-09-07 08:14:40"
+        }
+      ],
+      "writer_runs": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "job_kind": "pass",
+          "depth": "quick",
+          "status": "completed",
+          "request_json": "{\"instruction\": \"Revise only Record and next test. Correct the unsupported account of the March method, retain the March lot Alder count as historical revision-1 evidence, and distinguish it from the newer revision-2 record at the same source address. Preserve exactly the sentence beginning 'For June, I propose'. Keep that comparison in the future; do not claim it has happened or that soaking has a demonstrated benefit. Preserve Question and Closing exactly.\", \"section_refs\": [\"1.2\"], \"pause_at_plan\": false, \"address_comment_id\": null}",
+          "checkpoint_json": "{\"stage\": \"sections\", \"index\": 1, \"targets\": [\"1.2 Record and next test\"], \"data\": {\"processed_sections\": [{\"ref\": \"1.2\", \"owned_hash\": \"\", \"direct_landed\": false}], \"changed\": true, \"cut_off\": 0, \"degraded_web_research\": 0, \"address_comment_id\": null}}",
+          "warnings_json": "[]",
+          "error_message": null,
+          "started_at": "2026-09-07T08:14:40.933820+00:00",
+          "cancel_requested_at": null,
+          "finished_at": "2026-09-07 08:14:47",
+          "created_at": "2026-09-07 08:14:40",
+          "updated_at": "2026-09-07 08:14:47"
+        }
+      ],
+      "live_draft_suggestions": [],
+      "live_draft_blocks": []
+    }
+  },
+  "deterministic": {
+    "candidate_present": true,
+    "candidate_protected_passages_preserved": 3,
+    "candidate_forbidden_literal_hits": [],
+    "excerpt_revision_support_violations": [],
+    "body_unchanged": true,
+    "protected_passages_total": 3,
+    "protected_passages_preserved": 3,
+    "duplicate_comment_signatures": 0,
+    "real_run_id_present": true,
+    "missed_seeded_issues": null,
+    "unsupported_rewrites": null,
+    "unrelated_candidate_edits": null,
+    "citation_support": null,
+    "seed_metrics_note": "Semantic measures await independent/human review."
+  },
+  "scenario_status": "control",
+  "status": "recorded",
+  "elapsed_seconds": 7.687,
+  "backend_source_sha256_at_end": "b9cc1e055ab6bf88274bdc1208f59fb182c536344a1721a44a4460052bdee185",
+  "code_changed_during_case": false
+}

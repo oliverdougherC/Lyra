@@ -1,0 +1,71 @@
+{
+  "scope": "Exact captured message content, not inferred from database availability. Digit presence alone is not a delivered source fact.",
+  "frames": [
+    {
+      "max_tokens": 4096,
+      "finish_reasons": [
+        "stop"
+      ],
+      "retained": "wire/before-0016.json",
+      "schema": "writer_overall_assessment",
+      "full_18_response_fact_delivered": true,
+      "full_14_response_fact_delivered": true,
+      "upstream_locality": "non_loopback",
+      "source_revision_context_present": true,
+      "scoped_before_after_contract": false
+    },
+    {
+      "max_tokens": 256,
+      "finish_reasons": [
+        "stop"
+      ],
+      "retained": "wire/before-0017.json",
+      "schema": null,
+      "full_18_response_fact_delivered": true,
+      "full_14_response_fact_delivered": false,
+      "upstream_locality": "non_loopback",
+      "source_revision_context_present": true,
+      "scoped_before_after_contract": false
+    },
+    {
+      "max_tokens": 256,
+      "finish_reasons": [
+        "stop"
+      ],
+      "retained": "wire/before-0018.json",
+      "schema": null,
+      "full_18_response_fact_delivered": false,
+      "full_14_response_fact_delivered": false,
+      "upstream_locality": "non_loopback",
+      "source_revision_context_present": true,
+      "scoped_before_after_contract": false
+    },
+    {
+      "max_tokens": 4096,
+      "finish_reasons": [
+        "stop"
+      ],
+      "retained": "wire/e2857f6-0003.json",
+      "schema": "writer_scoped_revision",
+      "full_18_response_fact_delivered": true,
+      "full_14_response_fact_delivered": true,
+      "upstream_locality": "non_loopback",
+      "source_revision_context_present": true,
+      "scoped_before_after_contract": true
+    },
+    {
+      "max_tokens": 4096,
+      "finish_reasons": [
+        "length"
+      ],
+      "retained": "wire/e2857f6-0066.json",
+      "schema": "writer_overall_assessment",
+      "full_18_response_fact_delivered": true,
+      "full_14_response_fact_delivered": true,
+      "upstream_locality": "non_loopback",
+      "source_revision_context_present": true,
+      "scoped_before_after_contract": false
+    }
+  ],
+  "locality": "Loopback capture service forwarded to explicitly authorized non-loopback Qwen endpoint. Runtime receipt loopback is first-hop locality only. Exact model-weight identity is not known."
+}

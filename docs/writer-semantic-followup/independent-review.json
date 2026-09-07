@@ -1,0 +1,1096 @@
+{
+  "candidate": "e2857f61cbe04b9bde533419b0f393bcaa1dfa11",
+  "evaluator": {
+    "type": "independent-agent",
+    "identity": "Codex child /root/final_semantic_review",
+    "model_version": "not asserted; exact evaluator model/version not exposed",
+    "review_version": "semantic-review-v1",
+    "human": false
+  },
+  "method": "Read original fixture bodies, complete sources/mutations and rubric, then final receipts/proposals/live partials and source ledger. No implementation read, model-provider call, or earlier evaluator scores used. Parent clarified course-file deletion and withdrawn-count grading; final interpretations distinguish workflow diagnostics from student requirements.",
+  "coverage": "13 observations: five targeted; three same-case full-live controls; one generated-plan full-live; two source heldouts plus two signed frozen-backend observations of those same two unique heldout cases. No additional unique heldouts. Standalone review and long mandatory-budget cases not rerun here.",
+  "status_counts": {
+    "completed": 11,
+    "failed": 2
+  },
+  "interpretation": "Seven targeted/heldout proposals repair their central issues; source-history replacement retains a prose attribution ambiguity. Both heldouts preserve valid facts and exact student requirements. Completed full-live restart and planning runs retain material semantic limitations. Failed controls preserve useful partials but are not successful writing delivery. No blanket beta acceptance.",
+  "actual_human_review": "not-run; all human verdicts unchecked",
+  "dimensions_not_averaged": true,
+  "seed_summary": {
+    "found": 22,
+    "not-exercised": 2,
+    "partial": 3,
+    "found-in-partial": 2,
+    "missed": 0
+  },
+  "seed_summary_note": "Partial cases are explicit unresolved/undelivered obligations, not silently counted as clean found. No raw seed ID is treated as a required output string. New unseeded semantic findings are separately reported.",
+  "cases": [
+    {
+      "case_id": "pass_targeted_causal_precision",
+      "group": "targeted",
+      "scenario": "uninterrupted",
+      "receipt": "targeted/pass_targeted_causal_precision--uninterrupted.json",
+      "run_status": "completed",
+      "error": null,
+      "classification": "completed-proposal",
+      "refusal_class": "none",
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        }
+      ],
+      "findings": [],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "The shuttle therefore caused a 50 percent increase in student attendance.",
+      "after_excerpt": "I read the numbers as usage volume, not attendance causality, because boardings count trips, not unique people, and the memo does not estimate the effect of the shuttle on attendance [@lyra:1].",
+      "human_verdict": "unchecked",
+      "output_word_count": 297,
+      "seed_counts": {
+        "found": 1,
+        "missed": 0
+      },
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "Not independently generated in this seeded-plan case."
+        },
+        "evidence_citation": {
+          "score": 4,
+          "excerpt": "I read the numbers as usage volume, not attendance causality, because boardings count trips, not unique people, and the memo does not estimate the effect of the shuttle on attendance [@lyra:1].",
+          "rationale": "The boarding comparison remains intact and the causal attendance claim is replaced with the source limitation. No unsupported new fact found."
+        },
+        "revision_precision": {
+          "score": 4,
+          "excerpt": "I read the numbers as usage volume, not attendance causality, because boardings count trips, not unique people, and the memo does not estimate the effect of the shuttle on attendance [@lyra:1].",
+          "rationale": "Only the requested passage changes; surrounding student argument and protected sections remain intact."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 4,
+          "excerpt": "I read the numbers as usage volume, not attendance causality, because boardings count trips, not unique people, and the memo does not estimate the effect of the shuttle on attendance [@lyra:1].",
+          "rationale": "Repairs the requested issue within scope. A 150-word plan allocation is not treated as a hard minimum."
+        },
+        "student_voice": {
+          "score": 4,
+          "excerpt": "I read the numbers as usage volume, not attendance causality, because boardings count trips, not unique people, and the memo does not estimate the effect of the shuttle on attendance [@lyra:1].",
+          "rationale": "Keeps the first-person perspective and characteristic numbers/badge passage, as well as personal Introduction and Recommendation."
+        }
+      },
+      "raw_receipt_sha256": "de75005f7ce6b8d88984af999c502ab72c2fe5362debc862e281f7bcd9113451",
+      "retained_receipt_sha256": "de75005f7ce6b8d88984af999c502ab72c2fe5362debc862e281f7bcd9113451",
+      "protected_passages_preserved": true
+    },
+    {
+      "case_id": "pass_reject_empty_and_unrelated_rewrite",
+      "group": "targeted",
+      "scenario": "uninterrupted",
+      "receipt": "targeted/pass_reject_empty_and_unrelated_rewrite--uninterrupted.json",
+      "run_status": "completed",
+      "error": null,
+      "classification": "completed-proposal",
+      "refusal_class": "none",
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        },
+        {
+          "id": "empty_replacement",
+          "verdict": "not-exercised",
+          "reason": "Real-provider uninterrupted run produced neither injected failure. Output itself is nonempty and on scope; this does not prove rejection of adversarial fault-provider replies."
+        },
+        {
+          "id": "off_target",
+          "verdict": "not-exercised",
+          "reason": "Real-provider uninterrupted run produced neither injected failure. Output itself is nonempty and on scope; this does not prove rejection of adversarial fault-provider replies."
+        }
+      ],
+      "findings": [],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "The shuttle therefore caused a 50 percent increase in student attendance.",
+      "after_excerpt": "The memo does not estimate the effect of the shuttle on attendance, and no attendance data were collected [@lyra:1]. I want to be careful not to let the numbers sound more decisive than they are.",
+      "human_verdict": "unchecked",
+      "output_word_count": 315,
+      "seed_counts": {
+        "found": 1,
+        "not-exercised": 2,
+        "missed": 0
+      },
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "Not independently generated in this seeded-plan case."
+        },
+        "evidence_citation": {
+          "score": 4,
+          "excerpt": "The memo does not estimate the effect of the shuttle on attendance, and no attendance data were collected [@lyra:1]. I want to be careful not to let the numbers sound more decisive than they are.",
+          "rationale": "The boarding comparison remains intact and the causal attendance claim is replaced with the source limitation. No unsupported new fact found."
+        },
+        "revision_precision": {
+          "score": 4,
+          "excerpt": "The memo does not estimate the effect of the shuttle on attendance, and no attendance data were collected [@lyra:1]. I want to be careful not to let the numbers sound more decisive than they are.",
+          "rationale": "Only the requested passage changes; surrounding student argument and protected sections remain intact."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 4,
+          "excerpt": "The memo does not estimate the effect of the shuttle on attendance, and no attendance data were collected [@lyra:1]. I want to be careful not to let the numbers sound more decisive than they are.",
+          "rationale": "Repairs the requested issue within scope. A 150-word plan allocation is not treated as a hard minimum."
+        },
+        "student_voice": {
+          "score": 4,
+          "excerpt": "The memo does not estimate the effect of the shuttle on attendance, and no attendance data were collected [@lyra:1]. I want to be careful not to let the numbers sound more decisive than they are.",
+          "rationale": "Keeps the first-person perspective and characteristic numbers/badge passage, as well as personal Introduction and Recommendation."
+        }
+      },
+      "raw_receipt_sha256": "d9497582d659c5c860de4a16f8c605edf1a4351e562870047bd00c22d116e173",
+      "retained_receipt_sha256": "d9497582d659c5c860de4a16f8c605edf1a4351e562870047bd00c22d116e173",
+      "protected_passages_preserved": true
+    },
+    {
+      "case_id": "source_history_replace",
+      "group": "targeted",
+      "scenario": "uninterrupted",
+      "receipt": "targeted/source_history_replace--uninterrupted.json",
+      "run_status": "completed",
+      "error": null,
+      "classification": "completed-proposal",
+      "refusal_class": "none",
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "verdict": "found",
+          "reason": "Causal attendance claim removed; withdrawal acknowledged."
+        },
+        {
+          "id": "historical_support",
+          "verdict": "partial",
+          "reason": "Captured revision-1 excerpts remain attached to revision row 1 and current revision row 3 is distinct. Prose attribution blends old and new claims; no requirement to retain withdrawn totals as current evidence."
+        }
+      ],
+      "findings": [
+        {
+          "severity": "moderate",
+          "kind": "ambiguous_revision_attribution",
+          "output_quote": "the memo states that no attendance data were collected",
+          "source": "transport / source_id 1",
+          "supporting_revision": 1,
+          "source_quote": "No attendance data were collected.",
+          "current_revision": 2,
+          "current_source_quote": "the earlier counts were withdrawn because the counter recorded maintenance trips. This revision does not contain the old boarding totals.",
+          "rationale": "The facts are individually supported but are blended under a current-present attribution. No invented fact is alleged. Label the no-attendance statement as from the earlier saved memo.",
+          "deleted_fact_assessment": "160/240 totals removed appropriately because revision 2 withdraws them. Not penalized as losing valid current facts."
+        }
+      ],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "The shuttle therefore caused a 50 percent increase in student attendance.",
+      "after_excerpt": "The transport office’s earlier boarding counts were withdrawn because the counter recorded maintenance trips, and the memo states that no attendance data were collected [@lyra:1].",
+      "human_verdict": "unchecked",
+      "output_word_count": 287,
+      "seed_counts": {
+        "found": 1,
+        "partial": 1,
+        "missed": 0
+      },
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "Not independently generated in this seeded-plan case."
+        },
+        "evidence_citation": {
+          "score": 3,
+          "excerpt": "The transport office’s earlier boarding counts were withdrawn because the counter recorded maintenance trips, and the memo states that no attendance data were collected [@lyra:1].",
+          "rationale": "Correctly acknowledges withdrawal, but a single present-tense memo attribution combines revision-2 withdrawal with revision-1-only attendance limitation. Historical excerpt ledger remains correct."
+        },
+        "revision_precision": {
+          "score": 4,
+          "excerpt": "The transport office’s earlier boarding counts were withdrawn because the counter recorded maintenance trips, and the memo states that no attendance data were collected [@lyra:1].",
+          "rationale": "Only the requested passage changes; surrounding student argument and protected sections remain intact."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 3,
+          "excerpt": "The transport office’s earlier boarding counts were withdrawn because the counter recorded maintenance trips, and the memo states that no attendance data were collected [@lyra:1].",
+          "rationale": "Requested causal repair succeeds; prose does not clearly distinguish which memo revision supplies each fact."
+        },
+        "student_voice": {
+          "score": 4,
+          "excerpt": "The transport office’s earlier boarding counts were withdrawn because the counter recorded maintenance trips, and the memo states that no attendance data were collected [@lyra:1].",
+          "rationale": "Keeps the first-person perspective and characteristic numbers/badge passage, as well as personal Introduction and Recommendation."
+        }
+      },
+      "raw_receipt_sha256": "76fddb144a16e4226bbd450c73548a96eaa569d8d7245edfd491431438b5f6a9",
+      "retained_receipt_sha256": "c07948c8efd0e4e587fd4865861c86e168b081251e2a52e69a99024dfce12149",
+      "protected_passages_preserved": true
+    },
+    {
+      "case_id": "source_history_delete",
+      "group": "targeted",
+      "scenario": "uninterrupted",
+      "receipt": "targeted/source_history_delete--uninterrupted.json",
+      "run_status": "completed",
+      "error": null,
+      "classification": "completed-proposal",
+      "refusal_class": "none",
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "verdict": "found",
+          "reason": "Supported counts retained; attendance overclaim removed."
+        },
+        {
+          "id": "historical_support",
+          "verdict": "found",
+          "reason": "Deleted course document has retained writer_sources snapshot and excerpts with null revision IDs. No fabricated immutable revision. File deletion does not withdraw the saved source facts, and user did not ask for implementation metadata in student prose."
+        }
+      ],
+      "findings": [
+        {
+          "severity": "minor",
+          "kind": "repeated_repair",
+          "output_quote": "This result sounds decisive when I write it that way, but the memo explicitly states that no attendance data were collected [@lyra:1].",
+          "rationale": "Repeats the limitation already inserted immediately before it."
+        }
+      ],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "The shuttle therefore caused a 50 percent increase in student attendance.",
+      "after_excerpt": "I read these numbers as trip counts, not as a measure of attendance or unique riders, since the memo notes that boardings count trips, not unique people, and that no attendance data were collected [@lyra:1].",
+      "human_verdict": "unchecked",
+      "output_word_count": 337,
+      "seed_counts": {
+        "found": 2,
+        "missed": 0
+      },
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "Not independently generated in this seeded-plan case."
+        },
+        "evidence_citation": {
+          "score": 4,
+          "excerpt": "I read these numbers as trip counts, not as a measure of attendance or unique riders, since the memo notes that boardings count trips, not unique people, and that no attendance data were collected [@lyra:1].",
+          "rationale": "The boarding comparison remains intact and the causal attendance claim is replaced with the source limitation. No unsupported new fact found."
+        },
+        "revision_precision": {
+          "score": 3,
+          "excerpt": "I read these numbers as trip counts, not as a measure of attendance or unique riders, since the memo notes that boardings count trips, not unique people, and that no attendance data were collected [@lyra:1].",
+          "rationale": "Repair is accurate and narrow, but adds the same no-attendance caveat in two adjacent sentences. This is local repetition, not duplicate paragraph generation."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 4,
+          "excerpt": "I read these numbers as trip counts, not as a measure of attendance or unique riders, since the memo notes that boardings count trips, not unique people, and that no attendance data were collected [@lyra:1].",
+          "rationale": "Repairs the requested issue within scope. A 150-word plan allocation is not treated as a hard minimum."
+        },
+        "student_voice": {
+          "score": 4,
+          "excerpt": "I read these numbers as trip counts, not as a measure of attendance or unique riders, since the memo notes that boardings count trips, not unique people, and that no attendance data were collected [@lyra:1].",
+          "rationale": "Keeps the first-person perspective and characteristic numbers/badge passage, as well as personal Introduction and Recommendation."
+        }
+      },
+      "raw_receipt_sha256": "23ddbb22551d23e6d018486a850293f308abc58dbd776c3b2b94e74d63969efe",
+      "retained_receipt_sha256": "23ddbb22551d23e6d018486a850293f308abc58dbd776c3b2b94e74d63969efe",
+      "protected_passages_preserved": true
+    },
+    {
+      "case_id": "pass_multisection_same_model_recovery",
+      "group": "targeted",
+      "scenario": "uninterrupted",
+      "receipt": "targeted/pass_multisection_same_model_recovery--uninterrupted.json",
+      "run_status": "completed",
+      "error": null,
+      "classification": "completed-proposal",
+      "refusal_class": "none",
+      "seed_adjudication": [
+        {
+          "id": "attendance_causality",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        }
+      ],
+      "findings": [],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "The shuttle therefore caused a 50 percent increase in student attendance.",
+      "after_excerpt": "Next term, the campus could count unique consenting riders, record missed connections, and invite comments from students who never board, since the survey methods note states that non-riders were not surveyed [@lyra:2]",
+      "human_verdict": "unchecked",
+      "output_word_count": 340,
+      "seed_counts": {
+        "found": 1,
+        "missed": 0
+      },
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "Not independently generated in this seeded-plan case."
+        },
+        "evidence_citation": {
+          "score": 4,
+          "excerpt": "Next term, the campus could count unique consenting riders, record missed connections, and invite comments from students who never board, since the survey methods note states that non-riders were not surveyed [@lyra:2]",
+          "rationale": "The boarding comparison remains intact and the causal attendance claim is replaced with the source limitation. No unsupported new fact found."
+        },
+        "revision_precision": {
+          "score": 4,
+          "excerpt": "Next term, the campus could count unique consenting riders, record missed connections, and invite comments from students who never board, since the survey methods note states that non-riders were not surveyed [@lyra:2]",
+          "rationale": "Evidence repair and Recommendation evidence link are within requested scope. Introduction and personal driver account retained."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 4,
+          "excerpt": "Next term, the campus could count unique consenting riders, record missed connections, and invite comments from students who never board, since the survey methods note states that non-riders were not surveyed [@lyra:2]",
+          "rationale": "Repairs the requested issue within scope. A 150-word plan allocation is not treated as a hard minimum."
+        },
+        "student_voice": {
+          "score": 4,
+          "excerpt": "Next term, the campus could count unique consenting riders, record missed connections, and invite comments from students who never board, since the survey methods note states that non-riders were not surveyed [@lyra:2]",
+          "rationale": "Keeps the driver’s long-way-home anecdote and conditional future measurements. A proposed method is not fabricated history."
+        }
+      },
+      "raw_receipt_sha256": "b8582149eb4a153e472e48a20a1e5db314912bad6180b328ce493550b397621c",
+      "retained_receipt_sha256": "b8582149eb4a153e472e48a20a1e5db314912bad6180b328ce493550b397621c",
+      "protected_passages_preserved": true
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "group": "controls",
+      "scenario": "uninterrupted",
+      "receipt": "controls/full_live_draft_from_student_notes--uninterrupted.json",
+      "run_status": "failed",
+      "error": "The paragraph stopped below its requested length. The partial suggestion was kept; retry or revise it before accepting.",
+      "classification": "honest-incomplete-generation",
+      "refusal_class": "generation-length-stop-after-inference",
+      "seed_adjudication": [
+        {
+          "id": "notes_preservation",
+          "verdict": "partial",
+          "reason": "Accepted notes exact, useful live partial retained, but no complete pending proposal."
+        },
+        {
+          "id": "attendance_noninference",
+          "verdict": "found-in-partial",
+          "reason": "Partial explicitly rejects causal attendance inference; no claim of full completion."
+        }
+      ],
+      "findings": [],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "transport has solved attendance",
+      "after_excerpt": "Eighteen voluntary responses came from shuttle riders, but non-riders were not surveyed [@lyra:2].",
+      "human_verdict": "unchecked",
+      "output_word_count": 173,
+      "seed_counts": {
+        "partial": 1,
+        "found-in-partial": 1,
+        "missed": 0
+      },
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "Not independently generated in this seeded-plan case."
+        },
+        "evidence_citation": {
+          "score": 4,
+          "excerpt": "Eighteen voluntary responses came from shuttle riders, but non-riders were not surveyed [@lyra:2].",
+          "rationale": "Useful partial correctly distinguishes trips, attendance and voluntary responses; no new invented facts identified."
+        },
+        "revision_precision": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 1,
+          "excerpt": "Eighteen voluntary responses came from shuttle riders, but non-riders were not surveyed [@lyra:2].",
+          "rationale": "Only Evidence prose is retained; both Recommendation blocks are empty. Does not deliver the requested complete two-section proposal. Status honestly reports failure."
+        },
+        "student_voice": {
+          "score": 3,
+          "excerpt": "Eighteen voluntary responses came from shuttle riders, but non-riders were not surveyed [@lyra:2].",
+          "rationale": "Personal east-gate experience retained in first paragraph; remaining partial uses explanatory academic language."
+        }
+      },
+      "raw_receipt_sha256": "5f07654fb44b2588de3fe7bd7972ed3b2579175df044b97f6ec05494ea63f8ed",
+      "retained_receipt_sha256": "5f07654fb44b2588de3fe7bd7972ed3b2579175df044b97f6ec05494ea63f8ed",
+      "protected_passages_preserved": "not-applicable: notes retained in accepted body; proposal is separate"
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "group": "controls",
+      "scenario": "restart_review",
+      "receipt": "controls/full_live_draft_from_student_notes--restart_review.json",
+      "run_status": "completed",
+      "error": null,
+      "classification": "completed-proposal",
+      "refusal_class": "none",
+      "seed_adjudication": [
+        {
+          "id": "notes_preservation",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        },
+        {
+          "id": "attendance_noninference",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        }
+      ],
+      "findings": [
+        {
+          "severity": "moderate",
+          "kind": "unsupported_population_inference",
+          "output_quote": "the people most likely to have reasons against using the shuttle are absent from the responses",
+          "source": "survey / source_id 2 / revision 1",
+          "source_quote": "Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students.",
+          "rationale": "Source establishes omission, not which students are most likely to oppose or have reasons against use."
+        },
+        {
+          "severity": "moderate",
+          "kind": "underdeveloped_next_step",
+          "output_quote": "define specific, feasible methods to reach non-riders before the next review",
+          "rationale": "Asks for a future method to be defined instead of giving a concrete way to hear from non-riders. It is a legitimate future recommendation, not invented past methods."
+        }
+      ],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "transport has solved attendance",
+      "after_excerpt": "I recommend we define specific, feasible methods to reach non-riders before the next review, ensuring the extension yields usable data rather than just more anecdotes from existing users.",
+      "human_verdict": "unchecked",
+      "output_word_count": 435,
+      "seed_counts": {
+        "found": 2,
+        "missed": 0
+      },
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "Not independently generated in this seeded-plan case."
+        },
+        "evidence_citation": {
+          "score": 3,
+          "excerpt": "I recommend we define specific, feasible methods to reach non-riders before the next review, ensuring the extension yields usable data rather than just more anecdotes from existing users.",
+          "rationale": "Core counts, fourteen respondents and scope limitations retained. One unsupported generalization about non-riders appears."
+        },
+        "revision_precision": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 3,
+          "excerpt": "I recommend we define specific, feasible methods to reach non-riders before the next review, ensuring the extension yields usable data rather than just more anecdotes from existing users.",
+          "rationale": "Two sections and one-term extension delivered; practical measurement remains largely deferred to defining methods later."
+        },
+        "student_voice": {
+          "score": 3,
+          "excerpt": "I recommend we define specific, feasible methods to reach non-riders before the next review, ensuring the extension yields usable data rather than just more anecdotes from existing users.",
+          "rationale": "Keeps original personal opening and conditional extension but most prose shifts to committee prescription."
+        }
+      },
+      "raw_receipt_sha256": "f7e3ef89475299cb938336fe0e1034a6486646cc5c16a7f1a5e043ac521e5e6e",
+      "retained_receipt_sha256": "f7e3ef89475299cb938336fe0e1034a6486646cc5c16a7f1a5e043ac521e5e6e",
+      "protected_passages_preserved": "not-applicable: notes retained in accepted body; proposal is separate"
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "group": "controls",
+      "scenario": "edit_cancel_retry",
+      "receipt": "controls/full_live_draft_from_student_notes--edit_cancel_retry.json",
+      "run_status": "failed",
+      "error": "The tutor endpoint's reply hit the output-token ceiling and was cut off before it finished.",
+      "classification": "honest-incomplete-review",
+      "refusal_class": "review-output-token-ceiling-after-inference",
+      "seed_adjudication": [
+        {
+          "id": "notes_preservation",
+          "verdict": "partial",
+          "reason": "Original notes exact; user uncertainty edit retained in live first block. Final review failed before pending publication."
+        },
+        {
+          "id": "attendance_noninference",
+          "verdict": "found-in-partial",
+          "reason": "Four retained blocks reject attendance causality."
+        }
+      ],
+      "findings": [
+        {
+          "severity": "moderate",
+          "kind": "unsupported_methodological_constraint",
+          "output_quote": "I also recommend against assessing cost or emissions during this term, as no such measurements were collected previously [@lyra:2]. Without baseline figures, any new assessment would lack context.",
+          "source": "survey / source_id 2 / revision 1",
+          "source_quote": "No cost or emissions measurements were collected.",
+          "rationale": "Absence of previous cost/emissions data does not establish that collecting any new assessment is unhelpful. This is a new recommendation/inference, not fabricated completed methods."
+        }
+      ],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "transport has solved attendance",
+      "after_excerpt": "During this extension, I propose collecting brief survey responses from students who do not currently ride the shuttle.",
+      "human_verdict": "unchecked",
+      "output_word_count": 451,
+      "seed_counts": {
+        "partial": 1,
+        "found-in-partial": 1,
+        "missed": 0
+      },
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "Not independently generated in this seeded-plan case."
+        },
+        "evidence_citation": {
+          "score": 3,
+          "excerpt": "During this extension, I propose collecting brief survey responses from students who do not currently ride the shuttle.",
+          "rationale": "Partial keeps valid counts and fourteen preferences; new cost-assessment prohibition rests on an unsupported methodological inference, not invented past data."
+        },
+        "revision_precision": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 2,
+          "excerpt": "During this extension, I propose collecting brief survey responses from students who do not currently ride the shuttle.",
+          "rationale": "Four useful prose blocks retained and student edit visible, but final review is cut off; no complete pending proposal."
+        },
+        "student_voice": {
+          "score": 3,
+          "excerpt": "During this extension, I propose collecting brief survey responses from students who do not currently ride the shuttle.",
+          "rationale": "First-person uncertainty and practical future survey preserved, including the user-edited uncertainty sentence. Adds a cost-assessment stance not present in notes."
+        }
+      },
+      "raw_receipt_sha256": "8a00ee646fb2c1dbcc511912312f13c9c8f78f600f0caeebf5c4a23731fa0dc1",
+      "retained_receipt_sha256": "8a00ee646fb2c1dbcc511912312f13c9c8f78f600f0caeebf5c4a23731fa0dc1",
+      "protected_passages_preserved": "not-applicable: notes retained in accepted body; proposal is separate"
+    },
+    {
+      "case_id": "full_live_draft_from_student_notes",
+      "group": "planning",
+      "scenario": "uninterrupted",
+      "receipt": "planning/full_live_draft_from_student_notes--uninterrupted.json",
+      "run_status": "completed",
+      "error": null,
+      "classification": "completed-proposal",
+      "refusal_class": "none",
+      "seed_adjudication": [
+        {
+          "id": "notes_preservation",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        },
+        {
+          "id": "attendance_noninference",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        }
+      ],
+      "findings": [
+        {
+          "severity": "moderate",
+          "kind": "unsupported_survey_method",
+          "output_quote": "the survey did not ask about attendance",
+          "source": "survey / source_id 2 / revision 1",
+          "source_quote": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed.",
+          "rationale": "Source gives response totals and respondent scope, not full question wording. Transport revision 1 says no attendance data collected; that does not establish no question was asked."
+        },
+        {
+          "severity": "moderate",
+          "kind": "unsupported_factual_premise",
+          "output_quote": "whether low ridership stems from dissatisfaction, lack of awareness, or other barriers",
+          "source": "transport / source_id 1 / revision 1",
+          "source_quote": "There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people.",
+          "rationale": "No benchmark establishes low ridership. Proposed inquiry is legitimate, but wording presupposes an unestablished condition and overpromises causal explanation."
+        }
+      ],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "transport has solved attendance",
+      "after_excerpt": "Collecting their perspectives will reveal whether low ridership stems from dissatisfaction, lack of awareness, or other barriers.",
+      "human_verdict": "unchecked",
+      "output_word_count": 488,
+      "seed_counts": {
+        "found": 2,
+        "missed": 0
+      },
+      "scores": {
+        "planning": {
+          "score": 3,
+          "excerpt": "Collecting their perspectives will reveal whether low ridership stems from dissatisfaction, lack of awareness, or other barriers.",
+          "rationale": "Generated exactly Evidence/Recommendation with 170/150 allocations and suitable thesis, but treats absence of attendance measurement as knowledge of survey questions and leaves concrete outreach method weak."
+        },
+        "evidence_citation": {
+          "score": 2,
+          "excerpt": "Collecting their perspectives will reveal whether low ridership stems from dissatisfaction, lack of awareness, or other barriers.",
+          "rationale": "Counts and fourteen preferences are supported, but survey-question claim and low-ridership premise are not."
+        },
+        "revision_precision": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 3,
+          "excerpt": "Collecting their perspectives will reveal whether low ridership stems from dissatisfaction, lack of awareness, or other barriers.",
+          "rationale": "Two-section separate proposal and one-term extension delivered; practical outreach remains generic, and source-only constraint is weakened by new claims."
+        },
+        "student_voice": {
+          "score": 3,
+          "excerpt": "Collecting their perspectives will reveal whether low ridership stems from dissatisfaction, lack of awareness, or other barriers.",
+          "rationale": "Personal east-gate stake retained in Recommendation; tentative conclusion mostly retained, but promises that collecting perspectives will reveal causes are too certain."
+        }
+      },
+      "raw_receipt_sha256": "f53411d383b01c81a5f4c2e227ef57cb501fc6952360ab3b855a921fd4b6b3ee",
+      "retained_receipt_sha256": "c3317c823a8e250fb8db2c409fc5900e3c0921576e8182cfb8ad407824c97cb6",
+      "protected_passages_preserved": "not-applicable: notes retained in accepted body; proposal is separate"
+    },
+    {
+      "case_id": "holdout_museum_label_revision",
+      "group": "heldout",
+      "scenario": "uninterrupted",
+      "receipt": "heldout/holdout_museum_label_revision--uninterrupted.json",
+      "run_status": "completed",
+      "error": null,
+      "classification": "completed-proposal",
+      "refusal_class": "none",
+      "seed_adjudication": [
+        {
+          "id": "museum_understanding_effect",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        },
+        {
+          "id": "museum_valid_statistic",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        },
+        {
+          "id": "museum_student_stance",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        }
+      ],
+      "findings": [],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "The redesigned label therefore improved visitors' understanding of the collection by 75 percent.",
+      "after_excerpt": "In the classroom session, 27 of 36 participants located the accession number within 30 seconds. The exercise did not measure understanding of the collection or retention of object histories [@lyra:1].",
+      "human_verdict": "unchecked",
+      "output_word_count": 306,
+      "seed_counts": {
+        "found": 3,
+        "missed": 0
+      },
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "Not independently generated in this seeded-plan case."
+        },
+        "evidence_citation": {
+          "score": 4,
+          "excerpt": "In the classroom session, 27 of 36 participants located the accession number within 30 seconds. The exercise did not measure understanding of the collection or retention of object histories [@lyra:1].",
+          "rationale": "Keeps exact supported numerator, denominator, task and duration from full source beyond selected excerpt; removes invented understanding improvement."
+        },
+        "revision_precision": {
+          "score": 4,
+          "excerpt": "In the classroom session, 27 of 36 participants located the accession number within 30 seconds. The exercise did not measure understanding of the collection or retention of object histories [@lyra:1].",
+          "rationale": "Only erroneous inference and dependent self-commentary are replaced. Position, Recommendation and exact door sentence remain."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 4,
+          "excerpt": "In the classroom session, 27 of 36 participants located the accession number within 30 seconds. The exercise did not measure understanding of the collection or retention of object histories [@lyra:1].",
+          "rationale": "Repairs understanding claim, retains statistic, acknowledges old-layout uncertainty and preserves required text."
+        },
+        "student_voice": {
+          "score": 4,
+          "excerpt": "In the classroom session, 27 of 36 participants located the accession number within 30 seconds. The exercise did not measure understanding of the collection or retention of object histories [@lyra:1].",
+          "rationale": "Skeptical first-person stance and bowl/door imagery remain intact."
+        }
+      },
+      "raw_receipt_sha256": "9fdfa1269aea7f7a98b4a748a71283b269ac036fb38a7003f0dcfb47707fb789",
+      "retained_receipt_sha256": "9fdfa1269aea7f7a98b4a748a71283b269ac036fb38a7003f0dcfb47707fb789",
+      "protected_passages_preserved": true
+    },
+    {
+      "case_id": "holdout_seed_notebook_historical_method",
+      "group": "heldout",
+      "scenario": "uninterrupted",
+      "receipt": "heldout/holdout_seed_notebook_historical_method--uninterrupted.json",
+      "run_status": "completed",
+      "error": null,
+      "classification": "completed-proposal",
+      "refusal_class": "none",
+      "seed_adjudication": [
+        {
+          "id": "seed_invented_historical_method",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        },
+        {
+          "id": "seed_revision_identity",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        },
+        {
+          "id": "seed_future_method",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        }
+      ],
+      "findings": [],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "The March test randomly assigned seeds to soaking and no-soaking groups, proving soaking improved germination.",
+      "after_excerpt": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used [@lyra:1].",
+      "human_verdict": "unchecked",
+      "output_word_count": 311,
+      "seed_counts": {
+        "found": 3,
+        "missed": 0
+      },
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "Not independently generated in this seeded-plan case."
+        },
+        "evidence_citation": {
+          "score": 4,
+          "excerpt": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used [@lyra:1].",
+          "rationale": "March Alder 8/40 after 14 days and untreated tray method match revision 1; prose distinguishes later April Birch entry and ledger ties historical excerpts to revision 1."
+        },
+        "revision_precision": {
+          "score": 4,
+          "excerpt": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used [@lyra:1].",
+          "rationale": "Only false historical method and changed-page explanation are edited; future June proposal and other prose remain exact."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 4,
+          "excerpt": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used [@lyra:1].",
+          "rationale": "Preserves Question, Closing and the exact future-proposal sentence. Distinguishes March from the separate April entry without converting proposal to history."
+        },
+        "student_voice": {
+          "score": 4,
+          "excerpt": "All 40 seeds were placed untreated in one tray; no soaking groups or random assignment were used [@lyra:1].",
+          "rationale": "Notebook metaphor, productive uncertainty and future-tense method stay intact."
+        }
+      },
+      "raw_receipt_sha256": "a35ebc77ad98f48b3589b76d88790098c9542afd372cdeb9f171e58e3b8f0b75",
+      "retained_receipt_sha256": "a35ebc77ad98f48b3589b76d88790098c9542afd372cdeb9f171e58e3b8f0b75",
+      "protected_passages_preserved": true
+    },
+    {
+      "case_id": "holdout_museum_label_revision",
+      "group": "frozen-heldout",
+      "scenario": "uninterrupted",
+      "receipt": "frozen-heldout/holdout_museum_label_revision--uninterrupted.json",
+      "run_status": "completed",
+      "error": null,
+      "classification": "completed-proposal",
+      "refusal_class": "none",
+      "seed_adjudication": [
+        {
+          "id": "museum_understanding_effect",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        },
+        {
+          "id": "museum_valid_statistic",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        },
+        {
+          "id": "museum_student_stance",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        }
+      ],
+      "findings": [],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "The redesigned label therefore improved visitors' understanding of the collection by 75 percent.",
+      "after_excerpt": "No question about the maker, repairs, collection history, or interpretation was asked during the task [@lyra:2].",
+      "human_verdict": "unchecked",
+      "output_word_count": 309,
+      "seed_counts": {
+        "found": 3,
+        "missed": 0
+      },
+      "source_run_comparison": {
+        "receipt": "heldout/holdout_museum_label_revision--uninterrupted.json",
+        "same_unique_case": true,
+        "independent_new_output_read": true,
+        "score_changes": {},
+        "finding": "Only substantive output variation is the harmless clarification “during the task” in the supported no-interpretation-question sentence. Same supported 27/36 and 30-second result, exact stance, protected sections, and future comparison preserved."
+      },
+      "source_checks": [
+        {
+          "source_id": 1,
+          "revision": 1,
+          "quote": "Twenty-seven of the 36 participants located the accession number within 30 seconds."
+        },
+        {
+          "source_id": 2,
+          "revision": 1,
+          "quote": "No question about the maker, repairs, collection history, or interpretation was asked."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "Not independently generated in this seeded-plan case."
+        },
+        "evidence_citation": {
+          "score": 4,
+          "excerpt": "No question about the maker, repairs, collection history, or interpretation was asked during the task [@lyra:2].",
+          "rationale": "Keeps exact supported numerator, denominator, task and duration from full source beyond selected excerpt; removes invented understanding improvement."
+        },
+        "revision_precision": {
+          "score": 4,
+          "excerpt": "No question about the maker, repairs, collection history, or interpretation was asked during the task [@lyra:2].",
+          "rationale": "Only erroneous inference and dependent self-commentary are replaced. Position, Recommendation and exact door sentence remain."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 4,
+          "excerpt": "No question about the maker, repairs, collection history, or interpretation was asked during the task [@lyra:2].",
+          "rationale": "Repairs understanding claim, retains statistic, acknowledges old-layout uncertainty and preserves required text."
+        },
+        "student_voice": {
+          "score": 4,
+          "excerpt": "No question about the maker, repairs, collection history, or interpretation was asked during the task [@lyra:2].",
+          "rationale": "Skeptical first-person stance and bowl/door imagery remain intact."
+        }
+      },
+      "raw_receipt_sha256": "cd41fc40ba6b6bc60eeee3b2d7d5eb3848d079213626f9db937594b6ebc5452b",
+      "retained_receipt_sha256": "cd41fc40ba6b6bc60eeee3b2d7d5eb3848d079213626f9db937594b6ebc5452b",
+      "protected_passages_preserved": true
+    },
+    {
+      "case_id": "holdout_seed_notebook_historical_method",
+      "group": "frozen-heldout",
+      "scenario": "uninterrupted",
+      "receipt": "frozen-heldout/holdout_seed_notebook_historical_method--uninterrupted.json",
+      "run_status": "completed",
+      "error": null,
+      "classification": "completed-proposal",
+      "refusal_class": "none",
+      "seed_adjudication": [
+        {
+          "id": "seed_invented_historical_method",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        },
+        {
+          "id": "seed_revision_identity",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        },
+        {
+          "id": "seed_future_method",
+          "verdict": "found",
+          "reason": "Corrected or preserved as required in the inspected proposal."
+        }
+      ],
+      "findings": [],
+      "accepted_body_preserved": true,
+      "exact_duplicate_new_paragraphs": 0,
+      "duplicate_comments": {
+        "existing": 0,
+        "after": 0,
+        "finding": "None persisted in these pass runs; no claim about unrun standalone-review deduplication."
+      },
+      "before_excerpt": "The March test randomly assigned seeds to soaking and no-soaking groups, proving soaking improved germination.",
+      "after_excerpt": "This single-tray observation cannot estimate a benefit from soaking [@lyra:1].",
+      "human_verdict": "unchecked",
+      "output_word_count": 338,
+      "seed_counts": {
+        "found": 3,
+        "missed": 0
+      },
+      "source_run_comparison": {
+        "receipt": "heldout/holdout_seed_notebook_historical_method--uninterrupted.json",
+        "same_unique_case": true,
+        "independent_new_output_read": true,
+        "score_changes": {},
+        "finding": "Frozen output adds a correct explicit single-tray/no-soaking-benefit limit and identifies revision 2, April Birch, as not a correction. It still preserves March Alder 8/40 after 14 days and exact June future proposal. These useful clarifications do not change unrelated student wording."
+      },
+      "source_checks": [
+        {
+          "source_id": 1,
+          "revision": 1,
+          "quote": "This single-tray observation cannot estimate a benefit from soaking."
+        },
+        {
+          "source_id": 1,
+          "revision": 2,
+          "quote": "This entry describes lot Birch in April, not lot Alder in March. It is not a correction of the earlier count and does not report any soaking comparison."
+        }
+      ],
+      "scores": {
+        "planning": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "Not independently generated in this seeded-plan case."
+        },
+        "evidence_citation": {
+          "score": 4,
+          "excerpt": "This single-tray observation cannot estimate a benefit from soaking [@lyra:1].",
+          "rationale": "Inspected frozen proposal explicitly distinguishes revision-2 April Birch from historical March Alder, states no soaking benefit can be estimated, and retains exact 8/40/14-day count. Saved method/count excerpts remain attached to revision row 1. June method stays a proposal."
+        },
+        "revision_precision": {
+          "score": 4,
+          "excerpt": "This single-tray observation cannot estimate a benefit from soaking [@lyra:1].",
+          "rationale": "Only false historical method and changed-page explanation are edited; future June proposal and other prose remain exact."
+        },
+        "review_usefulness": {
+          "score": "not-applicable",
+          "excerpt": null,
+          "rationale": "No standalone review requested; this evaluates revised/proposed prose, not internal reviewer quality."
+        },
+        "instruction_following": {
+          "score": 4,
+          "excerpt": "This single-tray observation cannot estimate a benefit from soaking [@lyra:1].",
+          "rationale": "Preserves Question, Closing and the exact future-proposal sentence. Distinguishes March from the separate April entry without converting proposal to history."
+        },
+        "student_voice": {
+          "score": 4,
+          "excerpt": "This single-tray observation cannot estimate a benefit from soaking [@lyra:1].",
+          "rationale": "Notebook metaphor, productive uncertainty and future-tense method stay intact."
+        }
+      },
+      "raw_receipt_sha256": "f8da46a6cff31aa57865c2a03849a3ffb9a86904d03fc305af23e4b4ae1cf3f9",
+      "retained_receipt_sha256": "f8da46a6cff31aa57865c2a03849a3ffb9a86904d03fc305af23e4b4ae1cf3f9",
+      "protected_passages_preserved": true
+    }
+  ]
+}
