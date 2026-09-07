@@ -75,7 +75,8 @@ acceptance. The retained storage implementation and regression bytes match #83 e
 | Post-merge immutable candidate | Blocked | Requires explicit Oliver authorization, serial integration and new current-main checks. |
 | Real Keychain outage/denial/Forget | Blocked | Disposable OS account or genuinely isolated approved setup absent. Null/fail Keyring is not OS Keychain acceptance. |
 | Installed N→N+1/rollback | Blocked | Approved integrated artifact pair/feed and safe native acceptance still required. Signature/schema regressions do not substitute. |
-| Print, graceful UI quit, physical input/accessibility | Not run on combined candidate | No unsafe app selection/relaunch used. Earlier receipts remain dated and separate. |
+| Production-identity native startup / Print / graceful UI quit | Blocked on this account | Backend selectors do not isolate WebKit or single-instance IPC. No combined native shell was launched. |
+| Physical input/accessibility | Not run on combined candidate | Earlier receipts remain dated and separate. |
 | Sustained study/writing, sleep/wake | Not run on combined candidate | Requires final immutable build and real quality scenarios. Short recovery tests are not a soak. |
 | Physical 8 GB | Waived by owner / not measured | No target hardware; no 8 GB performance claim. |
 | Distribution licensing | Owner-confirmed decision | Not independent licensing verification; notices and PyMuPDF obligations retained. |
@@ -86,11 +87,25 @@ acceptance. The retained storage implementation and regression bytes match #83 e
 ## Native-host safety
 
 No ordinary CUA app selection or LaunchServices relaunch is used for this rehearsal. An alive-PID
-check before a launching selector still has a race. Use a held, explicit executable process with
-allowlisted data/database/cache/models/logs/credential selectors and external readiness/descendant
-verification only. A process exit must fail the check, not reopen another app. SIGTERM testing is
-process-termination evidence, not Cmd-Q acceptance. UI/Print stays not run until a non-launching,
-fail-closed mechanism or genuinely isolated OS account is available.
+check before a launching selector still has a race. **Do not launch the production-identity native
+shell on this account, even through direct Popen with backend overrides.** Source inspection of the
+installed SDK found two additional boundaries:
+
+- `create_main_window` configures neither incognito nor a separate data-store identifier. Installed
+  Wry 0.55.1 uses `WKWebsiteDataStore::defaultDataStore` in `src/wkwebview/mod.rs`; backend cache/data
+  selectors do not isolate WebKit/localStorage.
+- `tauri-plugin-single-instance` 2.4.3 derives `/tmp/com_lyra_desktop_si.sock` only from the compiled
+  app identifier. Neither UID, HOME/TMPDIR nor backend profile overrides separate this IPC name.
+  A second process can notify/focus an incumbent and exit. A disposable OS account must also have
+  no incumbent sharing this pathname, or use a fully isolated device/login environment.
+
+Root discovered this before launching the combined shell. Frozen-backend tests remain isolated
+through their explicit profile/credential selectors and authenticated inherited-socket boundary.
+For future candidate-equivalent native acceptance, use a genuinely isolated environment with no
+incumbent IPC owner, retain a held explicit child process and prove every descendant's selectors.
+A process exit fails the check; it must not select/reopen another app. A unique compiled-ID and
+separate-store variant can test isolation mechanics, but is not the production candidate's bytes.
+External SIGTERM observations are process-termination evidence, not Cmd-Q or rendered acceptance.
 
 The earlier writer normal-profile auto-launch incident remains excluded from isolated evidence.
 Startup effects were not ruled out; do not relabel it impact-free. Any test-only launcher/unique-ID
@@ -99,7 +114,7 @@ certification.
 
 #76's `build_local_app.sh` and `--open` are normal-profile delivery tools. Keep the existing
 installer separate; use it without `--open` for a selected private review destination only after
-ownership checks. Do not replace the canonical app or share writable profiles during rehearsal.
+ownership checks. Installation does not prove native-profile isolation. Do not replace the canonical app or share writable profiles during rehearsal.
 
 ## Authorization handoff
 
