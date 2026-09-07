@@ -165,6 +165,43 @@ def mark_failed(conn: sqlite3.Connection, run_id: int, message: str) -> None:
     _finish(conn, run_id, FAILED, message=message)
 
 
+def settle_failure(conn: sqlite3.Connection, run_id: int, detail: str, message: str) -> bool:
+    """Fail the owning run and its mirrors in one transaction.
+
+    Releasing the active-run slot separately from the artifact update lets a late
+    callback overwrite the next run. Terminal/superseded callbacks are no-ops.
+    """
+    try:
+        cursor = conn.execute(
+            "update writer_runs set status = ?, error_message = ?, "
+            "finished_at = datetime('now'), updated_at = datetime('now') "
+            "where id = ? and status in (?, ?) and not exists "
+            "(select 1 from writer_runs successor where "
+            "successor.artifact_id = writer_runs.artifact_id and successor.id > writer_runs.id)",
+            (FAILED, message, run_id, QUEUED, RUNNING),
+        )
+        if not cursor.rowcount:
+            conn.rollback()
+            return False
+        run = get_run(conn, run_id)
+        conn.execute(
+            "update artifacts set state = ?, stage_detail = ?, error_message = ?, "
+            "writer_job_completed_at = datetime('now'), updated_at = datetime('now') "
+            "where id = ?",
+            (FAILED, detail, message, run["artifact_id"]),
+        )
+        conn.execute(
+            "update live_draft_suggestions set status = ?, detail = ?, "
+            "version = version + 1, updated_at = datetime('now') where run_id = ?",
+            (FAILED, message, run_id),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def mark_cancelled(conn: sqlite3.Connection, run_id: int) -> None:
     _finish(conn, run_id, CANCELLED)
 

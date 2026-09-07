@@ -251,6 +251,22 @@ def retrieve(
             return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
     elif document_id is not None:
         document_ids = (document_id,)
+    # A draft may use only saved sources, with no indexed uploads. Do not require
+    # an embedding runtime just to establish that the permitted search set is empty.
+    scope_sql = ""
+    scope_args: tuple[object, ...] = (class_id,)
+    if document_ids is not None:
+        scope_sql = " and c.document_id in (" + ",".join("?" for _ in document_ids) + ")"
+        scope_args = (class_id, *document_ids)
+    if (
+        conn.execute(
+            "select 1 from chunks c join documents d on d.id = c.document_id "  # noqa: S608 - placeholders only
+            "where c.class_id = ? and d.state = 'ready'" + scope_sql + " limit 1",
+            scope_args,
+        ).fetchone()
+        is None
+    ):
+        return RetrievalResult(chunks=[], trimmed=False, omitted_document_count=0)
     vector = embed_query(query)
     resolved = _resolve_sections(
         conn, class_id, query, vector, budget_tokens, document_id, document_ids

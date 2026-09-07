@@ -74,6 +74,28 @@ def _suggestion_row(conn: sqlite3.Connection, suggestion_id: int) -> sqlite3.Row
     return row
 
 
+def _require_model_ownership(conn: sqlite3.Connection, suggestion_id: int) -> None:
+    """Fence model effects under the caller's SQLite writer lock.
+
+    Legacy suggestions without a durable run retain their old storage contract.
+    HTTP suggestions always have a run, whose cancellation/terminal commit wins over
+    any later callback, including one arriving after a successor has started.
+    """
+    run = conn.execute(
+        "select r.status, r.id, r.artifact_id from writer_runs r "
+        "join live_draft_suggestions s on s.run_id = r.id where s.id = ?",
+        (suggestion_id,),
+    ).fetchone()
+    if run is not None and (
+        run["status"] not in ("queued", "running")
+        or conn.execute(
+            "select 1 from writer_runs where artifact_id = ? and id > ?",
+            (run["artifact_id"], run["id"]),
+        ).fetchone()
+    ):
+        raise ConflictError("This writing run no longer owns the suggestion. Saved text was kept.")
+
+
 def _block_row(conn: sqlite3.Connection, block_id: int) -> sqlite3.Row:
     row = conn.execute("select * from live_draft_blocks where id = ?", (block_id,)).fetchone()
     if row is None:
@@ -237,12 +259,14 @@ def update_live_suggestion(
     `metadata` is merged into every block's `metadata` payload, which gives the pipeline
     a simple way to stamp shared run details across the seeded outline.
     """
-    current = get_live_suggestion(conn, suggestion_id)
     if stage is not None:
         _validate_stage(stage)
-    next_version = int(current["version"]) + max(0, version_bump)
     try:
         conn.execute("begin immediate")
+        if status not in {"cancelled", "failed"}:
+            _require_model_ownership(conn, suggestion_id)
+        current = get_live_suggestion(conn, suggestion_id)
+        next_version = int(current["version"]) + max(0, version_bump)
         conn.execute(
             "update live_draft_suggestions set stage = ?, status = ?, detail = ?, "
             "version = ?, updated_at = datetime('now') where id = ?",
@@ -417,6 +441,7 @@ def model_update_block(
         # streamed appends from another connection.
         conn.execute("begin immediate")
         _suggestion_row(conn, suggestion_id)
+        _require_model_ownership(conn, suggestion_id)
         current_row = _block_row_for_key(conn, suggestion_id, stable_key)
         if current_row is None:
             block = _insert_block(
@@ -485,6 +510,7 @@ def append_block_text(
     try:
         conn.execute("begin immediate")
         _suggestion_row(conn, suggestion_id)
+        _require_model_ownership(conn, suggestion_id)
         current_row = _block_row_for_key(conn, suggestion_id, stable_key)
         if current_row is None:
             block = _insert_block(
@@ -620,7 +646,11 @@ def assemble_markdown(conn: sqlite3.Connection, suggestion_id: int) -> str:
 
 
 def finalize_to_pending_edit(
-    conn: sqlite3.Connection, suggestion_id: int, *, note: str | None = None
+    conn: sqlite3.Connection,
+    suggestion_id: int,
+    *,
+    note: str | None = None,
+    model_owned: bool = False,
 ) -> dict[str, object] | None:
     """Create or update the pending edit row from the live suggestion, without writing.
 
@@ -628,18 +658,19 @@ def finalize_to_pending_edit(
     draft body happens to say now. The existing review flow may later rebase or mark it
     stale on read.
     """
-    suggestion = get_live_suggestion(conn, suggestion_id)
-    artifact_id = int(suggestion["artifact_id"])
-    part = _body_part(conn, artifact_id)
-    proposed = assemble_markdown(conn, suggestion_id)
-    if proposed == str(suggestion["base_content"]):
-        # The pending-edit table predates live suggestions and carries no ownership
-        # marker. A no-op live finalization must not erase an unrelated proposal.
-        return None
-
-    stale = int(_sha256(str(part["content"])) != str(suggestion["base_hash"]))
     try:
         conn.execute("begin immediate")
+        if model_owned:
+            _require_model_ownership(conn, suggestion_id)
+        suggestion = get_live_suggestion(conn, suggestion_id)
+        artifact_id = int(suggestion["artifact_id"])
+        part = _body_part(conn, artifact_id)
+        proposed = assemble_markdown(conn, suggestion_id)
+        if proposed == str(suggestion["base_content"]):
+            # A no-op must not erase an unrelated proposal.
+            conn.commit()
+            return None
+        stale = int(_sha256(str(part["content"])) != str(suggestion["base_hash"]))
         existing = conn.execute(
             "select id from pending_edits where part_id = ?",
             (int(part["id"]),),

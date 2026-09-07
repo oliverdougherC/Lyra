@@ -385,19 +385,10 @@ def _settle_failed(conn: sqlite3.Connection, job: PassJob, exc: Exception) -> No
         return
     message = exc.message if isinstance(exc, LyraError) else str(exc)
     if job.run_id is not None:
-        writer_runs.mark_failed(conn, job.run_id, message)
-        if _cancel_requested(conn, job):
-            return
+        writer_runs.settle_failure(conn, job.run_id, _FAILED_DETAIL, message)
+        _cancel_requested(conn, job)
+        return
     artifacts.mark_artifact_failed(conn, job.artifact_id, _FAILED_DETAIL, message)
-    if job.run_id is not None:
-        live = live_drafts.get_live_suggestion_for_run(conn, job.run_id)
-        if live is not None:
-            live_drafts.update_live_suggestion(
-                conn,
-                int(live["id"]),
-                status="failed",
-                detail=message,
-            )
     conn.execute(
         "update artifacts set writer_job_completed_at = datetime('now') where id = ?",
         (job.artifact_id,),
@@ -481,7 +472,11 @@ def _complete(
                 fail_on_truncation=truncated is None,
                 schema=schema,
                 temperature=client.DETERMINISTIC_TEMPERATURE if schema else None,
-                enable_thinking=enable_thinking,
+                # Schema stages need their bounded output for the requested artifact.
+                # Do not let endpoint-default reasoning exhaust it before emitting JSON.
+                enable_thinking=False
+                if schema is not None and enable_thinking is None
+                else enable_thinking,
             )
         )
     ).strip()
@@ -725,15 +720,20 @@ def _run_live_pipeline(
         return
 
     document_map = _live_document_map(plan, job)
-    _draft_live_blocks(conn, job, artifact, config, class_id, suggestion_id, plan, document_map)
+    if resume_stage not in {"transitions", "reviewing", "finalizing", "completed"}:
+        _draft_live_blocks(conn, job, artifact, config, class_id, suggestion_id, plan, document_map)
     if _live_cancelled(conn, job, suggestion_id):
         return
 
-    _review_live_transitions(conn, job, artifact, config, suggestion_id, document_map)
+    if resume_stage not in {"reviewing", "finalizing", "completed"}:
+        _review_live_transitions(conn, job, artifact, config, suggestion_id, document_map)
     if _live_cancelled(conn, job, suggestion_id):
         return
 
-    _review_live_chunks(conn, job, artifact, config, class_id, suggestion_id, plan, document_map)
+    if resume_stage not in {"finalizing", "completed"}:
+        _review_live_chunks(
+            conn, job, artifact, config, class_id, suggestion_id, plan, document_map
+        )
     if _live_cancelled(conn, job, suggestion_id):
         return
 
@@ -766,6 +766,7 @@ def _run_live_pipeline(
         conn,
         suggestion_id,
         note=job.instruction or "agentic long-form draft",
+        model_owned=True,
     )
     live_drafts.update_live_suggestion(
         conn,
@@ -1209,6 +1210,9 @@ def _review_live_transitions(
         right = _live_block_by_key(conn, suggestion_id, str(right_snapshot["stable_key"]))
         if left is None or right is None:
             continue
+        metadata = dict(right["metadata"]) if isinstance(right["metadata"], dict) else {}
+        if metadata.get("transition_review", {}).get("completed"):
+            continue
         _live_stage(
             conn,
             job,
@@ -1231,19 +1235,30 @@ def _review_live_transitions(
             schema=prompts.TRANSITION_REVIEW_SCHEMA,
         )
         payload = replies.loads_object(reply)
-        if payload is None or not payload.get("needs_change"):
-            continue
+        if (
+            payload is None
+            or not isinstance(payload.get("needs_change"), bool)
+            or not isinstance(payload.get("revised_next_paragraph"), str)
+            or not isinstance(payload.get("rationale"), str)
+        ):
+            raise LyraError(
+                "The transition review did not return a usable assessment. Saved prose was kept."
+            )
         revised = str(payload.get("revised_next_paragraph") or "").strip()
-        metadata = dict(right["metadata"]) if isinstance(right["metadata"], dict) else {}
+        if payload["needs_change"] and not revised:
+            raise LyraError(
+                "The transition review returned an empty revision. Saved prose was kept."
+            )
         metadata["transition_review"] = {
             "rationale": str(payload.get("rationale") or ""),
             "left": left["stable_key"],
+            "completed": True,
         }
         live_drafts.model_update_block(
             conn,
             suggestion_id,
             str(right["stable_key"]),
-            content=revised or None,
+            content=revised if payload["needs_change"] else None,
             status="complete",
             metadata=metadata,
         )
@@ -1268,6 +1283,8 @@ def _review_live_chunks(
     for chunk_index, chunk in enumerate(chunks):
         if _live_cancelled(conn, job, suggestion_id):
             return
+        if all(block["metadata"].get("overall_assessment", {}).get("completed") for block in chunk):
+            continue
         _live_stage(
             conn,
             job,
@@ -1293,13 +1310,33 @@ def _review_live_chunks(
             schema=prompts.OVERALL_ASSESSMENT_SCHEMA,
         )
         payload = replies.loads_object(reply)
-        if payload is None:
-            continue
-        issues = payload.get("issues")
-        issue_list = issues if isinstance(issues, list) else []
+        if (
+            payload is None
+            or not isinstance(payload.get("issues"), list)
+            or not isinstance(payload.get("summary"), str)
+        ):
+            raise LyraError(
+                "The document review did not return a usable assessment. Saved prose was kept."
+            )
+        issue_list = payload["issues"]
+        chunk_keys = {str(block["stable_key"]) for block in chunk}
+        if any(
+            not isinstance(issue, dict)
+            or not isinstance(issue.get("block_key"), str)
+            or issue["block_key"] not in chunk_keys
+            or not isinstance(issue.get("problem"), str)
+            or not isinstance(issue.get("revision_instruction"), str)
+            or not str(issue.get("revision_instruction") or "").strip()
+            for issue in issue_list
+        ):
+            raise LyraError(
+                "The document review named an invalid passage or revision. Saved prose was kept."
+            )
         for snapshot in chunk:
             current = _live_block_by_key(conn, suggestion_id, str(snapshot["stable_key"]))
             if current is None:
+                continue
+            if current["metadata"].get("overall_assessment", {}).get("completed"):
                 continue
             own_issues = [
                 issue
@@ -1311,6 +1348,7 @@ def _review_live_chunks(
             metadata["overall_assessment"] = {
                 "summary": str(payload.get("summary") or ""),
                 "issues": own_issues,
+                "completed": True,
             }
             if not own_issues or int(current["user_revision"]) > 0:
                 live_drafts.model_update_block(
@@ -1337,6 +1375,10 @@ def _review_live_chunks(
                         json.dumps(current["context"], ensure_ascii=False, sort_keys=True)
                         + "\nRevision instruction: "
                         + instruction
+                        + "\n\nRevise only the passage below. Preserve its voice, evidence, "
+                        "and all wording unrelated to the requested correction. Return only "
+                        "the revised passage, not a new paragraph on the same topic.\n\n"
+                        + str(current["content"])
                     ),
                     research_block=str(section_plan.get("research_notes") or ""),
                     ledger_block=prompts.format_ledger_block(
@@ -1351,6 +1393,7 @@ def _review_live_chunks(
             )
             normalized_revision = mathnorm.normalize(revised.strip())
             if not normalized_revision:
+                metadata["overall_assessment"]["completed"] = False
                 metadata["overall_assessment"]["revision_skipped"] = (
                     "The model returned no replacement prose, so the completed paragraph "
                     "was preserved."
@@ -1362,7 +1405,9 @@ def _review_live_chunks(
                     status="complete",
                     metadata=metadata,
                 )
-                continue
+                raise LyraError(
+                    "The document review returned an empty revision. Saved prose was kept."
+                )
             live_drafts.model_update_block(
                 conn,
                 suggestion_id,

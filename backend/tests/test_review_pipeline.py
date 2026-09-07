@@ -219,29 +219,23 @@ def test_a_single_section_skips_the_argument_lens_but_counts_all_four(
     assert artifact["problems_done"] == review_pipeline.LENS_COUNT
 
 
-def test_one_upstream_failure_is_weather_and_the_review_continues(
+def test_one_upstream_failure_stops_review_without_certifying_skipped_lenses(
     db: sqlite3.Connection, class_id: int, reviewer: _StubReviewer
 ) -> None:
-    # The first live review lost two whole lenses to a one-off llama-server 500. A
-    # single failed run is skipped; the run after it succeeding resets the count.
     artifact_id, part_id = _draft(db, class_id)
     reviewer.script = [
         ToolLoopResult(content="", stopped=UPSTREAM_FAILED, detail="A one-off 500."),
-        _files("Filed after the hiccup.", "major", "## Introduction"),
+        _files("Must not run after the incomplete lens.", "major", "## Introduction"),
     ]
-
     review_pipeline.run_review(review_pipeline.ReviewJob(artifact_id))
-
-    assert len(reviewer.runs) == 6
+    assert len(reviewer.runs) == 1
     artifact = artifacts.get_artifact(db, artifact_id)
-    assert artifact["state"] == artifacts.READY
-    assert artifact["error_message"] is None
-    assert artifact["stage_detail"] == "Review complete: 1 major."
-    [thread] = comments.list_threads(db, part_id, BODY)
-    assert thread["body"] == "Filed after the hiccup."
+    assert artifact["state"] == artifacts.FAILED
+    assert artifact["error_message"] == "A one-off 500."
+    assert comments.list_threads(db, part_id, BODY) == []
 
 
-def test_two_consecutive_upstream_failures_stop_the_review_but_keep_what_it_filed(
+def test_upstream_failure_stops_the_review_but_keeps_what_it_filed(
     db: sqlite3.Connection, class_id: int, reviewer: _StubReviewer
 ) -> None:
     artifact_id, part_id = _draft(db, class_id)
@@ -253,7 +247,7 @@ def test_two_consecutive_upstream_failures_stop_the_review_but_keep_what_it_file
 
     review_pipeline.run_review(review_pipeline.ReviewJob(artifact_id))
 
-    assert len(reviewer.runs) == 3
+    assert len(reviewer.runs) == 2
     artifact = artifacts.get_artifact(db, artifact_id)
     # `failed`, not `ready`: the alert that carries `error_message` renders on that state
     # alone, so an aborted review used to settle looking exactly like a finished one.
@@ -263,7 +257,7 @@ def test_two_consecutive_upstream_failures_stop_the_review_but_keep_what_it_file
     assert thread["body"] == "Filed before the endpoint died."
 
 
-def test_a_lens_hitting_its_ceiling_costs_that_lens_not_the_review(
+def test_a_lens_hitting_its_ceiling_cannot_certify_the_review(
     db: sqlite3.Connection, class_id: int, reviewer: _StubReviewer
 ) -> None:
     artifact_id, _ = _draft(db, class_id)
@@ -273,10 +267,10 @@ def test_a_lens_hitting_its_ceiling_costs_that_lens_not_the_review(
 
     review_pipeline.run_review(review_pipeline.ReviewJob(artifact_id))
 
-    assert len(reviewer.runs) == 6
+    assert len(reviewer.runs) == 1
     artifact = artifacts.get_artifact(db, artifact_id)
-    assert artifact["state"] == artifacts.READY
-    assert artifact["error_message"] is None
+    assert artifact["state"] == artifacts.FAILED
+    assert artifact["error_message"] == "Stopped after 12 rounds."
 
 
 def test_a_deep_review_adds_full_skeptic_runs_and_carries_plan_jobs(
@@ -688,6 +682,7 @@ def test_parallel_review_replays_successful_findings_when_a_peer_fails(
         deadline: float | None = None,
         coordinator: review_pipeline._CaptureCoordinator | None = None,
         worker_index: int = 0,
+        run_id: int | None = None,
     ) -> review_pipeline._CapturedLens:
         if "Introduction" in stage:
             return review_pipeline._CapturedLens(
@@ -705,11 +700,10 @@ def test_parallel_review_replays_successful_findings_when_a_peer_fails(
     review_pipeline.run_review(review_pipeline.ReviewJob(artifact_id))
 
     artifact = artifacts.get_artifact(db, artifact_id)
-    assert artifact["state"] == artifacts.READY
+    assert artifact["state"] == artifacts.FAILED
     threads = comments.list_threads(db, part_id, BODY)
     assert [thread["body"] for thread in threads] == [
         "survived: Reviewing prose: 1.3 Results",
-        "survived: Reviewing claims: 1.3 Results",
     ]
 
 
@@ -752,6 +746,7 @@ def test_parallel_review_checkpoints_only_validated_replayed_outcomes(
         deadline: float | None = None,
         coordinator: review_pipeline._CaptureCoordinator | None = None,
         worker_index: int = 0,
+        run_id: int | None = None,
     ) -> review_pipeline._CapturedLens:
         if "Introduction" in stage:
             return review_pipeline._CapturedLens(
@@ -824,10 +819,11 @@ def test_review_wall_clock_stops_without_reporting_unrun_lenses_complete(
     review_pipeline.run_review(review_pipeline.ReviewJob(artifact_id, depth="quick"))
 
     artifact = artifacts.get_artifact(db, artifact_id)
-    assert artifact["state"] == artifacts.READY
+    assert artifact["state"] == artifacts.FAILED
     assert artifact["problems_total"] == 4
     assert artifact["problems_done"] == 0
-    assert artifact["stage_detail"] == "Review stopped: the quick time budget was exhausted."
+    assert artifact["stage_detail"] == "The review did not finish."
+    assert "time budget was exhausted" in artifact["error_message"]
     assert reviewer.runs == []
 
 
