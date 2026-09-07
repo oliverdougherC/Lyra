@@ -183,3 +183,9 @@ flashcards, and unchanged behavior for smaller windows. The recorded one-call fl
 remains applicable because its dispatch parameters are unchanged; it is not relabelled as a
 new provider run. Successful final deck calls used at most 7,128 completion tokens. No provider
 thinking extension or shared transport change was made.
+
+Final code review added four failing-before regressions for a 2048-token window and an
+exact-fit source, on first and retry calls. Evidence is now retrieved and admitted first;
+optional whole-question memory uses only remaining context room (still capped at 4096
+characters). All 269 study checks pass. Large-window memory behavior remains covered; this
+software repair does not change the recorded failed ecology semantic acceptance.

@@ -616,16 +616,11 @@ def _propose_topic_cards(
     and no ordinal is reused. Returns the validated front/back pairs and the chunks that
     fed them, for the caller to persist with provenance.
     """
-    covered = _covered_questions(covered_fronts or set())
     retry = retained is not None
     retry_hint = _flashcard_retry_hint(retained or 0, job.cards_per_topic) if retry else None
     context_budget = _source_cap(
         config,
-        _prompt_tokens(
-            _flashcard_messages(
-                topic, job.cards_per_topic, [], retry_hint=retry_hint, covered=covered
-            )
-        ),
+        _prompt_tokens(_flashcard_messages(topic, job.cards_per_topic, [], retry_hint=retry_hint)),
     )
     _validate_sources(conn, job, class_id)
     _raise_if_cancelled(conn, job.artifact_id)
@@ -643,13 +638,19 @@ def _propose_topic_cards(
         job.cards_per_topic,
         list(result.chunks),
         retry_hint=retry_hint,
-        covered=covered,
     )
     if not kept_chunks:
         raise LyraError(CONTEXT_TOO_SMALL_MESSAGE)
-    messages = _flashcard_messages(
-        topic, job.cards_per_topic, kept_chunks, retry_hint=retry_hint, covered=covered
+    messages = _flashcard_messages(topic, job.cards_per_topic, kept_chunks, retry_hint=retry_hint)
+    # Evidence has priority: optional cross-topic memory can use only the room left
+    # after the original retrieval/trim contract, never displace an admitted chunk.
+    covered = _covered_questions(
+        covered_fronts or set(), token_budget=_input_ceiling(config) - _prompt_tokens(messages)
     )
+    if covered:
+        messages = _flashcard_messages(
+            topic, job.cards_per_topic, kept_chunks, retry_hint=retry_hint, covered=covered
+        )
     reply = _call_json(config, messages, prompts.FLASHCARDS_SCHEMA)
     _raise_if_cancelled(conn, job.artifact_id)
 
@@ -978,12 +979,12 @@ def _gather_source_text(
     return "\n\n".join(gathered), contributing
 
 
-def _covered_questions(fronts: set[str]) -> str:
+def _covered_questions(fronts: set[str], *, token_budget: int | None = None) -> str:
     """Bounded cross-topic memory, not additional evidence or a semantic validator.
 
-    Whole fronts only; the exact resulting message is counted in source budgeting and
-    chunk admission. Long/large decks can exceed this 4,096-character memory horizon, so
-    deterministic deduplication remains active and semantic review remains necessary.
+    Whole fronts only, within both the 4,096-character horizon and the optional token
+    budget remaining after source admission. Deterministic deduplication remains active
+    for fronts outside this memory horizon; semantic review remains necessary.
     """
     if not fronts:
         return ""
@@ -997,6 +998,9 @@ def _covered_questions(fronts: set[str]) -> str:
     for front in sorted(fronts):
         entry = json.dumps(front, ensure_ascii=False)
         if characters + len(entry) + 1 > 4_096:
+            continue
+        candidate = heading + "\n".join([*entries, entry])
+        if token_budget is not None and estimate_tokens(candidate) > token_budget:
             continue
         entries.append(entry)
         characters += len(entry) + 1

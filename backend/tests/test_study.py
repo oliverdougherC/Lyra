@@ -1842,6 +1842,64 @@ def test_deck_tells_later_topics_and_retries_which_questions_are_already_covered
     assert len(llm.calls) == 4
 
 
+@pytest.mark.parametrize("retained", [None, 1])
+@pytest.mark.parametrize("exact_source_fit", [False, True])
+def test_optional_memory_preserves_the_only_source_in_a_small_window(
+    db: sqlite3.Connection,
+    class_id: int,
+    llm: _StubLLM,
+    monkeypatch: pytest.MonkeyPatch,
+    retained: int | None,
+    exact_source_fit: bool,
+) -> None:
+    document_id = _document(db, class_id)
+    artifact_id = _deck(db, class_id, document_id)
+    job = _deck_job(artifact_id, document_id, cards_per_topic=2)
+    config = TutorConfig("http://127.0.0.1:9/v1", None, "m", 2048)
+    chunk = _flashcard_chunk("source evidence " * 50)
+    fronts = {
+        f"Question {i}: " + "Explain the relationship under the stated assumptions. " * 6
+        for i in range(12)
+    }
+    retry_hint = study._flashcard_retry_hint(retained, 2) if retained is not None else None
+    source_messages = study._flashcard_messages("topic", 2, [chunk], retry_hint=retry_hint)
+    if exact_source_fit:
+        ceiling = study._prompt_tokens(source_messages)
+        monkeypatch.setattr(study, "_input_ceiling", lambda _config: ceiling)
+    empty_messages = study._flashcard_messages("topic", 2, [], retry_hint=retry_hint)
+    expected_retrieval_budget = min(
+        study.TOPIC_RETRIEVAL_BUDGET,
+        study._source_cap(config, study._prompt_tokens(empty_messages)),
+    )
+
+    def retrieve(*args: object, **kwargs: object) -> RetrievalResult:
+        # Prior questions are optional; they must not reduce the source admission budget.
+        assert args[3] == expected_retrieval_budget
+        assert kwargs["document_ids"] == job.source_ids
+        return RetrievalResult(chunks=[chunk], trimmed=False, omitted_document_count=0)
+
+    monkeypatch.setattr(study, "retrieve", retrieve)
+    llm.replies = [_cards("A distinct question?")]
+    proposed, kept_chunks = study._propose_topic_cards(
+        db, job, config, class_id, "topic", retained=retained, covered_fronts=fronts
+    )
+
+    assert len(proposed) == 1
+    assert kept_chunks == [chunk]
+    messages = llm.calls[0]["args"][3]
+    assert study._prompt_tokens(messages) <= study._input_ceiling(config)
+    assert chunk.content in str(messages)
+    assert messages[: len(source_messages)] == source_messages
+    if exact_source_fit:
+        assert messages == source_messages
+    else:
+        assert len(messages) == len(source_messages) + 1
+        assert messages[-1]["role"] == "user"
+        covered = messages[-1]["content"]
+        assert len(covered) < len(study._covered_questions(fronts))
+        assert all(json.loads(line) in fronts for line in covered.splitlines()[2:])
+
+
 def test_covered_questions_are_bounded_and_count_toward_chunk_admission(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
