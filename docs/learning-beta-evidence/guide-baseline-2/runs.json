@@ -1,0 +1,617 @@
+{
+  "cases": {
+    "no-idea-how-to-start": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Start with the rate salt comes in \u2014 it's the easier one.\n\n**Rate in** = (concentration of incoming brine) \u00d7 (flow rate):\n\n$$0.1 \\text{ kg/L} \\times 3 \\text{ L/min} = 0.3 \\text{ kg/min}$$\n\nWatch the units: kg/L \u00d7 L/min = kg/min. If your units don't cancel like that, something's off.\n\n**Rate out** is the trickier one, because the outflow carries whatever concentration is *in the tank*. Since 3 L/min enters and 3 L/min leaves, the volume stays at 100 L, so the concentration in the tank is $S(t)/100$ kg/L. Then:\n\n$$\\text{rate out} = 3 \\text{ L/min} \\times \\frac{S(t)}{100} \\text{ kg/L} = 0.03\\,S(t) \\text{ kg/min}$$\n\nPut the two together with $S(0) = 20$:\n\n$$\\frac{dS}{dt} = 0.3 - 0.03\\,S, \\qquad S(0) = 20$$\n\nThat's the whole setup \u2014 a first-order linear ODE. Want me to walk through solving it?",
+      "generated_at": "2026-09-07T00:35:47+00:00",
+      "duration_seconds": 14.29,
+      "system_prompt_tokens": 1057,
+      "assembled_prompt_sha256": "0b31e3c9a68663350dae27767f270606a0307c9c79e4bf7da1341412c5c8cfd7",
+      "tool_schema_tokens": 1266,
+      "user": "I have no idea how to start.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "99383ff71f3d187ff79a3870522fcc52de7cd5db43df4d103c71cf9c1965bdd3",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "attempt-where-did-i-go-wrong": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(e^{-(0.5-tau)}, tau, 0, 0.5)",
+            "compare_to": "1 - e^{-0.5}"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(e^{-(0.5-tau)}, tau, 0, 0.5)\", \"compare_to\": \"1 - e^{-0.5}\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "expression contains characters that are not mathematical notation."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(e^{-(2-tau)}, tau, 0, 1)",
+            "compare_to": "(e - 1)*e^{-2}"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(e^{-(2-tau)}, tau, 0, 1)\", \"compare_to\": \"(e - 1)*e^{-2}\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "expression contains characters that are not mathematical notation."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "0.5*e^{-0.5}",
+            "compare_to": "1 - e^{-0.5}"
+          },
+          "raw_arguments": "{\"expression\": \"0.5*e^{-0.5}\", \"compare_to\": \"1 - e^{-0.5}\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "expression contains characters that are not mathematical notation."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(exp(-(0.5-tau)), tau, 0, 0.5)",
+            "compare_to": "1 - exp(-0.5)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(exp(-(0.5-tau)), tau, 0, 0.5)\", \"compare_to\": \"1 - exp(-0.5)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(exp(-(2-tau)), tau, 0, 1)",
+            "compare_to": "(exp(1) - 1)*exp(-2)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(exp(-(2-tau)), tau, 0, 1)\", \"compare_to\": \"(exp(1) - 1)*exp(-2)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(exp(-(t-tau)), tau, 0, t)",
+            "compare_to": "1 - exp(-t)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(exp(-(t-tau)), tau, 0, t)\", \"compare_to\": \"1 - exp(-t)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(exp(-(t-tau)), tau, 0, 1)",
+            "compare_to": "exp(-t)*(exp(1) - 1)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(exp(-(t-tau)), tau, 0, 1)\", \"compare_to\": \"exp(-t)*(exp(1) - 1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        }
+      ],
+      "rounds": 4,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "Two separate slips, and the second one is the big one:\n\n**1. The integrand still depends on $\\tau$.** You wrote $h(t-\\tau) = e^{-t}$, but it's $e^{-(t-\\tau)}$. Only $e^{-t}$ is constant in $\\tau$; the $e^{\\tau}$ part is not. That's why your integral came out as $t e^{-t}$ \u2014 you integrated a constant.\n\n**2. The upper limit isn't always $t$.** $x(\\tau) = u(\\tau) - u(\\tau-1)$ is a pulse: it's 1 only on $0 \\le \\tau \\le 1$, and 0 elsewhere. So the integral runs from 0 to $\\min(t, 1)$, not to $t$. Your answer is only valid (in form) while $t \\le 1$.\n\nPutting it together, with the correct integrand:\n\n$$y(t) = \\int_0^{\\min(t,1)} e^{-(t-\\tau)}\\, d\\tau = e^{-t}\\int_0^{\\min(t,1)} e^{\\tau}\\, d\\tau = e^{-t}\\left(e^{\\min(t,1)} - 1\\right)$$\n\nSo the piecewise answer is:\n\n$$y(t) = \\begin{cases} 0, & t < 0 \\\\ 1 - e^{-t}, & 0 \\le t \\le 1 \\\\ (e-1)e^{-t}, & t > 1 \\end{cases}$$\n\nI verified the two nontrivial integrals symbolically: $\\int_0^t e^{-(t-\\tau)}d\\tau = 1 - e^{-t}$ and $\\int_0^1 e^{-(t-\\tau)}d\\tau = (e-1)e^{-t}$, both check out.\n\nA quick sanity check on the shape: at $t=1$ both pieces give $1 - e^{-1}$, so it's continuous; it rises while the pulse is still overlapping the decaying exponential, then decays like $e^{-t}$ after the pulse ends. That rise-then-decay is exactly what you'd expect from convolving a pulse with a decaying exponential.",
+      "generated_at": "2026-09-07T00:36:16+00:00",
+      "duration_seconds": 29.13,
+      "system_prompt_tokens": 1057,
+      "assembled_prompt_sha256": "38068235331ebfb964cba788cdc6cad599cdea9d61c29879597511a11ace00d4",
+      "tool_schema_tokens": 1266,
+      "user": "Here's my attempt - where did I go wrong?\n\ny(t) = integral of x(tau) h(t-tau) d(tau) = integral from 0 to t of e^{-t} d(tau) = t e^{-t}, for t > 0",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "99383ff71f3d187ff79a3870522fcc52de7cd5db43df4d103c71cf9c1965bdd3",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "just-tell-me-the-answer": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "diff(10 + 10*e^(-0.03*t), t)",
+            "compare_to": "0.3 - 0.03*(10 + 10*e^(-0.03*t))"
+          },
+          "raw_arguments": "{\"expression\": \"diff(10 + 10*e^(-0.03*t), t)\", \"compare_to\": \"0.3 - 0.03*(10 + 10*e^(-0.03*t))\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": false,
+            "difference": "0.3*(1 - log(e))/e**(0.03*t)",
+            "certain": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "diff(10 + 10*exp(-0.03*t), t)",
+            "compare_to": "0.3 - 0.03*(10 + 10*exp(-0.03*t))"
+          },
+          "raw_arguments": "{\"expression\": \"diff(10 + 10*exp(-0.03*t), t)\", \"compare_to\": \"0.3 - 0.03*(10 + 10*exp(-0.03*t))\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "$$S(t) = 10 + 10\\,e^{-0.03t} \\text{ kg}$$\n\nQuick reason: salt enters at $0.1 \\times 3 = 0.3$ kg/min, and leaves at $3 \\cdot \\frac{S}{100} = 0.03S$ kg/min, so $\\frac{dS}{dt} = 0.3 - 0.03S$. Solving with $S(0) = 20$ gives the formula above (I verified it satisfies both the equation and the initial condition). As $t \\to \\infty$ it approaches 10 kg, which makes sense \u2014 the tank is heading toward the incoming concentration of 0.1 kg/L.",
+      "generated_at": "2026-09-07T00:36:26+00:00",
+      "duration_seconds": 9.56,
+      "system_prompt_tokens": 1057,
+      "assembled_prompt_sha256": "e6355e363f55aba1fe0ea97c58d2a4dcf350cb2fd7ba91db82aa2e9a79539b59",
+      "tool_schema_tokens": 1266,
+      "user": "Just tell me the answer.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "99383ff71f3d187ff79a3870522fcc52de7cd5db43df4d103c71cf9c1965bdd3",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "explain-that-more-simply": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Convolution is just \"how much of the past matters, and how.\"\n\nImagine you're in a room with an echo. Every sound you make bounces back a bit later, quieter. If you clap at 1 second, you hear a faint echo at 2 seconds. If you clap again at 3 seconds, you hear another echo at 4 seconds.\n\nNow do a whole sequence of claps. At any moment, the sound you hear is **all the claps so far**, each one faded by how long ago it happened.\n\nThat's convolution:\n\n- You have a **signal** (your claps).\n- You have a **response** (how the room echoes one clap).\n- The **output** at any moment = every piece of the signal, shifted by how long ago it happened, and scaled by how much the response still \"remembers\" it.\n\nThe integral is just the continuous version of adding up all those little contributions. No magic \u2014 it's a weighted sum over the past, where the weights come from the system's response.",
+      "generated_at": "2026-09-07T00:36:28+00:00",
+      "duration_seconds": 2.49,
+      "system_prompt_tokens": 1057,
+      "assembled_prompt_sha256": "c84889e5087afa2d5e2a6b56a9b5247d5fdf3f4c939fc9f17ba183a4f70e69e3",
+      "tool_schema_tokens": 1266,
+      "user": "Explain that more simply.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "99383ff71f3d187ff79a3870522fcc52de7cd5db43df4d103c71cf9c1965bdd3",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "dont-ask-me-questions-teach-it": {
+      "tool_calls": [
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "3*1 + 1*(-1)",
+            "compare_to": "2*1"
+          },
+          "raw_arguments": "{\"expression\": \"3*1 + 1*(-1)\", \"compare_to\": \"2*1\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "0*1 + 2*(-1)",
+            "compare_to": "2*(-1)"
+          },
+          "raw_arguments": "{\"expression\": \"0*1 + 2*(-1)\", \"compare_to\": \"2*(-1)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(3-lambda)*(2-lambda)",
+            "compare_to": "lambda**2 - 5*lambda + 6"
+          },
+          "raw_arguments": "{\"expression\": \"(3-lambda)*(2-lambda)\", \"compare_to\": \"lambda**2 - 5*lambda + 6\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "Could not read the expression: SyntaxError: invalid syntax"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "(3-l)*(2-l)",
+            "compare_to": "l**2 - 5*l + 6"
+          },
+          "raw_arguments": "{\"expression\": \"(3-l)*(2-l)\", \"compare_to\": \"l**2 - 5*l + 6\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "equal": true,
+            "difference": "0",
+            "certain": true
+          }
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "An eigenvalue is a stretch factor.\n\n**The mental model.** A matrix $A$ is a machine that takes a vector in and spits a vector out, usually in a *different direction*. An eigenvector is a special input that comes out pointing along its own line \u2014 the machine only stretches (or flips) it, never rotates it off its line. The eigenvalue $\\lambda$ is exactly how much it was stretched:\n\n$$A\\mathbf{x} = \\lambda \\mathbf{x}, \\qquad \\mathbf{x} \\neq \\mathbf{0}$$\n\nIf $\\lambda = 2$, the vector comes out twice as long. If $\\lambda = -1$, it's flipped to the opposite side, same length. If $\\lambda = 0$, it's crushed to zero.\n\n**A concrete example.** Take $A = \\begin{pmatrix} 3 & 1 \\\\ 0 & 2 \\end{pmatrix}$ and try $\\mathbf{x} = \\begin{pmatrix} 1 \\\\ -1 \\end{pmatrix}$:\n\n$$A\\mathbf{x} = \\begin{pmatrix} 3\\cdot 1 + 1\\cdot(-1) \\\\ 0\\cdot 1 + 2\\cdot(-1) \\end{pmatrix} = \\begin{pmatrix} 2 \\\\ -2 \\end{pmatrix} = 2\\begin{pmatrix} 1 \\\\ -1 \\end{pmatrix}$$\n\nThe output is exactly $2$ times the input \u2014 same line, twice as long. So $\\lambda = 2$ is an eigenvalue and $\\mathbf{x} = (1,-1)$ is its eigenvector.\n\n**How you'd find them without guessing.** $A\\mathbf{x} = \\lambda\\mathbf{x}$ rearranges to $(A - \\lambda I)\\mathbf{x} = \\mathbf{0}$. A nonzero solution exists only when that matrix is singular, i.e. when its determinant vanishes:\n\n$$\\det(A - \\lambda I) = 0$$\n\nFor our $A$: $\\det\\begin{pmatrix} 3-\\lambda & 1 \\\\ 0 & 2-\\lambda \\end{pmatrix} = (3-\\lambda)(2-\\lambda) = 0$, giving $\\lambda = 3$ or $\\lambda = 2$. Each of those $\\lambda$'s, plugged back in, gives you the matching eigenvector(s).\n\nOne thing to keep straight: the eigenvalue is a *number* (the stretch factor); the eigenvector is the *direction* that survives the stretch. They come as a pair, and the same eigenvalue can have many eigenvectors \u2014 all the vectors on that one line.",
+      "generated_at": "2026-09-07T00:37:02+00:00",
+      "duration_seconds": 33.75,
+      "system_prompt_tokens": 1057,
+      "assembled_prompt_sha256": "955a9399c4056f9a73350d61623c61fd055e2d17357c68eb8a8835dfc2a6d0e4",
+      "tool_schema_tokens": 1266,
+      "user": "Don't ask me questions; teach it.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "99383ff71f3d187ff79a3870522fcc52de7cd5db43df4d103c71cf9c1965bdd3",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    },
+    "show-convolution-worked": {
+      "tool_calls": [
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "e^{-(t - tau)}",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"e^{-(t - tau)}\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "expression contains characters that are not mathematical notation."
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "e^{-(t - tau)}",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "1"
+          },
+          "raw_arguments": "{\"expression\": \"e^{-(t - tau)}\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "expression contains characters that are not mathematical notation."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate((u(tau) - u(tau - 1)) * e^{-(t - tau)} * u(t - tau), tau, -oo, oo)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate((u(tau) - u(tau - 1)) * e^{-(t - tau)} * u(t - tau), tau, -oo, oo)\"}",
+          "ok": false,
+          "result": {
+            "ok": false,
+            "error": "expression contains characters that are not mathematical notation."
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(1 - e^(-t), t, 0, 1) + integrate((e - 1)*e^(-t), t, 1, oo)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(1 - e^(-t), t, 0, 1) + integrate((e - 1)*e^(-t), t, 1, oo)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "Piecewise(((e*((e - 1)*Integral(e**(-t), (t, 1, oo)) + 1)*log(e) - e + 1)/(e*log(e)), ((e > 0) | (e > 1)) & ((e > 1) | (e < 1))), ((e - 1)*Integral(e**(-t), (t, 1, oo)), True))"
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t - tau))",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "t"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"t\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "1 - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_integrate",
+          "arguments": {
+            "expression": "exp(-(t - tau))",
+            "variable": "tau",
+            "lower": "0",
+            "upper": "1"
+          },
+          "raw_arguments": "{\"expression\": \"exp(-(t - tau))\", \"variable\": \"tau\", \"lower\": \"0\", \"upper\": \"1\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "result": "exp(1 - t) - exp(-t)",
+            "definite": true
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate((u(tau) - u(tau - 1)) * exp(-(t - tau)) * u(t - tau), tau, -oo, oo)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate((u(tau) - u(tau - 1)) * exp(-(t - tau)) * u(t - tau), tau, -oo, oo)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "-exp(-t)*Integral((-Heaviside(tau) + Heaviside(tau - 1))*exp(tau)*Heaviside(t - tau), (tau, -oo, oo))"
+          }
+        },
+        {
+          "name": "cas_evaluate",
+          "arguments": {
+            "expression": "integrate(1 - exp(-t), t, 0, 1) + integrate((exp(1) - 1)*exp(-t), t, 1, oo)"
+          },
+          "raw_arguments": "{\"expression\": \"integrate(1 - exp(-t), t, 0, 1) + integrate((exp(1) - 1)*exp(-t), t, 1, oo)\"}",
+          "ok": true,
+          "result": {
+            "ok": true,
+            "simplified": "1"
+          }
+        }
+      ],
+      "rounds": 3,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": true,
+      "status": "ok",
+      "response": "## Result\n\n$$y(t) = \\bigl[u(t)-u(t-1)\\bigr] * e^{-t}u(t) = \\begin{cases} 0, & t < 0 \\\\ 1 - e^{-t}, & 0 \\le t < 1 \\\\ e^{1-t} - e^{-t}, & t \\ge 1 \\end{cases}$$\n\n## Step-by-step\n\n**Step 1 \u2014 Write the convolution integral.** The unit pulse on $[0,1]$ is $x(t) = u(t) - u(t-1)$, so\n\n$$y(t) = \\int_{-\\infty}^{\\infty} x(\\tau)\\, h(t-\\tau)\\, d\\tau = \\int_{0}^{1} e^{-(t-\\tau)}\\, u(t-\\tau)\\, d\\tau$$\n\nThe pulse already restricts $\\tau$ to $[0,1]$; the only remaining factor that can change the limits is $u(t-\\tau)$, which is $1$ exactly when $\\tau \\le t$.\n\n**Step 2 \u2014 Case $t < 0$.** For every $\\tau \\in [0,1]$, we have $\\tau > t$, so $u(t-\\tau) = 0$ throughout. The integrand vanishes:\n\n$$y(t) = 0$$\n\n**Step 3 \u2014 Case $0 \\le t < 1$.** Now $u(t-\\tau) = 1$ for $\\tau \\in [0, t]$ and $0$ for $\\tau \\in (t, 1]$, so the upper limit shrinks to $t$:\n\n$$y(t) = \\int_0^t e^{-(t-\\tau)}\\, d\\tau$$\n\nTreat $t$ as a constant and substitute $s = t - \\tau$ (or just integrate in $\\tau$): $\\int e^{-(t-\\tau)}\\,d\\tau = e^{-(t-\\tau)}$, so\n\n$$y(t) = \\Bigl[e^{-(t-\\tau)}\\Bigr]_{\\tau=0}^{\\tau=t} = e^{0} - e^{-t} = 1 - e^{-t}$$\n\n**Step 4 \u2014 Case $t \\ge 1$.** Now $t$ is past the whole pulse, so $u(t-\\tau) = 1$ for all $\\tau \\in [0,1]$ and the limits stay $[0,1]$:\n\n$$y(t) = \\int_0^1 e^{-(t-\\tau)}\\, d\\tau = \\Bigl[e^{-(t-\\tau)}\\Bigr]_{0}^{1} = e^{1-t} - e^{-t}$$\n\n**Step 5 \u2014 Sanity checks.**\n- Continuity at $t=1$: both middle and last formulas give $1 - e^{-1}$ \u2713\n- As $t \\to \\infty$, $y(t) \\to 0$ \u2713 (the exponential decays)\n- Total area: $\\int_0^\\infty y(t)\\,dt = 1$, which must equal (area of pulse) \u00d7 (area of $e^{-t}u(t)$) = $1 \\times 1$ \u2713 \u2014 I verified this integral symbolically and it comes out exactly $1$.\n\n## The idea to carry forward\n\nConvolution with a decaying exponential is a \"sliding window\" operation: as $t$ sweeps past the pulse, the window of overlap grows (giving the rising $1 - e^{-t}$), then the pulse slides out of the window and the output decays (giving $e^{1-t} - e^{-t}$). The breakpoints of the answer always occur where the edges of the two signals meet \u2014 here at $t = 0$ and $t = 1$ \u2014 so the first move in any such problem is to list those edge crossings and split the integral at each one.",
+      "generated_at": "2026-09-07T00:37:35+00:00",
+      "duration_seconds": 33.49,
+      "system_prompt_tokens": 860,
+      "assembled_prompt_sha256": "9e8c36b2ec07d4eceb0f6dcecb2032a9f1ada8d8b2306ed37c9e0155da388fa5",
+      "tool_schema_tokens": 1266,
+      "user": "Show me how to compute the convolution of the unit pulse on [0,1] with e^{-t}u(t), step by step.",
+      "mode": "show",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "7f41411936bdf96cbb19512ffb1f0a7d9fc2305d867a518d1c988aea61895fed",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "99383ff71f3d187ff79a3870522fcc52de7cd5db43df4d103c71cf9c1965bdd3",
+          "agent_prompt_source": "cde25ccff86b0fd06cc8de07c32601a1ba8931896df3d6c722ba6b0f98c50e4c",
+          "harness": "127660f6218e0128d03d26a2c485b545010cd980b0c034774d6b24ef9b987a55"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

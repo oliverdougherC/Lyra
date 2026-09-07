@@ -93,8 +93,8 @@ The first improved run still repeated conceptually identical questions across re
 topics. That intermediate failure is retained in `study-beta-improved.json`; it is not counted
 as a passing final deck. A follow-up supplies later topic calls and retries with the already
 accepted question fronts, instructing them to choose a different supported knowledge probe.
-This memory is bounded to 4,096 characters, keeps whole fronts, and is included in the existing
-source-budget and full-prompt chunk-admission checks. It adds no model calls and never changes
+This memory is bounded to 4,096 characters and keeps whole fronts. Evidence is retrieved and
+admitted first; memory uses only the remaining input room. It adds no model calls and never changes
 the requested count or publishes incomplete output. Oversized fronts and larger decks may
 exceed this memory horizon, so it reduces duplicates without claiming a semantic guarantee.
 

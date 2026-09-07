@@ -1,0 +1,57 @@
+{
+  "cases": {
+    "simpler-osmosis": {
+      "tool_calls": [],
+      "rounds": 1,
+      "toolless": false,
+      "stopped": "completed",
+      "generation_parameters": {
+        "temperature": 0.0,
+        "max_tokens": 65536,
+        "max_depth": 24,
+        "timeout_seconds": 600.0
+      },
+      "observed_tools_supported": null,
+      "status": "ok",
+      "response": "Osmosis is water moving on its own through a membrane that only water can pass through.\n\nHere's the picture: imagine a membrane that water can slip through, but sugar or salt cannot. If one side has plain water and the other side has salty water, water will drift from the plain side toward the salty side. It keeps going until the plain side gets more diluted and the salty side gets a bit more diluted, so the two sides are more similar.\n\nWhy does it happen? The water on the plain side is \"crowded\" \u2014 there's more of it relative to solute \u2014 so more water molecules bump into the membrane and pass through from that side. On the salty side, solute particles take up space, so fewer water molecules are available to cross. The net result: more water crosses toward the salty side than back, and that net flow is osmosis.\n\nA concrete example: a raisin in water. The raisin's skin lets water in but not the sugar inside. Water flows into the raisin, and it swells up. That's osmosis doing the work.",
+      "generated_at": "2026-09-07T00:55:59+00:00",
+      "duration_seconds": 2.81,
+      "system_prompt_tokens": 1347,
+      "assembled_prompt_sha256": "2bbba18368ea72641e2a9f332a0f533bbcab3cbcdf15842d46a16aa691679341",
+      "assembled_system_prompt_sha256": "c914ba13ba9c2b9533770b8890c42ec1afefd950b5089eecb6bfe7d142d0cb3e",
+      "tool_schema_tokens": 1266,
+      "user": "That is too abstract. Explain it in plain words.",
+      "mode": "guide",
+      "provenance": {
+        "evidence_version": 2,
+        "app": {
+          "sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+          "dirty": true
+        },
+        "hashes": {
+          "corpus": "4eec7bfd39d2d934cc12ec20e68f95af2f7da1df043fe1977dba1b530f05991a",
+          "rubric": "10ccd372b07e09ea21e7de2315646c09d6cdb308e5c9009937b873032fc51144",
+          "prompts": "b6ed20c9d01bcfda7295f2c890c7b663e3e133157030fa64675babd3fe7d5a71",
+          "agent_prompt_source": "c7d252c1d057afca0df2ba532ffa1a165c4d1ba7cca192371a908581b0448749",
+          "harness": "0f26047fb5205e5f61372445a8443b8deb8cd0f6ea53b7eea2752f700607e33c"
+        },
+        "model": "Qwen3.8-27B",
+        "model_identity_source": "configured; server identity not independently verified",
+        "context_window": 262144,
+        "context_window_source": "configured; maximum not independently measured",
+        "endpoint_locality": "remote",
+        "capabilities": {
+          "stored_tools_supported": null
+        },
+        "review": {
+          "deterministic": "integrity checks only",
+          "model_judge": "separate grade stage",
+          "independent_agent": "not_run",
+          "human": "not_run"
+        },
+        "surface": "class_chat",
+        "synthetic_environment": true
+      }
+    }
+  }
+}

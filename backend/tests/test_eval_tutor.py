@@ -420,6 +420,8 @@ def test_grade_records_the_judge_it_uses(tmp_path: Path, monkeypatch: pytest.Mon
     assert meta["tutor"] == {"model": "tutor-model", "locality": "local"}
     assert meta["judge"]["model"] == "tutor-model"
     assert meta["judge"]["same_as_tutor"] is True
+    assert meta["corpus_sha256"] == eval_tutor._sha256(CORPUS.read_bytes())
+    assert meta["rubric_sha256"] == eval_tutor._sha256(eval_tutor._GRADER_PROMPT.encode())
     assert seen_models == ["tutor-model"]
 
     # A re-grade with an explicit judge updates the entry and records the switch.

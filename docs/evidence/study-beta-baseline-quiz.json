@@ -1,0 +1,1490 @@
+{
+  "corpus_version": "study-beta-1",
+  "corpus_sha256": "aeba5901143e1f2f254263f9e46a3c68c067eda363fa93711c8b2a524d4e4e4b",
+  "rubric_version": "study-critical-1",
+  "critical_acceptance": [
+    "Every published answer is supported by selected material or an explicit valid derivation",
+    "Questions include enough context to answer independently",
+    "No ambiguous correct options or contradictory answer keys",
+    "Cards have useful self-contained answers and do not merely restate their fronts",
+    "No repeated knowledge probes masquerading as distinct practice",
+    "No excluded or wrong-class source provenance",
+    "Insufficient evidence may fail honestly; fabricated Ready content fails"
+  ],
+  "sha": "e96bf4886977c648f9e7905c7807c806b1ae7a80",
+  "study_sha256": "2326f09017c82aa51b782783c526754faaca711bd53015718ca6296a1645a1e9",
+  "prompts_sha256": "99383ff71f3d187ff79a3870522fcc52de7cd5db43df4d103c71cf9c1965bdd3",
+  "app_version": "0.2.0-beta.0",
+  "configuration": {
+    "model": "Qwen3.8-27B",
+    "locality": "remote",
+    "tools_supported_stored": null,
+    "context_window": 262144,
+    "max_tokens": 65536,
+    "temperature": 0.0,
+    "concurrency": 1,
+    "schema_capability": "observed in call transcript; fallback remains production behavior"
+  },
+  "review": {
+    "deterministic": "per-case structural results only",
+    "model_self_judging": "not run",
+    "independent_agent": "pending",
+    "human": "not run"
+  },
+  "results": [
+    {
+      "case": "circuits",
+      "split": "development",
+      "kind": "quiz",
+      "repeat": 1,
+      "state": "ready",
+      "latency_seconds": 58.993,
+      "terminal_content": [
+        {
+          "content": {
+            "type": "mcq",
+            "question": "In a series circuit with a $2\\,\\Omega$ resistor and a $4\\,\\Omega$ resistor connected to a $12\\,\\text{V}$ source, what is the current?",
+            "options": [
+              "1 A",
+              "2 A",
+              "3 A",
+              "6 A"
+            ],
+            "correct_index": 1,
+            "explanation": "The equivalent resistance is $2+4=6\\,\\Omega$, so $I=V/R=12/6=2\\,\\text{A}$.",
+            "topic": "Series circuits",
+            "difficulty": "intermediate"
+          },
+          "provenance": [
+            {
+              "id": 1,
+              "part_id": 1,
+              "chunk_id": null,
+              "document_id": 1,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            },
+            {
+              "id": 2,
+              "part_id": 1,
+              "chunk_id": null,
+              "document_id": 2,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "In a series circuit with a $2\\,\\Omega$ resistor and a $4\\,\\Omega$ resistor connected to a $12\\,\\text{V}$ source, what is the voltage drop across the $4\\,\\Omega$ resistor?",
+            "options": [
+              "$2\\,\\text{V}$",
+              "$4\\,\\text{V}$",
+              "$8\\,\\text{V}$",
+              "$12\\,\\text{V}$"
+            ],
+            "correct_index": 2,
+            "explanation": "The series current is $2\\,\\text{A}$, so $V=IR=2\\times4=8\\,\\text{V}$.",
+            "topic": "Series voltage drops",
+            "difficulty": "intermediate"
+          },
+          "provenance": [
+            {
+              "id": 3,
+              "part_id": 2,
+              "chunk_id": null,
+              "document_id": 1,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            },
+            {
+              "id": 4,
+              "part_id": 2,
+              "chunk_id": null,
+              "document_id": 2,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Two $6\\,\\Omega$ resistors are connected in parallel. What is their equivalent resistance?",
+            "options": [
+              "$1.5\\,\\Omega$",
+              "$3\\,\\Omega$",
+              "$6\\,\\Omega$",
+              "$12\\,\\Omega$"
+            ],
+            "correct_index": 1,
+            "explanation": "$1/R_{eq}=1/6+1/6=1/3$, so $R_{eq}=3\\,\\Omega$.",
+            "topic": "Parallel resistance",
+            "difficulty": "intermediate"
+          },
+          "provenance": [
+            {
+              "id": 5,
+              "part_id": 3,
+              "chunk_id": null,
+              "document_id": 1,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            },
+            {
+              "id": 6,
+              "part_id": 3,
+              "chunk_id": null,
+              "document_id": 2,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "In a series circuit with a $2\\,\\Omega$ resistor and a $4\\,\\Omega$ resistor connected to a $12\\,\\text{V}$ source, what is the power dissipated by the $4\\,\\Omega$ resistor?",
+            "options": [
+              "$4\\,\\text{W}$",
+              "$8\\,\\text{W}$",
+              "$16\\,\\text{W}$",
+              "$36\\,\\text{W}$"
+            ],
+            "correct_index": 2,
+            "explanation": "The series current is $2\\,\\text{A}$, so $P=I^2R=2^2\\times4=16\\,\\text{W}$.",
+            "topic": "Power dissipation",
+            "difficulty": "intermediate"
+          },
+          "provenance": [
+            {
+              "id": 7,
+              "part_id": 4,
+              "chunk_id": null,
+              "document_id": 1,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            },
+            {
+              "id": 8,
+              "part_id": 4,
+              "chunk_id": null,
+              "document_id": 2,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "An ideal ammeter should be connected in a circuit how?",
+            "options": [
+              "In series with the element whose current is being measured",
+              "In parallel with the element whose current is being measured",
+              "In series with the source only",
+              "In parallel with the source only"
+            ],
+            "correct_index": 0,
+            "explanation": "The material states that an ideal ammeter is inserted in series so that it carries the current being measured.",
+            "topic": "Circuit measurement",
+            "difficulty": "intermediate"
+          },
+          "provenance": [
+            {
+              "id": 9,
+              "part_id": 5,
+              "chunk_id": null,
+              "document_id": 1,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            },
+            {
+              "id": 10,
+              "part_id": 5,
+              "chunk_id": null,
+              "document_id": 2,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            }
+          ]
+        }
+      ],
+      "calls": [
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing a 5-question quiz at intermediate difficulty from the course\nmaterial below, using only these question types: mcq. Rules by type - mcq: exactly\nfour plausible options with one correct; the wrong options must be believable mistakes,\nnot filler. true_false: the options are exactly [\"True\", \"False\"]. fill_blank: the\nquestion contains a ___ blank, the options array holds exactly the one correct answer,\nand correct_index is 0. Every question carries a one-or-two-sentence explanation of why\nthe answer is correct, and a topic label. Use the course's notation; math in KaTeX.\nBase every question on the material provided."
+            },
+            {
+              "role": "user",
+              "content": "In an ideal DC resistive circuit, voltage V in volts equals current I in amperes times resistance R in ohms: V = IR. For positive resistance, doubling V at fixed R doubles I. In series, the same current flows through all resistors and equivalent resistance is their sum. Two series resistors of 2 ohms and 4 ohms have equivalent resistance 6 ohms; on a 12 V source current is 2 A. Voltage drops are 4 V and 8 V, summing to the source voltage.\n\nIn parallel each branch has the same voltage. The reciprocal equivalent resistance is the sum of reciprocal branch resistances. Two 6-ohm parallel resistors have equivalent resistance 3 ohms. On a 12 V supply each branch carries 2 A, so total current is 4 A. Power P = VI = I^2 R = V^2/R for an ideal resistor; units are watts. At fixed voltage a smaller resistance dissipates more power, but at fixed current a larger resistance dissipates more power. State which quantity is fixed before comparing power. An ideal ammeter is inserted in series and an ideal voltmeter in parallel."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "quiz_questions",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"questions\": [\n    {\n      \"type\": \"mcq\",\n      \"question\": \"In a series circuit with a $2\\\\,\\\\Omega$ resistor and a $4\\\\,\\\\Omega$ resistor connected to a $12\\\\,\\\\text{V}$ source, what is the current?\",\n      \"options\": [\n        \"1 A\",\n        \"2 A\",\n        \"3 A\",\n        \"6 A\"\n      ],\n      \"correct_index\": 1,\n      \"explanation\": \"The equivalent resistance is $2+4=6\\\\,\\\\Omega$, so $I=V/R=12/6=2\\\\,\\\\text{A}$.\",\n      \"topic\": \"Series circuits\"\n    ,\n    \"difficulty\": \"intermediate\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"In a series circuit with a $2\\\\,\\\\Omega$ resistor and a $4\\\\,\\\\Omega$ resistor connected to a $12\\\\,\\\\text{V}$ source, what is the voltage drop across the $4\\\\,\\\\Omega$ resistor?\",\n      \"options\": [\n        \"$2\\\\,\\\\text{V}$\",\n        \"$4\\\\,\\\\text{V}$\",\n        \"$8\\\\,\\\\text{V}$\",\n        \"$12\\\\,\\\\text{V}$\"\n      ],\n      \"correct_index\": 2,\n      \"explanation\": \"The series current is $2\\\\,\\\\text{A}$, so $V=IR=2\\\\times4=8\\\\,\\\\text{V}$.\",\n      \"topic\": \"Series voltage drops\"\n    ,\n    \"difficulty\": \"intermediate\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Two $6\\\\,\\\\Omega$ resistors are connected in parallel. What is their equivalent resistance?\",\n      \"options\": [\n        \"$1.5\\\\,\\\\Omega$\",\n        \"$3\\\\,\\\\Omega$\",\n        \"$6\\\\,\\\\Omega$\",\n        \"$12\\\\,\\\\Omega$\"\n      ],\n      \"correct_index\": 1,\n      \"explanation\": \"$1/R_{eq}=1/6+1/6=1/3$, so $R_{eq}=3\\\\,\\\\Omega$.\",\n      \"topic\": \"Parallel resistance\"\n    ,\n    \"difficulty\": \"intermediate\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"In a series circuit with a $2\\\\,\\\\Omega$ resistor and a $4\\\\,\\\\Omega$ resistor connected to a $12\\\\,\\\\text{V}$ source, what is the power dissipated by the $4\\\\,\\\\Omega$ resistor?\",\n      \"options\": [\n        \"$4\\\\,\\\\text{W}$\",\n        \"$8\\\\,\\\\text{W}$\",\n        \"$16\\\\,\\\\text{W}$\",\n        \"$36\\\\,\\\\text{W}$\"\n      ],\n      \"correct_index\": 2,\n      \"explanation\": \"The series current is $2\\\\,\\\\text{A}$, so $P=I^2R=2^2\\\\times4=16\\\\,\\\\text{W}$.\",\n      \"topic\": \"Power dissipation\"\n    ,\n    \"difficulty\": \"intermediate\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"An ideal ammeter should be connected in a circuit how?\",\n      \"options\": [\n        \"In series with the element whose current is being measured\",\n        \"In parallel with the element whose current is being measured\",\n        \"In series with the source only\",\n        \"In parallel with the source only\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"The material states that an ideal ammeter is inserted in series so that it carries the current being measured.\",\n      \"topic\": \"Circuit measurement\"\n    ,\n    \"difficulty\": \"intermediate\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 440,
+            "total_tokens": 9106,
+            "completion_tokens": 8666,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 7755
+            }
+          },
+          "latency_seconds": 58.913
+        }
+      ],
+      "critical_semantic_review": "pending",
+      "source_documents": [
+        {
+          "filename": "Circuit foundations.txt",
+          "page": 1,
+          "text": "In an ideal DC resistive circuit, voltage V in volts equals current I in amperes times resistance R in ohms: V = IR. For positive resistance, doubling V at fixed R doubles I. In series, the same current flows through all resistors and equivalent resistance is their sum. Two series resistors of 2 ohms and 4 ohms have equivalent resistance 6 ohms; on a 12 V source current is 2 A. Voltage drops are 4 V and 8 V, summing to the source voltage."
+        },
+        {
+          "filename": "Parallel and power.txt",
+          "page": 2,
+          "text": "In parallel each branch has the same voltage. The reciprocal equivalent resistance is the sum of reciprocal branch resistances. Two 6-ohm parallel resistors have equivalent resistance 3 ohms. On a 12 V supply each branch carries 2 A, so total current is 4 A. Power P = VI = I^2 R = V^2/R for an ideal resistor; units are watts. At fixed voltage a smaller resistance dissipates more power, but at fixed current a larger resistance dissipates more power. State which quantity is fixed before comparing power. An ideal ammeter is inserted in series and an ideal voltmeter in parallel."
+        }
+      ],
+      "expected_concepts": [
+        "Ohm's law",
+        "series current and voltage",
+        "parallel branches",
+        "power and fixed-variable assumptions",
+        "measurement"
+      ]
+    },
+    {
+      "case": "circuits",
+      "split": "development",
+      "kind": "quiz",
+      "repeat": 2,
+      "state": "ready",
+      "latency_seconds": 48.831,
+      "terminal_content": [
+        {
+          "content": {
+            "type": "mcq",
+            "question": "In the series circuit with a $2\\,\\Omega$ resistor and a $4\\,\\Omega$ resistor connected to a $12\\,\\text{V}$ source, what is the current?",
+            "options": [
+              "1 A",
+              "2 A",
+              "3 A",
+              "6 A"
+            ],
+            "correct_index": 1,
+            "explanation": "The equivalent resistance is $2+4=6\\,\\Omega$, so $I=V/R=12/6=2\\,\\text{A}$.",
+            "topic": "Series circuits",
+            "difficulty": "intermediate"
+          },
+          "provenance": [
+            {
+              "id": 11,
+              "part_id": 6,
+              "chunk_id": null,
+              "document_id": 1,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            },
+            {
+              "id": 12,
+              "part_id": 6,
+              "chunk_id": null,
+              "document_id": 2,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "In that same series circuit, what is the voltage drop across the $4\\,\\Omega$ resistor?",
+            "options": [
+              "$2\\,\\text{V}$",
+              "$4\\,\\text{V}$",
+              "$8\\,\\text{V}$",
+              "$12\\,\\text{V}$"
+            ],
+            "correct_index": 2,
+            "explanation": "The series current is $2\\,\\text{A}$, so $V=IR=2\\times4=8\\,\\text{V}$.",
+            "topic": "Series voltage drops",
+            "difficulty": "intermediate"
+          },
+          "provenance": [
+            {
+              "id": 13,
+              "part_id": 7,
+              "chunk_id": null,
+              "document_id": 1,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            },
+            {
+              "id": 14,
+              "part_id": 7,
+              "chunk_id": null,
+              "document_id": 2,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Two $6\\,\\Omega$ resistors are connected in parallel. What is their equivalent resistance?",
+            "options": [
+              "$1.5\\,\\Omega$",
+              "$3\\,\\Omega$",
+              "$6\\,\\Omega$",
+              "$12\\,\\Omega$"
+            ],
+            "correct_index": 1,
+            "explanation": "$1/R_{eq}=1/6+1/6=1/3$, so $R_{eq}=3\\,\\Omega$.",
+            "topic": "Parallel resistance",
+            "difficulty": "intermediate"
+          },
+          "provenance": [
+            {
+              "id": 15,
+              "part_id": 8,
+              "chunk_id": null,
+              "document_id": 1,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            },
+            {
+              "id": 16,
+              "part_id": 8,
+              "chunk_id": null,
+              "document_id": 2,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "In the series circuit with a $2\\,\\Omega$ resistor and a $4\\,\\Omega$ resistor connected to a $12\\,\\text{V}$ source, what is the power dissipated by the $4\\,\\Omega$ resistor?",
+            "options": [
+              "$4\\,\\text{W}$",
+              "$8\\,\\text{W}$",
+              "$16\\,\\text{W}$",
+              "$36\\,\\text{W}$"
+            ],
+            "correct_index": 2,
+            "explanation": "The series current is $2\\,\\text{A}$, so $P=I^2R=2^2\\times4=16\\,\\text{W}$.",
+            "topic": "Power dissipation",
+            "difficulty": "intermediate"
+          },
+          "provenance": [
+            {
+              "id": 17,
+              "part_id": 9,
+              "chunk_id": null,
+              "document_id": 1,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            },
+            {
+              "id": 18,
+              "part_id": 9,
+              "chunk_id": null,
+              "document_id": 2,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "An ideal ammeter should be connected in a circuit how?",
+            "options": [
+              "In series with the element whose current is being measured",
+              "In parallel with the element whose current is being measured",
+              "In series with the source only",
+              "In parallel with the source only"
+            ],
+            "correct_index": 0,
+            "explanation": "The course material states that an ideal ammeter is inserted in series so that it carries the current being measured.",
+            "topic": "Circuit measurement",
+            "difficulty": "intermediate"
+          },
+          "provenance": [
+            {
+              "id": 19,
+              "part_id": 10,
+              "chunk_id": null,
+              "document_id": 1,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Circuit foundations.txt",
+              "section_path": null
+            },
+            {
+              "id": 20,
+              "part_id": 10,
+              "chunk_id": null,
+              "document_id": 2,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Parallel and power.txt",
+              "section_path": null
+            }
+          ]
+        }
+      ],
+      "calls": [
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing a 5-question quiz at intermediate difficulty from the course\nmaterial below, using only these question types: mcq. Rules by type - mcq: exactly\nfour plausible options with one correct; the wrong options must be believable mistakes,\nnot filler. true_false: the options are exactly [\"True\", \"False\"]. fill_blank: the\nquestion contains a ___ blank, the options array holds exactly the one correct answer,\nand correct_index is 0. Every question carries a one-or-two-sentence explanation of why\nthe answer is correct, and a topic label. Use the course's notation; math in KaTeX.\nBase every question on the material provided."
+            },
+            {
+              "role": "user",
+              "content": "In an ideal DC resistive circuit, voltage V in volts equals current I in amperes times resistance R in ohms: V = IR. For positive resistance, doubling V at fixed R doubles I. In series, the same current flows through all resistors and equivalent resistance is their sum. Two series resistors of 2 ohms and 4 ohms have equivalent resistance 6 ohms; on a 12 V source current is 2 A. Voltage drops are 4 V and 8 V, summing to the source voltage.\n\nIn parallel each branch has the same voltage. The reciprocal equivalent resistance is the sum of reciprocal branch resistances. Two 6-ohm parallel resistors have equivalent resistance 3 ohms. On a 12 V supply each branch carries 2 A, so total current is 4 A. Power P = VI = I^2 R = V^2/R for an ideal resistor; units are watts. At fixed voltage a smaller resistance dissipates more power, but at fixed current a larger resistance dissipates more power. State which quantity is fixed before comparing power. An ideal ammeter is inserted in series and an ideal voltmeter in parallel."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "quiz_questions",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"questions\": [\n    {\n      \"type\": \"mcq\",\n      \"question\": \"In the series circuit with a $2\\\\,\\\\Omega$ resistor and a $4\\\\,\\\\Omega$ resistor connected to a $12\\\\,\\\\text{V}$ source, what is the current?\",\n      \"options\": [\n        \"1 A\",\n        \"2 A\",\n        \"3 A\",\n        \"6 A\"\n      ],\n      \"correct_index\": 1,\n      \"explanation\": \"The equivalent resistance is $2+4=6\\\\,\\\\Omega$, so $I=V/R=12/6=2\\\\,\\\\text{A}$.\",\n      \"topic\": \"Series circuits\"\n    ,\n    \"difficulty\": \"intermediate\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"In that same series circuit, what is the voltage drop across the $4\\\\,\\\\Omega$ resistor?\",\n      \"options\": [\n        \"$2\\\\,\\\\text{V}$\",\n        \"$4\\\\,\\\\text{V}$\",\n        \"$8\\\\,\\\\text{V}$\",\n        \"$12\\\\,\\\\text{V}$\"\n      ],\n      \"correct_index\": 2,\n      \"explanation\": \"The series current is $2\\\\,\\\\text{A}$, so $V=IR=2\\\\times4=8\\\\,\\\\text{V}$.\",\n      \"topic\": \"Series voltage drops\"\n    ,\n    \"difficulty\": \"intermediate\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Two $6\\\\,\\\\Omega$ resistors are connected in parallel. What is their equivalent resistance?\",\n      \"options\": [\n        \"$1.5\\\\,\\\\Omega$\",\n        \"$3\\\\,\\\\Omega$\",\n        \"$6\\\\,\\\\Omega$\",\n        \"$12\\\\,\\\\Omega$\"\n      ],\n      \"correct_index\": 1,\n      \"explanation\": \"$1/R_{eq}=1/6+1/6=1/3$, so $R_{eq}=3\\\\,\\\\Omega$.\",\n      \"topic\": \"Parallel resistance\"\n    ,\n    \"difficulty\": \"intermediate\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"In the series circuit with a $2\\\\,\\\\Omega$ resistor and a $4\\\\,\\\\Omega$ resistor connected to a $12\\\\,\\\\text{V}$ source, what is the power dissipated by the $4\\\\,\\\\Omega$ resistor?\",\n      \"options\": [\n        \"$4\\\\,\\\\text{W}$\",\n        \"$8\\\\,\\\\text{W}$\",\n        \"$16\\\\,\\\\text{W}$\",\n        \"$36\\\\,\\\\text{W}$\"\n      ],\n      \"correct_index\": 2,\n      \"explanation\": \"The series current is $2\\\\,\\\\text{A}$, so $P=I^2R=2^2\\\\times4=16\\\\,\\\\text{W}$.\",\n      \"topic\": \"Power dissipation\"\n    ,\n    \"difficulty\": \"intermediate\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"An ideal ammeter should be connected in a circuit how?\",\n      \"options\": [\n        \"In series with the element whose current is being measured\",\n        \"In parallel with the element whose current is being measured\",\n        \"In series with the source only\",\n        \"In parallel with the source only\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"The course material states that an ideal ammeter is inserted in series so that it carries the current being measured.\",\n      \"topic\": \"Circuit measurement\"\n    ,\n    \"difficulty\": \"intermediate\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 440,
+            "total_tokens": 8404,
+            "completion_tokens": 7964,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 7085
+            }
+          },
+          "latency_seconds": 48.824
+        }
+      ],
+      "critical_semantic_review": "pending",
+      "source_documents": [
+        {
+          "filename": "Circuit foundations.txt",
+          "page": 1,
+          "text": "In an ideal DC resistive circuit, voltage V in volts equals current I in amperes times resistance R in ohms: V = IR. For positive resistance, doubling V at fixed R doubles I. In series, the same current flows through all resistors and equivalent resistance is their sum. Two series resistors of 2 ohms and 4 ohms have equivalent resistance 6 ohms; on a 12 V source current is 2 A. Voltage drops are 4 V and 8 V, summing to the source voltage."
+        },
+        {
+          "filename": "Parallel and power.txt",
+          "page": 2,
+          "text": "In parallel each branch has the same voltage. The reciprocal equivalent resistance is the sum of reciprocal branch resistances. Two 6-ohm parallel resistors have equivalent resistance 3 ohms. On a 12 V supply each branch carries 2 A, so total current is 4 A. Power P = VI = I^2 R = V^2/R for an ideal resistor; units are watts. At fixed voltage a smaller resistance dissipates more power, but at fixed current a larger resistance dissipates more power. State which quantity is fixed before comparing power. An ideal ammeter is inserted in series and an ideal voltmeter in parallel."
+        }
+      ],
+      "expected_concepts": [
+        "Ohm's law",
+        "series current and voltage",
+        "parallel branches",
+        "power and fixed-variable assumptions",
+        "measurement"
+      ]
+    },
+    {
+      "case": "ecology",
+      "split": "held_out",
+      "kind": "quiz",
+      "repeat": 1,
+      "state": "ready",
+      "latency_seconds": 45.699,
+      "terminal_content": [
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Five $2 m^2$ quadrats contain 3, 5, 4, 6, and 2 daisies. What is the estimated daisy density?",
+            "options": [
+              "$1.5$ daisies per $m^2$",
+              "$2$ daisies per $m^2$",
+              "$2.5$ daisies per $m^2$",
+              "$4$ daisies per $m^2$"
+            ],
+            "correct_index": 1,
+            "explanation": "Total count is 20 daisies over total sampled area $10 m^2$, so density is $20/10 = 2$ daisies per $m^2$.",
+            "topic": "Quadrat density estimation",
+            "difficulty": "exam"
+          },
+          "provenance": [
+            {
+              "id": 21,
+              "part_id": 11,
+              "chunk_id": null,
+              "document_id": 4,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Population survey.txt",
+              "section_path": null
+            },
+            {
+              "id": 22,
+              "part_id": 11,
+              "chunk_id": null,
+              "document_id": 5,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Mark recapture.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Using the estimated density, how many daisies are expected in a comparable $150 m^2$ meadow, and what assumption is required?",
+            "options": [
+              "$300$ daisies, assuming the quadrat samples represent the meadow",
+              "$300$ daisies, assuming the population is closed between catches",
+              "$200$ daisies, assuming all daisies are marked",
+              "$600$ daisies, assuming equal capture probability"
+            ],
+            "correct_index": 0,
+            "explanation": "The density is $2$ daisies per $m^2$, so $2 \times 150 = 300$ daisies; extrapolation requires the quadrat samples to represent the meadow.",
+            "topic": "Extrapolation from quadrat samples",
+            "difficulty": "exam"
+          },
+          "provenance": [
+            {
+              "id": 23,
+              "part_id": 12,
+              "chunk_id": null,
+              "document_id": 4,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Population survey.txt",
+              "section_path": null
+            },
+            {
+              "id": 24,
+              "part_id": 12,
+              "chunk_id": null,
+              "document_id": 5,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Mark recapture.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "In simple mark-recapture, $M=40$, $C=50$, and $R=10$. What is the estimate $N$?",
+            "options": [
+              "$12.5$",
+              "$200$",
+              "$500$",
+              "$2000$"
+            ],
+            "correct_index": 1,
+            "explanation": "The estimate is $N = MC/R = 40 \times 50 / 10 = 200$ animals.",
+            "topic": "Mark-recapture estimation",
+            "difficulty": "exam"
+          },
+          "provenance": [
+            {
+              "id": 25,
+              "part_id": 13,
+              "chunk_id": null,
+              "document_id": 4,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Population survey.txt",
+              "section_path": null
+            },
+            {
+              "id": 26,
+              "part_id": 13,
+              "chunk_id": null,
+              "document_id": 5,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Mark recapture.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "If no marked animals are recaptured, so $R=0$, what happens to the simple mark-recapture estimate?",
+            "options": [
+              "The estimate is infinite.",
+              "The estimate is undefined because the formula divides by $R$.",
+              "The estimate is $0$.",
+              "The estimate is $M C$."
+            ],
+            "correct_index": 1,
+            "explanation": "Division by zero prevents the simple estimate; it is not evidence of an infinite population.",
+            "topic": "Mark-recapture edge case",
+            "difficulty": "exam"
+          },
+          "provenance": [
+            {
+              "id": 27,
+              "part_id": 14,
+              "chunk_id": null,
+              "document_id": 4,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Population survey.txt",
+              "section_path": null
+            },
+            {
+              "id": 28,
+              "part_id": 14,
+              "chunk_id": null,
+              "document_id": 5,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Mark recapture.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Which statement is correct?",
+            "options": [
+              "Increasing the number of quadrats automatically removes systematic selection bias.",
+              "A larger sample reduces sampling variation but does not automatically remove systematic selection bias.",
+              "A positive correlation between rainfall and abundance alone proves that rainfall causes abundance.",
+              "Random placement of quadrats guarantees that the sample represents the whole meadow."
+            ],
+            "correct_index": 1,
+            "explanation": "Larger samples reduce random sampling variation, but systematic bias or confounding can remain; correlation alone does not establish causation.",
+            "topic": "Sampling bias and inference",
+            "difficulty": "exam"
+          },
+          "provenance": [
+            {
+              "id": 29,
+              "part_id": 15,
+              "chunk_id": null,
+              "document_id": 4,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Population survey.txt",
+              "section_path": null
+            },
+            {
+              "id": 30,
+              "part_id": 15,
+              "chunk_id": null,
+              "document_id": 5,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Mark recapture.txt",
+              "section_path": null
+            }
+          ]
+        }
+      ],
+      "calls": [
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing a 5-question quiz at exam difficulty from the course\nmaterial below, using only these question types: mcq. Rules by type - mcq: exactly\nfour plausible options with one correct; the wrong options must be believable mistakes,\nnot filler. true_false: the options are exactly [\"True\", \"False\"]. fill_blank: the\nquestion contains a ___ blank, the options array holds exactly the one correct answer,\nand correct_index is 0. Every question carries a one-or-two-sentence explanation of why\nthe answer is correct, and a topic label. Use the course's notation; math in KaTeX.\nBase every question on the material provided."
+            },
+            {
+              "role": "user",
+              "content": "A quadrat is a fixed-area sample used to estimate density of sessile organisms. Random placement reduces selection bias. In a synthetic meadow, five 2 m^2 quadrats contain 3, 5, 4, 6 and 2 daisies. Total sampled area is 10 m^2, total count 20, estimated density 2 daisies per m^2. Extrapolating to a comparable 150 m^2 meadow gives 300 daisies; this assumes samples represent the meadow. A larger sample reduces sampling variation but does not automatically remove systematic selection bias.\n\nThe simple mark-recapture estimate is N = M*C/R, where M animals were initially marked, C animals were caught later, and R of that later catch were marked. With M=40, C=50, R=10, N=200 animals. Assumptions: closed population between catches, marks retained and recognised, marked animals mix back into population, and equal capture probability. Migration or unequal catchability can bias estimates. If no marked animals are recaptured, division by zero prevents this simple estimate; it is not evidence of an infinite population. Quadrat sampling suits sessile plants; mark-recapture suits mobile animals. Correlation between rainfall and abundance alone does not establish causation because confounders may affect both."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "quiz_questions",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"questions\": [\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Five $2 m^2$ quadrats contain 3, 5, 4, 6, and 2 daisies. What is the estimated daisy density?\",\n      \"options\": [\n        \"$1.5$ daisies per $m^2$\",\n        \"$2$ daisies per $m^2$\",\n        \"$2.5$ daisies per $m^2$\",\n        \"$4$ daisies per $m^2$\"\n      ],\n      \"correct_index\": 1,\n      \"explanation\": \"Total count is 20 daisies over total sampled area $10 m^2$, so density is $20/10 = 2$ daisies per $m^2$.\",\n      \"topic\": \"Quadrat density estimation\"\n    ,\n    \"difficulty\": \"exam\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Using the estimated density, how many daisies are expected in a comparable $150 m^2$ meadow, and what assumption is required?\",\n      \"options\": [\n        \"$300$ daisies, assuming the quadrat samples represent the meadow\",\n        \"$300$ daisies, assuming the population is closed between catches\",\n        \"$200$ daisies, assuming all daisies are marked\",\n        \"$600$ daisies, assuming equal capture probability\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"The density is $2$ daisies per $m^2$, so $2 \\times 150 = 300$ daisies; extrapolation requires the quadrat samples to represent the meadow.\",\n      \"topic\": \"Extrapolation from quadrat samples\"\n    ,\n    \"difficulty\": \"exam\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"In simple mark-recapture, $M=40$, $C=50$, and $R=10$. What is the estimate $N$?\",\n      \"options\": [\n        \"$12.5$\",\n        \"$200$\",\n        \"$500$\",\n        \"$2000$\"\n      ],\n      \"correct_index\": 1,\n      \"explanation\": \"The estimate is $N = MC/R = 40 \\times 50 / 10 = 200$ animals.\",\n      \"topic\": \"Mark-recapture estimation\"\n    ,\n    \"difficulty\": \"exam\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"If no marked animals are recaptured, so $R=0$, what happens to the simple mark-recapture estimate?\",\n      \"options\": [\n        \"The estimate is infinite.\",\n        \"The estimate is undefined because the formula divides by $R$.\",\n        \"The estimate is $0$.\",\n        \"The estimate is $M C$.\"\n      ],\n      \"correct_index\": 1,\n      \"explanation\": \"Division by zero prevents the simple estimate; it is not evidence of an infinite population.\",\n      \"topic\": \"Mark-recapture edge case\"\n    ,\n    \"difficulty\": \"exam\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Which statement is correct?\",\n      \"options\": [\n        \"Increasing the number of quadrats automatically removes systematic selection bias.\",\n        \"A larger sample reduces sampling variation but does not automatically remove systematic selection bias.\",\n        \"A positive correlation between rainfall and abundance alone proves that rainfall causes abundance.\",\n        \"Random placement of quadrats guarantees that the sample represents the whole meadow.\"\n      ],\n      \"correct_index\": 1,\n      \"explanation\": \"Larger samples reduce random sampling variation, but systematic bias or confounding can remain; correlation alone does not establish causation.\",\n      \"topic\": \"Sampling bias and inference\"\n    ,\n    \"difficulty\": \"exam\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 478,
+            "total_tokens": 6877,
+            "completion_tokens": 6399,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 5470
+            }
+          },
+          "latency_seconds": 45.691
+        }
+      ],
+      "critical_semantic_review": "pending",
+      "source_documents": [
+        {
+          "filename": "Population survey.txt",
+          "page": 3,
+          "text": "A quadrat is a fixed-area sample used to estimate density of sessile organisms. Random placement reduces selection bias. In a synthetic meadow, five 2 m^2 quadrats contain 3, 5, 4, 6 and 2 daisies. Total sampled area is 10 m^2, total count 20, estimated density 2 daisies per m^2. Extrapolating to a comparable 150 m^2 meadow gives 300 daisies; this assumes samples represent the meadow. A larger sample reduces sampling variation but does not automatically remove systematic selection bias."
+        },
+        {
+          "filename": "Mark recapture.txt",
+          "page": 4,
+          "text": "The simple mark-recapture estimate is N = M*C/R, where M animals were initially marked, C animals were caught later, and R of that later catch were marked. With M=40, C=50, R=10, N=200 animals. Assumptions: closed population between catches, marks retained and recognised, marked animals mix back into population, and equal capture probability. Migration or unequal catchability can bias estimates. If no marked animals are recaptured, division by zero prevents this simple estimate; it is not evidence of an infinite population. Quadrat sampling suits sessile plants; mark-recapture suits mobile animals. Correlation between rainfall and abundance alone does not establish causation because confounders may affect both."
+        }
+      ],
+      "expected_concepts": [
+        "density and area units",
+        "random sampling versus bias",
+        "mark-recapture formula",
+        "assumptions",
+        "zero recaptures",
+        "correlation"
+      ]
+    },
+    {
+      "case": "ecology",
+      "split": "held_out",
+      "kind": "quiz",
+      "repeat": 2,
+      "state": "ready",
+      "latency_seconds": 61.247,
+      "terminal_content": [
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Five $2 m^2$ quadrats contain 3, 5, 4, 6, and 2 daisies. What is the estimated density?",
+            "options": [
+              "$2$ daisies per $m^2$",
+              "$4$ daisies per $m^2$",
+              "$10$ daisies per $m^2$",
+              "$20$ daisies per $m^2$"
+            ],
+            "correct_index": 0,
+            "explanation": "Total count is 20 and total sampled area is 10 $m^2$, so density is 20/10 = 2 daisies per $m^2$.",
+            "topic": "Quadrat density estimation",
+            "difficulty": "exam"
+          },
+          "provenance": [
+            {
+              "id": 31,
+              "part_id": 16,
+              "chunk_id": null,
+              "document_id": 4,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Population survey.txt",
+              "section_path": null
+            },
+            {
+              "id": 32,
+              "part_id": 16,
+              "chunk_id": null,
+              "document_id": 5,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Mark recapture.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "A positive correlation between rainfall and abundance alone does not establish causation because:",
+            "options": [
+              "Confounders may affect both rainfall and abundance",
+              "A larger sample size would make the correlation causal",
+              "The correlation must be statistically significant to be causal",
+              "The relationship must be linear to be causal"
+            ],
+            "correct_index": 0,
+            "explanation": "Correlation alone does not establish causation because confounders may affect both variables.",
+            "topic": "Correlation and causation",
+            "difficulty": "exam"
+          },
+          "provenance": [
+            {
+              "id": 33,
+              "part_id": 17,
+              "chunk_id": null,
+              "document_id": 4,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Population survey.txt",
+              "section_path": null
+            },
+            {
+              "id": 34,
+              "part_id": 17,
+              "chunk_id": null,
+              "document_id": 5,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Mark recapture.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Increasing the number of randomly placed quadrats will most directly:",
+            "options": [
+              "Reduce random sampling variation in the density estimate",
+              "Eliminate systematic selection bias",
+              "Guarantee the estimate equals the true density",
+              "Increase the area of each quadrat"
+            ],
+            "correct_index": 0,
+            "explanation": "A larger sample reduces sampling variation but does not automatically remove systematic selection bias.",
+            "topic": "Quadrat sampling variation and bias",
+            "difficulty": "exam"
+          },
+          "provenance": [
+            {
+              "id": 35,
+              "part_id": 18,
+              "chunk_id": null,
+              "document_id": 4,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Population survey.txt",
+              "section_path": null
+            },
+            {
+              "id": 36,
+              "part_id": 18,
+              "chunk_id": null,
+              "document_id": 5,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Mark recapture.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "In the simple mark-recapture estimate $N = M C / R$, if $M=40$, $C=50$, and $R=10$, what is $N$?",
+            "options": [
+              "$200$",
+              "$100$",
+              "$400$",
+              "$250$"
+            ],
+            "correct_index": 0,
+            "explanation": "Using $N = M C / R$, $40 50 / 10 = 200$.",
+            "topic": "Mark-recapture estimation",
+            "difficulty": "exam"
+          },
+          "provenance": [
+            {
+              "id": 37,
+              "part_id": 19,
+              "chunk_id": null,
+              "document_id": 4,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Population survey.txt",
+              "section_path": null
+            },
+            {
+              "id": 38,
+              "part_id": 19,
+              "chunk_id": null,
+              "document_id": 5,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Mark recapture.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "If no marked animals are recaptured, so $R=0$, what is true about the simple mark-recapture estimate?",
+            "options": [
+              "It is undefined because the formula divides by zero",
+              "It is infinite",
+              "It is zero",
+              "It equals $M$"
+            ],
+            "correct_index": 0,
+            "explanation": "Division by zero prevents this simple estimate; it is not evidence of an infinite population.",
+            "topic": "Mark-recapture edge case",
+            "difficulty": "exam"
+          },
+          "provenance": [
+            {
+              "id": 39,
+              "part_id": 20,
+              "chunk_id": null,
+              "document_id": 4,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Population survey.txt",
+              "section_path": null
+            },
+            {
+              "id": 40,
+              "part_id": 20,
+              "chunk_id": null,
+              "document_id": 5,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Mark recapture.txt",
+              "section_path": null
+            }
+          ]
+        }
+      ],
+      "calls": [
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing a 5-question quiz at exam difficulty from the course\nmaterial below, using only these question types: mcq. Rules by type - mcq: exactly\nfour plausible options with one correct; the wrong options must be believable mistakes,\nnot filler. true_false: the options are exactly [\"True\", \"False\"]. fill_blank: the\nquestion contains a ___ blank, the options array holds exactly the one correct answer,\nand correct_index is 0. Every question carries a one-or-two-sentence explanation of why\nthe answer is correct, and a topic label. Use the course's notation; math in KaTeX.\nBase every question on the material provided."
+            },
+            {
+              "role": "user",
+              "content": "A quadrat is a fixed-area sample used to estimate density of sessile organisms. Random placement reduces selection bias. In a synthetic meadow, five 2 m^2 quadrats contain 3, 5, 4, 6 and 2 daisies. Total sampled area is 10 m^2, total count 20, estimated density 2 daisies per m^2. Extrapolating to a comparable 150 m^2 meadow gives 300 daisies; this assumes samples represent the meadow. A larger sample reduces sampling variation but does not automatically remove systematic selection bias.\n\nThe simple mark-recapture estimate is N = M*C/R, where M animals were initially marked, C animals were caught later, and R of that later catch were marked. With M=40, C=50, R=10, N=200 animals. Assumptions: closed population between catches, marks retained and recognised, marked animals mix back into population, and equal capture probability. Migration or unequal catchability can bias estimates. If no marked animals are recaptured, division by zero prevents this simple estimate; it is not evidence of an infinite population. Quadrat sampling suits sessile plants; mark-recapture suits mobile animals. Correlation between rainfall and abundance alone does not establish causation because confounders may affect both."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "quiz_questions",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"questions\": [\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Five $2 m^2$ quadrats contain 3, 5, 4, 6, and 2 daisies. What is the estimated density?\",\n      \"options\": [\n        \"$2$ daisies per $m^2$\",\n        \"$4$ daisies per $m^2$\",\n        \"$10$ daisies per $m^2$\",\n        \"$20$ daisies per $m^2$\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"Total count is 20 and total sampled area is 10 $m^2$, so density is 20/10 = 2 daisies per $m^2$.\",\n      \"topic\": \"Quadrat density estimation\"\n    ,\n    \"difficulty\": \"exam\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"A positive correlation between rainfall and abundance alone does not establish causation because:\",\n      \"options\": [\n        \"Confounders may affect both rainfall and abundance\",\n        \"A larger sample size would make the correlation causal\",\n        \"The correlation must be statistically significant to be causal\",\n        \"The relationship must be linear to be causal\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"Correlation alone does not establish causation because confounders may affect both variables.\",\n      \"topic\": \"Correlation and causation\"\n    ,\n    \"difficulty\": \"exam\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Increasing the number of randomly placed quadrats will most directly:\",\n      \"options\": [\n        \"Reduce random sampling variation in the density estimate\",\n        \"Eliminate systematic selection bias\",\n        \"Guarantee the estimate equals the true density\",\n        \"Increase the area of each quadrat\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"A larger sample reduces sampling variation but does not automatically remove systematic selection bias.\",\n      \"topic\": \"Quadrat sampling variation and bias\"\n    ,\n    \"difficulty\": \"exam\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"In the simple mark-recapture estimate $N = M C / R$, if $M=40$, $C=50$, and $R=10$, what is $N$?\",\n      \"options\": [\n        \"$200$\",\n        \"$100$\",\n        \"$400$\",\n        \"$250$\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"Using $N = M C / R$, $40 50 / 10 = 200$.\",\n      \"topic\": \"Mark-recapture estimation\"\n    ,\n    \"difficulty\": \"exam\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"If no marked animals are recaptured, so $R=0$, what is true about the simple mark-recapture estimate?\",\n      \"options\": [\n        \"It is undefined because the formula divides by zero\",\n        \"It is infinite\",\n        \"It is zero\",\n        \"It equals $M$\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"Division by zero prevents this simple estimate; it is not evidence of an infinite population.\",\n      \"topic\": \"Mark-recapture edge case\"\n    ,\n    \"difficulty\": \"exam\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 478,
+            "total_tokens": 8025,
+            "completion_tokens": 7547,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 6728
+            }
+          },
+          "latency_seconds": 61.239
+        }
+      ],
+      "critical_semantic_review": "pending",
+      "source_documents": [
+        {
+          "filename": "Population survey.txt",
+          "page": 3,
+          "text": "A quadrat is a fixed-area sample used to estimate density of sessile organisms. Random placement reduces selection bias. In a synthetic meadow, five 2 m^2 quadrats contain 3, 5, 4, 6 and 2 daisies. Total sampled area is 10 m^2, total count 20, estimated density 2 daisies per m^2. Extrapolating to a comparable 150 m^2 meadow gives 300 daisies; this assumes samples represent the meadow. A larger sample reduces sampling variation but does not automatically remove systematic selection bias."
+        },
+        {
+          "filename": "Mark recapture.txt",
+          "page": 4,
+          "text": "The simple mark-recapture estimate is N = M*C/R, where M animals were initially marked, C animals were caught later, and R of that later catch were marked. With M=40, C=50, R=10, N=200 animals. Assumptions: closed population between catches, marks retained and recognised, marked animals mix back into population, and equal capture probability. Migration or unequal catchability can bias estimates. If no marked animals are recaptured, division by zero prevents this simple estimate; it is not evidence of an infinite population. Quadrat sampling suits sessile plants; mark-recapture suits mobile animals. Correlation between rainfall and abundance alone does not establish causation because confounders may affect both."
+        }
+      ],
+      "expected_concepts": [
+        "density and area units",
+        "random sampling versus bias",
+        "mark-recapture formula",
+        "assumptions",
+        "zero recaptures",
+        "correlation"
+      ]
+    },
+    {
+      "case": "thin-evidence",
+      "split": "development",
+      "kind": "quiz",
+      "repeat": 1,
+      "state": "ready",
+      "latency_seconds": 16.51,
+      "terminal_content": [
+        {
+          "content": {
+            "type": "mcq",
+            "question": "On which day does the synthetic seminar meet?",
+            "options": [
+              "Monday",
+              "Tuesday",
+              "Wednesday",
+              "Thursday"
+            ],
+            "correct_index": 1,
+            "explanation": "The course material states that the synthetic seminar meets on Tuesdays. Therefore, Tuesday is the correct day.",
+            "topic": "Seminar schedule",
+            "difficulty": "basic"
+          },
+          "provenance": [
+            {
+              "id": 41,
+              "part_id": 21,
+              "chunk_id": null,
+              "document_id": 7,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "What is the instructor's surname?",
+            "options": [
+              "Rowan",
+              "Reed",
+              "Brown",
+              "Green"
+            ],
+            "correct_index": 0,
+            "explanation": "The material identifies the instructor's surname as Rowan. The other surnames are not mentioned.",
+            "topic": "Instructor identity",
+            "difficulty": "basic"
+          },
+          "provenance": [
+            {
+              "id": 42,
+              "part_id": 22,
+              "chunk_id": null,
+              "document_id": 7,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Which statement is explicitly supported by the course material?",
+            "options": [
+              "The seminar meets on Tuesdays.",
+              "The instructor's first name is Rowan.",
+              "The seminar meets on Wednesdays.",
+              "The instructor's surname is Reed."
+            ],
+            "correct_index": 0,
+            "explanation": "Only the meeting day and the instructor's surname are given, and the meeting day is Tuesdays. The other statements add unsupported details.",
+            "topic": "Course facts",
+            "difficulty": "basic"
+          },
+          "provenance": [
+            {
+              "id": 43,
+              "part_id": 23,
+              "chunk_id": null,
+              "document_id": 7,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Which of the following is not stated in the course material?",
+            "options": [
+              "The instructor's first name",
+              "The instructor's surname",
+              "The seminar's meeting day",
+              "The seminar's name"
+            ],
+            "correct_index": 0,
+            "explanation": "The material gives the instructor's surname, the seminar's meeting day, and the seminar's name, but it does not give the instructor's first name.",
+            "topic": "Unstated information",
+            "difficulty": "basic"
+          },
+          "provenance": [
+            {
+              "id": 44,
+              "part_id": 24,
+              "chunk_id": null,
+              "document_id": 7,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Which pair of facts is correct according to the course material?",
+            "options": [
+              "The seminar meets on Tuesdays and the instructor's surname is Rowan.",
+              "The seminar meets on Tuesdays and the instructor's surname is Reed.",
+              "The seminar meets on Wednesdays and the instructor's surname is Rowan.",
+              "The seminar meets on Mondays and the instructor's surname is Rowan."
+            ],
+            "correct_index": 0,
+            "explanation": "The material states both that the seminar meets on Tuesdays and that the instructor's surname is Rowan. The other options change one of these facts.",
+            "topic": "Combined facts",
+            "difficulty": "basic"
+          },
+          "provenance": [
+            {
+              "id": 45,
+              "part_id": 25,
+              "chunk_id": null,
+              "document_id": 7,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        }
+      ],
+      "calls": [
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing a 5-question quiz at basic difficulty from the course\nmaterial below, using only these question types: mcq. Rules by type - mcq: exactly\nfour plausible options with one correct; the wrong options must be believable mistakes,\nnot filler. true_false: the options are exactly [\"True\", \"False\"]. fill_blank: the\nquestion contains a ___ blank, the options array holds exactly the one correct answer,\nand correct_index is 0. Every question carries a one-or-two-sentence explanation of why\nthe answer is correct, and a topic label. Use the course's notation; math in KaTeX.\nBase every question on the material provided."
+            },
+            {
+              "role": "user",
+              "content": "The synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "quiz_questions",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"questions\": [\n    {\n      \"type\": \"mcq\",\n      \"question\": \"On which day does the synthetic seminar meet?\",\n      \"options\": [\n        \"Monday\",\n        \"Tuesday\",\n        \"Wednesday\",\n        \"Thursday\"\n      ],\n      \"correct_index\": 1,\n      \"explanation\": \"The course material states that the synthetic seminar meets on Tuesdays. Therefore, Tuesday is the correct day.\",\n      \"topic\": \"Seminar schedule\"\n    ,\n    \"difficulty\": \"basic\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"What is the instructor's surname?\",\n      \"options\": [\n        \"Rowan\",\n        \"Reed\",\n        \"Brown\",\n        \"Green\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"The material identifies the instructor's surname as Rowan. The other surnames are not mentioned.\",\n      \"topic\": \"Instructor identity\"\n    ,\n    \"difficulty\": \"basic\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Which statement is explicitly supported by the course material?\",\n      \"options\": [\n        \"The seminar meets on Tuesdays.\",\n        \"The instructor's first name is Rowan.\",\n        \"The seminar meets on Wednesdays.\",\n        \"The instructor's surname is Reed.\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"Only the meeting day and the instructor's surname are given, and the meeting day is Tuesdays. The other statements add unsupported details.\",\n      \"topic\": \"Course facts\"\n    ,\n    \"difficulty\": \"basic\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Which of the following is not stated in the course material?\",\n      \"options\": [\n        \"The instructor's first name\",\n        \"The instructor's surname\",\n        \"The seminar's meeting day\",\n        \"The seminar's name\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"The material gives the instructor's surname, the seminar's meeting day, and the seminar's name, but it does not give the instructor's first name.\",\n      \"topic\": \"Unstated information\"\n    ,\n    \"difficulty\": \"basic\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Which pair of facts is correct according to the course material?\",\n      \"options\": [\n        \"The seminar meets on Tuesdays and the instructor's surname is Rowan.\",\n        \"The seminar meets on Tuesdays and the instructor's surname is Reed.\",\n        \"The seminar meets on Wednesdays and the instructor's surname is Rowan.\",\n        \"The seminar meets on Mondays and the instructor's surname is Rowan.\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"The material states both that the seminar meets on Tuesdays and that the instructor's surname is Rowan. The other options change one of these facts.\",\n      \"topic\": \"Combined facts\"\n    ,\n    \"difficulty\": \"basic\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 220,
+            "total_tokens": 2134,
+            "completion_tokens": 1914,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 1197
+            }
+          },
+          "latency_seconds": 16.501
+        }
+      ],
+      "critical_semantic_review": "pending",
+      "source_documents": [
+        {
+          "filename": "Administrative note.txt",
+          "page": 1,
+          "text": "The synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+        }
+      ],
+      "expected_concepts": [
+        "honest insufficiency; do not invent subject material"
+      ]
+    },
+    {
+      "case": "thin-evidence",
+      "split": "development",
+      "kind": "quiz",
+      "repeat": 2,
+      "state": "ready",
+      "latency_seconds": 14.617,
+      "terminal_content": [
+        {
+          "content": {
+            "type": "mcq",
+            "question": "On which day does the synthetic seminar meet?",
+            "options": [
+              "Monday",
+              "Tuesday",
+              "Wednesday",
+              "Thursday"
+            ],
+            "correct_index": 1,
+            "explanation": "The course material states that the synthetic seminar meets on Tuesdays. Therefore, Tuesday is the correct day.",
+            "topic": "Seminar schedule",
+            "difficulty": "basic"
+          },
+          "provenance": [
+            {
+              "id": 46,
+              "part_id": 26,
+              "chunk_id": null,
+              "document_id": 7,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "What is the instructor's surname?",
+            "options": [
+              "Rowan",
+              "Reed",
+              "Brown",
+              "Green"
+            ],
+            "correct_index": 0,
+            "explanation": "The material identifies the instructor's surname as Rowan. The other surnames are not mentioned.",
+            "topic": "Instructor identity",
+            "difficulty": "basic"
+          },
+          "provenance": [
+            {
+              "id": 47,
+              "part_id": 27,
+              "chunk_id": null,
+              "document_id": 7,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Which statement is explicitly supported by the course material?",
+            "options": [
+              "The seminar meets on Tuesdays.",
+              "The instructor's first name is Rowan.",
+              "The seminar meets on Wednesdays.",
+              "The instructor's surname is Reed."
+            ],
+            "correct_index": 0,
+            "explanation": "Only the meeting day and the instructor's surname are given, and the meeting day is Tuesdays. The other statements add unsupported details.",
+            "topic": "Course facts",
+            "difficulty": "basic"
+          },
+          "provenance": [
+            {
+              "id": 48,
+              "part_id": 28,
+              "chunk_id": null,
+              "document_id": 7,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Which of the following is not stated in the course material?",
+            "options": [
+              "The instructor's first name",
+              "The instructor's surname",
+              "The seminar's meeting day",
+              "The seminar's name"
+            ],
+            "correct_index": 0,
+            "explanation": "The material gives the instructor's surname, the seminar's meeting day, and the seminar's name, but it does not give the instructor's first name.",
+            "topic": "Unstated information",
+            "difficulty": "basic"
+          },
+          "provenance": [
+            {
+              "id": 49,
+              "part_id": 29,
+              "chunk_id": null,
+              "document_id": 7,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        },
+        {
+          "content": {
+            "type": "mcq",
+            "question": "Which pair of facts is correct according to the course material?",
+            "options": [
+              "The seminar meets on Tuesdays and the instructor's surname is Rowan.",
+              "The seminar meets on Tuesdays and the instructor's surname is Reed.",
+              "The seminar meets on Wednesdays and the instructor's surname is Rowan.",
+              "The seminar meets on Mondays and the instructor's surname is Rowan."
+            ],
+            "correct_index": 0,
+            "explanation": "The material states both that the seminar meets on Tuesdays and that the instructor's surname is Rowan. The other options change one of these facts.",
+            "topic": "Combined facts",
+            "difficulty": "basic"
+          },
+          "provenance": [
+            {
+              "id": 50,
+              "part_id": 30,
+              "chunk_id": null,
+              "document_id": 7,
+              "page_number": null,
+              "label": null,
+              "bbox": null,
+              "filename": "Administrative note.txt",
+              "section_path": null
+            }
+          ]
+        }
+      ],
+      "calls": [
+        {
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are writing a 5-question quiz at basic difficulty from the course\nmaterial below, using only these question types: mcq. Rules by type - mcq: exactly\nfour plausible options with one correct; the wrong options must be believable mistakes,\nnot filler. true_false: the options are exactly [\"True\", \"False\"]. fill_blank: the\nquestion contains a ___ blank, the options array holds exactly the one correct answer,\nand correct_index is 0. Every question carries a one-or-two-sentence explanation of why\nthe answer is correct, and a topic label. Use the course's notation; math in KaTeX.\nBase every question on the material provided."
+            },
+            {
+              "role": "user",
+              "content": "The synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+            }
+          ],
+          "temperature": 0.0,
+          "max_tokens": 65536,
+          "schema": "quiz_questions",
+          "stop_reason": "stop",
+          "terminal_answer": "{\n  \"questions\": [\n    {\n      \"type\": \"mcq\",\n      \"question\": \"On which day does the synthetic seminar meet?\",\n      \"options\": [\n        \"Monday\",\n        \"Tuesday\",\n        \"Wednesday\",\n        \"Thursday\"\n      ],\n      \"correct_index\": 1,\n      \"explanation\": \"The course material states that the synthetic seminar meets on Tuesdays. Therefore, Tuesday is the correct day.\",\n      \"topic\": \"Seminar schedule\"\n    ,\n    \"difficulty\": \"basic\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"What is the instructor's surname?\",\n      \"options\": [\n        \"Rowan\",\n        \"Reed\",\n        \"Brown\",\n        \"Green\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"The material identifies the instructor's surname as Rowan. The other surnames are not mentioned.\",\n      \"topic\": \"Instructor identity\"\n    ,\n    \"difficulty\": \"basic\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Which statement is explicitly supported by the course material?\",\n      \"options\": [\n        \"The seminar meets on Tuesdays.\",\n        \"The instructor's first name is Rowan.\",\n        \"The seminar meets on Wednesdays.\",\n        \"The instructor's surname is Reed.\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"Only the meeting day and the instructor's surname are given, and the meeting day is Tuesdays. The other statements add unsupported details.\",\n      \"topic\": \"Course facts\"\n    ,\n    \"difficulty\": \"basic\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Which of the following is not stated in the course material?\",\n      \"options\": [\n        \"The instructor's first name\",\n        \"The instructor's surname\",\n        \"The seminar's meeting day\",\n        \"The seminar's name\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"The material gives the instructor's surname, the seminar's meeting day, and the seminar's name, but it does not give the instructor's first name.\",\n      \"topic\": \"Unstated information\"\n    ,\n    \"difficulty\": \"basic\"\n    },\n    {\n      \"type\": \"mcq\",\n      \"question\": \"Which pair of facts is correct according to the course material?\",\n      \"options\": [\n        \"The seminar meets on Tuesdays and the instructor's surname is Rowan.\",\n        \"The seminar meets on Tuesdays and the instructor's surname is Reed.\",\n        \"The seminar meets on Wednesdays and the instructor's surname is Rowan.\",\n        \"The seminar meets on Mondays and the instructor's surname is Rowan.\"\n      ],\n      \"correct_index\": 0,\n      \"explanation\": \"The material states both that the seminar meets on Tuesdays and that the instructor's surname is Rowan. The other options change one of these facts.\",\n      \"topic\": \"Combined facts\"\n    ,\n    \"difficulty\": \"basic\"\n    }\n  ]\n}",
+          "usage": {
+            "prompt_tokens": 220,
+            "total_tokens": 2134,
+            "completion_tokens": 1914,
+            "prompt_tokens_details": {
+              "cached_tokens": 0,
+              "created_cache_tokens": 0,
+              "multimodal_tokens": null
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 1197
+            }
+          },
+          "latency_seconds": 14.61
+        }
+      ],
+      "critical_semantic_review": "pending",
+      "source_documents": [
+        {
+          "filename": "Administrative note.txt",
+          "page": 1,
+          "text": "The synthetic seminar meets on Tuesdays. The instructor's surname is Rowan. No subject-matter content or worked examples are supplied."
+        }
+      ],
+      "expected_concepts": [
+        "honest insufficiency; do not invent subject material"
+      ]
+    }
+  ],
+  "study_prompt_sha256": "431ce2166b94726ca4f6748432537c6b67eed4807bc258588bf17528480aa45e",
+  "metadata_note": "Study constants digest recovered from recorded baseline HEAD; no study prompt changes before run."
+}

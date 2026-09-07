@@ -890,6 +890,9 @@ def _run_class_chat_cases(
             duration_seconds=duration_seconds,
             system_prompt_tokens=estimate_tokens(str(assembly.messages[0].get("content") or "")),
             assembled_prompt_sha256=_sha256(json.dumps(assembly.messages, sort_keys=True).encode()),
+            assembled_system_prompt_sha256=_sha256(
+                str(assembly.messages[0].get("content") or "").encode()
+            ),
             tool_schema_tokens=llm_tools.schema_tokens(list(assembly.tools)),
             user=case.user,
             mode=case.mode,
@@ -1189,6 +1192,8 @@ def cmd_grade(args: argparse.Namespace) -> int:
     workspace.write(
         "grade_meta",
         {
+            "corpus_sha256": _sha256(Path(args.corpus).read_bytes()),
+            "rubric_sha256": _sha256(_GRADER_PROMPT.encode()),
             "corpus_version": header["corpus_version"],
             "prompt_contract_version": header["prompt_contract_version"],
             "tutor": {

@@ -1,0 +1,347 @@
+{
+  "review_kind": "independent_agent",
+  "human_review": "not_run",
+  "model_self_judge_used_for_verdicts": false,
+  "quality_gate": "NOT_PASSED",
+  "scope": "One configured endpoint/model; bounded sequential synthetic runs; no universal capability claim",
+  "runs": [
+    {
+      "run": "guide-remediation-1",
+      "input_sha256": "84eb691fe3645166f2692dd8a553e55afb54b42d52d7ab006dd1d92930c11e55",
+      "app": {
+        "sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+        "dirty": true
+      },
+      "cases": [
+        {
+          "case": "no-idea-how-to-start",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Actionable rates with units and setup; no unsolicited full solution.",
+          "duration_seconds": 22.94,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "24ce3fef07792ce485856455acad92cc971c82f98c1cd30c50aa1b14b1f3e0c9",
+          "tool_calls": 0
+        },
+        {
+          "case": "attempt-where-did-i-go-wrong",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "Credits setup and diagnoses lost variable dependence, but does not acknowledge that student bounds are valid on0<t<1, an explicit partial-attempt criterion. Repeat2 factors correctly but still attributes t*exp(-t) to both errors without distinguishing the valid-bound interval.",
+          "duration_seconds": 17.2,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "7f94e606c1ea630471e2ed41fb95ed13b7f01c6cb370e3187373e03d39f82cd6",
+          "tool_calls": 4
+        },
+        {
+          "case": "just-tell-me-the-answer",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "Correct formula but claims exact derivative verification despite sole CAS comparison equal:false; lowercase e was symbolic and no exp retry occurred.",
+          "duration_seconds": 7.93,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "69ea04b7f3b24c1bdaad3d45f16cc91f4b287b6c35107b0dfde45c12b26d494d",
+          "tool_calls": 1
+        },
+        {
+          "case": "explain-that-more-simply",
+          "verdict": "pass_with_concerns",
+          "critical_failure": false,
+          "reason": "Useful bell-memory intuition; past-only description presumes causal response.",
+          "duration_seconds": 3.2,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "473fe18387a1ad1a152f46bdb32eac591c416e9ffc9ea4e97fdde1d15a3028f9",
+          "tool_calls": 0
+        },
+        {
+          "case": "dont-ask-me-questions-teach-it",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "Correct eigenpairs but wrong intermediate characteristic polynomial constant12 instead of18.",
+          "duration_seconds": 17.87,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "d2986642ca7f42d8382a22f92f3217e3f2d679bc1da7abdb823d13161fbfe0b2",
+          "tool_calls": 7
+        },
+        {
+          "case": "show-convolution-worked",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct support, factoring, signs and branch formulas; definite integrals and area1 supported by tools.",
+          "duration_seconds": 31.02,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "b0e9040ac5a9aa382319bfee1f8ba6d7ee57b58f296d9b58cec51335204f6deb",
+          "tool_calls": 4
+        },
+        {
+          "case": "show-what-is-a-derivative",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Self-contained definition, limit, worked example and takeaway; limit checked by tool.",
+          "duration_seconds": 10.5,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "2ce2c14e0b11b450c3ae3b1ec29de23d4692d770488eccc0d2065efb89f75e82",
+          "tool_calls": 1
+        }
+      ],
+      "latency_seconds": {
+        "median": 17.2,
+        "mean": 15.81,
+        "min": 3.2,
+        "max": 31.02
+      }
+    },
+    {
+      "run": "guide-remediation-2",
+      "input_sha256": "daa1018fdc0ac44bea4e4fe10b18e32b209bb8b9e2af3421bfcc9370397e5736",
+      "app": {
+        "sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+        "dirty": true
+      },
+      "cases": [
+        {
+          "case": "no-idea-how-to-start",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Actionable rates with units and setup; no unsolicited full solution.",
+          "duration_seconds": 12.08,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "6885c95d7e52c53d4dd052a728b108fd1d03c2e862d5b1763237f4dd1b70a213",
+          "tool_calls": 0
+        },
+        {
+          "case": "attempt-where-did-i-go-wrong",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "Credits setup and diagnoses lost variable dependence, but does not acknowledge that student bounds are valid on0<t<1, an explicit partial-attempt criterion. Repeat2 factors correctly but still attributes t*exp(-t) to both errors without distinguishing the valid-bound interval.",
+          "duration_seconds": 20.49,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "49f81c776f8ca44a15fc374bf09817c0c29d176356aa6ce4f09b2ddf16b127c5",
+          "tool_calls": 4
+        },
+        {
+          "case": "just-tell-me-the-answer",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "Correct formula but claims exact derivative verification despite sole CAS comparison equal:false; lowercase e was symbolic and no exp retry occurred.",
+          "duration_seconds": 8.52,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "69ea04b7f3b24c1bdaad3d45f16cc91f4b287b6c35107b0dfde45c12b26d494d",
+          "tool_calls": 1
+        },
+        {
+          "case": "explain-that-more-simply",
+          "verdict": "pass_with_concerns",
+          "critical_failure": false,
+          "reason": "Useful bell-memory intuition; past-only description presumes causal response.",
+          "duration_seconds": 3.32,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "473fe18387a1ad1a152f46bdb32eac591c416e9ffc9ea4e97fdde1d15a3028f9",
+          "tool_calls": 0
+        },
+        {
+          "case": "dont-ask-me-questions-teach-it",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct eigenpair teaching; erroneous characteristic-polynomial extension omitted; tool checks recovered malformed vector requests using scalar arithmetic.",
+          "duration_seconds": 18.89,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "3d17e38e72b770488a086a5f9082b9c1197cc676bcb5db57e545add87e15862a",
+          "tool_calls": 7
+        },
+        {
+          "case": "show-convolution-worked",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Correct support, factoring, signs and branch formulas; definite integrals and area1 supported by tools.",
+          "duration_seconds": 28.1,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "74825ba65ddb0d7eac20769ab76a46d9926a90df4dcfd6263990c0a59adab8db",
+          "tool_calls": 4
+        },
+        {
+          "case": "show-what-is-a-derivative",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Self-contained definition, limit, worked example and takeaway; limit checked by tool.",
+          "duration_seconds": 9.54,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "2ce2c14e0b11b450c3ae3b1ec29de23d4692d770488eccc0d2065efb89f75e82",
+          "tool_calls": 1
+        }
+      ],
+      "latency_seconds": {
+        "median": 12.08,
+        "mean": 14.42,
+        "min": 3.32,
+        "max": 28.1
+      }
+    },
+    {
+      "run": "guide-transfer-1",
+      "input_sha256": "60d29a5427060f191ea2012012a1205d51edd04881af107fd14877bd650f705c",
+      "app": {
+        "sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+        "dirty": true
+      },
+      "cases": [
+        {
+          "case": "transfer-ratio-attempt",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Preserves proportional scaling, diagnoses inverted ratio, corrects milk/flour to2/3 and verifies10/3cups.",
+          "duration_seconds": 7.63,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "796884ae5b31b086bb96b907f9a40827a189bcead01fba0b767279c8a5076560",
+          "tool_calls": 1
+        },
+        {
+          "case": "transfer-simple-feedback",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Plain thermostat feedback with near-set-point qualification and no compulsory questions.",
+          "duration_seconds": 6.29,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "f0ed4cb163670ea2d111558d86f6cbc9615145f91e55c0b8aa4e4c8cd1b7104e",
+          "tool_calls": 0
+        },
+        {
+          "case": "transfer-show-probability",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Complete conditional3/5*2/4 calculation and independently counted3/10; tool comparisons support arithmetic.",
+          "duration_seconds": 14.01,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "c7f2fac8ee56936210dcff3dd45f5066f55a357c7fe5c8a2c4c15add9cf4c72f",
+          "tool_calls": 3
+        }
+      ],
+      "latency_seconds": {
+        "median": 7.63,
+        "mean": 9.31,
+        "min": 6.29,
+        "max": 14.01
+      }
+    },
+    {
+      "run": "guide-transfer-2",
+      "input_sha256": "40264f92b673fad313a87307bb852075aaceb9d7738baa1af30c1022e585ee70",
+      "app": {
+        "sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+        "dirty": true
+      },
+      "cases": [
+        {
+          "case": "transfer-ratio-attempt",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Preserves proportional scaling, diagnoses inverted ratio, corrects milk/flour to2/3 and verifies10/3cups.",
+          "duration_seconds": 7.28,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "796884ae5b31b086bb96b907f9a40827a189bcead01fba0b767279c8a5076560",
+          "tool_calls": 1
+        },
+        {
+          "case": "transfer-simple-feedback",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Plain thermostat feedback with near-set-point qualification and no compulsory questions.",
+          "duration_seconds": 6.84,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "f0ed4cb163670ea2d111558d86f6cbc9615145f91e55c0b8aa4e4c8cd1b7104e",
+          "tool_calls": 0
+        },
+        {
+          "case": "transfer-show-probability",
+          "verdict": "pass",
+          "critical_failure": false,
+          "reason": "Complete conditional3/5*2/4 calculation and independently counted3/10; tool comparisons support arithmetic.",
+          "duration_seconds": 12.27,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "c7f2fac8ee56936210dcff3dd45f5066f55a357c7fe5c8a2c4c15add9cf4c72f",
+          "tool_calls": 3
+        }
+      ],
+      "latency_seconds": {
+        "median": 7.28,
+        "mean": 8.8,
+        "min": 6.84,
+        "max": 12.27
+      }
+    },
+    {
+      "run": "guide-osmosis-remediation-1",
+      "input_sha256": "e62ec9990a257b878ca007225a674c5ab4e939448fa93a54fc51a056e1654119",
+      "app": {
+        "sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+        "dirty": true
+      },
+      "cases": [
+        {
+          "case": "simpler-osmosis",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "Says pure-water side becomes more diluted as water leaves and promises sides become similar; false volunteered equilibrium description.",
+          "duration_seconds": 3.03,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "cfc0dc2fcd99984d7ab02b4fac69c44af96e436bdab402f2e55e5239ce5237e2",
+          "tool_calls": 0
+        }
+      ],
+      "latency_seconds": {
+        "median": 3.03,
+        "mean": 3.03,
+        "min": 3.03,
+        "max": 3.03
+      }
+    },
+    {
+      "run": "guide-osmosis-remediation-2",
+      "input_sha256": "13cdbd96f878338dae4968ac9c32e7a32d26f7560bddf1bc6c5a414f66c803fc",
+      "app": {
+        "sha": "49d78ae0aa03f6c1946b7e2db0d684f7ea9cd451",
+        "dirty": true
+      },
+      "cases": [
+        {
+          "case": "simpler-osmosis",
+          "verdict": "fail",
+          "critical_failure": true,
+          "reason": "Says pure-water side becomes more diluted as water leaves and promises sides become similar; false volunteered equilibrium description.",
+          "duration_seconds": 2.81,
+          "terminal_status": "ok",
+          "stopped": "completed",
+          "answer_sha256": "cfc0dc2fcd99984d7ab02b4fac69c44af96e436bdab402f2e55e5239ce5237e2",
+          "tool_calls": 0
+        }
+      ],
+      "latency_seconds": {
+        "median": 2.81,
+        "mean": 2.81,
+        "min": 2.81,
+        "max": 2.81
+      }
+    }
+  ]
+}
