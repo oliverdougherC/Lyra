@@ -1,0 +1,57 @@
+[
+  {
+    "link": "https://github.com/oliverdougherC/Lyra/actions/runs/34080748660/job/101616326391",
+    "name": "CI Gate",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/oliverdougherC/Lyra/actions/runs/34080748660/job/101615407226",
+    "name": "Rust desktop checks",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/oliverdougherC/Lyra/actions/runs/34080748660/job/101615407126",
+    "name": "Desktop macOS artifact",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/oliverdougherC/Lyra/actions/runs/34080748660/job/101615407156",
+    "name": "Python production dependency audit",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/oliverdougherC/Lyra/actions/runs/34080748660/job/101615407198",
+    "name": "backend",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/oliverdougherC/Lyra/actions/runs/34080748660/job/101615407174",
+    "name": "Backend targeted regressions",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/oliverdougherC/Lyra/actions/runs/34080748660/job/101615407203",
+    "name": "frontend",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/oliverdougherC/Lyra/actions/runs/34080748660/job/101615407249",
+    "name": "Full-stack acceptance",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/oliverdougherC/Lyra/actions/runs/34080748660/job/101615407055",
+    "name": "Frozen Python build and smoke",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/oliverdougherC/Lyra/actions/runs/34080748660/job/101615407148",
+    "name": "Component resource report",
+    "state": "SUCCESS"
+  },
+  {
+    "link": "https://github.com/oliverdougherC/Lyra/actions/runs/34080748660/job/101615407213",
+    "name": "Active reference absence scan",
+    "state": "SUCCESS"
+  }
+]

@@ -9,9 +9,9 @@ without mutating the document body.
 import hashlib
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
-from backend.core import artifacts, mathnorm
+from backend.core import artifacts, mathnorm, writer_runs
 from backend.core.errors import ConflictError, NotFoundError
 
 NOT_A_LIVE_SUGGESTION_MESSAGE = "That live suggestion does not exist."
@@ -72,6 +72,28 @@ def _suggestion_row(conn: sqlite3.Connection, suggestion_id: int) -> sqlite3.Row
     if row is None:
         raise NotFoundError(NOT_A_LIVE_SUGGESTION_MESSAGE)
     return row
+
+
+def _require_model_ownership(conn: sqlite3.Connection, suggestion_id: int) -> None:
+    """Fence model effects under the caller's SQLite writer lock.
+
+    Legacy suggestions without a durable run retain their old storage contract.
+    HTTP suggestions always have a run, whose cancellation/terminal commit wins over
+    any later callback, including one arriving after a successor has started.
+    """
+    run = conn.execute(
+        "select r.status, r.id, r.artifact_id from writer_runs r "
+        "join live_draft_suggestions s on s.run_id = r.id where s.id = ?",
+        (suggestion_id,),
+    ).fetchone()
+    if run is not None and (
+        run["status"] not in ("queued", "running")
+        or conn.execute(
+            "select 1 from writer_runs where artifact_id = ? and id > ?",
+            (run["artifact_id"], run["id"]),
+        ).fetchone()
+    ):
+        raise ConflictError("This writing run no longer owns the suggestion. Saved text was kept.")
 
 
 def _block_row(conn: sqlite3.Connection, block_id: int) -> sqlite3.Row:
@@ -199,6 +221,102 @@ def create_live_suggestion(
     return get_live_suggestion(conn, suggestion_id)
 
 
+def resume_previous_suggestion(
+    conn: sqlite3.Connection,
+    suggestion_id: int,
+    generation_identity: Callable[[], dict[str, object]],
+) -> bool:
+    """Copy compatible failed work into its successor without reviving the old run.
+
+    The fingerprint callback reads current plan/brief/source state under the same
+    writer lock as ownership, base validation, block copying and checkpoint publication.
+    Old suggestions without a fingerprint are deliberately ineligible.
+    """
+    try:
+        conn.execute("begin immediate")
+        _require_model_ownership(conn, suggestion_id)
+        current = get_live_suggestion(conn, suggestion_id)
+        run = writer_runs.get_run(conn, int(current["run_id"]))
+        previous_row = conn.execute(
+            "select id from writer_runs where artifact_id = ? and id < ? order by id desc limit 1",
+            (current["artifact_id"], run["id"]),
+        ).fetchone()
+        if current["blocks"] or previous_row is None or run["job_kind"] != writer_runs.PASS:
+            conn.rollback()
+            return False
+        previous = writer_runs.get_run(conn, int(previous_row["id"]))
+        checkpoint = previous["checkpoint"]
+        if (
+            previous["status"] not in (writer_runs.FAILED, writer_runs.CANCELLED)
+            or previous["job_kind"] != writer_runs.PASS
+            or previous["depth"] != run["depth"]
+            or previous["request"] != run["request"]
+            or not isinstance(checkpoint, dict)
+            or checkpoint.get("stage") not in {"drafting", "transitions", "reviewing", "finalizing"}
+        ):
+            conn.rollback()
+            return False
+        old = get_live_suggestion_for_run(conn, int(previous["id"]))
+        body = str(_body_part(conn, int(current["artifact_id"]))["content"])
+        if (
+            old is None
+            or not old["blocks"]
+            or old["stage"] != checkpoint["stage"]
+            or old["base_hash"] != current["base_hash"]
+            or old["base_hash"] != _sha256(str(old["base_content"]))
+            or current["base_hash"] != _sha256(str(current["base_content"]))
+            or current["base_hash"] != _sha256(body)
+        ):
+            conn.rollback()
+            return False
+        expected = generation_identity()
+        if not expected or any(
+            not isinstance(block["metadata"], dict)
+            or block["metadata"].get("generation_identity") != expected
+            for block in old["blocks"]
+        ):
+            conn.rollback()
+            return False
+        conn.execute(
+            "insert into live_draft_blocks "
+            "(suggestion_id, stable_key, section_ref, paragraph_ordinal, kind, heading, content, "
+            "status, target_words, summary, context_json, metadata_json, revision, user_revision) "
+            "select ?, stable_key, section_ref, paragraph_ordinal, kind, heading, content, "
+            "status, target_words, summary, context_json, metadata_json, revision, user_revision "
+            "from live_draft_blocks where suggestion_id = ? order by paragraph_ordinal, id",
+            (suggestion_id, old["id"]),
+        )
+        checkpoint = {**checkpoint, "resumed_from_run_id": previous["id"]}
+        conn.execute(
+            "update writer_runs set checkpoint_json = ?, updated_at = datetime('now') where id = ?",
+            (_json(checkpoint), run["id"]),
+        )
+        conn.execute(
+            "update live_draft_suggestions set stage = ?, status = 'running', "
+            "detail = 'Resuming saved paragraphs from the previous attempt', "
+            "version = version + 1, "
+            "updated_at = datetime('now') where id = ?",
+            (checkpoint["stage"], suggestion_id),
+        )
+        settled = sum(
+            bool(str(block["content"]).strip())
+            and (
+                block["status"] in {"complete", "drafted", "revised"}
+                or bool(block["user_revision"])
+            )
+            for block in old["blocks"]
+        )
+        conn.execute(
+            "update artifacts set problems_total = ?, problems_done = ? where id = ?",
+            (len(old["blocks"]), settled, current["artifact_id"]),
+        )
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def get_live_suggestion(conn: sqlite3.Connection, suggestion_id: int) -> dict[str, object]:
     return _suggestion_dict(conn, _suggestion_row(conn, suggestion_id))
 
@@ -237,12 +355,14 @@ def update_live_suggestion(
     `metadata` is merged into every block's `metadata` payload, which gives the pipeline
     a simple way to stamp shared run details across the seeded outline.
     """
-    current = get_live_suggestion(conn, suggestion_id)
     if stage is not None:
         _validate_stage(stage)
-    next_version = int(current["version"]) + max(0, version_bump)
     try:
         conn.execute("begin immediate")
+        if status not in {"cancelled", "failed"}:
+            _require_model_ownership(conn, suggestion_id)
+        current = get_live_suggestion(conn, suggestion_id)
+        next_version = int(current["version"]) + max(0, version_bump)
         conn.execute(
             "update live_draft_suggestions set stage = ?, status = ?, detail = ?, "
             "version = ?, updated_at = datetime('now') where id = ?",
@@ -417,6 +537,7 @@ def model_update_block(
         # streamed appends from another connection.
         conn.execute("begin immediate")
         _suggestion_row(conn, suggestion_id)
+        _require_model_ownership(conn, suggestion_id)
         current_row = _block_row_for_key(conn, suggestion_id, stable_key)
         if current_row is None:
             block = _insert_block(
@@ -485,6 +606,7 @@ def append_block_text(
     try:
         conn.execute("begin immediate")
         _suggestion_row(conn, suggestion_id)
+        _require_model_ownership(conn, suggestion_id)
         current_row = _block_row_for_key(conn, suggestion_id, stable_key)
         if current_row is None:
             block = _insert_block(
@@ -620,7 +742,11 @@ def assemble_markdown(conn: sqlite3.Connection, suggestion_id: int) -> str:
 
 
 def finalize_to_pending_edit(
-    conn: sqlite3.Connection, suggestion_id: int, *, note: str | None = None
+    conn: sqlite3.Connection,
+    suggestion_id: int,
+    *,
+    note: str | None = None,
+    model_owned: bool = False,
 ) -> dict[str, object] | None:
     """Create or update the pending edit row from the live suggestion, without writing.
 
@@ -628,18 +754,19 @@ def finalize_to_pending_edit(
     draft body happens to say now. The existing review flow may later rebase or mark it
     stale on read.
     """
-    suggestion = get_live_suggestion(conn, suggestion_id)
-    artifact_id = int(suggestion["artifact_id"])
-    part = _body_part(conn, artifact_id)
-    proposed = assemble_markdown(conn, suggestion_id)
-    if proposed == str(suggestion["base_content"]):
-        # The pending-edit table predates live suggestions and carries no ownership
-        # marker. A no-op live finalization must not erase an unrelated proposal.
-        return None
-
-    stale = int(_sha256(str(part["content"])) != str(suggestion["base_hash"]))
     try:
         conn.execute("begin immediate")
+        if model_owned:
+            _require_model_ownership(conn, suggestion_id)
+        suggestion = get_live_suggestion(conn, suggestion_id)
+        artifact_id = int(suggestion["artifact_id"])
+        part = _body_part(conn, artifact_id)
+        proposed = assemble_markdown(conn, suggestion_id)
+        if proposed == str(suggestion["base_content"]):
+            # A no-op must not erase an unrelated proposal.
+            conn.commit()
+            return None
+        stale = int(_sha256(str(part["content"])) != str(suggestion["base_hash"]))
         existing = conn.execute(
             "select id from pending_edits where part_id = ?",
             (int(part["id"]),),

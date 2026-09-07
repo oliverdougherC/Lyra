@@ -1503,6 +1503,15 @@ Write as much of the complete section as fits cleanly in this reply. The writing
 controller may ask for a continuation when the endpoint stops at its output limit; if
 it does, that later call will append to this one rather than replace it."""
 
+_SECTION_EDIT_BODY = """\
+You are editing an existing section, not drafting a replacement in your own style.
+Make the smallest changes that satisfy the student's request. Leave unaffected wording,
+order, perspective, and distinctive phrasing intact. Remove or correct an unsupported
+assertion where it occurs; do not retain it and append a rebuttal or a report of your edits.
+Return the complete edited section beginning with its existing heading, and nothing
+outside it. Keep [@lyra:ID] citations intact because the application renders them.
+Do not rewrite other sections or invent personal experiences, facts, or sources."""
+
 _SECTION_CONTINUATION_BODY = """\
 You are continuing one section that was too long for a single model reply. Return only
 new markdown prose to append after the supplied tail. Do not repeat the heading, the
@@ -1739,7 +1748,7 @@ RESEARCH_NOTES_SCHEMA = JsonSchema(
         "type": "object",
         "properties": {
             "notes": {"type": "array", "items": {"type": "string"}},
-            "source_ids": {"type": "array", "items": {"type": "string"}},
+            "source_ids": {"type": "array", "items": {"type": "integer"}},
             "gaps": {"type": "array", "items": {"type": "string"}},
             "relied_on": {
                 "type": "array",
@@ -2041,9 +2050,25 @@ def format_ledger_block(entries: list[Mapping[str, object]] | None) -> str:
     """Render source ids and relied-on excerpts without inventing citation syntax."""
     if not entries:
         return ""
-    return "Source ledger (cite only these stable source IDs):\n" + json.dumps(
-        [dict(entry) for entry in entries], ensure_ascii=False, sort_keys=True
-    )
+    sources = []
+    for entry in entries:
+        source = dict(entry)
+        source_id = source.pop("id", source.get("source_id"))
+        source["source_id"] = source_id
+        source["citation_marker"] = f"[@lyra:{source_id}]"
+        source["excerpts"] = [
+            {
+                **{key: value for key, value in excerpt.items() if key != "id"},
+                **({"excerpt_id": excerpt["id"]} if "id" in excerpt else {}),
+            }
+            for excerpt in source.get("excerpts", [])
+            if isinstance(excerpt, Mapping)
+        ]
+        sources.append(source)
+    return (
+        "Source ledger: copy citation_marker exactly to cite source_id; excerpt_id and "
+        "source_revision_id identify evidence records, never citation targets.\n"
+    ) + json.dumps(sources, ensure_ascii=False, sort_keys=True)
 
 
 def build_skeptic_prompt(
@@ -2200,6 +2225,7 @@ def build_section_prompt(
     target_words: int | None = None,
     plan_block: str = "",
     ledger_block: str = "",
+    preserve_existing: bool = False,
 ) -> list[dict[str, str]]:
     """Build the messages for one section of the pipeline's drafting stage.
 
@@ -2243,7 +2269,14 @@ def build_section_prompt(
     if facts_block:
         sections.append(facts_block)
     return [
-        {"role": "system", "content": _SECTION_PROMPT},
+        {
+            "role": "system",
+            "content": (
+                _SECTION_EDIT_BODY + "\n\n" + _WRITING_CRAFT
+                if preserve_existing
+                else _SECTION_PROMPT
+            ),
+        },
         {"role": "user", "content": "\n\n".join(sections)},
     ]
 

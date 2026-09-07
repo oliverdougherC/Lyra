@@ -1,0 +1,194 @@
+{
+  "version": "writer-quality-agent-review.v1",
+  "evaluator": {
+    "type": "independent_agent_review",
+    "identity": "Codex writer_corpus subagent",
+    "model": "inherited session model; exact provider revision not exposed",
+    "human_review": false,
+    "independence_limits": "This agent authored the corpus and implemented the later read_source repair; it did not author or run this baseline output. This is separate-agent adjudication, not blinded evaluation."
+  },
+  "case_id": "review_literary_invented_quote",
+  "receipt_path": "receipt:baseline/review_literary_invented_quote--uninterrupted.json",
+  "receipt_sha256": "ca8569ff977164a7004c7bae0eb648ded4fe3dea5e78010582cc7e103aee68f8",
+  "corpus_version": "writer-quality.v1",
+  "adjudication_corpus_sha256": "1a50068afbcd198133d554d4be6f2abf6a1921ceb79cd985a73459d691238fb3",
+  "corpus_note": "Current corpus includes a subsequent unrelated course-deletion correction. Literary case was checked against the receipt body and immutable source; generation-time corpus checksum must come from run metadata, not this adjudication hash.",
+  "scope": {
+    "partial_run": true,
+    "harness_timeout": true,
+    "elapsed_seconds": 305.718,
+    "run_id": 1,
+    "run_status": "running",
+    "last_stage": "Reviewing prose: 1.2 A competing reading",
+    "completed_lenses": 2,
+    "total_lenses": 4,
+    "comments_observed": 11,
+    "actual_model_identity": "Not recorded in this per-case receipt; consult parent manifest.",
+    "warning": "Although scenario is named uninterrupted and intervention_observed=false, saved run warnings include resumed_after_restart. Do not treat this as verified interruption-free completion. Scores cover observed persisted feedback only, not future comments or final quality."
+  },
+  "subjective_scores": {
+    "planning": {
+      "score": null,
+      "status": "not-applicable",
+      "reason": "Reviewer run used a saved plan; no generated plan is evaluated."
+    },
+    "evidence_citation": {
+      "score": 1,
+      "status": "scored_partial",
+      "evidence_comment_ids": [
+        3,
+        4,
+        6,
+        8,
+        9
+      ],
+      "reason": "Finds the invented speech and overgeneralization, but treats selected-excerpt omissions as evidence gaps despite complete saved source support. Comment 4 suggests another unsupported declaration as a repair."
+    },
+    "revision_precision": {
+      "score": null,
+      "status": "not-applicable",
+      "reason": "Reviewer proposed no replacement prose; no revision diff to judge."
+    },
+    "review_usefulness": {
+      "score": 1,
+      "status": "scored_partial",
+      "evidence_comment_ids": [
+        1,
+        3,
+        4,
+        5,
+        6,
+        8,
+        9
+      ],
+      "reason": "Both seeded problems are identified and several structure notes are actionable, but a false critical cup finding could cause removal of valid central evidence; redundant thesis-placement advice and two additional false evidence warnings dilute prioritization."
+    },
+    "instruction_following": {
+      "score": 2,
+      "status": "scored_partial",
+      "evidence_comment_ids": [
+        3,
+        4,
+        6,
+        8,
+        9
+      ],
+      "reason": "Keeps feedback in comments, finds both requested seeded problems, and preserves draft text. Evidence inspection remains inadequate; the advice can undermine supported textual interpretation."
+    },
+    "student_voice": {
+      "score": null,
+      "status": "not-applicable",
+      "reason": "No rewritten prose exists to assess voice quality; byte-for-byte accepted-body preservation is reported separately. Comment 11 asks for support for a rhythmic reading, but does not itself demonstrate rewritten voice flattening."
+    }
+  },
+  "seeded_issues": {
+    "expected_count": 2,
+    "found_count": 2,
+    "missed_count": 0,
+    "scope": "observed partial output only",
+    "results": [
+      {
+        "seed_id": "invented_dialogue",
+        "found": true,
+        "comment_ids": [
+          3
+        ],
+        "reason": "Correctly identifies invented never-return speech and cites the supported without-speaking passage; source contains no dialogue."
+      },
+      {
+        "seed_id": "overstated_interpretation",
+        "found": true,
+        "comment_ids": [
+          4
+        ],
+        "reason": "Correctly flags proves/every relationship as overclaiming. Repair example remains unsound: no declaration ending ties exists."
+      }
+    ]
+  },
+  "false_positive_comments": {
+    "count": 3,
+    "comment_ids": [
+      6,
+      8,
+      9
+    ],
+    "items": [
+      {
+        "comment_id": 6,
+        "quote": "On my second reading, the cup she leaves behind complicated that answer.",
+        "reason": "The immutable saved source explicitly says Mara set the blue cup on the table. Missing cup from the selected excerpt does not make this detail unverifiable from available saved evidence. Critical severity and possible removal advice are misleading.",
+        "supporting_source_quote": "Mara set the blue cup on the table."
+      },
+      {
+        "comment_id": 8,
+        "quote": "I first read Mara leaving the porch as an escape.",
+        "reason": "The saved source explicitly names Mara. A request to record an already-readable name is an avoidable false evidence alarm.",
+        "supporting_source_quote": "Mara set the blue cup on the table."
+      },
+      {
+        "comment_id": 9,
+        "quote": "The narrator notices the cup but never tells us what Mara thinks.",
+        "reason": "The complete four-sentence saved excerpt contains only observable actions and a limitation of narrator observation; it never reports Mara thoughts. The reviewer treats access to one selected sentence as if full saved evidence could not be checked.",
+        "supporting_source_quote": "Mara set the blue cup on the table. She pulled the porch door shut and crossed the yard without speaking. Behind her, the gate remained unlatched. The narrator did not see whether she looked back."
+      }
+    ],
+    "not_counted_as_false_positive": [
+      {
+        "comment_id": 7,
+        "reason": "Family relationships are not established anywhere in the complete supplied excerpt, so this is a legitimate additional issue."
+      },
+      {
+        "comment_id": 10,
+        "reason": "Asking for direct textual quotation is defensible close-reading advice; it differs from claiming that the cup is absent."
+      },
+      {
+        "comment_id": 11,
+        "reason": "Asking the student to explain a claimed rhythmic effect is actionable, although calling matters to me vague is subjective."
+      }
+    ]
+  },
+  "duplication": {
+    "exact_duplicate_comment_signatures": 0,
+    "semantic_redundant_pairs": [
+      [
+        1,
+        5
+      ]
+    ],
+    "semantic_redundant_extra_comment_count": 1,
+    "reason": "Both comments prescribe stating the thesis before its later references. Different anchors make them distinct exact signatures, but their core repair overlaps. Comments 9 and 10 share an anchor but raise different issues and are not counted as duplicates."
+  },
+  "citation_support": {
+    "source_id": 1,
+    "source_revision_id": 1,
+    "supporting_revision": 1,
+    "saved_snapshot_sha256": "9ad8dded1c17702e5089f8ba22bc92775d5dedd1d68afe4a02a62532cdffb1d6",
+    "selected_excerpt_is_exactly_supported": true,
+    "historical_binding_unchanged": true,
+    "source_snapshot_unchanged": true,
+    "unsupported_repair_advice": [
+      {
+        "comment_id": 4,
+        "excerpt": "that Mara has declared an end to her ties",
+        "reason": "Still attributes a declaration absent from the source; use qualified interpretation of departure instead."
+      }
+    ],
+    "evidence_limit": "Correct storage provenance does not make reviewer claims about absent support correct."
+  },
+  "student_prose_preservation": {
+    "body_unchanged": true,
+    "body_before_sha256": "f22218abc5c8a97bc833d27529c808603e3e311e7c1d83b5276aa860811b9b80",
+    "body_after_sha256": "f22218abc5c8a97bc833d27529c808603e3e311e7c1d83b5276aa860811b9b80",
+    "unrelated_accepted_edits": 0,
+    "pending_revision_present": false,
+    "unsupported_rewrites": 0,
+    "unsupported_rewrites_scope": "No replacement prose was generated; unsupported feedback advice is separately reported."
+  },
+  "acceptance": {
+    "human_review": "not-run",
+    "completed_provider_quality": "not-run: harness timed out while durable run remained running",
+    "same_model_interruption_comparison": "not-run in this adjudication",
+    "packaged_candidate": "not-run in this adjudication",
+    "decision": "Observed feedback demonstrates a source-access quality defect; passing seeded recall and preserved text do not establish beta acceptance."
+  }
+}

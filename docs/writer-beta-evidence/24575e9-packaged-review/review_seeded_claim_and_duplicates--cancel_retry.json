@@ -1,0 +1,1801 @@
+{
+  "case_id": "review_seeded_claim_and_duplicates",
+  "corpus_recovery_requirements": [
+    "uninterrupted",
+    "review_before_comment_persist",
+    "review_after_comment_persist",
+    "process_restart",
+    "repeat_review"
+  ],
+  "scenario": "cancel_retry",
+  "evidence_kind": "deterministic_fault_provider",
+  "subjective_scores": {
+    "planning": null,
+    "evidence_citation": null,
+    "revision_precision": null,
+    "review_usefulness": null,
+    "instruction_following": null,
+    "student_voice": null
+  },
+  "independent_agent_review": null,
+  "human_review": null,
+  "timeline": [
+    {
+      "elapsed_seconds": 0.783,
+      "state": "pending",
+      "stage_detail": "Reviewing (queued)",
+      "error_message": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.153862+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 0.871,
+      "state": "generating",
+      "stage_detail": "Reviewing structure",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.153862+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 0.893,
+      "state": "generating",
+      "stage_detail": "Cancelling after the current step",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.153862+00:00",
+      "run_status": "cancel_requested",
+      "cancel_requested": true,
+      "cancel_requested_at": "2026-09-07 04:22:53",
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 0.981,
+      "state": "cancelled",
+      "stage_detail": "The review was cancelled. Filed comments were kept.",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.153862+00:00",
+      "run_status": "cancelled",
+      "cancel_requested": false,
+      "cancel_requested_at": "2026-09-07 04:22:53",
+      "finished_at": "2026-09-07 04:22:53",
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 1.015,
+      "state": "pending",
+      "stage_detail": "Reviewing (queued)",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 0,
+      "run_id": 2,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.386869+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 1.103,
+      "state": "generating",
+      "stage_detail": "Reviewing structure",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 0,
+      "run_id": 2,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.386869+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 1.281,
+      "state": "generating",
+      "stage_detail": "Reviewing the argument",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 1,
+      "run_id": 2,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.386869+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 1.456,
+      "state": "generating",
+      "stage_detail": "Reviewing prose: 1.1 Introduction",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 2,
+      "run_id": 2,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.386869+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 1.627,
+      "state": "generating",
+      "stage_detail": "Reviewing prose: 1.2 Evidence",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 2,
+      "run_id": 2,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.386869+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 1.799,
+      "state": "generating",
+      "stage_detail": "Reviewing prose: 1.3 Recommendation",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 2,
+      "run_id": 2,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.386869+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 1.975,
+      "state": "generating",
+      "stage_detail": "Reviewing claims: 1.1 Introduction",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 3,
+      "run_id": 2,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.386869+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 2.149,
+      "state": "generating",
+      "stage_detail": "Reviewing claims: 1.2 Evidence",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 3,
+      "run_id": 2,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.386869+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 2.326,
+      "state": "generating",
+      "stage_detail": "Reviewing claims: 1.3 Recommendation",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 3,
+      "run_id": 2,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.386869+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    {
+      "elapsed_seconds": 2.501,
+      "state": "ready",
+      "stage_detail": "Review complete: 1 major. 1 earlier comment remains open.",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 4,
+      "run_id": 2,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.386869+00:00",
+      "run_status": "completed",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": "2026-09-07 04:22:54",
+      "warnings": []
+    }
+  ],
+  "intervention_observed": true,
+  "backend_source_sha256_at_start": "c9418f8ffc91746b7b9e113221877f9f04205815359d2d3bb77aaf33a3e26cb1",
+  "effective_context_window": 32768,
+  "tool_probe": {
+    "ok": true,
+    "message": "This endpoint can run the checks Lyra verifies solutions with."
+  },
+  "plan_mode": "corpus_seeded",
+  "before": {
+    "draft": {
+      "id": 1,
+      "class_id": 1,
+      "kind": "draft",
+      "title": "review_seeded_claim_and_duplicates",
+      "state": "ready",
+      "stage_detail": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "error_message": null,
+      "created_at": "2026-09-07 04:22:52",
+      "updated_at": "2026-09-07 04:22:52",
+      "part_id": 1,
+      "body": "# A timetable is a promise\n\n## Introduction\n\nOn the first morning of the bus pilot, I got to the library early enough to watch the lights come on. That is a small thing, but it explains why I care about this policy. A timetable is also a promise about whose time matters. Our campus should keep the evening shuttle for one more term while collecting better evidence, rather than calling a short pilot either a miracle or a failure. My own easier commute gives me a reason to ask the question; it does not answer it for everyone.\n\n## Evidence\n\nThe transport office counted 240 boardings in the pilot week, compared with 160 in the earlier observation week. The shuttle therefore caused a 50 percent increase in student attendance. This result sounds decisive when I write it that way. Still, boardings are trips, and one rider can appear in the count several times. The two observation weeks also landed on different points in the semester. I want the numbers to earn their place in this paragraph rather than act like a badge that makes the argument official. The rider survey helps describe who answered, but it cannot tell us what every student needed.\n\n## Recommendation\n\nI would keep the route running while checking who can actually use it. The driver I spoke with called the last stop 'the long way home,' and that phrase stayed with me. It catches something the total number of rides misses: access has a shape as well as a size. Next term, the campus could count unique consenting riders, record missed connections, and invite comments from students who never board. This is a modest recommendation. I prefer a modest claim I can explain to a big claim that disappears when someone asks how we counted.\n",
+      "body_version": 1,
+      "pending": false
+    },
+    "status": {
+      "state": "ready",
+      "stage_detail": null,
+      "error_message": null,
+      "problems_total": null,
+      "problems_done": 0,
+      "run_id": null,
+      "job_kind": null,
+      "depth": null,
+      "started_at": null,
+      "run_status": "legacy",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    "comments": [
+      {
+        "id": 1,
+        "part_id": 1,
+        "parent_id": null,
+        "author": "reviewer",
+        "severity": "major",
+        "quote": "The shuttle therefore caused a 50 percent increase in student attendance.",
+        "hint": 656,
+        "body": "Boardings are not attendance. Replace the causal claim with the observed trip counts and their limitation.",
+        "resolved": 0,
+        "orphaned": 0,
+        "created_at": "2026-09-07 04:22:53",
+        "section_ref": "1.2",
+        "anchor": {
+          "start": 656,
+          "end": 729,
+          "exact": true
+        },
+        "replies": []
+      }
+    ],
+    "pending": null,
+    "live_suggestion": null,
+    "plan": {
+      "id": 1,
+      "artifact_id": 1,
+      "version": 1,
+      "brief_analysis": "A conditional recommendation, not a causal evaluation.",
+      "thesis": "Extend the pilot for one term while measuring access more carefully.",
+      "argument_map": [
+        {
+          "claim": "The observed use justifies further inquiry, not an attendance effect."
+        }
+      ],
+      "created_at": "2026-09-07 04:22:53",
+      "updated_at": "2026-09-07 04:22:53",
+      "sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1.1",
+          "ordinal": 0,
+          "title": "Introduction",
+          "job": "Keep the personal stake and thesis.",
+          "claim": "A timetable is a promise.",
+          "evidence": [],
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "sources": [
+            1
+          ]
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "1.2",
+          "ordinal": 1,
+          "title": "Evidence",
+          "job": "Correct the causal overclaim using both sources.",
+          "claim": "Trips and volunteer responses do not measure attendance.",
+          "evidence": [],
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "sources": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": 3,
+          "plan_id": 1,
+          "section_ref": "1.3",
+          "ordinal": 2,
+          "title": "Recommendation",
+          "job": "Preserve the student conclusion and propose better measurement.",
+          "claim": "Continue conditionally.",
+          "evidence": [],
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "sources": [
+            2
+          ]
+        }
+      ],
+      "status": "active"
+    },
+    "sources": [
+      {
+        "id": 1,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/transport",
+        "title": "Synthetic campus transport pilot memo, revision 1",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        },
+        "excerpts": [
+          {
+            "id": 1,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "No attendance data were collected."
+          },
+          {
+            "id": 2,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/survey",
+        "title": "Synthetic rider survey methods note",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        },
+        "excerpts": [
+          {
+            "id": 3,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "Non-riders were not surveyed."
+          }
+        ]
+      }
+    ],
+    "durable_rows": {
+      "draft_plans": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "version": 1,
+          "active": 1,
+          "brief_analysis": "A conditional recommendation, not a causal evaluation.",
+          "thesis": "Extend the pilot for one term while measuring access more carefully.",
+          "argument_map": "[{\"claim\":\"The observed use justifies further inquiry, not an attendance effect.\"}]",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "draft_plan_sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1.1",
+          "ordinal": 0,
+          "title": "Introduction",
+          "job": "Keep the personal stake and thesis.",
+          "claim": "A timetable is a promise.",
+          "evidence": "[]",
+          "source_ids": "[1]",
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "1.2",
+          "ordinal": 1,
+          "title": "Evidence",
+          "job": "Correct the causal overclaim using both sources.",
+          "claim": "Trips and volunteer responses do not measure attendance.",
+          "evidence": "[]",
+          "source_ids": "[1,2]",
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 3,
+          "plan_id": 1,
+          "section_ref": "1.3",
+          "ordinal": 2,
+          "title": "Recommendation",
+          "job": "Preserve the student conclusion and propose better measurement.",
+          "claim": "Continue conditionally.",
+          "evidence": "[]",
+          "source_ids": "[2]",
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "writer_sources": [
+        {
+          "id": 1,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/transport",
+          "title": "Synthetic campus transport pilot memo, revision 1",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "current_revision_id": 1
+        },
+        {
+          "id": 2,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/survey",
+          "title": "Synthetic rider survey methods note",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "current_revision_id": 2
+        }
+      ],
+      "writer_source_excerpts": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "No attendance data were collected.",
+          "created_at": "2026-09-07 04:22:53",
+          "source_revision_id": 1
+        },
+        {
+          "id": 2,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B.",
+          "created_at": "2026-09-07 04:22:53",
+          "source_revision_id": 1
+        },
+        {
+          "id": 3,
+          "source_id": 2,
+          "section_ref": null,
+          "excerpt": "Non-riders were not surveyed.",
+          "created_at": "2026-09-07 04:22:53",
+          "source_revision_id": 2
+        }
+      ],
+      "writer_source_revisions": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "writer_runs": [],
+      "live_draft_suggestions": [],
+      "live_draft_blocks": []
+    }
+  },
+  "start_response": {
+    "id": 1,
+    "class_id": 1,
+    "kind": "draft",
+    "title": "review_seeded_claim_and_duplicates",
+    "state": "pending",
+    "stage_detail": "Reviewing (queued)",
+    "problems_total": null,
+    "problems_done": 0,
+    "error_message": null,
+    "created_at": "2026-09-07 04:22:52",
+    "updated_at": "2026-09-07 04:22:53"
+  },
+  "intervention_boundary": {
+    "state": "generating",
+    "stage_detail": "Reviewing structure",
+    "error_message": null,
+    "problems_total": 4,
+    "problems_done": 0,
+    "run_id": 1,
+    "job_kind": "review",
+    "depth": "quick",
+    "started_at": "2026-09-07T04:22:53.153862+00:00",
+    "run_status": "running",
+    "cancel_requested": false,
+    "cancel_requested_at": null,
+    "finished_at": null,
+    "warnings": []
+  },
+  "boundary_evidence": "provider_request_observed",
+  "at_interruption": {
+    "draft": {
+      "id": 1,
+      "class_id": 1,
+      "kind": "draft",
+      "title": "review_seeded_claim_and_duplicates",
+      "state": "generating",
+      "stage_detail": "Reviewing structure",
+      "problems_total": 4,
+      "problems_done": 0,
+      "error_message": null,
+      "created_at": "2026-09-07 04:22:52",
+      "updated_at": "2026-09-07 04:22:53",
+      "part_id": 1,
+      "body": "# A timetable is a promise\n\n## Introduction\n\nOn the first morning of the bus pilot, I got to the library early enough to watch the lights come on. That is a small thing, but it explains why I care about this policy. A timetable is also a promise about whose time matters. Our campus should keep the evening shuttle for one more term while collecting better evidence, rather than calling a short pilot either a miracle or a failure. My own easier commute gives me a reason to ask the question; it does not answer it for everyone.\n\n## Evidence\n\nThe transport office counted 240 boardings in the pilot week, compared with 160 in the earlier observation week. The shuttle therefore caused a 50 percent increase in student attendance. This result sounds decisive when I write it that way. Still, boardings are trips, and one rider can appear in the count several times. The two observation weeks also landed on different points in the semester. I want the numbers to earn their place in this paragraph rather than act like a badge that makes the argument official. The rider survey helps describe who answered, but it cannot tell us what every student needed.\n\n## Recommendation\n\nI would keep the route running while checking who can actually use it. The driver I spoke with called the last stop 'the long way home,' and that phrase stayed with me. It catches something the total number of rides misses: access has a shape as well as a size. Next term, the campus could count unique consenting riders, record missed connections, and invite comments from students who never board. This is a modest recommendation. I prefer a modest claim I can explain to a big claim that disappears when someone asks how we counted.\n",
+      "body_version": 1,
+      "pending": false
+    },
+    "status": {
+      "state": "generating",
+      "stage_detail": "Reviewing structure",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.153862+00:00",
+      "run_status": "running",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": null,
+      "warnings": []
+    },
+    "comments": [
+      {
+        "id": 1,
+        "part_id": 1,
+        "parent_id": null,
+        "author": "reviewer",
+        "severity": "major",
+        "quote": "The shuttle therefore caused a 50 percent increase in student attendance.",
+        "hint": 656,
+        "body": "Boardings are not attendance. Replace the causal claim with the observed trip counts and their limitation.",
+        "resolved": 0,
+        "orphaned": 0,
+        "created_at": "2026-09-07 04:22:53",
+        "section_ref": "1.2",
+        "anchor": {
+          "start": 656,
+          "end": 729,
+          "exact": true
+        },
+        "replies": []
+      }
+    ],
+    "pending": null,
+    "live_suggestion": null,
+    "plan": {
+      "id": 1,
+      "artifact_id": 1,
+      "version": 1,
+      "brief_analysis": "A conditional recommendation, not a causal evaluation.",
+      "thesis": "Extend the pilot for one term while measuring access more carefully.",
+      "argument_map": [
+        {
+          "claim": "The observed use justifies further inquiry, not an attendance effect."
+        }
+      ],
+      "created_at": "2026-09-07 04:22:53",
+      "updated_at": "2026-09-07 04:22:53",
+      "sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1.1",
+          "ordinal": 0,
+          "title": "Introduction",
+          "job": "Keep the personal stake and thesis.",
+          "claim": "A timetable is a promise.",
+          "evidence": [],
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "sources": [
+            1
+          ]
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "1.2",
+          "ordinal": 1,
+          "title": "Evidence",
+          "job": "Correct the causal overclaim using both sources.",
+          "claim": "Trips and volunteer responses do not measure attendance.",
+          "evidence": [],
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "sources": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": 3,
+          "plan_id": 1,
+          "section_ref": "1.3",
+          "ordinal": 2,
+          "title": "Recommendation",
+          "job": "Preserve the student conclusion and propose better measurement.",
+          "claim": "Continue conditionally.",
+          "evidence": [],
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "sources": [
+            2
+          ]
+        }
+      ],
+      "status": "active"
+    },
+    "sources": [
+      {
+        "id": 1,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/transport",
+        "title": "Synthetic campus transport pilot memo, revision 1",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        },
+        "excerpts": [
+          {
+            "id": 1,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "No attendance data were collected."
+          },
+          {
+            "id": 2,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/survey",
+        "title": "Synthetic rider survey methods note",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        },
+        "excerpts": [
+          {
+            "id": 3,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "Non-riders were not surveyed."
+          }
+        ]
+      }
+    ],
+    "durable_rows": {
+      "draft_plans": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "version": 1,
+          "active": 1,
+          "brief_analysis": "A conditional recommendation, not a causal evaluation.",
+          "thesis": "Extend the pilot for one term while measuring access more carefully.",
+          "argument_map": "[{\"claim\":\"The observed use justifies further inquiry, not an attendance effect.\"}]",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "draft_plan_sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1.1",
+          "ordinal": 0,
+          "title": "Introduction",
+          "job": "Keep the personal stake and thesis.",
+          "claim": "A timetable is a promise.",
+          "evidence": "[]",
+          "source_ids": "[1]",
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "1.2",
+          "ordinal": 1,
+          "title": "Evidence",
+          "job": "Correct the causal overclaim using both sources.",
+          "claim": "Trips and volunteer responses do not measure attendance.",
+          "evidence": "[]",
+          "source_ids": "[1,2]",
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 3,
+          "plan_id": 1,
+          "section_ref": "1.3",
+          "ordinal": 2,
+          "title": "Recommendation",
+          "job": "Preserve the student conclusion and propose better measurement.",
+          "claim": "Continue conditionally.",
+          "evidence": "[]",
+          "source_ids": "[2]",
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "writer_sources": [
+        {
+          "id": 1,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/transport",
+          "title": "Synthetic campus transport pilot memo, revision 1",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "current_revision_id": 1
+        },
+        {
+          "id": 2,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/survey",
+          "title": "Synthetic rider survey methods note",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "current_revision_id": 2
+        }
+      ],
+      "writer_source_excerpts": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "No attendance data were collected.",
+          "created_at": "2026-09-07 04:22:53",
+          "source_revision_id": 1
+        },
+        {
+          "id": 2,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B.",
+          "created_at": "2026-09-07 04:22:53",
+          "source_revision_id": 1
+        },
+        {
+          "id": 3,
+          "source_id": 2,
+          "section_ref": null,
+          "excerpt": "Non-riders were not surveyed.",
+          "created_at": "2026-09-07 04:22:53",
+          "source_revision_id": 2
+        }
+      ],
+      "writer_source_revisions": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "writer_runs": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "job_kind": "review",
+          "depth": "quick",
+          "status": "running",
+          "request_json": "{}",
+          "checkpoint_json": "{\"stage\": \"start\", \"index\": 0, \"targets\": [], \"data\": {\"body_snapshot\": {\"part_id\": 1, \"content_version\": 1, \"sha256\": \"762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d\"}}}",
+          "warnings_json": "[]",
+          "error_message": null,
+          "started_at": "2026-09-07T04:22:53.153862+00:00",
+          "cancel_requested_at": null,
+          "finished_at": null,
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "live_draft_suggestions": [],
+      "live_draft_blocks": []
+    }
+  },
+  "after_interruption": {
+    "draft": {
+      "id": 1,
+      "class_id": 1,
+      "kind": "draft",
+      "title": "review_seeded_claim_and_duplicates",
+      "state": "cancelled",
+      "stage_detail": "The review was cancelled. Filed comments were kept.",
+      "problems_total": 4,
+      "problems_done": 0,
+      "error_message": null,
+      "created_at": "2026-09-07 04:22:52",
+      "updated_at": "2026-09-07 04:22:53",
+      "part_id": 1,
+      "body": "# A timetable is a promise\n\n## Introduction\n\nOn the first morning of the bus pilot, I got to the library early enough to watch the lights come on. That is a small thing, but it explains why I care about this policy. A timetable is also a promise about whose time matters. Our campus should keep the evening shuttle for one more term while collecting better evidence, rather than calling a short pilot either a miracle or a failure. My own easier commute gives me a reason to ask the question; it does not answer it for everyone.\n\n## Evidence\n\nThe transport office counted 240 boardings in the pilot week, compared with 160 in the earlier observation week. The shuttle therefore caused a 50 percent increase in student attendance. This result sounds decisive when I write it that way. Still, boardings are trips, and one rider can appear in the count several times. The two observation weeks also landed on different points in the semester. I want the numbers to earn their place in this paragraph rather than act like a badge that makes the argument official. The rider survey helps describe who answered, but it cannot tell us what every student needed.\n\n## Recommendation\n\nI would keep the route running while checking who can actually use it. The driver I spoke with called the last stop 'the long way home,' and that phrase stayed with me. It catches something the total number of rides misses: access has a shape as well as a size. Next term, the campus could count unique consenting riders, record missed connections, and invite comments from students who never board. This is a modest recommendation. I prefer a modest claim I can explain to a big claim that disappears when someone asks how we counted.\n",
+      "body_version": 1,
+      "pending": false
+    },
+    "status": {
+      "state": "cancelled",
+      "stage_detail": "The review was cancelled. Filed comments were kept.",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 0,
+      "run_id": 1,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.153862+00:00",
+      "run_status": "cancelled",
+      "cancel_requested": false,
+      "cancel_requested_at": "2026-09-07 04:22:53",
+      "finished_at": "2026-09-07 04:22:53",
+      "warnings": []
+    },
+    "comments": [
+      {
+        "id": 1,
+        "part_id": 1,
+        "parent_id": null,
+        "author": "reviewer",
+        "severity": "major",
+        "quote": "The shuttle therefore caused a 50 percent increase in student attendance.",
+        "hint": 656,
+        "body": "Boardings are not attendance. Replace the causal claim with the observed trip counts and their limitation.",
+        "resolved": 0,
+        "orphaned": 0,
+        "created_at": "2026-09-07 04:22:53",
+        "section_ref": "1.2",
+        "anchor": {
+          "start": 656,
+          "end": 729,
+          "exact": true
+        },
+        "replies": []
+      }
+    ],
+    "pending": null,
+    "live_suggestion": null,
+    "plan": {
+      "id": 1,
+      "artifact_id": 1,
+      "version": 1,
+      "brief_analysis": "A conditional recommendation, not a causal evaluation.",
+      "thesis": "Extend the pilot for one term while measuring access more carefully.",
+      "argument_map": [
+        {
+          "claim": "The observed use justifies further inquiry, not an attendance effect."
+        }
+      ],
+      "created_at": "2026-09-07 04:22:53",
+      "updated_at": "2026-09-07 04:22:53",
+      "sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1.1",
+          "ordinal": 0,
+          "title": "Introduction",
+          "job": "Keep the personal stake and thesis.",
+          "claim": "A timetable is a promise.",
+          "evidence": [],
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "sources": [
+            1
+          ]
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "1.2",
+          "ordinal": 1,
+          "title": "Evidence",
+          "job": "Correct the causal overclaim using both sources.",
+          "claim": "Trips and volunteer responses do not measure attendance.",
+          "evidence": [],
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "sources": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": 3,
+          "plan_id": 1,
+          "section_ref": "1.3",
+          "ordinal": 2,
+          "title": "Recommendation",
+          "job": "Preserve the student conclusion and propose better measurement.",
+          "claim": "Continue conditionally.",
+          "evidence": [],
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "sources": [
+            2
+          ]
+        }
+      ],
+      "status": "active"
+    },
+    "sources": [
+      {
+        "id": 1,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/transport",
+        "title": "Synthetic campus transport pilot memo, revision 1",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        },
+        "excerpts": [
+          {
+            "id": 1,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "No attendance data were collected."
+          },
+          {
+            "id": 2,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/survey",
+        "title": "Synthetic rider survey methods note",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        },
+        "excerpts": [
+          {
+            "id": 3,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "Non-riders were not surveyed."
+          }
+        ]
+      }
+    ],
+    "durable_rows": {
+      "draft_plans": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "version": 1,
+          "active": 1,
+          "brief_analysis": "A conditional recommendation, not a causal evaluation.",
+          "thesis": "Extend the pilot for one term while measuring access more carefully.",
+          "argument_map": "[{\"claim\":\"The observed use justifies further inquiry, not an attendance effect.\"}]",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "draft_plan_sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1.1",
+          "ordinal": 0,
+          "title": "Introduction",
+          "job": "Keep the personal stake and thesis.",
+          "claim": "A timetable is a promise.",
+          "evidence": "[]",
+          "source_ids": "[1]",
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "1.2",
+          "ordinal": 1,
+          "title": "Evidence",
+          "job": "Correct the causal overclaim using both sources.",
+          "claim": "Trips and volunteer responses do not measure attendance.",
+          "evidence": "[]",
+          "source_ids": "[1,2]",
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 3,
+          "plan_id": 1,
+          "section_ref": "1.3",
+          "ordinal": 2,
+          "title": "Recommendation",
+          "job": "Preserve the student conclusion and propose better measurement.",
+          "claim": "Continue conditionally.",
+          "evidence": "[]",
+          "source_ids": "[2]",
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "writer_sources": [
+        {
+          "id": 1,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/transport",
+          "title": "Synthetic campus transport pilot memo, revision 1",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "current_revision_id": 1
+        },
+        {
+          "id": 2,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/survey",
+          "title": "Synthetic rider survey methods note",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "current_revision_id": 2
+        }
+      ],
+      "writer_source_excerpts": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "No attendance data were collected.",
+          "created_at": "2026-09-07 04:22:53",
+          "source_revision_id": 1
+        },
+        {
+          "id": 2,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B.",
+          "created_at": "2026-09-07 04:22:53",
+          "source_revision_id": 1
+        },
+        {
+          "id": 3,
+          "source_id": 2,
+          "section_ref": null,
+          "excerpt": "Non-riders were not surveyed.",
+          "created_at": "2026-09-07 04:22:53",
+          "source_revision_id": 2
+        }
+      ],
+      "writer_source_revisions": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "writer_runs": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "job_kind": "review",
+          "depth": "quick",
+          "status": "cancelled",
+          "request_json": "{}",
+          "checkpoint_json": "{\"stage\": \"start\", \"index\": 0, \"targets\": [], \"data\": {\"body_snapshot\": {\"part_id\": 1, \"content_version\": 1, \"sha256\": \"762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d\"}}}",
+          "warnings_json": "[]",
+          "error_message": null,
+          "started_at": "2026-09-07T04:22:53.153862+00:00",
+          "cancel_requested_at": "2026-09-07 04:22:53",
+          "finished_at": "2026-09-07 04:22:53",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "live_draft_suggestions": [],
+      "live_draft_blocks": []
+    }
+  },
+  "retry_response": {
+    "id": 1,
+    "class_id": 1,
+    "kind": "draft",
+    "title": "review_seeded_claim_and_duplicates",
+    "state": "pending",
+    "stage_detail": "Reviewing (queued)",
+    "problems_total": 4,
+    "problems_done": 0,
+    "error_message": null,
+    "created_at": "2026-09-07 04:22:52",
+    "updated_at": "2026-09-07 04:22:53"
+  },
+  "after": {
+    "draft": {
+      "id": 1,
+      "class_id": 1,
+      "kind": "draft",
+      "title": "review_seeded_claim_and_duplicates",
+      "state": "ready",
+      "stage_detail": "Review complete: 1 major. 1 earlier comment remains open.",
+      "problems_total": 4,
+      "problems_done": 4,
+      "error_message": null,
+      "created_at": "2026-09-07 04:22:52",
+      "updated_at": "2026-09-07 04:22:54",
+      "part_id": 1,
+      "body": "# A timetable is a promise\n\n## Introduction\n\nOn the first morning of the bus pilot, I got to the library early enough to watch the lights come on. That is a small thing, but it explains why I care about this policy. A timetable is also a promise about whose time matters. Our campus should keep the evening shuttle for one more term while collecting better evidence, rather than calling a short pilot either a miracle or a failure. My own easier commute gives me a reason to ask the question; it does not answer it for everyone.\n\n## Evidence\n\nThe transport office counted 240 boardings in the pilot week, compared with 160 in the earlier observation week. The shuttle therefore caused a 50 percent increase in student attendance. This result sounds decisive when I write it that way. Still, boardings are trips, and one rider can appear in the count several times. The two observation weeks also landed on different points in the semester. I want the numbers to earn their place in this paragraph rather than act like a badge that makes the argument official. The rider survey helps describe who answered, but it cannot tell us what every student needed.\n\n## Recommendation\n\nI would keep the route running while checking who can actually use it. The driver I spoke with called the last stop 'the long way home,' and that phrase stayed with me. It catches something the total number of rides misses: access has a shape as well as a size. Next term, the campus could count unique consenting riders, record missed connections, and invite comments from students who never board. This is a modest recommendation. I prefer a modest claim I can explain to a big claim that disappears when someone asks how we counted.\n",
+      "body_version": 1,
+      "pending": false
+    },
+    "status": {
+      "state": "ready",
+      "stage_detail": "Review complete: 1 major. 1 earlier comment remains open.",
+      "error_message": null,
+      "problems_total": 4,
+      "problems_done": 4,
+      "run_id": 2,
+      "job_kind": "review",
+      "depth": "quick",
+      "started_at": "2026-09-07T04:22:53.386869+00:00",
+      "run_status": "completed",
+      "cancel_requested": false,
+      "cancel_requested_at": null,
+      "finished_at": "2026-09-07 04:22:54",
+      "warnings": []
+    },
+    "comments": [
+      {
+        "id": 1,
+        "part_id": 1,
+        "parent_id": null,
+        "author": "reviewer",
+        "severity": "major",
+        "quote": "The shuttle therefore caused a 50 percent increase in student attendance.",
+        "hint": 656,
+        "body": "Boardings are not attendance. Replace the causal claim with the observed trip counts and their limitation.",
+        "resolved": 0,
+        "orphaned": 0,
+        "created_at": "2026-09-07 04:22:53",
+        "section_ref": "1.2",
+        "anchor": {
+          "start": 656,
+          "end": 729,
+          "exact": true
+        },
+        "replies": []
+      },
+      {
+        "id": 2,
+        "part_id": 1,
+        "parent_id": null,
+        "author": "reviewer",
+        "severity": "major",
+        "quote": null,
+        "hint": null,
+        "body": "Synthetic review: this claim needs supporting evidence.",
+        "resolved": 0,
+        "orphaned": 0,
+        "created_at": "2026-09-07 04:22:53",
+        "section_ref": null,
+        "anchor": null,
+        "replies": []
+      }
+    ],
+    "pending": null,
+    "live_suggestion": null,
+    "plan": {
+      "id": 1,
+      "artifact_id": 1,
+      "version": 1,
+      "brief_analysis": "A conditional recommendation, not a causal evaluation.",
+      "thesis": "Extend the pilot for one term while measuring access more carefully.",
+      "argument_map": [
+        {
+          "claim": "The observed use justifies further inquiry, not an attendance effect."
+        }
+      ],
+      "created_at": "2026-09-07 04:22:53",
+      "updated_at": "2026-09-07 04:22:53",
+      "sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1.1",
+          "ordinal": 0,
+          "title": "Introduction",
+          "job": "Keep the personal stake and thesis.",
+          "claim": "A timetable is a promise.",
+          "evidence": [],
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "sources": [
+            1
+          ]
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "1.2",
+          "ordinal": 1,
+          "title": "Evidence",
+          "job": "Correct the causal overclaim using both sources.",
+          "claim": "Trips and volunteer responses do not measure attendance.",
+          "evidence": [],
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "sources": [
+            1,
+            2
+          ]
+        },
+        {
+          "id": 3,
+          "plan_id": 1,
+          "section_ref": "1.3",
+          "ordinal": 2,
+          "title": "Recommendation",
+          "job": "Preserve the student conclusion and propose better measurement.",
+          "claim": "Continue conditionally.",
+          "evidence": [],
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "sources": [
+            2
+          ]
+        }
+      ],
+      "status": "active"
+    },
+    "sources": [
+      {
+        "id": 1,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/transport",
+        "title": "Synthetic campus transport pilot memo, revision 1",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        },
+        "excerpts": [
+          {
+            "id": 1,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "No attendance data were collected."
+          },
+          {
+            "id": 2,
+            "source_revision_id": 1,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "There were 160 boardings in week A and 240 boardings in week B."
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "class_id": 1,
+        "source_type": "web",
+        "document_id": null,
+        "url": "https://synthetic.invalid/survey",
+        "title": "Synthetic rider survey methods note",
+        "accessed_at": "2026-09-06T00:00:00Z",
+        "revision": {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": false,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        },
+        "excerpts": [
+          {
+            "id": 3,
+            "source_revision_id": 2,
+            "supporting_revision": 1,
+            "supporting_accessed_at": "2026-09-06T00:00:00Z",
+            "evidence_unavailable": false,
+            "section_ref": null,
+            "excerpt": "Non-riders were not surveyed."
+          }
+        ]
+      }
+    ],
+    "durable_rows": {
+      "draft_plans": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "version": 1,
+          "active": 1,
+          "brief_analysis": "A conditional recommendation, not a causal evaluation.",
+          "thesis": "Extend the pilot for one term while measuring access more carefully.",
+          "argument_map": "[{\"claim\":\"The observed use justifies further inquiry, not an attendance effect.\"}]",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "draft_plan_sections": [
+        {
+          "id": 1,
+          "plan_id": 1,
+          "section_ref": "1.1",
+          "ordinal": 0,
+          "title": "Introduction",
+          "job": "Keep the personal stake and thesis.",
+          "claim": "A timetable is a promise.",
+          "evidence": "[]",
+          "source_ids": "[1]",
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 2,
+          "plan_id": 1,
+          "section_ref": "1.2",
+          "ordinal": 1,
+          "title": "Evidence",
+          "job": "Correct the causal overclaim using both sources.",
+          "claim": "Trips and volunteer responses do not measure attendance.",
+          "evidence": "[]",
+          "source_ids": "[1,2]",
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 3,
+          "plan_id": 1,
+          "section_ref": "1.3",
+          "ordinal": 2,
+          "title": "Recommendation",
+          "job": "Preserve the student conclusion and propose better measurement.",
+          "claim": "Continue conditionally.",
+          "evidence": "[]",
+          "source_ids": "[2]",
+          "word_budget": 150,
+          "research_notes": "",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "writer_sources": [
+        {
+          "id": 1,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/transport",
+          "title": "Synthetic campus transport pilot memo, revision 1",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "current_revision_id": 1
+        },
+        {
+          "id": 2,
+          "class_id": 1,
+          "source_type": "web",
+          "document_id": null,
+          "url": "https://synthetic.invalid/survey",
+          "title": "Synthetic rider survey methods note",
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53",
+          "current_revision_id": 2
+        }
+      ],
+      "writer_source_excerpts": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "No attendance data were collected.",
+          "created_at": "2026-09-07 04:22:53",
+          "source_revision_id": 1
+        },
+        {
+          "id": 2,
+          "source_id": 1,
+          "section_ref": null,
+          "excerpt": "There were 160 boardings in week A and 240 boardings in week B.",
+          "created_at": "2026-09-07 04:22:53",
+          "source_revision_id": 1
+        },
+        {
+          "id": 3,
+          "source_id": 2,
+          "section_ref": null,
+          "excerpt": "Non-riders were not surveyed.",
+          "created_at": "2026-09-07 04:22:53",
+          "source_revision_id": 2
+        }
+      ],
+      "writer_source_revisions": [
+        {
+          "id": 1,
+          "source_id": 1,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/transport",
+          "content_type": null,
+          "snapshot": "This fictional memo compares two observation weeks. There were 160 boardings in week A and 240 boardings in week B. Boardings count trips, not unique people. No attendance data were collected. The weeks differed in academic schedule, and the pilot was not randomized. The memo does not estimate the effect of the shuttle on attendance.",
+          "snapshot_hash": "8dfbb47e4259292bffc7aa137c5fb4d428c1027f0d0e96d9586d9710d7c8a1d1",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 2,
+          "source_id": 2,
+          "revision": 1,
+          "final_url": "https://synthetic.invalid/survey",
+          "content_type": null,
+          "snapshot": "Eighteen voluntary survey responses were collected from shuttle riders. Fourteen respondents said they valued later service. Non-riders were not surveyed. The responses describe these respondents and cannot establish demand across all students. No cost or emissions measurements were collected.",
+          "snapshot_hash": "416cd21b2418ea5343057ed7d4d7c3b95b4303f9a2a8af6ebbbf5438a397d49a",
+          "truncated": 0,
+          "accessed_at": "2026-09-06T00:00:00Z",
+          "created_at": "2026-09-07 04:22:53"
+        }
+      ],
+      "writer_runs": [
+        {
+          "id": 1,
+          "artifact_id": 1,
+          "job_kind": "review",
+          "depth": "quick",
+          "status": "cancelled",
+          "request_json": "{}",
+          "checkpoint_json": "{\"stage\": \"start\", \"index\": 0, \"targets\": [], \"data\": {\"body_snapshot\": {\"part_id\": 1, \"content_version\": 1, \"sha256\": \"762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d\"}}}",
+          "warnings_json": "[]",
+          "error_message": null,
+          "started_at": "2026-09-07T04:22:53.153862+00:00",
+          "cancel_requested_at": "2026-09-07 04:22:53",
+          "finished_at": "2026-09-07 04:22:53",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:53"
+        },
+        {
+          "id": 2,
+          "artifact_id": 1,
+          "job_kind": "review",
+          "depth": "quick",
+          "status": "completed",
+          "request_json": "{}",
+          "checkpoint_json": "{\"stage\": \"done\", \"index\": 0, \"targets\": [], \"data\": {\"body_snapshot\": {\"part_id\": 1, \"content_version\": 1, \"sha256\": \"762cef01c37a0c42d111ec222cd486667874dfe8f78cefa2009dcc33eb61b48d\"}, \"filed_comment_ids\": [2], \"confirmed_comment_ids\": [2], \"completed_lenses\": 4}}",
+          "warnings_json": "[]",
+          "error_message": null,
+          "started_at": "2026-09-07T04:22:53.386869+00:00",
+          "cancel_requested_at": null,
+          "finished_at": "2026-09-07 04:22:54",
+          "created_at": "2026-09-07 04:22:53",
+          "updated_at": "2026-09-07 04:22:54"
+        }
+      ],
+      "live_draft_suggestions": [],
+      "live_draft_blocks": []
+    }
+  },
+  "deterministic": {
+    "candidate_present": false,
+    "candidate_protected_passages_preserved": null,
+    "candidate_forbidden_literal_hits": null,
+    "excerpt_revision_support_violations": [],
+    "body_unchanged": true,
+    "protected_passages_total": 1,
+    "protected_passages_preserved": 1,
+    "duplicate_comment_signatures": 0,
+    "real_run_id_present": true,
+    "missed_seeded_issues": null,
+    "unsupported_rewrites": null,
+    "unrelated_candidate_edits": null,
+    "citation_support": null,
+    "seed_metrics_note": "Semantic measures await independent/human review."
+  },
+  "scenario_status": "observed",
+  "status": "recorded",
+  "elapsed_seconds": 2.653,
+  "backend_source_sha256_at_end": "c9418f8ffc91746b7b9e113221877f9f04205815359d2d3bb77aaf33a3e26cb1",
+  "code_changed_during_case": false
+}
