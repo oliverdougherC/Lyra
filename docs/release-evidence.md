@@ -41,7 +41,9 @@ lacked SQLite extension loading. It now selects the same managed Python as deskt
 the existing resource/extension smoke before acceptance. The recovered lane also exposed three
 harness assumptions: macOS keyboard traversal, a fleeting loading state, and a forced click into a
 recovery toast. Tests now require a real focused class link, hold and release the actual API response,
-and send through the enabled composer keyboard path; no case or durable-operation assertion was removed.
+and send through the enabled composer keyboard path. Source-recovery evidence observes a completed
+text GET instead of a canceled speculative response; original bytes, empty-text UI and context
+assertions remain. No case or durable-operation assertion was removed.
 
 ### Remaining acceptance boundaries
 
